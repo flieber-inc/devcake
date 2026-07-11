@@ -95,6 +95,12 @@ services:
     profiles: [images]        # `docker compose --profile images build`
     entrypoint: ["true"]
 
+  dev-claude-code:
+    build: ./images/claude-code
+    image: devcake/dev-claude-code:latest
+    profiles: [images]
+    entrypoint: ["true"]
+
   fluentbit:
     image: fluent/fluent-bit:3.2
     command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]

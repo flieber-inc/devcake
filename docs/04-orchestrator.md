@@ -76,6 +76,8 @@ def dispatch(mission, dev_type):
 
 Writing the Run file *before* the Dagu trigger means a crash between (1) and (2) leaves a `dispatched` Run with no Dagu counterpart — repaired by startup reconciliation (§6), never dispatched twice (a blind re-trigger with the same `dag_run_id` would 409 regardless — verified, `13-deployment.md` §4).
 
+**Failure symmetry rule (added at M3):** every side effect of a dispatch whose run then fails must be reverted so the mission re-derives exactly as before the attempt. Concretely, step (3)'s backlog→in_progress write is undone on `failed`/`timed_out`/`orphaned` runs — after a live re-read confirming a human hasn't moved the mission meanwhile. The watchdog's liveness reference is `last_heartbeat or started_at` and Devs send their first heartbeat immediately, so a Dev killed in its first seconds is detected within the heartbeat grace, not at the wall-clock timeout (both gaps found and fixed live at M3).
+
 The run spec (stage-2 env, credentials, repo info) is fully resolved by the app at dispatch and served to the Dev over `runspec.get` (`09-messaging.md` §3); Dagu receives only non-secret params and executes with zero business logic (app is the brain, Dagu is muscle).
 
 ## 4. No-lock atomicity: compare-and-transition
@@ -138,7 +140,7 @@ On every app boot, before the first poll cycle:
 |---|---|---|
 | App crashes mid-poll | Nothing dispatched twice (Run file precedes trigger) | §6 reconciliation |
 | App crashes mid-finalization | Some side effects applied | `finalized_steps` + idempotency keys resume the rest |
-| Dev container crashes | Mission label untouched (INV-3) | Run `failed`; attempt++; reschedules next cycle; after `max_attempts` → `DEVCAKE-FAILED` |
+| Dev container crashes | Mission label untouched (INV-3); **the dispatch-time backlog→in_progress status write is reverted** (live compare first — human edits win), else a failed first ONBOARD would strand the mission at derivation row 9 (verified at M3) | Run `failed`; attempt++; reschedules next cycle; after `max_attempts` → `DEVCAKE-FAILED` |
 | Dev exceeds timeout | Watchdog kills container | Same as crash (`DEV_TIMEOUT`) |
 | Redis down | Devs buffer/retry publishes with backoff; app consumer reconnects | Streams are durable (AOF); nothing lost; finalization is stream-driven |
 | Linear down | Poll cycles skip; running Devs unaffected (they don't talk to PMO — INV-4) | Backoff per `PMO_TRANSIENT`; finalizations queue on the ingress until PMO is writable |

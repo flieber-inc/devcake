@@ -3,6 +3,7 @@ kills go through Dagu's stop endpoint (verified: SIGTERM→SIGKILL→removal).""
 
 import asyncio
 import logging
+import os
 from datetime import timedelta
 
 from .runs import RunManager
@@ -11,7 +12,9 @@ from .state import utcnow
 log = logging.getLogger("devcake.watchdog")
 
 CHECK_INTERVAL = 10
-HEARTBEAT_GRACE = timedelta(minutes=5)
+HEARTBEAT_GRACE = timedelta(
+    seconds=int(os.environ.get("DEVCAKE_HEARTBEAT_GRACE_SECONDS", "300")))
+STARTUP_GRACE = timedelta(seconds=90)  # dispatched runs must start within this
 
 
 async def watchdog_loop(mgr: RunManager) -> None:
@@ -22,15 +25,22 @@ async def watchdog_loop(mgr: RunManager) -> None:
                 if age > run.timeout_seconds:
                     await mgr.kill(run, "timed_out", f"exceeded {run.timeout_seconds}s")
                     continue
-                if (
-                    run.state == "running"
-                    and run.last_heartbeat
-                    and utcnow() - run.last_heartbeat > HEARTBEAT_GRACE
-                ):
+                # reference = last heartbeat, else run start: a Dev killed before its
+                # first heartbeat must not be invisible until the wall-clock timeout
+                beat_ref = run.last_heartbeat or run.started_at
+                stale_running = (run.state == "running" and beat_ref
+                                 and utcnow() - beat_ref > HEARTBEAT_GRACE)
+                dead_before_start = (run.state == "dispatched"
+                                     and utcnow() - run.created_at > STARTUP_GRACE)
+                if stale_running or dead_before_start:
                     status = await mgr.executor.status(run.run_id)
-                    st = str((status or {}).get("status", "")).lower()
-                    if status is None or st in ("failed", "aborted", "error", "cancelled"):
-                        await mgr.kill(run, "failed", "heartbeat lost; dagu run not running")
+                    detail = ((status or {}).get("dagRunDetails") or {})
+                    label = str(detail.get("statusLabel", detail.get("status", ""))).lower()
+                    if status is None or any(t in label for t in
+                                             ("failed", "aborted", "error", "cancel")):
+                        await mgr.kill(run, "failed",
+                                       "dagu run dead (%s)" %
+                                       ("no heartbeat" if stale_running else "never started"))
         except Exception:
             log.exception("watchdog cycle failed")
         await asyncio.sleep(CHECK_INTERVAL)

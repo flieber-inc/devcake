@@ -204,6 +204,30 @@ class LinearAdapter:
             log.info("linear: created project label %s", name)
         self._invalidate_team_cache()
 
+    async def upload_attachment(self, pmo_id: str, filename: str, data: bytes) -> str:
+        """Linear 3-step upload (docs/05 §4): fileUpload → PUT bytes → assetUrl."""
+        up = (await self._gql(
+            """mutation($ct: String!, $fn: String!, $size: Int!) {
+                 fileUpload(contentType: $ct, filename: $fn, size: $size) {
+                   success
+                   uploadFile { uploadUrl assetUrl headers { key value } }
+                 } }""",
+            {"ct": "text/markdown", "fn": filename, "size": len(data)}))["fileUpload"]
+        uf = up["uploadFile"]
+        headers = {h["key"]: h["value"] for h in uf["headers"]}
+        headers["Content-Type"] = "text/markdown"
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.put(uf["uploadUrl"], content=data, headers=headers)
+            resp.raise_for_status()
+        return uf["assetUrl"]
+
+    async def download_asset(self, url: str) -> bytes:
+        """assetUrl downloads require Linear auth (docs/05 §4)."""
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"Authorization": self._headers["Authorization"]})
+            resp.raise_for_status()
+            return resp.content
+
     def capabilities(self) -> PMOCapabilities:
         return PMOCapabilities(projects_supported=True, project_labels_supported=True,
                                attachment_max_bytes=50 * 1024 * 1024,

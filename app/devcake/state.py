@@ -28,10 +28,13 @@ class Run(BaseModel):
     schema_version: int = 1
     run_id: str
     mission_key: str
+    mission_pmo_id: str = ""
     mission_type: str
     dev_type: str
     seq: int
     attempt_of_step: int = 1
+    stage_label_at_dispatch: Optional[str] = None
+    spec_prompt: str = ""
     state: RunState = "dispatched"
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None

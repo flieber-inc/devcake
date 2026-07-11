@@ -42,7 +42,7 @@ Before any transcript or report is posted to the PMO System (an external SaaS), 
 
 ## 6. Dev container hardening
 
-- Non-root harness user; entrypoint drops privileges after credential installation.
+- Non-root harness user (uid 1000 for the whole entrypoint; Claude Code enforces this itself by refusing `--dangerously-skip-permissions` as root — verified at M3).
 - Resource limits (`07-dev-runtime.md` §7).
 - No `docker.sock`; no host or volume mounts at all (credentials arrive via the run-spec channel).
 - MCP free-text commands are **arbitrary code execution by design** — an admin-only surface, run inside the disposable container, labeled as such in the UI (`11-admin-panel.md` §2).

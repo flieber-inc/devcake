@@ -83,6 +83,24 @@ class Messaging:
 
     # ── ingress consumption (Devs → app) ─────────────────────────────────────
 
+    async def reclaim_pending(self, handler: Handler,
+                              verify_auth: Callable[[str, Optional[str]], bool]) -> None:
+        """Startup reconciliation step 4 (docs/04 §6): re-handle pending entries."""
+        await self.setup()
+        start = "0-0"
+        while True:
+            resp = await self.redis.execute_command(
+                "XAUTOCLAIM", INGRESS, GROUP, CONSUMER, 60000, start, "COUNT", 20)
+            start, messages = resp[0], resp[1]
+            for entry_id, fields in messages:
+                fields = {k: v for k, v in (fields or {}).items()} if isinstance(fields, dict)                     else dict(zip(fields[::2], fields[1::2]))
+                try:
+                    await self._handle_entry(entry_id, fields, handler, verify_auth)
+                except Exception:
+                    log.exception("reclaim: failed handling %s", entry_id)
+            if not messages or start == "0-0":
+                break
+
     async def consume_forever(
         self, handler: Handler, verify_auth: Callable[[str, Optional[str]], bool]
     ) -> None:

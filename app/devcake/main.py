@@ -14,10 +14,11 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from .config import load_config
+from .config import load_config, load_dev_types
 from .dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from .linear import LinearAdapter, PMOTransient
 from .messaging import Messaging
+from .missions import MissionManager
 from .pmo import ALL_LABELS, derive
 from .runs import RunManager
 from .state import RunStore
@@ -34,11 +35,14 @@ REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
 tracer = setup_telemetry()
 
 config = load_config()
+dev_types = load_dev_types()
 store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
 pmo = LinearAdapter(config.api_key)
+mission_mgr = MissionManager(config, dev_types, pmo, manager, messaging)
+manager.mission_mgr = mission_mgr
 
 # poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
 missions_cache: list[dict] = []
@@ -55,6 +59,8 @@ async def poll_loop() -> None:
                 missions = await pmo.list_all(config.pmo.team_key)
                 derived = [(m, derive(m, config.adoption_mode)) for m in missions]
                 candidates = [m for m, d in derived if d.schedulable]
+                dispatched = await mission_mgr.schedule(missions)
+                mission_mgr.rotate_grace()
                 missions_cache.clear()
                 missions_cache.extend({
                     "key": m.key, "kind": m.pmo_kind, "title": m.title,
@@ -65,9 +71,9 @@ async def poll_loop() -> None:
                 } for m, d in derived)
                 span.set_attribute("devcake.missions.seen", len(missions))
                 span.set_attribute("devcake.missions.candidates", len(candidates))
-                span.set_attribute("devcake.missions.dispatched", 0)  # M3
-                log.info("poll.cycle %d: %d missions, %d candidates",
-                         cycle, len(missions), len(candidates))
+                span.set_attribute("devcake.missions.dispatched", dispatched)
+                log.info("poll.cycle %d: %d missions, %d candidates, %d dispatched",
+                         cycle, len(missions), len(candidates), dispatched)
             except PMOTransient as e:
                 span.set_attribute("devcake.outcome", "PMO_TRANSIENT")
                 log.warning("poll.cycle %d skipped: %s", cycle, e)
@@ -76,12 +82,28 @@ async def poll_loop() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    # startup reconciliation step 2 (docs/04 §6): ensure the nine managed labels
+    # startup reconciliation (docs/04 §6)
     try:
-        await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)
+        await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)          # step 2
         log.info("labels ensured in team %s", config.pmo.team_key)
     except Exception:
         log.exception("label bootstrap failed — poll loop will keep retrying reads")
+    for r in store.active():                                              # step 3
+        try:
+            status = await executor.status(r.run_id)
+            st = str(((status or {}).get("dagRunDetails") or {}).get("status", "")).lower()
+            label = str(((status or {}).get("dagRunDetails") or {}).get("statusLabel", "")).lower()
+            if status is None or st in ("failed", "aborted", "error")                     or label in ("failed", "aborted", "error", "cancelled"):
+                await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
+            else:
+                log.info("reconciliation: adopted in-flight run %s (dagu: %s)",
+                         r.run_id, label or st or "running")
+        except Exception:
+            log.exception("reconciliation failed for %s", r.run_id)
+    try:
+        await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
+    except Exception:
+        log.exception("pending-entry reclaim failed")
     tasks = [
         asyncio.create_task(poll_loop()),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth)),

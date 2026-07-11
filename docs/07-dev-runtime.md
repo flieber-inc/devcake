@@ -125,7 +125,7 @@ There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint abl
 
 - **Network:** full outbound internet access (host-equivalent, per the mission doc) + membership in the compose network (`devcake_default`) for `redis`/`openobserve` name resolution. Attachment mechanism in `13-deployment.md` §5.
 - **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md`).
-- **User:** the harness runs as a non-root user inside the container; the entrypoint drops privileges after credential installation.
+- **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root.
 - **Resources:** defaults `cpus: 2`, `memory: 4g`, overridable per Dev Type via `docker_image`-level config in the run spec.
 
 ## 8. Building a new Dev image (checklist)

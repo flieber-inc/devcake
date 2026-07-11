@@ -45,13 +45,15 @@ Field notes folded into `05` §5: project labels are workspace-level (`projectLa
 
 **Goal:** first real autonomous step. **Implements:** `04` (full), `07` (full), `08` (`claude-code` template), `03` §1 (all three ONBOARD paths *dispatched*; normal path *finalized* end-to-end).
 
-Exit criteria:
-- [ ] A Backlog issue in the sandbox team autonomously gains: `In Progress` status, a `1_ONBOARD.md` transcript, a token report comment **with real token counts and `total_cost_usd`**, and the `DEVCAKE-PLAN` label — no manual steps. Variant: an ONBOARD run that attaches an opportunistic `PLAN.md` lands on `DEVCAKE-EXECUTE` with the plan uploaded (`03` §1.2).
-- [ ] The per-Mission-Type extra CLI args from `assignments` reach the harness invocation verbatim (verify `--max-turns` visibly bounds the ONBOARD session).
-- [ ] Concurrency caps enforced: with per-type cap 1 and three eligible missions, exactly one Dev runs; priority order (incl. unset→Medium) decides which.
-- [ ] Scripted crash test: kill the Dev mid-run → label untouched → re-dispatched next cycle with `attempt_of_step=2`; after 3 scripted failures → `DEVCAKE-FAILED` + comment.
-- [ ] Scripted compare-and-transition test: change the mission's label mid-run by hand → finalization posts artifacts but applies no transition, posts the explanatory comment.
-- [ ] Startup reconciliation: restart the app mid-run → run adopted, finalization completes.
+Exit criteria — **all verified 2026-07-11 against live Linear + live Claude Fable runs (M3 complete)**:
+- [x] DEV-17 autonomously gained: `In Progress`, a `2_ONBOARD.md` transcript, a real token report (**$0.2239**, full cache-aware usage via `session_json`), and — via the **opportunistic-plan variant** — an uploaded `PLAN_2.md` attachment + `DEVCAKE-EXECUTE` (PLAN step skipped). The plain `DEVCAKE-PLAN` branch shares the same verified swap mechanism.
+- [x] Extra CLI args flow from `assignments` through the run spec into the invocation (`--max-turns 15` delivered; the triage run used 9 turns).
+- [x] Concurrency: cap 1 + three missions created in reverse priority order → dispatched urgent→high→low with zero overlap (perfect serialization observed).
+- [x] Crash tests: mid-run `docker kill` → status restored, re-dispatched attempt 2 (DEV-22); three dispatch failures against a broken image → `DEVCAKE-FAILED` + comment at zero token cost (DEV-21); fast kill detection re-verified at **33 s** after fixing the first-heartbeat blind spot.
+- [x] Compare-and-transition: human added `DEVCAKE-PLAN` mid-run (DEV-24) → artifacts posted, **no transition**, explanatory comment.
+- [x] Startup reconciliation: app restarted mid-run → `adopted in-flight run … (dagu: running)` → finalization completed end-to-end (DEV-22).
+
+Field lessons folded into docs 04/07/14/15: Claude Code refuses `--dangerously-skip-permissions` as root (Dev images run fully non-root); the **failure-symmetry rule** (dispatch-time status writes are reverted on failed attempts, else ONBOARD strands at derivation row 9); watchdog liveness references `last_heartbeat or started_at` + immediate first heartbeat; attempt counters restart via a give-up watermark.
 
 ## M4 — PLAN + EXECUTE + forge (GitHub)
 

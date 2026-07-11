@@ -37,6 +37,7 @@ class RunManager:
         self.store = store
         self.messaging = messaging
         self.executor = executor
+        self.mission_mgr = None  # wired by main (MissionManager); None for hello-only
 
     # ── dispatch (docs/04 §3.1, hello variant) ───────────────────────────────
 
@@ -122,25 +123,36 @@ class RunManager:
         elif kind == "runspec.get":
             await self.messaging.reply(
                 run_id, "runspec.result",
-                {"env": run.spec_env, "credential_files": run.spec_files},
+                {"env": run.spec_env, "credential_files": run.spec_files,
+                 "prompt": run.spec_prompt},
             )
         elif kind == "runspec.ack":
             await self.messaging.delete_runspec_result(run_id)
+        elif kind == "activity.get":
+            if self.mission_mgr and run.mission_pmo_id:
+                await self.messaging.reply(
+                    run_id, "activity.result",
+                    await self.mission_mgr.activity_payload(run.mission_pmo_id))
+            else:
+                await self.messaging.reply(run_id, "activity.result",
+                                           {"activity_md": "", "attachments": []})
         elif kind == "run.log":
             log.info("[%s] %s", run_id, payload.get("message", ""))
         elif kind == "run.artifacts":
-            await self._finalize(run, payload)
+            if run.state == "finished":
+                return  # redelivery: idempotent no-op
+            run.state = "finalizing"
+            self.store.save(run)
+            if self.mission_mgr and run.mission_pmo_id:
+                await self.mission_mgr.finalize(run, payload)
+            else:
+                await self._finalize(run, payload)
         else:
             log.warning("unknown message kind %s for %s", kind, run_id)
 
     # ── finalization (docs/04 §4, M1 subset) ─────────────────────────────────
 
     async def _finalize(self, run: Run, payload: dict) -> None:
-        if run.state == "finished":
-            return  # redelivery: idempotent no-op
-        run.state = "finalizing"
-        self.store.save(run)
-
         ctx = extract({"traceparent": run.traceparent}) if run.traceparent else None
         with tracer.start_as_current_span(
             "run.finalize", context=ctx, kind=SpanKind.CONSUMER
@@ -174,4 +186,6 @@ class RunManager:
         run.error = reason
         run.redis_password = None
         self.store.save(run)
+        if self.mission_mgr and run.mission_pmo_id:
+            await self.mission_mgr.restore_after_failure(run)
         log.warning("killed %s → %s (%s)", run.run_id, new_state, reason)

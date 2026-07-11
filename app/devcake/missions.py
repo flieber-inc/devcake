@@ -1,0 +1,397 @@
+"""Mission scheduling and finalization (docs/04) — M3 scope: ONBOARD on Issues.
+
+PLAN/EXECUTE/REVIEW dispatch and the trivial/decompose finalizations land at
+M4/M5; the mechanics here (ordering, caps, grace cycle, compare-and-transition,
+attempt counting) are the permanent ones.
+"""
+
+import base64
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+from opentelemetry import trace
+from opentelemetry.propagate import inject
+from opentelemetry.trace import SpanKind
+
+from .config import AppConfig, DevType
+from .linear import LinearAdapter
+from .messaging import Messaging
+from .pmo import (LABEL_EXECUTE, LABEL_FAILED, LABEL_PLAN, LABEL_SKIP, Mission,
+                  MissionType, PRIORITY_RANK, STAGE_LABELS, derive)
+from .runs import RunManager
+from .state import Run, utcnow
+from .telemetry import OO_ORG, OO_URL
+
+log = logging.getLogger("devcake.missions")
+tracer = trace.get_tracer("devcake")
+
+# M3 gate: only ONBOARD on Issues is dispatched. PLAN/EXECUTE arrive at M4,
+# REVIEW + project decomposition at M5 (docs/16).
+DISPATCHABLE_TYPES = {MissionType.ONBOARD}
+
+STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
+
+AUDIT_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "events.jsonl"
+
+
+def _oo_basic_auth() -> str:
+    email = os.environ.get("OO_ROOT_EMAIL", "")
+    password = os.environ.get("OO_ROOT_PASSWORD", "")
+    return base64.b64encode(f"{email}:{password}".encode()).decode()
+
+
+class MissionManager:
+    def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
+                 pmo: LinearAdapter, runs: RunManager, messaging: Messaging):
+        self.config = config
+        self.dev_types = dev_types
+        self.pmo = pmo
+        self.runs = runs
+        self.messaging = messaging
+        self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
+        self._grace_next: set[str] = set()
+
+    # ── audit log (docs/10: every PMO write) ────────────────────────────────
+
+    def _audit(self, pmo_id: str, action: str, detail: str = "") -> None:
+        AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(AUDIT_PATH, "a") as f:
+            f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                                "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
+        self._grace_next.add(pmo_id)
+
+    def rotate_grace(self) -> None:
+        self._grace, self._grace_next = self._grace_next, set()
+
+    # ── scheduling (docs/04 §§2–3) ───────────────────────────────────────────
+
+    async def schedule(self, missions: list[Mission]) -> int:
+        candidates = []
+        for m in missions:
+            d = derive(m, self.config.adoption_mode)
+            if not d.schedulable or d.mission_type not in DISPATCHABLE_TYPES:
+                continue
+            if m.pmo_kind == "project":
+                continue  # decompose path lands at M5 (ADR-0006)
+            if m.pmo_id in self._grace:
+                continue  # grace cycle after our own writes (docs/04 §2)
+            if any(r.mission_pmo_id == m.pmo_id for r in self.runs.store.active()):
+                continue  # in-flight guard
+            candidates.append((m, d))
+
+        candidates.sort(key=lambda md: (PRIORITY_RANK[md[0].priority],
+                                        md[0].updated_at, md[0].pmo_id))
+        dispatched = 0
+        active = self.runs.store.active()
+        for mission, d in candidates:
+            dev_type = self.dev_types.get(self.config.assignments[d.mission_type.value].dev_type)
+            if dev_type is None:
+                continue
+            if sum(1 for r in active if r.dev_type == dev_type.name) >= dev_type.max_concurrency:
+                continue
+            if len(active) >= self.config.concurrency.global_max:
+                break
+            run = await self.dispatch(mission, d.mission_type, dev_type)
+            if run:
+                active.append(run)
+                dispatched += 1
+        return dispatched
+
+    # ── dispatch (docs/04 §3.1) ──────────────────────────────────────────────
+
+    async def dispatch(self, mission: Mission, mtype: MissionType,
+                       dev_type: DevType) -> Run | None:
+        live = await self.pmo.get_mission(mission.pmo_id)          # live re-read
+        d = derive(live, self.config.adoption_mode)
+        if d.mission_type != mtype:
+            return None                                            # world moved on
+
+        activity = await self.pmo.get_activity(mission.pmo_id)
+        seq = self._derive_seq(activity)
+        # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3):
+        # only failures newer than the last give-up event count
+        since = self._last_giveup_ts(mission.pmo_id)
+        attempt = 1 + sum(1 for r in self.runs.store.all()
+                          if r.mission_pmo_id == mission.pmo_id
+                          and r.mission_type == mtype.value and r.seq == seq
+                          and r.state in ("failed", "timed_out", "orphaned")
+                          and (since is None or r.created_at.isoformat() > since))
+        if attempt > self.config.max_attempts:
+            await self._give_up(live, mtype, attempt - 1)
+            return None
+
+        assignment = self.config.assignments[mtype.value]
+        from .ids import make_run_id
+        run_id = make_run_id(mission.key, seq, mtype.value)
+
+        with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
+            span.set_attribute("devcake.run.id", run_id)
+            span.set_attribute("devcake.mission.key", mission.key)
+            span.set_attribute("devcake.mission.type", mtype.value)
+            span.set_attribute("devcake.dev_type", dev_type.name)
+            span.set_attribute("devcake.run.attempt", attempt)
+            carrier: dict[str, str] = {}
+            inject(carrier)
+            traceparent = carrier.get("traceparent", "")
+
+            redis_password = await self.messaging.create_run_user(run_id)
+            from .prompts import onboard_prompt
+            prompt = onboard_prompt(dev_type.identifying_prompt, live)
+
+            spec_env = {
+                "DEVCAKE_MISSION_ID": mission.pmo_id,
+                "DEVCAKE_MISSION_KEY": mission.key,
+                "DEVCAKE_MISSION_TYPE": mtype.value,
+                "DEVCAKE_DEV_TYPE": dev_type.name,
+                "DEVCAKE_SEQ": str(seq),
+                "DEVCAKE_REPO_URL": self.config.repo.url,
+                "DEVCAKE_DEFAULT_BRANCH": "main",
+                "DEVCAKE_FORGE": self.config.repo.forge,
+                "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
+                "DEVCAKE_EXTRA_ARGS": assignment.extra_cli_args,
+                "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
+                "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
+            }
+            for var in dev_type.credential_env:                    # harness credentials
+                if os.environ.get(var):
+                    spec_env[var] = os.environ[var]
+
+            run = Run(
+                run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
+                dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
+                timeout_seconds=self.config.dev_timeout_minutes * 60,
+                traceparent=traceparent, redis_password=redis_password,
+                spec_env=spec_env, spec_files=[],
+            )
+            run.spec_prompt = prompt
+            run.stage_label_at_dispatch = self._stage_of(live)
+            run.mission_pmo_id = mission.pmo_id
+            self.runs.store.save(run)                              # durable intent first
+
+            await self.runs.executor.start(
+                params={"RUN_ID": run_id, "IMAGE": dev_type.docker_image,
+                        "TRACEPARENT": traceparent,
+                        "REDIS_USER": f"dev-{run_id}", "REDIS_PASSWORD": redis_password},
+                dag_run_id=run_id)
+
+            if live.status == "backlog":
+                await self.pmo.set_status(mission.pmo_id, "in_progress")
+                self._audit(mission.pmo_id, "set_status", "in_progress")
+            log.info("dispatched %s (attempt %d, dev=%s)", run_id, attempt, dev_type.name)
+            return run
+
+    @staticmethod
+    def _stage_of(mission: Mission) -> str | None:
+        stage = mission.labels & STAGE_LABELS
+        return next(iter(stage)) if stage else None
+
+    @staticmethod
+    def _derive_seq(activity) -> int:
+        """docs/02 §8 — count prior step artifacts in the feed + 1."""
+        steps = [int(m.group(1)) for e in activity.entries
+                 for m in STEP_MARKER.finditer(e.body or "")]
+        return (max(steps) + 1) if steps else 1
+
+    @staticmethod
+    def _last_giveup_ts(pmo_id: str) -> str | None:
+        try:
+            ts = None
+            with open(AUDIT_PATH) as f:
+                for line in f:
+                    e = json.loads(line)
+                    if e.get("pmo_id") == pmo_id and e.get("action") == "devcake_failed":
+                        ts = e["ts"]
+            return ts
+        except FileNotFoundError:
+            return None
+
+    async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) -> None:
+        if LABEL_FAILED in mission.labels:
+            return
+        await self.pmo.swap_labels(mission.pmo_id, remove=set(), add={LABEL_FAILED})
+        await self.pmo.post_comment(
+            mission.pmo_id,
+            f"⚠️ **DevCake gave up on this mission's {mtype.value} step** after "
+            f"{attempts} failed attempts. Remove the `DEVCAKE-FAILED` label to retry. "
+            f"(Traces: search run ids `{mission.key}-*` in OpenObserve.)")
+        self._audit(mission.pmo_id, "devcake_failed", mtype.value)
+        log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
+
+    # ── finalization (docs/04 §4) ────────────────────────────────────────────
+
+    async def finalize(self, run: Run, payload: dict) -> None:
+        result = payload.get("result") or {}
+        outcome = result.get("outcome", "")
+        transcript = payload.get("transcript_md", "")
+        token_report = payload.get("token_report") or {}
+        plan_md = payload.get("plan_md")
+        pmo_id = run.mission_pmo_id
+
+        ctx = None
+        if run.traceparent:
+            from opentelemetry.propagate import extract
+            ctx = extract({"traceparent": run.traceparent})
+        with tracer.start_as_current_span("run.finalize", context=ctx,
+                                          kind=SpanKind.CONSUMER) as span:
+            span.set_attribute("devcake.run.id", run.run_id)
+            span.set_attribute("devcake.outcome", outcome)
+            for k in ("input_tokens", "output_tokens", "total_tokens"):
+                if token_report.get(k) is not None:
+                    span.set_attribute(f"devcake.tokens.{k.removesuffix('_tokens')}",
+                                       token_report[k])
+            if token_report.get("cost_usd") is not None:
+                span.set_attribute("devcake.cost.usd", token_report["cost_usd"])
+
+            # 1 — transcript (idempotent via finalized_steps)
+            if "transcript" not in run.finalized_steps:
+                await self._post_transcript(run, transcript)
+                run.finalized_steps.append("transcript")
+                self.runs.store.save(run)
+
+            # 2 — token report (INV-5: always)
+            if "token_report" not in run.finalized_steps:
+                await self.pmo.post_comment(pmo_id, self._token_report_md(run, token_report))
+                run.finalized_steps.append("token_report")
+                self.runs.store.save(run)
+
+            # failure artifact (docs/07 §4 nonzero exits): evidence posted above,
+            # NO transition — and the dispatch-time status write is REVERTED so the
+            # mission re-derives exactly as before the attempt (INV-3; without this,
+            # a failed first ONBOARD strands the mission at in_progress/no-label = row 9)
+            if not outcome:
+                await self.messaging.delete_run_user(run.run_id)
+                await self.messaging.delete_reply_stream(run.run_id)
+                run.result = None
+                run.state, run.ended_at = "failed", utcnow()
+                run.error = "dev failure artifact (no valid result.json)"
+                run.redis_password = None
+                self.runs.store.save(run)
+                await self.restore_after_failure(run)
+                log.warning("run %s failed (attempt %d) — will retry via rescheduling",
+                            run.run_id, run.attempt_of_step)
+                return
+
+            # 3 — compare-and-transition
+            if "transition" not in run.finalized_steps:
+                await self._transition(run, outcome, plan_md)
+                run.finalized_steps.append("transition")
+                self.runs.store.save(run)
+
+            await self.messaging.delete_run_user(run.run_id)
+            await self.messaging.delete_reply_stream(run.run_id)
+            run.result = result
+            run.state, run.ended_at = "finished", utcnow()
+            run.redis_password = None
+            self.runs.store.save(run)
+            log.info("finalized %s (%s)", run.run_id, outcome)
+
+    async def _transition(self, run: Run, outcome: str, plan_md: str | None) -> None:
+        pmo_id = run.mission_pmo_id
+        live = await self.pmo.get_mission(pmo_id)                   # live re-read
+        if self._stage_of(live) != run.stage_label_at_dispatch:
+            await self.pmo.post_comment(
+                pmo_id,
+                f"ℹ️ DevCake completed a **{run.mission_type}** run (`{run.run_id}`), but "
+                f"this mission's state was changed externally while it ran. The output is "
+                f"posted above; **no status or label changes were applied**.")
+            self._audit(pmo_id, "external_transition", run.run_id)
+            log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
+            return
+
+        if outcome == "plan_needed" and plan_md:
+            url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
+                                                   plan_md.encode())
+            await self.pmo.post_comment(
+                pmo_id, f"📋 DevCake attached an opportunistic plan from triage: "
+                        f"[PLAN_{run.seq}.md]({url}) — skipping the PLAN step.")
+            await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_EXECUTE})
+            self._audit(pmo_id, "label_add", LABEL_EXECUTE)
+        elif outcome == "plan_needed":
+            await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_PLAN})
+            self._audit(pmo_id, "label_add", LABEL_PLAN)
+        else:
+            # trivial/decomposed finalization lands at M5 — park safely (no loops)
+            await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_SKIP})
+            await self.pmo.post_comment(
+                pmo_id,
+                f"ℹ️ DevCake's triage returned outcome `{outcome}`, whose finalization "
+                f"ships at milestone M5. Added `DEVCAKE-SKIP` to park this mission; "
+                f"remove the label after M5 to resume.")
+            self._audit(pmo_id, "label_add", f"{LABEL_SKIP} (outcome {outcome} parked)")
+
+    async def restore_after_failure(self, run: Run) -> None:
+        """Revert the dispatch-time backlog→in_progress write after a failed attempt,
+        iff the mission is still exactly as we left it (live re-read; human edits win)."""
+        if run.stage_label_at_dispatch is not None or not run.mission_pmo_id:
+            return  # only ONBOARD dispatches from backlog change the status
+        try:
+            live = await self.pmo.get_mission(run.mission_pmo_id)
+            if live.status == "in_progress" and self._stage_of(live) is None:
+                await self.pmo.set_status(run.mission_pmo_id, "backlog")
+                self._audit(run.mission_pmo_id, "set_status",
+                            "backlog (restored after failed attempt)")
+        except Exception:
+            log.exception("status restore failed for %s", run.run_id)
+
+    async def _post_transcript(self, run: Run, transcript: str) -> None:
+        name = f"{run.seq}_{run.mission_type}.md"
+        body = f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n---\n\n{transcript}"
+        if len(body.encode()) > 50 * 1024:                          # docs/05 §4 threshold
+            url = await self.pmo.upload_attachment(run.mission_pmo_id, name,
+                                                   transcript.encode())
+            body = (f"🧾 DevCake transcript `{name}` (run `{run.run_id}`) — "
+                    f"too large for a comment, attached: [{name}]({url})")
+        await self.pmo.post_comment(run.mission_pmo_id, body)
+        self._audit(run.mission_pmo_id, "transcript", name)
+
+    @staticmethod
+    def _token_report_md(run: Run, tr: dict) -> str:
+        def fmt(v):  # noqa: ANN001
+            return "—" if v is None else v
+        cost = tr.get("cost_usd")
+        return (
+            f"🧮 DevCake token report — step {run.seq} ({run.mission_type}, {run.dev_type})\n"
+            f"model: {fmt(tr.get('model'))} · input: {fmt(tr.get('input_tokens'))} · "
+            f"output: {fmt(tr.get('output_tokens'))}\n"
+            f"cache read/write: {fmt(tr.get('cache_read_tokens'))}/"
+            f"{fmt(tr.get('cache_write_tokens'))}"
+            + (f"\ncost: ${cost:.4f}" if cost is not None else "")
+            + f"\nextraction: {fmt(tr.get('extraction_method'))}\nrun: {run.run_id}")
+
+    # ── activity rendering for the Dev workspace (docs/07 §2 index format) ──
+
+    async def activity_payload(self, pmo_id: str) -> dict:
+        act = await self.pmo.get_activity(pmo_id)
+        m = act.mission
+        lines = [
+            f"# {m.key}: {m.title}",
+            f"> Kind: {m.pmo_kind} · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
+            f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
+            "## Description", m.description or "(none)", "",
+            "## Activity (chronological index — long bodies live as files in this folder)",
+        ]
+        attachments = []
+        for e in act.entries:
+            body = e.body or ""
+            if len(body) > 2048:                                    # externalize long bodies
+                fname = f"entry-{e.ts:%Y%m%dT%H%M%S}.md"
+                attachments.append({"filename": fname,
+                                    "content_b64": base64.b64encode(body.encode()).decode()})
+                body = body[:300].replace("\n", " ") + f"… — see: {fname}"
+            lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} ({e.kind})")
+            lines.append(body)
+            for url in e.attachments:
+                try:
+                    data = await self.pmo.download_asset(url)
+                    fname = url.rsplit("/", 1)[-1][:80] or "attachment.bin"
+                    attachments.append({"filename": fname,
+                                        "content_b64": base64.b64encode(data).decode()})
+                    lines.append(f"[attachment: {fname}]")
+                except Exception:
+                    lines.append(f"[attachment unavailable: {url}]")
+            lines.append("")
+        return {"activity_md": "\n".join(lines), "attachments": attachments}

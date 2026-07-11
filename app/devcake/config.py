@@ -24,9 +24,79 @@ class PMOConfig(BaseModel):
     team_key: str = ""
 
 
+class RepoConfig(BaseModel):
+    forge: Literal["github", "gitlab"] = "github"
+    url: str = ""
+    token_env: str = "GITHUB_TOKEN"
+    reviewer_token_env: str | None = None
+
+    @property
+    def token(self) -> str:
+        return os.environ.get(self.token_env, "")
+
+
+class Assignment(BaseModel):
+    dev_type: str = ""
+    extra_cli_args: str = ""
+
+
+class Concurrency(BaseModel):
+    global_max: int = 3
+
+
+class DevType(BaseModel):
+    """docs/02 §6 — one YAML per Dev Type under /data/config/dev_types/."""
+    name: str
+    harness_template: Literal["claude-code", "grok-build", "codex"]
+    identifying_prompt: str = ""
+    mcp_setup_commands: list[str] = Field(default_factory=list)
+    credential_env: list[str] = Field(default_factory=list)  # env vars passed through
+    max_concurrency: int = 1
+    docker_image: str = ""
+
+
+DEFAULT_ASSIGNMENTS = {
+    "ONBOARD": Assignment(dev_type="senior-dev", extra_cli_args="--max-turns 15"),
+    "PLAN": Assignment(dev_type="senior-dev"),
+    "EXECUTE": Assignment(dev_type="main-dev"),
+    "REVIEW": Assignment(dev_type="senior-dev"),
+}
+
+# docs/03 §7 — canonical identifying prompts (seed data; admin-editable)
+SENIOR_PROMPT = (
+    "You are **Senior Dev**, DevCake's judgment-heavy engineer. You assess, plan, and "
+    "review software work with the skepticism of a staff engineer who has been burned "
+    "before. You are precise about scope: you do exactly what your current mission type "
+    "asks — no more. You never invent requirements, you flag what you cannot verify, and "
+    "you write conclusions that a teammate can act on without asking follow-up questions."
+)
+MAIN_PROMPT = (
+    "You are **Main Dev**, DevCake's implementation engineer. You turn plans into working, "
+    "tested code. You follow the plan you are given; where reality contradicts the plan, "
+    "you implement the smallest sound deviation and document it prominently in your "
+    "summary. You match the conventions of the codebase you are in, you run the tests, "
+    "and you never commit until the work is complete."
+)
+
+DEFAULT_DEV_TYPES = [
+    DevType(name="senior-dev", harness_template="claude-code",
+            identifying_prompt=SENIOR_PROMPT,
+            credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+            max_concurrency=2, docker_image="devcake/dev-claude-code:latest"),
+    DevType(name="main-dev", harness_template="grok-build",
+            identifying_prompt=MAIN_PROMPT,
+            credential_env=["XAI_API_KEY"],
+            max_concurrency=2, docker_image="devcake/dev-grok-build:latest"),
+]
+
+
 class AppConfig(BaseModel):
     schema_version: int = 1
     pmo: PMOConfig = Field(default_factory=PMOConfig)
+    repo: RepoConfig = Field(default_factory=RepoConfig)
+    assignments: dict[str, Assignment] = Field(
+        default_factory=lambda: dict(DEFAULT_ASSIGNMENTS))
+    concurrency: Concurrency = Field(default_factory=Concurrency)
     adoption_mode: Literal["opt_in", "opt_out"] = "opt_in"
     poll_interval_seconds: int = 30
     dev_timeout_minutes: int = 120
@@ -39,19 +109,40 @@ class AppConfig(BaseModel):
         return os.environ.get(self.pmo.api_key_env, "")
 
 
+def _atomic_yaml(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
         cfg = AppConfig.model_validate(yaml.safe_load(CONFIG_PATH.read_text()) or {})
-        log.info("config: loaded %s (team=%s, adoption=%s)",
-                 CONFIG_PATH, cfg.pmo.team_key, cfg.adoption_mode)
-        return cfg
-    cfg = AppConfig(pmo=PMOConfig(team_key=os.environ.get("DEVCAKE_TEAM_KEY", "")))
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=CONFIG_PATH.parent, suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        yaml.safe_dump(cfg.model_dump(), f, sort_keys=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, CONFIG_PATH)
-    log.info("config: first boot — seeded %s from env (team=%s)", CONFIG_PATH, cfg.pmo.team_key)
+    else:
+        cfg = AppConfig(pmo=PMOConfig(team_key=os.environ.get("DEVCAKE_TEAM_KEY", "")))
+        log.info("config: first boot — seeding %s from env", CONFIG_PATH)
+    # top-up missing/env-provided fields (e.g. repo added at M3), then persist
+    if not cfg.repo.url and os.environ.get("DEVCAKE_REPO_URL"):
+        cfg.repo.url = os.environ["DEVCAKE_REPO_URL"]
+    _atomic_yaml(CONFIG_PATH, cfg.model_dump())
+    log.info("config: team=%s adoption=%s repo=%s",
+             cfg.pmo.team_key, cfg.adoption_mode, cfg.repo.url or "(unset)")
     return cfg
+
+
+def load_dev_types() -> dict[str, DevType]:
+    dt_dir = CONFIG_PATH.parent / "dev_types"
+    dt_dir.mkdir(parents=True, exist_ok=True)
+    if not any(dt_dir.glob("*.yaml")):
+        for dt in DEFAULT_DEV_TYPES:
+            _atomic_yaml(dt_dir / f"{dt.name}.yaml", dt.model_dump())
+        log.info("config: seeded default dev types (senior-dev, main-dev)")
+    out = {}
+    for p in sorted(dt_dir.glob("*.yaml")):
+        dt = DevType.model_validate(yaml.safe_load(p.read_text()) or {})
+        out[dt.name] = dt
+    return out

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { get } from "./../api.js";
+import { get, send } from "./../api.js";
 
 const cfg = window.DEVCAKE || {};
 const PAGE = 25;
@@ -9,27 +9,119 @@ const traceUrl = (runId) =>
   `${cfg.ooUrl || "http://localhost:5080"}/web/traces?org_identifier=default` +
   `&stream=default&period=1w&search_mode=spans&query=${btoa(`devcake_run_id='${runId}'`)}`;
 
+function ConfirmDialog({ open, title, body, confirmLabel, busy, onConfirm, onCancel }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-neutral-900">
+        <h4 className="mb-2 text-base font-semibold">{title}</h4>
+        <p className="mb-5 whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-300">
+          {body}
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium disabled:opacity-40 dark:border-neutral-700"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={busy}
+            onClick={onConfirm}
+            className="rounded-md bg-red-700 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 disabled:opacity-40"
+          >
+            {busy ? "Clearing…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ExecutorTab() {
   const [data, setData] = useState({ total: 0, runs: [] });
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState("");
-  useEffect(() => {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearMsg, setClearMsg] = useState("");
+  const [clearErr, setClearErr] = useState("");
+
+  const load = () => {
     const q = `/runs?limit=${PAGE}&offset=${offset}` +
       (filter ? `&mission_key=${encodeURIComponent(filter)}` : "");
-    const load = () => get(q).then(setData).catch(() => {});
+    return get(q).then(setData).catch(() => {});
+  };
+
+  useEffect(() => {
     load();
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
   }, [offset, filter]);
+
+  const doClear = async () => {
+    setClearing(true);
+    setClearErr("");
+    setClearMsg("");
+    try {
+      const result = await send("POST", "/system/clear-runs");
+      const local = result.local?.runs_deleted ?? 0;
+      const dagu = result.dagu?.deleted ?? 0;
+      const oo = (result.openobserve?.deleted || []).length;
+      setClearMsg(
+        `Cleared ${local} local run${local === 1 ? "" : "s"}, ` +
+        `${dagu} Dagu run${dagu === 1 ? "" : "s"}, ` +
+        `${oo} OpenObserve stream${oo === 1 ? "" : "s"}. ` +
+        `Config and credentials preserved.`
+      );
+      if (!result.ok) {
+        const bits = [];
+        if (result.dagu?.failed?.length) bits.push(`Dagu still holds: ${result.dagu.failed.join(", ")}`);
+        if (result.openobserve?.errors?.length) bits.push(result.openobserve.errors.join("; "));
+        if (result.dagu?.error) bits.push(result.dagu.error);
+        if (result.openobserve?.error) bits.push(result.openobserve.error);
+        if (result.redis?.error) bits.push(result.redis.error);
+        if (bits.length) setClearErr(bits.join(" · "));
+      }
+      setOffset(0);
+      setFilter("");
+      await load();
+      setConfirmOpen(false);
+    } catch (e) {
+      setClearErr(String(e.message || e));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">Executor — Dagu</h2>
-        <a href={cfg.daguUrl || "http://localhost:8525"} target="_blank" rel="noopener"
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:brightness-110">
-          Open Dagu ↗
-        </a>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setConfirmOpen(true); setClearErr(""); }}
+            className="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-950"
+          >
+            Clear runs
+          </button>
+          <a href={cfg.daguUrl || "http://localhost:8525"} target="_blank" rel="noopener"
+            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:brightness-110">
+            Open Dagu ↗
+          </a>
+        </div>
       </div>
+      {clearMsg && (
+        <p className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800 dark:border-green-900 dark:bg-green-950 dark:text-green-200">
+          {clearMsg}
+        </p>
+      )}
+      {clearErr && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          Partial clear: {clearErr}
+        </p>
+      )}
       <div className="flex items-center gap-3">
         <input
           className="w-64 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
@@ -75,6 +167,21 @@ export default function ExecutorTab() {
           ))}
         </tbody>
       </table>
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Clear all run history?"
+        body={
+          "This wipes local run records, stops any in-flight Devs, deletes Dagu " +
+          "execution history, and empties OpenObserve logs and traces.\n\n" +
+          "Config, credentials, and everything in Linear / GitHub / GitLab are " +
+          "untouched. Attempt counters reset (INV-1).\n\n" +
+          "This cannot be undone."
+        }
+        confirmLabel="Clear everything"
+        busy={clearing}
+        onConfirm={doClear}
+        onCancel={() => !clearing && setConfirmOpen(false)}
+      />
     </div>
   );
 }

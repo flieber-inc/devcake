@@ -214,6 +214,28 @@ async def get_run(run_id: str):
     return data
 
 
+@app.post("/api/v1/system/clear-runs")
+async def clear_runs():
+    """Operator wipe: local run state + Dagu history + OpenObserve data.
+
+    Config, secrets, and everything in the PMO/forge are untouched (INV-1).
+    In-flight Devs are stopped first. See docs/11 §3 and docs/10 §5.
+    """
+    from .clear import clear_all
+    with tracer.start_as_current_span("system.clear_runs") as span:
+        result = await clear_all(store, executor, messaging)
+        missions_cache.clear()
+        mission_mgr._grace.clear()
+        mission_mgr._grace_next.clear()
+        # auth breakers stay — they reflect live credential health, not run history
+        span.set_attribute("devcake.clear.runs_deleted",
+                           int((result.get("local") or {}).get("runs_deleted") or 0))
+        span.set_attribute("devcake.clear.dagu_deleted",
+                           int((result.get("dagu") or {}).get("deleted") or 0))
+        span.set_attribute("devcake.clear.ok", bool(result.get("ok")))
+        return result
+
+
 # ── Config CRUD (docs/11 §1; writes validate once here, hot-apply next cycle) ──
 
 @app.get("/api/v1/config")

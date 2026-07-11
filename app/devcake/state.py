@@ -90,3 +90,14 @@ class RunStore:
 
     def active(self) -> list[Run]:
         return [r for r in self.all() if r.state in ("dispatched", "running", "finalizing")]
+
+    def clear(self) -> int:
+        """Delete every run record. Returns how many files were removed."""
+        n = 0
+        for p in self.root.glob("*.json"):
+            try:
+                p.unlink()
+                n += 1
+            except OSError:
+                continue
+        return n

@@ -22,6 +22,7 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 | `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns team name + label status |
 | `POST /api/v1/connections/forge/test` | Live probe: auth + repo fetch + default branch (+ reviewer token check) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
+| `POST /api/v1/system/clear-runs` | Operator wipe: stop in-flight Devs, delete local run records + audit log, purge Dagu run history, delete OpenObserve log/trace streams. Config + secrets + PMO/forge untouched (`10-persistence.md` §5) |
 | `GET /api/v1/missions` | Debug: current derived Missions + types (M2, `16-roadmap.md`) |
 
 All writes go through the app (single validation point, `10-persistence.md` §4).
@@ -58,7 +59,17 @@ Save = `PUT` per section; optimistic UI with server errors inline.
 
 ## 3. Executor tab
 
-A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`), above a live run table from `GET /api/v1/runs` — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live at M6). No iframe.
+A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a **"Clear runs"** danger button, above a live run table from `GET /api/v1/runs` — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live at M6). No iframe.
+
+**Clear runs** opens a React confirmation dialog (never `window.confirm`) and on confirm calls `POST /api/v1/system/clear-runs`. That endpoint:
+
+1. Stops any in-flight Dagu runs (`POST /dags/dev-run/stop-all`).
+2. Deletes every local Run file under `/data/state/runs/` and truncates `events.jsonl` (attempt counters and give-up watermarks reset — INV-1 / `10-persistence.md` §5).
+3. Deletes every Dagu `dev-run` history record (`DELETE /dag-runs/dev-run/{id}`, paginated list).
+4. Deletes OpenObserve log/trace streams (they recreate on next ingest; dashboards stay).
+5. Trims the Redis ingress stream, drops leftover reply streams and per-run ACL users.
+
+**Preserved:** `/data/config`, `/data/secrets`, Linear/GitHub/GitLab state, circuit breakers (credential health).
 
 ## 4. Logs tab
 

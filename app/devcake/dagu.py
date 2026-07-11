@@ -46,3 +46,50 @@ class DaguExecutor:
                 return None
             resp.raise_for_status()
             return resp.json()
+
+    async def stop_all(self) -> list[str]:
+        """Stop every in-flight run of the dev-run DAG. Returns any error strings."""
+        async with httpx.AsyncClient(timeout=30, auth=_AUTH) as client:
+            resp = await client.post(f"{self.base}/api/v1/dags/{DAG_NAME}/stop-all")
+            if resp.status_code == 404:
+                return []
+            resp.raise_for_status()
+            return list((resp.json() or {}).get("errors") or [])
+
+    async def list_all_run_ids(self) -> list[str]:
+        """Paginate through every historical dagRunId for the dev-run DAG."""
+        ids: list[str] = []
+        cursor: Optional[str] = None
+        async with httpx.AsyncClient(timeout=30, auth=_AUTH) as client:
+            while True:
+                params: dict[str, Any] = {"limit": 500}
+                if cursor:
+                    params["cursor"] = cursor
+                resp = await client.get(
+                    f"{self.base}/api/v1/dag-runs/{DAG_NAME}", params=params
+                )
+                resp.raise_for_status()
+                body = resp.json() or {}
+                for r in body.get("dagRuns") or []:
+                    rid = r.get("dagRunId")
+                    if rid:
+                        ids.append(rid)
+                cursor = body.get("nextCursor") or None
+                if not cursor:
+                    break
+        return ids
+
+    async def delete(self, dag_run_id: str) -> bool:
+        """Permanently remove one DAG-run record. True if deleted (or already gone)."""
+        async with httpx.AsyncClient(timeout=15, auth=_AUTH) as client:
+            resp = await client.delete(
+                f"{self.base}/api/v1/dag-runs/{DAG_NAME}/{dag_run_id}"
+            )
+            if resp.status_code in (204, 404):
+                return True
+            if resp.status_code == 400:
+                # still running / not deletable yet
+                log.warning("dagu delete refused for %s: %s", dag_run_id, resp.text[:200])
+                return False
+            resp.raise_for_status()
+            return True

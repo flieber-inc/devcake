@@ -46,8 +46,9 @@ created its nine `DEVCAKE-*` labels in your Linear team — go look.
 
 ## Step 2 — Meet the three tabs
 
-- **Config** — settings live here from M6 onward; until then `.env` +
-  `/data/config/config.yaml` rule.
+- **Config** — every setting: PMO team, repository, Dev Types (with OAuth
+  wizards), assignments, limits, and the two big toggles (adoption mode,
+  auto-merge). Secrets stay in `.env`; everything else is editable here.
 - **Executor** — opens Dagu, where every Dev run appears under a name like
   `DEV-17-3-EXECUTE-560E6T`: *mission* `DEV-17`, *step* 3, *type* EXECUTE.
 - **Logs** — opens OpenObserve. One Dev run = one trace, from dispatch through

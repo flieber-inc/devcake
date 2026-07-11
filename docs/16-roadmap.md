@@ -33,11 +33,13 @@ Field notes folded into `13` §4: Dagu API auth (basic mode), the `DOCKER_GID` r
 
 **Goal:** the world becomes visible. **Implements:** `02`, `05` (read side + label bootstrap), poll loop of `04` §1 (no dispatch).
 
-Exit criteria:
-- [ ] Against a seeded sandbox Linear team (fixture script committed under `scripts/seed_sandbox.py`), `GET /api/v1/missions` returns correctly derived Mission Types for **every row** of the derivation table (`02` §2), including conflict, SKIP, FAILED, and in-progress-without-label rows.
-- [ ] The nine labels are auto-created in the sandbox team on startup, idempotently.
-- [ ] Projects normalize (status/priority/labels) and derive per ADR-0006.
-- [ ] PMO adapter contract tests 1–5, 8–10 (`05` §7) pass.
+Exit criteria — **all verified 2026-07-11 against the live sandbox team (M2 complete)**:
+- [x] With `scripts/seed_sandbox.py` fixtures, `GET /api/v1/missions` derives **every row** of the derivation table correctly — incl. conflict, SKIP, FAILED, in-progress-without-label, awaiting-merge, and the opt-in gate (the team's pre-existing issues were correctly not adopted: the backlog-stampede protection observed live).
+- [x] The nine labels auto-created idempotently on startup — in both Linear namespaces (team issue labels AND workspace project labels, a separate entity — `05` §5).
+- [x] The project fixture normalizes (status/priority/project-labels) and derives per ADR-0006.
+- [x] PMO adapter contract battery 1–5, 8–10 (`scripts/contract_tests_pmo.py`, run in-container against the sandbox): 8/8 pass.
+
+Field notes folded into `05` §5: project labels are workspace-level (`projectLabelCreate`); Linear's ~10k query-complexity budget forces split queries.
 
 ## M3 — Scheduler + real Dev runtime + ONBOARD
 

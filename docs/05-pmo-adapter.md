@@ -82,6 +82,8 @@ At startup (`04-orchestrator.md` §6) the app calls `ensure_labels(team, {the ni
 
 `swap_labels` is implemented as a single `issueUpdate(labelIds: [...])` computed from the live label set (read-modify-write with the removal and addition applied together), which is the closest-to-atomic operation Linear offers; `capabilities().native_label_swap_atomic = True`.
 
+**Verified at M2:** (a) Linear **project labels are a separate, workspace-level entity** (`projectLabels` / `projectLabelCreate`) — `ensure_labels` creates the nine managed labels in *both* namespaces, and `ProjectUpdateInput.labelIds` takes project-label ids, not issue-label ids; (b) Linear enforces a **per-query complexity budget** (~10k) — queries stay small and split rather than nesting team+issues+projects in one request.
+
 ## 6. Projects as Missions
 
 Projects are normalized into Missions like Issues (`pmo_kind="project"`, `key="PRJ-{slug}"`). Policy (ADR `0006-projects-always-decompose.md`):

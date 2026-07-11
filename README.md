@@ -2,7 +2,7 @@
 
 **DevCake is a lightweight, production-grade agentic developer.** It runs automated coding agents ("**Devs**") in Docker containers that systematically resolve work items ("**Missions**") from your project-management system (v0: **Linear**) — assessing, planning, executing, and reviewing them, ending in pull requests on your repository (GitHub or GitLab). A **Mission** is any work request of any shape or size (a Linear Project or Issue alike); a **Dev Type** pairs a model with a harness (v0: **Senior Dev** = Claude Fable/Claude Code for onboarding, planning, and review; **Main Dev** = Grok 4.5/Grok Build for execution); each Mission flows through up to four **Mission Types** — `ONBOARD → PLAN → EXECUTE → REVIEW` — driven entirely by labels and statuses in the PMO System, which is always the single source of truth.
 
-> **Status:** implementation in progress per [`docs/16-roadmap.md`](docs/16-roadmap.md) — **M1 complete** (dispatch mechanics proven end-to-end with a stub Dev: Dagu-spawned container, Redis protocol, per-run ACLs, linked traces, watchdog kill); next: M2 (Linear read path).
+> **Status:** implementation in progress per [`docs/16-roadmap.md`](docs/16-roadmap.md) — **M2 complete** (Linear read path live: label bootstrap in both namespaces, full derivation table verified against a seeded sandbox, 8/8 adapter contract tests); next: M3 (scheduler + real Dev runtime + ONBOARD).
 
 ## Architecture at a glance
 

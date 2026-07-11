@@ -14,8 +14,11 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
+from .config import load_config
 from .dagu import DAGU_URL, DaguExecutor, DuplicateRun
+from .linear import LinearAdapter, PMOTransient
 from .messaging import Messaging
+from .pmo import ALL_LABELS, derive
 from .runs import RunManager
 from .state import RunStore
 from .telemetry import OO_URL, setup_telemetry
@@ -30,27 +33,55 @@ REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
 
 tracer = setup_telemetry()
 
+config = load_config()
 store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
+pmo = LinearAdapter(config.api_key)
+
+# poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
+missions_cache: list[dict] = []
 
 
 async def poll_loop() -> None:
-    """M0 stub of the orchestrator poll cycle (docs/04 §1); real derivation at M2."""
+    """Poll cycle (docs/04 §1) — M2 scope: fetch + derive + cache; dispatch at M3."""
     cycle = 0
     while True:
         cycle += 1
         with tracer.start_as_current_span("poll.cycle") as span:
             span.set_attribute("devcake.poll.cycle", cycle)
-            span.set_attribute("devcake.missions.seen", 0)
-            span.set_attribute("devcake.missions.candidates", 0)
-            span.set_attribute("devcake.missions.dispatched", 0)
-        await asyncio.sleep(POLL_INTERVAL)
+            try:
+                missions = await pmo.list_all(config.pmo.team_key)
+                derived = [(m, derive(m, config.adoption_mode)) for m in missions]
+                candidates = [m for m, d in derived if d.schedulable]
+                missions_cache.clear()
+                missions_cache.extend({
+                    "key": m.key, "kind": m.pmo_kind, "title": m.title,
+                    "status": m.status, "priority": m.priority,
+                    "labels": sorted(m.labels), "mission_type": d.mission_type,
+                    "schedulable": d.schedulable, "reason": d.reason,
+                    "pmo_id": m.pmo_id,
+                } for m, d in derived)
+                span.set_attribute("devcake.missions.seen", len(missions))
+                span.set_attribute("devcake.missions.candidates", len(candidates))
+                span.set_attribute("devcake.missions.dispatched", 0)  # M3
+                log.info("poll.cycle %d: %d missions, %d candidates",
+                         cycle, len(missions), len(candidates))
+            except PMOTransient as e:
+                span.set_attribute("devcake.outcome", "PMO_TRANSIENT")
+                log.warning("poll.cycle %d skipped: %s", cycle, e)
+        await asyncio.sleep(config.poll_interval_seconds)
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    # startup reconciliation step 2 (docs/04 §6): ensure the nine managed labels
+    try:
+        await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)
+        log.info("labels ensured in team %s", config.pmo.team_key)
+    except Exception:
+        log.exception("label bootstrap failed — poll loop will keep retrying reads")
     tasks = [
         asyncio.create_task(poll_loop()),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth)),
@@ -94,16 +125,28 @@ async def health():
         _check_http(f"{DAGU_URL}/api/v1/health"),
         _check_http(f"{OO_URL}/healthz"),
     )
+    try:
+        await pmo._team(config.pmo.team_key)
+        pmo_ok = True
+    except Exception:
+        pmo_ok = False
     return {
         "app": True,
         "redis": redis_ok,
         "dagu": dagu_ok,
         "openobserve": oo_ok,
-        "pmo": None,          # wired at M2
+        "pmo": pmo_ok,
         "forge": None,        # wired at M4
         "config_valid": True,
         "circuit_breakers": {},
     }
+
+
+@app.get("/api/v1/missions")
+async def list_missions():
+    """Current derived Missions (poll-cycle snapshot) — M2 exit criterion."""
+    return {"team": config.pmo.team_key, "adoption_mode": config.adoption_mode,
+            "missions": missions_cache}
 
 
 @app.get("/api/v1/runs")

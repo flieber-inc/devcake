@@ -144,6 +144,18 @@ def load_config() -> AppConfig:
     return cfg
 
 
+def save_config(cfg: AppConfig) -> None:
+    _atomic_yaml(CONFIG_PATH, cfg.model_dump())
+
+
+def save_dev_type(dt: DevType) -> None:
+    _atomic_yaml(CONFIG_PATH.parent / "dev_types" / f"{dt.name}.yaml", dt.model_dump())
+
+
+def delete_dev_type(name: str) -> None:
+    (CONFIG_PATH.parent / "dev_types" / f"{name}.yaml").unlink(missing_ok=True)
+
+
 def load_dev_types() -> dict[str, DevType]:
     dt_dir = CONFIG_PATH.parent / "dev_types"
     dt_dir.mkdir(parents=True, exist_ok=True)

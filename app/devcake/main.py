@@ -14,7 +14,9 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from .config import load_config, load_dev_types
+from .config import (AppConfig, Assignment, DevType, delete_dev_type, load_config,
+                     load_dev_types, save_config, save_dev_type)
+from .oauth import OAuthManager
 from .dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from .linear import LinearAdapter, PMOTransient
 from .messaging import Messaging
@@ -43,6 +45,8 @@ manager = RunManager(store, messaging, executor)
 pmo = LinearAdapter(config.api_key)
 mission_mgr = MissionManager(config, dev_types, pmo, manager, messaging)
 manager.mission_mgr = mission_mgr
+oauth_mgr = OAuthManager(manager, messaging, dev_types)
+manager.oauth_mgr = oauth_mgr
 
 # poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
 missions_cache: list[dict] = []
@@ -203,6 +207,136 @@ async def get_run(run_id: str):
     data["spec_env"] = {k: ("«redacted»" if "SECRET" in k or "OTLP_BASIC" in k else v)
                         for k, v in data["spec_env"].items()}
     return data
+
+
+# ── Config CRUD (docs/11 §1; writes validate once here, hot-apply next cycle) ──
+
+@app.get("/api/v1/config")
+async def get_config():
+    data = config.model_dump()
+    return data
+
+
+@app.put("/api/v1/config")
+async def put_config(body: dict):
+    global config
+    try:
+        merged = AppConfig.model_validate({**config.model_dump(), **body})
+    except Exception as e:
+        raise HTTPException(422, str(e))
+    for field in merged.model_fields:
+        setattr(config, field, getattr(merged, field))
+    save_config(config)
+    mission_mgr.reload_forge()
+    return config.model_dump()
+
+
+@app.get("/api/v1/dev-types")
+async def list_dev_types():
+    return [d.model_dump() for d in dev_types.values()]
+
+
+@app.post("/api/v1/dev-types")
+@app.put("/api/v1/dev-types/{name}")
+async def upsert_dev_type(body: dict, name: str | None = None):
+    try:
+        dt = DevType.model_validate(body if name is None else {**body, "name": name})
+    except Exception as e:
+        raise HTTPException(422, str(e))
+    dev_types[dt.name] = dt
+    save_dev_type(dt)
+    return dt.model_dump()
+
+
+@app.delete("/api/v1/dev-types/{name}")
+async def remove_dev_type(name: str):
+    if any(a.dev_type == name for a in config.assignments.values()):
+        raise HTTPException(409, f"{name} is assigned to a mission type")
+    dev_types.pop(name, None)
+    delete_dev_type(name)
+    return {"deleted": name}
+
+
+@app.post("/api/v1/dev-types/{name}/credentials")
+async def upload_credentials(name: str, body: dict):
+    """{"filename": "...", "content": "..."} → /data/secrets/{name}/ (0600)."""
+    if name not in dev_types:
+        raise HTTPException(404)
+    from pathlib import Path
+    target = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / name
+    target.mkdir(parents=True, exist_ok=True)
+    fname = os.path.basename(body.get("filename") or "creds.json")
+    p = target / fname
+    p.write_text(body.get("content") or "")
+    p.chmod(0o600)
+    mission_mgr.breakers.pop(name, None)   # fresh credential clears the breaker
+    return {"stored": f"{name}/{fname}"}
+
+
+@app.get("/api/v1/assignments")
+async def get_assignments():
+    return {k: v.model_dump() for k, v in config.assignments.items()}
+
+
+@app.put("/api/v1/assignments")
+async def put_assignments(body: dict):
+    try:
+        new = {k: Assignment.model_validate(v) for k, v in body.items()}
+    except Exception as e:
+        raise HTTPException(422, str(e))
+    missing = {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"} - set(new)
+    if missing:
+        raise HTTPException(422, f"unassigned mission types: {sorted(missing)}")
+    unknown = {a.dev_type for a in new.values()} - set(dev_types)
+    if unknown:
+        raise HTTPException(422, f"unknown dev types: {sorted(unknown)}")
+    config.assignments = new
+    save_config(config)
+    return {k: v.model_dump() for k, v in config.assignments.items()}
+
+
+@app.post("/api/v1/connections/pmo/test")
+async def test_pmo():
+    try:
+        team = await pmo._team(config.pmo.team_key)
+        missions = await pmo.list_all(config.pmo.team_key)
+        return {"ok": True, "team": config.pmo.team_key,
+                "labels": len([l for l in team["labels"]["nodes"]
+                               if l["name"].startswith("DEVCAKE")]),
+                "missions_visible": len(missions)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
+
+@app.post("/api/v1/connections/forge/test")
+async def test_forge():
+    try:
+        import httpx as _hx
+        f = mission_mgr.forge
+        pr = await f.get_pr_by_branch("devcake/__connection_test__")
+        reviewer = bool(getattr(f, "reviewer_token", None))
+        return {"ok": True, "forge": config.repo.forge, "repo": config.repo.url,
+                "reviewer_token_configured": reviewer, "probe_pr": pr is None}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
+
+# ── GUI OAuth helpers (docs/16 M6) ───────────────────────────────────────────
+
+@app.post("/api/v1/oauth/{harness}/start")
+async def oauth_start(harness: str):
+    try:
+        return await oauth_mgr.start(harness)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/v1/oauth/status/{run_id}")
+async def oauth_status(run_id: str):
+    s = oauth_mgr.status(run_id)
+    if s is None:
+        raise HTTPException(404)
+    return s
 
 
 @app.post("/api/v1/debug/dispatch-hello")

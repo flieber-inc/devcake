@@ -38,6 +38,7 @@ class RunManager:
         self.messaging = messaging
         self.executor = executor
         self.mission_mgr = None  # wired by main (MissionManager); None for hello-only
+        self.oauth_mgr = None    # wired by main (OAuthManager)
 
     # ── dispatch (docs/04 §3.1, hello variant) ───────────────────────────────
 
@@ -138,7 +139,12 @@ class RunManager:
                 await self.messaging.reply(run_id, "activity.result",
                                            {"activity_md": "", "attachments": []})
         elif kind == "run.log":
-            log.info("[%s] %s", run_id, payload.get("message", ""))
+            log.info("[%s] %s", run_id, payload.get("message", "") or payload)
+            if self.oauth_mgr:
+                self.oauth_mgr.on_log(run_id, payload)
+        elif kind == "oauth.result":
+            if self.oauth_mgr:
+                await self.oauth_mgr.on_result(run_id, payload)
         elif kind == "run.artifacts":
             if run.state == "finished":
                 return  # redelivery: idempotent no-op
@@ -189,4 +195,7 @@ class RunManager:
         self.store.save(run)
         if self.mission_mgr and run.mission_pmo_id:
             await self.mission_mgr.restore_after_failure(run)
+        if self.oauth_mgr and run.run_id in self.oauth_mgr.sessions:
+            self.oauth_mgr.sessions[run.run_id].update(
+                state="failed", error=f"login container died ({reason})")
         log.warning("killed %s → %s (%s)", run.run_id, new_state, reason)

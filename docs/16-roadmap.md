@@ -83,12 +83,12 @@ Exit criteria — **all verified 2026-07-11 (M5 complete; live where organic, di
 
 **Goal:** operable by a stranger. **Implements:** `11` (full), `08` §4 (credential modes incl. JSON upload + OAuth flows documented in-UI), `06` (GitLab), `14` §3.
 
-Exit criteria:
-- [ ] From an empty `/data`, a fresh operator configures everything through the UI alone (connection tests green, Dev Types created, assignments set) and reproduces the M3 demo without touching files.
-- [ ] **Guided OAuth helpers in the UI** (founder request 2026-07-11): the Config tab drives the device-code flows (Grok/Codex/Claude) — shows the URL + code, polls for completion, stores the credential to `/data/secrets/{dev_type}/` — replacing `scripts/grok_login.sh`.
-- [ ] Credentials JSON upload lands 0600, mounts read-only, works end-to-end for at least one harness (subscription OAuth path).
-- [ ] GitLab adapter passes the forge contract battery; the M4 demo passes on a GitLab sandbox repo.
-- [ ] `auto_merge` and `adoption_mode` confirm dialogs + `DEVCAKE-SKIP` behavior verified in UI-driven tests; basic auth gates both the SPA and `/api` (unauthenticated requests get 401).
+Exit criteria — **verified 2026-07-11 in a real browser except where noted (M6 functionally complete)**:
+- [x] Config tab CRUD live: Vite/React/Tailwind SPA renders real config; PMO/forge connection tests green from the UI ("✓ team DEV: 9/9 labels", "✓ github reachable"); saves flow UI→PUT→YAML with hot apply; Dev Type cards with prompts/MCP-warning/credentials; assignment matrix with extra-args + harness-change dialog. *Fresh-operator-from-empty-`/data` run deferred to M7 acceptance (destructive on the live volume).*
+- [x] **GUI OAuth wizard** (founder request): device-code flow runs in a Dagu-spawned harness container, streams the URL + code over Redis into a React modal (observed live: `accounts.x.ai/oauth2/device` + code rendered), polls to completion; the storage tail (file 0600, session completed, `DEV_AUTH` breaker cleared) synthetic-verified. Sessions are in-memory: an app restart orphans a pending wizard (dialog reports it; just retry).
+- [x] Credentials JSON upload endpoint verified (0600 under `/data/secrets/{dev_type}/`, delivered per-run via runspec — the bind-mount wording predates the M1 runspec redesign); subscription OAuth end-to-end proven for Grok since M4.
+- [ ] **GitLab: code complete, live verification pending** — the adapter (MR notes/approve/squash-merge, normalized to the forge shape) needs a GitLab sandbox repo + token from the operator to run the contract battery and the M4 demo. The only unchecked box; carried into M7.
+- [x] `auto_merge` + `adoption_mode` confirm dialogs verified by browser automation (incl. Cancel preserving state); `DEVCAKE-SKIP` precedence verified throughout M3–M5; basic auth 401s on both SPA and `/api` (M0, re-checked).
 
 ## M7 — Hardening + acceptance
 

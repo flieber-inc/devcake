@@ -85,6 +85,33 @@ def main() -> None:
     stop = threading.Event()
     threading.Thread(target=heartbeat_loop, args=(stop,), daemon=True).start()
 
+    # ── OAuth helper mode (docs/16 M6): device-code login, not a mission run ──
+    if env.get("DEVCAKE_OAUTH_MODE"):
+        import re as _re
+        cmd = env["DEVCAKE_OAUTH_LOGIN_CMD"].split()
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        url = code = None
+        for line in proc.stdout:
+            print(line, end="")
+            m = _re.search(r"https://\S+", line)
+            if m and "url" not in (url or ""):
+                if "user_code=" in m.group(0) or "device" in m.group(0):
+                    url = m.group(0)
+                    cm = _re.search(r"user_code=([A-Z0-9-]+)", url)
+                    code = cm.group(1) if cm else None
+                    send("run.log", {"oauth_url": url, "code": code})
+        proc.wait()
+        if proc.returncode != 0:
+            send("run.log", {"oauth_error": f"login exited {proc.returncode}"})
+            stop.set()
+            sys.exit(12)
+        auth = pathlib.Path(os.path.expanduser(env["DEVCAKE_OAUTH_AUTH_PATH"]))
+        send("oauth.result", {"content": auth.read_text()})
+        stop.set()
+        print("oauth login captured")
+        return
+
     # ── workspace prep (docs/07 §1) ──────────────────────────────────────────
     (WORKSPACE / "out").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / "activity").mkdir(parents=True, exist_ok=True)

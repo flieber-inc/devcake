@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+@theme {
+  --color-accent: #b4550a;
+}
+html { color-scheme: light dark; }

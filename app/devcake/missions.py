@@ -21,6 +21,7 @@ from .config import AppConfig, DevType
 from .linear import LinearAdapter
 from .messaging import Messaging
 from .forge import GitHubForge
+from .forge_gitlab import GitLabForge
 from .pmo import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                   LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW, LABEL_SKIP, LABEL_TRACKING,
                   Mission, MissionType, PRIORITY_RANK, STAGE_LABELS, derive)
@@ -57,8 +58,16 @@ class MissionManager:
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
         self.breakers: dict[str, str] = {}  # dev_type → reason (DEV_AUTH circuit breaker)
-        self.forge = GitHubForge(config.repo.url, config.repo.token,
-                                 os.environ.get(config.repo.reviewer_token_env or "") or None)
+        self.forge = self._make_forge()
+
+    def _make_forge(self):
+        reviewer = os.environ.get(self.config.repo.reviewer_token_env or "") or None
+        cls = GitLabForge if self.config.repo.forge == "gitlab" else GitHubForge
+        return cls(self.config.repo.url, self.config.repo.token, reviewer)
+
+    def reload_forge(self) -> None:
+        """Called after a config write changes repo settings (hot reload)."""
+        self.forge = self._make_forge()
 
     # ── audit log (docs/10: every PMO write) ────────────────────────────────
 

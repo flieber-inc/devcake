@@ -5,6 +5,9 @@
 
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
+retry_policy:
+  limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting
+                                # (docs/15 §2; the default would retry failed runs 3x)
 
 params:
   - name: RUN_ID
@@ -19,7 +22,7 @@ params:
     default: ""
 
 steps:
-  - id: run-dev
+  - id: run_dev
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}

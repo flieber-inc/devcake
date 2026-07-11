@@ -21,12 +21,18 @@ services:
 
   dagu:
     image: ghcr.io/dagucloud/dagu:2.10.5  # pinned — docs/13-deployment.md §4
-    user: "0:0"                           # required for docker.sock access (official docs)
     ports: [ "8525:8080" ]                # UI opened via the admin panel's button (no iframe)
-    # NOTE(M1): API auth (DAGU_API_KEY) is wired when the app starts triggering DAGs.
+    environment:                          # basic auth: API requires creds; health stays open
+      - DAGU_AUTH_MODE=basic
+      - DAGU_AUTH_BASIC_USERNAME=${DAGU_USER}
+      - DAGU_AUTH_BASIC_PASSWORD=${DAGU_PASSWORD}
+      # entrypoint runs dagu as uid 1000 with group $DOCKER_GID → docker.sock access
+      # (least privilege; find yours with: stat -c %g /var/run/docker.sock)
+      - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
     volumes:
       - dagu_data:/var/lib/dagu
       - ./dagu/dags:/var/lib/dagu/dags    # contains the single dev-run DAG
+      - ./dagu/init:/etc/custom-init.d:ro # repairs the image's DOCKER_GID mechanism
       - /var/run/docker.sock:/var/run/docker.sock  # ⚠ root-equivalent host access — docs/14 §4
     depends_on:
       fluentbit: { condition: service_started }
@@ -81,6 +87,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Dev images: built by compose, never run as services (Dagu spawns them).
+  dev-hello:
+    build: ./images/hello
+    image: devcake/dev-hello:latest
+    profiles: [images]        # `docker compose --profile images build`
+    entrypoint: ["true"]
 
   fluentbit:
     image: fluent/fluent-bit:3.2

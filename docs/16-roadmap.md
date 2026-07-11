@@ -21,11 +21,13 @@ Exit criteria — **all verified 2026-07-11 (M0 complete)**:
 **Goal:** the full dispatch mechanics with a stub Dev. **Implements:** `09`, `13` §4–5 (`dev-run` DAG), `07` skeleton (entrypoint contract, exit codes), Dagu adapter.
 **Out of scope:** real harnesses, PMO.
 
-Exit criteria:
-- [ ] `POST /api/v1/debug/dispatch-hello` → app triggers Dagu (non-secret params + client `dagRunId`) → a stub Dev container joins `devcake_default`, fetches its run spec via `runspec.get`, sends `run.started` + heartbeats + `run.artifacts` ("hello") over Redis → app consumes, writes a Run file with state `finished`. (The `dev-run` DAG shape was already verified live on Dagu v2.10.5 — `13` §4; this milestone wires it to our images.)
-- [ ] One linked trace spans dispatch → container → finalize (TRACEPARENT propagation proven).
-- [ ] Watchdog kill via the Dagu stop endpoint → Run `timed_out`, container removed; duplicate trigger returns 409; chunked (>512 KB) artifact reassembly test passes.
-- [ ] Secrets probe: a fake secret placed in the run spec never appears in Dagu's UI/run API; the `runspec.result` entry is gone from Redis after acknowledgment.
+Exit criteria — **all verified 2026-07-11 (M1 complete)**:
+- [x] `POST /api/v1/debug/dispatch-hello` → app triggers Dagu (non-secret params + client `dagRunId`) → a stub Dev container joins `devcake_default`, fetches its run spec via `runspec.get`, sends `run.started` + heartbeats + `run.artifacts` ("hello") over Redis → app consumes, writes a Run file with state `finished`.
+- [x] One linked trace spans dispatch → container → finalize (verified: `mission.dispatch`, `dev.run`, `harness.exec`, `run.finalize` under one trace_id across `devcake-app` and `devcake-dev`).
+- [x] Watchdog kill via the Dagu stop endpoint → Run `timed_out`, container force-removed, Dagu status `aborted`; duplicate trigger returns 409 `already_exists`; chunked artifact reassembly verified with a 718 KB payload.
+- [x] Secrets probe: the fake run-spec secret never appears in Dagu's run API; `runspec.result` gone from Redis; the per-run ACL user revoked at finalization.
+
+Field notes folded into `13` §4: Dagu API auth (basic mode), the `DOCKER_GID` repair hook, step-id charset, and `retry_policy: {limit: 0}` (Dagu auto-retry would fight DevCake's attempt counting).
 
 ## M2 — Linear read path + domain model
 

@@ -31,13 +31,16 @@ services:
 
   dagu:
     image: ghcr.io/dagucloud/dagu:2.10.5   # PIN the version — project moves fast (see §4)
-    user: "0:0"                            # required for docker.sock access (official docs)
     ports: [ "8525:8080" ]                 # UI opened directly via the admin panel's button (no iframe)
-    environment: []
-      # auth mode + API key for app→dagu REST calls; see §4
+    environment:
+      - DAGU_AUTH_MODE=basic               # API 401s without creds; /api/v1/health stays open (verified)
+      - DAGU_AUTH_BASIC_USERNAME=${DAGU_USER}
+      - DAGU_AUTH_BASIC_PASSWORD=${DAGU_PASSWORD}
+      - DOCKER_GID=${DOCKER_GID}           # host docker-group gid → daemon runs uid 1000 : docker
     volumes:
       - dagu_data:/var/lib/dagu
       - ./dagu/dags:/var/lib/dagu/dags     # contains the single dev-run DAG
+      - ./dagu/init:/etc/custom-init.d:ro  # repairs the image's broken DOCKER_GID mechanism (§4)
       - /var/run/docker.sock:/var/run/docker.sock   # ⚠ root-equivalent host access — 14-security.md §4
     healthcheck:   # stock image has no curl/wget (verified at M0) — bash /dev/tcp HTTP probe
       test: ["CMD", "bash", "-c",
@@ -100,8 +103,12 @@ OPENAI_API_KEY=
 OO_ROOT_EMAIL=admin@example.com
 OO_ROOT_PASSWORD=change-me
 
-# Dagu app→dagu API auth
-DAGU_API_KEY=
+# Dagu API auth (basic mode — verified env names from source; app + browser use these)
+DAGU_USER=devcake
+DAGU_PASSWORD=
+
+# Host docker group gid, for Dagu's sock access: stat -c %g /var/run/docker.sock
+DOCKER_GID=
 
 # Redis default-user password (app-only; Devs get per-run ACL users — 09 §1a)
 REDIS_PASSWORD=change-me-too
@@ -117,7 +124,11 @@ OO_UI_URL=http://localhost:5080
 
 ## 4. Dagu configuration
 
-- **Version pinned** (`2.10.5` at spec time — everything in this section was **verified live against v2.10.5**, source + running server). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
+- **Version pinned** (`2.10.5` at spec time — everything in this section was **verified live against v2.10.5**, source + running server, and exercised end-to-end at M1). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
+- **Auth (verified at M1):** v2.10.5 locks the API by default (401). We run `DAGU_AUTH_MODE=basic` with `DAGU_AUTH_BASIC_USERNAME/PASSWORD` (env names confirmed from the source's config loader); the app sends HTTP Basic on every call; `/api/v1/health` stays open for the compose healthcheck.
+- **docker.sock access (verified at M1):** the image's entrypoint always drops to uid 1000 via sudo, and its `DOCKER_GID` group setup is broken on the ubuntu base (alpine-only `addgroup`). Our `dagu/init/10-docker-group.sh` (mounted at `/etc/custom-init.d/`, the image's own hook) creates the docker group with `groupadd`, so the daemon runs as `dagu:docker` — least privilege, no root daemon.
+- **Step ids are `^[a-zA-Z][a-zA-Z0-9_]*$`** (verified) — underscores, not dashes: the DAG's step is `run_dev`.
+- **Auto-retry disabled (verified):** the DAG sets `retry_policy: {limit: 0}` — Dagu would otherwise auto-retry failed runs 3×, fighting DevCake's own attempt counting (`15-errors-and-retries.md` §2).
 - **UI:** served at root on host port 8525; the admin panel links to it with a button (no iframe, no base-path/proxy configuration — confirmed decision).
 - **v2 YAML is snake_case only** (`timeout_sec`, not `timeoutSec` — camelCase keys are rejected with a hint). The step-level `container:` field is the current preferred syntax; `action: docker.run` and the legacy `type: docker` shapes also parse but are not used here.
 - **Timeout ownership:** the app watchdog owns the real kill (`04-orchestrator.md` §5) via Dagu's **stop endpoint** (verified: SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed → run status `aborted`). Dagu gets a belt-and-suspenders DAG-level `timeout_sec` set to *app timeout + 30 min* so it can never fire first — satisfying the mission-doc requirement that Dagu never times out a run prematurely.

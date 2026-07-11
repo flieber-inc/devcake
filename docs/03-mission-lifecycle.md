@@ -1,0 +1,156 @@
+# 03 — Mission Lifecycle: The Four Playbooks
+
+> **Audience:** implementers and prompt authors. This document owns the canonical prompt texts and the `result.json` contract.
+> **Depends on:** `02-domain-model.md` (state machine, labels), `04-orchestrator.md` (finalization), `07-dev-runtime.md` (workspace).
+
+Each Mission Type has a **playbook**: what the Dev receives, what it must do inside the workspace, the structured output it must produce, and the app-side finalization that follows. Common to all four:
+
+- **Inputs:** `/workspace/repo` (fresh clone), `/workspace/activity/ACTIVITY.md` (+ attachments), the Dev Type's identifying prompt, and the playbook prompt (§7).
+- **Output:** `/workspace/out/result.json` (§6) — the app finalizes **from this file plus the exit code, never by parsing prose**.
+- **Finalization (app-side, always):** post `{seq}_{TYPE}.md` transcript → post token report (§8) → compare-and-transition (`04-orchestrator.md` §4) → forge side effects if any. **Exception:** on REVIEW-approve, the merge precedes the Done transition (§4.1) — Done must never overstate the repository.
+- **Failure:** nonzero exit or invalid `result.json` ⇒ no PMO transition; the Mission's label is untouched and it reschedules (attempt counting per `15-errors-and-retries.md`).
+
+## 1. ONBOARD
+
+**Goal:** assess a previously-untouched Mission's complexity and route it.
+
+The Dev studies the Mission against the actual codebase and classifies it using this rubric:
+
+| Verdict | Criteria | Expectation |
+|---|---|---|
+| `trivial` | The Dev is confident it can complete the work in a single short session: localized change (typically ≤ ~2 files), no design ambiguity, no migration/infra impact, obvious verification. | Rare. |
+| `normal` | Definable piece of work needing a plan first. | **Most Missions.** |
+| `high` | Too large/compound for one plan–execute–review cycle; naturally splits into independent work items. | Rare. |
+
+### 1.1 Trivial path
+The Dev implements the change immediately (same rules as EXECUTE: branch `devcake/{mission_key}`, commit only at the very end, push, open PR). `result.json`: `outcome: "executed_trivially"` with `pr_url`.
+
+**Finalization:** transcript + token report → add `DEVCAKE-REVIEW`. The trivial path skips PLAN and EXECUTE, but **never skips REVIEW** — self-assessment is not a quality gate; an independent REVIEW pass always stands between any DevCake-written code and Done/merge (confirmed decision).
+
+### 1.2 Normal path
+No code changes. `result.json`: `outcome: "plan_needed"` with a one-paragraph `summary` of the assessment.
+
+**Bounded effort:** ONBOARD is a triage pass, not an exploration — the playbook prompt says "assess, don't deep-dive," and operators can cap it mechanically via the per-Mission-Type extra CLI args (`02-domain-model.md` §9; the seeded default gives ONBOARD `--max-turns 15` on the claude-code harness — admin-editable data, never hardcoded).
+
+**Opportunistic plan:** if, in the course of assessing, the Dev has already effectively formed the complete plan, it may write it to `/workspace/out/PLAN.md`. This is optional and confidence-gated — never forced; assessment and planning remain separate jobs by default.
+
+**Finalization:** transcript + token report → if a `PLAN.md` was attached: upload it to the activity feed and add `DEVCAKE-EXECUTE` (the PLAN step is skipped — its work already exists); otherwise add `DEVCAKE-PLAN`.
+
+### 1.3 High-complexity path (decomposition)
+No code changes. The Dev emits a **decomposition manifest** in `result.json` (`outcome: "decomposed"`, `decomposition: [MissionDraft, …]` — `02-domain-model.md` §11), observing:
+
+- **Standalone rule:** every child description must read as an independent Mission. Never "Review the work done in this Mission"; instead "Review all work recently done in connection with the creation of feature XYZ". No cross-references between siblings.
+- **Explicit priority** on every child (required field).
+- **Depth limit = 1:** a Mission that carries `DEVCAKE-CREATED` must not be decomposed again — the ONBOARD playbook prompt states this, and the app rejects a `decomposed` outcome for such missions (`DEV_BAD_OUTPUT`). This prevents fission chain reactions.
+
+**Finalization:** transcript + token report → create each child via `PMOPort.create_mission` (app adds `DEVCAKE-CREATED`, plus `DEVCAKE` in opt-in mode). **Child creation is idempotent:** every child description ends with the footer line `Created by DevCake from {parent_key} — part {i}/{n}`; before creating, the app lists the parent's existing `DEVCAKE-CREATED` children and skips any whose footer matches, so a crash mid-decomposition resumes without duplicates (and a retried ONBOARD never re-decomposes differently: a parent that already has `DEVCAKE-CREATED` children with its key in their footers only tops up the missing parts). Then:
+- original is an **Issue** → status `canceled` + comment linking the children;
+- original is a **Project** → children are created inside the Project, the Project gets `DEVCAKE-TRACKING` and stays open; the poll loop auto-completes it when all children are done (`04-orchestrator.md` §1.3, ADR-0006). Projects always take this path — never trivial or normal (`05-pmo-adapter.md` §6).
+
+## 2. PLAN
+
+**Goal:** produce a plan and nothing else.
+
+The Dev invokes the harness's plan capability (mapping per harness in `08-harness-templates.md` §3) over the Mission and the codebase, producing `/workspace/out/PLAN.md`. No code changes. `result.json`: `outcome: "planned"`.
+
+**Finalization:** transcript + token report → upload `PLAN.md` to the activity feed (as attachment, referenced from a comment) → swap `DEVCAKE-PLAN` → `DEVCAKE-EXECUTE`.
+
+## 3. EXECUTE
+
+**Goal:** implement the most recent plan (and address the most recent review report, if any).
+
+The Dev reads the latest `PLAN.md` and the latest REVIEW report from `ACTIVITY.md`/attachments, then:
+
+1. **Branch:** `devcake/{mission_key}`. If the branch already exists on the remote (a prior EXECUTE loop), check it out and continue on it. **Never force-push.**
+2. Implement; run the repo's tests/build where present.
+3. **Commit only at the very end** (INV-6). Commit message: `[{mission_key}] {concise summary}`.
+4. Push; the PR/MR is opened by the Dev via the forge CLI/API using injected credentials — **idempotently**: if a PR for the branch exists, update it (title/body) instead of creating another. Title: `[{mission_key}] {title}`; body links the Mission URL and the plan.
+
+`result.json`: `outcome: "executed"` with `pr_url` and `summary`.
+
+**Finalization:** transcript + token report → swap `DEVCAKE-EXECUTE` → `DEVCAKE-REVIEW` → post the PR link as a comment (idempotent — skipped when the same `pr_url` was already posted).
+
+## 4. REVIEW
+
+**Goal:** act as a skeptical software engineer over the previous step's work.
+
+The Dev must: check out the PR branch in its clone; diff against the plan; hunt for bugs, flaws, and omissions; run the tests if present. The playbook prompt forbids rubber-stamping — the default posture is distrust.
+
+`result.json`: `outcome: "reviewed"`, `verdict: "approve" | "reject"`, `report_md` (the full review report), `pr_url`.
+
+### 4.1 Approve
+
+**Merge always precedes Done** — a Mission's Done status must never claim more than the repository shows (confirmed decision). Finalization: transcript + token report → forge effects, then the PMO transition:
+
+1. Post the review report as a PR comment, **always ending with the copy-pasteable approval command** (§5).
+2. If a **reviewer token** is configured (`repo.reviewer_token_env`), formally approve the PR with it; otherwise the comment carries the marker `APPROVED-BY-DEVCAKE`.
+3. Then, by `auto_merge`:
+   - **ON:** merge the PR (`06-forge-adapter.md` §5). Success → remove `DEVCAKE-REVIEW`, mission status `done`. Failure (conflicts, branch protection) → remove `DEVCAKE-REVIEW`, add `DEVCAKE-MERGE`, post an explanatory comment, raise a health warning — the Mission stays In Progress until a human resolves the merge.
+   - **OFF:** remove `DEVCAKE-REVIEW`, add `DEVCAKE-MERGE`. The Mission stays In Progress, awaiting the human merge.
+
+**Merge sweep** (every poll cycle, alongside the `DEVCAKE-TRACKING` sweep — `04-orchestrator.md` §1): for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter — merged → remove the label, mission status `done`; closed without merging → remove the label, mission status `canceled`, with a comment either way. State remains fully derivable from PMO + forge; nothing local.
+
+### 4.2 Reject
+**Finalization:** transcript + token report → post `report_md` to the activity feed AND as a PR comment → swap `DEVCAKE-REVIEW` → `DEVCAKE-EXECUTE`. The next EXECUTE Dev finds the report in `ACTIVITY.md` and reworks the same branch/PR.
+
+**Loop guardrail:** loops are unlimited by design, but every `review_loop_warning_every`-th (default 3rd) rejection of the same Mission, the app posts a warning **to the Mission's activity feed** (the source of truth, where a human intervenes by adding `DEVCAKE-SKIP`) **and mirrors it as a PR comment**, containing the loop count and cumulative token cost across all the Mission's runs; also emitted as a metric (`12-observability.md`). Loop count is derived from the activity feed (count of prior `N_REVIEW.md` artifacts), not local state.
+
+## 5. The approval-command footer (normative)
+
+Every REVIEW PR comment (approve *and* reject — on reject it helps a human short-circuit the loop) ends with:
+
+```
+---
+To approve and merge this PR yourself:
+  gh pr review --approve <PR_URL> && gh pr merge --squash <PR_URL>     # GitHub
+  glab mr approve <MR_IID> && glab mr merge <MR_IID>                   # GitLab
+```
+
+rendered with the *concrete* URL/IID substituted — one paste must suffice.
+
+## 6. `result.json` schema (normative)
+
+```jsonc
+{
+  "schema_version": 1,
+  "outcome": "executed_trivially | plan_needed | decomposed | planned | executed | reviewed",
+  "summary": "one-paragraph human summary of what was done/found",   // required, all outcomes
+  "verdict": "approve | reject",          // REVIEW only
+  "report_md": "…full review report…",    // REVIEW only
+  "decomposition": [                       // ONBOARD 'decomposed' only
+    {"title": "…", "description": "…", "priority": "high", "parent_ref": null}
+  ],
+  "pr_url": "https://…"                    // executed_trivially / executed / reviewed
+}
+```
+
+A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
+
+Validation is strict (pydantic): outcome must be legal for the run's `DEVCAKE_MISSION_TYPE` (e.g. `planned` from an EXECUTE run ⇒ exit 11 / `DEV_BAD_OUTPUT`).
+
+## 7. Canonical prompts (v0)
+
+The full prompt a Dev receives = **identifying prompt** (Dev Type, below) + **playbook prompt** (per Mission Type, maintained as templates in `app/prompts/`, interpolated with mission metadata). Playbook prompts inline only the mission title and description; the `activity/` folder is presented as **reference material to consult as needed** ("the mission's history and artifacts are in activity/ — grep or read what you need"), never dumped into the prompt (`07-dev-runtime.md` §2). The playbook prompts restate, verbatim, the binding rules from this document: workspace boundaries (INV-6), commit-at-end, branch conventions, the standalone rule, the depth limit, and the `result.json` contract.
+
+### Senior Dev — identifying prompt
+> You are **Senior Dev**, DevCake's judgment-heavy engineer. You assess, plan, and review software work with the skepticism of a staff engineer who has been burned before. You are precise about scope: you do exactly what your current mission type asks — no more. You never invent requirements, you flag what you cannot verify, and you write conclusions that a teammate can act on without asking follow-up questions.
+
+### Main Dev — identifying prompt
+> You are **Main Dev**, DevCake's implementation engineer. You turn plans into working, tested code. You follow the plan you are given; where reality contradicts the plan, you implement the smallest sound deviation and document it prominently in your summary. You match the conventions of the codebase you are in, you run the tests, and you never commit until the work is complete.
+
+*(Playbook prompt texts are derived mechanically from §§1–4 of this document; they live in `app/prompts/{onboard,plan,execute,review}.md` and are the single runtime source. When this doc and those files disagree, this doc wins and the files must be fixed.)*
+
+## 8. Token report message format (normative)
+
+Posted to the activity feed immediately after each transcript (INV-5):
+
+```
+🧮 DevCake token report — step {seq} ({TYPE}, {dev_type})
+model: {model} · input: {input_tokens} · output: {output_tokens}
+cache read/write: {cache_read_tokens}/{cache_write_tokens}
+cost: ${cost_usd}                 (omitted when unknown — never estimated)
+extraction: {extraction_method}
+run: {run_id}
+```
+
+The `run: {run_id}` footer doubles as the idempotency key for finalization (`04-orchestrator.md` §4).

@@ -1,0 +1,109 @@
+# 00 — Overview: Vision, Glossary, and Core Invariants
+
+> **Audience:** everyone. Every other document in `docs/` assumes you have read this one.
+> **Status:** v0 specification.
+
+## 1. What DevCake is
+
+DevCake is a lightweight, production-grade **agentic developer system**. It runs automated coding agents ("**Devs**") inside Docker containers that systematically resolve work items ("**Missions**") pulled from a project-management system ("**PMO System**" — v0: Linear). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to the main app through Redis Streams, and every component is traced and logged into OpenObserve.
+
+The whole system ships as a single `docker-compose up`, stores its local state as plain files on one volume, and treats the PMO System as the single source of truth — so it recovers from any crash by simply re-reading the world.
+
+## 2. Non-goals for v0
+
+The following are explicitly **out of scope** for v0 (see `16-roadmap.md` § Post-v0 backlog):
+
+- Webhook-based ingestion (v0 polls; the internal interface is webhook-ready).
+- Multiple repositories or multiple Linear teams per DevCake instance.
+- Human-in-the-loop approval steps *inside* DevCake (approval happens in the PMO System and the forge).
+- Authentication on the admin panel (network isolation only).
+- PMO Systems other than Linear (the adapter interface exists; only Linear is implemented).
+
+## 3. Glossary (normative definitions)
+
+| Term | Definition |
+|---|---|
+| **Mission** | A unit of work of any shape or size: a Linear **Project or Issue** in the configured team whose status is not Done/Completed/Canceled. DevCake makes no structural distinction between "projects" and "issues" — both are Missions. |
+| **Mission Type** | One of exactly four values — `ONBOARD`, `PLAN`, `EXECUTE`, `REVIEW` — **derived** from the Mission's live PMO status + labels (derivation table in `02-domain-model.md`). Never stored authoritatively anywhere local. |
+| **Mission Step** | One Dev run against one Mission (e.g. "the 2nd EXECUTE pass of ENG-142"). Identified by a sequence number `seq` used in transcript names (`1_ONBOARD.md`, `2_PLAN.md`, …). |
+| **Dev** | An ephemeral Docker container running one model/harness pair to perform one Mission Step, then exit. |
+| **Dev Type** | A named configuration: harness template + identifying prompt + MCP servers + credentials + concurrency cap. v0 ships two: **Senior Dev** (Claude Fable / Claude Code) and **Main Dev** (Grok 4.5 / Grok Build). |
+| **Harness Template** | One of three hardcoded (but easily editable) model/harness pairs a Dev Type is built from: `claude-code` (Claude Fable), `grok-build` (Grok 4.5), `codex` (gpt-5.6-sol). Specified in `08-harness-templates.md`. |
+| **PMO System** | The external project-management system holding the Missions. v0: Linear (one configured team). Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
+| **Forge** | The code-hosting platform holding the configured repository: GitHub or GitLab. Accessed only through the `ForgePort` adapter (`06-forge-adapter.md`). |
+| **Run** | The locally persisted record of one Mission Step attempt: telemetry, timing, outcome, token report. Advisory data only — never authoritative (see INV-1). |
+| **Activity feed** | The Mission's chronological record inside the PMO System: description, comments, attachments, status changes. Rendered into `ACTIVITY.md` for each Dev run. |
+| **Stage label** | One of `DEVCAKE-PLAN`, `DEVCAKE-EXECUTE`, `DEVCAKE-REVIEW` — the label that drives the Mission state machine. A Mission carries at most one at a time (INV-2). |
+
+The complete set of nine managed labels is defined in `02-domain-model.md` §5 and nowhere else.
+
+## 4. Core invariants
+
+These invariants are the contract every other document implements. They are referenced by ID (`INV-n`) throughout the docs, and every one of them must be covered by at least one automated test before v0 is accepted (`16-roadmap.md`, M7).
+
+- **INV-1 — The PMO System is the single source of truth.** All Mission status, labels, and priority are read live from the PMO System. No local data is ever deemed current; local state (`/data/state`) is advisory telemetry that can be wiped without corrupting the system (consequences of a wipe are documented in `10-persistence.md`).
+- **INV-2 — At most one stage label per Mission.** A Mission carrying two or more stage labels is in conflict: DevCake refuses to schedule it and asks a human to resolve (`15-errors-and-retries.md`, `LABEL_CONFLICT`).
+- **INV-3 — No new work before the PMO reflects the previous step.** There are no locks or checkouts. A Mission Step may only be dispatched when the PMO System's live state shows the previous step's transition fully applied. A crashed Dev holds nothing; its Mission simply re-derives and reschedules.
+- **INV-4 — Devs never talk to the PMO System directly.** The main app is the sole PMO client. Devs communicate only via Redis Streams (`09-messaging.md`); all PMO writes are performed by the app during run finalization.
+- **INV-5 — Every Dev run posts a transcript AND a token/cost report to the activity feed.** No exceptions. When token usage cannot be extracted, an explicit "unavailable" report is posted instead of silence (`08-harness-templates.md` §Token extraction).
+- **INV-6 — Devs work only inside their fresh clone and commit only at the very end.** Every Dev container receives a fresh `git clone`; all work is atomistic; git commits and pushes happen only during run finalization inside the container, never incrementally.
+
+## 5. System at a glance
+
+```
+                        ┌────────────────────────────── docker-compose ─────────────────────────────┐
+                        │                                                                            │
+  ┌────────┐  GraphQL   │  ┌─────────────┐   REST    ┌────────┐  docker.sock   ┌ ─ ─ ─ ─ ─ ─ ─ ┐    │
+  │ Linear │◄──────────►│  │  app        │──────────►│  dagu  │───────────────► │ dev-<run_id>  │    │
+  │ (PMO)  │  polling   │  │  (FastAPI)  │           └────────┘   spawns        │ (Claude Code /│    │
+  └────────┘            │  │             │                        siblings      │  Grok Build / │    │
+                        │  │  PMO Handler│                                      │  Codex)       │    │
+  ┌────────┐  HTTPS     │  │  Scheduler  │◄———— Redis Streams ————————————————─┤               │    │
+  │ GitHub/│◄──────────►│  │  Finalizer  │      (devcake:ingress)              └ ─ ─ ─ ┬ ─ ─ ─ ┘    │
+  │ GitLab │  (and from │  └──────┬──────┘                                             │ git        │
+  └────────┘   Devs)    │         │ /api/v1                                            ▼            │
+                        │  ┌──────┴──────┐        ┌─────────────┐   OTLP (all services & Devs)      │
+                        │  │ admin (SPA  │        │ openobserve │◄───────────────────────────       │
+                        │  │ + nginx)    │        └─────────────┘                                    │
+                        │  └─────────────┘                                                           │
+                        └────────────────────────────────────────────────────────────────────────────┘
+```
+
+Two levels of containers: the compose stack itself, and the ephemeral **Dev containers** that Dagu spawns as *siblings* via the host `docker.sock` (they join the same compose network, so they reach `redis` and `openobserve` by service name). See `13-deployment.md`.
+
+## 6. Walkthrough: one Mission's life
+
+A concrete end-to-end pass, naming the governing document at each hop:
+
+1. **A human creates an Issue** in the configured Linear team and labels it `DEVCAKE` (adoption is opt-in by default; an `opt_out` mode adopts everything in the team — `02-domain-model.md` §2). It sits in `Backlog`.
+2. **The PMO Handler polls Linear** (default every 30 s) and normalizes the Issue into a Mission (`05-pmo-adapter.md`). Status `backlog` + no stage label ⇒ derived Mission Type = **ONBOARD** (`02-domain-model.md`).
+3. **The scheduler picks it** by priority (Urgent > High > Medium > Low; unset = Medium), checks the concurrency caps for the mapped Dev Type (Senior Dev), and dispatches: writes a Run record, triggers Dagu's `dev-run` DAG, and marks the Mission `In Progress` in Linear (`04-orchestrator.md`).
+4. **Dagu spawns a Dev container.** The entrypoint prepares `/workspace/repo` (fresh clone), `/workspace/activity/ACTIVITY.md` (+ attachments), registers MCP servers, and launches Claude Code with the Senior Dev identifying prompt + the ONBOARD playbook prompt (`07-dev-runtime.md`, `08-harness-templates.md`, `03-mission-lifecycle.md`).
+5. **The Dev assesses complexity** and, say, deems it *normal*. It writes `/workspace/out/result.json` with `outcome: "plan_needed"` and exits 0. The entrypoint publishes the transcript, token report, and result over Redis (`09-messaging.md`).
+6. **The app finalizes**: posts `1_ONBOARD.md` and the token report to the Linear activity feed, then — after re-reading the Mission live (compare-and-transition, `04-orchestrator.md` §4) — adds the `DEVCAKE-PLAN` label.
+7. **Next poll cycle**: status `started` + `DEVCAKE-PLAN` ⇒ Mission Type **PLAN** ⇒ Senior Dev produces `PLAN.md`; the app uploads it, swaps the label to `DEVCAKE-EXECUTE`.
+8. **EXECUTE**: Main Dev (Grok Build) implements the plan on branch `devcake/ENG-142`, opens a PR (`06-forge-adapter.md`), and the app swaps the label to `DEVCAKE-REVIEW`.
+9. **REVIEW**: Senior Dev skeptically reviews the PR. On approval, the app removes the stage label and approves the PR (second reviewer token if configured; the PR comment always includes the copy-pasteable `gh`/`glab` approval command); then **merge precedes Done**: with `auto_merge` on the app merges and only then marks the Mission **Done**; with it off the Mission carries `DEVCAKE-MERGE` until a human merges, at which point the poll sweep marks it Done. On rejection, the review report is posted and the label swaps back to `DEVCAKE-EXECUTE` for another pass.
+10. **Throughout**, every hop above is one connected OpenTelemetry trace (dispatch → container → finalization), with token counts and cost as span attributes, all visible in OpenObserve (`12-observability.md`).
+
+## 7. Document map
+
+| Doc | Governs |
+|---|---|
+| `01-architecture.md` | Component topology, interaction matrix, ports & adapters layering |
+| `02-domain-model.md` | Entities, fields, Mission Type derivation, label set, state machine |
+| `03-mission-lifecycle.md` | The four Mission Type playbooks, `result.json`, canonical prompts |
+| `04-orchestrator.md` | Poll loop, scheduling, no-lock atomicity, crash recovery |
+| `05-pmo-adapter.md` | `PMOPort` + Linear adapter |
+| `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab adapters, PR/branch conventions |
+| `07-dev-runtime.md` | Dev container contract: filesystem, env, exit codes, lifecycle |
+| `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup |
+| `09-messaging.md` | Redis Streams protocol |
+| `10-persistence.md` | `/data` layout, file formats, atomic writes |
+| `11-admin-panel.md` | Admin UI + `/api/v1` contract |
+| `12-observability.md` | OTel conventions, cost telemetry, dashboards |
+| `13-deployment.md` | docker-compose, Dagu config, networking, runbook |
+| `14-security.md` | Threat model, credential handling, redaction |
+| `15-errors-and-retries.md` | Error taxonomy, retry matrix, `DEVCAKE-FAILED` |
+| `16-roadmap.md` | Milestones M0–M7 with exit criteria |
+| `adr/` | Records of the significant architectural decisions |

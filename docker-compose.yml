@@ -1,0 +1,99 @@
+name: devcake
+
+services:
+  app:
+    build: ./app
+    env_file: .env
+    environment:
+      - DEVCAKE_POLL_INTERVAL_SECONDS=${DEVCAKE_POLL_INTERVAL_SECONDS:-30}
+    volumes:
+      - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
+    depends_on:
+      redis:       { condition: service_healthy }
+      openobserve: { condition: service_started }
+      dagu:        { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  dagu:
+    image: ghcr.io/dagucloud/dagu:2.10.5  # pinned — docs/13-deployment.md §4
+    user: "0:0"                           # required for docker.sock access (official docs)
+    ports: [ "8525:8080" ]                # UI opened via the admin panel's button (no iframe)
+    # NOTE(M1): API auth (DAGU_API_KEY) is wired when the app starts triggering DAGs.
+    volumes:
+      - dagu_data:/var/lib/dagu
+      - ./dagu/dags:/var/lib/dagu/dags    # contains the single dev-run DAG
+      - /var/run/docker.sock:/var/run/docker.sock  # ⚠ root-equivalent host access — docs/14 §4
+    depends_on:
+      fluentbit: { condition: service_started }
+    logging: &ship_stdout                 # stdout → fluent-bit → OpenObserve (docs/13 §7)
+      driver: fluentd
+      options:
+        fluentd-address: 127.0.0.1:24224
+        fluentd-async: "true"             # never block container start on the shipper
+        tag: "{{.Name}}"
+    healthcheck:
+      # stock image ships no curl/wget — bash /dev/tcp HTTP probe (verified)
+      test: ["CMD", "bash", "-c",
+             "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /api/v1/health HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec",
+              "--requirepass", "${REDIS_PASSWORD}"]  # default user = app-only; per-run ACLs for Devs (docs/09 §1a)
+    volumes: [ redis_data:/data ]
+    depends_on:
+      fluentbit: { condition: service_started }
+    logging: *ship_stdout
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.1  # pinned
+    environment:
+      - ZO_ROOT_USER_EMAIL=${OO_ROOT_EMAIL}
+      - ZO_ROOT_USER_PASSWORD=${OO_ROOT_PASSWORD}
+    volumes: [ oo_data:/data ]
+    ports: [ "5080:5080" ]
+
+  admin:
+    build: ./admin                        # nginx + static shell (M0); proxies /api only
+    ports: [ "8080:80" ]
+    environment:
+      - DAGU_UI_URL=${DAGU_UI_URL:-http://localhost:8525}
+      - OO_UI_URL=${OO_UI_URL:-http://localhost:5080}
+      - ADMIN_USER=${ADMIN_USER}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    depends_on: [ app ]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  fluentbit:
+    image: fluent/fluent-bit:3.2
+    command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
+    environment:
+      - OO_ROOT_EMAIL=${OO_ROOT_EMAIL}
+      - OO_ROOT_PASSWORD=${OO_ROOT_PASSWORD}
+    volumes:
+      - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    ports: [ "24224:24224" ]              # receives the fluentd logging driver (host side)
+
+volumes:
+  devcake_data: {}
+  dagu_data: {}
+  redis_data: {}
+  oo_data: {}

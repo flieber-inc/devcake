@@ -7,6 +7,8 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind — one page per tab
 
 Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header health strip (`GET /api/v1/health`: PMO reachable, forge reachable, Redis, Dagu, OpenObserve, config valid, per-Dev-Type circuit-breaker state).
 
+**Milestone note:** M0–M5 ship a dependency-free static shell (`admin/site/` — same three tabs, health strip, auth gate, and buttons; no build step). The Vite/React SPA replaces it at M6, when the Config tab's CRUD forms arrive.
+
 ## 1. REST API contract (`/api/v1`)
 
 | Method + path | Purpose |

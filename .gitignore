@@ -1,0 +1,22 @@
+# Secrets & local config — never commit
+.env
+
+# App local state (volume-mounted in containers; may appear locally during dev)
+/data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (admin SPA, from M6)
+node_modules/
+dist/
+
+# Editor/OS noise
+.idea/
+.vscode/
+.DS_Store

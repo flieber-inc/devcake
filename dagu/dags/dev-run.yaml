@@ -1,0 +1,35 @@
+# dev-run: launch one Dev container. Only non-secret params (+ the per-run scoped
+# Redis ACL credential, docs/09 §1a); everything else reaches the Dev via runspec.get.
+# Shape verified live on Dagu v2.10.5 — docs/13-deployment.md §4.
+# Exercised from M1 onward; shipped at M0 so the executor is complete.
+
+timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
+max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
+
+params:
+  - name: RUN_ID
+    default: ""
+  - name: IMAGE
+    default: ""
+  - name: TRACEPARENT
+    default: ""
+  - name: REDIS_USER
+    default: ""
+  - name: REDIS_PASSWORD
+    default: ""
+
+steps:
+  - id: run-dev
+    container:
+      image: ${params.IMAGE}
+      name: dev-${params.RUN_ID}
+      network: devcake_default
+      pull_policy: missing
+      keep_container: false
+      startup: entrypoint
+      env:
+        DEVCAKE_RUN_ID: ${params.RUN_ID}
+        TRACEPARENT: ${params.TRACEPARENT}
+        REDIS_URL: redis://redis:6379/0
+        REDIS_USER: ${params.REDIS_USER}
+        REDIS_PASSWORD: ${params.REDIS_PASSWORD}

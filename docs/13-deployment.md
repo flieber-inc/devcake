@@ -39,8 +39,11 @@ services:
       - dagu_data:/var/lib/dagu
       - ./dagu/dags:/var/lib/dagu/dags     # contains the single dev-run DAG
       - /var/run/docker.sock:/var/run/docker.sock   # ⚠ root-equivalent host access — 14-security.md §4
-    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"],
-                   interval: 10s, retries: 5 }
+    healthcheck:   # stock image has no curl/wget (verified at M0) — bash /dev/tcp HTTP probe
+      test: ["CMD", "bash", "-c",
+             "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /api/v1/health HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      retries: 5
 
   redis:
     image: redis:7-alpine

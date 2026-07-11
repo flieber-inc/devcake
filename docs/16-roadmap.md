@@ -8,11 +8,11 @@
 **Goal:** all five services up, traced, healthy. **Implements:** `13` (compose), `12` §1 (pipeline), `11` shell.
 **Out of scope:** any business logic.
 
-Exit criteria:
-- [ ] `docker compose up -d` from a fresh clone + `.env` → all services healthy.
-- [ ] `app` emits a stub `poll.cycle` trace visible in OpenObserve.
-- [ ] Admin panel serves the three tabs; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes).
-- [ ] Container stdout of `dagu`/`redis` searchable in OpenObserve.
+Exit criteria — **all verified 2026-07-11 (M0 complete)**:
+- [x] `docker compose up -d` from a fresh clone + `.env` → all services healthy.
+- [x] `app` emits a stub `poll.cycle` trace visible in OpenObserve (verified via `_search?type=traces`).
+- [x] Admin panel serves the three tabs; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
+- [x] Container stdout of `dagu`/`redis` searchable in OpenObserve (`container_logs` stream, via fluent-bit + fluentd logging driver).
 
 **Demo:** open the admin panel, click through the three tabs, show the trace.
 

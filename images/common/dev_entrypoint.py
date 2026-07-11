@@ -224,11 +224,17 @@ def main() -> None:
     # Plan mode is read-only — the harness cannot write files, so the entrypoint
     # materializes PLAN.md and result.json from the returned plan text (docs/08 §3)
     if plan_mode:
-        (WORKSPACE / "out" / "PLAN.md").write_text(result_text or "")
+        if len((result_text or "").strip()) < 200:  # a real plan is never this short
+            send_artifacts({"result": None,
+                            "transcript_md": f"plan mode returned no usable plan "
+                                             f"({len(result_text or '')} chars):\n\n{result_text}",
+                            "token_report": token_report})
+            stop.set()
+            sys.exit(11)  # DEV_BAD_OUTPUT — fail the attempt, never advance an empty plan
+        (WORKSPACE / "out" / "PLAN.md").write_text(result_text)
         (WORKSPACE / "out" / "result.json").write_text(json.dumps({
             "schema_version": 1, "outcome": "planned",
-            "summary": (result_text or "").strip().splitlines()[0][:300]
-            if result_text.strip() else "empty plan"}))
+            "summary": result_text.strip().splitlines()[0][:300]}))
     result_path = WORKSPACE / "out" / "result.json"
     try:
         result = json.loads(result_path.read_text())

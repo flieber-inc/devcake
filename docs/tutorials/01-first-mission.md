@@ -55,12 +55,11 @@ created its nine `DEVCAKE-*` labels in your Linear team — go look.
 
 ## Step 3 — Log Grok in (one time)
 
-```bash
-./scripts/grok_login.sh
-```
-
-A URL and code appear; open, enter, approve with your X/xAI account. The session
-is DevCake's own — your local Grok CLI (if any) is untouched.
+In the admin panel's Config tab, find the **main-dev** card and click
+**"Connect via OAuth…"** — a dialog shows a URL and a code; open, enter, approve
+with your X/xAI account, and the dialog completes itself. (The same wizard works
+for Codex Dev Types. Terminal alternative: `./scripts/grok_login.sh`.) The
+session is DevCake's own — your local Grok CLI (if any) is untouched.
 
 ## Step 4 — Create a mission
 

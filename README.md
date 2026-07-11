@@ -20,10 +20,13 @@ Five compose services + ephemeral Dev containers spawned as siblings by Dagu. Ev
 ## Quickstart
 
 ```bash
-cp .env.example .env         # fill: LINEAR_API_KEY, GITHUB_TOKEN (or GITLAB_TOKEN),
-                             #       and your model credentials (subscription OAuth preferred)
+cp .env.example .env         # fill: LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TOKEN (or GITLAB_*),
+                             # DEVCAKE_REPO_URL, model credentials (subscription OAuth preferred),
+                             # and DOCKER_GID (stat -c %g /var/run/docker.sock)
 docker compose up -d
-open http://localhost:8080   # admin panel → Config tab → test connections, pick your team
+docker compose --profile images build    # the three Dev harness images
+open http://localhost:8080   # admin panel (basic auth from .env) → Config tab →
+                             # test connections; connect Grok/Codex via the OAuth wizard
 ```
 
 From there, any non-done Issue or Project in your configured Linear team becomes a Mission. Progress, transcripts (`1_ONBOARD.md`, `2_PLAN.md`, …), and token reports appear in the Mission's activity feed; code lands as PRs on `devcake/<mission-key>` branches. DevCake never pushes to your default branch (merges happen by a human — or by DevCake itself if you enable the `auto_merge` toggle).

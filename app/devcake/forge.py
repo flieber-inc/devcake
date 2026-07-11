@@ -48,8 +48,9 @@ class GitHubForge:
         return prs[0] if prs else None
 
     async def post_pr_comment(self, pr_number: int, markdown: str) -> None:
+        from .security import redact
         await self._req("POST", f"/issues/{pr_number}/comments",
-                        json={"body": markdown})
+                        json={"body": redact(markdown)})
 
     async def approve(self, pr_number: int) -> bool:
         """Formal approval with the reviewer token; False when none configured."""

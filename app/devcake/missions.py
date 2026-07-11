@@ -26,6 +26,7 @@ from .pmo import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                   LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW, LABEL_SKIP, LABEL_TRACKING,
                   Mission, MissionType, PRIORITY_RANK, STAGE_LABELS, derive)
 from .runs import RunManager
+from .security import redact
 from .state import Run, utcnow
 from .telemetry import OO_ORG, OO_URL
 
@@ -237,6 +238,8 @@ class MissionManager:
             await self.pmo.set_status(pmo_id, status)
 
     async def _feed(self, pmo_id: str, kind: str, markdown: str) -> None:
+        markdown = redact(markdown, [r.redis_password for r in self.runs.store.active()
+                                     if r.redis_password])
         """Projects have no issue-style comments API (verified at M2/M5): their
         run artifacts live in the audit log + OpenObserve; the substance lands on
         the child issues anyway (ADR-0006)."""
@@ -385,7 +388,7 @@ class MissionManager:
 
         if outcome == "planned":
             url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
-                                                   (plan_md or "").encode())
+                                                   redact(plan_md or "").encode())
             await self.pmo.post_comment(
                 pmo_id, f"📋 DevCake plan for this mission: [PLAN_{run.seq}.md]({url})")
             await self.pmo.swap_labels(pmo_id, remove={LABEL_PLAN}, add={LABEL_EXECUTE})
@@ -410,7 +413,7 @@ class MissionManager:
             await self._finalize_decomposition(run, result)
         elif outcome == "plan_needed" and plan_md:
             url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
-                                                   plan_md.encode())
+                                                   redact(plan_md).encode())
             await self.pmo.post_comment(
                 pmo_id, f"📋 DevCake attached an opportunistic plan from triage: "
                         f"[PLAN_{run.seq}.md]({url}) — skipping the PLAN step.")
@@ -609,6 +612,7 @@ class MissionManager:
             log.exception("status restore failed for %s", run.run_id)
 
     async def _post_transcript(self, run: Run, transcript: str) -> None:
+        transcript = redact(transcript, [run.redis_password or ""])
         name = f"{run.seq}_{run.mission_type}.md"
         body = f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n---\n\n{transcript}"
         if run.pmo_kind == "project":

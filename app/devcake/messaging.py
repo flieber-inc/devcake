@@ -98,6 +98,7 @@ class Messaging:
                     await self._handle_entry(entry_id, fields, handler, verify_auth)
                 except Exception:
                     log.exception("reclaim: failed handling %s", entry_id)
+                    await self._maybe_poison(entry_id, fields)
             if not messages or start == "0-0":
                 break
 
@@ -115,7 +116,20 @@ class Messaging:
                         await self._handle_entry(entry_id, fields, handler, verify_auth)
                     except Exception:
                         log.exception("ingress: failed handling %s", entry_id)
-                        # leave un-ACKed: pending-entry reclaim will retry (docs/09 §4)
+                        await self._maybe_poison(entry_id, fields)
+
+    async def _maybe_poison(self, entry_id, fields) -> None:
+        """docs/09 §4: an entry failing 5 deliveries moves to devcake:dead."""
+        try:
+            pending = await self.redis.xpending_range(INGRESS, GROUP, entry_id,
+                                                      entry_id, count=1)
+            if pending and pending[0].get("times_delivered", 0) >= 5:
+                await self.redis.xadd("devcake:dead", {"m": fields.get("m", ""),
+                                                       "src": entry_id})
+                await self.redis.xack(INGRESS, GROUP, entry_id)
+                log.error("ingress: POISON message %s moved to devcake:dead", entry_id)
+        except Exception:
+            log.exception("poison handling failed for %s", entry_id)
 
     async def _handle_entry(self, entry_id, fields, handler, verify_auth) -> None:
         envelope = json.loads(fields.get("m", "{}"))

@@ -13,7 +13,7 @@ A **harness template** fully describes how one model/harness pair runs inside a 
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
-> Facts below were verified in July 2026 against official docs — and, for Grok Build, against a live install of the pinned CLI version. No open items remain; every invocation, flag, and extraction path in this document is verified.
+> Facts below were verified in July 2026 against official docs — and, for **Grok Build (v0.2.93)** and **Codex (codex-cli 0.144.1)**, against live installed CLIs including live probes of their headless output shapes. No open items remain; every invocation, flag, and extraction path in this document is verified.
 
 ## 1. Invocation patterns
 
@@ -38,11 +38,13 @@ grok -p "$PROMPT" --output-format streaming-json --always-approve
 
 ### `codex`
 ```bash
-codex exec "$PROMPT" --json --sandbox danger-full-access
+codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
+  --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
 ```
-- Final message → stdout; `--json` emits a JSONL event stream. `--full-auto` is deprecated — `--sandbox danger-full-access` is correct *inside* an isolated container.
-- Token usage is official: with `--json`, the final **`turn.completed`** event carries `usage` = `{input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (openai.com non-interactive docs). Caveat: on `codex exec resume`, these values are **cumulative across the session**, not per-call — DevCake runs are single-session so this is naturally correct.
-- Secondary source: session rollout files `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` contain `token_count` events with `payload.info.total_token_usage` (cumulative).
+- **Verified on an installed CLI (codex-cli 0.144.1, 2026-07 — pin this).** `--json` emits a JSONL event stream (`thread.started` → `turn.started` → `item.completed` → `turn.completed`); **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `type: agent_message` is the in-stream equivalent).
+- Sandboxing: `--dangerously-bypass-approvals-and-sandbox` is the container invocation — its own help text says "intended solely for running in environments that are externally sandboxed", which is exactly the Dev container. The plan-substitute run uses `--sandbox read-only` instead. `--ephemeral` (no session files) and `--ignore-user-config` exist for hermetic runs.
+- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (probe: 12196/10112/5/0). Caveat: on `codex exec resume` these are cumulative across the session — DevCake runs are single-session so this is naturally correct. No cost field → `cost_usd` from the price table.
+- Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
 
 ## 2. Base images
 
@@ -121,7 +123,7 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 |---|---|
 | `claude-code` | `claude mcp add [--transport http\|stdio] [--env K=V] <name> -- <command…>` (or per-run `--mcp-config <file>`) |
 | `grok-build` | **Verified (CLI v0.2.93):** `grok mcp add [-t stdio\|http\|sse] [-s user\|project] [-e K=V] [-H "Name: value"] <name> [--] <command…>` (or a URL for http/sse) — writes `~/.grok/config.toml` (user scope) or `./.grok/config.toml` (project). Also `grok mcp list\|remove\|doctor`. |
-| `codex` | `codex mcp add <name> [--env K=V] -- <command…>`; HTTP: `codex mcp add <name> --url <url> --bearer-token-env-var <VAR>` |
+| `codex` | **Verified (CLI 0.144.1):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
 
 ## 8. Adding or changing a template (checklist)
 

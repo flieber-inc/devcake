@@ -30,7 +30,7 @@ PROJECT_STATUS_MAP: dict[str, NormalizedStatus] = {
     "backlog": "backlog", "planned": "backlog", "started": "in_progress",
     "completed": "done", "canceled": "canceled", "paused": "backlog",
 }
-_ASSET_RE = re.compile(r"https://uploads\.linear\.app/\S+")
+_ASSET_RE = re.compile(r"https://uploads\.linear\.app/[^\s)\]]+")
 
 
 class PMOTransient(Exception):

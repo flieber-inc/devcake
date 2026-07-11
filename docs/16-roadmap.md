@@ -59,11 +59,13 @@ Field lessons folded into docs 04/07/14/15: Claude Code refuses `--dangerously-s
 
 **Goal:** code flows. **Implements:** `03` §§2–3, `06` (GitHub), `08` (`grok-build` template — invocation, auto-approval, plan mode, MCP syntax, and the `signals.json` token-totals extraction all verified on the pinned CLI v0.2.93).
 
-Exit criteria:
-- [ ] A `DEVCAKE-PLAN` mission autonomously: produces `PLAN.md`, uploads it, swaps to `DEVCAKE-EXECUTE`; then Main Dev implements on `devcake/{mission_key}`, opens a PR on the sandbox repo, label swaps to `DEVCAKE-REVIEW`, PR link posted.
-- [ ] Token reports present for both steps (Claude with full usage+cost; Grok with `signals.json` totals per `08` §5 — and the `unavailable` fallback proven by fault injection).
-- [ ] Re-running EXECUTE (simulated crash after push) reuses the branch, updates the same PR (idempotent `ensure_pr`), never force-pushes.
-- [ ] Transcript > 50 KB uploads as an `.md` attachment (PMO contract test 6).
+Exit criteria — **all verified 2026-07-11 against live Linear + GitHub + live Grok/Claude runs (M4 complete)**:
+- [x] DEV-18 ran the full chain autonomously: PLAN (Claude plan mode; entrypoint materializes `PLAN.md` + `result.json`, since plan mode is read-only) → plan uploaded → `DEVCAKE-EXECUTE` → Main Dev (Grok Build, OAuth subscription session) implemented on `devcake/DEV-18`, opened PR#3 → `DEVCAKE-REVIEW` + PR link posted. DEV-17 ran the direct-EXECUTE variant (opportunistic plan from M3) → PR#2 with a 23-test pytest suite.
+- [x] Token reports for both harnesses: Claude full usage+cost (`session_json`); Grok totals via `signals.json` (`total: 22006` / `26892` posted to the feed).
+- [x] Rework idempotency: swapping DEV-17 back to `DEVCAKE-EXECUTE` produced a run that reused the branch, reported the **same** PR#2 (still the only open PR for it, head sha unchanged), and swapped back to REVIEW. No duplicates, no force-push.
+- [x] A forced 60 KB transcript took the attachment route: uploaded `.md` + short reference comment (and exposed a trailing-paren asset-URL regex bug, fixed).
+
+Operational note: widening the dispatch gate immediately picks up ANY adopted mission already carrying a stage label — as designed, but remember it when seeding sandboxes (the M2 fixtures dispatched and one produced a PR before being parked).
 
 ## M5 — REVIEW + full loop + failure taxonomy
 
@@ -82,6 +84,7 @@ Exit criteria — scripted scenarios all green:
 
 Exit criteria:
 - [ ] From an empty `/data`, a fresh operator configures everything through the UI alone (connection tests green, Dev Types created, assignments set) and reproduces the M3 demo without touching files.
+- [ ] **Guided OAuth helpers in the UI** (founder request 2026-07-11): the Config tab drives the device-code flows (Grok/Codex/Claude) — shows the URL + code, polls for completion, stores the credential to `/data/secrets/{dev_type}/` — replacing `scripts/grok_login.sh`.
 - [ ] Credentials JSON upload lands 0600, mounts read-only, works end-to-end for at least one harness (subscription OAuth path).
 - [ ] GitLab adapter passes the forge contract battery; the M4 demo passes on a GitLab sandbox repo.
 - [ ] `auto_merge` and `adoption_mode` confirm dialogs + `DEVCAKE-SKIP` behavior verified in UI-driven tests; basic auth gates both the SPA and `/api` (unauthenticated requests get 401).

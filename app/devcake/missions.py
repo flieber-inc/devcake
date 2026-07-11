@@ -29,9 +29,8 @@ from .telemetry import OO_ORG, OO_URL
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
-# M3 gate: only ONBOARD on Issues is dispatched. PLAN/EXECUTE arrive at M4,
-# REVIEW + project decomposition at M5 (docs/16).
-DISPATCHABLE_TYPES = {MissionType.ONBOARD}
+# M4 gate: ONBOARD/PLAN/EXECUTE on Issues. REVIEW + project decomposition at M5.
+DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN, MissionType.EXECUTE}
 
 STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 
@@ -139,8 +138,14 @@ class MissionManager:
             traceparent = carrier.get("traceparent", "")
 
             redis_password = await self.messaging.create_run_user(run_id)
-            from .prompts import onboard_prompt
-            prompt = onboard_prompt(dev_type.identifying_prompt, live)
+            from .prompts import execute_prompt, onboard_prompt, plan_prompt
+            repo_name = self.config.repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+            prompt = {
+                MissionType.ONBOARD: lambda: onboard_prompt(dev_type.identifying_prompt, live),
+                MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
+                MissionType.EXECUTE: lambda: execute_prompt(dev_type.identifying_prompt,
+                                                            live, repo_name),
+            }[mtype]()
 
             spec_env = {
                 "DEVCAKE_MISSION_ID": mission.pmo_id,
@@ -160,12 +165,22 @@ class MissionManager:
                 if os.environ.get(var):
                     spec_env[var] = os.environ[var]
 
+            spec_files = []
+            secrets_dir = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / dev_type.name
+            for cf in dev_type.credential_files:
+                p = secrets_dir / cf.secret_file
+                if p.exists():
+                    spec_files.append({"path_hint": cf.path_hint,
+                                       "content": p.read_text(), "mode": "600"})
+                else:
+                    log.warning("credential file %s missing for %s — run scripts/%s login",
+                                p, dev_type.name, dev_type.harness_template.split("-")[0])
             run = Run(
                 run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
                 dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
                 timeout_seconds=self.config.dev_timeout_minutes * 60,
                 traceparent=traceparent, redis_password=redis_password,
-                spec_env=spec_env, spec_files=[],
+                spec_env=spec_env, spec_files=spec_files,
             )
             run.spec_prompt = prompt
             run.stage_label_at_dispatch = self._stage_of(live)
@@ -277,7 +292,7 @@ class MissionManager:
 
             # 3 — compare-and-transition
             if "transition" not in run.finalized_steps:
-                await self._transition(run, outcome, plan_md)
+                await self._transition(run, result, plan_md)
                 run.finalized_steps.append("transition")
                 self.runs.store.save(run)
 
@@ -289,7 +304,8 @@ class MissionManager:
             self.runs.store.save(run)
             log.info("finalized %s (%s)", run.run_id, outcome)
 
-    async def _transition(self, run: Run, outcome: str, plan_md: str | None) -> None:
+    async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None:
+        outcome = result.get("outcome", "")
         pmo_id = run.mission_pmo_id
         live = await self.pmo.get_mission(pmo_id)                   # live re-read
         if self._stage_of(live) != run.stage_label_at_dispatch:
@@ -302,7 +318,28 @@ class MissionManager:
             log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
             return
 
-        if outcome == "plan_needed" and plan_md:
+        if outcome == "planned":
+            url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
+                                                   (plan_md or "").encode())
+            await self.pmo.post_comment(
+                pmo_id, f"📋 DevCake plan for this mission: [PLAN_{run.seq}.md]({url})")
+            await self.pmo.swap_labels(pmo_id, remove={LABEL_PLAN}, add={LABEL_EXECUTE})
+            self._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
+        elif outcome == "executed":
+            from .pmo import LABEL_REVIEW
+            await self.pmo.swap_labels(pmo_id, remove={LABEL_EXECUTE}, add={LABEL_REVIEW})
+            await self.pmo.post_comment(
+                pmo_id, f"🔀 DevCake opened/updated the pull request: "
+                        f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
+            self._audit(pmo_id, "label_swap", f"{LABEL_EXECUTE}→{LABEL_REVIEW}")
+        elif outcome == "executed_trivially":
+            from .pmo import LABEL_REVIEW
+            await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_REVIEW})
+            await self.pmo.post_comment(
+                pmo_id, f"🔀 Trivial path: PR opened ({result.get('pr_url', '?')}) — "
+                        f"the trivial path never skips REVIEW (docs/03 §1.1).")
+            self._audit(pmo_id, "label_add", LABEL_REVIEW)
+        elif outcome == "plan_needed" and plan_md:
             url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
                                                    plan_md.encode())
             await self.pmo.post_comment(
@@ -359,6 +396,7 @@ class MissionManager:
             f"output: {fmt(tr.get('output_tokens'))}\n"
             f"cache read/write: {fmt(tr.get('cache_read_tokens'))}/"
             f"{fmt(tr.get('cache_write_tokens'))}"
+            + (f" · total: {tr['total_tokens']}" if tr.get('total_tokens') is not None else "")
             + (f"\ncost: ${cost:.4f}" if cost is not None else "")
             + f"\nextraction: {fmt(tr.get('extraction_method'))}\nrun: {run.run_id}")
 
@@ -384,10 +422,13 @@ class MissionManager:
                 body = body[:300].replace("\n", " ") + f"… — see: {fname}"
             lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} ({e.kind})")
             lines.append(body)
+            names = dict(re.findall(r"\[([^\]]+\.\w{1,8})\]\((https://uploads\.linear\.app/\S+?)\)",
+                                    e.body or ""))
+            names = {v: k for k, v in names.items()}
             for url in e.attachments:
                 try:
                     data = await self.pmo.download_asset(url)
-                    fname = url.rsplit("/", 1)[-1][:80] or "attachment.bin"
+                    fname = names.get(url) or url.rsplit("/", 1)[-1][:80] or "attachment.bin"
                     attachments.append({"filename": fname,
                                         "content_b64": base64.b64encode(data).decode()})
                     lines.append(f"[attachment: {fname}]")

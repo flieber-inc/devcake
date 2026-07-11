@@ -44,6 +44,13 @@ class Concurrency(BaseModel):
     global_max: int = 3
 
 
+class CredentialFile(BaseModel):
+    """A secret file under /data/secrets/{dev_type}/ delivered via runspec and
+    installed by the Dev entrypoint at path_hint (docs/08 §4, docs/09 §3)."""
+    secret_file: str
+    path_hint: str
+
+
 class DevType(BaseModel):
     """docs/02 §6 — one YAML per Dev Type under /data/config/dev_types/."""
     name: str
@@ -51,6 +58,7 @@ class DevType(BaseModel):
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
     credential_env: list[str] = Field(default_factory=list)  # env vars passed through
+    credential_files: list[CredentialFile] = Field(default_factory=list)
     max_concurrency: int = 1
     docker_image: str = ""
 
@@ -85,7 +93,9 @@ DEFAULT_DEV_TYPES = [
             max_concurrency=2, docker_image="devcake/dev-claude-code:latest"),
     DevType(name="main-dev", harness_template="grok-build",
             identifying_prompt=MAIN_PROMPT,
-            credential_env=["XAI_API_KEY"],
+            credential_env=["XAI_API_KEY"],  # optional API-key mode; OAuth file preferred
+            credential_files=[CredentialFile(secret_file="grok-auth.json",
+                                             path_hint="~/.grok/auth.json")],
             max_concurrency=2, docker_image="devcake/dev-grok-build:latest"),
 ]
 

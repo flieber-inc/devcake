@@ -96,8 +96,14 @@ services:
     entrypoint: ["true"]
 
   dev-claude-code:
-    build: ./images/claude-code
+    build: { context: ./images, dockerfile: claude-code/Dockerfile }
     image: devcake/dev-claude-code:latest
+    profiles: [images]
+    entrypoint: ["true"]
+
+  dev-grok-build:
+    build: { context: ./images, dockerfile: grok-build/Dockerfile }
+    image: devcake/dev-grok-build:latest
     profiles: [images]
     entrypoint: ["true"]
 

@@ -57,3 +57,66 @@ def onboard_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + ONBOARD_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
         title=mission.title, description=mission.description or "(no description)")
+
+
+PLAN_PLAYBOOK = """
+## Your current mission type: PLAN
+
+Produce a complete, standalone implementation plan for the mission below — and
+nothing else. You are running in the harness's read-only plan mode; your final
+message IS the plan and will be delivered verbatim to the implementer, who has
+no other context. Structure it so a competent engineer (or agent) can execute
+it without asking questions: goals, file-by-file changes, new files, testing
+strategy, and acceptance checks. Study /workspace/repo and the mission history
+in /workspace/activity/ (reference material — read what you need).
+
+### The mission
+- Key: {key}   ·   Priority: {priority}   ·   URL: {url}
+- Title: **{title}**
+
+{description}
+"""
+
+
+def plan_prompt(identifying_prompt: str, mission: Mission) -> str:
+    return identifying_prompt + "\n" + PLAN_PLAYBOOK.format(
+        key=mission.key, priority=mission.priority, url=mission.url,
+        title=mission.title, description=mission.description or "(no description)")
+
+
+EXECUTE_PLAYBOOK = """
+## Your current mission type: EXECUTE
+
+Implement the mission's plan. The latest plan (PLAN*.md) and any review reports
+are in /workspace/activity/ — read the plan first; if a review report exists,
+its findings take priority. Where reality contradicts the plan, implement the
+smallest sound deviation and document it in your summary.
+
+### Binding rules (violations fail the run)
+1. Work ONLY inside /workspace/repo/{repo_name}/.
+2. Branch: `devcake/{key}`. If it exists on the remote, check it out and
+   continue on it (`git fetch origin devcake/{key} && git checkout devcake/{key}`);
+   otherwise create it from the default branch. NEVER force-push.
+3. Run the repo's tests/build if present; add tests per the plan.
+4. Commit ONLY at the very end, one commit: `[{key}] <concise summary>`.
+   Then push: `git push -u origin devcake/{key}` (credentials are configured).
+5. Pull request (idempotent): `gh pr view devcake/{key} --json url` — if one
+   exists, update it (`gh pr edit`) instead of creating; else
+   `gh pr create --head devcake/{key} --title "[{key}] {title}" --body "<summary + mission URL>"`.
+6. Write /workspace/out/result.json EXACTLY as:
+   {{"schema_version": 1, "outcome": "executed", "summary": "<what you built,
+   deviations, test results>", "pr_url": "<the PR url>"}}
+
+### The mission
+- Key: {key}   ·   Priority: {priority}   ·   URL: {url}
+- Title: **{title}**
+
+{description}
+"""
+
+
+def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str) -> str:
+    return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
+        key=mission.key, priority=mission.priority, url=mission.url,
+        title=mission.title, repo_name=repo_name,
+        description=mission.description or "(no description)")

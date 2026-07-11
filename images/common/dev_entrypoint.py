@@ -1,4 +1,5 @@
-"""DevCake Dev entrypoint — claude-code harness (docs/07 lifecycle, docs/08 §1).
+"""DevCake Dev entrypoint — shared across harness images (docs/07, docs/08).
+Harness selected by the image-baked DEVCAKE_HARNESS env (claude-code | grok-build).
 
 Exit codes per docs/07 §4: 0 ok · 10 harness crash · 11 bad result.json ·
 12 auth · 13 clone/forge · 14 MCP setup · 20 entrypoint error.
@@ -102,9 +103,16 @@ def main() -> None:
     clone_url = repo_url.replace("https://", "https://x-access-token@")
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
+    # git auth for clone AND the harness's own push (docs/03 §3); gh auth for PRs
+    os.environ["GIT_ASKPASS"] = str(askpass)
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+    if env.get("DEVCAKE_FORGE_TOKEN"):
+        os.environ["GH_TOKEN"] = env["DEVCAKE_FORGE_TOKEN"]
+    subprocess.run(["git", "config", "--global", "user.name", "DevCake"], capture_output=True)
+    subprocess.run(["git", "config", "--global", "user.email",
+                    "devcake@users.noreply.github.com"], capture_output=True)
     clone = subprocess.run(
         ["git", "clone", clone_url, str(repo_dir / repo_name)],
-        env={**os.environ, "GIT_ASKPASS": str(askpass), "GIT_TERMINAL_PROMPT": "0"},
         capture_output=True, text=True)
     if clone.returncode != 0:
         print("clone failed:", clone.stderr[-500:], file=sys.stderr)
@@ -135,45 +143,72 @@ def main() -> None:
     tracer = trace.get_tracer("devcake-dev")
     ctx = extract({"traceparent": TRACEPARENT}) if TRACEPARENT else None
 
-    # ── harness (docs/08 §1: claude-code) ────────────────────────────────────
+    # ── harness (docs/08 §§1,3) ──────────────────────────────────────────────
+    harness = os.environ.get("DEVCAKE_HARNESS", "claude-code")
+    plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
-    cmd = ["claude", "-p", prompt, "--output-format", "json",
-           "--dangerously-skip-permissions", *extra]
+    if harness == "grok-build":
+        mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
+        cmd = ["grok", "-p", prompt, "--output-format", "json", *mode, *extra]
+    else:
+        mode = ["--permission-mode", "plan"] if plan_mode             else ["--dangerously-skip-permissions"]
+        cmd = ["claude", "-p", prompt, "--output-format", "json", *mode, *extra]
     harness_exit, out = 1, ""
     with tracer.start_as_current_span("dev.run", context=ctx) as span:
         span.set_attribute("devcake.run.id", RUN_ID)
         span.set_attribute("devcake.dev_type", env.get("DEVCAKE_DEV_TYPE", ""))
-        span.set_attribute("devcake.harness", "claude-code")
+        span.set_attribute("devcake.harness", harness)
         with tracer.start_as_current_span("harness.exec"):
             proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
             harness_exit, out = proc.returncode, proc.stdout
         span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
     provider.force_flush()
 
-    # ── token extraction (docs/08 §5: session_json first) ────────────────────
-    token_report = {"extraction_method": "unavailable", "model": "claude-code"}
-    result_text = ""
-    try:
-        j = json.loads(out)
-        usage = j.get("usage") or {}
-        mu = j.get("modelUsage") or {}
-        def _weight(v):  # dominant model = the one that cost/produced the most
-            return (v.get("costUSD") or 0, v.get("outputTokens") or 0) if isinstance(v, dict) else (0, 0)
-        models = sorted(mu, key=lambda k: _weight(mu[k]), reverse=True)
-        token_report = {
-            "input_tokens": usage.get("input_tokens"),
-            "output_tokens": usage.get("output_tokens"),
-            "cache_read_tokens": usage.get("cache_read_input_tokens"),
-            "cache_write_tokens": usage.get("cache_creation_input_tokens"),
-            "cost_usd": j.get("total_cost_usd"),
-            "model": models[0] if models else "claude-code",
-            "extraction_method": "session_json",
-            "num_turns": j.get("num_turns"),
-            "duration_ms": j.get("duration_ms"),
-        }
-        result_text = j.get("result") or ""
-    except Exception:
-        result_text = out[-4000:]
+    # ── token extraction + result text (docs/08 §5) ──────────────────────────
+    token_report = {"extraction_method": "unavailable", "model": harness}
+    result_text, transcript_body = "", ""
+    if harness == "grok-build":
+        try:
+            j = json.loads(out)
+            result_text = j.get("text") or ""
+            sid = j.get("sessionId") or ""
+            sig = None
+            for p in pathlib.Path.home().glob(f".grok/sessions/*/{sid}/signals.json"):
+                sig = json.loads(p.read_text())
+            if sig:
+                token_report = {
+                    "total_tokens": sig.get("contextTokensUsed") or sig.get("totalTokens"),
+                    "model": (sig.get("modelsUsed") or ["grok"])[0],
+                    "extraction_method": "session_json",
+                    "num_turns": sig.get("turnCount"),
+                }
+            exp = subprocess.run(["grok", "export", sid], capture_output=True, text=True)
+            if exp.returncode == 0 and exp.stdout.strip():
+                transcript_body = exp.stdout
+        except Exception:
+            result_text = out[-4000:]
+    else:
+        try:
+            j = json.loads(out)
+            usage = j.get("usage") or {}
+            mu = j.get("modelUsage") or {}
+            def _weight(v):  # dominant model = the one that cost/produced the most
+                return (v.get("costUSD") or 0, v.get("outputTokens") or 0)                     if isinstance(v, dict) else (0, 0)
+            models = sorted(mu, key=lambda k: _weight(mu[k]), reverse=True)
+            token_report = {
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "cache_read_tokens": usage.get("cache_read_input_tokens"),
+                "cache_write_tokens": usage.get("cache_creation_input_tokens"),
+                "cost_usd": j.get("total_cost_usd"),
+                "model": models[0] if models else "claude-code",
+                "extraction_method": "session_json",
+                "num_turns": j.get("num_turns"),
+                "duration_ms": j.get("duration_ms"),
+            }
+            result_text = j.get("result") or ""
+        except Exception:
+            result_text = out[-4000:]
 
     if harness_exit != 0:
         err = (proc.stderr or "")[-1500:]
@@ -186,6 +221,14 @@ def main() -> None:
         sys.exit(12 if auth_fail else 10)
 
     # ── result.json (docs/03 §6) ─────────────────────────────────────────────
+    # Plan mode is read-only — the harness cannot write files, so the entrypoint
+    # materializes PLAN.md and result.json from the returned plan text (docs/08 §3)
+    if plan_mode:
+        (WORKSPACE / "out" / "PLAN.md").write_text(result_text or "")
+        (WORKSPACE / "out" / "result.json").write_text(json.dumps({
+            "schema_version": 1, "outcome": "planned",
+            "summary": (result_text or "").strip().splitlines()[0][:300]
+            if result_text.strip() else "empty plan"}))
     result_path = WORKSPACE / "out" / "result.json"
     try:
         result = json.loads(result_path.read_text())
@@ -202,11 +245,12 @@ def main() -> None:
     plan_path = WORKSPACE / "out" / "PLAN.md"
     transcript = (
         f"# {env.get('DEVCAKE_SEQ')}_{env.get('DEVCAKE_MISSION_TYPE')} — run {RUN_ID}\n\n"
-        f"**Dev:** {env.get('DEVCAKE_DEV_TYPE')} (claude-code) · "
+        f"**Dev:** {env.get('DEVCAKE_DEV_TYPE')} ({harness}) · "
         f"**turns:** {token_report.get('num_turns', '—')} · "
         f"**duration:** {token_report.get('duration_ms', '—')} ms\n\n"
         f"## Agent report\n\n{result_text}\n\n"
-        f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n")
+        + (f"## Session transcript\n\n{transcript_body}\n\n" if transcript_body else "")
+        + f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n")
     payload = {"result": result, "transcript_md": transcript, "token_report": token_report}
     if plan_path.exists():
         payload["plan_md"] = plan_path.read_text()

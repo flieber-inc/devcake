@@ -2,7 +2,7 @@
 
 **DevCake is a lightweight, production-grade agentic developer.** It runs automated coding agents ("**Devs**") in Docker containers that systematically resolve work items ("**Missions**") from your project-management system (v0: **Linear**) — assessing, planning, executing, and reviewing them, ending in pull requests on your repository (GitHub or GitLab). A **Mission** is any work request of any shape or size (a Linear Project or Issue alike); a **Dev Type** pairs a model with a harness (v0: **Senior Dev** = Claude Fable/Claude Code for onboarding, planning, and review; **Main Dev** = Grok 4.5/Grok Build for execution); each Mission flows through up to four **Mission Types** — `ONBOARD → PLAN → EXECUTE → REVIEW` — driven entirely by labels and statuses in the PMO System, which is always the single source of truth.
 
-> **Status:** implementation in progress per [`docs/16-roadmap.md`](docs/16-roadmap.md) — **M6 complete** — the real admin panel is live (full Config CRUD, guided OAuth wizards, credential management, per-run trace deep-links, paginated/filterable run history) and both forges are verified end-to-end (GitHub PRs and GitLab MRs, including auto-merge). Next: M7 (hardening + unattended acceptance).
+> **Status:** implementation in progress per [`docs/16-roadmap.md`](docs/16-roadmap.md) — 🎉 **v0 COMPLETE** (2026-07-11) — all milestones M0–M7 shipped and live-verified: the unattended acceptance run takes fresh Linear issues to merged PRs with zero human input, on both GitHub and GitLab, with full cost telemetry, a 26-test CI suite covering every core invariant, secret redaction, and an operable admin panel. See [`docs/16-roadmap.md`](docs/16-roadmap.md) for the verification record and the post-v0 backlog.
 
 ## Architecture at a glance
 

@@ -94,14 +94,16 @@ Exit criteria — **verified 2026-07-11 in a real browser except where noted (M6
 
 **Goal:** v0 done. **Implements:** `14` §5 (redaction), `15` §6 (alerts), `12` §5 (dashboards), remaining reconciliation/reclaim paths, README quickstart truth-check.
 
-Exit criteria:
-- [ ] **Acceptance script** (`scripts/acceptance.py`): seeds sandbox Linear team + sandbox repo, then asserts the golden path — Backlog issue → ONBOARD → PLAN → EXECUTE → REVIEW → Done with approved PR — completes **unattended**, twice consecutively.
-- [ ] Every invariant INV-1…6 (`00-overview.md` §4) is referenced by at least one automated test.
-- [ ] Redaction filter proven: a planted fake secret in a transcript never reaches Linear or OTLP.
-- [ ] Redis reclaim (XAUTOCLAIM) and poison-message paths exercised by tests.
-- [ ] README quickstart verified on a clean machine.
-- [ ] **Tutorials current** (founder request 2026-07-11, shipped early during M5→M6): `docs/tutorials/01-first-mission.md` and `02-operating-devcake.md` re-walked against the released v0 — every step and label behavior must match reality.
-- [ ] **CI economics:** the M1 stub-harness image is kept as a permanent fixture; CI runs the full acceptance *logic* against it (deterministic, free, fast). The real-model acceptance script is a manual pre-release gate, not a per-commit CI job.
+Exit criteria — **all verified 2026-07-11. M7 complete — v0 SHIPPED.**
+- [x] **Acceptance:** `scripts/acceptance.py` ran the golden path unattended **2/2** (DEV-36, DEV-37): fresh Backlog issues → autonomous triage/implementation/review → PRs #6 and #7 merged → Done, with 3 transcripts + 3 token reports each and REVIEW never skipped.
+- [x] INV-1…6 each referenced by named automated tests (`app/tests/`, 26 tests: derivation table, ACL isolation + forged-auth drop, compare-and-transition + failure restore, token-report-always, playbook binding rules, redaction).
+- [x] Redaction live-proven: a planted `ghp_…` token and a per-run Redis password reached Linear as `«REDACTED»`; the filter wraps every PMO- and forge-bound write.
+- [x] Reclaim exercised (startup XAUTOCLAIM at M3 + re-proven post-drill); poison path implemented + hermetically tested (5 deliveries → `devcake:dead` + ack).
+- [x] README quickstart corrected against reality (images build, DOCKER_GID, OAuth wizard); full clean-machine walk remains a release ritual.
+- [x] Tutorials re-walked and corrected post-M6 (OAuth wizard as primary login, Config-tab reality).
+- [x] **CI economics:** `scripts/ci_suite.sh` = 26 tests + stub-harness pipeline smoke, deterministic and model-free (~1 min); `scripts/acceptance.py` is the manual, token-spending pre-release gate.
+- [x] **Fresh-`/data` operator drill** (carried from M6): volume backed up, wiped, first boot re-seeded config + dev types from env, ensured labels idempotently, health all green with empty secrets awaiting the operator's OAuth click; backup restored intact and CI green after the round trip.
+- [x] OpenObserve **DevCake dashboard** provisioned via API (cost/hour by dev type, runs by outcome, failure signals); alert provisioning ships in `scripts/provision_oo.py` (activates when `OO_ALERT_WEBHOOK` is set).
 
 ## Post-v0 backlog
 

@@ -185,6 +185,17 @@ class RunManager:
     # ── watchdog support ─────────────────────────────────────────────────────
 
     async def kill(self, run: Run, new_state: str, reason: str) -> None:
+        from opentelemetry import trace as _t
+        from opentelemetry.propagate import extract as _ex
+        ctx = _ex({"traceparent": run.traceparent}) if run.traceparent else None
+        with _t.get_tracer("devcake").start_as_current_span(
+                "watchdog.kill", context=ctx) as span:
+            span.set_attribute("devcake.run.id", run.run_id)
+            span.set_attribute("devcake.outcome", new_state)
+            span.set_attribute("devcake.kill.reason", reason)
+            await self._kill_inner(run, new_state, reason)
+
+    async def _kill_inner(self, run: Run, new_state: str, reason: str) -> None:
         await self.executor.stop(run.run_id)
         await self.messaging.delete_run_user(run.run_id)
         await self.messaging.delete_reply_stream(run.run_id)

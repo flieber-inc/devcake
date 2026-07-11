@@ -58,7 +58,7 @@ Save = `PUT` per section; optimistic UI with server errors inline.
 
 ## 3. Executor tab
 
-A prominent **"Open Dagu ↗"** button (opens the Dagu UI in a new browser tab, URL from `DAGU_UI_URL`), above a live run list rendered from `GET /api/v1/runs` (mission key, type, dev type, state, started, duration — linking each row to its Dagu run and its OpenObserve trace). No iframe.
+A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`), above a live run table from `GET /api/v1/runs` — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live at M6). No iframe.
 
 ## 4. Logs tab
 

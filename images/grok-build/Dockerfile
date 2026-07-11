@@ -15,6 +15,10 @@ RUN pip install --no-cache-dir \
         opentelemetry-sdk==1.29.0 \
         opentelemetry-exporter-otlp-proto-http==1.29.0
 
+# GitLab CLI (docs/06 §7)
+RUN curl -fsSL https://gitlab.com/gitlab-org/cli/-/releases/v1.55.0/downloads/glab_1.55.0_linux_$(dpkg --print-architecture).deb -o /tmp/glab.deb \
+    && apt-get update && apt-get install -y /tmp/glab.deb && rm -f /tmp/glab.deb && rm -rf /var/lib/apt/lists/*
+
 # non-root harness user (docs/07 §7)
 RUN useradd -m -u 1000 dev && mkdir -p /workspace && chown dev:dev /workspace
 

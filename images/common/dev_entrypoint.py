@@ -91,16 +91,24 @@ def main() -> None:
         cmd = env["DEVCAKE_OAUTH_LOGIN_CMD"].split()
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1)
+        ansi = _re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
         url = code = None
-        for line in proc.stdout:
-            print(line, end="")
-            m = _re.search(r"https://\S+", line)
-            if m and "url" not in (url or ""):
-                if "user_code=" in m.group(0) or "device" in m.group(0):
-                    url = m.group(0)
+        for raw in proc.stdout:
+            print(raw, end="")
+            line = ansi.sub("", raw)                 # harness CLIs colorize output
+            if url is None:
+                m = _re.search(r"https://[^\s\x1b]+", line)
+                if m and ("user_code=" in m.group(0) or "device" in m.group(0)):
+                    url = m.group(0).rstrip(".,)")
                     cm = _re.search(r"user_code=([A-Z0-9-]+)", url)
                     code = cm.group(1) if cm else None
-                    send("run.log", {"oauth_url": url, "code": code})
+            if code is None:                         # codex prints the code on its own line
+                cm = _re.search(r"\b([A-Z0-9]{4,8}-[A-Z0-9]{4,8})\b", line)
+                if cm and "http" not in line:
+                    code = cm.group(1)
+            if url and (code or "user_code=" in url) and not getattr(main, "_sent", False):
+                main._sent = True
+                send("run.log", {"oauth_url": url, "code": code})
         proc.wait()
         if proc.returncode != 0:
             send("run.log", {"oauth_error": f"login exited {proc.returncode}"})
@@ -127,7 +135,8 @@ def main() -> None:
     askpass = WORKSPACE / ".devcake" / "askpass.sh"
     askpass.write_text("#!/bin/sh\necho \"$DEVCAKE_FORGE_TOKEN\"\n")
     askpass.chmod(0o700)
-    clone_url = repo_url.replace("https://", "https://x-access-token@")
+    clone_user = "oauth2" if env.get("DEVCAKE_FORGE") == "gitlab" else "x-access-token"
+    clone_url = repo_url.replace("https://", f"https://{clone_user}@")
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
     # git auth for clone AND the harness's own push (docs/03 §3); gh auth for PRs
@@ -135,6 +144,7 @@ def main() -> None:
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     if env.get("DEVCAKE_FORGE_TOKEN"):
         os.environ["GH_TOKEN"] = env["DEVCAKE_FORGE_TOKEN"]
+        os.environ["GITLAB_TOKEN"] = env["DEVCAKE_FORGE_TOKEN"]  # glab auth
     subprocess.run(["git", "config", "--global", "user.name", "DevCake"], capture_output=True)
     subprocess.run(["git", "config", "--global", "user.email",
                     "devcake@users.noreply.github.com"], capture_output=True)
@@ -178,6 +188,12 @@ def main() -> None:
     if harness == "grok-build":
         mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
         cmd = ["grok", "-p", prompt, "--output-format", "json", *mode, *extra]
+    elif harness == "codex":
+        mode = ["--sandbox", "read-only"] if plan_mode \
+            else ["--dangerously-bypass-approvals-and-sandbox"]
+        cmd = ["codex", "exec", prompt, "--json",
+               "-o", str(WORKSPACE / "out" / "last_message.txt"),
+               "--skip-git-repo-check", *mode, *extra]
     else:
         mode = ["--permission-mode", "plan"] if plan_mode             else ["--dangerously-skip-permissions"]
         cmd = ["claude", "-p", prompt, "--output-format", "json", *mode, *extra]
@@ -195,7 +211,30 @@ def main() -> None:
     # ── token extraction + result text (docs/08 §5) ──────────────────────────
     token_report = {"extraction_method": "unavailable", "model": harness}
     result_text, transcript_body = "", ""
-    if harness == "grok-build":
+    if harness == "codex":
+        try:
+            last = WORKSPACE / "out" / "last_message.txt"
+            result_text = last.read_text() if last.exists() else ""
+            for line in out.splitlines():           # JSONL events (verified 0.144.1)
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                if ev.get("type") == "turn.completed":
+                    u = ev.get("usage") or {}
+                    token_report = {
+                        "input_tokens": u.get("input_tokens"),
+                        "output_tokens": u.get("output_tokens"),
+                        "cache_read_tokens": u.get("cached_input_tokens"),
+                        "model": "codex",
+                        "extraction_method": "session_json",
+                        "notes": f"reasoning_output_tokens={u.get('reasoning_output_tokens')}",
+                    }
+            if not result_text:
+                result_text = out[-4000:]
+        except Exception:
+            result_text = out[-4000:]
+    elif harness == "grok-build":
         try:
             j = json.loads(out)
             result_text = j.get("text") or ""

@@ -40,6 +40,14 @@ class OAuthManager:
                      if d.harness_template == harness), None)
 
     async def start(self, harness: str) -> dict:
+        from opentelemetry import trace as _t
+        with _t.get_tracer("devcake").start_as_current_span("oauth.start") as span:
+            span.set_attribute("devcake.harness", harness)
+            result = await self._start_inner(harness)
+            span.set_attribute("devcake.run.id", result["run_id"])
+            return result
+
+    async def _start_inner(self, harness: str) -> dict:
         flow = FLOWS.get(harness)
         dev_type = self._dev_type_for(harness)
         if not flow or not dev_type:
@@ -75,6 +83,12 @@ class OAuthManager:
             s.update(state="failed", error=payload["oauth_error"])
 
     async def on_result(self, run_id: str, payload: dict) -> None:
+        from opentelemetry import trace as _t
+        with _t.get_tracer("devcake").start_as_current_span("oauth.result") as span:
+            span.set_attribute("devcake.run.id", run_id)
+            await self._on_result_inner(run_id, payload)
+
+    async def _on_result_inner(self, run_id: str, payload: dict) -> None:
         s = self.sessions.get(run_id)
         run = self.runs.store.get(run_id)
         if not s or not run:

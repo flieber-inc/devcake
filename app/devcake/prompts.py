@@ -108,12 +108,10 @@ smallest sound deviation and document it in your summary.
 3. Run the repo's tests/build if present; add tests per the plan.
 4. Commit ONLY at the very end, one commit: `[{key}] <concise summary>`.
    Then push: `git push -u origin devcake/{key}` (credentials are configured).
-5. Pull request (idempotent): `gh pr view devcake/{key} --json url` — if one
-   exists, update it (`gh pr edit`) instead of creating; else
-   `gh pr create --head devcake/{key} --title "[{key}] {title}" --body "<summary + mission URL>"`.
+5. {pr_instructions}
 6. Write /workspace/out/result.json EXACTLY as:
    {{"schema_version": 1, "outcome": "executed", "summary": "<what you built,
-   deviations, test results>", "pr_url": "<the PR url>"}}
+   deviations, test results>", "pr_url": "<the PR/MR url>"}}
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -123,10 +121,26 @@ smallest sound deviation and document it in your summary.
 """
 
 
-def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str) -> str:
+PR_INSTRUCTIONS = {
+    "github": ("Pull request (idempotent): `gh pr view devcake/{key} --json url` — if one "
+               "exists, update it (`gh pr edit`) instead of creating; else "
+               "`gh pr create --head devcake/{key} --title \"[{key}] {title}\" "
+               "--body \"<summary + mission URL>\"`."),
+    "gitlab": ("Merge request (idempotent): `glab mr list --source-branch devcake/{key}` — "
+               "if one exists, update it (`glab mr update`) instead of creating; else "
+               "`glab mr create --source-branch devcake/{key} --target-branch {default} "
+               "--title \"[{key}] {title}\" --description \"<summary + mission URL>\" --yes`. "
+               "glab is authenticated via GITLAB_TOKEN; pass --repo if it asks."),
+}
+
+
+def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
+                   forge: str = "github", default_branch: str = "main") -> str:
+    pr = PR_INSTRUCTIONS.get(forge, PR_INSTRUCTIONS["github"]).format(
+        key=mission.key, title=mission.title, default=default_branch)
     return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, repo_name=repo_name,
+        title=mission.title, repo_name=repo_name, pr_instructions=pr,
         description=mission.description or "(no description)")
 
 

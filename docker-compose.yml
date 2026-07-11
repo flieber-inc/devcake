@@ -107,6 +107,12 @@ services:
     profiles: [images]
     entrypoint: ["true"]
 
+  dev-codex:
+    build: { context: ./images, dockerfile: codex/Dockerfile }
+    image: devcake/dev-codex:latest
+    profiles: [images]
+    entrypoint: ["true"]
+
   fluentbit:
     image: fluent/fluent-bit:3.2
     command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]

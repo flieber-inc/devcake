@@ -188,13 +188,18 @@ async def list_missions():
 
 
 @app.get("/api/v1/runs")
-async def list_runs(limit: int = 50):
-    runs = sorted(store.all(), key=lambda r: r.created_at, reverse=True)[:limit]
-    return [
-        r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
-                              "seq", "state", "created_at", "started_at", "ended_at", "error"})
-        for r in runs
-    ]
+async def list_runs(limit: int = 25, offset: int = 0, mission_key: str | None = None):
+    runs = sorted(store.all(), key=lambda r: r.created_at, reverse=True)
+    if mission_key:
+        needle = mission_key.strip().upper()
+        runs = [r for r in runs if needle in r.mission_key.upper()
+                or needle in r.run_id.upper()]
+    total = len(runs)
+    page = [r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
+                                  "seq", "state", "created_at", "started_at",
+                                  "ended_at", "error"})
+            for r in runs[offset:offset + limit]]
+    return {"total": total, "offset": offset, "limit": limit, "runs": page}
 
 
 @app.get("/api/v1/runs/{run_id}")

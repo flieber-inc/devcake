@@ -3,6 +3,18 @@
 > **Audience:** everyone writing instrumented code. ALL code must be appropriately spanned/traced and logged in OpenObserve (mission-doc requirement).
 > **Depends on:** `07-dev-runtime.md` (TRACEPARENT injection), `13-deployment.md` (endpoints).
 
+## 0. The principle (founder decision, 2026-07-11)
+
+**Everything is traced — no exceptions.** Every method that changes state or
+crosses a boundary must be observable in OpenObserve: every outbound HTTP call
+(auto-instrumented via `HTTPXClientInstrumentor` — Linear, forge, Dagu, all of
+it), every API endpoint (FastAPI auto-instrumentation), and an explicit span for
+every internally-triggered action: dispatch, finalization, watchdog kills,
+give-ups, sweeps, OAuth flows. The test when adding code: *if this line
+misbehaved at 3am, would a trace show it?* If not, add a span. Failure paths
+especially — a failure that leaves no trace is a design bug, not an
+observability gap.
+
 ## 1. Pipeline
 
 - All Python services and Dev entrypoints export **OTLP HTTP directly to OpenObserve** — no collector in v0 (a collector is the documented future insertion point for sampling/routing).

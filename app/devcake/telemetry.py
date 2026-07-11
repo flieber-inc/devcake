@@ -35,5 +35,9 @@ def setup_telemetry() -> trace.Tracer:
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
+    # Design principle (founder, 2026-07-11): EVERYTHING is traced. Auto-span
+    # every outbound HTTP call (Linear, GitHub/GitLab, Dagu, OpenObserve probes).
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    HTTPXClientInstrumentor().instrument()
     log.info("telemetry: exporting OTLP traces to %s/api/%s/v1/traces", OO_URL, OO_ORG)
     return trace.get_tracer("devcake")

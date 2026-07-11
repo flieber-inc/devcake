@@ -161,8 +161,9 @@ class MissionManager:
             prompt = {
                 MissionType.ONBOARD: lambda: onboard_prompt(dev_type.identifying_prompt, live),
                 MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
-                MissionType.EXECUTE: lambda: execute_prompt(dev_type.identifying_prompt,
-                                                            live, repo_name),
+                MissionType.EXECUTE: lambda: execute_prompt(
+                    dev_type.identifying_prompt, live, repo_name,
+                    forge=self.config.repo.forge),
                 MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
             }[mtype]()
 
@@ -272,6 +273,10 @@ class MissionManager:
     async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) -> None:
         if LABEL_FAILED in mission.labels:
             return
+        with tracer.start_as_current_span("mission.give_up") as span:
+            span.set_attribute("devcake.mission.key", mission.key)
+            span.set_attribute("devcake.mission.type", mtype.value)
+            span.set_attribute("devcake.run.attempt", attempts)
         await self._swap(mission.pmo_id, mission.pmo_kind, remove=set(), add={LABEL_FAILED})
         await self._feed(
             mission.pmo_id, mission.pmo_kind,
@@ -545,6 +550,7 @@ class MissionManager:
     async def sweeps(self, missions: list[Mission]) -> None:
         for m in missions:
             try:
+                # spans only when a sweep actually acts (inside the helpers)
                 if m.pmo_kind == "issue" and LABEL_MERGE in m.labels \
                         and m.status == "in_progress":
                     await self._merge_sweep(m)
@@ -559,6 +565,11 @@ class MissionManager:
         if not pr:
             return
         state = await self.forge.pr_state(pr["number"])
+        if state["merged"] or state["state"] == "closed":
+            with tracer.start_as_current_span("sweep.merge") as span:
+                span.set_attribute("devcake.mission.key", m.key)
+                span.set_attribute("devcake.outcome",
+                                   "merged" if state["merged"] else "closed")
         if state["merged"]:
             await self.pmo.swap_labels(m.pmo_id, remove={LABEL_MERGE}, add=set())
             await self.pmo.set_status(m.pmo_id, "done")
@@ -576,6 +587,8 @@ class MissionManager:
     async def _tracking_sweep(self, m: Mission) -> None:
         children = await self.pmo.children_of_project(m.pmo_id)
         if children and all(c.status in ("done", "canceled") for c in children):
+            with tracer.start_as_current_span("sweep.tracking") as span:
+                span.set_attribute("devcake.mission.key", m.key)
             await self.pmo.set_project_status(m.pmo_id, "done")
             await self.pmo.swap_labels_project(m.pmo_id, remove={LABEL_TRACKING}, add=set())
             self._audit(m.pmo_id, "tracking_sweep_completed", f"{len(children)} children")

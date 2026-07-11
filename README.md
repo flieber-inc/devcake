@@ -28,6 +28,11 @@ open http://localhost:8080   # admin panel → Config tab → test connections, 
 
 From there, any non-done Issue or Project in your configured Linear team becomes a Mission. Progress, transcripts (`1_ONBOARD.md`, `2_PLAN.md`, …), and token reports appear in the Mission's activity feed; code lands as PRs on `devcake/<mission-key>` branches. DevCake never pushes to your default branch (merges happen by a human — or by DevCake itself if you enable the `auto_merge` toggle).
 
+## Tutorials
+
+- **[Your first mission, end to end](docs/tutorials/01-first-mission.md)** — clean machine → merged PR in ~30 minutes.
+- **[Operating DevCake day to day](docs/tutorials/02-operating-devcake.md)** — the label language, interventions, and reading the bill.
+
 ## Documentation
 
 Start with **[`docs/00-overview.md`](docs/00-overview.md)** — glossary, core invariants, and a full walkthrough. Then:

@@ -100,6 +100,7 @@ Exit criteria:
 - [ ] Redaction filter proven: a planted fake secret in a transcript never reaches Linear or OTLP.
 - [ ] Redis reclaim (XAUTOCLAIM) and poison-message paths exercised by tests.
 - [ ] README quickstart verified on a clean machine.
+- [ ] **Tutorials current** (founder request 2026-07-11, shipped early during M5→M6): `docs/tutorials/01-first-mission.md` and `02-operating-devcake.md` re-walked against the released v0 — every step and label behavior must match reality.
 - [ ] **CI economics:** the M1 stub-harness image is kept as a permanent fixture; CI runs the full acceptance *logic* against it (deterministic, free, fast). The real-model acceptance script is a manual pre-release gate, not a per-commit CI job.
 
 ## Post-v0 backlog

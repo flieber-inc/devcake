@@ -1,0 +1,65 @@
+# Tutorial 2 — Operating DevCake Day to Day
+
+You never operate DevCake through its own UI — you operate it **through Linear**.
+Labels and statuses are the whole control surface; DevCake reads them as
+instructions and reports back the same way. This tutorial is the vocabulary plus
+the handful of interventions you'll actually use.
+
+## The label language
+
+| You see… | It means… | You can… |
+|---|---|---|
+| `DEVCAKE` | Adopted: DevCake owns this mission (opt-in mode) | Remove it to un-adopt at any point |
+| `DEVCAKE-PLAN` | Queued for a planning run | — |
+| `DEVCAKE-EXECUTE` | Queued for implementation (a plan exists in the feed) | — |
+| `DEVCAKE-REVIEW` | Implementation done; queued for skeptical review | — |
+| `DEVCAKE-MERGE` | **Approved — waiting for your merge.** The PR comment has the copy-paste command | Merge (→ Done) or close the PR (→ Canceled) |
+| `DEVCAKE-CREATED` | This issue was authored by DevCake (a decomposition child) | Treat as any adopted issue |
+| `DEVCAKE-TRACKING` | A decomposed project; auto-completes when its children finish | — |
+| `DEVCAKE-FAILED` | Gave up after 3 failed attempts (comment explains; trace linked) | Fix the cause, remove the label → fresh retries |
+| `DEVCAKE-SKIP` | You told DevCake: hands off | Remove to resume |
+
+Statuses mean exactly what they say: **Backlog** = untouched, **In Progress** =
+DevCake pulled it, **Done** = the PR is *merged* (never before), **Canceled** =
+abandoned (decomposed away, or PR closed unmerged).
+
+## Interventions that work (all verified)
+
+- **Pause anything:** add `DEVCAKE-SKIP`. It outranks every other label.
+- **Force a rework:** swap `DEVCAKE-MERGE` (or `-REVIEW`) → `DEVCAKE-EXECUTE`,
+  optionally with a comment saying what you want changed — the next run reads
+  the feed, reuses the branch, and updates the same PR. This is also the answer
+  when a waiting PR grows **merge conflicts**: send it back to EXECUTE.
+- **Edit mid-run without fear:** if you change a mission's stage label while a
+  Dev is running, DevCake finishes, posts its output, and *applies nothing* —
+  a comment tells you your edit won. Your labels always beat its labels.
+- **Re-triage:** move an untouched-looking mission back to Backlog with no stage
+  labels and it becomes ONBOARD material again.
+
+## Reading the bill
+
+Every step posts a token report to the feed — model, token counts (full split
+for Claude and Codex; totals for Grok), and cost where the harness reports it.
+For aggregates, the Logs tab (OpenObserve) carries every run as a trace with
+`devcake.tokens.*` / `devcake.cost.usd` attributes. Watch for the **loop
+warning** comment: every third review rejection it posts the mission's
+cumulative recorded cost — that's your cue to intervene or SKIP.
+
+## The two big switches (Config)
+
+- **`adoption_mode`** — `opt_in` (default: only `DEVCAKE`-labeled items) vs
+  `opt_out` (**the entire team**, existing backlog included; DevCake will start
+  working it by priority, spending tokens — flip deliberately).
+- **`auto_merge`** — off (default): every merge is yours; `DEVCAKE-MERGE` is the
+  handoff point. On: approved PRs merge themselves and missions go straight to
+  Done. All the way autonomous — enable once you trust the review quality, and
+  remember the review Dev is the only gate left.
+
+## Scaling up
+
+Per-Dev-Type concurrency caps plus a global cap bound how many containers run at
+once (`/data/config/`); priorities decide the queue order; and the assignment
+matrix decides which Dev Type performs each mission type — including the extra
+CLI args slot (e.g. ONBOARD's `--max-turns 15` triage budget). When you're ready
+to point DevCake at a real team: start `opt_in`, keep `auto_merge` off, label
+one small mission, and expand from there.

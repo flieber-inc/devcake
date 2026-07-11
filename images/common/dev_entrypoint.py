@@ -116,7 +116,8 @@ def main() -> None:
         capture_output=True, text=True)
     if clone.returncode != 0:
         print("clone failed:", clone.stderr[-500:], file=sys.stderr)
-        send_artifacts({"result": None, "transcript_md": f"clone failed:\n{clone.stderr[-2000:]}",
+        send_artifacts({"result": None, "exit_code": 13,
+                        "transcript_md": f"clone failed:\n{clone.stderr[-2000:]}",
                         "token_report": {"extraction_method": "unavailable", "model": None}})
         sys.exit(13)
     workdir = repo_dir / repo_name
@@ -214,18 +215,19 @@ def main() -> None:
         err = (proc.stderr or "")[-1500:]
         auth_fail = "authentication" in err.lower() or "unauthorized" in err.lower() \
             or "log in" in err.lower()
-        send_artifacts({"result": None,
+        code = 12 if auth_fail else 10
+        send_artifacts({"result": None, "exit_code": code,
                         "transcript_md": f"harness exited {harness_exit}\n\n```\n{err}\n```",
                         "token_report": token_report})
         stop.set()
-        sys.exit(12 if auth_fail else 10)
+        sys.exit(code)
 
     # ── result.json (docs/03 §6) ─────────────────────────────────────────────
     # Plan mode is read-only — the harness cannot write files, so the entrypoint
     # materializes PLAN.md and result.json from the returned plan text (docs/08 §3)
     if plan_mode:
         if len((result_text or "").strip()) < 200:  # a real plan is never this short
-            send_artifacts({"result": None,
+            send_artifacts({"result": None, "exit_code": 11,
                             "transcript_md": f"plan mode returned no usable plan "
                                              f"({len(result_text or '')} chars):\n\n{result_text}",
                             "token_report": token_report})
@@ -242,7 +244,7 @@ def main() -> None:
                                          "decomposed", "planned", "executed", "reviewed")
         assert isinstance(result.get("summary"), str)
     except Exception as e:
-        send_artifacts({"result": None,
+        send_artifacts({"result": None, "exit_code": 11,
                         "transcript_md": f"result.json missing/invalid: {e}\n\n---\n\n{result_text}",
                         "token_report": token_report})
         stop.set()

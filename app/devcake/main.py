@@ -59,6 +59,7 @@ async def poll_loop() -> None:
                 missions = await pmo.list_all(config.pmo.team_key)
                 derived = [(m, derive(m, config.adoption_mode)) for m in missions]
                 candidates = [m for m, d in derived if d.schedulable]
+                await mission_mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
                 dispatched = await mission_mgr.schedule(missions)
                 mission_mgr.rotate_grace()
                 missions_cache.clear()
@@ -77,6 +78,10 @@ async def poll_loop() -> None:
             except PMOTransient as e:
                 span.set_attribute("devcake.outcome", "PMO_TRANSIENT")
                 log.warning("poll.cycle %d skipped: %s", cycle, e)
+            except Exception:
+                # a poll cycle must NEVER kill the loop — log and try again next tick
+                span.set_attribute("devcake.outcome", "cycle_error")
+                log.exception("poll.cycle %d failed", cycle)
         await asyncio.sleep(config.poll_interval_seconds)
 
 
@@ -104,11 +109,18 @@ async def lifespan(app: FastAPI):
         await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
     except Exception:
         log.exception("pending-entry reclaim failed")
+    def _log_task_death(t: asyncio.Task) -> None:
+        if not t.cancelled() and t.exception():
+            log.error("background task %s DIED", t.get_name(), exc_info=t.exception())
+
     tasks = [
-        asyncio.create_task(poll_loop()),
-        asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth)),
-        asyncio.create_task(watchdog_loop(manager)),
+        asyncio.create_task(poll_loop(), name="poll_loop"),
+        asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
+                            name="ingress_consumer"),
+        asyncio.create_task(watchdog_loop(manager), name="watchdog"),
     ]
+    for t in tasks:
+        t.add_done_callback(_log_task_death)
     yield
     for t in tasks:
         t.cancel()
@@ -160,7 +172,7 @@ async def health():
         "pmo": pmo_ok,
         "forge": None,        # wired at M4
         "config_valid": True,
-        "circuit_breakers": {},
+        "circuit_breakers": mission_mgr.breakers,
     }
 
 

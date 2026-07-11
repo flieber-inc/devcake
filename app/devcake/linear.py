@@ -98,7 +98,7 @@ class LinearAdapter:
                    project { id }
                  } }
                  projects(first: 50, filter: {accessibleTeams: {id: {eq: $teamId}}}) { nodes {
-                   id name description url updatedAt priority
+                   id name description content url updatedAt priority
                    status { name type }
                    labels(first: 20) { nodes { name } }
                  } }
@@ -116,6 +116,15 @@ class LinearAdapter:
                  project { id }
             } }""", {"id": pmo_id})
         return self._issue_to_mission(data["issue"])
+
+    async def get_project(self, pmo_id: str) -> Mission:
+        data = await self._gql(
+            """query($id: String!) { project(id: $id) {
+                 id name description content url updatedAt priority
+                 status { name type }
+                 labels(first: 20) { nodes { name } }
+            } }""", {"id": pmo_id})
+        return self._project_to_mission(data["project"])
 
     async def get_activity(self, pmo_id: str) -> Activity:
         data = await self._gql(
@@ -204,6 +213,63 @@ class LinearAdapter:
             log.info("linear: created project label %s", name)
         self._invalidate_team_cache()
 
+    async def create_mission(self, team_ref: str, title: str, description: str,
+                             priority: str, label_names: set[str],
+                             project_id: str | None = None) -> str:
+        team = await self._team(team_ref)
+        by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
+        prio = {"urgent": 1, "high": 2, "medium": 3, "low": 4}[priority]
+        inp: dict = {"teamId": team["id"], "title": title, "description": description,
+                     "priority": prio,
+                     "labelIds": [by_name[n.upper()] for n in label_names]}
+        if project_id:
+            inp["projectId"] = project_id
+        data = await self._gql(
+            """mutation($input: IssueCreateInput!) {
+                 issueCreate(input: $input) { issue { id identifier } } }""",
+            {"input": inp})
+        return data["issueCreate"]["issue"]["identifier"]
+
+    async def children_of_project(self, project_id: str) -> list[Mission]:
+        data = await self._gql(
+            """query($pid: ID!) {
+                 issues(first: 100, filter: {project: {id: {eq: $pid}}}) { nodes {
+                   id identifier title description url updatedAt priority
+                   state { name type }
+                   labels(first: 20) { nodes { name } }
+                   project { id }
+                 } } }""", {"pid": project_id})
+        return [self._issue_to_mission(n) for n in data["issues"]["nodes"]]
+
+    async def swap_labels_project(self, project_id: str, remove: set[str],
+                                  add: set[str]) -> None:
+        """Project labels are a separate workspace-level entity (verified at M2)."""
+        pl = await self._gql("""query { projectLabels(first: 100) { nodes { id name } } }""")
+        by_name = {l["name"].upper(): l["id"] for l in pl["projectLabels"]["nodes"]}
+        proj = await self._gql(
+            """query($id: String!) { project(id: $id) {
+                 labels(first: 20) { nodes { id name } } } }""", {"id": project_id})
+        current = {l["name"].upper(): l["id"] for l in proj["project"]["labels"]["nodes"]}
+        for name in remove:
+            current.pop(name.upper(), None)
+        for name in add:
+            current[name.upper()] = by_name[name.upper()]
+        await self._gql(
+            """mutation($id: String!, $l: [String!]!) {
+                 projectUpdate(id: $id, input: {labelIds: $l}) { success } }""",
+            {"id": project_id, "l": sorted(current.values())})
+
+    async def set_project_status(self, project_id: str, status: NormalizedStatus) -> None:
+        wanted = {"backlog": "backlog", "in_progress": "started",
+                  "done": "completed", "canceled": "canceled"}[status]
+        data = await self._gql("""query { projectStatuses { nodes { id name type } } }""")
+        st = next(s for s in data["projectStatuses"]["nodes"]
+                  if s["type"].lower() == wanted)
+        await self._gql(
+            """mutation($id: String!, $s: String!) {
+                 projectUpdate(id: $id, input: {statusId: $s}) { success } }""",
+            {"id": project_id, "s": st["id"]})
+
     async def upload_attachment(self, pmo_id: str, filename: str, data: bytes) -> str:
         """Linear 3-step upload (docs/05 §4): fileUpload → PUT bytes → assetUrl."""
         up = (await self._gql(
@@ -251,7 +317,9 @@ class LinearAdapter:
         status_type = ((n.get("status") or {}).get("type") or "backlog").lower()
         return Mission(
             pmo_id=n["id"], pmo_kind="project", key=f"PRJ-{slug}", title=n["name"],
-            description=n.get("description") or "",
+            # Linear caps project `description` at 255 chars (verified at M5);
+            # the long-form body lives in `content`
+            description=n.get("content") or n.get("description") or "",
             status=PROJECT_STATUS_MAP.get(status_type, "backlog"),
             priority=PRIORITY_MAP.get(int(n.get("priority") or 0), "medium"),
             labels={l["name"].upper() for l in (n.get("labels") or {}).get("nodes", [])},

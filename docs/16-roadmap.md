@@ -71,12 +71,13 @@ Operational note: widening the dispatch gate immediately picks up ANY adopted mi
 
 **Goal:** the complete state machine. **Implements:** `03` §§1.1, 1.3, 4–5, `15` (full), `04` §5 watchdog timeout, decomposition + `DEVCAKE-TRACKING` sweep.
 
-Exit criteria — scripted scenarios all green:
-- [ ] **Approve path:** REVIEW → PR review comment with the concrete copy-pasteable approval footer → formal approval when a reviewer token is configured → with `auto_merge` on: merged (squash) **then** Done; with it off: `DEVCAKE-MERGE`, then the merge sweep marks Done after a human merges (and Canceled when the PR is closed unmerged) — Done never precedes the merge.
-- [ ] **Reject path:** review report posted to feed + PR; label back to `DEVCAKE-EXECUTE`; second EXECUTE reworks the same branch; the 3rd rejection posts the loop warning to feed + PR with cumulative cost.
-- [ ] **Trivial ONBOARD:** PR opened + `DEVCAKE-REVIEW` added (trivial path never skips REVIEW); the mission reaches Done only through the approve path above.
-- [ ] **Decomposition:** high-complexity issue → standalone children with priorities + `DEVCAKE-CREATED`, original canceled; a `DEVCAKE-CREATED` child returning `decomposed` is rejected (depth limit). Project variant → children in project, `DEVCAKE-TRACKING`, auto-completed when children done.
-- [ ] **Timeout:** a run exceeding a 2-minute test timeout is killed by the app watchdog and counted.
+Exit criteria — **all verified 2026-07-11 (M5 complete; live where organic, direct-fired where the model wouldn't misbehave on demand)**:
+- [x] **Approve paths, all three:** auto_merge ON → merged **then** Done (DEV-18/PR#3, DEV-25/PR#4, DEV-17 after conflict rework); auto_merge OFF → `DEVCAKE-MERGE` + APPROVED-BY-DEVCAKE marker + copy-pasteable footer (DEV-17 first pass); merge sweep verified on both branches — merged→Done (direct-fired against a genuinely merged PR) and closed-unmerged→Canceled (DEV-26/PR#5, live). Bonus live finding: **auto-merge conflict fallback** correctly lands on `DEVCAKE-MERGE` + explanation instead of a hollow Done (DEV-26).
+- [x] **Reject path:** direct-fired (organic reviews kept approving genuinely good work): report to feed + PR, label back to EXECUTE, loop warning with **cumulative cost** at round 3 — which caught and fixed a real crash (Run never persisted token_report). Live rework loop proven via DEV-17's conflict cycle: EXECUTE reused the branch, re-REVIEW, auto-merge, Done.
+- [x] **Trivial ONBOARD:** DEV-25 ran the whole chain live: trivial verdict → typo-fix PR#4 → `DEVCAKE-REVIEW` (never skipped) → approve → auto-merge → Done.
+- [x] **Decomposition:** project variant fully organic — 5 standalone children created in-project with priorities + `DEVCAKE-CREATED` + `DEVCAKE` + provenance footers, `DEVCAKE-TRACKING` applied, and the tracking sweep auto-completed the project once children finished. Issue variant + depth limit direct-fired (children + cancel; grandchild refused, child parked). Honest note: the "high-complexity" *issue* fixture was legitimately judged cohesive by the model and routed plan→execute — decomposition triggering is model judgment; the machinery is what we verify.
+- [x] **Timeout:** verified at M1 (15 s) and M3 (wall-clock kill); not re-run.
+- [x] **En route:** give-up → `DEVCAKE-FAILED` on the project after 3 attempts, human label-removal restarting the attempt watermark, and the `DEV_AUTH` breaker implemented (not live-fired — an M7 fault-injection target).
 
 ## M6 — Admin Config tab + credentials + GitLab
 

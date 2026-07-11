@@ -25,7 +25,7 @@ path is the only exception, and you must be certain).
 
 {description}
 
-### Classify (docs rubric)
+{project_note}### Classify (docs rubric)
 - `trivial` — you are CERTAIN you can complete it now: localized (≤ ~2 files), zero
   design ambiguity, obvious verification. Rare.
 - `normal` — a definable piece of work that needs a plan first. **Most missions.**
@@ -53,10 +53,18 @@ mission's permanent transcript in the PMO system.
 """
 
 
+PROJECT_NOTE = """### This mission is a PROJECT
+Projects ALWAYS take the high-complexity path (never trivial, never normal):
+decompose it into standalone child issues covering the full extent of the work.
+
+"""
+
+
 def onboard_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + ONBOARD_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, description=mission.description or "(no description)")
+        title=mission.title, description=mission.description or "(no description)",
+        project_note=PROJECT_NOTE if mission.pmo_kind == "project" else "")
 
 
 PLAN_PLAYBOOK = """
@@ -120,3 +128,41 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str) ->
         key=mission.key, priority=mission.priority, url=mission.url,
         title=mission.title, repo_name=repo_name,
         description=mission.description or "(no description)")
+
+
+REVIEW_PLAYBOOK = """
+## Your current mission type: REVIEW
+
+Act as a skeptical software engineer reviewing the work delivered for this
+mission. Rubber-stamping is forbidden — your default posture is distrust; an
+approval must be EARNED by the evidence you gather.
+
+### Procedure (binding)
+1. The work lives on branch `devcake/{key}` — check it out:
+   `git fetch origin devcake/{key} && git checkout devcake/{key}`.
+2. Read the plan and any prior review reports in /workspace/activity/ and diff
+   the branch against the default branch. Judge the work against the PLAN and
+   the MISSION — flag omissions, not just bugs.
+3. Run the tests / build if present. A red test suite is an automatic reject.
+4. Hunt for real defects: correctness, edge cases, error handling, security,
+   silent failure modes. Cosmetic nitpicks alone do not justify a reject.
+
+### Required output — /workspace/out/result.json
+{{"schema_version": 1, "outcome": "reviewed", "verdict": "approve" | "reject",
+  "report_md": "<your full review report in markdown: what you checked, what
+  you found, and — if rejecting — an actionable list the next EXECUTE run must
+  address>", "pr_url": "<the PR url from the activity feed>",
+  "summary": "<one-paragraph verdict rationale>"}}
+
+### The mission
+- Key: {key}   ·   Priority: {priority}   ·   URL: {url}
+- Title: **{title}**
+
+{description}
+"""
+
+
+def review_prompt(identifying_prompt: str, mission: Mission) -> str:
+    return identifying_prompt + "\n" + REVIEW_PLAYBOOK.format(
+        key=mission.key, priority=mission.priority, url=mission.url,
+        title=mission.title, description=mission.description or "(no description)")

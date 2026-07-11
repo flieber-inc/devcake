@@ -132,7 +132,8 @@ class RunManager:
             if self.mission_mgr and run.mission_pmo_id:
                 await self.messaging.reply(
                     run_id, "activity.result",
-                    await self.mission_mgr.activity_payload(run.mission_pmo_id))
+                    await self.mission_mgr.activity_payload(run.mission_pmo_id,
+                                                            run.pmo_kind))
             else:
                 await self.messaging.reply(run_id, "activity.result",
                                            {"activity_md": "", "attachments": []})

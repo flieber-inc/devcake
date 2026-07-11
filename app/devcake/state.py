@@ -29,6 +29,7 @@ class Run(BaseModel):
     run_id: str
     mission_key: str
     mission_pmo_id: str = ""
+    pmo_kind: str = "issue"
     mission_type: str
     dev_type: str
     seq: int
@@ -49,6 +50,7 @@ class Run(BaseModel):
     spec_files: list[dict[str, Any]] = Field(default_factory=list)
     finalized_steps: list[str] = Field(default_factory=list)
     result: Optional[dict[str, Any]] = None
+    token_report: Optional[dict[str, Any]] = None
     artifact_bytes: Optional[int] = None
     error: Optional[str] = None
 

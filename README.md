@@ -1,25 +1,62 @@
 # DevCake 🍰
 
-**DevCake is a lightweight, production-grade agentic developer.** It runs automated coding agents ("**Devs**") in Docker containers that systematically resolve work items ("**Missions**") from your project-management system (v0: **Linear**) — assessing, planning, executing, and reviewing them, ending in pull requests on your repository (GitHub or GitLab). A **Mission** is any work request of any shape or size (a Linear Project or Issue alike); a **Dev Type** pairs a model with a harness (v0: **Senior Dev** = Claude Fable/Claude Code for onboarding, planning, and review; **Main Dev** = Grok 4.5/Grok Build for execution); each Mission flows through up to four **Mission Types** — `ONBOARD → PLAN → EXECUTE → REVIEW` — driven entirely by labels and statuses in the PMO System, which is always the single source of truth.
+**You never operate it. You write a ticket; finished, reviewed work comes back — with a receipt.**
 
-> **Status:** implementation in progress per [`docs/16-roadmap.md`](docs/16-roadmap.md) — 🎉 **v0 COMPLETE** (2026-07-11) — all milestones M0–M7 shipped and live-verified: the unattended acceptance run takes fresh Linear issues to merged PRs with zero human input, on both GitHub and GitLab, with full cost telemetry, a 26-test CI suite covering every core invariant, secret redaction, and an operable admin panel. See [`docs/16-roadmap.md`](docs/16-roadmap.md) for the verification record and the post-v0 backlog.
+DevCake staffs your task board with AI developers. You keep working the way you
+already do — writing tickets in Linear, in plain language — and DevCake picks
+them up: it sizes each task, plans it, writes the code in a disposable
+container, and then a *second* AI reviews the work like a skeptical senior
+engineer before you ever see it. What lands back on your board is a finished
+pull request, a full transcript of every step, and an itemized bill of what
+each step cost. Nothing merges without your approval — unless you've decided to
+trust it that far and switched auto-merge on.
 
-## Architecture at a glance
+There is no new app to live in, no chat window to babysit. The board is the
+interface: one label adopts a ticket, one label pauses everything, and a human
+edit always beats an in-flight agent. Autonomy, with receipts.
 
-```
- Linear ◄──poll/write──► app (FastAPI) ──trigger──► Dagu ──docker.sock──► dev-<run_id>
-                          ▲    │                                          (Claude Code /
- GitHub/GitLab ◄──PRs─────┤    └──/api/v1──► admin panel (nginx+SPA)       Grok Build /
-                          │                                                Codex)
-                          └────────◄── Redis Streams ◄────────────────────────┘
-                                     all logs/traces/costs ──► OpenObserve
-```
+## A day with DevCake
 
-Five compose services + ephemeral Dev containers spawned as siblings by Dagu. Everything is OpenTelemetry-traced into OpenObserve — including per-step **token and cost reports**, which are also posted to each Mission's activity feed.
+1. You write a ticket: *"Add a `--quiet` flag to the CLI, with tests."* You add
+   the `DEVCAKE` label and get on with your day.
+2. Within a minute the ticket is **In Progress**. A triage transcript appears in
+   its feed, then a token report — model, tokens, cost for that step.
+3. Labels progress on their own: a plan is attached, an implementation lands on
+   a branch, a pull request opens on your repo.
+4. A review — written to reject unless convinced, tests actually run — is posted
+   to the PR. On approval, the ticket waits on **`DEVCAKE-MERGE`** with the
+   exact merge command ready to paste.
+5. You read the diff, merge, and the ticket flips to **Done**. Done means
+   *merged* — never before.
+
+Not happy instead? Swap one label and the crew reworks the same branch with
+your notes. Want it to stop? `DEVCAKE-SKIP` wins over everything, always.
+
+## Why it's different
+
+- **No new interface.** Your PMO system (Linear in v0) is the single source of
+  truth; four labels are the whole state machine. Adopt with a label, stop with
+  a label.
+- **Reviewed by design.** No DevCake-written code reaches your default branch
+  without an independent AI review — even the "trivial" fast path. Rejections
+  loop back with findings; every third rejection posts a cost warning.
+- **Receipts for everything.** Every step posts its transcript and token bill to
+  the ticket; every action — dispatches, kills, sweeps, logins — is an
+  OpenTelemetry trace you can pull up by run id.
+- **Your models, your box.** One `docker-compose up`. Mix Claude Code, Grok
+  Build, and Codex per role, on the subscriptions you already pay — connected
+  through guided OAuth, stored only on your machine.
+
+> **Status: v0 complete** (2026-07-11). Every milestone live-verified — the
+> release gate is an acceptance script that took fresh tickets to merged PRs
+> **2/2 with zero human input**, on GitHub and GitLab alike. A 26-test suite
+> pins the core invariants; secret redaction is proven against the live PMO;
+> [`docs/16-roadmap.md`](docs/16-roadmap.md) holds the full verification record.
 
 ## Quickstart
 
 ```bash
+git clone https://github.com/fidecastro/devcake && cd devcake
 cp .env.example .env         # fill: LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TOKEN (or GITLAB_*),
                              # DEVCAKE_REPO_URL, model credentials (subscription OAuth preferred),
                              # and DOCKER_GID (stat -c %g /var/run/docker.sock)
@@ -29,33 +66,36 @@ open http://localhost:8080   # admin panel (basic auth from .env) → Config tab
                              # test connections; connect Grok/Codex via the OAuth wizard
 ```
 
-From there, any non-done Issue or Project in your configured Linear team becomes a Mission. Progress, transcripts (`1_ONBOARD.md`, `2_PLAN.md`, …), and token reports appear in the Mission's activity feed; code lands as PRs on `devcake/<mission-key>` branches. DevCake never pushes to your default branch (merges happen by a human — or by DevCake itself if you enable the `auto_merge` toggle).
+Then follow **[Tutorial 1 — your first mission, end to end](docs/tutorials/01-first-mission.md)**
+(~30 minutes from clean machine to merged PR) and
+**[Tutorial 2 — operating DevCake day to day](docs/tutorials/02-operating-devcake.md)**
+(the label language, interventions, and reading the bill).
 
-## Tutorials
+## How it works, in one breath
 
-- **[Your first mission, end to end](docs/tutorials/01-first-mission.md)** — clean machine → merged PR in ~30 minutes.
-- **[Operating DevCake day to day](docs/tutorials/02-operating-devcake.md)** — the label language, interventions, and reading the bill.
+A FastAPI orchestrator polls your Linear team and derives each ticket's next
+step purely from its live labels — no local state is ever authoritative. Steps
+run as disposable Docker containers spawned through [Dagu](https://docs.dagu.sh),
+each wrapping a real coding harness with a fresh clone and the mission's full
+history; results travel back over per-run-authenticated Redis Streams, and the
+orchestrator applies all board updates itself, with compare-and-transition
+semantics so human edits always win. Everything exports to OpenObserve, cost
+included. There are no locks anywhere: a crashed agent holds nothing and simply
+gets rescheduled.
 
 ## Documentation
 
-Start with **[`docs/00-overview.md`](docs/00-overview.md)** — glossary, core invariants, and a full walkthrough. Then:
+Start with **[`docs/00-overview.md`](docs/00-overview.md)** — glossary, the six
+core invariants, and a full walkthrough. Highlights:
 
-| Doc | What it covers |
+| | |
 |---|---|
-| [`01-architecture.md`](docs/01-architecture.md) | Topology, interaction matrix, ports & adapters |
-| [`02-domain-model.md`](docs/02-domain-model.md) | Entities, the Mission Type derivation table, labels, state machine |
-| [`03-mission-lifecycle.md`](docs/03-mission-lifecycle.md) | The four playbooks, `result.json`, canonical prompts |
-| [`04-orchestrator.md`](docs/04-orchestrator.md) | Scheduling, no-lock atomicity, crash recovery |
-| [`05-pmo-adapter.md`](docs/05-pmo-adapter.md) | `PMOPort` + the Linear adapter |
-| [`06-forge-adapter.md`](docs/06-forge-adapter.md) | `ForgePort` + GitHub/GitLab, PR conventions, approvals |
-| [`07-dev-runtime.md`](docs/07-dev-runtime.md) | The Dev container contract |
-| [`08-harness-templates.md`](docs/08-harness-templates.md) | Claude Code / Grok Build / Codex specifics, token extraction |
-| [`09-messaging.md`](docs/09-messaging.md) | Redis Streams protocol |
-| [`10-persistence.md`](docs/10-persistence.md) | The `/data` volume |
-| [`11-admin-panel.md`](docs/11-admin-panel.md) | Admin UI + REST API |
-| [`12-observability.md`](docs/12-observability.md) | OTel conventions, cost telemetry |
-| [`13-deployment.md`](docs/13-deployment.md) | docker-compose, Dagu, networking, runbook |
-| [`14-security.md`](docs/14-security.md) | Threat model, credential handling |
-| [`15-errors-and-retries.md`](docs/15-errors-and-retries.md) | Error taxonomy, retries, `DEVCAKE-FAILED` |
-| [`16-roadmap.md`](docs/16-roadmap.md) | Milestones M0–M7 with exit criteria |
-| [`docs/adr/`](docs/adr/) | Why the big decisions were made |
+| The idea & the words | [`00-overview`](docs/00-overview.md) · [`17-positioning`](docs/17-positioning.md) · [`tutorials/`](docs/tutorials/) |
+| The state machine | [`02-domain-model`](docs/02-domain-model.md) · [`03-mission-lifecycle`](docs/03-mission-lifecycle.md) · [`04-orchestrator`](docs/04-orchestrator.md) |
+| The integrations | [`05-pmo-adapter`](docs/05-pmo-adapter.md) · [`06-forge-adapter`](docs/06-forge-adapter.md) · [`08-harness-templates`](docs/08-harness-templates.md) |
+| The runtime | [`07-dev-runtime`](docs/07-dev-runtime.md) · [`09-messaging`](docs/09-messaging.md) · [`13-deployment`](docs/13-deployment.md) |
+| Trust & operations | [`12-observability`](docs/12-observability.md) · [`14-security`](docs/14-security.md) · [`15-errors-and-retries`](docs/15-errors-and-retries.md) · [`11-admin-panel`](docs/11-admin-panel.md) |
+| The record | [`16-roadmap`](docs/16-roadmap.md) · [`docs/adr/`](docs/adr/) · [`10-persistence`](docs/10-persistence.md) · [`01-architecture`](docs/01-architecture.md) |
+
+*The name "DevCake" is provisional — the naming discussion lives in
+[`docs/17-positioning.md`](docs/17-positioning.md) §6.*

@@ -194,6 +194,8 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 | `devcake/dev-grok-build` | `./images/grok-build` | 〃 |
 | `devcake/dev-codex` | `./images/codex` | 〃 |
 
+Which Dev image a run uses is `HARNESSES[harness_template].image` (`app/devcake/harness.py` — `08-harness-templates.md` §2); `docker_image` is no longer stored config. Since any harness is selectable from the admin panel at any time, **all three `devcake/dev-*` images must be built locally**.
+
 ## 7. Log shipping for non-instrumented services
 
 `dagu` and `redis` stdout is shipped to OpenObserve via a lightweight shipper (vector/fluent-bit sidecar or compose logging driver) into stream `container_logs`. App and Devs use OTLP directly (`12-observability.md` §1).

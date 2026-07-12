@@ -20,6 +20,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
 
 from .config import AppConfig, DevType
+from .harness import HARNESSES
 from .linear import LinearAdapter
 from .messaging import Messaging
 from .forge import GitHubForge
@@ -270,6 +271,7 @@ class MissionManager:
                 "DEVCAKE_MISSION_KEY": mission.key,
                 "DEVCAKE_MISSION_TYPE": mtype.value,
                 "DEVCAKE_DEV_TYPE": dev_type.name,
+                "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
                 "DEVCAKE_SEQ": str(seq),
                 "DEVCAKE_REPO_URL": self.config.repo.url,
                 "DEVCAKE_DEFAULT_BRANCH": "main",
@@ -296,7 +298,8 @@ class MissionManager:
             self.runs.store.save(run)                              # durable intent first
 
             await self.runs.executor.start(
-                params={"RUN_ID": run_id, "IMAGE": dev_type.docker_image,
+                params={"RUN_ID": run_id,
+                        "IMAGE": HARNESSES[dev_type.harness_template].image,
                         "TRACEPARENT": traceparent,
                         "REDIS_USER": f"dev-{run_id}", "REDIS_PASSWORD": redis_password},
                 dag_run_id=run_id)
@@ -308,21 +311,23 @@ class MissionManager:
             return run
 
     def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:
-        """Harness credentials for a run spec: pass-through env vars + secret
-        files from /data/secrets/{dev_type}/ (docs/08 §4)."""
-        env = {var: os.environ[var] for var in dev_type.credential_env
+        """Harness credentials for a run spec: requirements come from the
+        harness registry, secret material from /data/secrets/{dev_type}/
+        (docs/08 §4)."""
+        harness = HARNESSES[dev_type.harness_template]
+        env = {var: os.environ[var] for var in harness.credential_env
                if os.environ.get(var)}
         files = []
         secrets_dir = (Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
                        / "secrets" / dev_type.name)
-        for cf in dev_type.credential_files:
+        for cf in harness.credential_files:
             p = secrets_dir / cf.secret_file
             if p.exists():
                 files.append({"path_hint": cf.path_hint,
                               "content": p.read_text(), "mode": "600"})
             else:
-                log.warning("credential file %s missing for %s — run scripts/%s login",
-                            p, dev_type.name, dev_type.harness_template.split("-")[0])
+                log.warning("credential file %s missing for %s — connect via OAuth "
+                            "or upload it on the admin Config tab", p, dev_type.name)
         return env, files
 
     async def _live(self, pmo_id: str, kind: str) -> Mission:
@@ -831,6 +836,7 @@ class MissionManager:
                 "DEVCAKE_MISSION_KEY": "TEAM",
                 "DEVCAKE_MISSION_TYPE": "MAPPER",
                 "DEVCAKE_DEV_TYPE": dev_type.name,
+                "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
                 "DEVCAKE_SEQ": str(seq),
                 "DEVCAKE_REPO_URL": self.config.repo.url,
                 "DEVCAKE_DEFAULT_BRANCH": "main",
@@ -854,7 +860,8 @@ class MissionManager:
             self.runs.store.save(run)                              # durable intent first
 
             await self.runs.executor.start(
-                params={"RUN_ID": run_id, "IMAGE": dev_type.docker_image,
+                params={"RUN_ID": run_id,
+                        "IMAGE": HARNESSES[dev_type.harness_template].image,
                         "TRACEPARENT": traceparent,
                         "REDIS_USER": f"dev-{run_id}", "REDIS_PASSWORD": redis_password},
                 dag_run_id=run_id)

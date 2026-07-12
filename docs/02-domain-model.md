@@ -124,13 +124,13 @@ Persisted as one YAML file per Dev Type at `/data/config/dev_types/{name}.yaml` 
 | Field | Type | Notes |
 |---|---|---|
 | `name` | `str` | e.g. `senior-dev`, `main-dev` (kebab-case slug; display name derived). |
-| `harness_template` | `"claude-code" \| "grok-build" \| "codex"` | See `08-harness-templates.md`. |
+| `harness_template` | `"claude-code" \| "grok-build" \| "codex"` | **Authoritative** (2026-07-12 rework): the Docker image, credential requirements, and OAuth flow all derive from it via the harness registry (`app/devcake/harness.py`, `08-harness-templates.md` §2/§4). Changing it in the admin panel changes what actually runs. |
 | `identifying_prompt` | `str` | Always delivered to the harness at the start of every run, before the playbook prompt. |
 | `mcp_setup_commands` | `list[str]` | Shell commands run by the Dev entrypoint before harness launch (e.g. `claude mcp add …`). Failure ⇒ exit code 14. |
-| `credential` | `{kind: "env_api_key" \| "credentials_json", ref: str}` | `env_api_key`: `ref` names an env var resolved from the app's environment at dispatch. `credentials_json`: `ref` is the filename under `/data/secrets/{name}/`; its content is delivered to the Dev in the run spec and written to the harness-specific path by the entrypoint (`08-harness-templates.md`, `09-messaging.md` §3). OAuth/subscription credentials preferred. |
 | `max_concurrency` | `int` | Per-type cap (see `04-orchestrator.md` §3). |
-| `docker_image` | `str` | Defaults from the harness template; overridable. |
 | `model` | `str` | Pins the harness model (added 2026-07-12 after Claude Code silently defaulted to Sonnet). Delivered via runspec as `DEVCAKE_MODEL`; the entrypoint maps it to the harness flag (`claude --model` / `codex -m` / `grok --model`). Empty = harness default. Seed: `senior-dev` = `claude-fable-5`. Per-assignment `extra_cli_args` can still override (appended after the pin). |
+
+There is deliberately **no stored `docker_image` or credential config**: requirements are per-harness (registry), while secret *material* stays per Dev Type under `/data/secrets/{name}/` — so two Dev Types on the same harness can hold different accounts. Legacy YAML keys (`docker_image`, `credential_env`, `credential_files`) are ignored on load and dropped on the next save.
 
 **v0 defaults:**
 

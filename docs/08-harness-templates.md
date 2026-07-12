@@ -52,6 +52,14 @@ codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
 
 ## 2. Base images
 
+**The harness registry (`app/devcake/harness.py`) is authoritative** (2026-07-12
+rework): which image a Dev runs, which credential env vars pass through, which
+secret files are delivered, and whether an OAuth device flow exists all derive
+from `harness_template` via `HARNESSES`. Dev Types store no image or credential
+config; the admin panel's harness combobox therefore controls what actually
+runs. Dispatch also sends `DEVCAKE_HARNESS` in the run spec, which overrides
+the image-baked `ENV` (kept as a fallback).
+
 Each template names a Dockerfile under `images/`:
 
 | Template | Base | Installs |
@@ -131,8 +139,8 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 
 ## 8. Adding or changing a template (checklist)
 
-1. Add/edit the template file under `app/harness_templates/{id}.yaml` (fields: `image`, `invoke`, `invoke_plan`, `credential_modes`, `transcript_source`, `token_strategy`, `mcp_registration`).
-2. Add/adjust the Dockerfile under `images/` and the compose build matrix.
-3. Implement/adjust the token-extraction strategy class (one per `token_strategy` id).
+1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow) and the new value to `DevType.harness_template`'s Literal (`config.py`).
+2. Add/adjust the Dockerfile under `images/` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and the compose build matrix.
+3. Add the invocation + renderer + token-extraction branches in `images/common/dev_entrypoint.py` (§1, §1a, §5).
 4. Run the M1 hello-world DAG with the new image, then the M3 ONBOARD end-to-end demo.
 5. Update the price table (§5) and this document.

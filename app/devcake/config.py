@@ -54,23 +54,19 @@ class RelationsMapper(BaseModel):
     dev_type: str | None = "junior-dev"
 
 
-class CredentialFile(BaseModel):
-    """A secret file under /data/secrets/{dev_type}/ delivered via runspec and
-    installed by the Dev entrypoint at path_hint (docs/08 §4, docs/09 §3)."""
-    secret_file: str
-    path_hint: str
-
-
 class DevType(BaseModel):
-    """docs/02 §6 — one YAML per Dev Type under /data/config/dev_types/."""
+    """docs/02 §6 — one YAML per Dev Type under /data/config/dev_types/.
+
+    Deliberately slim: the Docker image, credential requirements, and OAuth
+    flow all DERIVE from harness_template via harness.HARNESSES — the admin
+    panel's harness combobox is authoritative. Legacy YAML keys (docker_image,
+    credential_env, credential_files) are ignored on load and dropped on the
+    next save (pydantic extra="ignore")."""
     name: str
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
-    credential_env: list[str] = Field(default_factory=list)  # env vars passed through
-    credential_files: list[CredentialFile] = Field(default_factory=list)
     max_concurrency: int = 1
-    docker_image: str = ""
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
 
 
@@ -104,22 +100,14 @@ JUNIOR_PROMPT = (
 
 DEFAULT_DEV_TYPES = [
     DevType(name="senior-dev", harness_template="claude-code",
-            identifying_prompt=SENIOR_PROMPT,
-            credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-            max_concurrency=2, docker_image="devcake/dev-claude-code:latest",
+            identifying_prompt=SENIOR_PROMPT, max_concurrency=2,
             model="claude-fable-5"),  # founder decision 2026-07-12: Senior Dev judgment runs on Fable
     DevType(name="main-dev", harness_template="grok-build",
-            identifying_prompt=MAIN_PROMPT,
-            credential_env=["XAI_API_KEY"],  # optional API-key mode; OAuth file preferred
-            credential_files=[CredentialFile(secret_file="grok-auth.json",
-                                             path_hint="~/.grok/auth.json")],
-            max_concurrency=2, docker_image="devcake/dev-grok-build:latest"),
+            identifying_prompt=MAIN_PROMPT, max_concurrency=2),
     # cheap, literal worker for narrow structured tasks — the Relations Mapper's
     # default vehicle (ADR-0007 addendum); same harness/credentials as senior-dev
     DevType(name="junior-dev", harness_template="claude-code",
-            identifying_prompt=JUNIOR_PROMPT,
-            credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-            max_concurrency=1, docker_image="devcake/dev-claude-code:latest",
+            identifying_prompt=JUNIOR_PROMPT, max_concurrency=1,
             model="claude-haiku-4-5"),
 ]
 

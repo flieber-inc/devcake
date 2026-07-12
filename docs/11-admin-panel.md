@@ -15,7 +15,9 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 |---|---|
 | `GET /api/v1/health` | Component health + circuit breakers |
 | `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline |
-| `GET /api/v1/dev-types` · `POST /api/v1/dev-types` | List / create Dev Types |
+| `GET /api/v1/harnesses` | The harness registry: derived image, credential requirements, OAuth availability per `harness_template` — the Dev Type card renders (and previews unsaved harness switches) from this |
+| `GET /api/v1/dev-types` · `POST /api/v1/dev-types` | List (enriched: `harness` info + `secrets_present`) / create Dev Types |
+| `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login (docs/16 M6); credential lands in `/data/secrets/{name}/` |
 | `GET/PUT/DELETE /api/v1/dev-types/{name}` | CRUD one Dev Type. DELETE refuses while assigned to a Mission Type |
 | `POST /api/v1/dev-types/{name}/credentials` | Either multipart file upload (credentials JSON → `/data/secrets/{name}/`, 0600) or `{"env_var": "NAME"}` reference |
 | `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
@@ -62,11 +64,11 @@ configured env var resolves empty (instead of `Illegal header value b'Bearer '`)
 - **`auto_merge` toggle** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."*
 
 ### Dev Types
-Card list + editor:
-- Name; **harness template** dropdown (the three from `08-harness-templates.md`); **identifying prompt** textarea.
-- **Credentials**: radio — (a) API-key env var name, or (b) credentials JSON file upload (OAuth/subscription preferred; per-harness how-to hints from `08-harness-templates.md` §4).
+Card list + editor (2026-07-12 rework — the harness combobox is **authoritative**, `08-harness-templates.md` §2):
+- Name; **harness template** dropdown (options from `GET /harnesses`); **identifying prompt** textarea; **model** pin; per-type **max concurrency** integer.
+- **Runtime & credentials block** (derived, read-only structure): the registry image for the *currently selected* harness, a readiness badge, and a per-requirement checklist — each `credential_env` var with live ✓/✗ from `GET /env-check`, each required secret file with ✓/✗ from the enriched `secrets_present` plus an **upload button** (filename forced to the registry `secret_file`). Flipping the combobox previews the new harness's requirements immediately, with an amber "unsaved harness change" note until Save. Any one ✓ (env var or file) suffices.
+- **Connect via OAuth…** — per **Dev Type** (`POST /oauth/dev-types/{name}/start`), shown when the saved harness has a device-code flow; the credential lands in that Dev Type's `/data/secrets/{name}/` dir (two Dev Types on one harness = two accounts).
 - **MCP servers**: free-text area, one CLI command per line (syntax hint per selected template, `08-harness-templates.md` §7), with the warning: *"These commands run inside the Dev container before the agent starts and are arbitrary code execution by design."* Execution semantics per `07-dev-runtime.md` §5 (failure ⇒ run fails).
-- Per-type **max concurrency** integer.
 
 ### Assignments
 Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).

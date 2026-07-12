@@ -23,6 +23,7 @@ from .dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from .linear import LinearAdapter, PMOTransient
 from .messaging import Messaging
 from .missions import MapperBusy, MapperService, MapperUnconfigured, MissionManager
+from .harness import HARNESSES, dev_type_status
 from .pmo import ALL_LABELS, derive
 from .runlog import RunLogStore
 from .runs import RunManager
@@ -344,9 +345,21 @@ async def put_config(body: dict):
     return config.model_dump()
 
 
+@app.get("/api/v1/harnesses")
+async def list_harnesses():
+    """The harness registry — image + credential requirements per
+    harness_template. Read-only; the admin Dev Type card derives its display
+    (including previews of unsaved harness switches) from this."""
+    return {name: {"docker_image": h.image,
+                   "credential_env": h.credential_env,
+                   "credential_files": [cf.model_dump() for cf in h.credential_files],
+                   "oauth_available": h.oauth is not None}
+            for name, h in HARNESSES.items()}
+
+
 @app.get("/api/v1/dev-types")
 async def list_dev_types():
-    return [d.model_dump() for d in dev_types.values()]
+    return [dev_type_status(d) for d in dev_types.values()]
 
 
 @app.post("/api/v1/dev-types")
@@ -469,10 +482,12 @@ async def run_mapper():
 
 # ── GUI OAuth helpers (docs/16 M6) ───────────────────────────────────────────
 
-@app.post("/api/v1/oauth/{harness}/start")
-async def oauth_start(harness: str):
+@app.post("/api/v1/oauth/dev-types/{name}/start")
+async def oauth_start(name: str):
+    """Per-dev-type device-code login: the credential lands in THIS Dev Type's
+    /data/secrets dir (two Dev Types on one harness = two accounts)."""
     try:
-        return await oauth_mgr.start(harness)
+        return await oauth_mgr.start(name)
     except ValueError as e:
         raise HTTPException(422, str(e))
 

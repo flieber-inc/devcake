@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { get, send } from "./../api.js";
 
 const MISSION_TYPES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
-const TEMPLATES = ["claude-code", "grok-build", "codex"];
-const OAUTH_TEMPLATES = ["grok-build", "codex"];
+// harness identities (image, credential requirements, OAuth availability) come
+// from GET /harnesses — the registry is authoritative, nothing is hardcoded here
 
 // ── primitives ───────────────────────────────────────────────────────────────
 
@@ -143,13 +143,13 @@ function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCancel })
 
 // ── OAuth wizard (docs/16 M6): device-code flow driven from the UI ──────────
 
-function OAuthWizard({ harness, onClose }) {
+function OAuthWizard({ devType, onClose }) {
   const [status, setStatus] = useState({ state: "starting" });
   const [runId, setRunId] = useState(null);
   const [error, setError] = useState(null);
   useEffect(() => {
     let timer;
-    send("POST", `/oauth/${harness}/start`)
+    send("POST", `/oauth/dev-types/${devType}/start`)
       .then(({ run_id }) => {
         setRunId(run_id);
         timer = setInterval(
@@ -160,11 +160,11 @@ function OAuthWizard({ harness, onClose }) {
       })
       .catch((e) => setError(String(e)));
     return () => clearInterval(timer);
-  }, [harness]);
+  }, [devType]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-neutral-900">
-        <h4 className="mb-3 text-base font-semibold">Connect {harness} (OAuth)</h4>
+        <h4 className="mb-3 text-base font-semibold">Connect {devType} (OAuth)</h4>
         {error && <p className="text-sm text-red-600">{error}</p>}
         {!error && status.state === "starting" && (
           <p className="text-sm text-neutral-500">Starting a login container…</p>
@@ -206,28 +206,61 @@ function OAuthWizard({ harness, onClose }) {
 
 // ── Dev Type editor card ─────────────────────────────────────────────────────
 
-function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
-  const [d, setD] = useState(dt);
-  const [credFile, setCredFile] = useState(null);
-  const set = (k, v) => setD({ ...d, [k]: v });
-  const [credMsg, setCredMsg] = useState("");
-  const uploadCred = async () => {
-    const content = await credFile.text();
-    await send("POST", `/dev-types/${d.name}/credentials`, {
-      filename: credFile.name,
-      content,
-    });
-    setCredMsg(`✓ stored ${credFile.name}`);
-    setCredFile(null);
-    setTimeout(() => setCredMsg(""), 4000);
+// Per-required-file upload: the stored filename is FORCED to the registry's
+// secret_file so the checklist and dispatch's _credential_spec always line up,
+// whatever the local file is called.
+function UploadButton({ devType, secretFile, onDone }) {
+  const [msg, setMsg] = useState("");
+  const inputId = `up-${devType}-${secretFile}`;
+  const upload = async (file) => {
+    if (!file) return;
+    try {
+      await send("POST", `/dev-types/${devType}/credentials`, {
+        filename: secretFile,
+        content: await file.text(),
+      });
+      setMsg("✓ stored");
+      onDone && onDone();
+    } catch (e) {
+      setMsg(`✗ ${String(e.message || e)}`);
+    }
+    setTimeout(() => setMsg(""), 4000);
   };
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <input id={inputId} type="file" className="hidden"
+        onChange={(e) => { upload(e.target.files[0]); e.target.value = ""; }} />
+      <label htmlFor={inputId}
+        className="cursor-pointer rounded border border-neutral-300 px-1.5 py-0.5 text-[11px] hover:bg-neutral-100 dark:border-neutral-700 dark:hover:bg-neutral-800">
+        upload…
+      </label>
+      {msg && <span className="text-[11px] text-green-700 dark:text-green-400">{msg}</span>}
+    </span>
+  );
+}
+
+function DevTypeCard({ dt, harnesses, onSave, onDelete, onOAuth, onCredChange }) {
+  const [d, setD] = useState(dt);
+  const set = (k, v) => setD({ ...d, [k]: v });
+  const h = harnesses[d.harness_template] || {};   // registry info for the SELECTED harness
+  const pending = d.harness_template !== dt.harness_template;   // unsaved switch
+  const [envSet, setEnvSet] = useState({});
+  useEffect(() => {
+    setEnvSet({});
+    const names = (h.credential_env || []).join(",");
+    if (names)
+      get(`/env-check?names=${encodeURIComponent(names)}`).then(setEnvSet).catch(() => {});
+  }, [d.harness_template]);
+  const filePresent = (sf) => (dt.secrets_present || []).includes(sf);
+  const ready = Object.values(envSet).some(Boolean) ||
+                (h.credential_files || []).some((cf) => filePresent(cf.secret_file));
   return (
     <div className="space-y-3 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
       <div className="flex items-center justify-between">
         <span className="font-mono text-sm font-semibold">{d.name}</span>
         <div className="flex gap-2">
-          {OAUTH_TEMPLATES.includes(d.harness_template) && (
-            <Button kind="ghost" onClick={() => onOAuth(d.harness_template)}>
+          {harnesses[dt.harness_template]?.oauth_available && (
+            <Button kind="ghost" onClick={() => onOAuth(dt.name)}>
               Connect via OAuth…
             </Button>
           )}
@@ -237,13 +270,13 @@ function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Harness template"
-          help="Which coding agent this Dev runs inside its container: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Determines the Docker image and credential kind.">
+          help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements below follow it automatically on Save.">
           <select
             className={inputCls}
             value={d.harness_template}
             onChange={(e) => set("harness_template", e.target.value)}
           >
-            {TEMPLATES.map((t) => <option key={t}>{t}</option>)}
+            {Object.keys(harnesses).map((t) => <option key={t}>{t}</option>)}
           </select>
         </Field>
         <Field label="Max concurrency"
@@ -276,13 +309,50 @@ function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
             set("mcp_setup_commands", e.target.value.split("\n").filter(Boolean))}
         />
       </Field>
-      <Field label="Credentials file (OAuth/JSON)" hint="Stored 0600 under /data/secrets/; delivered per-run over the runspec channel.">
-        <div className="flex items-center gap-2">
-          <input type="file" className="text-xs" onChange={(e) => setCredFile(e.target.files[0])} />
-          <Button kind="ghost" disabled={!credFile} onClick={uploadCred}>Upload</Button>
-          {credMsg && <span className="text-xs text-green-700 dark:text-green-400">{credMsg}</span>}
+      <div className="space-y-2 rounded-md bg-neutral-50 p-3 text-xs dark:bg-neutral-800/50">
+        <div className="flex items-center justify-between">
+          <span>
+            Image <span className="font-mono">{h.docker_image || "?"}</span>
+            <Help text="Derived from the harness template — not editable. Changing the harness changes the image and the credential requirements below." />
+          </span>
+          <span className={ready
+            ? "font-medium text-green-700 dark:text-green-400"
+            : "font-medium text-amber-600 dark:text-amber-400"}>
+            {ready ? "✓ credentials ready" : "✗ no credentials configured"}
+          </span>
         </div>
-      </Field>
+        {pending && (
+          <p className="text-amber-600 dark:text-amber-400">
+            ⚠ Unsaved harness change: on Save this Dev Type runs {h.docker_image} and
+            needs the credentials listed below. Files under /data/secrets/{dt.name}/
+            for the old harness are kept but unused.
+          </p>
+        )}
+        <ul className="space-y-1">
+          {(h.credential_env || []).map((v) => (
+            <li key={v}>
+              {envSet[v] ? "✓" : "✗"} env <span className="font-mono">{v}</span>
+              {!envSet[v] && (
+                <span className="text-neutral-400"> — set in .env and restart</span>
+              )}
+            </li>
+          ))}
+          {(h.credential_files || []).map((cf) => (
+            <li key={cf.secret_file} className="flex items-center gap-2">
+              <span>
+                {filePresent(cf.secret_file) ? "✓" : "✗"} file{" "}
+                <span className="font-mono">{cf.secret_file}</span>
+                <span className="text-neutral-400"> → {cf.path_hint}</span>
+              </span>
+              <UploadButton devType={dt.name} secretFile={cf.secret_file} onDone={onCredChange} />
+            </li>
+          ))}
+        </ul>
+        <p className="text-neutral-400">
+          Any one ✓ is enough — env keys pass through at dispatch; files are delivered
+          per-run over the runspec channel (stored 0600 under /data/secrets/{dt.name}/).
+        </p>
+      </div>
     </div>
   );
 }
@@ -292,6 +362,7 @@ function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
 export default function ConfigTab() {
   const [cfg, setCfg] = useState(null);
   const [devTypes, setDevTypes] = useState([]);
+  const [harnesses, setHarnesses] = useState({});
   const [assignments, setAssignments] = useState({});
   const [confirm, setConfirm] = useState(null); // {title, body, confirmLabel, action}
   const [oauthFor, setOauthFor] = useState(null);
@@ -303,8 +374,11 @@ export default function ConfigTab() {
 
   const reload = () =>
     Promise.all([get("/config"), get("/dev-types"), get("/assignments"),
-                 get("/health").catch(() => null)]).then(
-      ([c, d, a, h]) => { setCfg(c); setDevTypes(d); setAssignments(a); setHealthInfo(h); });
+                 get("/harnesses"), get("/health").catch(() => null)]).then(
+      ([c, d, a, hs, h]) => {
+        setCfg(c); setDevTypes(d); setAssignments(a);
+        setHarnesses(hs); setHealthInfo(h);
+      });
   useEffect(() => { reload().catch((e) => setMsg(String(e))); }, []);
   if (!cfg) return <p className="text-sm text-neutral-400">Loading…{msg}</p>;
 
@@ -560,7 +634,8 @@ export default function ConfigTab() {
       <Section title="Dev Types">
         <div className="grid gap-4 lg:grid-cols-2">
           {devTypes.map((dt) => (
-            <DevTypeCard key={dt.name} dt={dt}
+            <DevTypeCard key={dt.name} dt={dt} harnesses={harnesses}
+              onCredChange={reload}
               onSave={async (d) => { await send("PUT", `/dev-types/${d.name}`, d); reload(); }}
               onDelete={(name) =>
                 setConfirm({
@@ -581,7 +656,7 @@ export default function ConfigTab() {
             const name = `new-dev-${Date.now() % 1000}`;
             await send("POST", "/dev-types", {
               name, harness_template: "codex", identifying_prompt: "",
-              max_concurrency: 1, docker_image: "devcake/dev-codex:latest",
+              max_concurrency: 1,
             });
             reload();
           }}>
@@ -645,7 +720,8 @@ export default function ConfigTab() {
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => (confirm.cancelAction ? confirm.cancelAction() : setConfirm(null))} />
-      {oauthFor && <OAuthWizard harness={oauthFor} onClose={() => setOauthFor(null)} />}
+      {oauthFor && <OAuthWizard devType={oauthFor}
+        onClose={() => { setOauthFor(null); reload(); }} />}
     </div>
   );
 }

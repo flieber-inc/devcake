@@ -11,21 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from .harness import HARNESSES
 from .ids import make_run_id
 from .state import Run
 
 log = logging.getLogger("devcake.oauth")
 
 SECRETS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
-
-FLOWS = {
-    "grok-build": {"login_cmd": "grok login --device-auth",
-                   "auth_path": "~/.grok/auth.json",
-                   "secret_file": "grok-auth.json"},
-    "codex": {"login_cmd": "codex login --device-auth",
-              "auth_path": "~/.codex/auth.json",
-              "secret_file": "codex-auth.json"},
-}
 
 
 class OAuthManager:
@@ -35,41 +27,47 @@ class OAuthManager:
         self.dev_types = dev_types
         self.sessions: dict[str, dict[str, Any]] = {}  # run_id → status
 
-    def _dev_type_for(self, harness: str):
-        return next((d for d in self.dev_types.values()
-                     if d.harness_template == harness), None)
-
-    async def start(self, harness: str) -> dict:
+    async def start(self, dev_type_name: str) -> dict:
         from opentelemetry import trace as _t
         with _t.get_tracer("devcake").start_as_current_span("oauth.start") as span:
-            span.set_attribute("devcake.harness", harness)
-            result = await self._start_inner(harness)
+            span.set_attribute("devcake.dev_type", dev_type_name)
+            result = await self._start_inner(dev_type_name)
             span.set_attribute("devcake.run.id", result["run_id"])
             return result
 
-    async def _start_inner(self, harness: str) -> dict:
-        flow = FLOWS.get(harness)
-        dev_type = self._dev_type_for(harness)
-        if not flow or not dev_type:
-            raise ValueError(f"no OAuth flow/dev type for harness {harness!r}")
-        run_id = make_run_id("OAUTH", 1, harness.split("-")[0].upper())
+    async def _start_inner(self, dev_type_name: str) -> dict:
+        dev_type = self.dev_types.get(dev_type_name)
+        if not dev_type:
+            raise ValueError(f"unknown dev type {dev_type_name!r}")
+        harness = HARNESSES[dev_type.harness_template]
+        if not harness.oauth:
+            raise ValueError(f"harness {dev_type.harness_template!r} has no OAuth "
+                             "flow (it authenticates via env token)")
+        flow = harness.oauth
+        run_id = make_run_id("OAUTH", 1,
+                             dev_type.harness_template.split("-")[0].upper())
         password = await self.messaging.create_run_user(run_id)
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
                   dev_type=dev_type.name, seq=1, timeout_seconds=600,
                   redis_password=password,
-                  spec_env={"DEVCAKE_OAUTH_MODE": harness,
-                            "DEVCAKE_OAUTH_LOGIN_CMD": flow["login_cmd"],
-                            "DEVCAKE_OAUTH_AUTH_PATH": flow["auth_path"]})
+                  spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
+                            "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
+                            "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
         self.runs.store.save(run)
         await self.runs.executor.start(
-            params={"RUN_ID": run_id, "IMAGE": dev_type.docker_image,
+            params={"RUN_ID": run_id, "IMAGE": harness.image,
                     "TRACEPARENT": "", "REDIS_USER": f"dev-{run_id}",
                     "REDIS_PASSWORD": password},
             dag_run_id=run_id)
-        self.sessions[run_id] = {"harness": harness, "state": "starting",
-                                 "url": None, "code": None,
+        # snapshot everything on_result needs: a dev type deleted or re-harnessed
+        # mid-login must not misroute (or KeyError) the credential
+        self.sessions[run_id] = {"dev_type": dev_type.name,
+                                 "harness": dev_type.harness_template,
+                                 "secret_file": flow.secret_file,
+                                 "state": "starting", "url": None, "code": None,
                                  "started": datetime.now(timezone.utc).isoformat()}
-        log.info("oauth: started %s flow (%s)", harness, run_id)
+        log.info("oauth: started %s flow for %s (%s)",
+                 dev_type.harness_template, dev_type.name, run_id)
         return {"run_id": run_id}
 
     def on_log(self, run_id: str, payload: dict) -> None:
@@ -93,11 +91,9 @@ class OAuthManager:
         run = self.runs.store.get(run_id)
         if not s or not run:
             return
-        flow = FLOWS[s["harness"]]
-        dev_type = self._dev_type_for(s["harness"])
-        target = SECRETS_DIR / dev_type.name
-        target.mkdir(parents=True, exist_ok=True)
-        p = target / flow["secret_file"]
+        target = SECRETS_DIR / s["dev_type"]      # snapshot from start(), never
+        target.mkdir(parents=True, exist_ok=True)  # re-looked-up (see _start_inner)
+        p = target / s["secret_file"]
         p.write_text(payload["content"])
         p.chmod(0o600)
         s["state"] = "completed"
@@ -107,8 +103,8 @@ class OAuthManager:
         await self.messaging.delete_reply_stream(run_id)
         # a fresh credential clears any auth breaker for this dev type (docs/15 §4)
         if self.runs.mission_mgr:
-            self.runs.mission_mgr.breakers.pop(dev_type.name, None)
-        log.info("oauth: %s credential stored for %s", s["harness"], dev_type.name)
+            self.runs.mission_mgr.breakers.pop(s["dev_type"], None)
+        log.info("oauth: %s credential stored for %s", s["harness"], s["dev_type"])
 
     def status(self, run_id: str) -> Optional[dict]:
         return self.sessions.get(run_id)

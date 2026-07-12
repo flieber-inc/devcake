@@ -1,0 +1,89 @@
+"""Per-dev-type OAuth: the credential lands in the NAMED Dev Type's secrets
+dir, using flow + image from the harness registry (session state snapshotted
+at start — a dev type deleted or re-harnessed mid-login must not misroute)."""
+
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
+import devcake.oauth as oauth_mod
+from devcake.config import DevType
+from devcake.harness import HARNESSES
+from devcake.oauth import OAuthManager
+from devcake.state import RunStore
+
+
+def run_coro(c):
+    return asyncio.new_event_loop().run_until_complete(c)
+
+
+class FakeExecutor:
+    def __init__(self):
+        self.params = None
+
+    async def start(self, params, dag_run_id):
+        self.params = params
+
+
+class NullMessaging:
+    async def create_run_user(self, rid): return "pw"
+    async def delete_run_user(self, rid): pass
+    async def delete_reply_stream(self, rid): pass
+
+
+def make_mgr(tmp_path, monkeypatch):
+    monkeypatch.setattr(oauth_mod, "SECRETS_DIR", tmp_path / "secrets")
+    runs = SimpleNamespace(store=RunStore(tmp_path / "runs"),
+                           executor=FakeExecutor(),
+                           mission_mgr=SimpleNamespace(breakers={"main-dev": "DEV_AUTH"}))
+    dev_types = {
+        "main-dev": DevType(name="main-dev", harness_template="grok-build"),
+        "second-grok": DevType(name="second-grok", harness_template="grok-build"),
+        "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
+    }
+    return OAuthManager(runs, NullMessaging(), dev_types)
+
+
+def test_start_rejects_unknown_and_flowless(tmp_path, monkeypatch):
+    mgr = make_mgr(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="unknown dev type"):
+        run_coro(mgr._start_inner("ghost"))
+    with pytest.raises(ValueError, match="no OAuth flow"):
+        run_coro(mgr._start_inner("senior-dev"))   # claude-code: env token only
+
+
+def test_start_uses_registry_and_snapshots(tmp_path, monkeypatch):
+    mgr = make_mgr(tmp_path, monkeypatch)
+    result = run_coro(mgr._start_inner("main-dev"))
+    run_id = result["run_id"]
+    assert mgr.runs.executor.params["IMAGE"] == HARNESSES["grok-build"].image
+    s = mgr.sessions[run_id]
+    assert s["dev_type"] == "main-dev"
+    assert s["secret_file"] == "grok-auth.json"
+    run = mgr.runs.store.get(run_id)
+    assert run.spec_env["DEVCAKE_OAUTH_LOGIN_CMD"] == "grok login --device-auth"
+
+
+def test_result_lands_in_named_dev_type_dir(tmp_path, monkeypatch):
+    """Two dev types on one harness: connecting the SECOND must not write into
+    the first's dir (the old first-match bug), and must survive the dev type
+    being deleted mid-login (snapshot, no re-lookup)."""
+    mgr = make_mgr(tmp_path, monkeypatch)
+    run_id = run_coro(mgr._start_inner("second-grok"))["run_id"]
+    del mgr.dev_types["second-grok"]           # deleted mid-login
+    run_coro(mgr._on_result_inner(run_id, {"content": '{"auth": 1}'}))
+
+    p = tmp_path / "secrets" / "second-grok" / "grok-auth.json"
+    assert p.read_text() == '{"auth": 1}'
+    assert (p.stat().st_mode & 0o777) == 0o600
+    assert not (tmp_path / "secrets" / "main-dev").exists()
+    assert mgr.sessions[run_id]["state"] == "completed"
+    assert mgr.runs.store.get(run_id).state == "finished"
+
+
+def test_result_clears_breaker_for_that_dev_type(tmp_path, monkeypatch):
+    mgr = make_mgr(tmp_path, monkeypatch)
+    run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
+    run_coro(mgr._on_result_inner(run_id, {"content": "{}"}))
+    assert "main-dev" not in mgr.runs.mission_mgr.breakers

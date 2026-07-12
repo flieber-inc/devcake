@@ -200,7 +200,16 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config tab: PMO connection test, repo connection test, review the two default Dev Types → done. The app bootstraps the ten Linear labels on startup.
+- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config tab: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
+
+### 8a. Protect the default branch (deployment requirement — docs/14 §2)
+
+Dev containers hold the forge token, and token scoping cannot separate "push a feature branch" from "merge to main" (both are `contents: write`). Before pointing DevCake at a repository:
+
+- **GitHub:** add a ruleset (or classic protection) on the default branch — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW files a formal approval, so `auto_merge` keeps working.
+- **GitLab:** protect the default branch (no direct pushes) and require ≥1 MR approval.
+
+The forge connection test and the admin header surface the protection state; an unprotected default branch shows a standing amber warning.
 - **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). Schema migrations run automatically (`10-persistence.md` §2).
 - **Kill a stuck Dev:** admin → Executor tab → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Logs tab (OpenObserve). One run = one trace ID (`12-observability.md` §2).

@@ -5,11 +5,13 @@ M4/M5; the mechanics here (ordering, caps, grace cycle, compare-and-transition,
 attempt counting) are the permanent ones.
 """
 
+import asyncio
 import base64
 import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +27,7 @@ from .forge_gitlab import GitLabForge
 from .pmo import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                   LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW,
                   LABEL_SKIP, LABEL_TRACKING, Mission, MissionType, PRIORITY_RANK,
-                  STAGE_LABELS, derive)
+                  STAGE_LABELS, derive, find_cycles)
 from .runs import RunManager
 from .security import redact
 from .state import Run, utcnow
@@ -37,6 +39,20 @@ tracer = trace.get_tracer("devcake")
 # M5: the full state machine is dispatchable, projects included (ADR-0006).
 DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN,
                       MissionType.EXECUTE, MissionType.REVIEW}
+
+# docs/03 §6 (normative) — the app-side trust boundary: a run may only
+# transition through outcomes legal for its mission type. Devs ingest untrusted
+# text (mission descriptions, human comments), so a forged outcome must never
+# let an EXECUTE run approve its own work or an ONBOARD run skip REVIEW. The
+# entrypoint mirrors this table, but old images may run — the app check is the
+# invariant.
+LEGAL_OUTCOMES: dict[str, frozenset[str]] = {
+    "ONBOARD": frozenset({"plan_needed", "executed_trivially", "decomposed",
+                          "human_needed"}),
+    "PLAN": frozenset({"planned"}),
+    "EXECUTE": frozenset({"executed", "human_needed"}),
+    "REVIEW": frozenset({"reviewed", "human_needed"}),
+}
 
 STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 
@@ -66,7 +82,9 @@ class MissionManager:
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
         self.breakers: dict[str, str] = {}  # dev_type → reason (DEV_AUTH circuit breaker)
-        self.blocked_reasons: dict[str, str] = {}  # pmo_id → why the gate skipped it
+        self.blocked_reasons: dict[str, str] = {}  # last gate_map (advisory mirror)
+        self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map
+        self.anomalies: dict[str, str] = {}  # pmo_id → out-of-pipeline anomaly (advisory)
         self.forge = self._make_forge()
 
     def _make_forge(self):
@@ -92,13 +110,44 @@ class MissionManager:
 
     # ── scheduling (docs/04 §§2–3) ───────────────────────────────────────────
 
-    async def schedule(self, missions: list[Mission]) -> int:
-        # blocked-by gate (docs/04 §2, ADR-0007): terminal missions stay in the
-        # map so done/canceled blockers resolve; off-snapshot blockers are
-        # live-fetched once per cycle
+    async def gate_map(self, missions: list[Mission]) -> dict[str, str]:
+        """The blocked-by gate as a first-class poll artifact (docs/04 §2):
+        pmo_id → human-readable reason for every open mission the gate holds
+        back. Computed EVERY cycle — paused or not — so /api/v1/missions never
+        serves stale gate info. Members of a dependency cycle get an explicit
+        unsatisfiable-wait reason instead of ordinary blocking (docs/04 §2a).
+        Also refreshes self.blocked_reasons / self.cycles (advisory mirrors)."""
         by_id = {m.pmo_id: m for m in missions}
-        blocker_memo: dict[str, Mission | None] = {}
-        self.blocked_reasons = {}                  # pmo_id → "blocked by …" (advisory)
+        id_to_key = {m.pmo_id: m.key for m in missions}
+        graph = {m.pmo_id: set(m.blocked_by) for m in missions
+                 if m.pmo_kind == "issue" and m.blocked_by}
+        cycle_of: dict[str, list[str]] = {}
+        self.cycles = []
+        for cyc in find_cycles(graph):
+            keys = [id_to_key.get(i, i) for i in cyc]
+            self.cycles.append(keys)
+            for i in cyc:
+                cycle_of[i] = keys
+        gate: dict[str, str] = {}
+        memo: dict[str, Mission | None] = {}
+        for m in missions:
+            if not m.blocked_by or m.status in ("done", "canceled"):
+                continue
+            if m.pmo_id in cycle_of:
+                loop = " → ".join(cycle_of[m.pmo_id] + [cycle_of[m.pmo_id][0]])
+                gate[m.pmo_id] = (f"dependency cycle: {loop} — will never "
+                                  f"unblock; delete one relation in Linear")
+                continue
+            open_blockers = await self._open_blockers(m, by_id, memo)
+            if open_blockers:
+                gate[m.pmo_id] = "blocked by " + ", ".join(open_blockers)
+        self.blocked_reasons = gate
+        return gate
+
+    async def schedule(self, missions: list[Mission],
+                       gate: dict[str, str] | None = None) -> int:
+        if gate is None:                           # poll_loop passes its own
+            gate = await self.gate_map(missions)
         candidates = []
         for m in missions:
             d = derive(m, self.config.adoption_mode)
@@ -108,11 +157,8 @@ class MissionManager:
                 continue  # grace cycle after our own writes (docs/04 §2)
             if any(r.mission_pmo_id == m.pmo_id for r in self.runs.store.active()):
                 continue  # in-flight guard
-            open_blockers = await self._open_blockers(m, by_id, blocker_memo)
-            if open_blockers:
-                reason = "blocked by " + ", ".join(open_blockers)
-                self.blocked_reasons[m.pmo_id] = reason
-                log.info("mission %s not scheduled — %s", m.key, reason)
+            if m.pmo_id in gate:                   # blocked-by gate (docs/04 §2)
+                log.info("mission %s not scheduled — %s", m.key, gate[m.pmo_id])
                 continue
             candidates.append((m, d))
 
@@ -309,6 +355,16 @@ class MissionManager:
                 pmo_id, markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
 
     @staticmethod
+    def _is_devcake_comment(body: str | None) -> bool:
+        """Provenance classification (docs/03 §8a): sentinel-signed ⇒ DevCake.
+        `>`-quoted lines are ignored, so a human reply that ENDS by quoting a
+        DevCake comment still classifies as human — misreading a human's
+        instruction as DevCake's own record is the unsafe direction."""
+        unquoted = "\n".join(line for line in (body or "").splitlines()
+                             if not line.lstrip().startswith(">"))
+        return bool(SENTINEL_RE.search(unquoted.rstrip()))
+
+    @staticmethod
     def _stage_of(mission: Mission) -> str | None:
         stage = mission.labels & STAGE_LABELS
         return next(iter(stage)) if stage else None
@@ -412,9 +468,28 @@ class MissionManager:
                             run.run_id, exit_code, run.attempt_of_step)
                 return
 
-            # 3 — compare-and-transition
+            # 3 — compare-and-transition. A ValueError from a transition means
+            # the Dev's payload was structurally invalid (e.g. malformed
+            # decomposition / bad blocked_by) — that is DEV_BAD_OUTPUT, a
+            # counted attempt (docs/15 §2), NOT an exception to propagate: the
+            # run must fail cleanly so the mission reschedules next cycle
+            # instead of stranding in `finalizing` until the watchdog timeout.
             if "transition" not in run.finalized_steps:
-                await self._transition(run, result, plan_md)
+                try:
+                    await self._transition(run, result, plan_md)
+                except ValueError as e:
+                    await self.messaging.delete_run_user(run.run_id)
+                    await self.messaging.delete_reply_stream(run.run_id)
+                    run.result = result
+                    run.state = "failed"
+                    run.error = f"DEV_BAD_OUTPUT: {e}"
+                    run.ended_at = utcnow()
+                    run.redis_password = None
+                    self.runs.store.save(run)
+                    await self.restore_after_failure(run)
+                    log.warning("run %s failed with DEV_BAD_OUTPUT: %s",
+                                run.run_id, e)
+                    return
                 run.finalized_steps.append("transition")
                 self.runs.store.save(run)
 
@@ -429,6 +504,21 @@ class MissionManager:
     async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None:
         outcome = result.get("outcome", "")
         pmo_id = run.mission_pmo_id
+        if outcome not in LEGAL_OUTCOMES.get(run.mission_type, frozenset()):
+            # illegal (or unknown) outcome for this step — the trust boundary.
+            # Park for a human; never act on it (docs/03 §6, docs/15).
+            await self._swap(pmo_id, run.pmo_kind, remove=set(), add={LABEL_SKIP})
+            await self._feed(
+                pmo_id, run.pmo_kind,
+                f"⛔ DevCake received outcome `{outcome or '(empty)'}` from a "
+                f"**{run.mission_type}** run — not a legal outcome for that step. "
+                f"No transition was applied; parked with `DEVCAKE-SKIP` for a "
+                f"human to inspect.")
+            self._audit(pmo_id, "illegal_outcome",
+                        f"{outcome or '(empty)'} from {run.mission_type}")
+            log.warning("illegal outcome %r from %s run %s — parked",
+                        outcome, run.mission_type, run.run_id)
+            return
         live = await self._live(pmo_id, run.pmo_kind)               # live re-read
         if run.pmo_kind == "project" and outcome not in ("decomposed", "human_needed"):
             await self._swap(pmo_id, "project", remove=set(), add={LABEL_SKIP})
@@ -445,6 +535,9 @@ class MissionManager:
             self._audit(pmo_id, "external_transition", run.run_id)
             log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
             return
+
+        if outcome in ("executed", "executed_trivially", "reviewed"):
+            await self._flag_out_of_pipeline_merge(run)
 
         if outcome == "planned":
             url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
@@ -487,23 +580,44 @@ class MissionManager:
             await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_PLAN})
             self._audit(pmo_id, "label_add", LABEL_PLAN)
         elif outcome == "human_needed":
-            # deliberate hand-off (docs/03, ADR-0007): the run finished cleanly, so
-            # it never counts toward max_attempts; the stage label stays so work
-            # resumes at the same step once the human removes DEVCAKE-NEEDS-HUMAN
+            # deliberate hand-off (docs/03 §4a, ADR-0007): the run finished
+            # cleanly, so it never counts toward max_attempts; the stage label
+            # stays so work resumes at the same step once the human removes
+            # DEVCAKE-NEEDS-HUMAN. Repeats on the same step escalate a warning —
+            # never an auto-park; the human always decides (founder decision).
             await self._swap(pmo_id, run.pmo_kind, remove=set(), add={LABEL_NEEDS_HUMAN})
             if run.stage_label_at_dispatch is None and live.status == "in_progress":
                 # ONBOARD case: without this, removing the label later lands on
                 # derivation row 9 (in_progress, no stage label) and strands
                 await self._set_status(pmo_id, run.pmo_kind, "backlog")
                 self._audit(pmo_id, "set_status", "backlog (human hand-off)")
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"✋ **DevCake needs a human.** "
-                f"{result.get('summary', '(no details reported)')}\n\n"
-                f"When resolved, remove the `DEVCAKE-NEEDS-HUMAN` label and DevCake "
-                f"resumes where it left off.")
+            nth = 1 + sum(
+                1 for r in self.runs.store.all()
+                if r.mission_pmo_id == pmo_id and r.state == "finished"
+                and (r.result or {}).get("outcome") == "human_needed"
+                and r.stage_label_at_dispatch == run.stage_label_at_dispatch)
+            warn = "" if nth < 2 else (
+                f"⚠️ **Hand-off #{nth} on this step.** If DevCake keeps returning "
+                f"here, the mission may need re-scoping — add `DEVCAKE-SKIP` to "
+                f"stop DevCake on it.\n\n")
+            baton = (f"{warn}✋ **DevCake needs a human.** "
+                     f"{result.get('summary', '(no details reported)')}\n\n"
+                     f"When resolved, remove the `DEVCAKE-NEEDS-HUMAN` label and "
+                     f"DevCake resumes where it left off.")
+            await self._feed(pmo_id, run.pmo_kind, baton)
+            if run.pmo_kind == "project":
+                # _feed suppresses project comments (no comments API) — but a
+                # baton pass MUST be PMO-visible, so it goes out as a project
+                # update, Linear's project-native feed (docs/05 §6)
+                try:
+                    await self.pmo.create_project_update(
+                        pmo_id, redact(baton) + "\n\n" + COMMENT_SENTINEL)
+                except Exception:
+                    log.warning("project-update hand-off failed for %s — "
+                                "summary lives in the audit log only",
+                                run.mission_key, exc_info=True)
             self._audit(pmo_id, "devcake_needs_human",
-                        (result.get("summary") or "")[:120])
+                        f"#{nth}: " + (result.get("summary") or "")[:110])
         else:
             await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_SKIP})
             await self._feed(
@@ -511,6 +625,34 @@ class MissionManager:
                 f"ℹ️ DevCake received unknown outcome `{outcome}` — parked with "
                 f"`DEVCAKE-SKIP` for a human to inspect.")
             self._audit(pmo_id, "label_add", f"{LABEL_SKIP} (unknown outcome {outcome})")
+
+    async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
+        """Detection tripwire (docs/14, ADR-0007 addendum): the Dev's forge token
+        can merge unless branch protection forbids it. If the mission's PR turns
+        up merged while the mission is still mid-pipeline, say so loudly —
+        detection only; a human decides (they may have merged early themselves)."""
+        try:
+            pr = await self.forge.get_pr_by_branch(f"devcake/{run.mission_key}")
+            if not pr:
+                return
+            state = await self.forge.pr_state(pr["number"])
+            if not state["merged"]:
+                return
+            await self._feed(
+                run.mission_pmo_id, run.pmo_kind,
+                f"⚠️ **Out-of-pipeline merge detected:** {state['url']} is already "
+                f"merged, but this mission is still mid-pipeline "
+                f"({run.mission_type}). If you merged it yourself on purpose, "
+                f"mark the mission Done (or add `DEVCAKE-SKIP`); otherwise check "
+                f"who merged it — DevCake did not.")
+            self._audit(run.mission_pmo_id, "out_of_pipeline_merge", state["url"])
+            self.anomalies[run.mission_pmo_id] = (
+                f"{run.mission_key}: PR merged outside the pipeline ({state['url']})")
+            log.warning("out-of-pipeline merge on %s (%s)", run.mission_key,
+                        state["url"])
+        except Exception:
+            log.debug("out-of-pipeline merge check failed for %s",
+                      run.mission_key, exc_info=True)
 
     # ── REVIEW finalization (docs/03 §4, merge-before-Done) ──────────────────
 
@@ -940,7 +1082,7 @@ class MissionManager:
             body = e.body or ""
             # provenance is sentinel-based, never author-based (docs/03 §8a):
             # DevCake may post with the operator's own PMO credentials
-            provenance = "🤖 DevCake" if SENTINEL_RE.search(body) else "🧑 HUMAN"
+            provenance = "🤖 DevCake" if self._is_devcake_comment(body) else "🧑 HUMAN"
             if len(body) > 2048:                                    # externalize long bodies
                 fname = f"entry-{e.ts:%Y%m%dT%H%M%S}.md"
                 attachments.append({"filename": fname,
@@ -962,3 +1104,83 @@ class MissionManager:
                     lines.append(f"[attachment unavailable: {url}]")
             lines.append("")
         return {"activity_md": "\n".join(lines), "attachments": attachments}
+
+
+# ── Relations Mapper service (docs/04 §1, ADR-0007 addendum) ─────────────────
+
+class MapperBusy(Exception):
+    """A mapper run is already active."""
+
+
+class MapperUnconfigured(Exception):
+    """relations_mapper.dev_type does not name an existing Dev Type."""
+
+
+class MapperService:
+    """Cadence + concurrency for MAPPER runs. One lock closes the manual-vs-
+    interval double-dispatch window; the watermark advances only AFTER a
+    successful dispatch (a transient executor error costs one poll cycle, not a
+    full interval); degradation is derived from the run store — restart-safe,
+    and a successful run clears it naturally."""
+
+    def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
+                 mgr: MissionManager):
+        self.config = config
+        self.dev_types = dev_types
+        self.mgr = mgr
+        self._lock = asyncio.Lock()
+        # first auto-run lands one interval after boot; "Run now" covers immediacy
+        self._last_at = time.monotonic()
+
+    def dev_type(self) -> DevType | None:
+        rm = self.config.relations_mapper
+        return self.dev_types.get(rm.dev_type) if rm.dev_type else None
+
+    def active(self) -> bool:
+        return any(r.mission_type == "MAPPER"
+                   for r in self.mgr.runs.store.active())
+
+    def degraded(self) -> str | None:
+        """The 3 most recent MAPPER runs all dead ⇒ the periodic service backs
+        off (docs/15). Run now stays available; a success clears the condition."""
+        recent = sorted((r for r in self.mgr.runs.store.all()
+                         if r.mission_type == "MAPPER"),
+                        key=lambda r: r.created_at, reverse=True)[:3]
+        if len(recent) == 3 and all(r.state in ("failed", "timed_out", "orphaned")
+                                    for r in recent):
+            return recent[0].error or "3 consecutive mapper failures"
+        return None
+
+    async def maybe_dispatch(self, missions: list[Mission]) -> None:
+        """The interval path, called once per poll cycle (never while paused)."""
+        rm = self.config.relations_mapper
+        dt = self.dev_type()
+        if not rm.enabled or dt is None:
+            return
+        if time.monotonic() - self._last_at < rm.interval_minutes * 60:
+            return
+        degraded = self.degraded()
+        if degraded:
+            log.warning("mapper degraded — periodic run skipped (%s)", degraded)
+            return
+        async with self._lock:
+            if self.active():
+                return
+            if len(self.mgr.runs.store.active()) >= self.config.concurrency.global_max:
+                return                             # counts toward the global cap
+            await self.mgr.dispatch_mapper(dt, missions)
+            self._last_at = time.monotonic()
+
+    async def run_now(self) -> Run:
+        """Manual trigger: works regardless of the periodic toggle and of the
+        degraded state — a human pressing the button IS the reset signal."""
+        dt = self.dev_type()
+        if dt is None:
+            raise MapperUnconfigured(
+                "relations_mapper.dev_type must name an existing Dev Type — "
+                "set it on the Config tab")
+        async with self._lock:
+            if self.active():
+                raise MapperBusy("a relations-mapper run is already active")
+            missions = await self.mgr.pmo.list_all(self.config.pmo.team_key)
+            return await self.mgr.dispatch_mapper(dt, missions)

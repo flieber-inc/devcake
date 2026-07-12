@@ -92,6 +92,47 @@ def derive(mission: Mission, adoption_mode: str) -> Derivation:
     return Derivation(reason="in_progress without stage label — not DevCake's")  # row 9
 
 
+def find_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
+    """Cycles in a blocked-by graph (node → the set of nodes blocking it).
+    A cycle is an unsatisfiable wait: every member is parked forever until a
+    human deletes a relation, so the scheduler must name it as a cycle rather
+    than as ordinary blocking (docs/04 §2, ADR-0007 addendum). Pure — no I/O.
+    Iterative DFS; each cycle reported once, as the path segment that loops.
+    Edges pointing outside the graph's key set are ignored (off-snapshot
+    blockers cannot close a cycle within the snapshot)."""
+    color: dict[str, int] = {}          # 0/absent=unvisited, 1=on path, 2=done
+    cycles: list[list[str]] = []
+    seen: set[frozenset[str]] = set()
+    for root in graph:
+        if color.get(root):
+            continue
+        color[root] = 1
+        path = [root]
+        stack = [(root, iter(graph.get(root, ())))]
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                stack.pop()
+                path.pop()
+                color[node] = 2
+                continue
+            if nxt not in graph:
+                continue
+            c = color.get(nxt, 0)
+            if c == 0:
+                color[nxt] = 1
+                path.append(nxt)
+                stack.append((nxt, iter(graph.get(nxt, ()))))
+            elif c == 1:                # back-edge → the path from nxt loops
+                cyc = path[path.index(nxt):]
+                key = frozenset(cyc)
+                if key not in seen:
+                    seen.add(key)
+                    cycles.append(list(cyc))
+    return cycles
+
+
 class ActivityEntry(BaseModel):
     ts: datetime
     author: str
@@ -124,4 +165,5 @@ class PMOPort(Protocol):
     async def swap_labels(self, pmo_id: str, remove: set[str], add: set[str]) -> None: ...
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
+    async def create_project_update(self, project_id: str, body: str) -> None: ...
     def capabilities(self) -> PMOCapabilities: ...

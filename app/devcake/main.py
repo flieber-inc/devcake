@@ -13,16 +13,18 @@ import time
 import httpx
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from .config import (AppConfig, Assignment, DevType, delete_dev_type, load_config,
-                     load_dev_types, save_config, save_dev_type)
+from .config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
+                     load_config, load_dev_types, save_config, save_dev_type)
 from .oauth import OAuthManager
 from .dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from .linear import LinearAdapter, PMOTransient
 from .messaging import Messaging
-from .missions import MissionManager
+from .missions import MapperBusy, MapperService, MapperUnconfigured, MissionManager
 from .pmo import ALL_LABELS, derive
+from .runlog import RunLogStore
 from .runs import RunManager
 from .state import RunStore
 from .telemetry import OO_URL, setup_telemetry
@@ -48,36 +50,13 @@ mission_mgr = MissionManager(config, dev_types, pmo, manager, messaging)
 manager.mission_mgr = mission_mgr
 oauth_mgr = OAuthManager(manager, messaging, dev_types)
 manager.oauth_mgr = oauth_mgr
+runlog = RunLogStore()
+manager.runlog = runlog
 
 # poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
 missions_cache: list[dict] = []
 
-# relations-mapper cadence (ADR-0007): in-memory on purpose — first auto-run
-# lands one interval after boot; the admin "Run now" button covers immediacy
-_last_mapper_at = time.monotonic()
-
-
-def _mapper_dev_type():
-    rm = config.relations_mapper
-    return dev_types.get(rm.dev_type) if rm.dev_type else None
-
-
-def _mapper_active() -> bool:
-    return any(r.mission_type == "MAPPER" for r in store.active())
-
-
-async def _maybe_dispatch_mapper(missions) -> None:
-    global _last_mapper_at
-    rm = config.relations_mapper
-    dt = _mapper_dev_type()
-    if not rm.enabled or dt is None or _mapper_active():
-        return
-    if time.monotonic() - _last_mapper_at < rm.interval_minutes * 60:
-        return
-    if len(store.active()) >= config.concurrency.global_max:
-        return                                     # counts toward the global cap
-    _last_mapper_at = time.monotonic()
-    await mission_mgr.dispatch_mapper(dt, missions)
+mapper = MapperService(config, dev_types, mission_mgr)
 
 
 async def poll_loop() -> None:
@@ -91,15 +70,24 @@ async def poll_loop() -> None:
                 missions = await pmo.list_all(config.pmo.team_key)
                 derived = [(m, derive(m, config.adoption_mode)) for m in missions]
                 candidates = [m for m, d in derived if d.schedulable]
+                # the gate is a poll artifact, computed EVERY cycle — pause
+                # freezes dispatch, never information (docs/04 §2)
+                gate = await mission_mgr.gate_map(missions)
                 await mission_mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
                 # intake pause (docs/11): no NEW dispatches — in-flight runs still
                 # finalize (ingress consumer) and sweeps above keep running
                 if config.intake_paused:
                     dispatched = 0
                 else:
-                    dispatched = await mission_mgr.schedule(missions)
-                    await _maybe_dispatch_mapper(missions)
+                    dispatched = await mission_mgr.schedule(missions, gate)
+                    await mapper.maybe_dispatch(missions)
                 mission_mgr.rotate_grace()
+                # anomalies are advisory and per-mission: prune once terminal
+                terminal = {m.pmo_id for m in missions
+                            if m.status in ("done", "canceled")}
+                for k in list(mission_mgr.anomalies):
+                    if k in terminal:
+                        del mission_mgr.anomalies[k]
                 missions_cache.clear()
                 id_to_key = {m.pmo_id: m.key for m in missions}
                 missions_cache.extend({
@@ -109,7 +97,7 @@ async def poll_loop() -> None:
                     "schedulable": d.schedulable,
                     # the blocked-by gate is a scheduler concern, not a derivation
                     # row — surface it here so the admin panel shows why (ADR-0007)
-                    "reason": mission_mgr.blocked_reasons.get(m.pmo_id, d.reason),
+                    "reason": gate.get(m.pmo_id, d.reason),
                     "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
                     "pmo_id": m.pmo_id,
                 } for m, d in derived)
@@ -187,6 +175,23 @@ async def _check_redis() -> bool:
         return False
 
 
+# branch-protection probe (A2, docs/14): cached — /health is polled every 10 s
+# by the SPA, the forge API needs at most one look every few minutes
+_protection_cache: dict = {"ts": 0.0, "value": None}
+
+
+async def _branch_protection():
+    if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
+        _protection_cache["ts"] = time.monotonic()
+        try:
+            _protection_cache["value"] = (
+                await mission_mgr.forge.default_branch_protection()
+                if config.repo.url else None)
+        except Exception:
+            _protection_cache["value"] = None
+    return _protection_cache["value"]
+
+
 async def _check_http(url: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=3) as client:
@@ -217,6 +222,11 @@ async def health():
         "config_valid": True,
         "circuit_breakers": mission_mgr.breakers,
         "intake_paused": config.intake_paused,
+        "active_runs": len(store.active()),
+        "forge_protection": await _branch_protection(),
+        "anomalies": mission_mgr.anomalies,
+        "dependency_cycles": mission_mgr.cycles,
+        "mapper_degraded": mapper.degraded(),
     }
 
 
@@ -254,6 +264,36 @@ async def get_run(run_id: str):
     return data
 
 
+TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
+
+
+@app.get("/api/v1/runs/{run_id}/log")
+async def get_run_log(run_id: str, tail: int | None = None):
+    """Condensed harness output relayed live by the Dev (docs/11 §2a)."""
+    if store.get(run_id) is None:
+        raise HTTPException(404)
+    _seq, text = runlog.read(run_id, tail)
+    return PlainTextResponse(text)
+
+
+@app.get("/api/v1/runs/{run_id}/log/stream")
+async def stream_run_log(run_id: str):
+    """SSE follow: replays the stored log, then live lines until the run ends.
+    X-Accel-Buffering disables nginx proxy buffering for this response."""
+    if store.get(run_id) is None:
+        raise HTTPException(404)
+
+    def is_terminal() -> bool:
+        r = store.get(run_id)
+        return r is None or r.state in TERMINAL_STATES
+
+    return StreamingResponse(
+        runlog.stream(run_id, is_terminal),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/v1/system/clear-runs")
 async def clear_runs():
     """Operator wipe: local run state + Dagu history + OpenObserve data.
@@ -263,7 +303,7 @@ async def clear_runs():
     """
     from .clear import clear_all
     with tracer.start_as_current_span("system.clear_runs") as span:
-        result = await clear_all(store, executor, messaging)
+        result = await clear_all(store, executor, messaging, runlog)
         missions_cache.clear()
         mission_mgr._grace.clear()
         mission_mgr._grace_next.clear()
@@ -288,7 +328,7 @@ async def get_config():
 async def put_config(body: dict):
     global config
     try:
-        merged = AppConfig.model_validate({**config.model_dump(), **body})
+        merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
     except Exception as e:
         raise HTTPException(422, str(e))
     rm = merged.relations_mapper
@@ -325,6 +365,9 @@ async def upsert_dev_type(body: dict, name: str | None = None):
 async def remove_dev_type(name: str):
     if any(a.dev_type == name for a in config.assignments.values()):
         raise HTTPException(409, f"{name} is assigned to a mission type")
+    if config.relations_mapper.dev_type == name:
+        raise HTTPException(409, f"{name} is the Relations Mapper's Dev Type — "
+                                 "repoint or disable the mapper first")
     dev_types.pop(name, None)
     delete_dev_type(name)
     return {"deleted": name}
@@ -403,8 +446,10 @@ async def test_forge():
         f = mission_mgr.forge
         pr = await f.get_pr_by_branch("devcake/__connection_test__")
         reviewer = bool(getattr(f, "reviewer_token", None))
+        protection = await f.default_branch_protection()
         return {"ok": True, "forge": config.repo.forge, "repo": config.repo.url,
-                "reviewer_token_configured": reviewer, "probe_pr": pr is None}
+                "reviewer_token_configured": reviewer, "probe_pr": pr is None,
+                "branch_protection": protection}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
 
@@ -412,15 +457,13 @@ async def test_forge():
 @app.post("/api/v1/relations-mapper/run")
 async def run_mapper():
     """Manual trigger (docs/11): works regardless of the enabled toggle — the
-    toggle governs only the interval service. Requires a valid dev_type."""
-    dt = _mapper_dev_type()
-    if dt is None:
-        raise HTTPException(422, "relations_mapper.dev_type must name an existing "
-                                 "Dev Type — set it on the Config tab first")
-    if _mapper_active():
-        raise HTTPException(409, "a relations-mapper run is already active")
-    missions = await pmo.list_all(config.pmo.team_key)
-    run = await mission_mgr.dispatch_mapper(dt, missions)
+    toggle governs only the periodic service. Requires a valid dev_type."""
+    try:
+        run = await mapper.run_now()
+    except MapperUnconfigured as e:
+        raise HTTPException(422, str(e))
+    except MapperBusy as e:
+        raise HTTPException(409, str(e))
     return {"run_id": run.run_id, "state": run.state}
 
 

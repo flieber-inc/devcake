@@ -298,10 +298,13 @@ export default function ConfigTab() {
   const [testResult, setTestResult] = useState({});
   const [msg, setMsg] = useState("");
   const [mapperMsg, setMapperMsg] = useState("");
+  const [mapperBusy, setMapperBusy] = useState(false);
+  const [healthInfo, setHealthInfo] = useState(null);
 
   const reload = () =>
-    Promise.all([get("/config"), get("/dev-types"), get("/assignments")]).then(
-      ([c, d, a]) => { setCfg(c); setDevTypes(d); setAssignments(a); });
+    Promise.all([get("/config"), get("/dev-types"), get("/assignments"),
+                 get("/health").catch(() => null)]).then(
+      ([c, d, a, h]) => { setCfg(c); setDevTypes(d); setAssignments(a); setHealthInfo(h); });
   useEffect(() => { reload().catch((e) => setMsg(String(e))); }, []);
   if (!cfg) return <p className="text-sm text-neutral-400">Loading…{msg}</p>;
 
@@ -357,6 +360,19 @@ export default function ConfigTab() {
     }
   };
   const rm = cfg.relations_mapper || { enabled: false, interval_minutes: 60, dev_type: null };
+  // one in-flight save at a time: controls disable while saving, so a second
+  // click can never send a stale snapshot of the card's state
+  const saveMapper = async (patch) => {
+    setMapperBusy(true);
+    setMapperMsg("");
+    try {
+      await putCfg({ relations_mapper: { ...rm, ...patch } });
+    } catch (e) {
+      setMapperMsg(`✗ ${String(e.message || e)}`);
+    } finally {
+      setMapperBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -364,10 +380,11 @@ export default function ConfigTab() {
 
       <Section title="Traffic control">
         <Field label="Mission intake"
-          help="OFF pauses DevCake's intake: no new runs start while you rearrange missions in Linear. In-flight runs finish normally, results are still posted, and human PR merges are still swept. Flip back ON to resume.">
+          help="OFF pauses DevCake's intake: no new runs start while you rearrange missions in Linear. In-flight runs finish normally (they may still update labels/statuses as they complete), and human PR merges are still swept. Flip back ON to resume.">
           <div className="flex items-center gap-3 text-sm">
             <Toggle on={!cfg.intake_paused}
-              onClick={() => putCfg({ intake_paused: !cfg.intake_paused })} />
+              onClick={() => putCfg({ intake_paused: !cfg.intake_paused })
+                .catch((e) => setMsg(`✗ ${String(e.message || e)}`))} />
             <span>
               {cfg.intake_paused
                 ? "⏸ PAUSED — no new runs will start; in-flight runs finish normally"
@@ -382,41 +399,50 @@ export default function ConfigTab() {
               <Help text="A Dev tasked strictly with mapping missing 'blocked by' relations between existing missions (it reads every open mission's title and description head). Proposed relations are validated by the app and appear in Linear; delete a relation there to undo it." />
             </span>
             <div className="flex items-center gap-2">
-              <Button kind="ghost" onClick={runMapper} disabled={!rm.dev_type}>
+              <Button kind="ghost" onClick={runMapper} disabled={!rm.dev_type || mapperBusy}>
                 Run now
               </Button>
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <Field label="Dev Type"
-              help="Which Dev Type runs the mapper. Judgment matters more than speed here — a senior/planner type is a good fit.">
-              <select className={inputCls} value={rm.dev_type || ""}
-                onChange={(e) => putCfg({ relations_mapper: { ...rm, dev_type: e.target.value || null, ...(e.target.value ? {} : { enabled: false }) } })}>
+              help="Which Dev Type runs the mapper. The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
+              <select className={inputCls} value={rm.dev_type || ""} disabled={mapperBusy}
+                onChange={(e) => saveMapper({ dev_type: e.target.value || null,
+                                              ...(e.target.value ? {} : { enabled: false }) })}>
                 <option value="">(none)</option>
                 {devTypes.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
               </select>
             </Field>
             <Field label="Interval (minutes)"
-              help="How often the mapper service runs when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
+              help="Cadence of the periodic service when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
               <input type="number" min="1" className={inputCls} value={rm.interval_minutes}
+                disabled={mapperBusy}
                 onChange={(e) => setCfg({ ...cfg, relations_mapper: { ...rm, interval_minutes: Number(e.target.value) } })}
-                onBlur={(e) => putCfg({ relations_mapper: { ...rm, interval_minutes: Math.max(1, Number(e.target.value) || 60) } })} />
+                onBlur={(e) => saveMapper({ interval_minutes: Math.max(1, Number(e.target.value) || 60) })} />
             </Field>
-            <Field label="Scheduled service">
+            <Field label="Periodic service" hint="Default OFF — use Run now for one-shot passes">
               <div className="flex h-9 items-center gap-3 text-sm">
                 <Toggle on={rm.enabled}
                   onClick={() => {
+                    if (mapperBusy) return;
                     if (!rm.enabled && !rm.dev_type) {
                       setMapperMsg("✗ pick a Dev Type first");
                       return;
                     }
-                    putCfg({ relations_mapper: { ...rm, enabled: !rm.enabled } })
-                      .catch((e) => setMapperMsg(`✗ ${String(e.message || e)}`));
+                    saveMapper({ enabled: !rm.enabled });
                   }} />
                 <span>{rm.enabled ? "ON — runs on the interval" : "OFF — manual only"}</span>
               </div>
             </Field>
           </div>
+          {healthInfo?.mapper_degraded && (
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              ⚠ Periodic service backing off — the last 3 mapper runs failed
+              ({healthInfo.mapper_degraded}). Run now still works; a successful run resumes
+              the schedule.
+            </p>
+          )}
           {mapperMsg && (
             <p className={`text-sm ${mapperMsg.startsWith("✗") ? "text-red-600" : "text-green-700 dark:text-green-400"}`}>
               {mapperMsg}

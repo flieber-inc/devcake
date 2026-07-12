@@ -22,18 +22,22 @@ The entrypoint composes a single prompt: the Dev Type's **identifying prompt** +
 ### `claude-code`
 ```bash
 claude -p "$PROMPT" \
-  --output-format json \
+  --output-format stream-json --verbose \
   --dangerously-skip-permissions        # containerized; the container IS the sandbox
 ```
 - Do **not** use the `--bare` flag when running on subscription OAuth: `--bare` skips OAuth/keychain reads and requires `ANTHROPIC_API_KEY`. Since DevCake prefers subscription auth (§4), the template omits `--bare`.
-- `--output-format json` returns a single JSON object including `result`, `session_id`, `num_turns`, `duration_ms`, **`usage` (tokens) and `total_cost_usd`** — token extraction is first-class.
+- `--output-format stream-json` emits realtime JSONL events (`system/init`, `assistant`/`user` message events, noise events like `system/thinking_tokens`) ending in one `{type:"result"}` event that carries **the exact fields of the old `json` blob**: `result`, `session_id`, `num_turns`, `duration_ms`, `usage`, `modelUsage`, `total_cost_usd` — token extraction stays first-class, the entrypoint just reads the last `result` event instead of the whole stdout (verified live 2026-07-12). **`--verbose` is mandatory** with `-p` + `stream-json` (the CLI errors out without it).
+
+### Live output relay (§1a)
+
+The entrypoint pumps the harness's stdout line-by-line instead of buffering it (`dev_entrypoint.py`): each event is rendered to a **condensed one-liner** (tool name + truncated args, assistant text snippet, result summary — thinking/noise events skipped) which is (a) printed to the entrypoint's own stdout, where Dagu's container executor captures it **live into the step log** (Dagu UI), and (b) batched into `run.log {lines: […]}` envelopes over Redis (≤ 50 lines / ~2 s, 2000 chars/line, 20k-line flood cap) feeding the admin panel's run terminal (`11-admin-panel.md` §3). The raw lines are still accumulated in memory, so end-of-run parsing (result, tokens) is unchanged. Relaying is best-effort — a send failure drops the batch, never the run.
 
 ### `grok-build`
 ```bash
 grok -p "$PROMPT" --output-format streaming-json --always-approve
 ```
 - **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output).
-- **The image pins CLI v0.2.93** (current stable at spec time). Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`). **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future CLI release adds usage/cost to headless output, bump the pin and promote that to the primary strategy.
+- **The image pins CLI v0.2.93** (current stable at spec time). Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`) — **`text`/`thought` are token-level deltas** (re-verified live 2026-07-12; no tool-call events in the stream), so the entrypoint coalesces `text` deltas into lines for the relay (§1a) and reconstructs the result text by concatenating them; `sessionId` comes from the `end` event. **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future CLI release adds usage/cost to headless output, bump the pin and promote that to the primary strategy.
 - Sessions persist under `~/.grok/sessions/{urlencoded-cwd}/{session_id}/` (verified) — the `sessionId` from the headless output locates the directory; `signals.json` there carries `contextTokensUsed`/`totalTokens`, `contextWindowTokens`, `modelsUsed` (totals only — no input/output split, no cost). The TUI `/usage` command is interactive-only and not used.
 
 ### `codex`
@@ -64,8 +68,8 @@ The PLAN playbook requires the harness's native planning capability where one ex
 
 | Template | Plan invocation | Notes |
 |---|---|---|
-| `claude-code` | `claude -p --permission-mode plan "$PROMPT" --output-format json` | Read-only plan mode; the plan text is the `result` field. Entrypoint writes it to `/workspace/out/PLAN.md`. |
-| `grok-build` | `grok -p "$PROMPT" --permission-mode plan --output-format json` | **Verified (CLI v0.2.93):** `--permission-mode plan` is a first-class headless mode — same convention as Claude Code. Plan text returned as the `text` field; entrypoint writes it to `/workspace/out/PLAN.md`. |
+| `claude-code` | `claude -p --permission-mode plan "$PROMPT" --output-format stream-json --verbose` | Read-only plan mode; the plan text is the `result` field of the final `result` event. Entrypoint writes it to `/workspace/out/PLAN.md`. |
+| `grok-build` | `grok -p "$PROMPT" --permission-mode plan --output-format streaming-json` | **Verified (CLI v0.2.93):** `--permission-mode plan` is a first-class headless mode — same convention as Claude Code. Plan text = the concatenated `text` deltas; entrypoint writes it to `/workspace/out/PLAN.md`. |
 | `codex` | Plan-only prompt substitute (`codex exec` with a read-only sandbox: `--sandbox read-only`). | No documented headless plan artifact. |
 
 In all three cases the deliverable is the same: `/workspace/out/PLAN.md`, uploaded by the app to the activity feed (`03-mission-lifecycle.md` §3).
@@ -89,7 +93,7 @@ Uploaded credential files live at `/data/secrets/{dev_type}/` (0600); their cont
 Strategy order per template; the first that yields data wins, and `TokenReport.extraction_method` records which:
 
 1. **`session_json`** — structured harness output:
-   - `claude-code`: the `-p --output-format json` result's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown).
+   - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown — same fields the old `json` blob carried).
    - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `output_tokens→output`; `reasoning_output_tokens` recorded in `notes`. Secondary: last `token_count` event in the session rollout file (§1).
    - `grok-build` (pinned v0.2.93, verified): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`); revisit on every CLI pin bump.
 2. **`stdout_parse`** — regex over captured stdout/stderr for token summary lines.

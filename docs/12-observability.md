@@ -83,6 +83,13 @@ spawned via docker.sock with the default logging driver and removed on exit
 (`keep_container: false`). The only surviving post-mortem is the Dagu run
 record, whose per-step `error` field embeds a stderr tail.
 
+*Narrowed 2026-07-12 by the live output relay (`08-harness-templates.md` §1a):
+the entrypoint now streams condensed harness output into the Dagu step log
+(captured live, survives the container) and into `/data/state/runlogs/` via
+`run.log`, so a mid-run death leaves everything printed up to that moment.
+The blind spot shrinks to deaths before the harness starts — which is exactly
+what this stream covers.*
+
 So every kill (`watchdog.kill`: timeout, dead-before-start, stale heartbeat,
 reconciliation-orphaned) ships one JSON record to the OO log stream
 `run_failures` before finalizing:

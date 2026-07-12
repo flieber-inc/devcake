@@ -54,6 +54,10 @@ class FakePMO:
     async def create_relation(self, blocker_id, blocked_id):
         self.relations.append((blocker_id, blocked_id))
 
+    async def create_project_update(self, project_id, body):
+        self.project_updates = getattr(self, "project_updates", [])
+        self.project_updates.append((project_id, body))
+
     async def children_of_project(self, project_id):
         return []
 
@@ -151,9 +155,78 @@ def test_human_needed_allowed_for_projects(tmp_path):
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _run("ONBOARD", None)
     run.pmo_kind = "project"
-    run_coro(mgr._transition(run, {"outcome": "human_needed", "summary": "s"}, None))
+    run_coro(mgr._transition(run, {"outcome": "human_needed",
+                                   "summary": "grant the scope"}, None))
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # not parked with SKIP
     assert "DEVCAKE-SKIP" not in m.labels
+    # the baton MUST be PMO-visible: comments are suppressed for projects, so
+    # it goes out as a project update, sentinel-signed (docs/05 §6)
+    pid, body = fake.project_updates[-1]
+    assert "grant the scope" in body and body.endswith("`devcake:v1`")
+
+
+def test_illegal_outcome_parks_never_acts(tmp_path):
+    # the trust boundary (docs/03 §6): an EXECUTE dev forging "reviewed" must
+    # never reach _finalize_review (no forge attribute here — a forge call
+    # would raise AttributeError and fail this test)
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._transition(_run(), {"outcome": "reviewed",
+                                      "verdict": "approve"}, None))
+    assert "DEVCAKE-SKIP" in m.labels
+    assert "DEVCAKE-EXECUTE" in m.labels          # stage untouched, only parked
+    assert any("not a legal outcome" in c for c in fake.comments)
+    # and a PLAN run may only return "planned"
+    m2 = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr2, fake2, _ = make_mgr(tmp_path, m2)
+    run_coro(mgr2._transition(_run("PLAN", "DEVCAKE-PLAN"),
+                              {"outcome": "decomposed", "decomposition": [{}]},
+                              None))
+    assert "DEVCAKE-SKIP" in m2.labels and fake2.created == []
+
+
+def test_second_handoff_escalates_warning(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._transition(_run(), {"outcome": "human_needed", "summary": "s1"},
+                             None))
+    assert not any("Hand-off #" in c for c in fake.comments)   # first: no warning
+    prior = _run()
+    prior.run_id = "T-1-1-EXECUTE-PRIOR1"
+    prior.state = "finished"
+    prior.result = {"outcome": "human_needed"}
+    store.save(prior)
+    m.labels.discard("DEVCAKE-NEEDS-HUMAN")       # human resolved + resumed
+    run_coro(mgr._transition(_run(), {"outcome": "human_needed", "summary": "s2"},
+                             None))
+    assert any("Hand-off #2" in c and "DEVCAKE-SKIP" in c for c in fake.comments)
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # warned, never parked
+
+
+def test_malformed_decomposition_fails_run_not_poison(tmp_path):
+    # docs/15: DEV_BAD_OUTPUT is a counted attempt — the run fails cleanly and
+    # the mission reschedules; the exception must NOT escape finalize()
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = Run(run_id="T-1-1-ONBOARD-BADDEC", mission_key="T-1", mission_pmo_id="p1",
+              mission_type="ONBOARD", dev_type="senior-dev", seq=1,
+              stage_label_at_dispatch=None, state="finalizing")
+    store.save(run)
+    payload = {"result": {"outcome": "decomposed", "summary": "s",
+                          "decomposition": [{"title": "a", "blocked_by": [1]}]},
+               "transcript_md": "T", "token_report": {}}
+    run_coro(mgr.finalize(run, payload))
+    assert run.state == "failed" and "DEV_BAD_OUTPUT" in (run.error or "")
+    assert fake.statuses == ["backlog"]           # dispatch-time write reverted
+    assert fake.created == []                     # no children materialized
+
+
+def test_quoted_sentinel_still_classifies_human():
+    quoted = ("please also add tests\n\n"
+              "> ✋ **DevCake needs a human.** blah\n> `devcake:v1`")
+    genuine = "> user asked:\n> do X\n\nDone.\n\n`devcake:v1`"
+    assert not MissionManager._is_devcake_comment(quoted)
+    assert MissionManager._is_devcake_comment(genuine)
 
 
 def test_decomposition_wires_blocked_by_edges(tmp_path):

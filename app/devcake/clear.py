@@ -17,6 +17,7 @@ import httpx
 
 from .dagu import DaguExecutor
 from .messaging import INGRESS, Messaging
+from .runlog import RunLogStore
 from .state import RunStore
 from .telemetry import OO_ORG, OO_URL
 
@@ -34,9 +35,12 @@ def _oo_auth_header() -> str:
     return "Basic " + base64.b64encode(f"{email}:{password}".encode()).decode()
 
 
-def clear_local_state(store: RunStore) -> dict[str, int]:
-    """Wipe run files, audit log, and rebuildable cache. Config/secrets untouched."""
+def clear_local_state(store: RunStore,
+                      runlog: RunLogStore | None = None) -> dict[str, int]:
+    """Wipe run files, run logs, audit log, and rebuildable cache.
+    Config/secrets untouched."""
     runs_deleted = store.clear()
+    runlogs_deleted = runlog.clear() if runlog is not None else 0
     audit_cleared = 0
     if AUDIT_PATH.exists():
         AUDIT_PATH.write_text("")
@@ -52,6 +56,7 @@ def clear_local_state(store: RunStore) -> dict[str, int]:
                     pass
     return {
         "runs_deleted": runs_deleted,
+        "runlogs_deleted": runlogs_deleted,
         "audit_cleared": audit_cleared,
         "cache_files_deleted": cache_deleted,
     }
@@ -165,9 +170,10 @@ async def clear_all(
     store: RunStore,
     executor: DaguExecutor,
     messaging: Messaging,
+    runlog: RunLogStore | None = None,
 ) -> dict[str, Any]:
     """Full operator wipe. Best-effort per subsystem; partial failures are reported."""
-    local = clear_local_state(store)
+    local = clear_local_state(store, runlog)
     dagu: dict[str, Any]
     oo: dict[str, Any]
     redis_info: dict[str, Any]

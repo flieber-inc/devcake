@@ -70,6 +70,33 @@ class GitHubForge:
         return {"state": pr["state"], "merged": bool(pr.get("merged")),
                 "url": pr["html_url"], "number": pr["number"]}
 
+    async def default_branch_protection(self, branch: str = "main") -> Optional[dict]:
+        """{"protected": bool, "requires_reviews": bool|None} for the default
+        branch, or None when unreadable. Branch protection is the ONLY effective
+        control against a Dev merging with its own token (docs/14, ADR-0007
+        addendum) — push-branch and merge both need contents:write."""
+        try:
+            b = await self._req("GET", f"/branches/{branch}")
+        except ForgeError:
+            return None
+        protected = bool(b.get("protected"))
+        requires_reviews = None
+        try:  # classic protection detail (may 403/404 without admin scope)
+            prot = await self._req("GET", f"/branches/{branch}/protection")
+            requires_reviews = bool(prot.get("required_pull_request_reviews"))
+        except ForgeError:
+            pass
+        try:  # repository rulesets (the modern mechanism)
+            rules = await self._req("GET", f"/rules/branches/{branch}")
+            if isinstance(rules, list) and rules:
+                protected = True
+                if requires_reviews is None:
+                    requires_reviews = any(r.get("type") == "pull_request"
+                                           for r in rules)
+        except ForgeError:
+            pass
+        return {"protected": protected, "requires_reviews": requires_reviews}
+
     @staticmethod
     def approval_footer(pr_url: str) -> str:
         """D14 (confirmed decision): every REVIEW PR comment ends with the exact

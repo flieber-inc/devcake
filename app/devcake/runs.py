@@ -65,6 +65,7 @@ class RunManager:
         self.executor = executor
         self.mission_mgr = None  # wired by main (MissionManager); None for hello-only
         self.oauth_mgr = None    # wired by main (OAuthManager)
+        self.runlog = None       # wired by main (RunLogStore)
 
     # ── dispatch (docs/04 §3.1, hello variant) ───────────────────────────────
 
@@ -165,9 +166,16 @@ class RunManager:
                 await self.messaging.reply(run_id, "activity.result",
                                            {"activity_md": "", "attachments": []})
         elif kind == "run.log":
-            log.info("[%s] %s", run_id, payload.get("message", "") or payload)
-            if self.oauth_mgr:
-                self.oauth_mgr.on_log(run_id, payload)
+            # {"lines": [...]} = streamed harness output (docs/09 §2); anything
+            # else keeps the legacy/OAuth behavior ({oauth_url}, {level,message})
+            if self.runlog is not None and isinstance(payload.get("lines"), list):
+                from .security import redact
+                self.runlog.append(
+                    run_id, [redact(str(l))[:4000] for l in payload["lines"]])
+            else:
+                log.info("[%s] %s", run_id, payload.get("message", "") or payload)
+                if self.oauth_mgr:
+                    self.oauth_mgr.on_log(run_id, payload)
         elif kind == "oauth.result":
             if self.oauth_mgr:
                 await self.oauth_mgr.on_result(run_id, payload)
@@ -182,6 +190,8 @@ class RunManager:
                 await self.mission_mgr.finalize(run, payload)
             else:
                 await self._finalize(run, payload)
+            if self.runlog is not None:
+                self.runlog.close(run.run_id)  # end any live log followers
         else:
             log.warning("unknown message kind %s for %s", kind, run_id)
 
@@ -254,4 +264,6 @@ class RunManager:
         if self.oauth_mgr and run.run_id in self.oauth_mgr.sessions:
             self.oauth_mgr.sessions[run.run_id].update(
                 state="failed", error=f"login container died ({reason})")
+        if self.runlog is not None:
+            self.runlog.close(run.run_id)  # end any live log followers
         log.warning("killed %s → %s (%s)", run.run_id, new_state, reason)

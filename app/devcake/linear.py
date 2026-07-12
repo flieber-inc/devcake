@@ -32,6 +32,11 @@ PROJECT_STATUS_MAP: dict[str, NormalizedStatus] = {
 }
 _ASSET_RE = re.compile(r"https://uploads\.linear\.app/[^\s)\]]+")
 
+# inverseRelations page size: Linear returns ALL relation types and we filter
+# for `blocks` client-side, so an undersized page can silently evict a blocker
+# and blind the scheduling gate (docs/05 §6). A full page is logged loudly.
+RELATIONS_PAGE = 50
+
 
 class PMOTransient(Exception):
     """Retryable PMO failure (429/5xx/network) — docs/15."""
@@ -86,26 +91,46 @@ class LinearAdapter:
         missions = await self.list_all(team_ref)
         return [m for m in missions if m.status not in ("done", "canceled")]
 
+    async def _paginate(self, query: str, root: str, variables: dict) -> list[dict]:
+        """Cursor-paginate a top-level connection. The scheduling gate and the
+        mapper's validator must see the WHOLE team — a first-page-only read
+        turns silent truncation into wrong scheduling decisions (docs/05 §6)."""
+        nodes: list[dict] = []
+        after: str | None = None
+        while True:
+            data = await self._gql(query, {**variables, "after": after})
+            page = data[root]
+            nodes.extend(page["nodes"])
+            if not page["pageInfo"]["hasNextPage"]:
+                return nodes
+            after = page["pageInfo"]["endCursor"]
+
     async def list_all(self, team_ref: str) -> list[Mission]:
         """Terminal included — the /api/v1/missions debug view (derivation row 5 visible)."""
         team = await self._team(team_ref)
-        data = await self._gql(
-            """query($teamId: ID!) {
-                 issues(first: 100, filter: {team: {id: {eq: $teamId}}}) { nodes {
-                   id identifier title description url updatedAt priority
-                   state { name type }
-                   labels(first: 20) { nodes { name } }
-                   project { id }
-                   inverseRelations(first: 10) { nodes { type issue { id } } }
-                 } }
-                 projects(first: 50, filter: {accessibleTeams: {id: {eq: $teamId}}}) { nodes {
-                   id name description content url updatedAt priority
-                   status { name type }
-                   labels(first: 20) { nodes { name } }
-                 } }
-               }""", {"teamId": team["id"]})
-        missions = [self._issue_to_mission(n) for n in data["issues"]["nodes"]]
-        missions += [self._project_to_mission(n) for n in data["projects"]["nodes"]]
+        issues = await self._paginate(
+            """query($teamId: ID!, $after: String) {
+                 issues(first: 100, after: $after, filter: {team: {id: {eq: $teamId}}}) {
+                   pageInfo { hasNextPage endCursor }
+                   nodes {
+                     id identifier title description url updatedAt priority
+                     state { name type }
+                     labels(first: 20) { nodes { name } }
+                     project { id }
+                     inverseRelations(first: 50) { nodes { type issue { id } } }
+                   } } }""", "issues", {"teamId": team["id"]})
+        projects = await self._paginate(
+            """query($teamId: ID!, $after: String) {
+                 projects(first: 50, after: $after,
+                          filter: {accessibleTeams: {id: {eq: $teamId}}}) {
+                   pageInfo { hasNextPage endCursor }
+                   nodes {
+                     id name description content url updatedAt priority
+                     status { name type }
+                     labels(first: 20) { nodes { name } }
+                   } } }""", "projects", {"teamId": team["id"]})
+        missions = [self._issue_to_mission(n) for n in issues]
+        missions += [self._project_to_mission(n) for n in projects]
         return missions
 
     async def get_mission(self, pmo_id: str) -> Mission:
@@ -115,7 +140,7 @@ class LinearAdapter:
                  state { name type }
                  labels(first: 20) { nodes { name } }
                  project { id }
-                 inverseRelations(first: 10) { nodes { type issue { id } } }
+                 inverseRelations(first: 50) { nodes { type issue { id } } }
             } }""", {"id": pmo_id})
         return self._issue_to_mission(data["issue"])
 
@@ -251,15 +276,17 @@ class LinearAdapter:
             raise
 
     async def children_of_project(self, project_id: str) -> list[Mission]:
-        data = await self._gql(
-            """query($pid: ID!) {
-                 issues(first: 100, filter: {project: {id: {eq: $pid}}}) { nodes {
-                   id identifier title description url updatedAt priority
-                   state { name type }
-                   labels(first: 20) { nodes { name } }
-                   project { id }
-                 } } }""", {"pid": project_id})
-        return [self._issue_to_mission(n) for n in data["issues"]["nodes"]]
+        nodes = await self._paginate(
+            """query($pid: ID!, $after: String) {
+                 issues(first: 100, after: $after, filter: {project: {id: {eq: $pid}}}) {
+                   pageInfo { hasNextPage endCursor }
+                   nodes {
+                     id identifier title description url updatedAt priority
+                     state { name type }
+                     labels(first: 20) { nodes { name } }
+                     project { id }
+                   } } }""", "issues", {"pid": project_id})
+        return [self._issue_to_mission(n) for n in nodes]
 
     async def swap_labels_project(self, project_id: str, remove: set[str],
                                   add: set[str]) -> None:
@@ -278,6 +305,15 @@ class LinearAdapter:
             """mutation($id: String!, $l: [String!]!) {
                  projectUpdate(id: $id, input: {labelIds: $l}) { success } }""",
             {"id": project_id, "l": sorted(current.values())})
+
+    async def create_project_update(self, project_id: str, body: str) -> None:
+        """Project updates are Linear's project-native feed — projects have no
+        issue-style comments API (verified at M2/M5), so baton-pass messages on
+        project-kind missions land here (docs/05 §6, ADR-0007 addendum)."""
+        await self._gql(
+            """mutation($p: String!, $b: String!) {
+                 projectUpdateCreate(input: {projectId: $p, body: $b}) { success } }""",
+            {"p": project_id, "b": body})
 
     async def set_project_status(self, project_id: str, status: NormalizedStatus) -> None:
         wanted = {"backlog": "backlog", "in_progress": "started",
@@ -326,6 +362,10 @@ class LinearAdapter:
         # on issue B, inverseRelations holds relations where B is relatedIssue;
         # a `blocks` node's `issue` is the blocker (verified live, ADR-0007)
         relations = (n.get("inverseRelations") or {}).get("nodes") or []
+        if len(relations) >= RELATIONS_PAGE:
+            log.warning("issue %s: inverseRelations page is full (%d) — "
+                        "blocked_by may be truncated; the gate could miss a blocker",
+                        n.get("identifier"), len(relations))
         return Mission(
             pmo_id=n["id"], pmo_kind="issue", key=n["identifier"], title=n["title"],
             description=n.get("description") or "",

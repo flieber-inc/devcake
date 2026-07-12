@@ -45,11 +45,13 @@ class Concurrency(BaseModel):
 
 
 class RelationsMapper(BaseModel):
-    """Periodic Dev run that maps missing blocked-by relations (ADR-0007).
-    dev_type must name an existing Dev Type whenever enabled."""
+    """Dev run that maps missing blocked-by relations (ADR-0007). Manual-only
+    by default (enabled=False → the admin "Run now" button); the periodic
+    service is opt-in. dev_type must name an existing Dev Type whenever
+    enabled — the seeded junior-dev (cheap model) is the default vehicle."""
     enabled: bool = False
     interval_minutes: int = 60
-    dev_type: str | None = None
+    dev_type: str | None = "junior-dev"
 
 
 class CredentialFile(BaseModel):
@@ -94,6 +96,11 @@ MAIN_PROMPT = (
     "summary. You match the conventions of the codebase you are in, you run the tests, "
     "and you never commit until the work is complete."
 )
+JUNIOR_PROMPT = (
+    "You are **Junior Dev**, DevCake's fast, literal assistant. You do exactly the narrow "
+    "task you are given — no more. You never improvise scope, you follow output formats "
+    "to the letter, and when you are unsure you say so instead of guessing."
+)
 
 DEFAULT_DEV_TYPES = [
     DevType(name="senior-dev", harness_template="claude-code",
@@ -107,6 +114,13 @@ DEFAULT_DEV_TYPES = [
             credential_files=[CredentialFile(secret_file="grok-auth.json",
                                              path_hint="~/.grok/auth.json")],
             max_concurrency=2, docker_image="devcake/dev-grok-build:latest"),
+    # cheap, literal worker for narrow structured tasks — the Relations Mapper's
+    # default vehicle (ADR-0007 addendum); same harness/credentials as senior-dev
+    DevType(name="junior-dev", harness_template="claude-code",
+            identifying_prompt=JUNIOR_PROMPT,
+            credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+            max_concurrency=1, docker_image="devcake/dev-claude-code:latest",
+            model="claude-haiku-4-5"),
 ]
 
 
@@ -131,6 +145,19 @@ class AppConfig(BaseModel):
     @property
     def api_key(self) -> str:
         return os.environ.get(self.pmo.api_key_env, "")
+
+
+def deep_merge(base: dict, patch: dict) -> dict:
+    """Recursive dict merge for partial config PUTs (docs/11 §1): a nested
+    patch like {"repo": {"url": …}} must not silently reset sibling fields
+    (forge, token_env, …) to their defaults."""
+    merged = dict(base)
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k] = deep_merge(merged[k], v)
+        else:
+            merged[k] = v
+    return merged
 
 
 def _atomic_yaml(path: Path, data: dict) -> None:
@@ -173,10 +200,14 @@ def delete_dev_type(name: str) -> None:
 def load_dev_types() -> dict[str, DevType]:
     dt_dir = CONFIG_PATH.parent / "dev_types"
     dt_dir.mkdir(parents=True, exist_ok=True)
-    if not any(dt_dir.glob("*.yaml")):
-        for dt in DEFAULT_DEV_TYPES:
-            _atomic_yaml(dt_dir / f"{dt.name}.yaml", dt.model_dump())
-        log.info("config: seeded default dev types (senior-dev, main-dev)")
+    # name-based top-up: a default Dev Type is (re-)seeded whenever its file is
+    # missing, so existing deployments gain new defaults on boot. Customize
+    # defaults by EDITING them — a deleted default returns next boot (docs/02 §6).
+    for dt in DEFAULT_DEV_TYPES:
+        p = dt_dir / f"{dt.name}.yaml"
+        if not p.exists():
+            _atomic_yaml(p, dt.model_dump())
+            log.info("config: seeded default dev type %s", dt.name)
     out = {}
     for p in sorted(dt_dir.glob("*.yaml")):
         dt = DevType.model_validate(yaml.safe_load(p.read_text()) or {})

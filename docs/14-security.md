@@ -18,9 +18,12 @@ v0 explicitly **trusts**: the configured repository's content and the Mission de
 
 v0 stance: **accepted risk**, mitigated by:
 - single-team scoping (nothing outside `pmo.team_key` is ever read — `05-pmo-adapter.md` §2);
-- Devs cannot write to the PMO (INV-4) and cannot push to the default branch — output lands in PRs (`06-forge-adapter.md` §3);
+- Devs cannot write to the PMO (INV-4); code output lands in PRs (`06-forge-adapter.md` §3);
+- **outcome legality is an app-side invariant** (`03-mission-lifecycle.md` §6, the `LEGAL_OUTCOMES` table): a forged `result.json` (e.g. an EXECUTE run claiming `reviewed`/approve) is parked with `DEVCAKE-SKIP`, never acted on — the app-as-deputy path is closed;
 - `auto_merge` defaults **off**, so a human gate sits before the default branch; the toggle's confirm dialog states the consequence (`11-admin-panel.md` §2);
 - every action is traced (`12-observability.md`) and every PMO write audit-logged (`10-persistence.md`).
+
+**Honest limit — the Dev's own forge token (normative mitigation: branch protection).** An EXECUTE Dev holds `DEVCAKE_FORGE_TOKEN` inside its container (it must, to push its branch and open the PR), and on GitHub, pushing a feature branch and merging a PR both require the same `contents: write` permission — the capability is indivisible at the token level. The playbooks forbid direct merges, but that is guidance, not enforcement. **The effective control is forge-side branch protection on the default branch** (require PRs + ≥1 approval; no bypass for the Dev token's account). DevCake's own pipeline keeps working: the reviewer token files a formal approval before the app merges. Deployment requirement in `13-deployment.md` §8a. DevCake verifies and surfaces this: the forge connection test and `/api/v1/health` report the default branch's protection state, and the admin panel shows an amber warning when unprotected. A **detection tripwire** backs it up: if a mission's PR turns up merged while the mission is still mid-pipeline, the app posts an "out-of-pipeline merge" comment, audits `out_of_pipeline_merge`, and surfaces it in health (`15-errors-and-retries.md`). Per-run scoped forge tokens (§7) would not change this — they hit the same indivisibility.
 
 Future hardening in §7.
 

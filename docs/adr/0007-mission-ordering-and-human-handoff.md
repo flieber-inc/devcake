@@ -31,3 +31,16 @@ Five coupled mechanisms, all live-derivable from PMO state (ADR-0003/0005 preser
 - Dev images must be rebuilt with the app (the entrypoint's legal-outcome list gains `human_needed`/`relations_mapped`); an old image rejects them as exit 11 — fail-safe, but a counted attempt.
 - Comments posted before the sentinel convention classify as human — harmless noise on pre-migration Missions.
 - The Mapper may re-propose an edge a human deleted (it only knows current relations); the persistent notification comment gives context, and the service can be disabled. Remembering deleted edges is deferred.
+
+## Addendum — hardening decisions (2026-07-12, post-adversarial-review)
+
+Shipped as the immediate follow-up increment, after live verification (relation direction, idempotent duplicate creates, complexity 1,310/3M-hr, sentinel roundtrip, `projectUpdateCreate`) and an adversarial review of the original commit:
+
+1. **Outcome legality is an app-side invariant** (`LEGAL_OUTCOMES`, docs/03 §6): illegal/forged outcomes park with `DEVCAKE-SKIP`, never act. The entrypoint mirrors the table but the app check is authoritative. Structurally invalid payloads behind legal outcomes fail as `DEV_BAD_OUTPUT` (counted attempt) instead of poisoning the ingress.
+2. **The Dev's own forge token is contained by branch protection, not scoping** — push-branch and merge are the same `contents: write`; docs/13 §8a makes protection a deployment requirement, DevCake verifies and surfaces the state, and an out-of-pipeline-merge tripwire detects violations (docs/14 §2).
+3. **All Linear list reads paginate; `inverseRelations` reads 50 with a full-page WARNING** — silent truncation of the gate's inputs (or the mapper's validation graph) is never acceptable.
+4. **The gate is a poll artifact** (`gate_map`), computed even while paused, with **dependency-cycle detection** (`pmo.find_cycles`) naming unsatisfiable waits explicitly — an undetected routing deadlock is the one failure a traffic-routing product cannot afford.
+5. **Hand-off guardrail: evidence required, warnings only** — escalating "Hand-off #N" headers from the 2nd repeat; never auto-park (founder decision: the human always decides).
+6. **The Mapper runs on the seeded `junior-dev`** (claude-code, `claude-haiku-4-5`) by default, manual-only out of the box; `MapperService` serializes manual/periodic dispatch, advances its watermark only on success, and backs off after 3 consecutive dead runs (store-derived). The repo clone is kept (founder decision: preserves future code-aware ordering).
+7. **Blocking stays pipeline-coarse** (founder decision): better bottlenecked than accumulating parallel garbage — routing quality is the product thesis (docs/04 §2).
+8. Provenance classification ignores `>`-quoted lines (a human quoting DevCake stays human); project-kind baton passes go out as project updates.

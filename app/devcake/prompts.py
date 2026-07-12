@@ -66,10 +66,13 @@ HUMAN_HANDOFF = """
 ### Blocked on a human?
 If you hit an obstacle only a human can clear — a missing permission or
 credential, an external account or service decision, anything outside the
-repository — do NOT improvise a workaround. Stop and write
-/workspace/out/result.json EXACTLY as:
+repository — do NOT improvise a workaround. First VERIFY the obstacle: actually
+attempt the blocked operation and capture its exact error output. A hand-off is
+expensive (a person must stop and act), so your summary MUST quote that
+evidence; a hand-off without evidence wastes a human's time. Then stop and
+write /workspace/out/result.json EXACTLY as:
 {"schema_version": 1, "outcome": "human_needed", "summary": "<precisely what a
-human must do to unblock this mission>"}
+human must do to unblock this mission, including the exact error you hit>"}
 """
 
 # Appended to all four playbooks. Provenance is sentinel-based (docs/03 §8a):

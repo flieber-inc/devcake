@@ -46,6 +46,210 @@ def send_artifacts(payload: dict) -> None:
         send("run.artifacts", {"chunk": i, "of": len(parts), "data": part})
 
 
+# ── live output relay (docs/08 §4, docs/09 §2) ──────────────────────────────
+# The harness's stdout is pumped line-by-line: the raw line is accumulated for
+# end-of-run parsing, and a condensed human-readable rendering is (a) printed
+# to THIS process's stdout — Dagu's container executor captures it live into
+# the step log — and (b) batched into run.log envelopes for the admin panel.
+
+LINE_LIMIT = 2000            # per condensed line
+BATCH_LINES = 50             # per run.log envelope (50×2000 ≈ 100KB « 512KB)
+FLUSH_SECS = 2.0
+MAX_RELAY_LINES = 20_000     # flood guard; Dagu's step log still has everything
+
+
+class LogRelay:
+    """Thread-safe batcher for condensed lines → run.log. Best-effort only:
+    send failures are swallowed — logging must never kill a run."""
+
+    def __init__(self) -> None:
+        self.buf: list[str] = []
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.sent = 0
+
+    def add(self, text: str) -> None:
+        if self.sent >= MAX_RELAY_LINES:
+            return
+        with self.lock:
+            for line in text.splitlines() or [""]:
+                self.buf.append(line[:LINE_LIMIT])
+
+    def flush(self) -> None:
+        while True:
+            with self.lock:
+                batch, self.buf = self.buf[:BATCH_LINES], self.buf[BATCH_LINES:]
+            if not batch:
+                return
+            if self.sent >= MAX_RELAY_LINES:
+                with self.lock:
+                    self.buf = []
+                return
+            if self.sent + len(batch) >= MAX_RELAY_LINES:
+                batch = batch[:MAX_RELAY_LINES - self.sent]
+                batch.append("[output relay capped — see the Dagu step log]")
+            try:
+                send("run.log", {"lines": batch})
+                self.sent += len(batch)
+            except Exception:
+                return  # drop the batch, keep the run alive
+
+    def loop(self) -> None:
+        while not self.stop.wait(FLUSH_SECS):
+            self.flush()
+        self.flush()  # final drain after the pumps finish
+
+
+def _pump(stream, sink: list, render, relay: LogRelay, echo) -> None:
+    """Reader thread: drain one pipe fully (deadlock guard), echo + relay the
+    condensed rendering of each line."""
+    for raw in iter(stream.readline, ""):
+        sink.append(raw)
+        try:
+            text = render(raw)
+        except Exception:
+            text = None
+        if text:
+            print(text, file=echo, flush=True)
+            relay.add(text)
+    finish = getattr(render, "finish", None)  # stateful renderers flush here
+    if finish and (text := finish()):
+        print(text, file=echo, flush=True)
+        relay.add(text)
+    stream.close()
+
+
+def render_claude(raw: str):
+    """Claude Code stream-json events → condensed lines (shape verified live)."""
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        s = raw.strip()
+        return s[:LINE_LIMIT] if s else None
+    kind = ev.get("type")
+    if kind == "system" and ev.get("subtype") == "init":
+        return f"[claude] session {str(ev.get('session_id', ''))[:8]} · " \
+               f"model={ev.get('model', '?')}"
+    if kind == "assistant":
+        parts = []
+        for block in (ev.get("message") or {}).get("content") or []:
+            if block.get("type") == "text" and block.get("text", "").strip():
+                parts.append(block["text"].strip()[:200])
+            elif block.get("type") == "tool_use":
+                args = json.dumps(block.get("input") or {})[:160]
+                parts.append(f"→ {block.get('name', '?')} {args}")
+        return "\n".join(parts) or None
+    if kind == "result":
+        cost = ev.get("total_cost_usd")
+        line = f"[claude] done: {ev.get('subtype', '?')} · " \
+               f"turns={ev.get('num_turns', '?')}"
+        return line + (f" · cost=${cost:.2f}" if isinstance(cost, (int, float))
+                       else "")
+    return None  # thinking_tokens, rate_limit_event, tool results: noise
+
+
+def render_codex(raw: str):
+    """Codex exec --json JSONL events → condensed lines."""
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        s = raw.strip()
+        return s[:LINE_LIMIT] if s else None
+    kind = ev.get("type")
+    if kind == "item.completed":
+        item = ev.get("item") or {}
+        it = item.get("item_type") or item.get("type")
+        if it == "command_execution":
+            return f"$ {str(item.get('command', ''))[:160]} → " \
+                   f"exit {item.get('exit_code', '?')}"
+        if it == "agent_message":
+            return str(item.get("text", "")).strip()[:200] or None
+        return None  # reasoning etc.
+    if kind == "turn.completed":
+        u = ev.get("usage") or {}
+        return f"[codex] turn done · in={u.get('input_tokens', '?')} " \
+               f"out={u.get('output_tokens', '?')}"
+    if kind == "error":
+        return f"[codex] error: {str(ev.get('message', ''))[:200]}"
+    return None
+
+
+class GrokCoalescer:
+    """grok streaming-json emits token-level {"type":"text","data":…} deltas
+    (verified live on 0.2.93) — coalesce them into lines; thoughts skipped."""
+
+    def __init__(self) -> None:
+        self.buf = ""
+
+    def __call__(self, raw: str):
+        try:
+            ev = json.loads(raw)
+        except Exception:
+            s = raw.strip()
+            return s[:LINE_LIMIT] if s else None
+        kind = ev.get("type")
+        if kind == "text":
+            self.buf += ev.get("data", "")
+            if "\n" in self.buf:
+                emit, self.buf = self.buf.rsplit("\n", 1)
+                return emit.strip() or None
+            if len(self.buf) >= 200:
+                emit, self.buf = self.buf, ""
+                return emit
+            return None
+        if kind == "end":
+            tail = self.buf.strip()
+            self.buf = ""
+            done = f"[grok] done: {ev.get('stopReason', '?')}"
+            return f"{tail}\n{done}" if tail else done
+        return None  # thought deltas: noise
+
+    def finish(self):
+        tail, self.buf = self.buf.strip(), ""
+        return tail or None
+
+
+def render_stderr(raw: str):
+    s = raw.strip()
+    return f"! {s[:LINE_LIMIT]}" if s else None
+
+
+def claude_result_event(out: str):
+    """Last {"type":"result"} event in a stream-json transcript, or None."""
+    found = None
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "result":
+            found = ev
+    return found
+
+
+def grok_stream_parse(out: str):
+    """(result_text, session_id) from streaming-json deltas; None if the
+    output isn't grok stream events (e.g. an EXTRA_ARGS format override)."""
+    texts, sid, saw = [], "", False
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("type")
+        if kind == "text":
+            texts.append(ev.get("data", ""))
+            saw = True
+        elif kind == "end":
+            sid = ev.get("sessionId", "") or sid
+            saw = True
+        elif kind == "thought":
+            saw = True
+    return ("".join(texts), sid) if saw else None
+
+
 def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
     send(kind, {})
     last_id, deadline = "0", time.time() + timeout
@@ -189,7 +393,8 @@ def main() -> None:
     if harness == "grok-build":
         mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
         pin = ["--model", model] if model else []
-        cmd = ["grok", "-p", prompt, "--output-format", "json", *mode, *pin, *extra]
+        cmd = ["grok", "-p", prompt, "--output-format", "streaming-json",
+               *mode, *pin, *extra]
     elif harness == "codex":
         mode = ["--sandbox", "read-only"] if plan_mode \
             else ["--dangerously-bypass-approvals-and-sandbox"]
@@ -200,17 +405,37 @@ def main() -> None:
     else:
         mode = ["--permission-mode", "plan"] if plan_mode             else ["--dangerously-skip-permissions"]
         pin = ["--model", model] if model else []
-        cmd = ["claude", "-p", prompt, "--output-format", "json", *mode, *pin, *extra]
-    harness_exit, out = 1, ""
+        # --verbose is REQUIRED with -p + stream-json (CLI errors out without it)
+        cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
+               "--verbose", *mode, *pin, *extra]
+    harness_exit = 1
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+    relay = LogRelay()
+    render = {"codex": render_codex,
+              "grok-build": GrokCoalescer()}.get(harness, render_claude)
     with tracer.start_as_current_span("dev.run", context=ctx) as span:
         span.set_attribute("devcake.run.id", RUN_ID)
         span.set_attribute("devcake.dev_type", env.get("DEVCAKE_DEV_TYPE", ""))
         span.set_attribute("devcake.harness", harness)
         with tracer.start_as_current_span("harness.exec"):
-            proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
-            harness_exit, out = proc.returncode, proc.stdout
+            proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+            pumps = [threading.Thread(target=_pump, daemon=True, args=(
+                         proc.stdout, out_lines, render, relay, sys.stdout)),
+                     threading.Thread(target=_pump, daemon=True, args=(
+                         proc.stderr, err_lines, render_stderr, relay, sys.stderr))]
+            flusher = threading.Thread(target=relay.loop, daemon=True)
+            for t in (*pumps, flusher):
+                t.start()
+            harness_exit = proc.wait()
+            for t in pumps:
+                t.join(timeout=10)
+            relay.stop.set()
+            flusher.join(timeout=10)
         span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
     provider.force_flush()
+    out, err_text = "".join(out_lines), "".join(err_lines)
 
     # ── token extraction + result text (docs/08 §5) ──────────────────────────
     token_report = {"extraction_method": "unavailable", "model": harness}
@@ -240,9 +465,13 @@ def main() -> None:
             result_text = out[-4000:]
     elif harness == "grok-build":
         try:
-            j = json.loads(out)
-            result_text = j.get("text") or ""
-            sid = j.get("sessionId") or ""
+            parsed = grok_stream_parse(out)
+            if parsed is not None:
+                result_text, sid = parsed
+            else:  # EXTRA_ARGS overrode the format back to a plain json blob
+                j = json.loads(out)
+                result_text = j.get("text") or ""
+                sid = j.get("sessionId") or ""
             sig = None
             for p in pathlib.Path.home().glob(f".grok/sessions/*/{sid}/signals.json"):
                 sig = json.loads(p.read_text())
@@ -260,7 +489,10 @@ def main() -> None:
             result_text = out[-4000:]
     else:
         try:
-            j = json.loads(out)
+            # stream-json: the final result event carries the exact fields of
+            # the old --output-format json blob (verified live); blob fallback
+            # covers an EXTRA_ARGS format override
+            j = claude_result_event(out) or json.loads(out)
             usage = j.get("usage") or {}
             mu = j.get("modelUsage") or {}
             def _weight(v):  # dominant model = the one that cost/produced the most
@@ -282,7 +514,7 @@ def main() -> None:
             result_text = out[-4000:]
 
     if harness_exit != 0:
-        err = (proc.stderr or "")[-1500:]
+        err = err_text[-1500:]
         auth_fail = "authentication" in err.lower() or "unauthorized" in err.lower() \
             or "log in" in err.lower()
         code = 12 if auth_fail else 10
@@ -308,11 +540,21 @@ def main() -> None:
             "schema_version": 1, "outcome": "planned",
             "summary": result_text.strip().splitlines()[0][:300]}))
     result_path = WORKSPACE / "out" / "result.json"
+    # per-type legality (docs/03 §6). First-line defense only — the app enforces
+    # the same table authoritatively at finalization (missions.LEGAL_OUTCOMES).
+    legal_outcomes = {
+        "ONBOARD": {"plan_needed", "executed_trivially", "decomposed", "human_needed"},
+        "PLAN": {"planned"},
+        "EXECUTE": {"executed", "human_needed"},
+        "REVIEW": {"reviewed", "human_needed"},
+        "MAPPER": {"relations_mapped"},
+    }
+    legal = legal_outcomes.get(env.get("DEVCAKE_MISSION_TYPE", ""),
+                               set().union(*legal_outcomes.values()))
     try:
         result = json.loads(result_path.read_text())
-        assert result.get("outcome") in ("plan_needed", "executed_trivially",
-                                         "decomposed", "planned", "executed", "reviewed",
-                                         "human_needed", "relations_mapped")
+        assert result.get("outcome") in legal, \
+            f"outcome {result.get('outcome')!r} illegal for {env.get('DEVCAKE_MISSION_TYPE')}"
         assert isinstance(result.get("summary"), str)
     except Exception as e:
         send_artifacts({"result": None, "exit_code": 11,

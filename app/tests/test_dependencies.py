@@ -105,6 +105,43 @@ def test_off_snapshot_blocker_fetched_once_per_cycle(tmp_path):
     assert pmo.live_fetches == ["g1"]              # memoized within the cycle
 
 
+def test_find_cycles():
+    from devcake.pmo import find_cycles
+    assert find_cycles({"a": {"b"}, "b": set()}) == []
+    assert find_cycles({"a": {"a"}}) == [["a"]]                 # self-loop
+    two = find_cycles({"a": {"b"}, "b": {"a"}})
+    assert len(two) == 1 and set(two[0]) == {"a", "b"}
+    three = find_cycles({"a": {"b"}, "b": {"c"}, "c": {"a"}, "d": {"a"}})
+    assert len(three) == 1 and set(three[0]) == {"a", "b", "c"}
+    # edge pointing outside the snapshot cannot close a cycle
+    assert find_cycles({"a": {"ghost"}}) == []
+
+
+def test_gate_map_names_cycles_as_unsatisfiable(tmp_path):
+    a = m("ia", "T-1", blocked_by=["ib"])
+    b = m("ib", "T-2", blocked_by=["ia"])
+    mgr, dispatched = make_mgr(tmp_path, DepPMO())
+    gate = run_coro(mgr.gate_map([a, b]))
+    assert "dependency cycle" in gate["ia"] and "will never unblock" in gate["ia"]
+    assert "T-1" in gate["ib"] and "T-2" in gate["ib"]          # the loop is named
+    assert mgr.cycles and set(mgr.cycles[0]) == {"T-1", "T-2"}  # → /health banner
+    run_coro(mgr.schedule([a, b], gate))
+    assert dispatched == []
+
+
+def test_gate_map_is_always_fresh(tmp_path):
+    # the gate is a poll artifact: while intake is paused the loop still calls
+    # gate_map, so a relation deleted in Linear clears the reason next cycle
+    blocker = m("b1", "T-1")
+    blocked = m("b2", "T-2", blocked_by=["b1"])
+    mgr, _ = make_mgr(tmp_path, DepPMO())
+    gate = run_coro(mgr.gate_map([blocker, blocked]))
+    assert "b2" in gate
+    blocker_done = m("b1", "T-1", status="done")
+    gate2 = run_coro(mgr.gate_map([blocker_done, blocked]))
+    assert gate2 == {} and mgr.blocked_reasons == {}
+
+
 def test_dispatch_recheck_aborts_on_live_blocker(tmp_path):
     from devcake.pmo import MissionType
     live = m("b2", "T-2", blocked_by=["b1"])

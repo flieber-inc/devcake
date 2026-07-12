@@ -35,6 +35,52 @@ def test_inverse_relations_parse_into_blocked_by():
     assert mission.blocked_by == ["uuid-a"]
 
 
+def test_list_all_paginates_issue_pages():
+    seen_cursors = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        q, variables = body["query"], body.get("variables", {})
+        if "teams(" in q:
+            return httpx.Response(200, json={"data": {"teams": {"nodes": [
+                {"id": "tid", "key": "T", "states": {"nodes": []},
+                 "labels": {"nodes": []}}]}}})
+        if "issues(" in q:
+            after = variables.get("after")
+            seen_cursors.append(after)
+            if after is None:
+                return httpx.Response(200, json={"data": {"issues": {
+                    "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    "nodes": [ISSUE]}}})
+            return httpx.Response(200, json={"data": {"issues": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [{**ISSUE, "id": "uuid-c", "identifier": "T-3"}]}}})
+        return httpx.Response(200, json={"data": {"projects": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}}})
+
+    pmo = LinearAdapter("fake-key", transport=httpx.MockTransport(handler))
+    missions = run_coro(pmo.list_all("T"))
+    assert [m.key for m in missions] == ["T-2", "T-3"]   # both pages merged
+    assert seen_cursors == [None, "c1"]                  # cursor threaded through
+
+
+def test_full_relations_page_warns(caplog):
+    import logging
+
+    from devcake.linear import RELATIONS_PAGE
+    issue = {**ISSUE, "inverseRelations": {"nodes": [
+        {"type": "related", "issue": {"id": f"r{i}"}}
+        for i in range(RELATIONS_PAGE)]}}
+    mock = httpx.MockTransport(
+        lambda req: httpx.Response(200, json={"data": {"issue": issue}}))
+    pmo = LinearAdapter("fake-key", transport=mock)
+    with caplog.at_level(logging.WARNING, logger="devcake.linear"):
+        mission = run_coro(pmo.get_mission("uuid-b"))
+    assert mission.blocked_by == []                      # blocks evicted by the page
+    assert any("inverseRelations page is full" in r.message
+               for r in caplog.records)                  # …but never silently
+
+
 def test_create_relation_payload_and_duplicate_tolerance():
     seen = []
 

@@ -138,6 +138,9 @@ Persisted as one YAML file per Dev Type at `/data/config/dev_types/{name}.yaml` 
 |---|---|---|
 | `senior-dev` ("Senior Dev") | `claude-code` (Claude Fable) | ONBOARD, PLAN, REVIEW |
 | `main-dev` ("Main Dev") | `grok-build` (Grok 4.5) | EXECUTE |
+| `junior-dev` ("Junior Dev") | `claude-code` (`claude-haiku-4-5`) | Relations Mapper (default vehicle; assignable anywhere) |
+
+Default Dev Types are **re-seeded by name** whenever their YAML is missing (boot-time top-up) — customize a default by editing it, not deleting it; a deleted default returns on the next boot.
 
 The Mission-Type→Dev-Type assignment lives in `AppConfig.assignments` (§9); each Mission Type maps to exactly one Dev Type; a Dev Type may serve any number of Mission Types.
 
@@ -184,7 +187,7 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
 | `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §2): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
-| `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/none) | The Relations Mapper service (`03-mission-lifecycle.md` §4b): a periodic Dev run that proposes missing blocked-by relations. `dev_type` must name an existing Dev Type whenever `enabled`. |
+| `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`junior-dev`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
 
 ## 10. TokenReport
 

@@ -21,8 +21,10 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 | `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
 | `GET /api/v1/env-check?names=A,B` | Set/unset status (never values) of env vars in the app's environment — powers the Config tab's inline ✓/✗ on `*_env` fields |
 | `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns team name + label status |
-| `POST /api/v1/connections/forge/test` | Live probe: auth + repo fetch + default branch (+ reviewer token check) |
+| `POST /api/v1/connections/forge/test` | Live probe: auth + repo fetch + default branch (+ reviewer token check + branch-protection state) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
+| `GET /api/v1/runs/{run_id}/log?tail=N` | Plain-text condensed run output (from `/data/state/runlogs/`, relayed live by the Dev via `run.log` — `09-messaging.md` §3) |
+| `GET /api/v1/runs/{run_id}/log/stream` | SSE follow of the same log: replays the stored lines, then streams new ones until the run reaches a terminal state (`event: end`). Sends `X-Accel-Buffering: no` so nginx doesn't buffer; 15 s `: ping` heartbeats stay under nginx's 60 s read timeout |
 | `POST /api/v1/system/clear-runs` | Operator wipe: stop in-flight Devs, delete local run records + audit log, purge Dagu run history, delete OpenObserve log/trace streams. Config + secrets + PMO/forge untouched (`10-persistence.md` §5) |
 | `POST /api/v1/relations-mapper/run` | Manually dispatch a Relations Mapper run (`03-mission-lifecycle.md` §4b). Works regardless of the `enabled` toggle (which governs only the interval service); 422 without a valid `dev_type`, 409 while a mapper run is active |
 | `GET /api/v1/missions` | Debug: current derived Missions + types (M2, `16-roadmap.md`); includes `blocked_by` keys, and the reason string names open blockers |
@@ -32,8 +34,11 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 ## 2. Config tab — sections and fields
 
 ### Traffic control (added with adr/0007)
-- **Mission intake toggle** (`intake_paused`) — OFF pauses DevCake's intake: no new runs start (missions or mapper) while the operator rearranges missions in Linear. In-flight runs finish normally, results still post, and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. While paused, the header shows a persistent "⏸ Intake paused" banner (from `GET /health`, which reports `intake_paused`).
-- **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (existing Dev Types; required before enabling or running); (d) **ON/OFF toggle** for the scheduled service. Help text explains the mapper proposes `blocked by` relations that appear natively in Linear, where a human can delete any wrong one.
+- **Mission intake toggle** (`intake_paused`) — OFF pauses DevCake's intake: no new runs start (missions or mapper) while the operator rearranges missions in Linear. In-flight runs finish normally (and may still update labels/statuses as they complete — pause freezes dispatch, not consequence), and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. While paused, the header banner is **stateful**: it counts the in-flight runs still finishing ("N runs still finishing…") and flips to "all runs drained; Linear is all yours" at zero — no trip to the Executor tab needed. Save errors surface inline (the toggle never fails silently).
+- **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `junior-dev`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`: last 3 runs dead → periodic backs off; Run now still works and resets it). Deleting the mapper's Dev Type is refused with 409.
+
+### Header banners (from `GET /health`)
+Amber/blue strips under the header, all driven by the 10 s health poll: intake paused (stateful, above) · **dependency cycle detected** (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · **default branch unprotected** (a Dev's forge token could merge without review — `13-deployment.md` §8a) · **out-of-pipeline activity** (a mission's PR merged mid-pipeline — `15-errors-and-retries.md`) · circuit breaker tripped (pre-existing).
 
 **Field-level help (added 2026-07-11, after the token_env incident):** every
 field carries a hover `?` tooltip explaining what it means and what shape of
@@ -77,10 +82,12 @@ Save = `PUT` per section; optimistic UI with server errors inline.
 
 A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a **"Clear runs"** danger button, above a live run table from `GET /api/v1/runs` — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live at M6). No iframe.
 
+**Run terminal (popup):** clicking any run row opens a terminal-styled modal (dark chrome, monospace, blinking cursor while live) showing the run's condensed output. Live runs follow `GET /runs/{id}/log/stream` over `EventSource` (the server replays the stored log first, so no separate initial fetch); terminal runs fetch `GET /runs/{id}/log?tail=1000` once. The stream's `end` event prints `[process exited]` and stops the cursor. This is a simulacrum, not a TTY: the harness runs headless (no PTY) and the app deliberately holds no docker.sock (`13-deployment.md` §5), so the feed is the Dev's own `run.log` relay — the same condensed lines Dagu captures in its step log. Client caps at ~5000 lines; ESC / backdrop / ✕ close it.
+
 **Clear runs** opens a React confirmation dialog (never `window.confirm`) and on confirm calls `POST /api/v1/system/clear-runs`. That endpoint:
 
 1. Stops any in-flight Dagu runs (`POST /dags/dev-run/stop-all`).
-2. Deletes every local Run file under `/data/state/runs/` and truncates `events.jsonl` (attempt counters and give-up watermarks reset — INV-1 / `10-persistence.md` §5).
+2. Deletes every local Run file under `/data/state/runs/`, every run log under `/data/state/runlogs/` (open SSE followers get the end sentinel), and truncates `events.jsonl` (attempt counters and give-up watermarks reset — INV-1 / `10-persistence.md` §5).
 3. Deletes every Dagu `dev-run` history record (`DELETE /dag-runs/dev-run/{id}`, paginated list).
 4. Deletes OpenObserve log/trace streams (they recreate on next ingest; dashboards stay).
 5. Trims the Redis ingress stream, drops leftover reply streams and per-run ACL users.

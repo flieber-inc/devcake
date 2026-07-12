@@ -108,6 +108,7 @@ Exit criteria — **all verified 2026-07-11. M7 complete — v0 SHIPPED.**
 ## Post-v0 shipped
 
 - **2026-07-12 — Traffic control (`adr/0007`):** Mission ordering via native `blocked by` relations (ONBOARD decomposition declares `blocked_by`; scheduler gate honors any relation, human-added included) · `DEVCAKE-NEEDS-HUMAN` hand-off label + `human_needed` outcome (tenth label) · intake pause toggle (`intake_paused` + admin Traffic control section) · comment-provenance sentinel `` `devcake:v1` `` with 🧑/🤖 markers in `ACTIVITY.md` · Relations Mapper service (`MAPPER` run kind: interval + manual trigger + Dev Type combobox + on/off in the admin panel). Requires a dev-image rebuild (new legal outcomes in the entrypoint).
+- **2026-07-12 — Traffic-control hardening (`adr/0007` addendum), same day, post-adversarial-review:** app-side `LEGAL_OUTCOMES` trust boundary · branch-protection verification + out-of-pipeline-merge tripwire (docs/13 §8a, docs/14 §2) · paginated Linear reads + relations-page warnings · `gate_map` as an always-fresh poll artifact + dependency-cycle detection with header banner · hand-off evidence requirement + escalating warnings (never auto-park) · seeded `junior-dev` + `MapperService` (lock, post-success watermark, store-derived degradation) · quote-aware sentinel classification · project-update baton passes (verified live) · stateful pause banner with in-flight count · config deep-merge + mapper Dev Type delete guard.
 
 ## Post-v0 backlog
 

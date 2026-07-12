@@ -98,15 +98,19 @@ The Dev must: check out the PR branch in its clone; diff against the plan; hunt 
 
 ## 4a. Human hand-off (`human_needed`)
 
-Any ONBOARD, EXECUTE, or REVIEW run may end with `outcome: "human_needed"` instead of its normal outcome when the Dev hits an obstacle **only a human can clear** — a missing permission or credential scope, an external account/service decision, anything outside the repository. The playbooks instruct the Dev to stop rather than improvise a workaround, and to state in `summary` precisely what a human must do. (PLAN cannot emit this: plan mode is read-only and the entrypoint synthesizes its `result.json`.)
+Any ONBOARD, EXECUTE, or REVIEW run may end with `outcome: "human_needed"` instead of its normal outcome when the Dev hits an obstacle **only a human can clear** — a missing permission or credential scope, an external account/service decision, anything outside the repository. The playbooks instruct the Dev to stop rather than improvise a workaround, and — **evidence requirement** — to first actually attempt the blocked operation and quote its exact error/output in `summary`: a hand-off is expensive, and one without evidence wastes a human's time. (PLAN cannot emit this: plan mode is read-only and the entrypoint synthesizes its `result.json`.)
 
-**Finalization:** transcript + token report → add `DEVCAKE-NEEDS-HUMAN` (the stage label stays, so work resumes at the same step) → post a baton-pass comment quoting the summary and the resume instruction. If the run was an ONBOARD (no stage label at dispatch) the status is restored to `backlog` — otherwise removing the label later would land on derivation row 9 and strand the Mission.
+**Finalization:** transcript + token report → add `DEVCAKE-NEEDS-HUMAN` (the stage label stays, so work resumes at the same step) → post a baton-pass comment quoting the summary and the resume instruction. If the run was an ONBOARD (no stage label at dispatch) the status is restored to `backlog` — otherwise removing the label later would land on derivation row 9 and strand the Mission. For **project-kind** missions (no issue-style comments API) the baton goes out as a **project update** — Linear's project-native feed, sentinel-signed (`05-pmo-adapter.md` §6; verified live 2026-07-12).
+
+**Loop guardrail (warnings only — never auto-park; founder decision 2026-07-12):** the app counts prior `human_needed` runs for the same (mission, stage) from the run store; from the 2nd hand-off on, the baton-pass comment carries an escalating header — "Hand-off #N on this step … add `DEVCAKE-SKIP` to stop DevCake on it." DevCake never parks on its own; the human always decides.
 
 **Semantics vs neighbors:** `DEVCAKE-FAILED` = DevCake errored out after `max_attempts` (involuntary); `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = a clean, deliberate hand-off — the run `finished`, so it **never counts toward `max_attempts`**. Recovery: the human resolves the obstacle and removes the label; the Mission re-derives its stage on the next poll. See `15-errors-and-retries.md`.
 
 ## 4b. Relations Mapper (`MAPPER` runs)
 
-A **team-scoped run kind** (not a Mission Type — it has no host Mission and no labels) whose only job is proposing missing blocked-by relations across the team's open Missions. Configured under `AppConfig.relations_mapper` (`02-domain-model.md` §9): an on/off interval service plus a manual "Run now" trigger in the admin panel (`11-admin-panel.md` §2).
+A **team-scoped run kind** (not a Mission Type — it has no host Mission and no labels) whose only job is proposing missing blocked-by relations across the team's open Missions. Configured under `AppConfig.relations_mapper` (`02-domain-model.md` §9): **manual-only by default** (the admin "Run now" button) with an opt-in periodic service. Its default vehicle is the seeded **junior-dev** Dev Type (claude-code pinned to a cheap model) — ordering judgment from titles and description heads doesn't need a heavyweight; the repo clone is kept so a future prompt can let it inspect code for dependency evidence.
+
+**Cadence & degradation (`MapperService`):** one lock serializes the manual and periodic paths (no double dispatch); the interval watermark advances only after a successful dispatch (a transient executor error costs one poll cycle, not a full interval); and when the 3 most recent MAPPER runs all died, the periodic service **backs off** — surfaced as `mapper_degraded` in `/health` and on the admin card — while "Run now" stays available and a successful run clears the condition (store-derived, restart-safe).
 
 - **Dispatch:** the app inlines every open, adopted, issue-kind Mission into the prompt — `key · status · existing blocker keys · title · first ~300 chars of description` (capped at 200 missions; truncation logged). No PMO writes at dispatch. Skipped while `intake_paused`; max one MAPPER run in flight; counts toward `global_max`.
 - **Output:** `result.json` `{"outcome": "relations_mapped", "edges": [{"blocker": "<key>", "blocked": "<key>"}, …], "summary": "…"}` — an empty `edges` list is valid and common. The playbook demands conservatism: propose only edges where one Mission clearly consumes another's output; never invent keys.
@@ -145,11 +149,19 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice.
 }
 ```
 
-`human_needed` (§4a) is legal from ONBOARD, EXECUTE, and REVIEW runs; `relations_mapped` only from MAPPER runs.
-
 A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
 
-Validation is strict (pydantic): outcome must be legal for the run's `DEVCAKE_MISSION_TYPE` (e.g. `planned` from an EXECUTE run ⇒ exit 11 / `DEV_BAD_OUTPUT`).
+**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`missions.LEGAL_OUTCOMES`) — an illegal outcome is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on; the Dev entrypoint mirrors the same table as first-line defense (exit 11), but the app check is the invariant (old images may run):
+
+| Run type | Legal outcomes |
+|---|---|
+| ONBOARD | `plan_needed` · `executed_trivially` · `decomposed` · `human_needed` |
+| PLAN | `planned` |
+| EXECUTE | `executed` · `human_needed` |
+| REVIEW | `reviewed` · `human_needed` |
+| MAPPER | `relations_mapped` |
+
+A **structurally invalid payload** behind a legal outcome (empty decomposition, forward/self `blocked_by` index) is different: it fails the run as `DEV_BAD_OUTPUT` — a counted attempt that retries naturally (`15-errors-and-retries.md` §2) — because a formatting slip deserves a retry where a forged outcome does not.
 
 ## 7. Canonical prompts (v0)
 

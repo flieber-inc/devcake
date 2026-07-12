@@ -44,8 +44,31 @@ export default function App() {
       </header>
       {health.intake_paused && (
         <div className="border-b border-sky-300 bg-sky-50 px-6 py-2 text-sm text-sky-900 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-200">
-          ⏸ Intake paused — no new runs will start; in-flight runs finish normally.
-          Resume from the Config tab (Traffic control).
+          ⏸ Intake paused —{" "}
+          {(health.active_runs || 0) > 0
+            ? `${health.active_runs} run${health.active_runs > 1 ? "s" : ""} still finishing (they may still update labels/statuses as they complete)`
+            : "all runs drained; Linear is all yours"}
+          . Resume from the Config tab (Traffic control).
+        </div>
+      )}
+      {(health.dependency_cycles || []).length > 0 && (
+        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+          ⚠️ Dependency cycle detected:{" "}
+          {health.dependency_cycles.map((c) => [...c, c[0]].join(" → ")).join(" · ")} —
+          these missions will never start until a relation is deleted in Linear.
+        </div>
+      )}
+      {health.forge_protection && health.forge_protection.protected === false && (
+        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+          ⚠️ The repository's default branch is unprotected — a Dev's forge token could
+          merge to it without review. Enable branch protection (require PRs + 1 approval);
+          DevCake's own pipeline keeps working.
+        </div>
+      )}
+      {Object.keys(health.anomalies || {}).length > 0 && (
+        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+          ⚠️ Out-of-pipeline activity: {Object.values(health.anomalies).join(" · ")} —
+          see the mission's activity feed.
         </div>
       )}
       {breakers.length > 0 && (

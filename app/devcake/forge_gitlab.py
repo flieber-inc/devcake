@@ -61,6 +61,19 @@ class GitLabForge:
                 "merged": mr["state"] == "merged", "url": mr["web_url"],
                 "number": mr["iid"]}
 
+    async def default_branch_protection(self, branch: str = "main") -> Optional[dict]:
+        """Mirror of GitHubForge.default_branch_protection (docs/14). GitLab:
+        a 404 on /protected_branches/{branch} means unprotected."""
+        try:
+            await self._req("GET", f"/protected_branches/{quote(branch, safe='')}")
+            return {"protected": True, "requires_reviews": None}
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return {"protected": False, "requires_reviews": None}
+            return None
+        except Exception:
+            return None
+
     @staticmethod
     def approval_footer(pr_url: str) -> str:
         return ("\n\n---\nTo approve and merge this MR yourself:\n"

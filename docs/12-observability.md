@@ -72,3 +72,30 @@ Token/cost numbers are emitted **twice by design**: human-facing in the activity
 3. **Throughput** — active runs vs caps, poll duration, queue depth (candidates not dispatched).
 
 The admin panel's Logs tab deep-links to these (`11-admin-panel.md` §5).
+
+## 6. Run-failure log stream (`run_failures`) — the executor's dying words
+
+Discovered live (2026-07-11, first real-world mission): when a Dev container
+dies before it can emit telemetry — bad credentials, clone failure, crashed
+entrypoint — **nothing reaches OpenObserve**. Fluent-bit ships only the
+dagu/redis containers' own stdout (`13-deployment.md` §7); Dev containers are
+spawned via docker.sock with the default logging driver and removed on exit
+(`keep_container: false`). The only surviving post-mortem is the Dagu run
+record, whose per-step `error` field embeds a stderr tail.
+
+So every kill (`watchdog.kill`: timeout, dead-before-start, stale heartbeat,
+reconciliation-orphaned) ships one JSON record to the OO log stream
+`run_failures` before finalizing:
+
+| field | content |
+|---|---|
+| `run_id`, `mission_key`, `mission_type`, `dev_type`, `seq` | run identity |
+| `outcome` | `failed` / `timed_out` / `orphaned` |
+| `reason` | the watchdog's kill reason |
+| `trace_id` | from the run's traceparent — joins with the trace in OO |
+| `detail` | Dagu step errors + stderr tail, **redacted** (`14-security.md` §5) |
+
+Shipping is best-effort (`push_oo_log` never raises): losing a log record must
+not break the kill path. Dev-reported failures (`outcome: failure` in
+`run.artifacts`) are NOT shipped here — they already post a full transcript to
+the PMO and their spans reach OO normally.

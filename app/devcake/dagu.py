@@ -18,6 +18,22 @@ class DuplicateRun(Exception):
     """Dagu returned 409 already_exists for this dagRunId."""
 
 
+def extract_node_errors(status: Optional[dict]) -> list[dict[str, str]]:
+    """Per-step failure details from a dag-run record. Dagu embeds the container's
+    stderr tail in each failed node's `error` field, and the record outlives the
+    container (keep_container: false) — this is the only post-mortem source."""
+    detail = (status or {}).get("dagRunDetails") or {}
+    out = []
+    for node in detail.get("nodes") or []:
+        err = node.get("error")
+        if not err:
+            continue
+        out.append({"step": str((node.get("step") or {}).get("name", "")),
+                    "status": str(node.get("statusLabel", node.get("status", ""))),
+                    "error": str(err)})
+    return out
+
+
 class DaguExecutor:
     def __init__(self, base_url: str = DAGU_URL):
         self.base = base_url
@@ -46,6 +62,10 @@ class DaguExecutor:
                 return None
             resp.raise_for_status()
             return resp.json()
+
+    async def node_errors(self, dag_run_id: str) -> list[dict[str, str]]:
+        """Step errors (with stderr tails) for one run; [] when none/unknown."""
+        return extract_node_errors(await self.status(dag_run_id))
 
     async def stop_all(self) -> list[str]:
         """Stop every in-flight run of the dev-run DAG. Returns any error strings."""

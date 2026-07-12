@@ -26,6 +26,32 @@ HELLO_IMAGE = os.environ.get("DEVCAKE_HELLO_IMAGE", "devcake/dev-hello:latest")
 DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("DEVCAKE_DEV_TIMEOUT_MINUTES", "120")) * 60
 
 
+RUN_FAILURES_STREAM = "run_failures"
+
+
+def failure_record(run: "Run", outcome: str, reason: str,
+                   errors: list[dict[str, str]]) -> dict:
+    """OO log record for a run the executor lost (docs/12 §6). `detail` carries
+    the Dev container's dying words (Dagu step errors + stderr tails), redacted
+    like everything else that leaves the app."""
+    from .security import redact
+    detail = "\n\n".join(f"[{e['step']} {e['status']}] {e['error']}"
+                         for e in errors) or "(no step error recorded in dagu)"
+    trace_id = run.traceparent.split("-")[1] if run.traceparent else ""
+    return {
+        "level": "error",
+        "run_id": run.run_id,
+        "mission_key": run.mission_key,
+        "mission_type": run.mission_type,
+        "dev_type": run.dev_type,
+        "seq": run.seq,
+        "outcome": outcome,
+        "reason": reason,
+        "trace_id": trace_id,
+        "detail": redact(detail),
+    }
+
+
 def _oo_basic_auth() -> str:
     email = os.environ.get("OO_ROOT_EMAIL", "")
     password = os.environ.get("OO_ROOT_PASSWORD", "")
@@ -195,8 +221,25 @@ class RunManager:
             span.set_attribute("devcake.kill.reason", reason)
             await self._kill_inner(run, new_state, reason)
 
+    async def _ship_failure(self, run: Run, new_state: str, reason: str) -> None:
+        """The executor's failure detail must land where everything else does:
+        Dagu keeps the Dev's stderr tail in its run record but nothing ships it
+        to OpenObserve — fluent-bit only sees the dagu/redis containers' own
+        stdout, and Dev containers are removed on exit (docs/12 §6)."""
+        from .telemetry import push_oo_log
+        try:
+            errors = await self.executor.node_errors(run.run_id)
+        except Exception:
+            log.warning("no dagu node errors for %s", run.run_id, exc_info=True)
+            errors = []
+        record = failure_record(run, new_state, reason, errors)
+        await push_oo_log(RUN_FAILURES_STREAM, record)
+        log.warning("run %s → %s (%s): %s", run.run_id, new_state, reason,
+                    record["detail"][:500])
+
     async def _kill_inner(self, run: Run, new_state: str, reason: str) -> None:
         await self.executor.stop(run.run_id)
+        await self._ship_failure(run, new_state, reason)
         await self.messaging.delete_run_user(run.run_id)
         await self.messaging.delete_reply_stream(run.run_id)
         run.state = new_state  # type: ignore[assignment]

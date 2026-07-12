@@ -27,6 +27,23 @@ def _basic_auth() -> str:
     return base64.b64encode(f"{email}:{password}".encode()).decode()
 
 
+async def push_oo_log(stream: str, record: dict) -> bool:
+    """Ship one JSON record to an OpenObserve log stream (docs/12 §6). Never
+    raises: shipping runs inside kill/finalize paths that must not break."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{OO_URL}/api/{OO_ORG}/{stream}/_json",
+                headers={"Authorization": f"Basic {_basic_auth()}"},
+                json=[record])
+            resp.raise_for_status()
+        return True
+    except Exception:
+        log.warning("could not ship record to OO stream %s", stream, exc_info=True)
+        return False
+
+
 def setup_telemetry() -> trace.Tracer:
     provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
     exporter = OTLPSpanExporter(

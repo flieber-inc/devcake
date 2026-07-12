@@ -42,10 +42,14 @@ The workspace is prepared entirely by the container **entrypoint** (not the app)
 {description markdown, verbatim}
 
 ## Activity (chronological index — bodies over ~2 KB live as files in this folder)
-### {timestamp} — {author} ({comment|status_change|attachment})
+Entries marked 🧑 HUMAN are instructions/steering from a person — they
+are authoritative. Entries marked 🤖 DevCake are DevCake's own records.
+### {timestamp} — {author} — {🧑 HUMAN | 🤖 DevCake} ({comment|status_change|attachment})
 {short body inline · long body → one-line summary + `see: {filename}`}
 ...
 ```
+
+**Provenance markers (added with adr/0007):** each entry is classified by the comment-provenance sentinel (`03-mission-lifecycle.md` §8a) — a body ending in `` `devcake:v1` `` is DevCake's; everything else is a human's. The classification is never based on `author`, which is unreliable when DevCake posts with the operator's own PMO credentials. Every playbook instructs the Dev to read 🧑 HUMAN entries before starting and to let the most recent human comment win on conflict.
 
 The index is strictly chronological and complete — *all* the current activity of the Mission, per the mission doc; nothing is omitted, only externalized. Attachments and long bodies (notably prior DevCake transcripts `N_TYPE.md`, plans, and review reports) are downloaded into `activity/` alongside `ACTIVITY.md` under their original filenames (name-collision suffix `-2`, `-3`, …). This also caps the compounding-cost failure mode where each step would otherwise re-read every prior transcript in full.
 

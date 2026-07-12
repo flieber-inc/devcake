@@ -112,6 +112,17 @@ function Button({ children, kind = "primary", ...props }) {
   );
 }
 
+function Toggle({ on, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`h-6 w-11 rounded-full p-0.5 transition ${on ? "bg-accent" : "bg-neutral-300 dark:bg-neutral-700"}`}
+    >
+      <span className={`block h-5 w-5 rounded-full bg-white transition ${on ? "translate-x-5" : ""}`} />
+    </button>
+  );
+}
+
 function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCancel }) {
   if (!open) return null;
   return (
@@ -286,6 +297,7 @@ export default function ConfigTab() {
   const [oauthFor, setOauthFor] = useState(null);
   const [testResult, setTestResult] = useState({});
   const [msg, setMsg] = useState("");
+  const [mapperMsg, setMapperMsg] = useState("");
 
   const reload = () =>
     Promise.all([get("/config"), get("/dev-types"), get("/assignments")]).then(
@@ -335,9 +347,83 @@ export default function ConfigTab() {
     setAssignments(await send("PUT", "/assignments", next));
   };
 
+  const runMapper = async () => {
+    setMapperMsg("Starting…");
+    try {
+      const r = await send("POST", "/relations-mapper/run");
+      setMapperMsg(`✓ dispatched ${r.run_id} — watch it on the Executor tab`);
+    } catch (e) {
+      setMapperMsg(`✗ ${String(e.message || e)}`);
+    }
+  };
+  const rm = cfg.relations_mapper || { enabled: false, interval_minutes: 60, dev_type: null };
+
   return (
     <div className="space-y-6">
       {msg && <p className="text-sm text-green-700 dark:text-green-400">{msg}</p>}
+
+      <Section title="Traffic control">
+        <Field label="Mission intake"
+          help="OFF pauses DevCake's intake: no new runs start while you rearrange missions in Linear. In-flight runs finish normally, results are still posted, and human PR merges are still swept. Flip back ON to resume.">
+          <div className="flex items-center gap-3 text-sm">
+            <Toggle on={!cfg.intake_paused}
+              onClick={() => putCfg({ intake_paused: !cfg.intake_paused })} />
+            <span>
+              {cfg.intake_paused
+                ? "⏸ PAUSED — no new runs will start; in-flight runs finish normally"
+                : "ON — DevCake dispatches new runs as missions become ready"}
+            </span>
+          </div>
+        </Field>
+        <div className="space-y-3 rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold">
+              Relations Mapper
+              <Help text="A Dev tasked strictly with mapping missing 'blocked by' relations between existing missions (it reads every open mission's title and description head). Proposed relations are validated by the app and appear in Linear; delete a relation there to undo it." />
+            </span>
+            <div className="flex items-center gap-2">
+              <Button kind="ghost" onClick={runMapper} disabled={!rm.dev_type}>
+                Run now
+              </Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Dev Type"
+              help="Which Dev Type runs the mapper. Judgment matters more than speed here — a senior/planner type is a good fit.">
+              <select className={inputCls} value={rm.dev_type || ""}
+                onChange={(e) => putCfg({ relations_mapper: { ...rm, dev_type: e.target.value || null, ...(e.target.value ? {} : { enabled: false }) } })}>
+                <option value="">(none)</option>
+                {devTypes.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Interval (minutes)"
+              help="How often the mapper service runs when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
+              <input type="number" min="1" className={inputCls} value={rm.interval_minutes}
+                onChange={(e) => setCfg({ ...cfg, relations_mapper: { ...rm, interval_minutes: Number(e.target.value) } })}
+                onBlur={(e) => putCfg({ relations_mapper: { ...rm, interval_minutes: Math.max(1, Number(e.target.value) || 60) } })} />
+            </Field>
+            <Field label="Scheduled service">
+              <div className="flex h-9 items-center gap-3 text-sm">
+                <Toggle on={rm.enabled}
+                  onClick={() => {
+                    if (!rm.enabled && !rm.dev_type) {
+                      setMapperMsg("✗ pick a Dev Type first");
+                      return;
+                    }
+                    putCfg({ relations_mapper: { ...rm, enabled: !rm.enabled } })
+                      .catch((e) => setMapperMsg(`✗ ${String(e.message || e)}`));
+                  }} />
+                <span>{rm.enabled ? "ON — runs on the interval" : "OFF — manual only"}</span>
+              </div>
+            </Field>
+          </div>
+          {mapperMsg && (
+            <p className={`text-sm ${mapperMsg.startsWith("✗") ? "text-red-600" : "text-green-700 dark:text-green-400"}`}>
+              {mapperMsg}
+            </p>
+          )}
+        </div>
+      </Section>
 
       <Section title="PMO connection (Linear)">
         <div className="grid grid-cols-3 gap-3">
@@ -361,7 +447,7 @@ export default function ConfigTab() {
           {testResult.pmo && (
             <span className={`text-sm ${testResult.pmo.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
               {testResult.pmo.ok
-                ? `✓ team ${testResult.pmo.team}: ${testResult.pmo.labels}/9 labels, ${testResult.pmo.missions_visible} items visible`
+                ? `✓ team ${testResult.pmo.team}: ${testResult.pmo.labels}/10 labels, ${testResult.pmo.missions_visible} items visible`
                 : `✗ ${testResult.pmo.error}`}
             </span>
           )}

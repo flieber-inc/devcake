@@ -42,10 +42,22 @@ Retries of Dev work are never in-place: a failed attempt ends the container; the
 
 After `max_attempts` (default 3) counted failures of the **same step** (mission + type):
 
-1. Add the `DEVCAKE-FAILED` label (one of the nine managed labels, `02-domain-model.md` §5).
+1. Add the `DEVCAKE-FAILED` label (one of the ten managed labels, `02-domain-model.md` §5).
 2. Post a comment: last error class + message, attempt count, and the OpenObserve trace link for the final attempt.
 3. Stop scheduling the Mission (derivation row 8).
 4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event count toward the next give-up (advisory local state — `10-persistence.md` §5).
+
+## 3a. `DEVCAKE-NEEDS-HUMAN` semantics (not an error class)
+
+The `human_needed` outcome (`03-mission-lifecycle.md` §4a) is a **successful run** — the Dev deliberately reported that only a human can clear an external obstacle. Consequences:
+
+1. The run finishes in state `finished` and **never counts toward `max_attempts`** — no watermark or counter reset is needed.
+2. The app adds `DEVCAKE-NEEDS-HUMAN` (derivation row 11 halts scheduling) and posts a baton-pass comment stating precisely what the human must do; an ONBOARD hand-off also restores the status to `backlog`.
+3. **Recovery is human:** resolve the obstacle, remove the label → the Mission re-derives its stage next poll and resumes where it left off.
+
+Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = clean hand-off.
+
+**Blocked-on-a-dead-blocker deadlock:** a Mission whose blocker carries `DEVCAKE-FAILED`/`DEVCAKE-SKIP` stays parked indefinitely (the prerequisite will not complete autonomously). This is surfaced in `/api/v1/missions` reason strings (`04-orchestrator.md` §2); recovery is human — fix the blocker or delete the relation.
 
 ## 4. `DEV_AUTH` circuit breaker
 
@@ -60,6 +72,7 @@ Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to
 OpenObserve scheduled alerts, provisioned at M7:
 
 1. any `DEVCAKE-FAILED` event (`devcake.runs.total{outcome="devcake_failed"}` > 0, 5-min window);
+1a. any `devcake_needs_human` event — a Dev is waiting on a human action (post-v0 provisioning, same channel);
 2. tripped `DEV_AUTH` breaker;
 3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min;
 4. poison message;

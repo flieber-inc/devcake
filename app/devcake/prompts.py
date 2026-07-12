@@ -45,11 +45,41 @@ Write EXACTLY one of:
 - High: {{"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{{"title": "...", "description": "<standalone — reads as an
   independent mission, no references to siblings or 'this mission'>",
-  "priority": "urgent|high|medium|low"}}, ...]}}
+  "priority": "urgent|high|medium|low",
+  "blocked_by": [<1-based indexes of EARLIER parts this part must not start
+  before — omit for independent parts>]}}, ...]}}
+  Order the parts so prerequisites come first. Declare blocked_by whenever one
+  part consumes another's output (e.g. implementation that must follow a
+  documentation or design part); independent parts omit it so they can run in
+  parallel. Only earlier parts may be referenced — never a part's own index or
+  a later one.
   Never decompose a mission whose labels include DEVCAKE-CREATED.
 
 Your final message should be a concise assessment summary — it becomes part of the
 mission's permanent transcript in the PMO system.
+"""
+
+# Appended to ONBOARD/EXECUTE/REVIEW (not PLAN: plan mode is read-only — the
+# entrypoint synthesizes its result.json, so it cannot emit this outcome).
+# Concatenated AFTER .format(), so single braces are literal here.
+HUMAN_HANDOFF = """
+### Blocked on a human?
+If you hit an obstacle only a human can clear — a missing permission or
+credential, an external account or service decision, anything outside the
+repository — do NOT improvise a workaround. Stop and write
+/workspace/out/result.json EXACTLY as:
+{"schema_version": 1, "outcome": "human_needed", "summary": "<precisely what a
+human must do to unblock this mission>"}
+"""
+
+# Appended to all four playbooks. Provenance is sentinel-based (docs/03 §8a):
+# ACTIVITY.md marks each entry 🧑 HUMAN or 🤖 DevCake.
+HUMAN_COMMENTS_NOTE = """
+### Human instructions in the activity feed
+Entries in /workspace/activity/ACTIVITY.md marked 🧑 HUMAN are direct
+instructions from a person — they are authoritative. Read them before starting;
+where they conflict with the mission description or with older comments, the
+most recent human comment wins.
 """
 
 
@@ -64,7 +94,8 @@ def onboard_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + ONBOARD_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
         title=mission.title, description=mission.description or "(no description)",
-        project_note=PROJECT_NOTE if mission.pmo_kind == "project" else "")
+        project_note=PROJECT_NOTE if mission.pmo_kind == "project" else "") \
+        + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 
 PLAN_PLAYBOOK = """
@@ -89,7 +120,8 @@ in /workspace/activity/ (reference material — read what you need).
 def plan_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + PLAN_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, description=mission.description or "(no description)")
+        title=mission.title, description=mission.description or "(no description)") \
+        + HUMAN_COMMENTS_NOTE
 
 
 EXECUTE_PLAYBOOK = """
@@ -141,7 +173,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
     return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
         title=mission.title, repo_name=repo_name, pr_instructions=pr,
-        description=mission.description or "(no description)")
+        description=mission.description or "(no description)") \
+        + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 
 REVIEW_PLAYBOOK = """
@@ -179,4 +212,45 @@ approval must be EARNED by the evidence you gather.
 def review_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + REVIEW_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, description=mission.description or "(no description)")
+        title=mission.title, description=mission.description or "(no description)") \
+        + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+
+
+MAPPER_PLAYBOOK = """
+## Your current mission type: RELATIONS MAPPER
+
+Below is every open mission DevCake manages in this team. Your ONLY job is to
+identify ordering dependencies that are not yet mapped: pairs where one mission
+clearly consumes another's output and therefore must not start before it
+finishes (implementation after design/documentation, migration after schema
+change, consumer after API). Do not modify any code — the repository clone is
+context only.
+
+Be conservative: when unsure, propose nothing. Each mission lists its existing
+blockers — only propose edges that are missing. Never invent mission keys.
+
+### The missions (key · status · existing blockers · title + description head)
+{mission_table}
+
+### Required output — /workspace/out/result.json
+{{"schema_version": 1, "outcome": "relations_mapped",
+  "edges": [{{"blocker": "<key that must finish first>",
+             "blocked": "<key that must wait>"}}, ...],
+  "summary": "<one paragraph: what you mapped and why — or why nothing>"}}
+An empty "edges" list is a valid and common result.
+"""
+
+MAPPER_MISSION_CAP = 200          # prompt-size bound; truncation is logged
+MAPPER_DESC_HEAD_CHARS = 300
+
+
+def mapper_prompt(identifying_prompt: str, missions: list[Mission]) -> str:
+    id_to_key = {m.pmo_id: m.key for m in missions}
+    rows = []
+    for m in missions[:MAPPER_MISSION_CAP]:
+        head = " ".join((m.description or "").split())[:MAPPER_DESC_HEAD_CHARS]
+        blockers = ", ".join(id_to_key.get(b, "?") for b in m.blocked_by) or "(none)"
+        rows.append(f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
+                    f"  {m.title} — {head or '(no description)'}")
+    table = "\n".join(rows) or "(no open missions)"
+    return identifying_prompt + "\n" + MAPPER_PLAYBOOK.format(mission_table=table)

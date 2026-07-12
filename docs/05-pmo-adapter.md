@@ -19,6 +19,8 @@ class PMOPort(Protocol):
     async def set_status(self, pmo_id: str, status: NormalizedStatus) -> None: ...
     async def swap_labels(self, pmo_id: str, remove: set[str], add: set[str]) -> None: ...
         # single call so each adapter implements the closest-to-atomic native operation
+    async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
+        # native "blocker blocks blocked" relation (adr/0007); duplicate-tolerant
     async def create_mission(self, team_ref: str, draft: MissionDraft) -> Mission: ...
     async def cancel_mission(self, pmo_id: str) -> None: ...
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
@@ -34,6 +36,7 @@ class PMOCapabilities:
     project_labels_supported: bool    # Linear: True (project labels since 2025-06)
     attachment_max_bytes: int
     native_label_swap_atomic: bool    # Linear: True via issueUpdate(labelIds)
+    relations_supported: bool         # Linear: True (issue relations; issue-only)
 ```
 
 ## 2. Linear adapter — connection
@@ -65,7 +68,9 @@ Issue priority (Linear numeric):
 | 3 (and 0 = none) | `medium` |
 | 4 | `low` |
 
-Projects: Linear Project statuses come in five fixed categories — Backlog, Planned, In Progress, Completed, Canceled — mapped `Backlog/Planned→backlog`, `In Progress→in_progress`, `Completed→done`, `Canceled→canceled`. Project priority uses the same five-level scale and maps identically. Project labels are first-class in Linear (shipped 2025-06) — the same nine managed labels are ensured for projects.
+Projects: Linear Project statuses come in five fixed categories — Backlog, Planned, In Progress, Completed, Canceled — mapped `Backlog/Planned→backlog`, `In Progress→in_progress`, `Completed→done`, `Canceled→canceled`. Project priority uses the same five-level scale and maps identically. Project labels are first-class in Linear (shipped 2025-06) — the same ten managed labels are ensured for projects.
+
+**Blocked-by relations (adr/0007):** issue queries (`list_all`, `get_mission`) additionally fetch `inverseRelations(first: 10) { nodes { type issue { id } } }`; nodes of type `blocks` map to `Mission.blocked_by` (on issue B, `inverseRelations` holds relations where B is `relatedIssue`, so each node's `issue` is a blocker — direction to be verified once live). `create_relation` → `issueRelationCreate(input: {issueId: blocker, relatedIssueId: blocked, type: blocks})`, tolerating the duplicate-relation error so decomposition resume stays idempotent. Relations are **issue-only** in Linear — projects always normalize with `blocked_by = []`. The enlarged `list_all` (issues 100 × inverseRelations 10) must be checked once against the ~10k complexity budget (§5).
 
 ## 4. Comments, transcripts, and attachments
 
@@ -78,13 +83,13 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 ## 5. Label bootstrap
 
-At startup (`04-orchestrator.md` §6) the app calls `ensure_labels(team, {the nine managed labels})` — `02-domain-model.md` §5. Missing labels are created via `issueLabelCreate` scoped to the team (issue labels) and the project-label equivalent. Existing labels are matched case-insensitively but always written in canonical uppercase form.
+At startup (`04-orchestrator.md` §6) the app calls `ensure_labels(team, {the ten managed labels})` — `02-domain-model.md` §5. Missing labels are created via `issueLabelCreate` scoped to the team (issue labels) and the project-label equivalent. Existing labels are matched case-insensitively but always written in canonical uppercase form.
 
 `swap_labels` is implemented as a single `issueUpdate(labelIds: [...])` computed from the live label set (read-modify-write with the removal and addition applied together), which is the closest-to-atomic operation Linear offers; `capabilities().native_label_swap_atomic = True`.
 
 **Verified at M5:** Linear caps project `description` at **255 chars** — the long-form body lives in `content` (the adapter reads `content or description`); projects have **no issue-style comments API**, so project-run transcripts/token reports are recorded in the audit log + OpenObserve only (the substance lands on the child issues anyway, per ADR-0006).
 
-**Verified at M2:** (a) Linear **project labels are a separate, workspace-level entity** (`projectLabels` / `projectLabelCreate`) — `ensure_labels` creates the nine managed labels in *both* namespaces, and `ProjectUpdateInput.labelIds` takes project-label ids, not issue-label ids; (b) Linear enforces a **per-query complexity budget** (~10k) — queries stay small and split rather than nesting team+issues+projects in one request.
+**Verified at M2:** (a) Linear **project labels are a separate, workspace-level entity** (`projectLabels` / `projectLabelCreate`) — `ensure_labels` creates the ten managed labels in *both* namespaces, and `ProjectUpdateInput.labelIds` takes project-label ids, not issue-label ids; (b) Linear enforces a **per-query complexity budget** (~10k) — queries stay small and split rather than nesting team+issues+projects in one request.
 
 ## 6. Projects as Missions
 
@@ -110,6 +115,8 @@ A reusable battery every `PMOPort` implementation must pass (run against a sandb
 | 8 | `get_activity` ordering is chronological and includes attachments with fetchable URLs |
 | 9 | Rate-limit (429/RATELIMITED) surfaces as `PMO_TRANSIENT` |
 | 10 | Project normalization: statuses, priority, labels; `capabilities()` truthful |
+| 11 | `inverseRelations` of type `blocks` parse into `blocked_by`; other relation types ignored |
+| 12 | `create_relation` issues the correct mutation and tolerates the duplicate-relation error |
 
 ## 8. Webhook readiness (fast-follow, not v0)
 

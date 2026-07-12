@@ -311,7 +311,8 @@ def main() -> None:
     try:
         result = json.loads(result_path.read_text())
         assert result.get("outcome") in ("plan_needed", "executed_trivially",
-                                         "decomposed", "planned", "executed", "reviewed")
+                                         "decomposed", "planned", "executed", "reviewed",
+                                         "human_needed", "relations_mapped")
         assert isinstance(result.get("summary"), str)
     except Exception as e:
         send_artifacts({"result": None, "exit_code": 11,

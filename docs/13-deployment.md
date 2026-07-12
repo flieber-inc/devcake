@@ -200,7 +200,7 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config tab: PMO connection test, repo connection test, review the two default Dev Types → done. The app bootstraps the nine Linear labels on startup.
+- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config tab: PMO connection test, repo connection test, review the two default Dev Types → done. The app bootstraps the ten Linear labels on startup.
 - **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). Schema migrations run automatically (`10-persistence.md` §2).
 - **Kill a stuck Dev:** admin → Executor tab → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Logs tab (OpenObserve). One run = one trace ID (`12-observability.md` §2).

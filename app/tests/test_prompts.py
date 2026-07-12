@@ -3,7 +3,8 @@ must appear verbatim in every playbook that writes code (docs/03 §7)."""
 from datetime import datetime, timezone
 
 from devcake.pmo import Mission
-from devcake.prompts import execute_prompt, onboard_prompt
+from devcake.prompts import (execute_prompt, mapper_prompt, onboard_prompt,
+                             plan_prompt, review_prompt)
 
 M = Mission(pmo_id="x", pmo_kind="issue", key="T-9", title="t", status="backlog",
             updated_at=datetime.now(timezone.utc))
@@ -24,3 +25,38 @@ def test_execute_forge_variants():
 
 def test_onboard_depth_limit_stated():
     assert "DEVCAKE-CREATED" in onboard_prompt("ID", M)
+
+
+def test_onboard_declares_blocked_by():
+    p = onboard_prompt("ID", M)
+    assert "blocked_by" in p
+    assert "Only earlier parts may be referenced" in p
+
+
+def test_human_handoff_in_writing_playbooks():
+    # PLAN can't emit outcomes (plan mode is read-only; the entrypoint
+    # synthesizes its result.json) — every other playbook must offer the exit
+    for p in (onboard_prompt("ID", M), execute_prompt("ID", M, "repo"),
+              review_prompt("ID", M)):
+        assert "human_needed" in p
+    assert "human_needed" not in plan_prompt("ID", M)
+
+
+def test_human_comments_note_everywhere():
+    for p in (onboard_prompt("ID", M), plan_prompt("ID", M),
+              execute_prompt("ID", M, "repo"), review_prompt("ID", M)):
+        assert "🧑 HUMAN" in p
+
+
+def test_mapper_prompt_embeds_missions():
+    a = Mission(pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
+                description="x" * 500, status="backlog",
+                updated_at=datetime.now(timezone.utc))
+    b = Mission(pmo_id="idb", pmo_kind="issue", key="T-2", title="implement",
+                status="backlog", blocked_by=["ida"],
+                updated_at=datetime.now(timezone.utc))
+    p = mapper_prompt("ID", [a, b])
+    assert "T-1" in p and "T-2" in p
+    assert "blocked by: T-1" in p                 # existing blockers shown as keys
+    assert "x" * 300 in p and "x" * 301 not in p  # description head capped
+    assert "relations_mapped" in p

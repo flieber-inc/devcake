@@ -44,6 +44,14 @@ class Concurrency(BaseModel):
     global_max: int = 3
 
 
+class RelationsMapper(BaseModel):
+    """Periodic Dev run that maps missing blocked-by relations (ADR-0007).
+    dev_type must name an existing Dev Type whenever enabled."""
+    enabled: bool = False
+    interval_minutes: int = 60
+    dev_type: str | None = None
+
+
 class CredentialFile(BaseModel):
     """A secret file under /data/secrets/{dev_type}/ delivered via runspec and
     installed by the Dev entrypoint at path_hint (docs/08 §4, docs/09 §3)."""
@@ -115,6 +123,10 @@ class AppConfig(BaseModel):
     max_attempts: int = 3
     review_loop_warning_every: int = 3
     auto_merge: bool = False
+    # operator switch: no NEW runs dispatch while paused; in-flight runs finish
+    # and sweeps keep running (docs/11)
+    intake_paused: bool = False
+    relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
 
     @property
     def api_key(self) -> str:

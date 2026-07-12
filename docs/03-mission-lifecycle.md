@@ -41,6 +41,7 @@ No code changes. The Dev emits a **decomposition manifest** in `result.json` (`o
 
 - **Standalone rule:** every child description must read as an independent Mission. Never "Review the work done in this Mission"; instead "Review all work recently done in connection with the creation of feature XYZ". No cross-references between siblings.
 - **Explicit priority** on every child (required field).
+- **Ordering (`blocked_by`):** each draft may declare `blocked_by`: 1-based indexes of **earlier** drafts it must not start before (`02-domain-model.md` §11). The playbook instructs the Dev to order parts prerequisites-first and to declare an edge whenever one part consumes another's output (implementation after documentation/design, etc.); independent parts omit it so they run in parallel. The app validates earlier-only (violation ⇒ `DEV_BAD_OUTPUT`, a counted attempt) — which structurally prevents cycles — and creates the corresponding native PMO relation immediately after creating each child (crash-safe: duplicate relations are tolerated on resume). The scheduler then withholds each child until its blockers are done (`04-orchestrator.md` §2, `adr/0007`).
 - **Depth limit = 1:** a Mission that carries `DEVCAKE-CREATED` must not be decomposed again — the ONBOARD playbook prompt states this, and the app rejects a `decomposed` outcome for such missions (`DEV_BAD_OUTPUT`). This prevents fission chain reactions.
 
 **Finalization:** transcript + token report → create each child via `PMOPort.create_mission` (app adds `DEVCAKE-CREATED`, plus `DEVCAKE` in opt-in mode). **Child creation is idempotent:** every child description ends with the footer line `Created by DevCake from {parent_key} — part {i}/{n}`; before creating, the app lists the parent's existing `DEVCAKE-CREATED` children and skips any whose footer matches, so a crash mid-decomposition resumes without duplicates (and a retried ONBOARD never re-decomposes differently: a parent that already has `DEVCAKE-CREATED` children with its key in their footers only tops up the missing parts). Then:
@@ -95,6 +96,22 @@ The Dev must: check out the PR branch in its clone; diff against the plan; hunt 
 
 **Loop guardrail:** loops are unlimited by design, but every `review_loop_warning_every`-th (default 3rd) rejection of the same Mission, the app posts a warning **to the Mission's activity feed** (the source of truth, where a human intervenes by adding `DEVCAKE-SKIP`) **and mirrors it as a PR comment**, containing the loop count and cumulative token cost across all the Mission's runs; also emitted as a metric (`12-observability.md`). Loop count is derived from the activity feed (count of prior `N_REVIEW.md` artifacts), not local state.
 
+## 4a. Human hand-off (`human_needed`)
+
+Any ONBOARD, EXECUTE, or REVIEW run may end with `outcome: "human_needed"` instead of its normal outcome when the Dev hits an obstacle **only a human can clear** — a missing permission or credential scope, an external account/service decision, anything outside the repository. The playbooks instruct the Dev to stop rather than improvise a workaround, and to state in `summary` precisely what a human must do. (PLAN cannot emit this: plan mode is read-only and the entrypoint synthesizes its `result.json`.)
+
+**Finalization:** transcript + token report → add `DEVCAKE-NEEDS-HUMAN` (the stage label stays, so work resumes at the same step) → post a baton-pass comment quoting the summary and the resume instruction. If the run was an ONBOARD (no stage label at dispatch) the status is restored to `backlog` — otherwise removing the label later would land on derivation row 9 and strand the Mission.
+
+**Semantics vs neighbors:** `DEVCAKE-FAILED` = DevCake errored out after `max_attempts` (involuntary); `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = a clean, deliberate hand-off — the run `finished`, so it **never counts toward `max_attempts`**. Recovery: the human resolves the obstacle and removes the label; the Mission re-derives its stage on the next poll. See `15-errors-and-retries.md`.
+
+## 4b. Relations Mapper (`MAPPER` runs)
+
+A **team-scoped run kind** (not a Mission Type — it has no host Mission and no labels) whose only job is proposing missing blocked-by relations across the team's open Missions. Configured under `AppConfig.relations_mapper` (`02-domain-model.md` §9): an on/off interval service plus a manual "Run now" trigger in the admin panel (`11-admin-panel.md` §2).
+
+- **Dispatch:** the app inlines every open, adopted, issue-kind Mission into the prompt — `key · status · existing blocker keys · title · first ~300 chars of description` (capped at 200 missions; truncation logged). No PMO writes at dispatch. Skipped while `intake_paused`; max one MAPPER run in flight; counts toward `global_max`.
+- **Output:** `result.json` `{"outcome": "relations_mapped", "edges": [{"blocker": "<key>", "blocked": "<key>"}, …], "summary": "…"}` — an empty `edges` list is valid and common. The playbook demands conservatism: propose only edges where one Mission clearly consumes another's output; never invent keys.
+- **Finalization (the app is the gatekeeper):** each proposed edge is validated against a live snapshot and dropped (audited `mapper_edge_rejected`) if it references an unknown or terminal key, is a self-edge, duplicates an existing relation, or would create a cycle in the blocked-by graph. Surviving edges become native PMO relations, and the blocked Mission gets a sentinel-signed comment naming its blocker ("delete the relation in Linear if wrong"). No transcript/token-report comments — there is no host Mission; failures are logged only and the next interval retries.
+
 ## 5. The approval-command footer (normative)
 
 Every REVIEW PR comment (approve *and* reject — on reject it helps a human short-circuit the loop) ends with:
@@ -113,16 +130,22 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice.
 ```jsonc
 {
   "schema_version": 1,
-  "outcome": "executed_trivially | plan_needed | decomposed | planned | executed | reviewed",
+  "outcome": "executed_trivially | plan_needed | decomposed | planned | executed | reviewed | human_needed | relations_mapped",
   "summary": "one-paragraph human summary of what was done/found",   // required, all outcomes
   "verdict": "approve | reject",          // REVIEW only
   "report_md": "…full review report…",    // REVIEW only
   "decomposition": [                       // ONBOARD 'decomposed' only
-    {"title": "…", "description": "…", "priority": "high", "parent_ref": null}
+    {"title": "…", "description": "…", "priority": "high", "parent_ref": null,
+     "blocked_by": [1]}                    // optional: earlier-sibling indexes (§1.3)
+  ],
+  "edges": [                               // MAPPER 'relations_mapped' only (§4b)
+    {"blocker": "ENG-10", "blocked": "ENG-12"}
   ],
   "pr_url": "https://…"                    // executed_trivially / executed / reviewed
 }
 ```
+
+`human_needed` (§4a) is legal from ONBOARD, EXECUTE, and REVIEW runs; `relations_mapped` only from MAPPER runs.
 
 A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
 
@@ -154,3 +177,19 @@ run: {run_id}
 ```
 
 The `run: {run_id}` footer doubles as the idempotency key for finalization (`04-orchestrator.md` §4).
+
+## 8a. Comment-provenance sentinel (normative)
+
+Every comment the app posts to the PMO System ends with the footer line:
+
+```
+`devcake:v1`
+```
+
+appended by the single posting choke-point (`MissionManager._feed`), after redaction. Classification is **content-based, never author/credential-based** — DevCake may be configured with the operator's own PMO API key, so `author` cannot distinguish DevCake's comments from the operator's. A comment whose body matches ``re.search(r"`devcake:v1`\s*$", body)`` is DevCake's; anything else is treated as a **human comment**.
+
+Consequences:
+
+- `ACTIVITY.md` (`07-dev-runtime.md` §2) marks each feed entry `🧑 HUMAN` or `🤖 DevCake` and carries a legend stating that HUMAN entries are authoritative instructions; every playbook tells the Dev to read them before starting and that the most recent human comment wins on conflict.
+- Comments posted before this convention lack the sentinel and are classified as human — harmless noise on pre-migration Missions.
+- False negatives degrade safely (a DevCake comment read as human); the sentinel is versioned (`v1`) so the format can evolve.

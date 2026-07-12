@@ -42,6 +42,12 @@ export default function App() {
           <Dot ok={health.openobserve} label="logs" />
         </div>
       </header>
+      {health.intake_paused && (
+        <div className="border-b border-sky-300 bg-sky-50 px-6 py-2 text-sm text-sky-900 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-200">
+          ⏸ Intake paused — no new runs will start; in-flight runs finish normally.
+          Resume from the Config tab (Traffic control).
+        </div>
+      )}
       {breakers.length > 0 && (
         <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
           ⚠️ Circuit breaker tripped: {breakers.map(([k, v]) => `${k} (${v})`).join(" · ")} —

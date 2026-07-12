@@ -3,7 +3,7 @@
 (docs/02 §2) — M2 exit criterion. Idempotent: fixtures are found by exact title.
 
 Standalone (stdlib only). Reads LINEAR_API_KEY + DEVCAKE_TEAM_KEY from .env/env.
-Run AFTER the app has bootstrapped the nine labels (or run the app once first).
+Run AFTER the app has bootstrapped the ten labels (or run the app once first).
 """
 
 import json

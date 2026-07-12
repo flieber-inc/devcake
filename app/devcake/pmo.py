@@ -7,7 +7,7 @@ from typing import Literal, Optional, Protocol
 
 from pydantic import BaseModel, Field
 
-# ── The nine managed labels (docs/02 §5 — defined once) ─────────────────────
+# ── The ten managed labels (docs/02 §5 — defined once) ──────────────────────
 
 LABEL_OPTIN = "DEVCAKE"
 LABEL_PLAN = "DEVCAKE-PLAN"
@@ -18,9 +18,11 @@ LABEL_CREATED = "DEVCAKE-CREATED"
 LABEL_FAILED = "DEVCAKE-FAILED"
 LABEL_SKIP = "DEVCAKE-SKIP"
 LABEL_TRACKING = "DEVCAKE-TRACKING"
+LABEL_NEEDS_HUMAN = "DEVCAKE-NEEDS-HUMAN"
 
 ALL_LABELS = {LABEL_OPTIN, LABEL_PLAN, LABEL_EXECUTE, LABEL_REVIEW, LABEL_MERGE,
-              LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, LABEL_TRACKING}
+              LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, LABEL_TRACKING,
+              LABEL_NEEDS_HUMAN}
 STAGE_LABELS = {LABEL_PLAN, LABEL_EXECUTE, LABEL_REVIEW}
 
 NormalizedStatus = Literal["backlog", "in_progress", "done", "canceled"]
@@ -48,6 +50,9 @@ class Mission(BaseModel):
     updated_at: datetime
     url: str = ""
     parent_ref: Optional[str] = None
+    # pmo_ids of missions that block this one (native PMO relations; issues only —
+    # projects always have [] since Linear relations are issue-scoped, ADR-0007)
+    blocked_by: list[str] = Field(default_factory=list)
 
 
 class Derivation(BaseModel):
@@ -71,6 +76,8 @@ def derive(mission: Mission, adoption_mode: str) -> Derivation:
         return Derivation(reason="DEVCAKE-SKIP — human opt-out")
     if LABEL_FAILED in labels:                                       # row 8
         return Derivation(reason="DEVCAKE-FAILED — needs human attention")
+    if LABEL_NEEDS_HUMAN in labels:                                  # row 11
+        return Derivation(reason="DEVCAKE-NEEDS-HUMAN — awaiting human action")
     if LABEL_MERGE in labels:                                        # row 10
         return Derivation(reason="awaiting merge (merge sweep handles)")
     if stage == {LABEL_PLAN}:                                        # row 2
@@ -103,6 +110,7 @@ class PMOCapabilities(BaseModel):
     project_labels_supported: bool
     attachment_max_bytes: int
     native_label_swap_atomic: bool
+    relations_supported: bool = False
 
 
 class PMOPort(Protocol):
@@ -115,4 +123,5 @@ class PMOPort(Protocol):
     async def set_status(self, pmo_id: str, status: NormalizedStatus) -> None: ...
     async def swap_labels(self, pmo_id: str, remove: set[str], add: set[str]) -> None: ...
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
+    async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
     def capabilities(self) -> PMOCapabilities: ...

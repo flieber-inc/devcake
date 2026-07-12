@@ -176,7 +176,9 @@ class RunManager:
                 return  # redelivery: idempotent no-op
             run.state = "finalizing"
             self.store.save(run)
-            if self.mission_mgr and run.mission_pmo_id:
+            if self.mission_mgr and run.mission_type == "MAPPER":
+                await self.mission_mgr.finalize_mapper(run, payload)
+            elif self.mission_mgr and run.mission_pmo_id:
                 await self.mission_mgr.finalize(run, payload)
             else:
                 await self._finalize(run, payload)

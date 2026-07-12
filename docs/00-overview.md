@@ -35,7 +35,7 @@ The following are explicitly **out of scope** for v0 (see `16-roadmap.md` § Pos
 | **Activity feed** | The Mission's chronological record inside the PMO System: description, comments, attachments, status changes. Rendered into `ACTIVITY.md` for each Dev run. |
 | **Stage label** | One of `DEVCAKE-PLAN`, `DEVCAKE-EXECUTE`, `DEVCAKE-REVIEW` — the label that drives the Mission state machine. A Mission carries at most one at a time (INV-2). |
 
-The complete set of nine managed labels is defined in `02-domain-model.md` §5 and nowhere else.
+The complete set of ten managed labels is defined in `02-domain-model.md` §5 and nowhere else.
 
 ## 4. Core invariants
 

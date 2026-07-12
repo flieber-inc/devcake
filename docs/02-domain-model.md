@@ -20,6 +20,7 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 | `updated_at` | `datetime` | PMO-side last update. Scheduling tiebreaker. |
 | `url` | `str` | Deep link into the PMO System. |
 | `parent_ref` | `str \| None` | For Issues that belong to a Project: the project's `pmo_id`. |
+| `blocked_by` | `list[str]` | `pmo_id`s of Missions that block this one, read from the PMO System's native issue relations (`05-pmo-adapter.md` §6, `adr/0007`). Always `[]` for Projects (Linear relations are issue-scoped). Gates scheduling (`04-orchestrator.md` §2), not derivation. |
 
 ## 2. Mission Type derivation (normative table)
 
@@ -39,8 +40,11 @@ Mission Type is a **pure function of live PMO state** — it is computed, never 
 | 8 | any active | `DEVCAKE-FAILED` present | *needs human attention — do not schedule (overrides rows 1–4)* |
 | 9 | `in_progress` | none | *no derivable type — a human moved it or a transition half-applied; do not schedule, log at INFO. It becomes schedulable again when a human sets a stage label or moves it back to backlog.* |
 | 10 | any active | `DEVCAKE-MERGE` present | *awaiting merge — not schedulable; handled by the merge sweep (`04-orchestrator.md` §1), which completes the Mission when its PR merges (or cancels it if the PR is closed unmerged).* |
+| 11 | any active | `DEVCAKE-NEEDS-HUMAN` present | *awaiting human action — do not schedule (overrides rows 1–4). A Dev deliberately handed off to a human (`03-mission-lifecycle.md` §4a); removing the label resumes the Mission at the same stage.* |
 
-Rows 7, 8, and 10 take precedence over rows 1–4; row 6 over everything except 5.
+Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything except 5.
+
+> **Blocked-by is not a derivation row.** A Mission whose `blocked_by` contains an open Mission still derives normally, but the scheduler skips it until every blocker is `done`/`canceled` (`04-orchestrator.md` §2) — this keeps `derive()` a pure single-Mission function.
 
 > **Note on row 9:** ONBOARD is only derived from `backlog` + no stage label. This guarantees DevCake never "adopts" work a human has independently started (`in_progress` with no DevCake labels).
 
@@ -96,7 +100,7 @@ Rows 7, 8, and 10 take precedence over rows 1–4; row 6 over everything except 
 
 ## 5. Managed labels (the complete set)
 
-Defined here and only here; code keeps them in a single constants module. The app ensures all nine exist in the configured Linear team at startup (`05-pmo-adapter.md` §5).
+Defined here and only here; code keeps them in a single constants module. The app ensures all ten exist in the configured Linear team at startup (`05-pmo-adapter.md` §5).
 
 | Label | Class | Meaning |
 |---|---|---|
@@ -109,6 +113,7 @@ Defined here and only here; code keeps them in a single constants module. The ap
 | `DEVCAKE-FAILED` | attention | A step failed `max_attempts` (default 3) times. DevCake will not touch the Mission until a human removes the label. |
 | `DEVCAKE-SKIP` | opt-out | A human told DevCake to ignore this Mission entirely (works in both adoption modes). |
 | `DEVCAKE-TRACKING` | tracking | A decomposed Project awaiting auto-completion once all its child Issues reach Done/Canceled. |
+| `DEVCAKE-NEEDS-HUMAN` | hand-off | A Dev reported an obstacle only a human can clear (`human_needed` outcome — `03-mission-lifecycle.md` §4a). Applied by the app with a baton-pass comment; the human resolves the obstacle and removes the label to resume. Unlike `DEVCAKE-FAILED`, the run finished cleanly and never counts toward `max_attempts`. |
 
 Naming is flat and uppercase; there are no version suffixes. Renaming a label is a documented migration (create new → copy → retire old), per `adr/0004-label-namespace-and-versioning.md`.
 
@@ -178,6 +183,8 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `auto_merge` | `bool` (default `false`) | When true, DevCake merges its own PRs with no human intervention at the two Done-producing transitions (trivial ONBOARD, REVIEW approval). See `03-mission-lifecycle.md`, `06-forge-adapter.md`, `14-security.md`. |
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
+| `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §2): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
+| `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/none) | The Relations Mapper service (`03-mission-lifecycle.md` §4b): a periodic Dev run that proposes missing blocked-by relations. `dev_type` must name an existing Dev Type whenever `enabled`. |
 
 ## 10. TokenReport
 
@@ -205,5 +212,6 @@ The payload an ONBOARD Dev emits per decomposed child Mission (inside `result.js
 | `description` | `str` | Must read as a **standalone** mission: no references to sibling missions or to "this mission" (`03-mission-lifecycle.md` §2.3). |
 | `priority` | `"urgent" \| "high" \| "medium" \| "low"` | Required — every decomposed Mission gets an explicit priority. |
 | `parent_ref` | `str \| None` | Project `pmo_id` when the children belong inside a decomposed Project. |
+| `blocked_by` | `list[int]` | Optional. 1-based indexes of **earlier** drafts in the same decomposition that must finish before this one starts (`03-mission-lifecycle.md` §1.3). Earlier-only is validated by the app and structurally prevents cycles; the app creates the corresponding PMO relations after creating the children. |
 
 The app adds the `DEVCAKE-CREATED` label on creation; the Dev does not manage labels (INV-4).

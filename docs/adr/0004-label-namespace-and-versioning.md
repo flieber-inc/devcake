@@ -8,7 +8,7 @@ The mission state machine is driven by labels living in the PMO System, visible 
 
 ## Decision
 
-A flat uppercase namespace with exactly nine managed labels, defined once in `02-domain-model.md` §5 and mirrored in a single code constants module: `DEVCAKE` (opt-in adoption signal), three stage labels (`-PLAN`, `-EXECUTE`, `-REVIEW`), plus `-MERGE` (awaiting merge), `-CREATED` (provenance), `-FAILED` (attention), `-SKIP` (opt-out), `-TRACKING` (decomposed projects). No version suffixes in names. The app ensures all nine exist in the configured team at startup. Renaming is a documented migration: create new → copy on touched missions → retire old.
+A flat uppercase namespace with exactly ten managed labels, defined once in `02-domain-model.md` §5 and mirrored in a single code constants module: `DEVCAKE` (opt-in adoption signal), three stage labels (`-PLAN`, `-EXECUTE`, `-REVIEW`), plus `-MERGE` (awaiting merge), `-CREATED` (provenance), `-FAILED` (attention), `-SKIP` (opt-out), `-TRACKING` (decomposed projects), and `-NEEDS-HUMAN` (deliberate hand-off — added post-v0 with `adr/0007`; the set was nine through v0). No version suffixes in names. The app ensures all ten exist in the configured team at startup. Renaming is a documented migration: create new → copy on touched missions → retire old.
 
 ## Alternatives considered
 

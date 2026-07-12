@@ -96,6 +96,7 @@ class LinearAdapter:
                    state { name type }
                    labels(first: 20) { nodes { name } }
                    project { id }
+                   inverseRelations(first: 10) { nodes { type issue { id } } }
                  } }
                  projects(first: 50, filter: {accessibleTeams: {id: {eq: $teamId}}}) { nodes {
                    id name description content url updatedAt priority
@@ -114,6 +115,7 @@ class LinearAdapter:
                  state { name type }
                  labels(first: 20) { nodes { name } }
                  project { id }
+                 inverseRelations(first: 10) { nodes { type issue { id } } }
             } }""", {"id": pmo_id})
         return self._issue_to_mission(data["issue"])
 
@@ -199,7 +201,7 @@ class LinearAdapter:
                 {"name": name, "teamId": team["id"]})
             log.info("linear: created label %s in team %s", name, team_ref)
         # project labels are a SEPARATE workspace-level entity in Linear (verified
-        # via schema introspection at M2) — ensure the same nine there too
+        # via schema introspection at M2) — ensure the same managed set there too
         data = await self._gql(
             """query { projectLabels(first: 100) { nodes { id name } } }""")
         existing_p = {l["name"].upper() for l in data["projectLabels"]["nodes"]}
@@ -215,7 +217,8 @@ class LinearAdapter:
 
     async def create_mission(self, team_ref: str, title: str, description: str,
                              priority: str, label_names: set[str],
-                             project_id: str | None = None) -> str:
+                             project_id: str | None = None) -> tuple[str, str]:
+        """Returns (identifier, id) — the id is needed to wire relation edges."""
         team = await self._team(team_ref)
         by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
         prio = {"urgent": 1, "high": 2, "medium": 3, "low": 4}[priority]
@@ -228,7 +231,24 @@ class LinearAdapter:
             """mutation($input: IssueCreateInput!) {
                  issueCreate(input: $input) { issue { id identifier } } }""",
             {"input": inp})
-        return data["issueCreate"]["issue"]["identifier"]
+        issue = data["issueCreate"]["issue"]
+        return issue["identifier"], issue["id"]
+
+    async def create_relation(self, blocker_id: str, blocked_id: str) -> None:
+        """`issueId blocks relatedIssueId` (docs/05 §6, ADR-0007). Duplicate
+        relations are tolerated so decomposition resume stays idempotent."""
+        try:
+            await self._gql(
+                """mutation($a: String!, $b: String!) {
+                     issueRelationCreate(input: {issueId: $a, relatedIssueId: $b,
+                                                 type: blocks}) { success } }""",
+                {"a": blocker_id, "b": blocked_id})
+        except RuntimeError as e:
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                log.info("linear: relation %s blocks %s already exists",
+                         blocker_id, blocked_id)
+                return
+            raise
 
     async def children_of_project(self, project_id: str) -> list[Mission]:
         data = await self._gql(
@@ -297,11 +317,15 @@ class LinearAdapter:
     def capabilities(self) -> PMOCapabilities:
         return PMOCapabilities(projects_supported=True, project_labels_supported=True,
                                attachment_max_bytes=50 * 1024 * 1024,
-                               native_label_swap_atomic=True)
+                               native_label_swap_atomic=True,
+                               relations_supported=True)
 
     # ── normalization ────────────────────────────────────────────────────────
 
     def _issue_to_mission(self, n: dict[str, Any]) -> Mission:
+        # on issue B, inverseRelations holds relations where B is relatedIssue;
+        # a `blocks` node's `issue` is the blocker (verified live, ADR-0007)
+        relations = (n.get("inverseRelations") or {}).get("nodes") or []
         return Mission(
             pmo_id=n["id"], pmo_kind="issue", key=n["identifier"], title=n["title"],
             description=n.get("description") or "",
@@ -310,6 +334,8 @@ class LinearAdapter:
             labels={l["name"].upper() for l in n["labels"]["nodes"]},
             updated_at=n["updatedAt"], url=n.get("url") or "",
             parent_ref=(n.get("project") or {}).get("id"),
+            blocked_by=[r["issue"]["id"] for r in relations
+                        if r.get("type") == "blocks" and r.get("issue")],
         )
 
     def _project_to_mission(self, n: dict[str, Any]) -> Mission:

@@ -101,7 +101,8 @@ async def main():
     t = await pmo._team(team)
     after = sorted(l["name"] for l in t["labels"]["nodes"] if l["name"].upper() in ALL_LABELS)
     check("5", "ensure_labels idempotent + case-insensitive",
-          before == after and len(after) == 9, f"{len(before)}→{len(after)}")
+          before == after and len(after) == len(ALL_LABELS),
+          f"{len(before)}→{len(after)}")
 
     # 9 — 429 → PMO_TRANSIENT (mock transport; never hits the network)
     mock = httpx.MockTransport(lambda req: httpx.Response(429, json={}))

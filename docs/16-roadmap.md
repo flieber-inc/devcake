@@ -105,6 +105,10 @@ Exit criteria — **all verified 2026-07-11. M7 complete — v0 SHIPPED.**
 - [x] **Fresh-`/data` operator drill** (carried from M6): volume backed up, wiped, first boot re-seeded config + dev types from env, ensured labels idempotently, health all green with empty secrets awaiting the operator's OAuth click; backup restored intact and CI green after the round trip.
 - [x] OpenObserve **DevCake dashboard** provisioned via API (cost/hour by dev type, runs by outcome, failure signals); alert provisioning ships in `scripts/provision_oo.py` (activates when `OO_ALERT_WEBHOOK` is set).
 
+## Post-v0 shipped
+
+- **2026-07-12 — Traffic control (`adr/0007`):** Mission ordering via native `blocked by` relations (ONBOARD decomposition declares `blocked_by`; scheduler gate honors any relation, human-added included) · `DEVCAKE-NEEDS-HUMAN` hand-off label + `human_needed` outcome (tenth label) · intake pause toggle (`intake_paused` + admin Traffic control section) · comment-provenance sentinel `` `devcake:v1` `` with 🧑/🤖 markers in `ACTIVITY.md` · Relations Mapper service (`MAPPER` run kind: interval + manual trigger + Dev Type combobox + on/off in the admin panel). Requires a dev-image rebuild (new legal outcomes in the entrypoint).
+
 ## Post-v0 backlog
 
 Webhook ingestion (Linear `watch()` receiver + tunnel guide) · multiple repositories / multi-team · additional PMO adapters (GitHub Issues, GitLab, Monday) · **priority-conditional Dev Type assignment** (e.g. Urgent missions route EXECUTE to Senior Dev — relaxes the strict 1 Mission Type → 1 Dev Type rule; deemed too much for v0) · **Scout Dev experiment** (route ONBOARD to a cheap-model Dev Type via the admin panel — zero code changes required; evaluate decomposition quality for a week before adopting) · admin panel OIDC/SSO (v0 has basic auth) · per-run scoped forge tokens & the rest of `14` §7 · OTel collector insertion · mid-run Dev→PMO write relay commands · SQLite `StatePort` swap if run history outgrows files.

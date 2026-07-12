@@ -17,8 +17,13 @@ class FakePMO:
         self.comments = []
         self.swaps = []
         self.statuses = []
+        self.created = []       # (title, project_id)
+        self.relations = []     # (blocker_id, blocked_id)
 
     async def get_mission(self, pmo_id):
+        return self.mission
+
+    async def get_project(self, pmo_id):
         return self.mission
 
     async def post_comment(self, pmo_id, md):
@@ -28,12 +33,29 @@ class FakePMO:
         self.swaps.append((set(remove), set(add)))
         self.mission.labels = (self.mission.labels - set(remove)) | set(add)
 
+    async def swap_labels_project(self, pmo_id, remove, add):
+        await self.swap_labels(pmo_id, remove, add)
+
     async def set_status(self, pmo_id, status):
         self.statuses.append(status)
         self.mission.status = status
 
+    async def set_project_status(self, pmo_id, status):
+        await self.set_status(pmo_id, status)
+
     async def upload_attachment(self, pmo_id, name, data):
         return f"https://fake/{name}"
+
+    async def create_mission(self, team_ref, title, description, priority,
+                             labels, project_id=None):
+        self.created.append((title, project_id))
+        return f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
+
+    async def create_relation(self, blocker_id, blocked_id):
+        self.relations.append((blocker_id, blocked_id))
+
+    async def children_of_project(self, project_id):
+        return []
 
 
 class NullMessaging:
@@ -93,6 +115,80 @@ def test_failure_restores_status_inv3(tmp_path):
               stage_label_at_dispatch=None)
     run_coro(mgr.restore_after_failure(run))
     assert fake.statuses == ["backlog"]        # dispatch-time write reverted
+
+
+def _run(mission_type="EXECUTE", stage="DEVCAKE-EXECUTE"):
+    return Run(run_id=f"T-1-1-{mission_type}-AAAAAA", mission_key="T-1",
+               mission_pmo_id="p1", mission_type=mission_type,
+               dev_type="senior-dev", seq=1, stage_label_at_dispatch=stage)
+
+
+def test_human_needed_keeps_stage_and_hands_off(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._transition(_run(), {"outcome": "human_needed",
+                                      "summary": "grant repo:write to the token"},
+                             None))
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels
+    assert "DEVCAKE-EXECUTE" in m.labels          # resumes at the same stage
+    assert fake.statuses == []                    # status untouched mid-pipeline
+    assert any("grant repo:write" in c and "DEVCAKE-NEEDS-HUMAN" in c
+               for c in fake.comments)
+
+
+def test_human_needed_from_onboard_restores_backlog(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})       # ONBOARD flipped it in_progress
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._transition(_run("ONBOARD", None),
+                             {"outcome": "human_needed", "summary": "s"}, None))
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels
+    assert fake.statuses == ["backlog"]           # avoids row-9 stranding
+
+
+def test_human_needed_allowed_for_projects(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    m.pmo_kind = "project"
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(mgr._transition(run, {"outcome": "human_needed", "summary": "s"}, None))
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # not parked with SKIP
+    assert "DEVCAKE-SKIP" not in m.labels
+
+
+def test_decomposition_wires_blocked_by_edges(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    drafts = [{"title": "docs", "priority": "high"},
+              {"title": "code", "priority": "high", "blocked_by": [1]},
+              {"title": "polish", "blocked_by": [1, 2]}]
+    run_coro(mgr._transition(_run("ONBOARD", None),
+                             {"outcome": "decomposed", "decomposition": drafts},
+                             None))
+    assert [t for t, _ in fake.created] == ["docs", "code", "polish"]
+    assert fake.relations == [("id-1", "id-2"), ("id-1", "id-3"), ("id-2", "id-3")]
+    assert fake.statuses == ["canceled"]
+
+
+def test_decomposition_rejects_forward_or_self_blocked_by(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    for bad in ([1], [2]):                        # self-reference / forward reference
+        with pytest.raises(ValueError):
+            run_coro(mgr._finalize_decomposition(
+                _run("ONBOARD", None),
+                {"outcome": "decomposed",
+                 "decomposition": [{"title": "a", "blocked_by": bad},
+                                   {"title": "b"}]}))
+    assert fake.created == []                     # nothing created before validation
+
+
+def test_feed_appends_sentinel_exactly_once(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._feed("p1", "issue", "hello there\n"))
+    assert fake.comments[-1].endswith("\n\n`devcake:v1`")
+    assert fake.comments[-1].count("`devcake:v1`") == 1
 
 
 def test_finalize_always_posts_report_inv5(tmp_path):

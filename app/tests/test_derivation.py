@@ -50,6 +50,16 @@ def test_row10_merge_sweep_owned():
     assert not d.schedulable and "merge" in d.reason
 
 
+def test_row11_needs_human_overrides_stages():
+    for labels in ({"DEVCAKE", "DEVCAKE-NEEDS-HUMAN"},
+                   {"DEVCAKE", "DEVCAKE-EXECUTE", "DEVCAKE-NEEDS-HUMAN"}):
+        d = derive(m("in_progress", labels), "opt_in")
+        assert not d.schedulable and "NEEDS-HUMAN" in d.reason
+    # terminal still wins over the hand-off label
+    assert "terminal" in derive(m("done", {"DEVCAKE", "DEVCAKE-NEEDS-HUMAN"}),
+                                "opt_in").reason
+
+
 def test_adoption_gate_opt_in_vs_out():
     assert not derive(m(), "opt_in").schedulable          # unlabeled → ignored
     assert derive(m(), "opt_out").schedulable             # opt-out adopts all

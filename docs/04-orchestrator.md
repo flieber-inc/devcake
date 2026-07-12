@@ -17,8 +17,9 @@ Every `poll_interval_seconds` (default 30):
 2. Derive each Mission's type per the table in `02-domain-model.md` §2.
 3. **Project auto-completion sweep:** for each Project carrying `DEVCAKE-TRACKING`, check its child Issues; if all are `done`/`canceled` (and it has ≥1 child), set the Project's status to `done`, remove `DEVCAKE-TRACKING`, and post a completion comment. (State is derived entirely from the PMO — no local tracking.)
 4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). Done is only ever declared after the merge is real.
-5. Run the scheduling algorithm (§3) over the derived candidates.
-6. Refresh the poll cache under `/data/cache/` (advisory only) and emit the `poll.cycle` span with counts (`12-observability.md`).
+5. Run the scheduling algorithm (§3) over the derived candidates — **unless `intake_paused`** (`02-domain-model.md` §9): while paused, steps 1–4 and 6 still run (sweeps, health, snapshot), the ingress consumer still finalizes in-flight runs, and the watchdog still enforces timeouts; only NEW dispatches (missions and MAPPER runs) are withheld.
+6. **Relations Mapper cadence:** when `relations_mapper.enabled` with a valid `dev_type`, and no MAPPER run is active, and `interval_minutes` have elapsed since the last one (in-memory watermark, initialized at boot — the admin "Run now" button covers immediacy), dispatch a MAPPER run (`03-mission-lifecycle.md` §4b). MAPPER runs count toward `global_max`.
+7. Refresh the poll cache under `/data/cache/` (advisory only) and emit the `poll.cycle` span with counts (`12-observability.md`).
 
 A poll cycle that fails on a PMO transient error is skipped after retries (`15-errors-and-retries.md`, `PMO_TRANSIENT`) — the next cycle starts fresh; nothing is lost because nothing local is authoritative.
 
@@ -26,9 +27,10 @@ A poll cycle that fails on a PMO transient error is skipped after retries (`15-e
 
 `candidates` = derived Missions **excluding** any that:
 
-- fail the opt-in adoption gate, or have no derivable type (rows 5–10 of the derivation table: terminal, conflict, `DEVCAKE-SKIP`, `DEVCAKE-FAILED`, in-progress-without-label, awaiting-merge);
+- fail the opt-in adoption gate, or have no derivable type (rows 5–11 of the derivation table: terminal, conflict, `DEVCAKE-SKIP`, `DEVCAKE-FAILED`, in-progress-without-label, awaiting-merge, `DEVCAKE-NEEDS-HUMAN`);
 - have an active local Run in state `dispatched | running | finalizing` (in-flight guard — this is bookkeeping, not a lock: if `/data/state` is wiped, the reconciliation in §6 rebuilds it from the Dagu API before the first cycle);
-- were transitioned by *us* within the last poll cycle (**grace cycle**): the app consults its own `events.jsonl` audit log and treats any Mission it wrote to in the previous cycle as busy for one cycle, absorbing the PMO's read-after-write staleness (resolves G5).
+- were transitioned by *us* within the last poll cycle (**grace cycle**): the app consults its own `events.jsonl` audit log and treats any Mission it wrote to in the previous cycle as busy for one cycle, absorbing the PMO's read-after-write staleness (resolves G5);
+- have an **open blocker** (`adr/0007`): any Mission in `blocked_by` whose normalized status is not `done`/`canceled`. The check resolves blockers against the poll snapshot (terminal Missions included, so done blockers resolve); a blocker outside the snapshot is live-fetched once per cycle (memoized), and a blocker that cannot be read counts as open — fail-safe, self-healing next cycle. A blocker carrying `DEVCAKE-FAILED`/`DEVCAKE-SKIP` is still open: the prerequisite will not complete autonomously, so dependents stay parked and the reason string names the guard label (surfaced in `/api/v1/missions` — this makes blocked-on-a-dead-blocker deadlocks, and human-created cycles, visible). The gate is re-verified live at dispatch (§3.1). Because it honors *any* blocked-by relation, humans steer ordering by adding/removing relations in the PMO UI — no DevCake-specific knowledge needed.
 
 ## 3. Scheduling algorithm (normative pseudocode)
 
@@ -58,6 +60,7 @@ Properties:
 def dispatch(mission, dev_type):
     live = pmo.get_mission(mission.pmo_id)         # live re-read: INV-1, INV-3
     if derive_type(live) != mission.type: return   # world moved on; skip silently
+    if open_blockers(live): return                 # blocked-by re-check, live (§2)
     run = Run(run_id=f"{mission.key}-{seq}-{mission.type}-{ulid()[-6:]}",   # 02 §7
               state="dispatched",
               seq=derive_seq(live),                # 02-domain-model.md §8
@@ -125,7 +128,7 @@ Runs every 30 s over all Runs in `dispatched | running`:
 On every app boot, before the first poll cycle:
 
 1. Load config; validate (`CONFIG_INVALID` blocks startup with a clear admin-panel health error).
-2. Ensure the nine managed labels exist in the configured team (`05-pmo-adapter.md` §5).
+2. Ensure the ten managed labels exist in the configured team (`05-pmo-adapter.md` §5).
 3. **Reconcile Runs:** for each local Run in a non-terminal state, query the Dagu run-status API for `run_id`:
    - Dagu says finished + artifacts message present in Redis (pending-entries reclaim, `09-messaging.md` §5) → resume finalization from `finalized_steps`.
    - Dagu says running → adopt it: mark `running`, resume watchdog coverage.

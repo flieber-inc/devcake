@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import time
 
 import httpx
 import redis.asyncio as aioredis
@@ -51,6 +52,33 @@ manager.oauth_mgr = oauth_mgr
 # poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
 missions_cache: list[dict] = []
 
+# relations-mapper cadence (ADR-0007): in-memory on purpose — first auto-run
+# lands one interval after boot; the admin "Run now" button covers immediacy
+_last_mapper_at = time.monotonic()
+
+
+def _mapper_dev_type():
+    rm = config.relations_mapper
+    return dev_types.get(rm.dev_type) if rm.dev_type else None
+
+
+def _mapper_active() -> bool:
+    return any(r.mission_type == "MAPPER" for r in store.active())
+
+
+async def _maybe_dispatch_mapper(missions) -> None:
+    global _last_mapper_at
+    rm = config.relations_mapper
+    dt = _mapper_dev_type()
+    if not rm.enabled or dt is None or _mapper_active():
+        return
+    if time.monotonic() - _last_mapper_at < rm.interval_minutes * 60:
+        return
+    if len(store.active()) >= config.concurrency.global_max:
+        return                                     # counts toward the global cap
+    _last_mapper_at = time.monotonic()
+    await mission_mgr.dispatch_mapper(dt, missions)
+
 
 async def poll_loop() -> None:
     """Poll cycle (docs/04 §1) — M2 scope: fetch + derive + cache; dispatch at M3."""
@@ -64,14 +92,25 @@ async def poll_loop() -> None:
                 derived = [(m, derive(m, config.adoption_mode)) for m in missions]
                 candidates = [m for m, d in derived if d.schedulable]
                 await mission_mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
-                dispatched = await mission_mgr.schedule(missions)
+                # intake pause (docs/11): no NEW dispatches — in-flight runs still
+                # finalize (ingress consumer) and sweeps above keep running
+                if config.intake_paused:
+                    dispatched = 0
+                else:
+                    dispatched = await mission_mgr.schedule(missions)
+                    await _maybe_dispatch_mapper(missions)
                 mission_mgr.rotate_grace()
                 missions_cache.clear()
+                id_to_key = {m.pmo_id: m.key for m in missions}
                 missions_cache.extend({
                     "key": m.key, "kind": m.pmo_kind, "title": m.title,
                     "status": m.status, "priority": m.priority,
                     "labels": sorted(m.labels), "mission_type": d.mission_type,
-                    "schedulable": d.schedulable, "reason": d.reason,
+                    "schedulable": d.schedulable,
+                    # the blocked-by gate is a scheduler concern, not a derivation
+                    # row — surface it here so the admin panel shows why (ADR-0007)
+                    "reason": mission_mgr.blocked_reasons.get(m.pmo_id, d.reason),
+                    "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
                     "pmo_id": m.pmo_id,
                 } for m, d in derived)
                 span.set_attribute("devcake.missions.seen", len(missions))
@@ -177,6 +216,7 @@ async def health():
         "forge": None,        # wired at M4
         "config_valid": True,
         "circuit_breakers": mission_mgr.breakers,
+        "intake_paused": config.intake_paused,
     }
 
 
@@ -251,6 +291,12 @@ async def put_config(body: dict):
         merged = AppConfig.model_validate({**config.model_dump(), **body})
     except Exception as e:
         raise HTTPException(422, str(e))
+    rm = merged.relations_mapper
+    if rm.enabled and (not rm.dev_type or rm.dev_type not in dev_types):
+        raise HTTPException(422, "relations_mapper.dev_type must name an existing "
+                                 "Dev Type when the mapper is enabled")
+    if rm.interval_minutes < 1:
+        raise HTTPException(422, "relations_mapper.interval_minutes must be ≥ 1")
     for field in merged.model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
@@ -361,6 +407,21 @@ async def test_forge():
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
+
+
+@app.post("/api/v1/relations-mapper/run")
+async def run_mapper():
+    """Manual trigger (docs/11): works regardless of the enabled toggle — the
+    toggle governs only the interval service. Requires a valid dev_type."""
+    dt = _mapper_dev_type()
+    if dt is None:
+        raise HTTPException(422, "relations_mapper.dev_type must name an existing "
+                                 "Dev Type — set it on the Config tab first")
+    if _mapper_active():
+        raise HTTPException(409, "a relations-mapper run is already active")
+    missions = await pmo.list_all(config.pmo.team_key)
+    run = await mission_mgr.dispatch_mapper(dt, missions)
+    return {"run_id": run.run_id, "state": run.state}
 
 
 # ── GUI OAuth helpers (docs/16 M6) ───────────────────────────────────────────

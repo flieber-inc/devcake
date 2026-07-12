@@ -24,11 +24,16 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 | `POST /api/v1/connections/forge/test` | Live probe: auth + repo fetch + default branch (+ reviewer token check) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
 | `POST /api/v1/system/clear-runs` | Operator wipe: stop in-flight Devs, delete local run records + audit log, purge Dagu run history, delete OpenObserve log/trace streams. Config + secrets + PMO/forge untouched (`10-persistence.md` §5) |
-| `GET /api/v1/missions` | Debug: current derived Missions + types (M2, `16-roadmap.md`) |
+| `POST /api/v1/relations-mapper/run` | Manually dispatch a Relations Mapper run (`03-mission-lifecycle.md` §4b). Works regardless of the `enabled` toggle (which governs only the interval service); 422 without a valid `dev_type`, 409 while a mapper run is active |
+| `GET /api/v1/missions` | Debug: current derived Missions + types (M2, `16-roadmap.md`); includes `blocked_by` keys, and the reason string names open blockers |
 
 All writes go through the app (single validation point, `10-persistence.md` §4).
 
 ## 2. Config tab — sections and fields
+
+### Traffic control (added with adr/0007)
+- **Mission intake toggle** (`intake_paused`) — OFF pauses DevCake's intake: no new runs start (missions or mapper) while the operator rearranges missions in Linear. In-flight runs finish normally, results still post, and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. While paused, the header shows a persistent "⏸ Intake paused" banner (from `GET /health`, which reports `intake_paused`).
+- **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (existing Dev Types; required before enabling or running); (d) **ON/OFF toggle** for the scheduled service. Help text explains the mapper proposes `blocked by` relations that appear natively in Linear, where a human can delete any wrong one.
 
 **Field-level help (added 2026-07-11, after the token_env incident):** every
 field carries a hover `?` tooltip explaining what it means and what shape of

@@ -18,6 +18,22 @@ def test_execute_playbook_binding_rules_inv6():
     assert "result.json" in p
 
 
+def test_execute_playbook_syncs_default_branch():
+    # docs/03 §4.1 prevention rule: PRs arrive mergeable
+    p = execute_prompt("ID", M, "repo")
+    assert "git fetch origin && git merge origin/main" in p
+    assert "Never rebase" in p
+    p2 = execute_prompt("ID", M, "repo", default_branch="develop")
+    assert "git merge origin/develop" in p2
+
+
+def test_execute_playbook_conflict_directive_awareness():
+    # a 🔀 resolve directive overrides the normal implement-the-mission job
+    p = execute_prompt("ID", M, "repo")
+    assert "conflict-resolve directive" in p
+    assert "do NOT redo or extend" in p
+
+
 def test_execute_forge_variants():
     assert "gh pr" in execute_prompt("ID", M, "repo", forge="github")
     assert "glab mr" in execute_prompt("ID", M, "repo", forge="gitlab")

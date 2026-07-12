@@ -125,6 +125,13 @@ class AppConfig(BaseModel):
     max_attempts: int = 3
     review_loop_warning_every: int = 3
     auto_merge: bool = False
+    # both inert while auto_merge is OFF (docs/03 §4.1): on a merge conflict,
+    # route back to EXECUTE to sync + resolve (max 2 attempts) instead of
+    # parking on DEVCAKE-MERGE; while a merge is merely not-possible-yet
+    # (CI running, mergeability computing) the merge sweep keeps retrying for
+    # merge_retry_window_minutes before the human hand-off (0 = immediately)
+    auto_resolve_merge_conflicts: bool = True
+    merge_retry_window_minutes: int = Field(30, ge=0)
     # operator switch: no NEW runs dispatch while paused; in-flight runs finish
     # and sweeps keep running (docs/11)
     intake_paused: bool = False

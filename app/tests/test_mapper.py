@@ -50,6 +50,7 @@ def make_mgr(tmp_path, pmo):
     mgr.pmo = pmo
     mgr.runs = SimpleNamespace(store=RunStore(tmp_path / "runs"))
     mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
+    mgr.merge_handoffs, mgr._merge_window_closed = {}, set()
     mgr._audit = lambda *a, **k: None
     return mgr
 
@@ -90,8 +91,12 @@ def test_config_defaults():
     assert cfg.relations_mapper.enabled is False           # manual-only by default
     assert cfg.relations_mapper.interval_minutes == 60
     assert cfg.relations_mapper.dev_type == "junior-dev"   # seeded cheap vehicle
+    assert cfg.auto_resolve_merge_conflicts is True        # docs/03 §4.1
+    assert cfg.merge_retry_window_minutes == 30
     # roundtrips through dump/validate (the /api/v1/config PUT path)
     assert AppConfig.model_validate(cfg.model_dump()) == cfg
+    with pytest.raises(Exception):                         # ge=0 enforced
+        AppConfig.model_validate({"merge_retry_window_minutes": -5})
 
 
 def test_deep_merge_preserves_nested_siblings():
@@ -206,3 +211,45 @@ def test_activity_payload_marks_provenance(tmp_path):
     # same author on both entries — provenance came from the sentinel, not the name
     assert MissionManager._derive_seq(
         Activity(mission=mission, entries=entries)) == 3   # STEP_MARKER intact
+
+
+def test_activity_payload_dedupes_colliding_filenames(tmp_path):
+    # docs/07 §2 collision rule: same-second externalized entries get -2/-3
+    # suffixes, and each index preview points at its OWN file
+    mission = m("i1", "T-1")
+    entries = [
+        ActivityEntry(ts=NOW, author="a", kind="comment", body="first " + "x" * 3000),
+        ActivityEntry(ts=NOW, author="b", kind="comment", body="second " + "y" * 3000),
+    ]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    names = [a["filename"] for a in payload["attachments"]]
+    base = f"entry-{NOW:%Y%m%dT%H%M%S}.md"
+    assert names == [base, base.replace(".md", "-2.md")]
+    md = payload["activity_md"]
+    assert f"see: {base}" in md and f"see: {base.replace('.md', '-2.md')}" in md
+
+
+def test_activity_payload_dedupes_downloaded_attachment_names(tmp_path):
+    # a Linear attachment whose filename collides with an externalized entry
+    mission = m("i1", "T-1")
+    base = f"entry-{NOW:%Y%m%dT%H%M%S}.md"
+    url = "https://uploads.linear.app/abc"
+    entries = [
+        ActivityEntry(ts=NOW, author="a", kind="comment", body="long " + "x" * 3000),
+        ActivityEntry(ts=NOW, author="a", kind="comment",
+                      body=f"file here: [{base}]({url})", attachments=[url]),
+    ]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    pmo.download_asset = _returns(b"data")
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert names == [base, base.replace(".md", "-2.md")]
+
+
+def _returns(value):
+    async def _f(*a, **k):
+        return value
+    return _f

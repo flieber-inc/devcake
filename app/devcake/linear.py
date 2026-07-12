@@ -37,6 +37,12 @@ _ASSET_RE = re.compile(r"https://uploads\.linear\.app/[^\s)\]]+")
 # and blind the scheduling gate (docs/05 §6). A full page is logged loudly.
 RELATIONS_PAGE = 50
 
+# get_activity cursor-walk safety ceiling (docs/05 §3): 10 pages × 100 =
+# 1,000 comments — a fail-loud valve (~50× DevCake's post-hygiene comment
+# rate), not a design limit. Newest pages are fetched first, so the newest
+# comments always survive if it trips.
+MAX_COMMENT_PAGES = 10
+
 
 class PMOTransient(Exception):
     """Retryable PMO failure (429/5xx/network) — docs/15."""
@@ -154,18 +160,43 @@ class LinearAdapter:
         return self._project_to_mission(data["project"])
 
     async def get_activity(self, pmo_id: str) -> Activity:
+        # Cursor-paginated like every other list read (docs/05 §3; a single
+        # page was verified LOSSY at 108 comments on 2026-07-12). orderBy:
+        # createdAt is pinned deliberately — verified live to return
+        # NEWEST-first — so if the safety ceiling ever trips, the newest
+        # comments win: the merge-state and conflict-resolve markers
+        # (docs/03 §4.1) live there, and losing them fails quiet.
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
                  id identifier title description url updatedAt priority
                  state { name type } labels(first: 20) { nodes { name } } project { id }
-                 comments(first: 100) { nodes {
-                   body createdAt user { name }
-                 } }
+                 comments(first: 100, orderBy: createdAt) {
+                   pageInfo { hasNextPage endCursor }
+                   nodes { body createdAt user { name } }
+                 }
             } }""", {"id": pmo_id})
         issue = data["issue"]
+        conn = issue["comments"]
+        nodes = list(conn["nodes"])
+        for _ in range(MAX_COMMENT_PAGES - 1):
+            if not conn["pageInfo"]["hasNextPage"]:
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { issue(id: $id) {
+                     comments(first: 100, orderBy: createdAt, after: $after) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { body createdAt user { name } }
+                     }
+                } }""", {"id": pmo_id, "after": conn["pageInfo"]["endCursor"]})
+            conn = page["issue"]["comments"]
+            nodes.extend(conn["nodes"])
+        if conn["pageInfo"]["hasNextPage"]:   # ceiling hit — never silent
+            log.warning("get_activity(%s): comment ceiling (%d) hit — oldest "
+                        "comments truncated from ACTIVITY.md and marker counts",
+                        pmo_id, 100 * MAX_COMMENT_PAGES)
         mission = self._issue_to_mission(issue)
         entries = []
-        for c in issue["comments"]["nodes"]:
+        for c in nodes:
             entries.append(ActivityEntry(
                 ts=c["createdAt"], author=(c.get("user") or {}).get("name") or "unknown",
                 kind="comment", body=c["body"],

@@ -135,16 +135,25 @@ are in /workspace/activity/ — read the plan first; if a review report exists,
 its findings take priority. Where reality contradicts the plan, implement the
 smallest sound deviation and document it in your summary.
 
+SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
+/workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
+job is to sync `devcake/{key}` with the default branch, resolve the merge
+conflicts, and push — do NOT redo or extend the mission's implementation.
+
 ### Binding rules (violations fail the run)
 1. Work ONLY inside /workspace/repo/{repo_name}/.
 2. Branch: `devcake/{key}`. If it exists on the remote, check it out and
    continue on it (`git fetch origin devcake/{key} && git checkout devcake/{key}`);
    otherwise create it from the default branch. NEVER force-push.
 3. Run the repo's tests/build if present; add tests per the plan.
-4. Commit ONLY at the very end, one commit: `[{key}] <concise summary>`.
+4. Before your final commit, sync with the default branch so the PR arrives
+   mergeable: `git fetch origin && git merge origin/{default}`, resolving any
+   conflicts locally (keep the default branch's state for code your mission
+   didn't change). Never rebase.
+5. Commit ONLY at the very end, one commit: `[{key}] <concise summary>`.
    Then push: `git push -u origin devcake/{key}` (credentials are configured).
-5. {pr_instructions}
-6. Write /workspace/out/result.json EXACTLY as:
+6. {pr_instructions}
+7. Write /workspace/out/result.json EXACTLY as:
    {{"schema_version": 1, "outcome": "executed", "summary": "<what you built,
    deviations, test results>", "pr_url": "<the PR/MR url>"}}
 
@@ -176,6 +185,7 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
     return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
         title=mission.title, repo_name=repo_name, pr_instructions=pr,
+        default=default_branch,
         description=mission.description or "(no description)") \
         + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 

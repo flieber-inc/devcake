@@ -629,6 +629,35 @@ export default function ConfigTab() {
             <span>{cfg.auto_merge ? "ON — approved PRs merge themselves" : "OFF — every merge is yours (DEVCAKE-MERGE handoff)"}</span>
           </div>
         </Field>
+        {/* dependent controls: only meaningful while auto-merge is ON */}
+        <div className={cfg.auto_merge ? "" : "opacity-50 pointer-events-none"}
+          aria-disabled={!cfg.auto_merge}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Auto-resolve merge conflicts"
+              help="Only applies when auto-merge is ON. When a merge fails on conflicts, DevCake sends the mission back to EXECUTE to sync the branch and resolve them (max 2 attempts) instead of waiting for you at DEVCAKE-MERGE.">
+              <div className="flex items-center gap-3 text-sm">
+                <button
+                  disabled={!cfg.auto_merge}
+                  onClick={() => cfg.auto_merge &&
+                    putCfg({ auto_resolve_merge_conflicts: !cfg.auto_resolve_merge_conflicts })}
+                  className={`h-6 w-11 rounded-full p-0.5 transition ${cfg.auto_resolve_merge_conflicts ? "bg-accent" : "bg-neutral-300 dark:bg-neutral-700"}`}
+                >
+                  <span className={`block h-5 w-5 rounded-full bg-white transition ${cfg.auto_resolve_merge_conflicts ? "translate-x-5" : ""}`} />
+                </button>
+                <span>{cfg.auto_resolve_merge_conflicts ? "ON — conflicts go back to EXECUTE (max 2 tries)" : "OFF — conflicts wait for you (DEVCAKE-MERGE)"}</span>
+              </div>
+            </Field>
+            <Field label="Merge retry window (min)"
+              help="When a merge isn't possible yet (CI running, mergeability computing), DevCake keeps retrying via the merge sweep for this long before handing off with DEVCAKE-MERGE. Lower it on CI-light repos to surface unmergeable PRs faster; raise it on CI-heavy repos. 0 = hand off immediately.">
+              <input type="number" min="0" className={inputCls}
+                disabled={!cfg.auto_merge}
+                value={cfg.merge_retry_window_minutes}
+                onChange={(e) => setCfg({ ...cfg, merge_retry_window_minutes: Math.max(0, Number(e.target.value)) })}
+                onBlur={() => cfg.auto_merge &&
+                  putCfg({ merge_retry_window_minutes: cfg.merge_retry_window_minutes })} />
+            </Field>
+          </div>
+        </div>
       </Section>
 
       <Section title="Dev Types">

@@ -2,6 +2,7 @@
 PR lookup, review comments, formal approval (optional 2nd token), squash merge.
 GitLab lands at M6."""
 
+import asyncio
 import logging
 import os
 from typing import Any, Optional
@@ -14,7 +15,12 @@ API = "https://api.github.com"
 
 
 class ForgeError(Exception):
-    pass
+    """Raised by all forge adapters for HTTP-level failures (docs/06).
+    `status` carries the HTTP status code when one exists."""
+
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
 
 
 class GitHubForge:
@@ -38,7 +44,7 @@ class GitHubForge:
                 headers=self._headers(reviewer), **kwargs)
             if resp.status_code >= 400:
                 raise ForgeError(f"{method} {path} → {resp.status_code}: "
-                                 f"{resp.text[:200]}")
+                                 f"{resp.text[:200]}", status=resp.status_code)
             return resp.json() if resp.text else None
 
     async def get_pr_by_branch(self, branch: str) -> Optional[dict]:
@@ -62,8 +68,33 @@ class GitHubForge:
         return True
 
     async def merge(self, pr_number: int) -> None:
-        await self._req("PUT", f"/pulls/{pr_number}/merge",
-                        json={"merge_method": "squash"})
+        """Squash-merge. 409 ("head branch was modified") is a transient race,
+        not a real failure — retried in place per the port contract (docs/06 §5)
+        so racy-but-healthy merges never park on DEVCAKE-MERGE."""
+        for attempt in range(3):
+            try:
+                await self._req("PUT", f"/pulls/{pr_number}/merge",
+                                json={"merge_method": "squash"})
+                return
+            except ForgeError as e:
+                if e.status != 409 or attempt == 2:
+                    raise
+                await asyncio.sleep(3)
+
+    async def mergeable(self, pr_number: int) -> Optional[bool]:
+        """Port contract (docs/06 §5) — single-shot, non-blocking tri-state:
+        False = auto-resolvable by a branch sync (conflict, or stale branch
+        behind an up-to-date protection rule); True = ready to merge now;
+        None = wait (mergeability still computing, required checks/CI pending,
+        or any unrecognized state — the safe default; the merge sweep provides
+        the time dimension, never this call)."""
+        pr = await self._req("GET", f"/pulls/{pr_number}")
+        state = pr.get("mergeable_state")
+        if state in ("dirty", "behind") or pr.get("mergeable") is False:
+            return False
+        if pr.get("mergeable") is True and state in ("clean", "unstable", "has_hooks"):
+            return True
+        return None  # null=computing, "blocked"=CI/approvals pending, or unknown
 
     async def pr_state(self, pr_number: int) -> dict:
         pr = await self._req("GET", f"/pulls/{pr_number}")

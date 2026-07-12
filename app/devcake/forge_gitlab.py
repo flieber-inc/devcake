@@ -1,11 +1,14 @@
 """ForgePort — GitLab adapter (docs/06 §7). Same shape as GitHubForge; MRs
 instead of PRs. Live verification requires a GitLab sandbox (M6 checklist)."""
 
+import asyncio
 import logging
 from typing import Any, Optional
 from urllib.parse import quote
 
 import httpx
+
+from .forge import ForgeError
 
 log = logging.getLogger("devcake.forge")
 
@@ -28,7 +31,11 @@ class GitLabForge:
             resp = await client.request(
                 method, f"{self.base}/api/v4/projects/{self.project}{path}",
                 headers=self._headers(reviewer), **kwargs)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # normalized error type across adapters (docs/06): callers
+                # handle ForgeError only, never httpx exceptions
+                raise ForgeError(f"{method} {path} → {resp.status_code}: "
+                                 f"{resp.text[:200]}", status=resp.status_code)
             return resp.json() if resp.text else None
 
     async def get_pr_by_branch(self, branch: str) -> Optional[dict]:
@@ -52,8 +59,36 @@ class GitLabForge:
         return True
 
     async def merge(self, pr_number: int) -> None:
-        await self._req("PUT", f"/merge_requests/{pr_number}/merge",
-                        json={"squash": True})
+        """Squash-merge. 409 (SHA/branch race) is a transient race, not a real
+        failure — retried in place per the port contract (docs/06 §5)."""
+        for attempt in range(3):
+            try:
+                await self._req("PUT", f"/merge_requests/{pr_number}/merge",
+                                json={"squash": True})
+                return
+            except ForgeError as e:
+                if e.status != 409 or attempt == 2:
+                    raise
+                await asyncio.sleep(3)
+
+    async def mergeable(self, pr_number: int) -> Optional[bool]:
+        """Port contract (docs/06 §5) — same tri-state as GitHubForge.mergeable.
+        Prefers detailed_merge_status (GitLab ≥ 15.6); falls back to the legacy
+        merge_status field on older instances."""
+        mr = await self._req("GET", f"/merge_requests/{pr_number}")
+        detailed = mr.get("detailed_merge_status")
+        if detailed is not None:
+            if detailed in ("conflict", "need_rebase"):
+                return False
+            if detailed == "mergeable":
+                return True
+            return None  # checking/unchecked/ci_must_pass/ci_still_running/…
+        legacy = mr.get("merge_status")
+        if legacy == "cannot_be_merged":
+            return False
+        if legacy == "can_be_merged":
+            return True
+        return None
 
     async def pr_state(self, pr_number: int) -> dict:
         mr = await self._req("GET", f"/merge_requests/{pr_number}")
@@ -67,8 +102,8 @@ class GitLabForge:
         try:
             await self._req("GET", f"/protected_branches/{quote(branch, safe='')}")
             return {"protected": True, "requires_reviews": None}
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
+        except ForgeError as e:
+            if e.status == 404:
                 return {"protected": False, "requires_reviews": None}
             return None
         except Exception:

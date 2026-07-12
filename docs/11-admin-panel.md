@@ -40,7 +40,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 - **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `junior-dev`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`: last 3 runs dead → periodic backs off; Run now still works and resets it). Deleting the mapper's Dev Type is refused with 409.
 
 ### Header banners (from `GET /health`)
-Amber/blue strips under the header, all driven by the 10 s health poll: intake paused (stateful, above) · **dependency cycle detected** (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · **default branch unprotected** (a Dev's forge token could merge without review — `13-deployment.md` §8a) · **out-of-pipeline activity** (a mission's PR merged mid-pipeline — `15-errors-and-retries.md`) · circuit breaker tripped (pre-existing).
+Amber/blue strips under the header, all driven by the 10 s health poll: intake paused (stateful, above) · **dependency cycle detected** (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · **default branch unprotected** (a Dev's forge token could merge without review — `13-deployment.md` §8a) · **out-of-pipeline activity** (a mission's PR merged mid-pipeline — `15-errors-and-retries.md`) · **awaiting human merge** (every `DEVCAKE-MERGE` mission with an open PR and no actively-running deferred-retry window — the operator's live merge queue, including normal `auto_merge`-OFF parks and terminal auto-merge hand-offs; `03-mission-lifecycle.md` §4.1) · circuit breaker tripped (pre-existing).
 
 **Field-level help (added 2026-07-11, after the token_env incident):** every
 field carries a hover `?` tooltip explaining what it means and what shape of
@@ -62,6 +62,8 @@ configured env var resolves empty (instead of `Illegal header value b'Bearer '`)
 - Forge selector (GitHub / GitLab) — one active repo.
 - Repo URL, token env var, optional **reviewer token** env var (tooltip: enables formal PR approval, `06-forge-adapter.md` §4).
 - **`auto_merge` toggle** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."*
+- **`auto_resolve_merge_conflicts` toggle** — default ON, no confirm dialog (every resulting merge still passes the full EXECUTE→REVIEW gate). Dimmed and non-interactive while `auto_merge` is OFF (the setting is inert without it). Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
+- **`merge_retry_window_minutes` number field** — default 30, min 0; also dimmed while `auto_merge` is OFF. Tooltip: lower it on CI-light repos to surface unmergeable PRs faster; raise it on CI-heavy repos to stop premature `DEVCAKE-MERGE` hand-offs; 0 = hand off immediately. Live-tunable: raising it mid-wait extends an active window.
 
 ### Dev Types
 Card list + editor (2026-07-12 rework — the harness combobox is **authoritative**, `08-harness-templates.md` §2):

@@ -79,7 +79,11 @@ Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything exc
                                         ▼
                         remove DEVCAKE-REVIEW, approve PR, then:
                         · auto_merge ON:  merge PR → on success mark Done
-                                          (merge fails → + DEVCAKE-MERGE + warning)
+                            (conflict + auto-resolve ON, < 2 tries →
+                             swap → EXECUTE with a resolve directive;
+                             not-mergeable-yet → + DEVCAKE-MERGE, sweep
+                             retries for merge_retry_window_minutes;
+                             else → + DEVCAKE-MERGE + warning)
                         · auto_merge OFF: + DEVCAKE-MERGE (await human merge)
                                         │
                                         ▼
@@ -87,6 +91,8 @@ Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything exc
                         │  merge sweep (every poll):    │
                         │  PR merged → Done, drop label │
                         │  PR closed unmerged → Canceled│
+                        │  retry window open → mergeable│
+                        │  → merge / conflict → EXECUTE │
                         └───────────────────────────────┘
 ```
 
@@ -108,7 +114,7 @@ Defined here and only here; code keeps them in a single constants module. The ap
 | `DEVCAKE-PLAN` | stage | Mission awaits a PLAN step. |
 | `DEVCAKE-EXECUTE` | stage | Mission awaits an EXECUTE step. |
 | `DEVCAKE-REVIEW` | stage | Mission awaits a REVIEW step. |
-| `DEVCAKE-MERGE` | awaiting-merge | REVIEW approved; the PR awaits merging (by a human, or after an `auto_merge` failure). The poll sweep watches the PR and completes the Mission when it merges (`04-orchestrator.md` §1). |
+| `DEVCAKE-MERGE` | awaiting-merge | REVIEW approved; the PR awaits merging (by a human, after an `auto_merge` failure, or — while the deferred-merge retry window is open — by the sweep itself once CI/mergeability clears; conflict auto-resolve must be off or exhausted for the hand-off to be final, `03-mission-lifecycle.md` §4.1). The poll sweep watches the PR and completes the Mission when it merges (`04-orchestrator.md` §1). |
 | `DEVCAKE-CREATED` | provenance | This Mission was created by DevCake (decomposition output). Coexists with stage labels. |
 | `DEVCAKE-FAILED` | attention | A step failed `max_attempts` (default 3) times. DevCake will not touch the Mission until a human removes the label. |
 | `DEVCAKE-SKIP` | opt-out | A human told DevCake to ignore this Mission entirely (works in both adoption modes). |
@@ -184,6 +190,8 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `dev_timeout_minutes` | `int` (default 120) | Enforced by the app watchdog (`04-orchestrator.md` §5), not by Dagu. |
 | `poll_interval_seconds` | `int` (default 30) | |
 | `auto_merge` | `bool` (default `false`) | When true, DevCake merges its own PRs with no human intervention at the two Done-producing transitions (trivial ONBOARD, REVIEW approval). See `03-mission-lifecycle.md`, `06-forge-adapter.md`, `14-security.md`. |
+| `auto_resolve_merge_conflicts` | `bool` (default `true`) | Inert while `auto_merge` is off. On a merge conflict (or stale branch), route the Mission back to EXECUTE with a sync-and-resolve directive instead of parking on `DEVCAKE-MERGE`; max 2 attempts per Mission, counted from feed markers (`03-mission-lifecycle.md` §4.1). |
+| `merge_retry_window_minutes` | `int ≥ 0` (default 30) | Inert while `auto_merge` is off. When a merge is not possible *yet* (CI running, mergeability computing), the merge sweep keeps retrying for this long before the human hand-off; 0 = hand off immediately. Lower on CI-light repos, raise on CI-heavy ones. |
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
 | `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §2): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |

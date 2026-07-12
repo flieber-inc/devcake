@@ -226,6 +226,7 @@ async def health():
         "active_runs": len(store.active()),
         "forge_protection": await _branch_protection(),
         "anomalies": mission_mgr.anomalies,
+        "merge_handoffs": mission_mgr.merge_handoffs,
         "dependency_cycles": mission_mgr.cycles,
         "mapper_degraded": mapper.degraded(),
     }

@@ -20,10 +20,18 @@ class ForgePort(Protocol):
     async def post_pr_comment(self, pr: PR, markdown: str) -> None: ...
     async def approve(self, pr: PR, *, use_reviewer_token: bool) -> None: ...
     async def merge(self, pr: PR) -> None: ...
-        # auto_merge toggle only; squash by default
+        # auto_merge toggle only; squash by default. Adapters retry their
+        # forge's transient merge race (409 head-modified/SHA race) up to 2
+        # times internally; only real failures propagate.
+    async def mergeable(self, pr: PR) -> bool | None: ...
+        # single-shot, non-blocking tri-state (§5): False = auto-resolvable by
+        # a branch sync; True = ready to merge now; None = wait (computing, CI
+        # pending, or any unrecognized state — the safe default)
     def capabilities(self) -> ForgeCapabilities: ...
         # e.g. self_approval_allowed, merge_strategies
 ```
+
+All adapters raise the same `ForgeError` (with a `status` attribute carrying the HTTP code) — callers never see forge-native exception types.
 
 `PR` DTO: `{url, number_or_iid, head_branch, state, approved}`.
 
@@ -55,7 +63,22 @@ GitHub and GitLab forbid approving a PR with the account that opened it. Resolut
 - `auto_merge` **ON**: after approval, the app merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §2).
 - `auto_merge` **OFF**: after approval the Mission carries `DEVCAKE-MERGE` and stays In Progress; the poll-cycle merge sweep (`04-orchestrator.md` §1) marks it Done when a human merges the PR, or Canceled if the PR is closed unmerged.
 
-Merge failures (branch protection, conflicts) are `FORGE_PERMANENT`: the Mission lands on `DEVCAKE-MERGE` (never a hollow Done), the PR stays open, a comment explains, and an admin-panel health warning is raised — never silent (`15-errors-and-retries.md`).
+**Merge-failure classes.** Neither forge's merge status code alone identifies the cause (GitHub 405 covers conflicts, branch protection, AND pending required checks; GitLab 405 covers conflicts, drafts, running/failed pipelines) — so after a failed merge the app reads the port's `mergeable()` and classifies:
+
+- **Auto-resolvable** (`False` — conflict or stale branch behind an up-to-date rule): with `auto_resolve_merge_conflicts` ON, the Mission goes back to EXECUTE for a sync-and-resolve rework, max 2 attempts (`03-mission-lifecycle.md` §4.1).
+- **Deferred** (`True`/`None` — ready-but-raced, mergeability computing, CI pending): the Mission lands on `DEVCAKE-MERGE` and the merge sweep retries for `merge_retry_window_minutes` before handing off. On large repos mergeability computation takes a while and CI-gated repos legitimately block merges for many minutes — `None` means "keep watching," never "give up."
+- **Transient** (409 head-modified/SHA race): retried inside the adapter's `merge()`, invisible to the orchestrator.
+- **Everything else** is `FORGE_PERMANENT`: the Mission lands on `DEVCAKE-MERGE` (never a hollow Done), the PR stays open, a comment explains, and an admin-panel health warning is raised — never silent (`15-errors-and-retries.md`).
+
+Per-adapter `mergeable()` signal mapping:
+
+| Contract | GitHub | GitLab |
+|---|---|---|
+| auto-resolvable (`False`) | `mergeable_state ∈ {dirty, behind}` or `mergeable: false` | `detailed_merge_status ∈ {conflict, need_rebase}` |
+| ready (`True`) | `mergeable: true` and state ∈ {clean, unstable, has_hooks} | `detailed_merge_status = mergeable` |
+| wait (`None`) | `mergeable: null` (computing), `blocked` (checks/CI), any unknown state | `checking`, `unchecked`, `ci_must_pass`, `ci_still_running`, any unknown state |
+
+GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the legacy `merge_status` field (`cannot_be_merged` → `False`, `can_be_merged` → `True`, anything else → `None`).
 
 ## 6. GitHub specifics
 
@@ -79,3 +102,5 @@ Merge failures (branch protection, conflicts) are `FORGE_PERMANENT`: the Mission
 | 4 | `merge` respects squash; surfaces branch-protection failure as `FORGE_PERMANENT` |
 | 5 | PR comment posting is idempotent under retry (keyed by run_id footer) |
 | 6 | Rate-limit and 5xx surface as `FORGE_TRANSIENT` |
+| 7 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
+| 8 | `merge()` retries a 409 twice then succeeds/raises; a 405 raises immediately (no retry); errors are `ForgeError` with `.status` |

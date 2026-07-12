@@ -76,10 +76,16 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 **Read robustness (normative):** every list read (`list_all` issues and projects, `children_of_project`) is **cursor-paginated** — the scheduling gate and the mapper's validator must see the whole team; a first-page-only read turns silent truncation into wrong scheduling (and, for the mapper, wrong *writes*). `inverseRelations` uses `first: 50` — Linear returns ALL relation types and the `blocks` filter is client-side, so an undersized page can evict a blocker; a full relations page is logged as a WARNING (never silent). Port method `create_project_update(project_id, body)` posts to the project-native feed.
 
+**`get_activity` pagination:** `get_activity` cursor-walks the full comment thread (`comments(first: 100, orderBy: createdAt, after: $cursor)`), per the read-robustness rule above — a single-page read was **verified lossy live on 2026-07-12** (DEV-50: 108 comments, 8 silently dropped). The ordering is pinned explicitly (verified: newest-first), so pages arrive newest-to-oldest and the safety ceiling of **10 pages / 1,000 comments** — a fail-loud valve at ~50× DevCake's post-hygiene comment rate, not a design limit — always keeps the newest comments, where the merge-state and conflict-resolve markers live (`03-mission-lifecycle.md` §4.1). Hitting the ceiling logs a truncation WARNING, never silent. Below it, `ACTIVITY.md` (`07-dev-runtime.md` §2), `_derive_seq`, and all marker counting see the complete thread.
+
 ## 4. Comments, transcripts, and attachments
 
 - `post_comment` → `commentCreate(input: {issueId, body})`; body is Markdown.
-- **Transcript size policy:** Linear documents no hard comment length limit, so DevCake sets its own: payloads over **50 KB** are uploaded as `.md` file attachments named `{seq}_{TYPE}.md` instead of inline comments (mission-doc requirement), then referenced from a short comment.
+- **Attachment-first feed policy (feed hygiene):** the activity feed is for *messages* — directives, short specifications, token reports, status notes. Bulk markdown always goes up as `.md` attachments referenced from a short sentinel-signed comment:
+  - **Transcripts** are ALWAYS uploaded as `{seq}_{TYPE}.md` attachments (never inline); the referencing comment keeps the backticked filename (the seq-derivation marker) and links the asset.
+  - **REVIEW reject reports** are uploaded as `{seq}_REVIEW_REPORT.md`; the feed gets a short "rejected (round N)" comment, while the PR comment keeps the full report.
+  - **Safety net:** ANY issue comment over **2048 chars** is externalized the same way (as `comment-{ts}.md`) with a 300-char preview + link. The provenance sentinel goes on the short comment, never inside the attachment. Upload failures fall back to posting inline — an upload outage must never lose feed content. Devs always receive full content: `activity.get` downloads attachments into the Dev's `activity/` folder (`07-dev-runtime.md` §2).
+  - Marker-bearing comments (`devcake:conflict-resolve:N`, `devcake:merge-retry`, `devcake:merge-handoff`, step markers) are short by construction so the markers always stay inline and countable.
 - `upload_attachment` implements Linear's three-step flow:
   1. `fileUpload(contentType, filename, size)` mutation → `{uploadUrl, assetUrl, headers[]}`;
   2. server-side HTTP `PUT` of the bytes to `uploadUrl`, including every returned header (client-side PUT is CSP-blocked; the headers array must be converted to a header map);
@@ -114,9 +120,9 @@ A reusable battery every `PMOPort` implementation must pass (run against a sandb
 | 3 | Priority normalization incl. the unset→`medium` default |
 | 4 | `swap_labels` removes+adds in one observable step; no intermediate two-stage-label state visible to a subsequent `get_mission` |
 | 5 | `ensure_labels` is idempotent and case-insensitive |
-| 6 | Transcript > 50 KB goes up as an attachment, ≤ 50 KB as a comment |
+| 6 | Transcripts and reject reports always go up as attachments; any comment > 2048 chars is externalized with a short sentinel-signed reference; upload failure falls back inline |
 | 7 | `create_mission` applies `DEVCAKE-CREATED`, explicit priority, and team scoping |
-| 8 | `get_activity` ordering is chronological and includes attachments with fetchable URLs |
+| 8 | `get_activity` ordering is chronological, paginates past 100 comments (ceiling → loud WARNING), and includes attachments with fetchable URLs |
 | 9 | Rate-limit (429/RATELIMITED) surfaces as `PMO_TRANSIENT` |
 | 10 | Project normalization: statuses, priority, labels; `capabilities()` truthful |
 | 11 | `inverseRelations` of type `blocks` parse into `blocked_by`; other relation types ignored |

@@ -6,6 +6,38 @@ import { get } from "./api.js";
 
 const TABS = { Config: ConfigTab, Executor: ExecutorTab, Logs: LogsTab };
 
+function MergeQueueBanner({ entries }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+      <button className="flex w-full items-center gap-2 text-left"
+        onClick={() => setOpen(!open)}>
+        <span>⏳ Awaiting human merge ({entries.length} mission{entries.length > 1 ? "s" : ""})</span>
+        <span className={`text-xs transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+      </button>
+      {open && (
+        <ul className="mt-1 space-y-0.5 pl-6">
+          {entries.map((e) => {
+            const i = e.lastIndexOf(" — ");
+            const [text, url] = i > -1 ? [e.slice(0, i), e.slice(i + 3)] : [e, null];
+            return (
+              <li key={e} className="list-disc">
+                {text}
+                {url && (
+                  <>
+                    {" — "}
+                    <a href={url} target="_blank" rel="noreferrer" className="underline">{url}</a>
+                  </>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Dot({ ok, label }) {
   const color = ok === true ? "bg-green-600" : ok === false ? "bg-red-600" : "bg-neutral-400";
   return (
@@ -70,6 +102,9 @@ export default function App() {
           ⚠️ Out-of-pipeline activity: {Object.values(health.anomalies).join(" · ")} —
           see the mission's activity feed.
         </div>
+      )}
+      {Object.keys(health.merge_handoffs || {}).length > 0 && (
+        <MergeQueueBanner entries={Object.values(health.merge_handoffs)} />
       )}
       {breakers.length > 0 && (
         <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">

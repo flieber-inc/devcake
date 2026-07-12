@@ -67,6 +67,8 @@ concurrency:
 dev_timeout_minutes: 120             # enforced by the app watchdog (04 §5)
 poll_interval_seconds: 30
 auto_merge: false                    # true = DevCake merges its own PRs, no human intervention
+auto_resolve_merge_conflicts: true   # inert while auto_merge is off: conflicts → EXECUTE rework (max 2)
+merge_retry_window_minutes: 30       # inert while auto_merge is off: sweep retries not-yet-mergeable PRs this long
 review_loop_warning_every: 3
 max_attempts: 3
 ```

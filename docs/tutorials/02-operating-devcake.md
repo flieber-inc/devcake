@@ -29,7 +29,10 @@ abandoned (decomposed away, or PR closed unmerged).
 - **Force a rework:** swap `DEVCAKE-MERGE` (or `-REVIEW`) → `DEVCAKE-EXECUTE`,
   optionally with a comment saying what you want changed — the next run reads
   the feed, reuses the branch, and updates the same PR. This is also the answer
-  when a waiting PR grows **merge conflicts**: send it back to EXECUTE.
+  when a waiting PR grows **merge conflicts** — though with `auto_merge` +
+  `auto_resolve_merge_conflicts` ON, DevCake does this swap itself (up to 2
+  attempts) before handing the conflict to you; the manual swap remains the
+  recovery path after that, or with the toggle OFF.
 - **Edit mid-run without fear:** if you change a mission's stage label while a
   Dev is running, DevCake finishes, posts its output, and *applies nothing* —
   a comment tells you your edit won. Your labels always beat its labels.

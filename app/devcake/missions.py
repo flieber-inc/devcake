@@ -57,6 +57,23 @@ LEGAL_OUTCOMES: dict[str, frozenset[str]] = {
 
 STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 
+# docs/05 §4: feed comments longer than this are uploaded as .md attachments
+# and referenced from a short comment. docs/07 §2 externalizes long bodies
+# into the Dev's activity folder at the same threshold, so Devs always see
+# full content either way.
+FEED_INLINE_MAX = 2048
+
+# docs/03 §4.1 — merge-failure state markers, counted/located from the feed
+# so the state stays fully PMO-derivable (no local clocks or counters). The
+# comments carrying them are short by construction (< FEED_INLINE_MAX): the
+# markers must stay inline, never externalized to attachments. NOTE:
+# get_activity reads the newest 100 comments (docs/05 §3, v0 limit) — markers
+# could age out on an extremely chatty mission.
+CONFLICT_MARKER = re.compile(r"`devcake:conflict-resolve:(\d+)`")
+MERGE_RETRY_MARKER = "`devcake:merge-retry`"
+MERGE_HANDOFF_MARKER = "`devcake:merge-handoff`"
+MAX_CONFLICT_RESOLVES = 2
+
 # Comment-provenance sentinel (docs/03 §8a, ADR-0007): every comment DevCake
 # posts ends with this footer. Classification is content-based, NEVER
 # author/credential-based — DevCake may post with the operator's own PMO key.
@@ -86,6 +103,19 @@ class MissionManager:
         self.blocked_reasons: dict[str, str] = {}  # last gate_map (advisory mirror)
         self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map
         self.anomalies: dict[str, str] = {}  # pmo_id → out-of-pipeline anomaly (advisory)
+        # pmo_id → "awaiting human merge" note (advisory; docs/11 banner): set
+        # by the merge sweep for every open-PR DEVCAKE-MERGE mission whose
+        # deferred-retry window is not actively running; pruned in sweeps()
+        self.merge_handoffs: dict[str, str] = {}
+        # pmo_ids whose deferred-merge window is known CLOSED (hand-off posted,
+        # or no retry marker in the feed) — skips the per-cycle feed read for
+        # terminally-parked missions. In-memory advisory only (PMO markers stay
+        # the source of truth): repopulated after restart at one feed read per
+        # parked mission; cleared when the mission leaves DEVCAKE-MERGE (the
+        # documented human intervention is a label swap) or when a fresh retry
+        # marker opens a new episode. A human DELETING the hand-off comment
+        # instead of swapping labels isn't noticed until restart.
+        self._merge_window_closed: set[str] = set()
         self.forge = self._make_forge()
 
     def _make_forge(self):
@@ -348,16 +378,37 @@ class MissionManager:
 
     async def _feed(self, pmo_id: str, kind: str, markdown: str) -> None:
         """The single choke-point for PMO comments: redaction + the provenance
-        sentinel. Projects have no issue-style comments API (verified at M2/M5):
-        their run artifacts live in the audit log + OpenObserve; the substance
-        lands on the child issues anyway (ADR-0006)."""
+        sentinel. Bodies over FEED_INLINE_MAX are uploaded as .md attachments
+        and replaced by a short referencing comment (docs/05 §4); the sentinel
+        goes on the comment, never inside the attachment, so provenance
+        classification keeps working. Upload failures fall back to posting
+        inline — an upload outage must never lose feed content. Projects have
+        no issue-style comments API (verified at M2/M5): their run artifacts
+        live in the audit log + OpenObserve; the substance lands on the child
+        issues anyway (ADR-0006)."""
         markdown = redact(markdown, [r.redis_password for r in self.runs.store.active()
                                      if r.redis_password])
         if kind == "project":
             self._audit(pmo_id, "project_feed_suppressed", markdown[:120])
-        else:
-            await self.pmo.post_comment(
-                pmo_id, markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
+            return
+        if len(markdown) > FEED_INLINE_MAX:
+            try:
+                name = f"comment-{utcnow():%Y%m%dT%H%M%S}.md"
+                url = await self.pmo.upload_attachment(pmo_id, name,
+                                                       markdown.encode())
+                markdown = (markdown[:300].replace("\n", " ")
+                            + f"… — full text attached: [{name}]({url})")
+            except Exception:
+                log.exception("feed attachment upload failed — posting inline")
+        await self.pmo.post_comment(
+            pmo_id, markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
+
+    @staticmethod
+    def _unquoted(body: str | None) -> str:
+        """Strip `>`-quoted lines: markers/sentinels inside a human's quote of
+        a DevCake comment must never count as DevCake's own."""
+        return "\n".join(line for line in (body or "").splitlines()
+                         if not line.lstrip().startswith(">"))
 
     @staticmethod
     def _is_devcake_comment(body: str | None) -> bool:
@@ -365,9 +416,8 @@ class MissionManager:
         `>`-quoted lines are ignored, so a human reply that ENDS by quoting a
         DevCake comment still classifies as human — misreading a human's
         instruction as DevCake's own record is the unsafe direction."""
-        unquoted = "\n".join(line for line in (body or "").splitlines()
-                             if not line.lstrip().startswith(">"))
-        return bool(SENTINEL_RE.search(unquoted.rstrip()))
+        return bool(SENTINEL_RE.search(
+            MissionManager._unquoted(body).rstrip()))
 
     @staticmethod
     def _stage_of(mission: Mission) -> str | None:
@@ -380,6 +430,17 @@ class MissionManager:
         steps = [int(m.group(1)) for e in activity.entries
                  for m in STEP_MARKER.finditer(e.body or "")]
         return (max(steps) + 1) if steps else 1
+
+    @staticmethod
+    def _unique_name(name: str, used: set[str]) -> str:
+        """docs/07 §2 collision rule: later duplicates get -2, -3, … suffixes."""
+        stem, dot, ext = name.rpartition(".")
+        cand, i = name, 1
+        while cand in used:
+            i += 1
+            cand = f"{stem}-{i}.{ext}" if dot else f"{name}-{i}"
+        used.add(cand)
+        return cand
 
     @staticmethod
     def _last_giveup_ts(pmo_id: str) -> str | None:
@@ -661,6 +722,51 @@ class MissionManager:
 
     # ── REVIEW finalization (docs/03 §4, merge-before-Done) ──────────────────
 
+    async def _conflict_attempts(self, pmo_id: str) -> int:
+        """Prior auto-resolve attempts, derived from feed markers — the PMO is
+        the source of truth (docs/03), so the count survives restarts and a
+        human deleting directive comments deliberately resets it."""
+        act = await self.pmo.get_activity(pmo_id)
+        hits = [int(mt.group(1)) for e in act.entries
+                for mt in CONFLICT_MARKER.finditer(self._unquoted(e.body))]
+        return max(hits) if hits else 0
+
+    async def _maybe_route_conflict_to_execute(self, pmo_id: str, key: str,
+                                               pr_url: str,
+                                               from_label: str) -> bool:
+        """docs/03 §4.1 — on an auto-resolvable merge failure (conflict or
+        stale branch), route the mission back to EXECUTE with a resolve
+        directive, max MAX_CONFLICT_RESOLVES attempts per mission. Returns
+        True when routed; any failure or decline returns False so the caller's
+        human fallback (DEVCAKE-MERGE) is never blocked."""
+        if not self.config.auto_resolve_merge_conflicts:
+            return False
+        try:
+            n = await self._conflict_attempts(pmo_id)
+            if n >= MAX_CONFLICT_RESOLVES:
+                self._audit(pmo_id, "conflict_resolve_exhausted", pr_url)
+                return False
+            # directive FIRST, then swap (mirrors the reject path): if the
+            # post fails the mission stays put and the marker count never
+            # undercounts. The EXECUTE playbook tells the Dev a 🧩 resolve
+            # directive overrides its normal implement-the-mission job (🧩 is
+            # reserved for this directive — 🔀 already means "PR opened").
+            await self._feed(
+                pmo_id, "issue",
+                f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
+                f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
+                f"Next Dev: sync `devcake/{key}` with the default branch, "
+                f"resolve the conflicts, and push; the PR then returns to "
+                f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
+            await self.pmo.swap_labels(pmo_id, remove={from_label},
+                                       add={LABEL_EXECUTE})
+            self._audit(pmo_id, "conflict_resolve_dispatched",
+                        f"attempt {n + 1} ({pr_url})")
+            return True
+        except Exception:
+            log.exception("conflict auto-resolve routing failed for %s", key)
+            return False
+
     async def _finalize_review(self, run: Run, result: dict) -> None:
         pmo_id = run.mission_pmo_id
         verdict = result.get("verdict")
@@ -689,13 +795,41 @@ class MissionManager:
                         f"✅ REVIEW approved; PR merged ({pr_url}). Mission done.")
                     self._audit(pmo_id, "review_approve_merged", pr_url)
                 except Exception as e:
+                    # docs/03 §4.1 — three-way failure branch. A detection
+                    # failure means mstate stays None → deferred retry, which
+                    # degrades safely to the hand-off when the window expires.
+                    mstate = None
+                    try:
+                        mstate = await self.forge.mergeable(pr["number"])
+                    except Exception:
+                        log.exception("mergeable check failed for %s", pr_url)
+                    if mstate is False and await self._maybe_route_conflict_to_execute(
+                            pmo_id, run.mission_key, pr_url, LABEL_REVIEW):
+                        return
                     await self.pmo.swap_labels(pmo_id, remove={LABEL_REVIEW},
                                                add={LABEL_MERGE})
-                    await self._feed(
-                        pmo_id, "issue",
-                        f"⚠️ REVIEW approved but auto-merge failed ({e}); "
-                        f"awaiting human merge of {pr_url} (`DEVCAKE-MERGE`).")
-                    self._audit(pmo_id, "review_approve_merge_failed", str(e)[:120])
+                    if mstate is not False and \
+                            self.config.merge_retry_window_minutes > 0:
+                        await self._feed(
+                            pmo_id, "issue",
+                            f"⏳ REVIEW approved but the merge is not possible "
+                            f"yet ({e}) — DevCake keeps retrying for up to "
+                            f"{self.config.merge_retry_window_minutes} minutes "
+                            f"(mergeability computing / CI pipeline running). "
+                            f"You can merge {pr_url} manually at any time. "
+                            f"{MERGE_RETRY_MARKER}")
+                        self._audit(pmo_id, "merge_deferred", str(e)[:120])
+                        # a fresh retry marker opens a new episode — the sweep
+                        # must read the feed again
+                        self._merge_window_closed.discard(pmo_id)
+                    else:
+                        await self._feed(
+                            pmo_id, "issue",
+                            f"⚠️ REVIEW approved but auto-merge failed ({e}); "
+                            f"awaiting human merge of {pr_url} "
+                            f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+                        self._audit(pmo_id, "review_approve_merge_failed",
+                                    str(e)[:120])
             else:
                 await self.pmo.swap_labels(pmo_id, remove={LABEL_REVIEW},
                                            add={LABEL_MERGE})
@@ -711,10 +845,22 @@ class MissionManager:
                 1 for r in self.runs.store.all()
                 if r.mission_pmo_id == pmo_id and r.mission_type == "REVIEW"
                 and r.state == "finished" and (r.result or {}).get("verdict") == "reject")
-            await self._feed(
-                pmo_id, "issue",
-                f"🔁 REVIEW rejected (round {rejections}) — back to EXECUTE.\n\n"
-                + report)
+            feed_body = (f"🔁 REVIEW rejected (round {rejections}) — back to "
+                         f"EXECUTE.\n\n" + report)
+            if report:
+                try:  # docs/05 §4: full report as attachment, short feed comment
+                    # redact with THIS run's relay password too — the attachment
+                    # bypasses _feed's active-run redaction
+                    name = f"{run.seq}_REVIEW_REPORT.md"
+                    url = await self.pmo.upload_attachment(
+                        pmo_id, name,
+                        redact(report, [run.redis_password or ""]).encode())
+                    feed_body = (f"🔁 REVIEW rejected (round {rejections}) — back "
+                                 f"to EXECUTE. Full report attached: "
+                                 f"[{name}]({url})")
+                except Exception:
+                    log.exception("review report upload failed — posting inline")
+            await self._feed(pmo_id, "issue", feed_body)
             if pr:
                 await self.forge.post_pr_comment(
                     pr["number"],
@@ -968,6 +1114,18 @@ class MissionManager:
     # ── poll-cycle sweeps (docs/04 §1) ───────────────────────────────────────
 
     async def sweeps(self, missions: list[Mission]) -> None:
+        # prune the merge-hand-off advisories to missions still awaiting a
+        # merge: covers merged/canceled AND the human label-swap intervention
+        # (which also reopens the window state for a possible next episode)
+        merge_ids = {m.pmo_id for m in missions
+                     if m.pmo_kind == "issue" and LABEL_MERGE in m.labels
+                     and m.status == "in_progress"}
+        self.merge_handoffs = {k: v for k, v in self.merge_handoffs.items()
+                               if k in merge_ids}
+        self._merge_window_closed &= merge_ids
+        # sequential by design; a per-mission await may include an adapter's
+        # short transient-retry sleeps (≤ ~6 s, docs/06 §5) — expected, not a
+        # hang, and non-blocking for the event loop
         for m in missions:
             try:
                 # spans only when a sweep actually acts (inside the helpers)
@@ -1005,6 +1163,85 @@ class MissionManager:
                 f"🚫 PR {state['url']} was closed without merging — mission "
                 f"canceled (merge sweep).")
             self._audit(m.pmo_id, "merge_sweep_canceled", state["url"])
+        else:
+            # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
+            # human — unless the deferred-retry window is actively running
+            # (_deferred_merge_retry pops the entry while it drives the window)
+            self.merge_handoffs[m.pmo_id] = (
+                f"{m.key}: awaiting human merge — {state['url']}")
+            if self.config.auto_merge:
+                await self._deferred_merge_retry(m, pr, state["url"])
+
+    async def _deferred_merge_retry(self, m: Mission, pr: dict,
+                                    pr_url: str) -> None:
+        """docs/03 §4.1 deferred-merge window: while `devcake:merge-retry` is
+        the latest merge-state marker in the feed, keep watching the PR each
+        sweep cycle — merge when it becomes ready, route to EXECUTE if a
+        conflict emerges, and hand off to a human once
+        merge_retry_window_minutes elapse. Elapsed time is measured from the
+        marker entry's PMO timestamp (no local clocks), so the window is
+        live-tunable and restart-safe. The label stays DEVCAKE-MERGE
+        throughout: a manual human merge mid-window is caught by the
+        external-merge branch above on the next cycle."""
+        if m.pmo_id in self._merge_window_closed:
+            return  # window known closed — skip the per-cycle feed read
+        act = await self.pmo.get_activity(m.pmo_id)
+        retry_ts = handoff_ts = None
+        for e in act.entries:
+            body = self._unquoted(e.body)
+            if MERGE_RETRY_MARKER in body:
+                retry_ts = max(retry_ts, e.ts) if retry_ts else e.ts
+            if MERGE_HANDOFF_MARKER in body:
+                handoff_ts = max(handoff_ts, e.ts) if handoff_ts else e.ts
+        if not retry_ts or (handoff_ts and handoff_ts >= retry_ts):
+            self._merge_window_closed.add(m.pmo_id)
+            return  # no active retry window (auto_merge-OFF parks land here)
+        window = self.config.merge_retry_window_minutes
+        if (utcnow() - retry_ts).total_seconds() / 60 > window:
+            await self._feed(
+                m.pmo_id, "issue",
+                f"⚠️ Still unmergeable after {window} min — awaiting human "
+                f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+            self._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
+            self._merge_window_closed.add(m.pmo_id)
+            return
+        # window ACTIVE: DevCake is still driving the merge — no human action
+        # needed, so the sweep's banner entry comes back off
+        self.merge_handoffs.pop(m.pmo_id, None)
+        verdict = await self.forge.mergeable(pr["number"])
+        if verdict is None:
+            return  # still computing / CI running — next cycle re-reads
+        # a False verdict can be a non-blocking "behind" (strict up-to-date
+        # rules are what make it fail) — one plain merge attempt is far
+        # cheaper than an EXECUTE rework, so always try the merge first and
+        # only route to rework when it actually fails on a real conflict
+        try:
+            await self.forge.merge(pr["number"])
+        except Exception:
+            if verdict is False:
+                if not await self._maybe_route_conflict_to_execute(
+                        m.pmo_id, m.key, pr_url, LABEL_MERGE):
+                    await self._feed(
+                        m.pmo_id, "issue",
+                        f"⚠️ Merge conflict on {pr_url} and auto-resolve is "
+                        f"unavailable (toggle off or attempts exhausted) — "
+                        f"awaiting human merge (`DEVCAKE-MERGE`). "
+                        f"{MERGE_HANDOFF_MARKER}")
+                    self._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
+                    self._merge_window_closed.add(m.pmo_id)
+                    self.merge_handoffs[m.pmo_id] = (
+                        f"{m.key}: awaiting human merge — {pr_url}")
+            else:
+                # state may have moved under us; next cycle re-reads
+                log.debug("deferred merge retry failed for %s", m.key,
+                          exc_info=True)
+            return
+        await self.pmo.swap_labels(m.pmo_id, remove={LABEL_MERGE}, add=set())
+        await self.pmo.set_status(m.pmo_id, "done")
+        await self._feed(
+            m.pmo_id, "issue",
+            f"✅ Merged after deferred retry ({pr_url}). Mission done.")
+        self._audit(m.pmo_id, "merge_retry_succeeded", pr_url)
 
     async def _tracking_sweep(self, m: Mission) -> None:
         children = await self.pmo.children_of_project(m.pmo_id)
@@ -1037,11 +1274,15 @@ class MissionManager:
         if run.pmo_kind == "project":
             await self._feed(run.mission_pmo_id, "project", body)
             return
-        if len(body.encode()) > 50 * 1024:                          # docs/05 §4 threshold
+        try:  # docs/05 §4: transcripts always live as attachments, never inline
             url = await self.pmo.upload_attachment(run.mission_pmo_id, name,
                                                    transcript.encode())
+            # the backticked `{name}` must stay in the comment — STEP_MARKER
+            # counts it for seq derivation (docs/02 §8)
             body = (f"🧾 DevCake transcript `{name}` (run `{run.run_id}`) — "
-                    f"too large for a comment, attached: [{name}]({url})")
+                    f"attached: [{name}]({url})")
+        except Exception:  # INV-5: the transcript is always posted, even inline
+            log.exception("transcript upload failed — posting inline")
         await self._feed(run.mission_pmo_id, "issue", body)
         self._audit(run.mission_pmo_id, "transcript", name)
 
@@ -1085,13 +1326,14 @@ class MissionManager:
             "are authoritative. Entries marked 🤖 DevCake are DevCake's own records.",
         ]
         attachments = []
+        used: set[str] = {"ACTIVITY.md"}     # docs/07 §2: suffix-dedupe filenames
         for e in act.entries:
             body = e.body or ""
             # provenance is sentinel-based, never author-based (docs/03 §8a):
             # DevCake may post with the operator's own PMO credentials
             provenance = "🤖 DevCake" if self._is_devcake_comment(body) else "🧑 HUMAN"
-            if len(body) > 2048:                                    # externalize long bodies
-                fname = f"entry-{e.ts:%Y%m%dT%H%M%S}.md"
+            if len(body) > FEED_INLINE_MAX:                 # externalize long bodies
+                fname = self._unique_name(f"entry-{e.ts:%Y%m%dT%H%M%S}.md", used)
                 attachments.append({"filename": fname,
                                     "content_b64": base64.b64encode(body.encode()).decode()})
                 body = body[:300].replace("\n", " ") + f"… — see: {fname}"
@@ -1103,7 +1345,9 @@ class MissionManager:
             for url in e.attachments:
                 try:
                     data = await self.pmo.download_asset(url)
-                    fname = names.get(url) or url.rsplit("/", 1)[-1][:80] or "attachment.bin"
+                    fname = self._unique_name(
+                        names.get(url) or url.rsplit("/", 1)[-1][:80] or "attachment.bin",
+                        used)
                     attachments.append({"filename": fname,
                                         "content_b64": base64.b64encode(data).decode()})
                     lines.append(f"[attachment: {fname}]")

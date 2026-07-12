@@ -322,8 +322,19 @@ async def put_assignments(body: dict):
     return {k: v.model_dump() for k, v in config.assignments.items()}
 
 
+@app.get("/api/v1/env-check")
+async def env_check(names: str = ""):
+    """Set/unset status (never values) for comma-separated env var names —
+    powers the admin Config tab's inline ✓/✗ next to *_env fields."""
+    return {n: bool(os.environ.get(n, "").strip()) for n in names.split(",") if n}
+
+
 @app.post("/api/v1/connections/pmo/test")
 async def test_pmo():
+    if not config.api_key:
+        return {"ok": False, "error": f"env var {config.pmo.api_key_env} is empty or "
+                                      "unset in DevCake's environment — put the API key "
+                                      "in .env and restart"}
     try:
         team = await pmo._team(config.pmo.team_key)
         missions = await pmo.list_all(config.pmo.team_key)
@@ -337,6 +348,10 @@ async def test_pmo():
 
 @app.post("/api/v1/connections/forge/test")
 async def test_forge():
+    if not config.repo.token:
+        return {"ok": False, "error": f"env var {config.repo.token_env} is empty or "
+                                      "unset in DevCake's environment — the field wants "
+                                      "the env var NAME; the token itself goes in .env"}
     try:
         import httpx as _hx
         f = mission_mgr.forge

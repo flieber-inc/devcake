@@ -19,6 +19,7 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 | `GET/PUT/DELETE /api/v1/dev-types/{name}` | CRUD one Dev Type. DELETE refuses while assigned to a Mission Type |
 | `POST /api/v1/dev-types/{name}/credentials` | Either multipart file upload (credentials JSON → `/data/secrets/{name}/`, 0600) or `{"env_var": "NAME"}` reference |
 | `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
+| `GET /api/v1/env-check?names=A,B` | Set/unset status (never values) of env vars in the app's environment — powers the Config tab's inline ✓/✗ on `*_env` fields |
 | `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns team name + label status |
 | `POST /api/v1/connections/forge/test` | Live probe: auth + repo fetch + default branch (+ reviewer token check) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
@@ -28,6 +29,16 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 All writes go through the app (single validation point, `10-persistence.md` §4).
 
 ## 2. Config tab — sections and fields
+
+**Field-level help (added 2026-07-11, after the token_env incident):** every
+field carries a hover `?` tooltip explaining what it means and what shape of
+value it wants. Fields that take an **env var name** (`api_key_env`,
+`token_env`, `reviewer_token_env`) additionally validate live: a value shaped
+like a secret (token prefixes, > 40 chars) shows a red warning that the field
+wants the variable's NAME and the secret goes in `.env`; a well-formed name is
+checked against `GET /api/v1/env-check` and shows `✓ set` or `✗ not set`. The
+connection-test endpoints short-circuit with a plain-language error when the
+configured env var resolves empty (instead of `Illegal header value b'Bearer '`).
 
 ### PMO connection
 - API key: env-var name (default `LINEAR_API_KEY`) or direct value (stored to app env file — with a hint that env vars are preferred).

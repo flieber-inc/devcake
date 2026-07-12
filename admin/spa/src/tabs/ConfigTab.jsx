@@ -16,13 +16,78 @@ function Section({ title, children }) {
   );
 }
 
-function Field({ label, hint, children }) {
+function Help({ text }) {
+  return (
+    <span className="group relative ml-1 inline-block align-middle">
+      <span className="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-500 dark:bg-neutral-700 dark:text-neutral-300">
+        ?
+      </span>
+      <span className="pointer-events-none invisible absolute left-1/2 top-full z-40 mt-1.5 w-64 -translate-x-1/2 rounded-md bg-neutral-900 p-2 text-xs font-normal leading-relaxed text-white opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 dark:bg-neutral-700">
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function Field({ label, hint, help, children }) {
   return (
     <label className="block text-sm">
-      <span className="mb-1 block font-medium">{label}</span>
+      <span className="mb-1 block font-medium">
+        {label}
+        {help && <Help text={help} />}
+      </span>
       {children}
       {hint && <span className="mt-1 block text-xs text-neutral-400">{hint}</span>}
     </label>
+  );
+}
+
+// ── env-var-name fields (the token_env incident, 2026-07-11) ────────────────
+// These fields want the NAME of an env var; pasting the secret itself silently
+// yields an empty token at runtime. Warn on secret-shaped values and show
+// live set/unset status from the app's environment.
+
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SECRET_SHAPE_RE = /^(ghp_|github_pat_|glpat-|sk-|xai-|lin_api_|lin_oauth_)/;
+
+function envProblem(value) {
+  if (!value) return null;
+  if (SECRET_SHAPE_RE.test(value) || value.length > 40)
+    return "This looks like a secret VALUE. This field wants the NAME of an " +
+           "environment variable (e.g. GITHUB_TOKEN); the secret itself goes " +
+           "in DevCake's .env.";
+  if (!ENV_NAME_RE.test(value))
+    return "Not a valid env var name (letters, digits and underscores only).";
+  return null;
+}
+
+function EnvVarField({ label, help, hint, value, onChange }) {
+  const [isSet, setIsSet] = useState(null); // null = unknown
+  const problem = envProblem(value);
+  useEffect(() => {
+    setIsSet(null);
+    if (!value || envProblem(value)) return;
+    const t = setTimeout(
+      () => get(`/env-check?names=${encodeURIComponent(value)}`)
+        .then((r) => setIsSet(!!r[value]))
+        .catch(() => setIsSet(null)),
+      400
+    );
+    return () => clearTimeout(t);
+  }, [value]);
+  return (
+    <Field label={label} help={help} hint={hint}>
+      <input className={inputCls} value={value || ""} onChange={onChange} />
+      {problem && <span className="mt-1 block text-xs text-red-600">⚠ {problem}</span>}
+      {!problem && value && isSet === false && (
+        <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
+          ✗ {value} is not set in DevCake's environment — add it to .env and restart
+        </span>
+      )}
+      {!problem && value && isSet === true && (
+        <span className="mt-1 block text-xs text-green-700 dark:text-green-400">✓ set</span>
+      )}
+    </Field>
   );
 }
 
@@ -160,7 +225,8 @@ function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Harness template">
+        <Field label="Harness template"
+          help="Which coding agent this Dev runs inside its container: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Determines the Docker image and credential kind.">
           <select
             className={inputCls}
             value={d.harness_template}
@@ -169,7 +235,8 @@ function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
             {TEMPLATES.map((t) => <option key={t}>{t}</option>)}
           </select>
         </Field>
-        <Field label="Max concurrency">
+        <Field label="Max concurrency"
+          help="How many Devs of this type may run at once. The global ceiling under Limits still applies on top.">
           <input
             type="number" min="1" className={inputCls} value={d.max_concurrency}
             onChange={(e) => set("max_concurrency", Number(e.target.value))}
@@ -269,11 +336,17 @@ export default function ConfigTab() {
 
       <Section title="PMO connection (Linear)">
         <div className="grid grid-cols-3 gap-3">
-          <Field label="Team key"><input className={inputCls} value={cfg.pmo.team_key}
+          <Field label="Team key"
+            help="The Linear team's short key — the prefix of its issue IDs (PRJ for PRJ-123). DevCake watches only this team.">
+            <input className={inputCls} value={cfg.pmo.team_key}
             onChange={(e) => setCfg({ ...cfg, pmo: { ...cfg.pmo, team_key: e.target.value } })} /></Field>
-          <Field label="API key env var"><input className={inputCls} value={cfg.pmo.api_key_env}
-            onChange={(e) => setCfg({ ...cfg, pmo: { ...cfg.pmo, api_key_env: e.target.value } })} /></Field>
-          <Field label="Poll interval (s)"><input type="number" className={inputCls}
+          <EnvVarField label="API key env var"
+            help="The NAME of the environment variable in DevCake's .env that holds your Linear API key — not the key itself. Default: LINEAR_API_KEY."
+            value={cfg.pmo.api_key_env}
+            onChange={(e) => setCfg({ ...cfg, pmo: { ...cfg.pmo, api_key_env: e.target.value } })} />
+          <Field label="Poll interval (s)"
+            help="How often DevCake polls Linear for new or changed missions. Lower = faster pickup, more API calls.">
+            <input type="number" className={inputCls}
             value={cfg.poll_interval_seconds}
             onChange={(e) => setCfg({ ...cfg, poll_interval_seconds: Number(e.target.value) })} /></Field>
         </div>
@@ -288,7 +361,8 @@ export default function ConfigTab() {
             </span>
           )}
         </div>
-        <Field label="Adoption mode">
+        <Field label="Adoption mode"
+          help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">
           <div className="flex items-center gap-3 text-sm">
             <span className={cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-400"}>
               opt-in (label required)
@@ -315,20 +389,25 @@ export default function ConfigTab() {
 
       <Section title="Repository">
         <div className="grid grid-cols-4 gap-3">
-          <Field label="Forge">
+          <Field label="Forge"
+            help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
             <select className={inputCls} value={cfg.repo.forge}
               onChange={(e) => setCfg({ ...cfg, repo: { ...cfg.repo, forge: e.target.value } })}>
               <option>github</option><option>gitlab</option>
             </select>
           </Field>
-          <Field label="Repository URL"><input className={inputCls} value={cfg.repo.url}
+          <Field label="Repository URL"
+            help="HTTPS URL of the repository DevCake works on, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it.">
+            <input className={inputCls} value={cfg.repo.url}
             onChange={(e) => setCfg({ ...cfg, repo: { ...cfg.repo, url: e.target.value } })} /></Field>
-          <Field label="Token env var"><input className={inputCls} value={cfg.repo.token_env}
-            onChange={(e) => setCfg({ ...cfg, repo: { ...cfg.repo, token_env: e.target.value } })} /></Field>
-          <Field label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals">
-            <input className={inputCls} value={cfg.repo.reviewer_token_env || ""}
-              onChange={(e) => setCfg({ ...cfg, repo: { ...cfg.repo, reviewer_token_env: e.target.value || null } })} />
-          </Field>
+          <EnvVarField label="Token env var"
+            help="The NAME of the environment variable in DevCake's .env that holds the forge access token (default: GITHUB_TOKEN) — never paste the token itself here. The token needs repo read/write and PR scopes."
+            value={cfg.repo.token_env}
+            onChange={(e) => setCfg({ ...cfg, repo: { ...cfg.repo, token_env: e.target.value } })} />
+          <EnvVarField label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals"
+            help="The NAME of an env var holding a second account's token. When set, REVIEW posts a formal approval from that account before merging. Leave empty to skip formal approvals."
+            value={cfg.repo.reviewer_token_env || ""}
+            onChange={(e) => setCfg({ ...cfg, repo: { ...cfg.repo, reviewer_token_env: e.target.value || null } })} />
         </div>
         <div className="flex items-center gap-3">
           <Button onClick={() => putCfg({ repo: cfg.repo })}>Save</Button>
@@ -341,7 +420,8 @@ export default function ConfigTab() {
             </span>
           )}
         </div>
-        <Field label="Auto-merge">
+        <Field label="Auto-merge"
+          help="ON: after DevCake's REVIEW step approves a PR, it merges itself (squash). OFF: DevCake stops at DEVCAKE-MERGE and waits for you to merge.">
           <div className="flex items-center gap-3 text-sm">
             <button
               onClick={() =>
@@ -395,7 +475,9 @@ export default function ConfigTab() {
       <Section title="Assignments (mission type → dev type)">
         <table className="w-full text-sm">
           <thead className="text-left text-xs uppercase text-neutral-400">
-            <tr><th className="py-1">Mission type</th><th>Dev type</th><th>Extra CLI args (harness-specific)</th></tr>
+            <tr><th className="py-1">Mission type</th><th>Dev type</th>
+              <th>Extra CLI args (harness-specific)
+                <Help text="Appended to the harness CLI for this mission type, e.g. --max-turns 15. Flags are harness-specific — they rarely survive a dev type change." /></th></tr>
           </thead>
           <tbody>
             {MISSION_TYPES.map((mt) => (
@@ -425,11 +507,13 @@ export default function ConfigTab() {
             <input type="number" className={inputCls} value={cfg.concurrency.global_max}
               onChange={(e) => setCfg({ ...cfg, concurrency: { global_max: Number(e.target.value) } })} />
           </Field>
-          <Field label="Dev run timeout (min)">
+          <Field label="Dev run timeout (min)"
+            help="Wall-clock limit per Dev run. The watchdog kills anything older; the mission is retried up to its attempt limit.">
             <input type="number" className={inputCls} value={cfg.dev_timeout_minutes}
               onChange={(e) => setCfg({ ...cfg, dev_timeout_minutes: Number(e.target.value) })} />
           </Field>
-          <Field label="Loop warning every N rejections">
+          <Field label="Loop warning every N rejections"
+            help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene.">
             <input type="number" className={inputCls} value={cfg.review_loop_warning_every}
               onChange={(e) => setCfg({ ...cfg, review_loop_warning_every: Number(e.target.value) })} />
           </Field>

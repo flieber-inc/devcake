@@ -61,6 +61,7 @@ class DevType(BaseModel):
     credential_files: list[CredentialFile] = Field(default_factory=list)
     max_concurrency: int = 1
     docker_image: str = ""
+    model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
 
 
 DEFAULT_ASSIGNMENTS = {
@@ -90,7 +91,8 @@ DEFAULT_DEV_TYPES = [
     DevType(name="senior-dev", harness_template="claude-code",
             identifying_prompt=SENIOR_PROMPT,
             credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-            max_concurrency=2, docker_image="devcake/dev-claude-code:latest"),
+            max_concurrency=2, docker_image="devcake/dev-claude-code:latest",
+            model="claude-fable-5"),  # founder decision 2026-07-12: Senior Dev judgment runs on Fable
     DevType(name="main-dev", harness_template="grok-build",
             identifying_prompt=MAIN_PROMPT,
             credential_env=["XAI_API_KEY"],  # optional API-key mode; OAuth file preferred

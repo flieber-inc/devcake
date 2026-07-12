@@ -185,18 +185,22 @@ def main() -> None:
     harness = os.environ.get("DEVCAKE_HARNESS", "claude-code")
     plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
+    model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
     if harness == "grok-build":
         mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
-        cmd = ["grok", "-p", prompt, "--output-format", "json", *mode, *extra]
+        pin = ["--model", model] if model else []
+        cmd = ["grok", "-p", prompt, "--output-format", "json", *mode, *pin, *extra]
     elif harness == "codex":
         mode = ["--sandbox", "read-only"] if plan_mode \
             else ["--dangerously-bypass-approvals-and-sandbox"]
+        pin = ["-m", model] if model else []
         cmd = ["codex", "exec", prompt, "--json",
                "-o", str(WORKSPACE / "out" / "last_message.txt"),
-               "--skip-git-repo-check", *mode, *extra]
+               "--skip-git-repo-check", *mode, *pin, *extra]
     else:
         mode = ["--permission-mode", "plan"] if plan_mode             else ["--dangerously-skip-permissions"]
-        cmd = ["claude", "-p", prompt, "--output-format", "json", *mode, *extra]
+        pin = ["--model", model] if model else []
+        cmd = ["claude", "-p", prompt, "--output-format", "json", *mode, *pin, *extra]
     harness_exit, out = 1, ""
     with tracer.start_as_current_span("dev.run", context=ctx) as span:
         span.set_attribute("devcake.run.id", RUN_ID)

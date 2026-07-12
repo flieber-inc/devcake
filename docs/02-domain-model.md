@@ -125,6 +125,7 @@ Persisted as one YAML file per Dev Type at `/data/config/dev_types/{name}.yaml` 
 | `credential` | `{kind: "env_api_key" \| "credentials_json", ref: str}` | `env_api_key`: `ref` names an env var resolved from the app's environment at dispatch. `credentials_json`: `ref` is the filename under `/data/secrets/{name}/`; its content is delivered to the Dev in the run spec and written to the harness-specific path by the entrypoint (`08-harness-templates.md`, `09-messaging.md` §3). OAuth/subscription credentials preferred. |
 | `max_concurrency` | `int` | Per-type cap (see `04-orchestrator.md` §3). |
 | `docker_image` | `str` | Defaults from the harness template; overridable. |
+| `model` | `str` | Pins the harness model (added 2026-07-12 after Claude Code silently defaulted to Sonnet). Delivered via runspec as `DEVCAKE_MODEL`; the entrypoint maps it to the harness flag (`claude --model` / `codex -m` / `grok --model`). Empty = harness default. Seed: `senior-dev` = `claude-fable-5`. Per-assignment `extra_cli_args` can still override (appended after the pin). |
 
 **v0 defaults:**
 

@@ -242,6 +242,11 @@ function DevTypeCard({ dt, onSave, onDelete, onOAuth }) {
             onChange={(e) => set("max_concurrency", Number(e.target.value))}
           />
         </Field>
+        <Field label="Model" hint="Empty = harness default"
+          help="Pins the model the harness runs (claude --model / codex -m / grok --model), e.g. claude-fable-5 for Claude Code. Leave empty to let the harness pick its own default.">
+          <input className={inputCls} value={d.model || ""} placeholder="e.g. claude-fable-5"
+            onChange={(e) => set("model", e.target.value)} />
+        </Field>
       </div>
       <Field label="Identifying prompt" hint="Delivered at the start of every run, before the mission playbook.">
         <textarea

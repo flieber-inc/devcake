@@ -179,6 +179,7 @@ class MissionManager:
                 "DEVCAKE_FORGE": self.config.repo.forge,
                 "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
                 "DEVCAKE_EXTRA_ARGS": assignment.extra_cli_args,
+                "DEVCAKE_MODEL": dev_type.model,
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
                 "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
             }

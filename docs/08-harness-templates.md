@@ -17,7 +17,7 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 
 ## 1. Invocation patterns
 
-The entrypoint composes a single prompt: the Dev Type's **identifying prompt** + the Mission Type **playbook prompt** (`03-mission-lifecycle.md` §7), then invokes the harness command below **plus `$DEVCAKE_EXTRA_ARGS`** — the per-Mission-Type extra CLI args from `assignments` (`02-domain-model.md` §9), delivered in the run spec. Rule (confirmed decision): **Mission-Type-specific flags are never hardcoded** — they are admin-set config, because assignments between Mission Types and Dev Types (and therefore harnesses) can change at any time.
+The entrypoint composes a single prompt: the Dev Type's **identifying prompt** + the Mission Type **playbook prompt** (`03-mission-lifecycle.md` §7), then invokes the harness command below **plus the Dev Type's model pin** (`$DEVCAKE_MODEL` → `claude --model` / `codex -m` / `grok --model`; empty = harness default — added 2026-07-12 after Claude Code's unpinned default silently resolved to Sonnet instead of Fable) **plus `$DEVCAKE_EXTRA_ARGS`** — the per-Mission-Type extra CLI args from `assignments` (`02-domain-model.md` §9), delivered in the run spec. Extra args come last, so they can override the pin per Mission Type. Rule (confirmed decision): **Mission-Type-specific flags are never hardcoded** — they are admin-set config, because assignments between Mission Types and Dev Types (and therefore harnesses) can change at any time.
 
 ### `claude-code`
 ```bash

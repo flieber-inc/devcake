@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from devcake.config import AppConfig, DevType
-from devcake.ports.forge import ForgeError
+from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.model import Activity, ActivityEntry, Mission
 from devcake.adapters.files.run_store import RunStore
@@ -91,7 +91,7 @@ class FakeForge:
         self.pr_comments = []
 
     async def get_pr_by_branch(self, branch):
-        return {"number": 8, "html_url": "https://forge/pr/8", "state": "open"}
+        return PullRequest(number=8, url="https://forge/pr/8", state="open")
 
     async def post_pr_comment(self, pr_number, markdown):
         self.pr_comments.append(markdown)
@@ -108,8 +108,8 @@ class FakeForge:
         return self.mergeable_result
 
     async def pr_state(self, pr_number):
-        return {"state": "open", "merged": False,
-                "url": "https://forge/pr/8", "number": pr_number}
+        return PullRequest(number=pr_number, url="https://forge/pr/8",
+                           state="open", merged=False)
 
     @staticmethod
     def approval_footer(pr_url):

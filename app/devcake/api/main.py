@@ -32,6 +32,7 @@ from ..domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured
 from ..domain.runs import RunManager
 from ..domain.watchdog import watchdog_loop
 from ..harness import HARNESSES, dev_type_status
+from ..ports.forge import mission_branch
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
 
@@ -219,9 +220,11 @@ async def _branch_protection():
     if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
         _protection_cache["ts"] = time.monotonic()
         try:
-            _protection_cache["value"] = (
-                await mission_mgr.forge.default_branch_protection()
-                if config.repo.url else None)
+            prot = (await mission_mgr.forge.default_branch_protection(
+                        config.repo.default_branch)
+                    if config.repo.url else None)
+            # serialized here so the /health JSON shape stays byte-identical
+            _protection_cache["value"] = prot.model_dump() if prot else None
         except Exception:
             _protection_cache["value"] = None
     return _protection_cache["value"]
@@ -491,14 +494,13 @@ async def test_forge():
                                       "unset in DevCake's environment — the field wants "
                                       "the env var NAME; the token itself goes in .env"}
     try:
-        import httpx as _hx
         f = mission_mgr.forge
-        pr = await f.get_pr_by_branch("devcake/__connection_test__")
+        pr = await f.get_pr_by_branch(mission_branch("__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
-        protection = await f.default_branch_protection()
+        protection = await f.default_branch_protection(config.repo.default_branch)
         return {"ok": True, "forge": config.repo.forge, "repo": config.repo.url,
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
-                "branch_protection": protection}
+                "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
 

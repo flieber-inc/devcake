@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import httpx
 
-from ...ports.forge import ForgeError
+from ...ports.forge import BranchProtection, ForgeError, PullRequest
 
 log = logging.getLogger("devcake.forge")
 
@@ -17,10 +17,12 @@ API = "https://api.github.com"
 
 
 class GitHubForge:
-    def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None):
+    def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
+                 api_base: str | None = None):
         # https://github.com/{owner}/{repo}
         parts = repo_url.rstrip("/").removesuffix(".git").split("/")
         self.owner, self.repo = parts[-2], parts[-1]
+        self.api = api_base or API          # override unlocks GitHub Enterprise
         self.token = token
         self.reviewer_token = reviewer_token or None
 
@@ -33,18 +35,23 @@ class GitHubForge:
                    **kwargs) -> Any:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.request(
-                method, f"{API}/repos/{self.owner}/{self.repo}{path}",
+                method, f"{self.api}/repos/{self.owner}/{self.repo}{path}",
                 headers=self._headers(reviewer), **kwargs)
             if resp.status_code >= 400:
                 raise ForgeError(f"{method} {path} → {resp.status_code}: "
                                  f"{resp.text[:200]}", status=resp.status_code)
             return resp.json() if resp.text else None
 
-    async def get_pr_by_branch(self, branch: str) -> Optional[dict]:
+    async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]:
         """Newest PR (any state) whose head is the given branch."""
         prs = await self._req(
             "GET", f"/pulls?head={self.owner}:{branch}&state=all&sort=created&direction=desc")
-        return prs[0] if prs else None
+        if not prs:
+            return None
+        pr = prs[0]
+        # list payloads carry merged_at, not merged (full-GET only)
+        return PullRequest(number=pr["number"], url=pr["html_url"],
+                           state=pr["state"], merged=bool(pr.get("merged_at")))
 
     async def post_pr_comment(self, pr_number: int, markdown: str) -> None:
         from ...security import redact
@@ -89,12 +96,13 @@ class GitHubForge:
             return True
         return None  # null=computing, "blocked"=CI/approvals pending, or unknown
 
-    async def pr_state(self, pr_number: int) -> dict:
+    async def pr_state(self, pr_number: int) -> PullRequest:
         pr = await self._req("GET", f"/pulls/{pr_number}")
-        return {"state": pr["state"], "merged": bool(pr.get("merged")),
-                "url": pr["html_url"], "number": pr["number"]}
+        return PullRequest(number=pr["number"], url=pr["html_url"],
+                           state=pr["state"], merged=bool(pr.get("merged")))
 
-    async def default_branch_protection(self, branch: str = "main") -> Optional[dict]:
+    async def default_branch_protection(
+            self, branch: str = "main") -> Optional[BranchProtection]:
         """{"protected": bool, "requires_reviews": bool|None} for the default
         branch, or None when unreadable. Branch protection is the ONLY effective
         control against a Dev merging with its own token (docs/14, ADR-0007
@@ -119,7 +127,7 @@ class GitHubForge:
                                            for r in rules)
         except ForgeError:
             pass
-        return {"protected": protected, "requires_reviews": requires_reviews}
+        return BranchProtection(protected=protected, requires_reviews=requires_reviews)
 
     @staticmethod
     def approval_footer(pr_url: str) -> str:

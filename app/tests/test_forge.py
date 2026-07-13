@@ -137,3 +137,101 @@ def test_req_raises_forge_error_with_status(make, monkeypatch):
         run_coro(make()._req("PUT", "/x"))
     assert e.value.status == 405
     assert "405" in str(e.value)
+
+
+# ── ForgePort conformance + DTO shape parity across adapters ─────────────────
+
+import inspect
+
+from devcake.ports.forge import (BRANCH_PREFIX, BranchProtection, ForgePort,
+                                 PullRequest, mission_branch)
+
+PORT_METHODS = [n for n, v in vars(ForgePort).items()
+                if callable(v) and not n.startswith("_")]
+
+
+def _params(fn):
+    return [p for p in inspect.signature(fn).parameters if p != "self"]
+
+
+@pytest.mark.parametrize("cls", [GitHubForge, GitLabForge])
+def test_adapters_implement_full_port(cls):
+    for name in PORT_METHODS:
+        impl = getattr(cls, name, None)
+        assert impl is not None, f"{cls.__name__} missing port method {name}"
+        assert _params(impl) == _params(getattr(ForgePort, name)), \
+            f"{cls.__name__}.{name} signature drifted from ForgePort"
+
+
+def test_mission_branch_single_definition():
+    assert BRANCH_PREFIX == "devcake/"
+    assert mission_branch("DEV-35") == "devcake/DEV-35"
+
+
+GH_PR_LIST_ITEM = {"number": 8, "html_url": "https://gh/pr/8", "state": "open",
+                   "merged_at": None}
+GH_PR_MERGED_ITEM = {"number": 9, "html_url": "https://gh/pr/9", "state": "closed",
+                     "merged_at": "2026-07-13T00:00:00Z"}
+GL_MR_OPEN = {"iid": 8, "web_url": "https://gl/mr/8", "state": "opened"}
+GL_MR_MERGED = {"iid": 9, "web_url": "https://gl/mr/9", "state": "merged"}
+
+
+def test_get_pr_by_branch_shape_parity():
+    g = stub_req(gh(), [GH_PR_LIST_ITEM])
+    pr = run_coro(g.get_pr_by_branch("devcake/DEV-1"))
+    assert pr == PullRequest(number=8, url="https://gh/pr/8", state="open",
+                             merged=False)
+    g = stub_req(gh(), [GH_PR_MERGED_ITEM])
+    pr = run_coro(g.get_pr_by_branch("devcake/DEV-1"))
+    assert pr.merged is True and pr.state == "closed"   # merged from merged_at
+
+    l = stub_req(gl(), [GL_MR_OPEN])
+    mr = run_coro(l.get_pr_by_branch("devcake/DEV-1"))
+    # GitLab "opened" normalizes to the same open shape
+    assert mr == PullRequest(number=8, url="https://gl/mr/8", state="open",
+                             merged=False)
+    l = stub_req(gl(), [GL_MR_MERGED])
+    mr = run_coro(l.get_pr_by_branch("devcake/DEV-1"))
+    # "merged" state → closed + merged=True (identical to GitHub semantics)
+    assert mr.state == "closed" and mr.merged is True
+
+    assert run_coro(stub_req(gh(), []).get_pr_by_branch("x")) is None
+    assert run_coro(stub_req(gl(), []).get_pr_by_branch("x")) is None
+
+
+def test_pr_state_shape_parity():
+    s = run_coro(stub_req(gh(), {"number": 8, "html_url": "u", "state": "closed",
+                                 "merged": True}).pr_state(8))
+    assert s == PullRequest(number=8, url="u", state="closed", merged=True)
+    s = run_coro(stub_req(gl(), GL_MR_MERGED).pr_state(9))
+    assert s == PullRequest(number=9, url="https://gl/mr/9", state="closed",
+                            merged=True)
+
+
+def test_branch_protection_dto():
+    g = stub_req(gh(), {"protected": True})
+    p = run_coro(g.default_branch_protection())
+    assert isinstance(p, BranchProtection) and p.protected is True
+
+    async def gl_404(method, path, **kw):
+        raise ForgeError("nope", status=404)
+    l = gl()
+    l._req = gl_404
+    p = run_coro(l.default_branch_protection())
+    assert p == BranchProtection(protected=False, requires_reviews=None)
+
+
+def test_api_base_defaults_and_overrides():
+    assert gh().api == "https://api.github.com"
+    assert GitHubForge("https://github.com/o/r", "t",
+                       api_base="https://ghe.corp/api/v3").api == "https://ghe.corp/api/v3"
+    assert gl().base == "https://gitlab.com"
+    # self-hosted: derived from the repo URL's origin (no extra config needed)
+    self_hosted = GitLabForge("https://gitlab.corp.example/grp/repo.git", "t")
+    assert self_hosted.base == "https://gitlab.corp.example"
+    assert self_hosted.project == "grp%2Frepo"
+    # api_base override wins without corrupting the project path
+    ov = GitLabForge("https://gitlab.corp.example/grp/repo", "t",
+                     api_base="https://gitlab-api.corp.example")
+    assert ov.base == "https://gitlab-api.corp.example"
+    assert ov.project == "grp%2Frepo"

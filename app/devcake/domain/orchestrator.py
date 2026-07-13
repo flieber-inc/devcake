@@ -30,6 +30,7 @@ from .model import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                     LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW,
                     LABEL_SKIP, LABEL_TRACKING, Mission, MissionRef, MissionType,
                     PRIORITY_RANK, STAGE_LABELS, derive, find_cycles)
+from ..ports.forge import mission_branch
 from ..ports.pmo import PMOPort
 from .run import Run, utcnow
 from .runs import RunManager
@@ -292,7 +293,8 @@ class MissionManager:
                 MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
                 MissionType.EXECUTE: lambda: execute_prompt(
                     dev_type.identifying_prompt, live, repo_name,
-                    forge=self.config.repo.forge),
+                    forge=self.config.repo.forge,
+                    default_branch=self.config.repo.default_branch),
                 MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
             }[mtype]()
 
@@ -304,7 +306,7 @@ class MissionManager:
                 "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
                 "DEVCAKE_SEQ": str(seq),
                 "DEVCAKE_REPO_URL": self.config.repo.url,
-                "DEVCAKE_DEFAULT_BRANCH": "main",
+                "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
                 "DEVCAKE_FORGE": self.config.repo.forge,
                 "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
                 "DEVCAKE_EXTRA_ARGS": assignment.extra_cli_args,
@@ -717,24 +719,24 @@ class MissionManager:
         up merged while the mission is still mid-pipeline, say so loudly —
         detection only; a human decides (they may have merged early themselves)."""
         try:
-            pr = await self.forge.get_pr_by_branch(f"devcake/{run.mission_key}")
+            pr = await self.forge.get_pr_by_branch(mission_branch(run.mission_key))
             if not pr:
                 return
-            state = await self.forge.pr_state(pr["number"])
-            if not state["merged"]:
+            state = await self.forge.pr_state(pr.number)
+            if not state.merged:
                 return
             await self._feed(
                 run.mission_pmo_id, run.pmo_kind,
-                f"⚠️ **Out-of-pipeline merge detected:** {state['url']} is already "
+                f"⚠️ **Out-of-pipeline merge detected:** {state.url} is already "
                 f"merged, but this mission is still mid-pipeline "
                 f"({run.mission_type}). If you merged it yourself on purpose, "
                 f"mark the mission Done (or add `DEVCAKE-SKIP`); otherwise check "
                 f"who merged it — DevCake did not.")
-            self._audit(run.mission_pmo_id, "out_of_pipeline_merge", state["url"])
+            self._audit(run.mission_pmo_id, "out_of_pipeline_merge", state.url)
             self.anomalies[run.mission_pmo_id] = (
-                f"{run.mission_key}: PR merged outside the pipeline ({state['url']})")
+                f"{run.mission_key}: PR merged outside the pipeline ({state.url})")
             log.warning("out-of-pipeline merge on %s (%s)", run.mission_key,
-                        state["url"])
+                        state.url)
         except Exception:
             log.debug("out-of-pipeline merge check failed for %s",
                       run.mission_key, exc_info=True)
@@ -774,7 +776,7 @@ class MissionManager:
                 pmo_id, "issue",
                 f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
                 f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
-                f"Next Dev: sync `devcake/{key}` with the default branch, "
+                f"Next Dev: sync `{mission_branch(key)}` with the default branch, "
                 f"resolve the conflicts, and push; the PR then returns to "
                 f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
             await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
@@ -790,23 +792,23 @@ class MissionManager:
         pmo_id = run.mission_pmo_id
         verdict = result.get("verdict")
         report = result.get("report_md") or result.get("summary") or ""
-        pr = await self.forge.get_pr_by_branch(f"devcake/{run.mission_key}")
-        pr_url = (pr or {}).get("html_url") or result.get("pr_url") or "?"
+        pr = await self.forge.get_pr_by_branch(mission_branch(run.mission_key))
+        pr_url = (pr.url if pr else None) or result.get("pr_url") or "?"
         footer = self.forge.approval_footer(pr_url)
 
         if verdict == "approve":
             formal = False
             if pr:
                 await self.forge.post_pr_comment(
-                    pr["number"],
+                    pr.number,
                     "## DevCake REVIEW: APPROVED-BY-DEVCAKE ✅\n\n" + report + footer)
                 try:
-                    formal = await self.forge.approve(pr["number"])
+                    formal = await self.forge.approve(pr.number)
                 except Exception:
                     log.exception("formal approval failed — falling back to marker")
             if self.config.auto_merge and pr:
                 try:
-                    await self.forge.merge(pr["number"])       # merge BEFORE Done
+                    await self.forge.merge(pr.number)          # merge BEFORE Done
                     await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                          remove={LABEL_REVIEW}, add=set())
                     await self.pmo.set_status(MissionRef(pmo_id, "issue"), "done")
@@ -820,7 +822,7 @@ class MissionManager:
                     # degrades safely to the hand-off when the window expires.
                     mstate = None
                     try:
-                        mstate = await self.forge.mergeable(pr["number"])
+                        mstate = await self.forge.mergeable(pr.number)
                     except Exception:
                         log.exception("mergeable check failed for %s", pr_url)
                     if mstate is False and await self._maybe_route_conflict_to_execute(
@@ -883,7 +885,7 @@ class MissionManager:
             await self._feed(pmo_id, "issue", feed_body)
             if pr:
                 await self.forge.post_pr_comment(
-                    pr["number"],
+                    pr.number,
                     "## DevCake REVIEW: changes requested 🔁\n\n" + report + footer)
             await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                    remove={LABEL_REVIEW}, add={LABEL_EXECUTE})
@@ -898,7 +900,7 @@ class MissionManager:
                         f"stop DevCake, or intervene on the PR directly.")
                 await self._feed(pmo_id, "issue", warn)
                 if pr:
-                    await self.forge.post_pr_comment(pr["number"], warn)
+                    await self.forge.post_pr_comment(pr.number, warn)
                 self._audit(pmo_id, "loop_warning", f"{rejections} rejections")
 
     # ── decomposition finalization (docs/03 §1.3) ────────────────────────────
@@ -1008,7 +1010,7 @@ class MissionManager:
                 "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
                 "DEVCAKE_SEQ": str(seq),
                 "DEVCAKE_REPO_URL": self.config.repo.url,
-                "DEVCAKE_DEFAULT_BRANCH": "main",
+                "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
                 "DEVCAKE_FORGE": self.config.repo.forge,
                 "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
                 "DEVCAKE_EXTRA_ARGS": "",
@@ -1172,40 +1174,40 @@ class MissionManager:
                 log.exception("sweep failed for %s", m.key)
 
     async def _merge_sweep(self, m: Mission) -> None:
-        pr = await self.forge.get_pr_by_branch(f"devcake/{m.key}")
+        pr = await self.forge.get_pr_by_branch(mission_branch(m.key))
         if not pr:
             return
-        state = await self.forge.pr_state(pr["number"])
-        if state["merged"] or state["state"] == "closed":
+        state = await self.forge.pr_state(pr.number)
+        if state.merged or state.state == "closed":
             with tracer.start_as_current_span("sweep.merge") as span:
                 span.set_attribute("devcake.mission.key", m.key)
                 span.set_attribute("devcake.outcome",
-                                   "merged" if state["merged"] else "closed")
-        if state["merged"]:
+                                   "merged" if state.merged else "closed")
+        if state.merged:
             await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
             await self.pmo.set_status(m.ref, "done")
             await self._feed(
                 m.pmo_id, "issue",
-                f"✅ PR {state['url']} merged — mission done (merge sweep).")
-            self._audit(m.pmo_id, "merge_sweep_done", state["url"])
-        elif state["state"] == "closed":
+                f"✅ PR {state.url} merged — mission done (merge sweep).")
+            self._audit(m.pmo_id, "merge_sweep_done", state.url)
+        elif state.state == "closed":
             await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
             await self.pmo.set_status(m.ref, "canceled")
             await self._feed(
                 m.pmo_id, "issue",
-                f"🚫 PR {state['url']} was closed without merging — mission "
+                f"🚫 PR {state.url} was closed without merging — mission "
                 f"canceled (merge sweep).")
-            self._audit(m.pmo_id, "merge_sweep_canceled", state["url"])
+            self._audit(m.pmo_id, "merge_sweep_canceled", state.url)
         else:
             # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
             # human — unless the deferred-retry window is actively running
             # (_deferred_merge_retry pops the entry while it drives the window)
             self.merge_handoffs[m.pmo_id] = (
-                f"{m.key}: awaiting human merge — {state['url']}")
+                f"{m.key}: awaiting human merge — {state.url}")
             if self.config.auto_merge:
-                await self._deferred_merge_retry(m, pr, state["url"])
+                await self._deferred_merge_retry(m, pr, state.url)
 
-    async def _deferred_merge_retry(self, m: Mission, pr: dict,
+    async def _deferred_merge_retry(self, m: Mission, pr,
                                     pr_url: str) -> None:
         """docs/03 §4.1 deferred-merge window: while `devcake:merge-retry` is
         the latest merge-state marker in the feed, keep watching the PR each
@@ -1241,7 +1243,7 @@ class MissionManager:
         # window ACTIVE: DevCake is still driving the merge — no human action
         # needed, so the sweep's banner entry comes back off
         self.merge_handoffs.pop(m.pmo_id, None)
-        verdict = await self.forge.mergeable(pr["number"])
+        verdict = await self.forge.mergeable(pr.number)
         if verdict is None:
             return  # still computing / CI running — next cycle re-reads
         # a False verdict can be a non-blocking "behind" (strict up-to-date
@@ -1249,7 +1251,7 @@ class MissionManager:
         # cheaper than an EXECUTE rework, so always try the merge first and
         # only route to rework when it actually fails on a real conflict
         try:
-            await self.forge.merge(pr["number"])
+            await self.forge.merge(pr.number)
         except Exception:
             if verdict is False:
                 if not await self._maybe_route_conflict_to_execute(

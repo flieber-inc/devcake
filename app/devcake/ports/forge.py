@@ -1,11 +1,63 @@
-"""ForgePort boundary: the shared error type every forge adapter raises
-(docs/06). The Protocol + PR DTOs are formalized in the ForgePort stage."""
+"""ForgePort — the contract every forge adapter implements (docs/06), plus the
+normalized DTOs that cross it and the single definition of DevCake's branch
+convention. Adapters normalize vendor payloads (GitHub PRs, GitLab MRs) into
+these DTOs; callers never see raw forge JSON."""
+
+from typing import ClassVar, Literal, Optional, Protocol
+
+from pydantic import BaseModel
+
+# THE branch-naming convention: one definition, imported by the orchestrator
+# and the prompt templates alike (docs/06 §2).
+BRANCH_PREFIX = "devcake/"
+
+
+def mission_branch(key: str) -> str:
+    """The working branch for a mission key (e.g. DEV-35 → devcake/DEV-35)."""
+    return f"{BRANCH_PREFIX}{key}"
 
 
 class ForgeError(Exception):
     """Raised by all forge adapters for HTTP-level failures (docs/06).
-    `status` carries the HTTP status code when one exists."""
+    `status` carries the HTTP status code when one exists. Adapters must never
+    leak httpx exceptions upward."""
 
     def __init__(self, msg: str, status: int | None = None):
         super().__init__(msg)
         self.status = status
+
+
+class PullRequest(BaseModel):
+    """Normalized PR/MR. GitLab's iid maps to number; its 'merged' state
+    normalizes to state='closed' + merged=True (matching today's pr_state)."""
+    number: int
+    url: str
+    state: Literal["open", "closed"]
+    merged: bool = False
+
+
+class BranchProtection(BaseModel):
+    protected: bool
+    requires_reviews: Optional[bool] = None
+
+
+class ForgePort(Protocol):
+    """App-side, decision-bearing forge operations. Contract notes (docs/06 §5):
+
+    - `mergeable` is a single-shot, non-blocking tri-state: False = auto-
+      resolvable by a branch sync (conflict/behind); True = ready now; None =
+      wait (computing, CI running, or unknown — the safe default).
+    - `merge` squash-merges and retries transient 409 races in place.
+    - `approve` uses the reviewer token; returns False when none configured.
+    - `get_pr_by_branch` returns the NEWEST PR (any state) for the branch.
+    """
+
+    async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]: ...
+    async def pr_state(self, pr_number: int) -> PullRequest: ...
+    async def post_pr_comment(self, pr_number: int, markdown: str) -> None: ...
+    async def approve(self, pr_number: int) -> bool: ...
+    async def merge(self, pr_number: int) -> None: ...
+    async def mergeable(self, pr_number: int) -> Optional[bool]: ...
+    async def default_branch_protection(
+        self, branch: str = "main") -> Optional[BranchProtection]: ...
+    def approval_footer(self, pr_url: str) -> str: ...

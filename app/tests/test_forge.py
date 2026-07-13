@@ -6,8 +6,9 @@ import asyncio
 import httpx
 import pytest
 
-from devcake.forge import ForgeError, GitHubForge
-from devcake.forge_gitlab import GitLabForge
+from devcake.adapters.github.adapter import GitHubForge
+from devcake.ports.forge import ForgeError
+from devcake.adapters.gitlab.adapter import GitLabForge
 
 
 def gh():

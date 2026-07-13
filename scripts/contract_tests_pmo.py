@@ -11,8 +11,8 @@ import os
 import httpx
 
 from devcake.config import load_config
-from devcake.linear import LinearAdapter, PMOTransient
-from devcake.pmo import ALL_LABELS
+from devcake.adapters.linear.adapter import LinearAdapter, PMOTransient
+from devcake.domain.model import ALL_LABELS
 
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []

@@ -8,6 +8,9 @@ services:
       - DEVCAKE_POLL_INTERVAL_SECONDS=${DEVCAKE_POLL_INTERVAL_SECONDS:-30}
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
+      # test fixture only: tests/test_entrypoint_render.py exercises the Dev
+      # entrypoint's renderers by path; the app never imports this at runtime
+      - ./images/common:/srv/images/common:ro
     depends_on:
       redis:       { condition: service_healthy }
       openobserve: { condition: service_started }

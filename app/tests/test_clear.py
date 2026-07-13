@@ -3,8 +3,9 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from devcake.state import Run, RunStore
-from devcake.clear import clear_local_state
+from devcake.adapters.files.run_store import RunStore
+from devcake.domain.run import Run
+from devcake.api.clear import clear_local_state
 
 
 def test_runstore_clear(tmp_path: Path):
@@ -40,7 +41,7 @@ def test_clear_local_state_preserves_nothing_but_wipes_audit(tmp_path: Path, mon
 
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(data))
     # re-import paths that were bound at module load — patch the module attributes
-    import devcake.clear as clear_mod
+    import devcake.api.clear as clear_mod
     monkeypatch.setattr(clear_mod, "DATA_DIR", data)
     monkeypatch.setattr(clear_mod, "STATE_DIR", data / "state")
     monkeypatch.setattr(clear_mod, "AUDIT_PATH", audit)

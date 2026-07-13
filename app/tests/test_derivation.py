@@ -2,7 +2,7 @@
 PMO state) and INV-2 (at most one stage label) — docs/02 §2, every row."""
 from datetime import datetime, timezone
 
-from devcake.pmo import Mission, MissionType, derive
+from devcake.domain.model import Mission, MissionType, derive
 
 NOW = datetime.now(timezone.utc)
 

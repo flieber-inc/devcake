@@ -2,7 +2,7 @@
 must appear verbatim in every playbook that writes code (docs/03 §7)."""
 from datetime import datetime, timezone
 
-from devcake.pmo import Mission
+from devcake.domain.model import Mission
 from devcake.prompts import (execute_prompt, mapper_prompt, onboard_prompt,
                              plan_prompt, review_prompt)
 

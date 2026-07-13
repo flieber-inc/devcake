@@ -6,8 +6,8 @@ import logging
 import os
 from datetime import timedelta
 
+from .run import utcnow
 from .runs import RunManager
-from .state import utcnow
 
 log = logging.getLogger("devcake.watchdog")
 

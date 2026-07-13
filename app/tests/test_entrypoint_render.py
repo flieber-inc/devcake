@@ -9,9 +9,17 @@ import json
 import os
 from pathlib import Path
 
-ENTRYPOINT = Path(__file__).parents[2] / "images" / "common" / "dev_entrypoint.py"
+# host checkout: repo/app/tests → repo/images/common; app container: /srv/tests
+# → /srv/images/common (read-only compose mount)
+_CANDIDATES = [Path(__file__).parents[2] / "images" / "common" / "dev_entrypoint.py",
+               Path(__file__).parents[1] / "images" / "common" / "dev_entrypoint.py"]
+ENTRYPOINT = next((p for p in _CANDIDATES if p.exists()), _CANDIDATES[0])
 
-# module reads these at import; redis.from_url is lazy (no connection until use)
+# module reads these at import; redis.from_url is lazy (no connection until use).
+# Restore the env afterwards — leaking REDIS_URL here would repoint the live
+# messaging tests (same pytest process) at a nonexistent server.
+_ENV_KEYS = ("DEVCAKE_RUN_ID", "REDIS_URL", "REDIS_USER", "REDIS_PASSWORD")
+_saved = {k: os.environ.get(k) for k in _ENV_KEYS}
 os.environ.setdefault("DEVCAKE_RUN_ID", "T-1-1-EXECUTE-AAAAAA")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6399/0")
 os.environ.setdefault("REDIS_USER", "test")
@@ -20,6 +28,12 @@ os.environ.setdefault("REDIS_PASSWORD", "test")
 spec = importlib.util.spec_from_file_location("dev_entrypoint", ENTRYPOINT)
 ep = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ep)
+
+for _k, _v in _saved.items():
+    if _v is None:
+        os.environ.pop(_k, None)
+    else:
+        os.environ[_k] = _v
 
 
 # ── claude stream-json ───────────────────────────────────────────────────────

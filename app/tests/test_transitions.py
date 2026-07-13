@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 import pytest
 
 from devcake.config import AppConfig, DevType
-from devcake.forge import ForgeError
-from devcake.missions import MissionManager
-from devcake.pmo import Activity, ActivityEntry, Mission
-from devcake.state import Run, RunStore
+from devcake.ports.forge import ForgeError
+from devcake.domain.orchestrator import MissionManager
+from devcake.domain.model import Activity, ActivityEntry, Mission
+from devcake.adapters.files.run_store import RunStore
+from devcake.domain.run import Run
 
 
 class FakePMO:

@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-import devcake.oauth as oauth_mod
+import devcake.domain.oauth as oauth_mod
 from devcake.config import DevType
 from devcake.harness import HARNESSES
-from devcake.oauth import OAuthManager
-from devcake.state import RunStore
+from devcake.domain.oauth import OAuthManager
+from devcake.adapters.files.run_store import RunStore
 
 
 def run_coro(c):

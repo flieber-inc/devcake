@@ -5,19 +5,25 @@ Real mission dispatch replaces the debug path at M3; the mechanics here
 checklist) are the permanent ones from docs/04 §3.1 and docs/09.
 """
 
+from __future__ import annotations
+
 import base64
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from opentelemetry.propagate import extract, inject
 
-from .dagu import DaguExecutor
+from ..telemetry import OO_ORG, OO_URL
 from .ids import make_run_id
-from .messaging import Messaging
-from .state import Run, RunStore, utcnow
-from .telemetry import OO_ORG, OO_URL
+from .run import Run, utcnow
+
+if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtime
+    from ..adapters.dagu import DaguExecutor
+    from ..adapters.files import RunStore
+    from ..adapters.redis import Messaging
 
 log = logging.getLogger("devcake.runs")
 tracer = trace.get_tracer("devcake")
@@ -34,7 +40,7 @@ def failure_record(run: "Run", outcome: str, reason: str,
     """OO log record for a run the executor lost (docs/12 §6). `detail` carries
     the Dev container's dying words (Dagu step errors + stderr tails), redacted
     like everything else that leaves the app."""
-    from .security import redact
+    from ..security import redact
     detail = "\n\n".join(f"[{e['step']} {e['status']}] {e['error']}"
                          for e in errors) or "(no step error recorded in dagu)"
     trace_id = run.traceparent.split("-")[1] if run.traceparent else ""
@@ -169,7 +175,7 @@ class RunManager:
             # {"lines": [...]} = streamed harness output (docs/09 §2); anything
             # else keeps the legacy/OAuth behavior ({oauth_url}, {level,message})
             if self.runlog is not None and isinstance(payload.get("lines"), list):
-                from .security import redact
+                from ..security import redact
                 self.runlog.append(
                     run_id, [redact(str(l))[:4000] for l in payload["lines"]])
             else:
@@ -240,7 +246,7 @@ class RunManager:
         Dagu keeps the Dev's stderr tail in its run record but nothing ships it
         to OpenObserve — fluent-bit only sees the dagu/redis containers' own
         stdout, and Dev containers are removed on exit (docs/12 §6)."""
-        from .telemetry import push_oo_log
+        from ..telemetry import push_oo_log
         try:
             errors = await self.executor.node_errors(run.run_id)
         except Exception:

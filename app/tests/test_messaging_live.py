@@ -9,7 +9,7 @@ import pytest
 import redis.asyncio as aioredis
 from redis.exceptions import AuthenticationError, NoPermissionError
 
-from devcake.messaging import INGRESS, Messaging
+from devcake.adapters.redis.messaging import INGRESS, Messaging
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 PASSWORD = os.environ.get("REDIS_PASSWORD", "")
@@ -90,7 +90,7 @@ def test_chunk_reassembly(msg):
 
 def test_poison_after_five_deliveries(msg, monkeypatch):
     # hermetic stream: the live app consumes the real ingress concurrently
-    import devcake.messaging as mm
+    import devcake.adapters.redis.messaging as mm
     test_stream = f"devcake:test:ingress:{uuid.uuid4().hex[:6]}"
     monkeypatch.setattr(mm, "INGRESS", test_stream)
 

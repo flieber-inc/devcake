@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from devcake.config import AppConfig, DevType
-from devcake.missions import MissionManager
-from devcake.pmo import Mission
-from devcake.state import RunStore
+from devcake.domain.orchestrator import MissionManager
+from devcake.domain.model import Mission
+from devcake.adapters.files.run_store import RunStore
 
 NOW = datetime.now(timezone.utc)
 
@@ -106,7 +106,7 @@ def test_off_snapshot_blocker_fetched_once_per_cycle(tmp_path):
 
 
 def test_find_cycles():
-    from devcake.pmo import find_cycles
+    from devcake.domain.model import find_cycles
     assert find_cycles({"a": {"b"}, "b": set()}) == []
     assert find_cycles({"a": {"a"}}) == [["a"]]                 # self-loop
     two = find_cycles({"a": {"b"}, "b": {"a"}})
@@ -143,7 +143,7 @@ def test_gate_map_is_always_fresh(tmp_path):
 
 
 def test_dispatch_recheck_aborts_on_live_blocker(tmp_path):
-    from devcake.pmo import MissionType
+    from devcake.domain.model import MissionType
     live = m("b2", "T-2", blocked_by=["b1"])
     pmo = DepPMO(by_id={"b2": live, "b1": m("b1", "T-1")})   # blocker still open
     mgr, _ = make_mgr(tmp_path, pmo)

@@ -9,18 +9,11 @@ from typing import Any, Optional
 
 import httpx
 
+from ...ports.forge import ForgeError
+
 log = logging.getLogger("devcake.forge")
 
 API = "https://api.github.com"
-
-
-class ForgeError(Exception):
-    """Raised by all forge adapters for HTTP-level failures (docs/06).
-    `status` carries the HTTP status code when one exists."""
-
-    def __init__(self, msg: str, status: int | None = None):
-        super().__init__(msg)
-        self.status = status
 
 
 class GitHubForge:
@@ -54,7 +47,7 @@ class GitHubForge:
         return prs[0] if prs else None
 
     async def post_pr_comment(self, pr_number: int, markdown: str) -> None:
-        from .security import redact
+        from ...security import redact
         await self._req("POST", f"/issues/{pr_number}/comments",
                         json={"body": redact(markdown)})
 

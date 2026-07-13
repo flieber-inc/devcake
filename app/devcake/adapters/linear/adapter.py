@@ -12,8 +12,9 @@ from typing import Any, Optional
 
 import httpx
 
-from .pmo import (ALL_LABELS, Activity, ActivityEntry, Mission, NormalizedStatus,
-                  PMOCapabilities, Priority)
+from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, Mission,
+                             NormalizedStatus, Priority)
+from ...ports.pmo import PMOCapabilities
 
 log = logging.getLogger("devcake.linear")
 

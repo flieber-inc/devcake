@@ -6,7 +6,7 @@ import json
 
 import httpx
 
-from devcake.linear import LinearAdapter
+from devcake.adapters.linear.adapter import LinearAdapter
 
 ISSUE = {
     "id": "uuid-b", "identifier": "T-2", "title": "implement",
@@ -67,7 +67,7 @@ def test_list_all_paginates_issue_pages():
 def test_full_relations_page_warns(caplog):
     import logging
 
-    from devcake.linear import RELATIONS_PAGE
+    from devcake.adapters.linear.adapter import RELATIONS_PAGE
     issue = {**ISSUE, "inverseRelations": {"nodes": [
         {"type": "related", "issue": {"id": f"r{i}"}}
         for i in range(RELATIONS_PAGE)]}}

@@ -5,6 +5,8 @@ M4/M5; the mechanics here (ordering, caps, grace cycle, compare-and-transition,
 attempt counting) are the permanent ones.
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import json
@@ -14,25 +16,26 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from .config import AppConfig, DevType
-from .harness import HARNESSES
-from .linear import LinearAdapter
-from .messaging import Messaging
-from .forge import GitHubForge
-from .forge_gitlab import GitLabForge
-from .pmo import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
-                  LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW,
-                  LABEL_SKIP, LABEL_TRACKING, Mission, MissionType, PRIORITY_RANK,
-                  STAGE_LABELS, derive, find_cycles)
+from ..config import AppConfig, DevType
+from ..harness import HARNESSES
+from ..security import redact
+from ..telemetry import OO_ORG, OO_URL
+from .model import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
+                    LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW,
+                    LABEL_SKIP, LABEL_TRACKING, Mission, MissionType, PRIORITY_RANK,
+                    STAGE_LABELS, derive, find_cycles)
+from .run import Run, utcnow
 from .runs import RunManager
-from .security import redact
-from .state import Run, utcnow
-from .telemetry import OO_ORG, OO_URL
+
+if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtime
+    from ..adapters.linear import LinearAdapter
+    from ..adapters.redis import Messaging
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -91,10 +94,12 @@ def _oo_basic_auth() -> str:
 
 class MissionManager:
     def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
-                 pmo: LinearAdapter, runs: RunManager, messaging: Messaging):
+                 pmo: LinearAdapter, forge, runs: RunManager,
+                 messaging: Messaging):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
+        self.forge = forge
         self.runs = runs
         self.messaging = messaging
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
@@ -121,16 +126,6 @@ class MissionManager:
         # marker opens a new episode. A human DELETING the hand-off comment
         # instead of swapping labels isn't noticed until restart.
         self._merge_window_closed: set[str] = set()
-        self.forge = self._make_forge()
-
-    def _make_forge(self):
-        reviewer = os.environ.get(self.config.repo.reviewer_token_env or "") or None
-        cls = GitLabForge if self.config.repo.forge == "gitlab" else GitHubForge
-        return cls(self.config.repo.url, self.config.repo.token, reviewer)
-
-    def reload_forge(self) -> None:
-        """Called after a config write changes repo settings (hot reload)."""
-        self.forge = self._make_forge()
 
     # ── audit log (docs/10: every PMO write) ────────────────────────────────
 
@@ -289,7 +284,7 @@ class MissionManager:
             traceparent = carrier.get("traceparent", "")
 
             redis_password = await self.messaging.create_run_user(run_id)
-            from .prompts import (execute_prompt, onboard_prompt, plan_prompt,
+            from ..prompts import (execute_prompt, onboard_prompt, plan_prompt,
                                   review_prompt)
             repo_name = self.config.repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
             prompt = {
@@ -635,7 +630,7 @@ class MissionManager:
             await self.pmo.swap_labels(pmo_id, remove={LABEL_PLAN}, add={LABEL_EXECUTE})
             self._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
         elif outcome == "executed":
-            from .pmo import LABEL_REVIEW
+            from .model import LABEL_REVIEW
             await self.pmo.swap_labels(pmo_id, remove={LABEL_EXECUTE}, add={LABEL_REVIEW})
             await self._feed(
                 pmo_id, run.pmo_kind,
@@ -643,7 +638,7 @@ class MissionManager:
                 f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
             self._audit(pmo_id, "label_swap", f"{LABEL_EXECUTE}→{LABEL_REVIEW}")
         elif outcome == "executed_trivially":
-            from .pmo import LABEL_REVIEW
+            from .model import LABEL_REVIEW
             await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_REVIEW})
             await self._feed(
                 pmo_id, run.pmo_kind,
@@ -984,7 +979,7 @@ class MissionManager:
         blocked-by edges. No PMO writes at dispatch (no status, no labels) —
         finalize_mapper validates and applies whatever it proposes."""
         from .ids import make_run_id
-        from .prompts import MAPPER_MISSION_CAP, mapper_prompt
+        from ..prompts import MAPPER_MISSION_CAP, mapper_prompt
         eligible = [m for m in missions
                     if m.pmo_kind == "issue" and m.status not in ("done", "canceled")
                     and (self.config.adoption_mode != "opt_in"

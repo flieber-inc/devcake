@@ -2,9 +2,9 @@
 including the Dev container's stderr tail — must survive into the OO record,
 redacted. Payload shapes below match a live Dagu v2.10.5 response."""
 
-from devcake.dagu import extract_node_errors
-from devcake.runs import failure_record
-from devcake.state import Run
+from devcake.adapters.dagu.executor import extract_node_errors
+from devcake.domain.runs import failure_record
+from devcake.domain.run import Run
 
 LIVE_STATUS = {
     "dagRunDetails": {

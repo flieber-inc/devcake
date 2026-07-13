@@ -1,7 +1,7 @@
 """Human-readable run ids (docs/02 §7): Dagu charset ^[-a-zA-Z0-9_]+$, ≤64."""
 import re
 
-from devcake.ids import make_run_id
+from devcake.domain.ids import make_run_id
 
 
 def test_format_and_charset():

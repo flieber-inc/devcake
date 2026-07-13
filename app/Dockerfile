@@ -9,4 +9,4 @@ COPY devcake/ ./devcake/
 COPY tests/ ./tests/
 
 EXPOSE 8000
-CMD ["uvicorn", "devcake.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "devcake.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

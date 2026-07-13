@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .forge import ForgeError
+from ...ports.forge import ForgeError
 
 log = logging.getLogger("devcake.forge")
 
@@ -48,7 +48,7 @@ class GitLabForge:
         return {"number": mr["iid"], "html_url": mr["web_url"], "state": mr["state"]}
 
     async def post_pr_comment(self, pr_number: int, markdown: str) -> None:
-        from .security import redact
+        from ...security import redact
         await self._req("POST", f"/merge_requests/{pr_number}/notes",
                         json={"body": redact(markdown)})
 

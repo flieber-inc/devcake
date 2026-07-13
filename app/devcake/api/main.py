@@ -16,20 +16,22 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from .config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
-                     load_config, load_dev_types, save_config, save_dev_type)
-from .oauth import OAuthManager
-from .dagu import DAGU_URL, DaguExecutor, DuplicateRun
-from .linear import LinearAdapter, PMOTransient
-from .messaging import Messaging
-from .missions import MapperBusy, MapperService, MapperUnconfigured, MissionManager
-from .harness import HARNESSES, dev_type_status
-from .pmo import ALL_LABELS, derive
-from .runlog import RunLogStore
-from .runs import RunManager
-from .state import RunStore
-from .telemetry import OO_URL, setup_telemetry
-from .watchdog import watchdog_loop
+from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
+from ..adapters.files import RunLogStore, RunStore
+from ..adapters.github import GitHubForge
+from ..adapters.gitlab import GitLabForge
+from ..adapters.linear import LinearAdapter, PMOTransient
+from ..adapters.redis import Messaging
+from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
+                      load_config, load_dev_types, save_config, save_dev_type)
+from ..domain.model import ALL_LABELS, derive
+from ..domain.oauth import OAuthManager
+from ..domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
+                                   MissionManager)
+from ..domain.runs import RunManager
+from ..domain.watchdog import watchdog_loop
+from ..harness import HARNESSES, dev_type_status
+from ..telemetry import OO_URL, setup_telemetry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("devcake")
@@ -46,8 +48,17 @@ store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
+def _make_forge(cfg: AppConfig):
+    """Adapter construction lives in the api layer — the domain receives the
+    forge fully built and never imports adapter code (docs/01 §3)."""
+    reviewer = os.environ.get(cfg.repo.reviewer_token_env or "") or None
+    cls = GitLabForge if cfg.repo.forge == "gitlab" else GitHubForge
+    return cls(cfg.repo.url, cfg.repo.token, reviewer)
+
+
 pmo = LinearAdapter(config.api_key)
-mission_mgr = MissionManager(config, dev_types, pmo, manager, messaging)
+forge = _make_forge(config)
+mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
 manager.mission_mgr = mission_mgr
 oauth_mgr = OAuthManager(manager, messaging, dev_types)
 manager.oauth_mgr = oauth_mgr
@@ -343,7 +354,7 @@ async def put_config(body: dict):
     for field in merged.model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
-    mission_mgr.reload_forge()
+    mission_mgr.forge = _make_forge(config)  # hot reload after repo changes
     return config.model_dump()
 
 

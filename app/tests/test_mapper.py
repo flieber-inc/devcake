@@ -10,10 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 from devcake.config import AppConfig, DevType
-from devcake.missions import (MapperBusy, MapperService, MapperUnconfigured,
+from devcake.domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
                               MissionManager)
-from devcake.pmo import Activity, ActivityEntry, Mission
-from devcake.state import Run, RunStore
+from devcake.domain.model import Activity, ActivityEntry, Mission
+from devcake.adapters.files.run_store import RunStore
+from devcake.domain.run import Run
 
 NOW = datetime.now(timezone.utc)
 

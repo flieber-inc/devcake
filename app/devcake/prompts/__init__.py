@@ -2,7 +2,7 @@
 docs/03 — workspace boundaries, result.json contract, bounded effort. Prompts
 inline only the mission title/description; activity/ is reference material."""
 
-from .pmo import Mission
+from ..domain.model import Mission
 
 ONBOARD_PLAYBOOK = """
 ## Your current mission type: ONBOARD (triage)

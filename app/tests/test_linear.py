@@ -4,7 +4,7 @@ Ordering is pinned with orderBy: createdAt (verified live: newest-first); the
 10-page/1,000-comment safety ceiling logs a truncation WARNING, never silent."""
 import asyncio
 
-from devcake.linear import MAX_COMMENT_PAGES, LinearAdapter
+from devcake.adapters.linear.adapter import MAX_COMMENT_PAGES, LinearAdapter
 
 
 def run_coro(c):

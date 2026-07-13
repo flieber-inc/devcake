@@ -16,60 +16,55 @@ from devcake.domain.run import Run
 
 
 class FakePMO:
+    """Implements the unified PMOPort surface (MissionRef-keyed; the adapter
+    owns kind dispatch). Project feed posts land in project_updates so tests
+    can assert the baton path separately from issue comments."""
+
     def __init__(self, mission):
         self.mission = mission
         self.comments = []
         self.swaps = []
         self.statuses = []
-        self.created = []       # (title, project_id)
+        self.created = []       # (title, parent_ref)
         self.relations = []     # (blocker_id, blocked_id)
         self.uploads = []       # (name, bytes)
         self.activity_entries = []
 
-    async def get_mission(self, pmo_id):
+    async def get(self, ref):
         return self.mission
 
-    async def get_project(self, pmo_id):
-        return self.mission
+    async def post_feed(self, ref, markdown):
+        if ref.kind == "project":
+            self.project_updates = getattr(self, "project_updates", [])
+            self.project_updates.append((ref.pmo_id, markdown))
+        else:
+            self.comments.append(markdown)
 
-    async def post_comment(self, pmo_id, md):
-        self.comments.append(md)
-
-    async def swap_labels(self, pmo_id, remove, add):
+    async def swap_labels(self, ref, remove, add):
         self.swaps.append((set(remove), set(add)))
         self.mission.labels = (self.mission.labels - set(remove)) | set(add)
 
-    async def swap_labels_project(self, pmo_id, remove, add):
-        await self.swap_labels(pmo_id, remove, add)
-
-    async def set_status(self, pmo_id, status):
+    async def set_status(self, ref, status):
         self.statuses.append(status)
         self.mission.status = status
 
-    async def set_project_status(self, pmo_id, status):
-        await self.set_status(pmo_id, status)
+    async def upload_attachment(self, pmo_id, filename, data):
+        self.uploads.append((filename, data))
+        return f"https://fake/{filename}"
 
-    async def upload_attachment(self, pmo_id, name, data):
-        self.uploads.append((name, data))
-        return f"https://fake/{name}"
-
-    async def get_activity(self, pmo_id):
+    async def get_activity(self, ref):
         self.get_activity_calls = getattr(self, "get_activity_calls", 0) + 1
         return Activity(mission=self.mission, entries=list(self.activity_entries))
 
     async def create_mission(self, team_ref, title, description, priority,
-                             labels, project_id=None):
-        self.created.append((title, project_id))
+                             label_names, parent_ref=None):
+        self.created.append((title, parent_ref))
         return f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
 
     async def create_relation(self, blocker_id, blocked_id):
         self.relations.append((blocker_id, blocked_id))
 
-    async def create_project_update(self, project_id, body):
-        self.project_updates = getattr(self, "project_updates", [])
-        self.project_updates.append((project_id, body))
-
-    async def children_of_project(self, project_id):
+    async def children_of(self, ref):
         return []
 
 

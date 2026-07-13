@@ -24,11 +24,11 @@ class DepPMO:
         self.fail_ids = set(fail_ids)
         self.live_fetches = []
 
-    async def get_mission(self, pmo_id):
-        self.live_fetches.append(pmo_id)
-        if pmo_id in self.fail_ids:
+    async def get(self, ref):
+        self.live_fetches.append(ref.pmo_id)
+        if ref.pmo_id in self.fail_ids:
             raise RuntimeError("pmo unreachable")
-        return self.by_id[pmo_id]
+        return self.by_id[ref.pmo_id]
 
 
 def make_mgr(tmp_path, pmo):

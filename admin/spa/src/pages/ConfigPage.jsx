@@ -537,7 +537,7 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
           {testResult.pmo && (
             <span className={`text-sm ${testResult.pmo.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
               {testResult.pmo.ok
-                ? `✓ team ${testResult.pmo.team}: ${testResult.pmo.labels}/10 labels, ${testResult.pmo.missions_visible} items visible`
+                ? `✓ team ${testResult.pmo.team}: ${testResult.pmo.labels}/${testResult.pmo.labels_expected ?? 10} labels, ${testResult.pmo.missions_visible} items visible`
                 : `✗ ${testResult.pmo.error}`}
             </span>
           )}

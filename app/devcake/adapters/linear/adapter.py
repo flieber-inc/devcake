@@ -12,9 +12,9 @@ from typing import Any, Optional
 
 import httpx
 
-from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, Mission,
-                             NormalizedStatus, Priority)
-from ...ports.pmo import PMOCapabilities
+from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
+                             Mission, MissionRef, NormalizedStatus, Priority)
+from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 
 log = logging.getLogger("devcake.linear")
 
@@ -32,6 +32,11 @@ PROJECT_STATUS_MAP: dict[str, NormalizedStatus] = {
     "completed": "done", "canceled": "canceled", "paused": "backlog",
 }
 _ASSET_RE = re.compile(r"https://uploads\.linear\.app/[^\s)\]]+")
+# markdown-link form of the same asset URLs — recovers the human filename the
+# feed carried, so ActivityEntry attachments arrive named (the domain never
+# parses vendor asset URLs)
+_NAMED_ASSET_RE = re.compile(
+    r"\[([^\]]+\.\w{1,8})\]\((https://uploads\.linear\.app/\S+?)\)")
 
 # inverseRelations page size: Linear returns ALL relation types and we filter
 # for `blocks` client-side, so an undersized page can silently evict a blocker
@@ -43,10 +48,6 @@ RELATIONS_PAGE = 50
 # rate), not a design limit. Newest pages are fetched first, so the newest
 # comments always survive if it trips.
 MAX_COMMENT_PAGES = 10
-
-
-class PMOTransient(Exception):
-    """Retryable PMO failure (429/5xx/network) — docs/15."""
 
 
 class LinearAdapter:
@@ -140,7 +141,14 @@ class LinearAdapter:
         missions += [self._project_to_mission(n) for n in projects]
         return missions
 
-    async def get_mission(self, pmo_id: str) -> Mission:
+    async def get(self, ref: MissionRef) -> Mission:
+        """Unified read — the issue/project duality is dispatched HERE, never
+        in the domain (docs/05)."""
+        if ref.kind == "project":
+            return await self._get_project(ref.pmo_id)
+        return await self._get_issue(ref.pmo_id)
+
+    async def _get_issue(self, pmo_id: str) -> Mission:
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
                  id identifier title description url updatedAt priority
@@ -151,7 +159,7 @@ class LinearAdapter:
             } }""", {"id": pmo_id})
         return self._issue_to_mission(data["issue"])
 
-    async def get_project(self, pmo_id: str) -> Mission:
+    async def _get_project(self, pmo_id: str) -> Mission:
         data = await self._gql(
             """query($id: String!) { project(id: $id) {
                  id name description content url updatedAt priority
@@ -160,7 +168,12 @@ class LinearAdapter:
             } }""", {"id": pmo_id})
         return self._project_to_mission(data["project"])
 
-    async def get_activity(self, pmo_id: str) -> Activity:
+    async def get_activity(self, ref: MissionRef) -> Activity:
+        """Issue: the full comment feed. Project: mission + entries=[] —
+        Linear projects have no issue-style comments API (verified M2/M5)."""
+        if ref.kind == "project":
+            return Activity(mission=await self._get_project(ref.pmo_id), entries=[])
+        pmo_id = ref.pmo_id
         # Cursor-paginated like every other list read (docs/05 §3; a single
         # page was verified LOSSY at 108 comments on 2026-07-12). orderBy:
         # createdAt is pinned deliberately — verified live to return
@@ -198,24 +211,63 @@ class LinearAdapter:
         mission = self._issue_to_mission(issue)
         entries = []
         for c in nodes:
+            body = c["body"] or ""
+            names = {url: name for name, url in _NAMED_ASSET_RE.findall(body)}
             entries.append(ActivityEntry(
                 ts=c["createdAt"], author=(c.get("user") or {}).get("name") or "unknown",
                 kind="comment", body=c["body"],
-                attachments=_ASSET_RE.findall(c["body"] or ""),
+                attachments=[AttachmentRef(url=u, name=names.get(u))
+                             for u in _ASSET_RE.findall(body)],
             ))
         entries.sort(key=lambda e: e.ts)
         return Activity(mission=mission, entries=entries)
 
     # ── writes (contract-test scope at M2) ───────────────────────────────────
 
-    async def post_comment(self, pmo_id: str, markdown: str) -> None:
+    async def post_feed(self, ref: MissionRef, markdown: str) -> None:
+        """Issue → comment; project → project update (Linear's project-native
+        feed — projects have no comments API, verified M2/M5)."""
+        if ref.kind == "project":
+            await self._gql(
+                """mutation($p: String!, $b: String!) {
+                     projectUpdateCreate(input: {projectId: $p, body: $b}) { success } }""",
+                {"p": ref.pmo_id, "b": markdown})
+            return
         await self._gql(
             """mutation($id: String!, $body: String!) {
                  commentCreate(input: {issueId: $id, body: $body}) { success } }""",
-            {"id": pmo_id, "body": markdown})
+            {"id": ref.pmo_id, "body": markdown})
 
-    async def set_status(self, pmo_id: str, status: NormalizedStatus) -> None:
-        team_key = (await self.get_mission(pmo_id)).key.split("-")[0]
+    async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
+        if ref.kind == "project":
+            await self._set_project_status(ref.pmo_id, status)
+        else:
+            await self._set_issue_status(ref.pmo_id, status)
+
+    async def swap_labels(self, ref: MissionRef, remove: set[str],
+                          add: set[str]) -> None:
+        if ref.kind == "project":
+            await self._swap_project_labels(ref.pmo_id, remove, add)
+        else:
+            await self._swap_issue_labels(ref.pmo_id, remove, add)
+
+    async def children_of(self, ref: MissionRef) -> list[Mission]:
+        if ref.kind != "project":
+            return []          # Linear issues have no child missions
+        nodes = await self._paginate(
+            """query($pid: ID!, $after: String) {
+                 issues(first: 100, after: $after, filter: {project: {id: {eq: $pid}}}) {
+                   pageInfo { hasNextPage endCursor }
+                   nodes {
+                     id identifier title description url updatedAt priority
+                     state { name type }
+                     labels(first: 20) { nodes { name } }
+                     project { id }
+                   } } }""", "issues", {"pid": ref.pmo_id})
+        return [self._issue_to_mission(n) for n in nodes]
+
+    async def _set_issue_status(self, pmo_id: str, status: NormalizedStatus) -> None:
+        team_key = (await self._get_issue(pmo_id)).key.split("-")[0]
         team = await self._team(team_key)
         wanted = {"backlog": "backlog", "in_progress": "started",
                   "done": "completed", "canceled": "canceled"}[status]
@@ -226,7 +278,8 @@ class LinearAdapter:
                  issueUpdate(id: $id, input: {stateId: $stateId}) { success } }""",
             {"id": pmo_id, "stateId": state["id"]})
 
-    async def swap_labels(self, pmo_id: str, remove: set[str], add: set[str]) -> None:
+    async def _swap_issue_labels(self, pmo_id: str, remove: set[str],
+                                 add: set[str]) -> None:
         """Single issueUpdate(labelIds) — the closest-to-atomic op Linear offers."""
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
@@ -274,22 +327,32 @@ class LinearAdapter:
 
     async def create_mission(self, team_ref: str, title: str, description: str,
                              priority: str, label_names: set[str],
-                             project_id: str | None = None) -> tuple[str, str]:
-        """Returns (identifier, id) — the id is needed to wire relation edges."""
+                             parent_ref: str | None = None) -> tuple[str, str]:
+        """Returns (identifier, id) — the id is needed to wire relation edges.
+        parent_ref is the containing project's pmo_id, when there is one."""
         team = await self._team(team_ref)
         by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
         prio = {"urgent": 1, "high": 2, "medium": 3, "low": 4}[priority]
         inp: dict = {"teamId": team["id"], "title": title, "description": description,
                      "priority": prio,
                      "labelIds": [by_name[n.upper()] for n in label_names]}
-        if project_id:
-            inp["projectId"] = project_id
+        if parent_ref:
+            inp["projectId"] = parent_ref
         data = await self._gql(
             """mutation($input: IssueCreateInput!) {
                  issueCreate(input: $input) { issue { id identifier } } }""",
             {"input": inp})
         issue = data["issueCreate"]["issue"]
         return issue["identifier"], issue["id"]
+
+    async def health_probe(self, team_ref: str) -> PMOHealth:
+        """Connection + label-bootstrap probe. Counts DevCake's MANAGED label
+        set (intersection with ALL_LABELS), not any DEVCAKE-prefixed name."""
+        team = await self._team(team_ref)
+        present = {l["name"].upper() for l in team["labels"]["nodes"]} & ALL_LABELS
+        return PMOHealth(ok=True, workspace=team.get("key") or team_ref,
+                         managed_labels_present=len(present),
+                         managed_labels_expected=len(ALL_LABELS))
 
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None:
         """`issueId blocks relatedIssueId` (docs/05 §6, ADR-0007). Duplicate
@@ -307,21 +370,8 @@ class LinearAdapter:
                 return
             raise
 
-    async def children_of_project(self, project_id: str) -> list[Mission]:
-        nodes = await self._paginate(
-            """query($pid: ID!, $after: String) {
-                 issues(first: 100, after: $after, filter: {project: {id: {eq: $pid}}}) {
-                   pageInfo { hasNextPage endCursor }
-                   nodes {
-                     id identifier title description url updatedAt priority
-                     state { name type }
-                     labels(first: 20) { nodes { name } }
-                     project { id }
-                   } } }""", "issues", {"pid": project_id})
-        return [self._issue_to_mission(n) for n in nodes]
-
-    async def swap_labels_project(self, project_id: str, remove: set[str],
-                                  add: set[str]) -> None:
+    async def _swap_project_labels(self, project_id: str, remove: set[str],
+                                   add: set[str]) -> None:
         """Project labels are a separate workspace-level entity (verified at M2)."""
         pl = await self._gql("""query { projectLabels(first: 100) { nodes { id name } } }""")
         by_name = {l["name"].upper(): l["id"] for l in pl["projectLabels"]["nodes"]}
@@ -338,16 +388,7 @@ class LinearAdapter:
                  projectUpdate(id: $id, input: {labelIds: $l}) { success } }""",
             {"id": project_id, "l": sorted(current.values())})
 
-    async def create_project_update(self, project_id: str, body: str) -> None:
-        """Project updates are Linear's project-native feed — projects have no
-        issue-style comments API (verified at M2/M5), so baton-pass messages on
-        project-kind missions land here (docs/05 §6, ADR-0007 addendum)."""
-        await self._gql(
-            """mutation($p: String!, $b: String!) {
-                 projectUpdateCreate(input: {projectId: $p, body: $b}) { success } }""",
-            {"p": project_id, "b": body})
-
-    async def set_project_status(self, project_id: str, status: NormalizedStatus) -> None:
+    async def _set_project_status(self, project_id: str, status: NormalizedStatus) -> None:
         wanted = {"backlog": "backlog", "in_progress": "started",
                   "done": "completed", "canceled": "canceled"}[status]
         data = await self._gql("""query { projectStatuses { nodes { id name type } } }""")

@@ -11,7 +11,9 @@ import os
 import httpx
 
 from devcake.config import load_config
-from devcake.adapters.linear.adapter import LinearAdapter, PMOTransient
+from devcake.adapters.linear.adapter import LinearAdapter
+from devcake.domain.model import MissionRef
+from devcake.ports.pmo import PMOTransient
 from devcake.domain.model import ALL_LABELS
 
 PASS, FAIL = "PASS", "FAIL"
@@ -22,6 +24,9 @@ def check(num: str, name: str, ok: bool, note: str = "") -> None:
     results.append((num, name, PASS if ok else FAIL + (" — " + note if note else "")))
 
 
+# NOTE: _team/_gql below are adapter-internal fixture plumbing (issue create/
+# delete has no port method and should not grow one for tests' sake). This
+# battery is Linear-specific by design; only port methods are contract-tested.
 async def make_temp_issue(pmo, team, title, label_names):
     t = await pmo._team(team)
     by_name = {l["name"].upper(): l["id"] for l in t["labels"]["nodes"]}
@@ -54,8 +59,8 @@ async def main():
     ok2, note = True, ""
     try:
         for status in ("in_progress", "done", "canceled", "backlog"):
-            await pmo.set_status(tid, status)
-            got = (await pmo.get_mission(tid)).status
+            await pmo.set_status(MissionRef(tid, "issue"), status)
+            got = (await pmo.get(MissionRef(tid, "issue"))).status
             if got != status:
                 ok2, note = False, f"{status} → {got}"
                 break
@@ -64,21 +69,22 @@ async def main():
     check("2", "status normalization round-trips all four", ok2, note)
 
     # 4 — swap_labels: remove+add in one observable step (reuse temp issue)
-    await pmo.swap_labels(tid, remove=set(), add={"DEVCAKE-PLAN"})
-    await pmo.swap_labels(tid, remove={"DEVCAKE-PLAN"}, add={"DEVCAKE-EXECUTE"})
-    labels = (await pmo.get_mission(tid)).labels
+    await pmo.swap_labels(MissionRef(tid, "issue"), remove=set(), add={"DEVCAKE-PLAN"})
+    await pmo.swap_labels(MissionRef(tid, "issue"), remove={"DEVCAKE-PLAN"}, add={"DEVCAKE-EXECUTE"})
+    labels = (await pmo.get(MissionRef(tid, "issue"))).labels
     check("4", "swap_labels atomic remove+add, others preserved",
           "DEVCAKE-EXECUTE" in labels and "DEVCAKE-PLAN" not in labels
           and "DEVCAKE" in labels, str(labels))
 
     # 8 — activity ordering + attachment extraction (reuse temp issue)
-    await pmo.post_comment(tid, "first comment")
+    await pmo.post_feed(MissionRef(tid, "issue"), "first comment")
     await asyncio.sleep(1.2)
-    await pmo.post_comment(
-        tid, "second, with file: https://uploads.linear.app/fake/asset-abc123.md")
-    act = await pmo.get_activity(tid)
+    await pmo.post_feed(
+        MissionRef(tid, "issue"),
+        "second, with file: https://uploads.linear.app/fake/asset-abc123.md")
+    act = await pmo.get_activity(MissionRef(tid, "issue"))
     bodies = [e.body.split(",")[0] for e in act.entries]
-    atts = [u for e in act.entries for u in e.attachments]
+    atts = [a.url for e in act.entries for a in e.attachments]
     check("8", "get_activity chronological + attachments extracted",
           bodies == ["first comment", "second"] and len(atts) == 1, f"{bodies} {atts}")
     await delete_issue(pmo, tid)
@@ -103,6 +109,12 @@ async def main():
     check("5", "ensure_labels idempotent + case-insensitive",
           before == after and len(after) == len(ALL_LABELS),
           f"{len(before)}→{len(after)}")
+
+    # 5b — health_probe: the public replacement for _team reach-ins
+    h = await pmo.health_probe(team)
+    check("5b", "health_probe ok + managed labels all present",
+          h.ok and h.managed_labels_present == h.managed_labels_expected == len(ALL_LABELS),
+          f"{h.managed_labels_present}/{h.managed_labels_expected}")
 
     # 9 — 429 → PMO_TRANSIENT (mock transport; never hits the network)
     mock = httpx.MockTransport(lambda req: httpx.Response(429, json={}))

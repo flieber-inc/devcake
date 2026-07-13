@@ -7,6 +7,7 @@ import json
 import httpx
 
 from devcake.adapters.linear.adapter import LinearAdapter
+from devcake.domain.model import MissionRef
 
 ISSUE = {
     "id": "uuid-b", "identifier": "T-2", "title": "implement",
@@ -31,7 +32,7 @@ def test_inverse_relations_parse_into_blocked_by():
     mock = httpx.MockTransport(
         lambda req: httpx.Response(200, json={"data": {"issue": ISSUE}}))
     pmo = LinearAdapter("fake-key", transport=mock)
-    mission = run_coro(pmo.get_mission("uuid-b"))
+    mission = run_coro(pmo.get(MissionRef("uuid-b", "issue")))
     assert mission.blocked_by == ["uuid-a"]
 
 
@@ -75,7 +76,7 @@ def test_full_relations_page_warns(caplog):
         lambda req: httpx.Response(200, json={"data": {"issue": issue}}))
     pmo = LinearAdapter("fake-key", transport=mock)
     with caplog.at_level(logging.WARNING, logger="devcake.linear"):
-        mission = run_coro(pmo.get_mission("uuid-b"))
+        mission = run_coro(pmo.get(MissionRef("uuid-b", "issue")))
     assert mission.blocked_by == []                      # blocks evicted by the page
     assert any("inverseRelations page is full" in r.message
                for r in caplog.records)                  # …but never silently

@@ -3,7 +3,7 @@ derivation (docs/02). Pure logic — no I/O, no vendor types (docs/01 §3)."""
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal, NamedTuple, Optional
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +38,15 @@ class MissionType(str, Enum):
     REVIEW = "REVIEW"
 
 
+class MissionRef(NamedTuple):
+    """Adapter-facing mission handle: opaque vendor id + normalized kind.
+    The port's unified write/read methods take a ref; how each kind is stored
+    (Linear's issue/project duality, or nothing of the sort) is the adapter's
+    business, never the domain's."""
+    pmo_id: str
+    kind: Literal["issue", "project"]
+
+
 class Mission(BaseModel):
     pmo_id: str
     pmo_kind: Literal["issue", "project"]
@@ -53,6 +62,10 @@ class Mission(BaseModel):
     # pmo_ids of missions that block this one (native PMO relations; issues only —
     # projects always have [] since Linear relations are issue-scoped, ADR-0007)
     blocked_by: list[str] = Field(default_factory=list)
+
+    @property
+    def ref(self) -> MissionRef:
+        return MissionRef(self.pmo_id, self.pmo_kind)
 
 
 class Derivation(BaseModel):
@@ -133,12 +146,20 @@ def find_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
     return cycles
 
 
+class AttachmentRef(BaseModel):
+    """An asset referenced from a feed entry. `name` is the markdown link text
+    when the feed carried one — the adapter resolves it so the domain never
+    parses vendor asset URLs."""
+    url: str
+    name: Optional[str] = None
+
+
 class ActivityEntry(BaseModel):
     ts: datetime
     author: str
     kind: Literal["comment", "status_change", "attachment"]
     body: str = ""
-    attachments: list[str] = Field(default_factory=list)  # asset URLs
+    attachments: list[AttachmentRef] = Field(default_factory=list)
 
 
 class Activity(BaseModel):

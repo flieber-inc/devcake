@@ -5,6 +5,7 @@ Ordering is pinned with orderBy: createdAt (verified live: newest-first); the
 import asyncio
 
 from devcake.adapters.linear.adapter import MAX_COMMENT_PAGES, LinearAdapter
+from devcake.domain.model import MissionRef
 
 
 def run_coro(c):
@@ -46,7 +47,7 @@ def _paged_adapter(total, queries):
 
 def test_get_activity_walks_all_pages_chronologically():
     queries = []
-    act = run_coro(_paged_adapter(108, queries).get_activity("i1"))  # DEV-50 shape
+    act = run_coro(_paged_adapter(108, queries).get_activity(MissionRef("i1", "issue")))  # DEV-50 shape
     assert len(act.entries) == 108
     assert len(queries) == 2                        # 100 + 8, exactly two reads
     assert "orderBy: createdAt" in queries[0][0]    # pinned ordering
@@ -58,7 +59,7 @@ def test_get_activity_walks_all_pages_chronologically():
 
 def test_get_activity_single_page_needs_one_read():
     queries = []
-    act = run_coro(_paged_adapter(99, queries).get_activity("i1"))
+    act = run_coro(_paged_adapter(99, queries).get_activity(MissionRef("i1", "issue")))
     assert len(act.entries) == 99 and len(queries) == 1
 
 
@@ -66,7 +67,7 @@ def test_get_activity_ceiling_warns_and_keeps_newest(caplog):
     total = 100 * MAX_COMMENT_PAGES + 50            # 50 past the ceiling
     queries = []
     with caplog.at_level("WARNING", logger="devcake.linear"):
-        act = run_coro(_paged_adapter(total, queries).get_activity("i1"))
+        act = run_coro(_paged_adapter(total, queries).get_activity(MissionRef("i1", "issue")))
     assert len(act.entries) == 100 * MAX_COMMENT_PAGES
     assert len(queries) == MAX_COMMENT_PAGES        # stopped at the valve
     assert any("comment ceiling" in r.message for r in caplog.records)

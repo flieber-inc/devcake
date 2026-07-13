@@ -12,7 +12,7 @@ import pytest
 from devcake.config import AppConfig, DevType
 from devcake.domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
                               MissionManager)
-from devcake.domain.model import Activity, ActivityEntry, Mission
+from devcake.domain.model import Activity, ActivityEntry, AttachmentRef, Mission
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
 
@@ -38,10 +38,10 @@ class MapPMO:
     async def create_relation(self, blocker_id, blocked_id):
         self.relations.append((blocker_id, blocked_id))
 
-    async def post_comment(self, pmo_id, md):
-        self.comments.append((pmo_id, md))
+    async def post_feed(self, ref, markdown):
+        self.comments.append((ref.pmo_id, markdown))
 
-    async def get_activity(self, pmo_id):
+    async def get_activity(self, ref):
         return self.activity
 
 
@@ -244,7 +244,8 @@ def test_activity_payload_dedupes_downloaded_attachment_names(tmp_path):
     entries = [
         ActivityEntry(ts=NOW, author="a", kind="comment", body="long " + "x" * 3000),
         ActivityEntry(ts=NOW, author="a", kind="comment",
-                      body=f"file here: [{base}]({url})", attachments=[url]),
+                      body=f"file here: [{base}]({url})",
+                      attachments=[AttachmentRef(url=url, name=base)]),
     ]
     pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
     pmo.download_asset = _returns(b"data")

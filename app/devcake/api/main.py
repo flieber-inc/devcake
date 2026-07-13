@@ -20,7 +20,7 @@ from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.github import GitHubForge
 from ..adapters.gitlab import GitLabForge
-from ..adapters.linear import LinearAdapter, PMOTransient
+from ..adapters.linear import LinearAdapter
 from ..adapters.redis import Messaging
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
                       load_config, load_dev_types, migrate_config_patch,
@@ -32,6 +32,7 @@ from ..domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured
 from ..domain.runs import RunManager
 from ..domain.watchdog import watchdog_loop
 from ..harness import HARNESSES, dev_type_status
+from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -221,8 +222,7 @@ async def health():
         _check_http(f"{OO_URL}/healthz"),
     )
     try:
-        await pmo._team(config.pmo.team_key)
-        pmo_ok = True
+        pmo_ok = (await pmo.health_probe(config.pmo.team_key)).ok
     except Exception:
         pmo_ok = False
     return {
@@ -453,11 +453,11 @@ async def test_pmo():
                                       "unset in DevCake's environment — put the API key "
                                       "in .env and restart"}
     try:
-        team = await pmo._team(config.pmo.team_key)
+        h = await pmo.health_probe(config.pmo.team_key)
         missions = await pmo.list_all(config.pmo.team_key)
-        return {"ok": True, "team": config.pmo.team_key,
-                "labels": len([l for l in team["labels"]["nodes"]
-                               if l["name"].startswith("DEVCAKE")]),
+        return {"ok": h.ok, "team": h.workspace or config.pmo.team_key,
+                "labels": h.managed_labels_present,
+                "labels_expected": h.managed_labels_expected,
                 "missions_visible": len(missions)}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}

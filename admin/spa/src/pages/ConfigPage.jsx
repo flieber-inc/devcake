@@ -519,12 +519,12 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Field label="Team key"
             help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). DevCake watches only this team.">
-            <Input value={cfg.pmo.team_key}
-            onChange={(e) => setField("cfg.pmo.team_key", e.target.value)} /></Field>
+            <Input value={cfg.pmos[0].team_key}
+            onChange={(e) => setField("cfg.pmos.0.team_key", e.target.value)} /></Field>
           <EnvVarField label="API key env var"
             help="The NAME of the environment variable in DevCake's .env that holds your Linear API key — not the key itself. Default: LINEAR_API_KEY."
-            value={cfg.pmo.api_key_env}
-            onChange={(e) => setField("cfg.pmo.api_key_env", e.target.value)} />
+            value={cfg.pmos[0].api_key_env}
+            onChange={(e) => setField("cfg.pmos.0.api_key_env", e.target.value)} />
           <Field label="Poll interval (s)"
             help="How often DevCake polls the PMO for new or changed missions. Lower = faster pickup, more API calls.">
             <Input type="number"
@@ -566,23 +566,23 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Field label="Forge"
             help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
-            <Select value={cfg.repo.forge}
-              onChange={(e) => setField("cfg.repo.forge", e.target.value)}>
+            <Select value={cfg.repos[0].forge}
+              onChange={(e) => setField("cfg.repos.0.forge", e.target.value)}>
               <option>github</option><option>gitlab</option>
             </Select>
           </Field>
           <Field label="Repository URL"
             help="HTTPS URL of the repository DevCake works on, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it.">
-            <Input value={cfg.repo.url}
-            onChange={(e) => setField("cfg.repo.url", e.target.value)} /></Field>
+            <Input value={cfg.repos[0].url}
+            onChange={(e) => setField("cfg.repos.0.url", e.target.value)} /></Field>
           <EnvVarField label="Token env var"
             help="The NAME of the environment variable in DevCake's .env that holds the forge access token (default: GITHUB_TOKEN) — never paste the token itself here. The token needs repo read/write and PR scopes."
-            value={cfg.repo.token_env}
-            onChange={(e) => setField("cfg.repo.token_env", e.target.value)} />
+            value={cfg.repos[0].token_env}
+            onChange={(e) => setField("cfg.repos.0.token_env", e.target.value)} />
           <EnvVarField label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals"
             help="The NAME of an env var holding a second account's token. When set, REVIEW posts a formal approval from that account before merging. Leave empty to skip formal approvals."
-            value={cfg.repo.reviewer_token_env || ""}
-            onChange={(e) => setField("cfg.repo.reviewer_token_env", e.target.value || null)} />
+            value={cfg.repos[0].reviewer_token_env || ""}
+            onChange={(e) => setField("cfg.repos.0.reviewer_token_env", e.target.value || null)} />
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button kind="ghost" onClick={() => test("forge")}>Test connection</Button>

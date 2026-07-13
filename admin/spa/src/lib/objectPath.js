@@ -1,5 +1,5 @@
 // Immutable dot-path helpers for the config draft trees.
-// Paths look like "cfg.repo.url", "devTypes.junior-dev.model",
+// Paths look like "cfg.repos.0.url", "devTypes.junior-dev.model",
 // "assignments.PLAN.extra_cli_args". Dev type names contain no dots.
 
 export function getIn(obj, path) {
@@ -22,8 +22,10 @@ export function setIn(obj, path, value) {
 
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
-// Leaf-level diff between two trees. Arrays are atomic leaves (they back
-// textareas, so the line-set is the field). Returns [{path, old, new}].
+// Leaf-level diff between two trees. Primitive arrays are atomic leaves (they
+// back textareas, so the line-set is the field); same-length arrays of objects
+// (the config instance lists, cfg.pmos/cfg.repos) recurse with index segments
+// so the Save dialog stays field-granular. Returns [{path, old, new}].
 export function diffLeaves(a, b, base = "") {
   const out = [];
   const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})]);
@@ -33,6 +35,9 @@ export function diffLeaves(a, b, base = "") {
     const path = base ? `${base}.${k}` : k;
     if (isPlainObject(va) && isPlainObject(vb)) {
       out.push(...diffLeaves(va, vb, path));
+    } else if (Array.isArray(va) && Array.isArray(vb) && va.length === vb.length
+               && va.length > 0 && va.every(isPlainObject) && vb.every(isPlainObject)) {
+      va.forEach((el, i) => out.push(...diffLeaves(el, vb[i], `${path}.${i}`)));
     } else if (JSON.stringify(va) !== JSON.stringify(vb)) {
       out.push({ path, old: va, new: vb });
     }

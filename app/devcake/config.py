@@ -6,27 +6,42 @@ concurrency) fills in at M3–M6.
 
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 log = logging.getLogger("devcake.config")
 
 CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "config.yaml"
 
 
-class PMOConfig(BaseModel):
-    system: Literal["linear"] = "linear"
+class PMOInstance(BaseModel):
+    """One configured PMO connection. v0 runs exactly one (see AppConfig
+    validator); the list shape is the forward-compatible schema so multi-PMO
+    needs no config migration."""
+    id: str = "main"
+    system: str = "linear"          # validated against the adapter registry
     api_key_env: str = "LINEAR_API_KEY"
     team_key: str = ""
+    api_base: str | None = None     # None = the adapter's default API host
+
+    @property
+    def api_key(self) -> str:
+        return os.environ.get(self.api_key_env, "")
 
 
-class RepoConfig(BaseModel):
-    forge: Literal["github", "gitlab"] = "github"
+class RepoInstance(BaseModel):
+    """One configured forge repository. v0 runs exactly one (see AppConfig
+    validator)."""
+    id: str = "main"
+    forge: str = "github"           # validated against the adapter registry
     url: str = ""
+    api_base: str | None = None     # None = api.github.com / the repo's origin
+    default_branch: str = "main"
     token_env: str = "GITHUB_TOKEN"
     reviewer_token_env: str | None = None
 
@@ -113,9 +128,9 @@ DEFAULT_DEV_TYPES = [
 
 
 class AppConfig(BaseModel):
-    schema_version: int = 1
-    pmo: PMOConfig = Field(default_factory=PMOConfig)
-    repo: RepoConfig = Field(default_factory=RepoConfig)
+    schema_version: int = 2
+    pmos: list[PMOInstance] = Field(default_factory=lambda: [PMOInstance()])
+    repos: list[RepoInstance] = Field(default_factory=lambda: [RepoInstance()])
     assignments: dict[str, Assignment] = Field(
         default_factory=lambda: dict(DEFAULT_ASSIGNMENTS))
     concurrency: Concurrency = Field(default_factory=Concurrency)
@@ -141,9 +156,57 @@ class AppConfig(BaseModel):
     # the UI un-dismisses by PUTting the whole replacement list.
     dismissed_alerts: list[str] = Field(default_factory=list)
 
+    @field_validator("pmos", "repos")
+    @classmethod
+    def _exactly_one(cls, v, info):
+        if len(v) != 1:
+            raise ValueError(f"{info.field_name}: exactly one entry is supported "
+                             "in v0 (multi-instance is a declared future seam)")
+        ids = [e.id for e in v]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"{info.field_name}: duplicate instance ids")
+        return v
+
+    # v0 single-instance accessors: the runtime is written against ONE pmo and
+    # ONE repo; these keep call sites (config.pmo.team_key, config.repo.url)
+    # stable while the persisted schema is already plural.
+    @property
+    def pmo(self) -> PMOInstance:
+        return self.pmos[0]
+
+    @property
+    def repo(self) -> RepoInstance:
+        return self.repos[0]
+
     @property
     def api_key(self) -> str:
-        return os.environ.get(self.pmo.api_key_env, "")
+        return self.pmos[0].api_key
+
+
+def migrate_config(data: dict) -> dict:
+    """v1 (singular pmo:/repo: blocks) → v2 (plural pmos:/repos:, id="main").
+    Idempotent; applied before validation on every load (ADR-0002: migrate on
+    load, persist atomically). Forward-only — load_config keeps a .v1.bak."""
+    if int(data.get("schema_version") or 1) >= 2:
+        return data
+    out = dict(data)
+    out["pmos"] = [{"id": "main", **(out.pop("pmo", None) or {})}]
+    out["repos"] = [{"id": "main", **(out.pop("repo", None) or {})}]
+    out["schema_version"] = 2
+    return out
+
+
+def migrate_config_patch(body: dict, current: "AppConfig") -> dict:
+    """Translate v1-shaped PUT bodies ({"pmo": {…}} / {"repo": {…}}) to the
+    plural v2 shape, merging over the current single entry. Load-bearing, not
+    defensive: pydantic ignores unknown keys, so without this a stale client's
+    PUT would silently DROP the operator's edit instead of failing."""
+    out = dict(body)
+    if isinstance(out.get("pmo"), dict):
+        out["pmos"] = [{**current.pmos[0].model_dump(), **out.pop("pmo")}]
+    if isinstance(out.get("repo"), dict):
+        out["repos"] = [{**current.repos[0].model_dump(), **out.pop("repo")}]
+    return out
 
 
 def deep_merge(base: dict, patch: dict) -> dict:
@@ -171,13 +234,20 @@ def _atomic_yaml(path: Path, data: dict) -> None:
 
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
-        cfg = AppConfig.model_validate(yaml.safe_load(CONFIG_PATH.read_text()) or {})
+        data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+        if int(data.get("schema_version") or 1) < 2:
+            # forward-only migration: the .bak is the rollback story
+            shutil.copy2(CONFIG_PATH, CONFIG_PATH.with_suffix(".yaml.v1.bak"))
+            log.info("config: migrating %s to schema v2 (backup: config.yaml.v1.bak)",
+                     CONFIG_PATH)
+        cfg = AppConfig.model_validate(migrate_config(data))
     else:
-        cfg = AppConfig(pmo=PMOConfig(team_key=os.environ.get("DEVCAKE_TEAM_KEY", "")))
+        cfg = AppConfig(pmos=[PMOInstance(
+            team_key=os.environ.get("DEVCAKE_TEAM_KEY", ""))])
         log.info("config: first boot — seeding %s from env", CONFIG_PATH)
     # top-up missing/env-provided fields (e.g. repo added at M3), then persist
     if not cfg.repo.url and os.environ.get("DEVCAKE_REPO_URL"):
-        cfg.repo.url = os.environ["DEVCAKE_REPO_URL"]
+        cfg.repos[0].url = os.environ["DEVCAKE_REPO_URL"]
     _atomic_yaml(CONFIG_PATH, cfg.model_dump())
     log.info("config: team=%s adoption=%s repo=%s",
              cfg.pmo.team_key, cfg.adoption_mode, cfg.repo.url or "(unset)")

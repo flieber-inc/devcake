@@ -101,13 +101,17 @@ def test_config_defaults():
 
 
 def test_deep_merge_preserves_nested_siblings():
-    from devcake.config import deep_merge
+    from devcake.config import deep_merge, migrate_config_patch
     base = AppConfig().model_dump()
-    base["repo"]["url"] = "https://github.com/x/y"
-    base["repo"]["token_env"] = "MY_TOKEN"
-    merged = deep_merge(base, {"repo": {"url": "https://github.com/x/z"}})
-    assert merged["repo"]["url"] == "https://github.com/x/z"
-    assert merged["repo"]["token_env"] == "MY_TOKEN"       # sibling survived
+    base["repos"][0]["url"] = "https://github.com/x/y"
+    base["repos"][0]["token_env"] = "MY_TOKEN"
+    # legacy singular PUT bodies are adapted to the plural shape by merging
+    # over the CURRENT entry — sibling fields survive
+    patched = migrate_config_patch({"repo": {"url": "https://github.com/x/z"}},
+                                   AppConfig.model_validate(base))
+    merged = deep_merge(base, patched)
+    assert merged["repos"][0]["url"] == "https://github.com/x/z"
+    assert merged["repos"][0]["token_env"] == "MY_TOKEN"   # sibling survived
     merged2 = deep_merge(base, {"relations_mapper": {"enabled": True}})
     assert merged2["relations_mapper"]["dev_type"] == "junior-dev"
 

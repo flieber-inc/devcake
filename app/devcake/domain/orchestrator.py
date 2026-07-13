@@ -317,6 +317,7 @@ class MissionManager:
             run = Run(
                 run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
                 pmo_kind=mission.pmo_kind,
+                pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
                 dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
                 timeout_seconds=self.config.dev_timeout_minutes * 60,
                 traceparent=traceparent, redis_password=redis_password,
@@ -1020,6 +1021,7 @@ class MissionManager:
             spec_env.update(env_creds)
             run = Run(
                 run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
+                pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
                 dev_type=dev_type.name, seq=seq,
                 timeout_seconds=self.config.dev_timeout_minutes * 60,
                 traceparent=traceparent, redis_password=redis_password,

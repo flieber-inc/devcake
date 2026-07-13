@@ -23,7 +23,8 @@ from ..adapters.gitlab import GitLabForge
 from ..adapters.linear import LinearAdapter, PMOTransient
 from ..adapters.redis import Messaging
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
-                      load_config, load_dev_types, save_config, save_dev_type)
+                      load_config, load_dev_types, migrate_config_patch,
+                      save_config, save_dev_type)
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
@@ -342,6 +343,7 @@ async def get_config():
 async def put_config(body: dict):
     global config
     try:
+        body = migrate_config_patch(body, config)
         merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
     except Exception as e:
         raise HTTPException(422, str(e))

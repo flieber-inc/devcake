@@ -25,6 +25,10 @@ class Run(BaseModel):
     mission_key: str
     mission_pmo_id: str = ""
     pmo_kind: str = "issue"
+    # which configured instance served this run (AppConfig.pmos/repos entry id;
+    # additive with defaults, so pre-v2 run JSONs parse unchanged)
+    pmo_ref: str = "main"
+    repo_ref: str = "main"
     mission_type: str
     dev_type: str
     seq: int

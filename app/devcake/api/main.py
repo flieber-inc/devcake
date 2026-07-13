@@ -1,7 +1,8 @@
-"""DevCake main app — M1 scope: dispatch mechanics with the stub Dev (docs/16 M1).
+"""DevCake main app: wiring, lifespan (startup reconciliation), and the API.
 
-Loops: stub poll cycle (M0), ingress consumer, watchdog. Endpoints: health,
-run history, and the M1 debug dispatch.
+Loops: poll cycle (derive + dispatch + sweeps), ingress consumer, watchdog.
+Endpoints: health, config, connections, missions, runs, credentials/OAuth,
+and the hello debug dispatch (permanent CI fixture — scripts/ci_suite.sh).
 """
 
 import asyncio
@@ -100,7 +101,7 @@ mapper = MapperService(config, dev_types, mission_mgr)
 
 
 async def poll_loop() -> None:
-    """Poll cycle (docs/04 §1) — M2 scope: fetch + derive + cache; dispatch at M3."""
+    """Poll cycle (docs/04 §1): fetch + derive + gate + dispatch + sweeps + cache."""
     cycle = 0
     while True:
         cycle += 1
@@ -312,7 +313,7 @@ async def liveness():
 
 @app.get("/api/v1/missions")
 async def list_missions():
-    """Current derived Missions (poll-cycle snapshot) — M2 exit criterion."""
+    """Current derived Missions (poll-cycle snapshot; advisory cache — INV-1)."""
     return {"team": config.pmo.team_key, "adoption_mode": config.adoption_mode,
             "missions": missions_cache}
 
@@ -611,7 +612,8 @@ async def oauth_status(run_id: str):
 @app.post("/api/v1/debug/dispatch-hello")
 async def dispatch_hello(sleep: int = 3, payload_kb: int = 1,
                          timeout_seconds: int | None = None):
-    """M1 debug endpoint (docs/16 M1). Removed when real dispatch lands at M3."""
+    """Dispatches the hello stub Dev through the full pipeline (Dagu → container
+    → Redis → finalize). Permanent debug/CI fixture — scripts/ci_suite.sh."""
     try:
         run = await manager.dispatch_hello(sleep, payload_kb, timeout_seconds)
     except DuplicateRun as e:

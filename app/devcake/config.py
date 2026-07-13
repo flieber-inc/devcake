@@ -1,7 +1,6 @@
-"""AppConfig: /data/config/config.yaml (docs/10 §3), seeded from env on first boot.
-
-M2 carries the PMO + adoption + poll fields; the full model (forge, assignments,
-concurrency) fills in at M3–M6.
+"""AppConfig: /data/config/config.yaml (docs/10 §3), seeded from env on first
+boot. The full operator surface: PMO/repo connections (plural, schema v2),
+adoption, polling, assignments, concurrency, merge policy, relations mapper.
 """
 
 import logging
@@ -265,7 +264,8 @@ def load_config() -> AppConfig:
         cfg = AppConfig(pmos=[PMOInstance(
             team_key=os.environ.get("DEVCAKE_TEAM_KEY", ""))])
         log.info("config: first boot — seeding %s from env", CONFIG_PATH)
-    # top-up missing/env-provided fields (e.g. repo added at M3), then persist
+    # top-up missing/env-provided fields (a config predating a field picks up
+    # its env default here), then persist
     if not cfg.repo.url and os.environ.get("DEVCAKE_REPO_URL"):
         cfg.repos[0].url = os.environ["DEVCAKE_REPO_URL"]
     _atomic_yaml(CONFIG_PATH, cfg.model_dump())

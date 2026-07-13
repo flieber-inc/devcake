@@ -47,10 +47,11 @@ your notes. Want it to stop? `DEVCAKE-SKIP` wins over everything, always.
   Build, and Codex per role, on the subscriptions you already pay — connected
   through guided OAuth, stored only on your machine.
 
-> **Status: v0 complete** (2026-07-11). Every milestone live-verified — the
+> **Status: v0 complete** (2026-07-11), hardened in production use since. The
 > release gate is an acceptance script that took fresh tickets to merged PRs
-> **2/2 with zero human input**, on GitHub and GitLab alike. A 26-test suite
-> pins the core invariants; secret redaction is proven against the live PMO;
+> **2/2 with zero human input**, on GitHub and GitLab alike. A 200+-test suite
+> (unit + live-Redis + an end-to-end stub dispatch) pins the core invariants;
+> secret redaction is proven against the live PMO;
 > [`docs/16-roadmap.md`](docs/16-roadmap.md) holds the full verification record.
 
 ## Quickstart
@@ -61,7 +62,8 @@ cp .env.example .env         # fill: LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TO
                              # DEVCAKE_REPO_URL, model credentials (subscription OAuth preferred),
                              # and DOCKER_GID (stat -c %g /var/run/docker.sock)
 docker compose up -d
-docker compose --profile images build    # the three Dev harness images
+docker compose --profile images build    # the Dev images (3 harnesses + the hello stub);
+                                         # re-run after any upgrade that touches images/
 open http://localhost:8080   # admin panel (basic auth from .env) → Config tab →
                              # test connections; connect Grok/Codex via the OAuth wizard
 ```

@@ -1,7 +1,6 @@
 # dev-run: launch one Dev container. Only non-secret params (+ the per-run scoped
 # Redis ACL credential, docs/09 §1a); everything else reaches the Dev via runspec.get.
 # Shape verified live on Dagu v2.10.5 — docs/13-deployment.md §4.
-# Exercised from M1 onward; shipped at M0 so the executor is complete.
 
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop

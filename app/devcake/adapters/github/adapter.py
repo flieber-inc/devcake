@@ -1,6 +1,6 @@
 """ForgePort — GitHub adapter (docs/06). App-side, decision-bearing operations:
-PR lookup, review comments, formal approval (optional 2nd token), squash merge.
-GitLab lands at M6."""
+PR lookup, review comments, formal approval (optional 2nd token), squash merge,
+health probe. The GitLab twin is adapters/gitlab (docs/06 §7)."""
 
 import asyncio
 import logging

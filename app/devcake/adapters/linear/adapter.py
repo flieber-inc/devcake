@@ -1,8 +1,8 @@
 """Linear adapter: PMOPort over the GraphQL API (docs/05).
 
-M2 scope: read path (issues + projects of ONE team), normalization, label
-bootstrap, comments, status/label writes for the contract tests. Attachment
-upload and mission creation land at M3–M5.
+Full surface: cursor-paginated reads (issues + projects of ONE team),
+normalization, label bootstrap, feed comments, status/label writes,
+attachment upload, and mission/relation creation.
 """
 
 import logging
@@ -222,7 +222,7 @@ class LinearAdapter:
         entries.sort(key=lambda e: e.ts)
         return Activity(mission=mission, entries=entries)
 
-    # ── writes (contract-test scope at M2) ───────────────────────────────────
+    # ── writes ───────────────────────────────────────────────────────────────
 
     async def post_feed(self, ref: MissionRef, markdown: str) -> None:
         """Issue → comment; project → project update (Linear's project-native

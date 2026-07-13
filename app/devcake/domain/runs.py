@@ -1,8 +1,7 @@
-"""Dispatch and finalization (M1 scope: the hello-world Dev — docs/16 M1).
-
-Real mission dispatch replaces the debug path at M3; the mechanics here
-(run spec over runspec.get, ACL lifecycle, trace continuity, finalization
-checklist) are the permanent ones from docs/04 §3.1 and docs/09.
+"""Run lifecycle shared by every dispatch path (docs/04 §3.1, docs/09):
+run-spec service over runspec.get, envelope auth, ACL lifecycle, trace
+continuity, watchdog kill, and the finalization checklist. Also hosts the
+hello stub dispatch — the permanent debug/CI fixture (scripts/ci_suite.sh).
 """
 
 from __future__ import annotations
@@ -224,7 +223,7 @@ class RunManager:
         else:
             log.warning("unknown message kind %s for %s", kind, run_id)
 
-    # ── finalization (docs/04 §4, M1 subset) ─────────────────────────────────
+    # ── finalization (docs/04 §4 — PMO-less runs: hello) ─────────────────────
 
     async def _finalize(self, run: Run, payload: dict) -> None:
         ctx = extract({"traceparent": run.traceparent}) if run.traceparent else None
@@ -236,7 +235,8 @@ class RunManager:
             run.result = redact_value(payload.get("result"))
             run.artifact_bytes = len(str(payload))
             span.set_attribute("devcake.outcome", str((run.result or {}).get("outcome")))
-            # M2+: post transcript + token report to the PMO here (INV-5).
+            # Mission runs post transcripts/token reports in MissionManager
+            # .finalize (INV-5); this path serves runs with no PMO host.
             for step in ("acl_user_deleted", "reply_stream_deleted"):
                 if step not in run.finalized_steps:
                     if step == "acl_user_deleted":

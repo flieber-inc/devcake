@@ -1,5 +1,5 @@
 """ForgePort — GitLab adapter (docs/06 §7). Same shape as GitHubForge; MRs
-instead of PRs. Live verification requires a GitLab sandbox (M6 checklist)."""
+instead of PRs. Live-verified E2E against a gitlab.com sandbox (docs/16 M6)."""
 
 import asyncio
 import logging

@@ -1,8 +1,7 @@
-"""Mission scheduling and finalization (docs/04) — M3 scope: ONBOARD on Issues.
-
-PLAN/EXECUTE/REVIEW dispatch and the trivial/decompose finalizations land at
-M4/M5; the mechanics here (ordering, caps, grace cycle, compare-and-transition,
-attempt counting) are the permanent ones.
+"""Mission scheduling and finalization (docs/04): the full state machine —
+ONBOARD/PLAN/EXECUTE/REVIEW dispatch, every finalization/transition, merge
+sweeps, the relations mapper, and the cross-cutting mechanics (ordering, caps,
+grace cycle, compare-and-transition, attempt counting, circuit breakers).
 """
 
 from __future__ import annotations
@@ -42,7 +41,7 @@ if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtim
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
-# M5: the full state machine is dispatchable, projects included (ADR-0006).
+# The full state machine is dispatchable, projects included (ADR-0006).
 DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN,
                       MissionType.EXECUTE, MissionType.REVIEW}
 

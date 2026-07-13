@@ -227,6 +227,7 @@ async def health():
         "forge_protection": await _branch_protection(),
         "anomalies": mission_mgr.anomalies,
         "merge_handoffs": mission_mgr.merge_handoffs,
+        "needs_human": mission_mgr.needs_human,
         "dependency_cycles": mission_mgr.cycles,
         "mapper_degraded": mapper.degraded(),
     }
@@ -249,7 +250,7 @@ async def list_runs(limit: int = 25, offset: int = 0, mission_key: str | None = 
     total = len(runs)
     page = [r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
                                   "seq", "state", "created_at", "started_at",
-                                  "ended_at", "error"})
+                                  "ended_at", "error", "verdict"})
             for r in runs[offset:offset + limit]]
     return {"total": total, "offset": offset, "limit": limit, "runs": page}
 

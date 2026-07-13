@@ -53,6 +53,11 @@ class Run(BaseModel):
     token_report: Optional[dict[str, Any]] = None
     artifact_bytes: Optional[int] = None
     error: Optional[str] = None
+    # App-level judgment when it diverges from the executor's: a run can end
+    # state="finished" (Dagu succeeded, artifacts were legal) yet carry a
+    # verdict like "rejected: …" because _transition refused to act on the
+    # outcome. None means an ordinary success.
+    verdict: Optional[str] = None
 
 
 class RunStore:

@@ -231,6 +231,8 @@ class RunManager:
             span.set_attribute("devcake.run.id", run.run_id)
             span.set_attribute("devcake.outcome", new_state)
             span.set_attribute("devcake.kill.reason", reason)
+            span.set_attribute("devcake.verdict", f"{new_state}: {reason}")
+            span.set_status(_t.Status(_t.StatusCode.ERROR, reason))
             await self._kill_inner(run, new_state, reason)
 
     async def _ship_failure(self, run: Run, new_state: str, reason: str) -> None:

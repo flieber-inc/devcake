@@ -139,6 +139,7 @@ def make_mgr(tmp_path, m, forge=None):
     mgr.messaging = NullMessaging()
     mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
     mgr.merge_handoffs, mgr._merge_window_closed = {}, set()
+    mgr.needs_human = {}
     mgr._audit = lambda *a, **k: None
     if forge is not None:       # default stays attribute-ABSENT (trust boundary
         mgr.forge = forge       # test relies on a forge call raising)
@@ -585,3 +586,36 @@ def test_fresh_retry_marker_reopens_window(tmp_path):
     run_coro(_approve_review(mgr))
     assert any("`devcake:merge-retry`" in c for c in fake.comments)
     assert "p1" not in mgr._merge_window_closed      # new episode reopened
+
+
+# ── app-level verdicts on the run record (admin diagnostics) ─────────────────
+
+def test_illegal_outcome_sets_verdict(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _run()
+    run_coro(mgr._transition(run, {"outcome": "reviewed", "verdict": "approve"},
+                             None))
+    assert run.verdict and run.verdict.startswith("rejected:")
+    assert "illegal for EXECUTE" in run.verdict
+
+
+def test_external_transition_sets_verdict(tmp_path):
+    m = mission(labels={"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = Run(run_id="T-1-1-ONBOARD-XXXXXX", mission_key="T-1",
+              mission_pmo_id="p1", mission_type="ONBOARD",
+              dev_type="senior-dev", seq=1, stage_label_at_dispatch=None)
+    run_coro(mgr._transition(run, {"outcome": "plan_needed"}, None))
+    assert run.verdict and run.verdict.startswith("skipped:")
+
+
+def test_human_needed_sets_verdict_and_advisory(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _run()
+    run_coro(mgr._transition(run, {"outcome": "human_needed", "summary": "s"},
+                             None))
+    assert run.verdict == "handed off: needs human on EXECUTE"
+    assert "p1" in mgr.needs_human
+    assert mgr.needs_human["p1"].startswith("T-1: needs human")

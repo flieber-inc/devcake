@@ -136,6 +136,10 @@ class AppConfig(BaseModel):
     # and sweeps keep running (docs/11)
     intake_paused: bool = False
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    # admin-UI state: dismissed advisory alerts as "id:signature" strings.
+    # A list (not a dict) on purpose — deep_merge can't delete dict keys, so
+    # the UI un-dismisses by PUTting the whole replacement list.
+    dismissed_alerts: list[str] = Field(default_factory=list)
 
     @property
     def api_key(self) -> str:

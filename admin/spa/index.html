@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DevCake</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍰</text></svg>" />
+  <script>
+    // pre-paint theme: default to system preference when no stored choice
+    (function () {
+      var p = localStorage.getItem("devcake-theme");
+      if (p === "dark" || (p !== "light" && matchMedia("(prefers-color-scheme: dark)").matches))
+        document.documentElement.classList.add("dark");
+    })();
+  </script>
   <script src="/config.js"></script>
 </head>
 <body>

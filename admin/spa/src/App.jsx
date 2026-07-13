@@ -1,143 +1,191 @@
-import React, { useEffect, useState } from "react";
-import ConfigTab from "./tabs/ConfigTab.jsx";
-import ExecutorTab from "./tabs/ExecutorTab.jsx";
-import LogsTab from "./tabs/LogsTab.jsx";
-import { get } from "./api.js";
+import React, { useEffect, useRef, useState } from "react";
+import { TriangleAlert, OctagonAlert } from "lucide-react";
+import Sidebar from "./components/Sidebar.jsx";
+import OverviewPage from "./pages/OverviewPage.jsx";
+import ConfigPage from "./pages/ConfigPage.jsx";
+import RunsPage from "./pages/RunsPage.jsx";
+import LogsPage from "./pages/LogsPage.jsx";
+import deriveAlerts, { alertKey } from "./lib/alerts.js";
+import usePoll from "./lib/usePoll.js";
+import { get, send } from "./api.js";
 
-const TABS = { Config: ConfigTab, Executor: ExecutorTab, Logs: LogsTab };
+const PAGES = ["overview", "runs", "config", "logs"];
 
-function MergeQueueBanner({ entries }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-      <button className="flex w-full items-center gap-2 text-left"
-        onClick={() => setOpen(!open)}>
-        <span>⏳ Awaiting human merge ({entries.length} mission{entries.length > 1 ? "s" : ""})</span>
-        <span className={`text-xs transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
-      </button>
-      {open && (
-        <ul className="mt-1 space-y-0.5 pl-6">
-          {entries.map((e) => {
-            const i = e.lastIndexOf(" — ");
-            const [text, url] = i > -1 ? [e.slice(0, i), e.slice(i + 3)] : [e, null];
-            return (
-              <li key={e} className="list-disc">
-                {text}
-                {url && (
-                  <>
-                    {" — "}
-                    <a href={url} target="_blank" rel="noreferrer" className="underline">{url}</a>
-                  </>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function Dot({ ok, label }) {
-  const color = ok === true ? "bg-green-600" : ok === false ? "bg-red-600" : "bg-neutral-400";
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-      <span className={`inline-block h-2 w-2 rounded-full ${color}`} />
-      {label}
-    </span>
-  );
+// tiny hash router: #/overview · #/runs · #/config · #/config/<section> · #/logs
+function parseHash() {
+  const m = window.location.hash.match(/^#\/([^/]+)(?:\/(.+))?/);
+  const page = m && PAGES.includes(m[1]) ? m[1] : "overview";
+  return { page, section: page === "config" ? m?.[2] || null : null };
 }
 
 export default function App() {
-  const [tab, setTab] = useState("Config");
+  const [route, setRoute] = useState(parseHash);
   const [health, setHealth] = useState({});
+  const [healthError, setHealthError] = useState(false);
+  const [lastOkAt, setLastOkAt] = useState(null);
+  const [spySection, setSpySection] = useState(null); // scrollspy report from ConfigPage
+  const [intakeOverride, setIntakeOverride] = useState(null);
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeError, setIntakeError] = useState("");
+  // dismissed advisory alerts: server-persisted (config.dismissed_alerts),
+  // localStorage as fallback while the PUT can't reach the backend
+  const [dismissed, setDismissed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("devcake-dismissed")) || []; }
+    catch { return []; }
+  });
   useEffect(() => {
-    const load = () => get("/health").then(setHealth).catch(() => setHealth({}));
-    load();
-    const t = setInterval(load, 10000);
-    return () => clearInterval(t);
+    get("/config")
+      .then((c) => setDismissed((local) =>
+        [...new Set([...(c.dismissed_alerts || []), ...local])]))
+      .catch(() => {});
   }, []);
-  const Body = TABS[tab];
-  const breakers = Object.entries(health.circuit_breakers || {});
+  const persistDismissed = async (list) => {
+    setDismissed(list);
+    try {
+      await send("PUT", "/config", { dismissed_alerts: list });
+      localStorage.removeItem("devcake-dismissed");
+    } catch {
+      localStorage.setItem("devcake-dismissed", JSON.stringify(list));
+    }
+  };
+
+  // nav guard: ConfigPage registers an async fn while its draft is dirty.
+  // hashchange fires AFTER the URL already changed, so blocking = revert the
+  // hash (one suppressed event), ask, then replay the target if allowed.
+  const navGuard = useRef(null);
+  const lastHash = useRef(window.location.hash || "#/overview");
+  const suppress = useRef(false);
+  useEffect(() => {
+    const onHash = async () => {
+      const targetHash = window.location.hash;
+      if (suppress.current) {
+        suppress.current = false;
+        lastHash.current = targetHash;
+        setRoute(parseHash());
+        return;
+      }
+      const next = parseHash();
+      const leavingConfig = /^#\/config/.test(lastHash.current) && next.page !== "config";
+      if (navGuard.current && leavingConfig) {
+        suppress.current = true;
+        window.location.hash = lastHash.current; // revert before asking
+        const proceed = await navGuard.current();
+        if (proceed) {
+          suppress.current = true;
+          window.location.hash = targetHash;
+        }
+        return;
+      }
+      lastHash.current = targetHash;
+      setRoute(next);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const registerNavGuard = (fn) => { navGuard.current = fn; };
+
+  // honest health: keep last-known data on failure; the failure itself is the signal
+  usePoll(
+    () =>
+      get("/health")
+        .then((h) => { setHealth(h); setHealthError(false); setLastOkAt(new Date()); })
+        .catch(() => setHealthError(true)),
+    10000
+  );
+
+  const intakePaused = intakeOverride ?? health.intake_paused;
+  const toggleIntake = async () => {
+    if (intakeBusy || healthError || health.intake_paused === undefined) return;
+    const next = !intakePaused;
+    setIntakeOverride(next);
+    setIntakeBusy(true);
+    setIntakeError("");
+    try {
+      await send("PUT", "/config", { intake_paused: next });
+      setHealth((h) => ({ ...h, intake_paused: next }));
+    } catch (e) {
+      setIntakeError(`✗ ${String(e.message || e)}`);
+      setTimeout(() => setIntakeError(""), 5000);
+    } finally {
+      setIntakeOverride(null);
+      setIntakeBusy(false);
+    }
+  };
+
+  const allAlerts = deriveAlerts(health);
+  const dismissedSet = new Set(dismissed);
+  const alerts = allAlerts.filter((a) => !dismissedSet.has(alertKey(a)));
+  const dismissedAlerts = allAlerts.filter((a) => dismissedSet.has(alertKey(a)));
+  const dismissAlert = (a) => persistDismissed([...dismissed, alertKey(a)]);
+  const restoreAlert = (a) => persistDismissed(dismissed.filter((k) => k !== alertKey(a)));
+  const critical = alerts.filter((a) => a.severity === "critical");
+  const { page, section } = route;
+
   return (
-    <div className="min-h-screen bg-stone-100 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
-      <header className="flex items-center justify-between border-b border-neutral-200 bg-white px-6 py-3 dark:border-neutral-800 dark:bg-neutral-900">
-        <div className="text-lg">
-          🍰 <span className="font-semibold">DevCake</span>{" "}
-          <span className="ml-1 text-sm text-neutral-400">agentic developer</span>
-        </div>
-        <div className="flex gap-4">
-          <Dot ok={health.app} label="app" />
-          <Dot ok={health.pmo} label="linear" />
-          <Dot ok={health.redis} label="redis" />
-          <Dot ok={health.dagu} label="dagu" />
-          <Dot ok={health.openobserve} label="logs" />
-        </div>
-      </header>
-      {health.intake_paused && (
-        <div className="border-b border-sky-300 bg-sky-50 px-6 py-2 text-sm text-sky-900 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-200">
-          ⏸ Intake paused —{" "}
-          {(health.active_runs || 0) > 0
-            ? `${health.active_runs} run${health.active_runs > 1 ? "s" : ""} still finishing (they may still update labels/statuses as they complete)`
-            : "all runs drained; Linear is all yours"}
-          . Resume from the Config tab (Traffic control).
-        </div>
-      )}
-      {(health.dependency_cycles || []).length > 0 && (
-        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          ⚠️ Dependency cycle detected:{" "}
-          {health.dependency_cycles.map((c) => [...c, c[0]].join(" → ")).join(" · ")} —
-          these missions will never start until a relation is deleted in Linear.
-        </div>
-      )}
-      {health.forge_protection && health.forge_protection.protected === false && (
-        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          ⚠️ The repository's default branch is unprotected — a Dev's forge token could
-          merge to it without review. Enable branch protection (require PRs + 1 approval);
-          DevCake's own pipeline keeps working.
-        </div>
-      )}
-      {Object.keys(health.anomalies || {}).length > 0 && (
-        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          ⚠️ Out-of-pipeline activity: {Object.values(health.anomalies).join(" · ")} —
-          see the mission's activity feed.
-        </div>
-      )}
-      {Object.keys(health.merge_handoffs || {}).length > 0 && (
-        <MergeQueueBanner entries={Object.values(health.merge_handoffs)} />
-      )}
-      {breakers.length > 0 && (
-        <div className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-          ⚠️ Circuit breaker tripped: {breakers.map(([k, v]) => `${k} (${v})`).join(" · ")} —
-          upload or refresh that Dev Type's credential to resume.
-        </div>
-      )}
-      <nav className="flex gap-1 px-6 pt-4">
-        {Object.keys(TABS).map((name) => (
-          <button
-            key={name}
-            onClick={() => setTab(name)}
-            className={`rounded-t-lg border border-b-0 px-4 py-2 text-sm ${
-              tab === name
-                ? "border-neutral-200 bg-white font-semibold dark:border-neutral-800 dark:bg-neutral-900"
-                : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
-            }`}
+    <div className="flex h-screen bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
+      <Sidebar
+        page={page}
+        configSection={spySection || section}
+        alertCount={alerts.length}
+        health={health}
+        healthError={healthError}
+        intakePaused={intakePaused}
+        intakeBusy={intakeBusy}
+        intakeError={intakeError}
+        onIntakeToggle={toggleIntake}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {healthError && (
+          <div className="flex items-center gap-2 border-b border-red-300 bg-red-50 px-4 py-1.5 text-xs font-medium text-red-800 dark:border-red-900 dark:bg-red-950/80 dark:text-red-200 sm:px-8">
+            <OctagonAlert size={13} className="shrink-0" aria-hidden />
+            <span className="truncate">
+              Backend unreachable —{" "}
+              {lastOkAt
+                ? `showing data from ${lastOkAt.toLocaleTimeString()}`
+                : "no data received yet"}
+              . Controls are disabled until it responds.
+            </span>
+          </div>
+        )}
+        {/* safety warnings stay visible on every page: slim strip → Overview */}
+        {alerts.length > 0 && page !== "overview" && (
+          <a
+            href="#/overview"
+            className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/70 dark:text-amber-200 dark:hover:bg-amber-950 sm:px-8"
           >
-            {name}
-          </button>
-        ))}
-      </nav>
-      <main className="px-6 pb-10">
-        <div className="rounded-b-xl rounded-tr-xl border border-neutral-200 bg-white p-6 dark:border-neutral-800 dark:bg-neutral-900">
-          <Body />
-        </div>
-      </main>
-      <footer className="px-6 pb-4 text-xs text-neutral-400">
-        DevCake v0 ·{" "}
-        <a className="underline" href="https://github.com/fidecastro/devcake" target="_blank" rel="noopener">
-          spec &amp; source
-        </a>
-      </footer>
+            <TriangleAlert size={13} className="shrink-0" aria-hidden />
+            <span className="truncate">
+              {alerts.length} active warning{alerts.length > 1 ? "s" : ""}
+              {critical.length > 0 && <> — {critical.map((a) => a.title).join(" · ")}</>}
+            </span>
+            <span className="ml-auto shrink-0 font-medium underline underline-offset-2">
+              view on Overview
+            </span>
+          </a>
+        )}
+        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+          <div className="mx-auto w-full max-w-6xl">
+            {page === "overview" && (
+              <OverviewPage
+                health={health}
+                alerts={alerts}
+                dismissedAlerts={dismissedAlerts}
+                onDismissAlert={dismissAlert}
+                onRestoreAlert={restoreAlert}
+              />
+            )}
+            {page === "config" && (
+              <ConfigPage
+                section={section}
+                onSectionInView={setSpySection}
+                registerNavGuard={registerNavGuard}
+              />
+            )}
+            {page === "runs" && <RunsPage />}
+            {page === "logs" && <LogsPage />}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

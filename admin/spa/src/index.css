@@ -1,6 +1,32 @@
 @import "tailwindcss";
 
+/* manual dark mode: `dark:` utilities key off the .dark class (set by theme.js) */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
+  /* bakery orange, anchored on the brand #b4550a at 600 */
+  --color-accent-50: #fdf6ef;
+  --color-accent-100: #f9e8d8;
+  --color-accent-200: #f2cdab;
+  --color-accent-300: #e9ab74;
+  --color-accent-400: #df833f;
+  --color-accent-500: #cf661c;
+  --color-accent-600: #b4550a;
+  --color-accent-700: #954409;
+  --color-accent-800: #7a380e;
+  --color-accent-900: #652f0f;
+  --color-accent-950: #3a1805;
   --color-accent: #b4550a;
+
+  /* warm surfaces: stone-tinted light, warm near-black dark */
+  --color-surface: #faf9f7;
+  --color-surface-raised: #ffffff;
+  --color-surface-dark: #141110;
+  --color-surface-raised-dark: #1d1917;
+
+  --radius-card: 0.75rem;
+  --shadow-card: 0 1px 2px rgb(28 20 12 / 0.05), 0 1px 3px rgb(28 20 12 / 0.07);
 }
-html { color-scheme: light dark; }
+
+html { color-scheme: light; }
+html.dark { color-scheme: dark; }

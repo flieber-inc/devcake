@@ -17,7 +17,7 @@ from pathlib import Path
 
 from opentelemetry import trace
 from opentelemetry.propagate import inject
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from .config import AppConfig, DevType
 from .harness import HARNESSES
@@ -107,6 +107,11 @@ class MissionManager:
         # by the merge sweep for every open-PR DEVCAKE-MERGE mission whose
         # deferred-retry window is not actively running; pruned in sweeps()
         self.merge_handoffs: dict[str, str] = {}
+        # pmo_id → "needs human" note (advisory; admin Needs-Human panel).
+        # Rebuilt every sweep from the DEVCAKE-NEEDS-HUMAN label — declarative,
+        # restart-safe, self-pruning. Same "text — url" convention as
+        # merge_handoffs so the admin UI parses both identically.
+        self.needs_human: dict[str, str] = {}
         # pmo_ids whose deferred-merge window is known CLOSED (hand-off posted,
         # or no retry marker in the feed) — skips the per-cycle feed read for
         # terminally-parked missions. In-memory advisory only (PMO markers stay
@@ -529,6 +534,8 @@ class MissionManager:
                 run.ended_at = utcnow()
                 run.redis_password = None
                 self.runs.store.save(run)
+                span.set_attribute("devcake.verdict", f"failed: {run.error}")
+                span.set_status(Status(StatusCode.ERROR, run.error))
                 await self.restore_after_failure(run)
                 log.warning("run %s failed (exit %s, attempt %d)",
                             run.run_id, exit_code, run.attempt_of_step)
@@ -552,6 +559,8 @@ class MissionManager:
                     run.ended_at = utcnow()
                     run.redis_password = None
                     self.runs.store.save(run)
+                    span.set_attribute("devcake.verdict", f"failed: {run.error}")
+                    span.set_status(Status(StatusCode.ERROR, run.error))
                     await self.restore_after_failure(run)
                     log.warning("run %s failed with DEV_BAD_OUTPUT: %s",
                                 run.run_id, e)
@@ -565,6 +574,12 @@ class MissionManager:
             run.state, run.ended_at = "finished", utcnow()
             run.redis_password = None
             self.runs.store.save(run)
+            # app-level judgment onto the trace: Dagu can report the step green
+            # while _transition refused to act — make that visible in OO
+            span.set_attribute("devcake.verdict", run.verdict or "success")
+            if run.verdict and not run.verdict.startswith("handed off"):
+                span.set_status(Status(StatusCode.ERROR, run.verdict))
+                span.add_event("devcake.verdict", {"detail": run.verdict})
             log.info("finalized %s (%s)", run.run_id, outcome)
 
     async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None:
@@ -582,6 +597,8 @@ class MissionManager:
                 f"human to inspect.")
             self._audit(pmo_id, "illegal_outcome",
                         f"{outcome or '(empty)'} from {run.mission_type}")
+            run.verdict = (f"rejected: outcome {outcome or '(empty)'} is illegal "
+                           f"for {run.mission_type} — parked with DEVCAKE-SKIP")
             log.warning("illegal outcome %r from %s run %s — parked",
                         outcome, run.mission_type, run.run_id)
             return
@@ -589,6 +606,8 @@ class MissionManager:
         if run.pmo_kind == "project" and outcome not in ("decomposed", "human_needed"):
             await self._swap(pmo_id, "project", remove=set(), add={LABEL_SKIP})
             self._audit(pmo_id, "project_bad_outcome_parked", outcome)
+            run.verdict = (f"rejected: project returned {outcome} (only decomposed "
+                           f"is legal) — parked with DEVCAKE-SKIP")
             log.warning("project %s returned %s (only decomposed is legal) — parked",
                         run.mission_key, outcome)
             return
@@ -599,6 +618,8 @@ class MissionManager:
                 f"this mission's state was changed externally while it ran. The output is "
                 f"posted above; **no status or label changes were applied**.")
             self._audit(pmo_id, "external_transition", run.run_id)
+            run.verdict = ("skipped: mission state changed externally while the "
+                           "run was in flight — no transition applied")
             log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
             return
 
@@ -684,6 +705,11 @@ class MissionManager:
                                 run.mission_key, exc_info=True)
             self._audit(pmo_id, "devcake_needs_human",
                         f"#{nth}: " + (result.get("summary") or "")[:110])
+            run.verdict = f"handed off: needs human on {run.mission_type}"
+            # advisory appears immediately (sweeps() keeps it in sync after)
+            self.needs_human[pmo_id] = (
+                f"{run.mission_key}: needs human on {run.mission_type}"
+                + (f" — {live.url}" if live.url else ""))
         else:
             await self.pmo.swap_labels(pmo_id, remove=set(), add={LABEL_SKIP})
             await self._feed(
@@ -691,6 +717,8 @@ class MissionManager:
                 f"ℹ️ DevCake received unknown outcome `{outcome}` — parked with "
                 f"`DEVCAKE-SKIP` for a human to inspect.")
             self._audit(pmo_id, "label_add", f"{LABEL_SKIP} (unknown outcome {outcome})")
+            run.verdict = (f"rejected: unknown outcome {outcome} — parked with "
+                           f"DEVCAKE-SKIP")
 
     async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
         """Detection tripwire (docs/14, ADR-0007 addendum): the Dev's forge token
@@ -1123,6 +1151,15 @@ class MissionManager:
         self.merge_handoffs = {k: v for k, v in self.merge_handoffs.items()
                                if k in merge_ids}
         self._merge_window_closed &= merge_ids
+        # needs-human advisories: rebuilt wholesale from the label each cycle
+        # (restart-safe; clears the moment the human removes the label)
+        self.needs_human = {
+            m.pmo_id: (f"{m.key}: needs human"
+                       + (f" on {next(iter(m.labels & STAGE_LABELS))}"
+                          if m.labels & STAGE_LABELS else "")
+                       + (f" — {m.url}" if m.url else ""))
+            for m in missions if LABEL_NEEDS_HUMAN in m.labels
+        }
         # sequential by design; a per-mission await may include an adapter's
         # short transient-retry sleeps (≤ ~6 s, docs/06 §5) — expected, not a
         # hang, and non-blocking for the event loop

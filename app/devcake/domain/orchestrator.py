@@ -255,7 +255,7 @@ class MissionManager:
         if mission.pmo_kind == "project":
             seq = 1                       # projects only ever ONBOARD (ADR-0006)
         else:
-            activity = await self.pmo.get_activity(mission.pmo_id)
+            activity = await self.pmo.get_activity(mission.ref)
             seq = self._derive_seq(activity)
         # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3):
         # only failures newer than the last give-up event count

@@ -17,8 +17,15 @@ from devcake.domain.run import Run
 
 class FakePMO:
     """Implements the unified PMOPort surface (MissionRef-keyed; the adapter
-    owns kind dispatch). Project feed posts land in project_updates so tests
-    can assert the baton path separately from issue comments."""
+    owns kind dispatch). STRICT on ref types: a caller passing a bare pmo_id
+    string must fail here in tests, not in production (the DEV-62 dispatch
+    regression). Project feed posts land in project_updates so tests can
+    assert the baton path separately from issue comments."""
+
+    @staticmethod
+    def _check_ref(ref):
+        from devcake.domain.model import MissionRef
+        assert isinstance(ref, MissionRef), f"port called with {ref!r}, not a MissionRef"
 
     def __init__(self, mission):
         self.mission = mission
@@ -31,9 +38,11 @@ class FakePMO:
         self.activity_entries = []
 
     async def get(self, ref):
+        self._check_ref(ref)
         return self.mission
 
     async def post_feed(self, ref, markdown):
+        self._check_ref(ref)
         if ref.kind == "project":
             self.project_updates = getattr(self, "project_updates", [])
             self.project_updates.append((ref.pmo_id, markdown))
@@ -41,10 +50,12 @@ class FakePMO:
             self.comments.append(markdown)
 
     async def swap_labels(self, ref, remove, add):
+        self._check_ref(ref)
         self.swaps.append((set(remove), set(add)))
         self.mission.labels = (self.mission.labels - set(remove)) | set(add)
 
     async def set_status(self, ref, status):
+        self._check_ref(ref)
         self.statuses.append(status)
         self.mission.status = status
 
@@ -53,6 +64,7 @@ class FakePMO:
         return f"https://fake/{filename}"
 
     async def get_activity(self, ref):
+        self._check_ref(ref)
         self.get_activity_calls = getattr(self, "get_activity_calls", 0) + 1
         return Activity(mission=self.mission, entries=list(self.activity_entries))
 
@@ -65,6 +77,7 @@ class FakePMO:
         self.relations.append((blocker_id, blocked_id))
 
     async def children_of(self, ref):
+        self._check_ref(ref)
         return []
 
 

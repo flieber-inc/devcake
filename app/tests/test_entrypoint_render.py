@@ -162,3 +162,28 @@ def test_logrelay_swallows_send_failures(monkeypatch):
     relay.add("line")
     relay.flush()                             # must not raise
     assert relay.sent == 0
+
+
+# ── forge dialect resolution (descriptor spec_env → clone bootstrap) ─────────
+
+def test_forge_dialect_prefers_descriptor_env():
+    user, name, email, envs = ep.forge_dialect({
+        "DEVCAKE_CLONE_USER": "gitea-bot", "DEVCAKE_GIT_NAME": "DevCake",
+        "DEVCAKE_GIT_EMAIL": "bot@example.com",
+        "DEVCAKE_FORGE_CLI_ENVS": "GITEA_TOKEN,TEA_TOKEN",
+        "DEVCAKE_FORGE": "github",   # descriptor values must win over legacy
+    })
+    assert (user, email) == ("gitea-bot", "bot@example.com")
+    assert envs == ["GITEA_TOKEN", "TEA_TOKEN"]
+
+
+def test_forge_dialect_legacy_fallback_bit_for_bit():
+    # old app / new image: only the legacy discriminator is present
+    user, name, email, envs = ep.forge_dialect({"DEVCAKE_FORGE": "gitlab"})
+    assert user == "oauth2"
+    user, name, email, envs = ep.forge_dialect({"DEVCAKE_FORGE": "github"})
+    assert user == "x-access-token"
+    user, name, email, envs = ep.forge_dialect({})
+    assert user == "x-access-token"                     # pre-descriptor default
+    assert (name, email) == ("DevCake", "devcake@users.noreply.github.com")
+    assert envs == ["GH_TOKEN", "GITLAB_TOKEN"]         # both, as v0 always set

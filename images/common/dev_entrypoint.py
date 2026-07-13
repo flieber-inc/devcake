@@ -273,6 +273,20 @@ def heartbeat_loop(stop: threading.Event) -> None:
             pass
 
 
+def forge_dialect(env: dict) -> tuple:
+    """(clone_user, git_name, git_email, cli_token_envs) for the clone
+    bootstrap. Values come from the app's ForgeDescriptor via spec_env
+    (docs/06, docs/07); the fallbacks reproduce the pre-descriptor behavior
+    bit-for-bit so old-app/new-image and new-app/old-image both keep working."""
+    clone_user = env.get("DEVCAKE_CLONE_USER") or (
+        "oauth2" if env.get("DEVCAKE_FORGE") == "gitlab" else "x-access-token")
+    git_name = env.get("DEVCAKE_GIT_NAME") or "DevCake"
+    git_email = env.get("DEVCAKE_GIT_EMAIL") or "devcake@users.noreply.github.com"
+    cli_envs = [e for e in (env.get("DEVCAKE_FORGE_CLI_ENVS") or "").split(",")
+                if e] or ["GH_TOKEN", "GITLAB_TOKEN"]
+    return clone_user, git_name, git_email, cli_envs
+
+
 def main() -> None:
     spec = request_reply("runspec.get", "runspec.result")
     send("runspec.ack", {})
@@ -339,19 +353,20 @@ def main() -> None:
     askpass = WORKSPACE / ".devcake" / "askpass.sh"
     askpass.write_text("#!/bin/sh\necho \"$DEVCAKE_FORGE_TOKEN\"\n")
     askpass.chmod(0o700)
-    clone_user = "oauth2" if env.get("DEVCAKE_FORGE") == "gitlab" else "x-access-token"
+    clone_user, git_name, git_email, cli_envs = forge_dialect(env)
     clone_url = repo_url.replace("https://", f"https://{clone_user}@")
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
-    # git auth for clone AND the harness's own push (docs/03 §3); gh auth for PRs
+    # git auth for clone AND the harness's own push (docs/03 §3); CLI auth for PRs
     os.environ["GIT_ASKPASS"] = str(askpass)
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
     if env.get("DEVCAKE_FORGE_TOKEN"):
-        os.environ["GH_TOKEN"] = env["DEVCAKE_FORGE_TOKEN"]
-        os.environ["GITLAB_TOKEN"] = env["DEVCAKE_FORGE_TOKEN"]  # glab auth
-    subprocess.run(["git", "config", "--global", "user.name", "DevCake"], capture_output=True)
-    subprocess.run(["git", "config", "--global", "user.email",
-                    "devcake@users.noreply.github.com"], capture_output=True)
+        for var in cli_envs:
+            os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]
+    subprocess.run(["git", "config", "--global", "user.name", git_name],
+                   capture_output=True)
+    subprocess.run(["git", "config", "--global", "user.email", git_email],
+                   capture_output=True)
     clone = subprocess.run(
         ["git", "clone", clone_url, str(repo_dir / repo_name)],
         capture_output=True, text=True)

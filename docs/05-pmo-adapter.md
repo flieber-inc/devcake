@@ -1,52 +1,97 @@
 # 05 — PMO Adapter: `PMOPort` and the Linear Implementation
 
 > **Audience:** implementers of the Linear adapter now; implementers of GitHub Issues / GitLab / Monday adapters later.
-> **Depends on:** `02-domain-model.md` (Mission, MissionDraft, labels), `00-overview.md` (INV-1, INV-4).
+> **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
-The domain core never sees Linear types. It programs against `PMOPort`, a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. The Linear adapter is the only v0 implementation; the port + contract-test battery (§7) is the template for every future PMO System.
+The domain core never sees Linear types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. The Linear adapter (`app/devcake/adapters/linear/adapter.py`) is the only v0 implementation; the port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
 ## 1. Port interface (normative signatures)
 
+Reads and writes are keyed by `MissionRef(pmo_id, kind)` — the adapter dispatches on `ref.kind` **internally**, so vendor dualities (Linear's issue/project split) never leak into the domain. `PMOTransient` (retryable 429/5xx/network failure, `15-errors-and-retries.md`) also lives in `ports/pmo.py`.
+
 ```python
 class PMOPort(Protocol):
+    # ── reads ──
     async def list_missions(self, team_ref: str) -> list[Mission]: ...
-    async def get_mission(self, pmo_id: str) -> Mission: ...
-    async def get_activity(self, pmo_id: str) -> Activity: ...
-        # ordered feed: comments, status changes, attachments (with download URLs)
-    async def post_comment(self, pmo_id: str, markdown: str) -> None: ...
-    async def upload_attachment(self, pmo_id: str, filename: str, data: bytes) -> str: ...
-        # returns the asset URL, referenced from a follow-up comment
-    async def set_status(self, pmo_id: str, status: NormalizedStatus) -> None: ...
-    async def swap_labels(self, pmo_id: str, remove: set[str], add: set[str]) -> None: ...
-        # single call so each adapter implements the closest-to-atomic native operation
+        # non-terminal Projects + Issues of the ONE configured team
+    async def list_all(self, team_ref: str) -> list[Mission]: ...
+        # terminal included — the /api/v1/missions debug view
+    async def get(self, ref: MissionRef) -> Mission: ...
+    async def get_activity(self, ref: MissionRef) -> Activity: ...
+        # ordered feed; a ref without a comment feed (Linear projects)
+        # returns the mission with entries=[] — never raises
+    async def children_of(self, ref: MissionRef) -> list[Mission]: ...
+
+    # ── writes ──
+    async def post_feed(self, ref: MissionRef, markdown: str) -> None: ...
+        # kind-appropriate channel: issue → comment, project → project update.
+        # Feed POLICY (redaction, sentinel, suppression) is the orchestrator's
+        # job; transport is the adapter's.
+    async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
+    async def swap_labels(self, ref: MissionRef, remove: set[str],
+                          add: set[str]) -> None: ...
+        # single call so each adapter implements the closest-to-atomic native op
+    async def create_mission(self, team_ref: str, title: str, description: str,
+                             priority: str, label_names: set[str],
+                             parent_ref: Optional[str] = None) -> tuple[str, str]: ...
+        # returns (key, pmo_id) — the id wires relation edges
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
         # native "blocker blocks blocked" relation (adr/0007); duplicate-tolerant
-    async def create_mission(self, team_ref: str, draft: MissionDraft) -> Mission: ...
-    async def cancel_mission(self, pmo_id: str) -> None: ...
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
-    async def watch(self, team_ref: str) -> AsyncIterator[ChangeEvent]: ...
-        # v0: wraps the poller; a future webhook receiver implements the same signature
+        # creates the managed set in EVERY namespace the vendor requires
+        # (Linear: team issue labels + workspace project labels)
+
+    # ── assets ──
+    async def upload_attachment(self, pmo_id: str, filename: str,
+                                data: bytes) -> str: ...
+        # returns the asset URL, referenced from a follow-up feed post
+    async def download_asset(self, url: str) -> bytes: ...
+
+    # ── meta ──
+    async def health_probe(self, team_ref: str) -> PMOHealth: ...
     def capabilities(self) -> PMOCapabilities: ...
 ```
 
 ```python
-@dataclass(frozen=True)
-class PMOCapabilities:
+class PMOHealth(BaseModel):        # neutral connection-probe result — replaces
+    ok: bool                       # the old private reach-ins into vendor JSON
+    workspace: str = ""            # resolved team/workspace reference
+    managed_labels_present: int = 0   # of DevCake's managed set, found remotely
+    managed_labels_expected: int = 0
+    detail: str = ""
+
+class PMOCapabilities(BaseModel):
     projects_supported: bool          # Linear: True
     project_labels_supported: bool    # Linear: True (project labels since 2025-06)
     attachment_max_bytes: int
     native_label_swap_atomic: bool    # Linear: True via issueUpdate(labelIds)
-    relations_supported: bool         # Linear: True (issue relations; issue-only)
+    relations_supported: bool = False # Linear: True (issue relations; issue-only)
 ```
+
+`/health` and `POST /api/v1/connections/pmo/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.
+
+## 1a. Adapter registry
+
+`app/devcake/adapters/registry.py` is the single place that knows which PMO systems exist and how to construct them. The domain never imports it — `api/main.py` builds adapters here and injects them (`01-architecture.md` §3).
+
+- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `api_key_env_default`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`. The secret fields feed `security.redact` (`14-security.md` §5) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
+- **`make_pmo(inst) -> PMOPort`** constructs the adapter for the one configured `PMOInstance` (`config.pmos[0]`); an unregistered `inst.system` raises.
+- **`PMOInstance.system` is validated against `PMO_SYSTEMS`** at config-load/PUT time (pydantic field validator), so a typo'd system name is a 422, not a boot crash.
+- **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, default env-var names, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin Config tab's selectors and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).
+- **Hot reload:** a successful config `PUT` calls `reload_connections()` — the PMO (and forge) adapters are rebuilt from the saved config, the orchestrator is repointed, and `ensure_labels` is re-run for the (possibly new) team. Label bootstrap is otherwise startup-only; without the re-ensure, a hot-swapped `team_key` would run unlabeled until restart.
+
+The registry also carries the forge side (`forges()` / `make_forge`, `06-forge-adapter.md`); the shapes mirror each other.
 
 ## 2. Linear adapter — connection
 
 - Endpoint: `POST https://api.linear.app/graphql`.
-- Auth: personal API key in the `Authorization` header **without a `Bearer` prefix** (OAuth apps would use `Bearer`; v0 uses a personal API key configured as `pmo.api_key_env`).
-- Scope: exactly one team, `pmo.team_key` (e.g. `ENG`). **No work is ever done outside the configured team** (mission-doc requirement) — every query filters by team, and `create_mission` targets it explicitly.
-- Rate limits: ~5,000 requests/hour for API-key auth, plus GraphQL complexity limits. At the default 30 s poll of a single team this is comfortable; the adapter still backs off on `RATELIMITED`/429 per `15-errors-and-retries.md`.
+- Auth: personal API key in the `Authorization` header **without a `Bearer` prefix** (OAuth apps would use `Bearer`; v0 uses a personal API key named by `pmos[0].api_key_env`).
+- Scope: exactly one team, `pmos[0].team_key` (e.g. `ENG`). **No work is ever done outside the configured team** (mission-doc requirement) — every query filters by team, and `create_mission` targets it explicitly.
+- Rate limits: ~5,000 requests/hour for API-key auth, plus GraphQL complexity limits. At the default 30 s poll of a single team this is comfortable; the adapter still backs off on `RATELIMITED`/429 per `15-errors-and-retries.md` (`_gql` raises `PMOTransient`).
 
 ## 3. Normalization tables (normative)
+
+Everything below is **adapter internals behind the port** — the unified `get(ref)` dispatches to `_get_issue`/`_get_project`, `set_status` to `_set_issue_status`/`_set_project_status`, `swap_labels` to `_swap_issue_labels`/`_swap_project_labels`, and `post_feed` to `commentCreate`/`projectUpdateCreate`. The domain only ever sees the port surface of §1.
 
 Linear workflow states carry a fixed `type` enum. DevCake maps by **type**, never by display name (teams rename states freely):
 
@@ -68,34 +113,35 @@ Issue priority (Linear numeric):
 | 3 (and 0 = none) | `medium` |
 | 4 | `low` |
 
-Projects: Linear Project statuses come in five fixed categories — Backlog, Planned, In Progress, Completed, Canceled — mapped `Backlog/Planned→backlog`, `In Progress→in_progress`, `Completed→done`, `Canceled→canceled`. Project priority uses the same five-level scale and maps identically. Project labels are first-class in Linear (shipped 2025-06) — the same ten managed labels are ensured for projects.
+Projects: Linear Project statuses come in five fixed categories — Backlog, Planned, In Progress, Completed, Canceled — mapped `Backlog/Planned→backlog`, `In Progress→in_progress`, `Completed→done`, `Canceled→canceled` (plus `Paused→backlog`). Project priority uses the same five-level scale and maps identically. Project labels are first-class in Linear (shipped 2025-06) — the same ten managed labels are ensured for projects.
 
-**Blocked-by relations (adr/0007):** issue queries (`list_all`, `get_mission`) additionally fetch `inverseRelations(first: 10) { nodes { type issue { id } } }`; nodes of type `blocks` map to `Mission.blocked_by` (on issue B, `inverseRelations` holds relations where B is `relatedIssue`, so each node's `issue` is a blocker). `create_relation` → `issueRelationCreate(input: {issueId: blocker, relatedIssueId: blocked, type: blocks})`, tolerating the duplicate-relation error so decomposition resume stays idempotent. Relations are **issue-only** in Linear — projects always normalize with `blocked_by = []`.
+**Blocked-by relations (adr/0007):** issue queries (`list_all`, `_get_issue`) additionally fetch `inverseRelations(first: 50) { nodes { type issue { id } } }`; nodes of type `blocks` map to `Mission.blocked_by` (on issue B, `inverseRelations` holds relations where B is `relatedIssue`, so each node's `issue` is a blocker). `create_relation` → `issueRelationCreate(input: {issueId: blocker, relatedIssueId: blocked, type: blocks})`, tolerating the duplicate-relation error so decomposition resume stays idempotent. Relations are **issue-only** in Linear — projects always normalize with `blocked_by = []`.
 
 **Verified live 2026-07-12 (sandbox):** (a) the direction above is correct end-to-end (`B.blocked_by == [A]`, A unaffected); (b) a duplicate `issueRelationCreate` returns an **idempotent success**, not an error — the adapter's error-tolerance is belt-and-suspenders; (c) the enlarged `list_all` costs complexity **1,310** against Linear's 3,000,000/hour budget (headers `x-complexity` / `x-ratelimit-complexity-*`) — ~5% of budget at 30 s polling; (d) the `` `devcake:v1` `` comment footer survives the create→read roundtrip byte-for-byte; (e) deleting a blocker issue clears the relation from the blocked issue immediately; (f) `projectUpdateCreate` posts a project update that reads back with the sentinel intact — the baton-pass channel for project-kind hand-offs (§6, `03-mission-lifecycle.md` §4a).
 
-**Read robustness (normative):** every list read (`list_all` issues and projects, `children_of_project`) is **cursor-paginated** — the scheduling gate and the mapper's validator must see the whole team; a first-page-only read turns silent truncation into wrong scheduling (and, for the mapper, wrong *writes*). `inverseRelations` uses `first: 50` — Linear returns ALL relation types and the `blocks` filter is client-side, so an undersized page can evict a blocker; a full relations page is logged as a WARNING (never silent). Port method `create_project_update(project_id, body)` posts to the project-native feed.
+**Read robustness (normative):** every list read (`list_all` issues and projects, `children_of`) is **cursor-paginated** — the scheduling gate and the mapper's validator must see the whole team; a first-page-only read turns silent truncation into wrong scheduling (and, for the mapper, wrong *writes*). `inverseRelations` uses `first: 50` — Linear returns ALL relation types and the `blocks` filter is client-side, so an undersized page can evict a blocker; a full relations page is logged as a WARNING (never silent).
 
-**`get_activity` pagination:** `get_activity` cursor-walks the full comment thread (`comments(first: 100, orderBy: createdAt, after: $cursor)`), per the read-robustness rule above — a single-page read was **verified lossy live on 2026-07-12** (DEV-50: 108 comments, 8 silently dropped). The ordering is pinned explicitly (verified: newest-first), so pages arrive newest-to-oldest and the safety ceiling of **10 pages / 1,000 comments** — a fail-loud valve at ~50× DevCake's post-hygiene comment rate, not a design limit — always keeps the newest comments, where the merge-state and conflict-resolve markers live (`03-mission-lifecycle.md` §4.1). Hitting the ceiling logs a truncation WARNING, never silent. Below it, `ACTIVITY.md` (`07-dev-runtime.md` §2), `_derive_seq`, and all marker counting see the complete thread.
+**`get_activity` pagination:** on issue refs, `get_activity` cursor-walks the full comment thread (`comments(first: 100, orderBy: createdAt, after: $cursor)`), per the read-robustness rule above — a single-page read was **verified lossy live on 2026-07-12** (DEV-50: 108 comments, 8 silently dropped). The ordering is pinned explicitly (verified: newest-first), so pages arrive newest-to-oldest and the safety ceiling of **10 pages / 1,000 comments** — a fail-loud valve at ~50× DevCake's post-hygiene comment rate, not a design limit — always keeps the newest comments, where the merge-state and conflict-resolve markers live (`03-mission-lifecycle.md` §4.1). Hitting the ceiling logs a truncation WARNING, never silent. Below it, `ACTIVITY.md` (`07-dev-runtime.md` §2), `_derive_seq`, and all marker counting see the complete thread. On project refs, `get_activity` returns the mission with `entries=[]` — Linear projects have no issue-style comments API (verified M2/M5).
 
-## 4. Comments, transcripts, and attachments
+## 4. Feed posts, transcripts, and attachments
 
-- `post_comment` → `commentCreate(input: {issueId, body})`; body is Markdown.
-- **Attachment-first feed policy (feed hygiene):** the activity feed is for *messages* — directives, short specifications, token reports, status notes. Bulk markdown always goes up as `.md` attachments referenced from a short sentinel-signed comment:
+- `post_feed(ref, markdown)` → issue: `commentCreate(input: {issueId, body})`; project: `projectUpdateCreate(input: {projectId, body})` — Linear's project-native feed. Body is Markdown either way.
+- **Attachment-first feed policy (feed hygiene):** the activity feed is for *messages* — directives, short specifications, token reports, status notes. Bulk markdown always goes up as `.md` attachments referenced from a short sentinel-signed comment. This policy lives in the **orchestrator**, not the adapter (the port note in §1: policy above, transport below):
   - **Transcripts** are ALWAYS uploaded as `{seq}_{TYPE}.md` attachments (never inline); the referencing comment keeps the backticked filename (the seq-derivation marker) and links the asset.
   - **REVIEW reject reports** are uploaded as `{seq}_REVIEW_REPORT.md`; the feed gets a short "rejected (round N)" comment, while the PR comment keeps the full report.
   - **Safety net:** ANY issue comment over **2048 chars** is externalized the same way (as `comment-{ts}.md`) with a 300-char preview + link. The provenance sentinel goes on the short comment, never inside the attachment. Upload failures fall back to posting inline — an upload outage must never lose feed content. Devs always receive full content: `activity.get` downloads attachments into the Dev's `activity/` folder (`07-dev-runtime.md` §2).
   - Marker-bearing comments (`devcake:conflict-resolve:N`, `devcake:merge-retry`, `devcake:merge-handoff`, step markers) are short by construction so the markers always stay inline and countable.
+- **Attachment references arrive named:** `ActivityEntry.attachments` is a `list[AttachmentRef{url, name}]` — the adapter extracts asset URLs from comment bodies and resolves `name` from the markdown link text (`[r.md](https://uploads.linear.app/…)` → `name="r.md"`; a bare URL → `name=None`). The domain never parses vendor asset URLs.
 - `upload_attachment` implements Linear's three-step flow:
   1. `fileUpload(contentType, filename, size)` mutation → `{uploadUrl, assetUrl, headers[]}`;
   2. server-side HTTP `PUT` of the bytes to `uploadUrl`, including every returned header (client-side PUT is CSP-blocked; the headers array must be converted to a header map);
-  3. reference `assetUrl` in a comment. Note: `assetUrl` downloads require Linear auth — the Dev entrypoint downloads attachments through the app relay, which holds the key (INV-4).
+  3. reference `assetUrl` in a comment. Note: `assetUrl` downloads require Linear auth — `download_asset` sends the key, and the Dev entrypoint downloads attachments through the app relay, which holds it (INV-4).
 
 ## 5. Label bootstrap
 
-At startup (`04-orchestrator.md` §6) the app calls `ensure_labels(team, {the ten managed labels})` — `02-domain-model.md` §5. Missing labels are created via `issueLabelCreate` scoped to the team (issue labels) and the project-label equivalent. Existing labels are matched case-insensitively but always written in canonical uppercase form.
+At startup (`04-orchestrator.md` §6) — and again after every config `PUT`, via `reload_connections()` (§1a) — the app calls `ensure_labels(team, {the ten managed labels})` — `02-domain-model.md` §5. Missing labels are created via `issueLabelCreate` scoped to the team (issue labels) and `projectLabelCreate` (workspace-level project labels). Existing labels are matched case-insensitively but always written in canonical uppercase form.
 
-`swap_labels` is implemented as a single `issueUpdate(labelIds: [...])` computed from the live label set (read-modify-write with the removal and addition applied together), which is the closest-to-atomic operation Linear offers; `capabilities().native_label_swap_atomic = True`.
+`swap_labels(ref, remove, add)` on issues is implemented as a single `issueUpdate(labelIds: [...])` computed from the live label set (read-modify-write with the removal and addition applied together), which is the closest-to-atomic operation Linear offers; `capabilities().native_label_swap_atomic = True`. The project branch (`_swap_project_labels`) does the same read-modify-write via `projectUpdate(labelIds)` against the workspace-level project-label ids.
 
 **Verified at M5:** Linear caps project `description` at **255 chars** — the long-form body lives in `content` (the adapter reads `content or description`); projects have **no issue-style comments API**, so project-run transcripts/token reports are recorded in the audit log + OpenObserve only (the substance lands on the child issues anyway, per ADR-0006).
 
@@ -105,29 +151,39 @@ At startup (`04-orchestrator.md` §6) the app calls `ensure_labels(team, {the te
 
 Projects are normalized into Missions like Issues (`pmo_kind="project"`, `key="PRJ-{slug}"`). Policy (ADR `0006-projects-always-decompose.md`):
 
-- A Project always takes the **high-complexity ONBOARD path**: it is decomposed into child Issues created inside the Project (`MissionDraft.parent_ref` = project id), each labeled `DEVCAKE-CREATED`.
+- A Project always takes the **high-complexity ONBOARD path**: it is decomposed into child Issues created inside the Project (`create_mission(..., parent_ref=project pmo_id)`), each labeled `DEVCAKE-CREATED`.
 - The Project itself then receives `DEVCAKE-TRACKING` and stays open; the poll loop auto-completes it once all child Issues are `done`/`canceled` (`04-orchestrator.md` §1.3).
 - Projects never take the trivial or normal ONBOARD paths.
 
 ## 7. Adapter contract tests
 
-A reusable battery every `PMOPort` implementation must pass (run against a sandbox team in CI for Linear; against fakes for the port itself):
+Two batteries. Every future `PMOPort` implementation reuses both shapes: the offline suite pins the port, the live battery pins the vendor behavior.
+
+**Offline (`app/tests/test_pmo_contract.py`, runs in CI, no network):**
+
+- **Port-surface pinning** — the exact method list of `PMOPort` is asserted, so a port edit must be deliberate.
+- **Adapter conformance** — `LinearAdapter` implements every port method with matching parameter names.
+- **Fake drift tripwire** — every port method a test fake (`FakePMO`/`MapPMO`/`DepPMO`) implements must match the port signature, keeping fakes honest as the contract evolves.
+- **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`; `get_activity` on a project returns `entries=[]` without ever querying comments; attachment `name` resolution (named markdown link vs bare URL).
+- **`health_probe` counting** — managed labels counted by `ALL_LABELS` intersection: a `DEVCAKE-CUSTOM-EXTRA` label must NOT count; `managed_labels_expected == len(ALL_LABELS)`.
+- **Transient typing** — a 429 surfaces as `PMOTransient` from the port.
+
+**Live (`scripts/contract_tests_pmo.py`, against the sandbox team — M2 exit criterion):** runs inside the app container (`docker compose exec -T app python - < scripts/contract_tests_pmo.py`); creates temp issues prefixed `[CONTRACT]` and deletes them afterwards. The battery's `_team`/`_gql` calls are **adapter-internal fixture plumbing only** (issue create/delete has no port method and should not grow one for tests' sake) — commented as such in the script; only port methods are contract-tested.
 
 | # | Scenario |
 |---|---|
 | 1 | `list_missions` returns only the configured team's items, excluding terminal ones |
 | 2 | Status normalization round-trips for every state type |
 | 3 | Priority normalization incl. the unset→`medium` default |
-| 4 | `swap_labels` removes+adds in one observable step; no intermediate two-stage-label state visible to a subsequent `get_mission` |
+| 4 | `swap_labels` removes+adds in one observable step; no intermediate two-stage-label state visible to a subsequent `get` |
 | 5 | `ensure_labels` is idempotent and case-insensitive |
-| 6 | Transcripts and reject reports always go up as attachments; any comment > 2048 chars is externalized with a short sentinel-signed reference; upload failure falls back inline |
-| 7 | `create_mission` applies `DEVCAKE-CREATED`, explicit priority, and team scoping |
-| 8 | `get_activity` ordering is chronological, paginates past 100 comments (ceiling → loud WARNING), and includes attachments with fetchable URLs |
-| 9 | Rate-limit (429/RATELIMITED) surfaces as `PMO_TRANSIENT` |
+| 5b | `health_probe` reports ok + the full managed set present — the public replacement for `_team` reach-ins |
+| 8 | `get_activity` ordering is chronological and attachments are extracted with fetchable URLs |
+| 9 | Rate-limit (429/RATELIMITED) surfaces as `PMOTransient` |
 | 10 | Project normalization: statuses, priority, labels; `capabilities()` truthful |
-| 11 | `inverseRelations` of type `blocks` parse into `blocked_by`; other relation types ignored |
-| 12 | `create_relation` issues the correct mutation and tolerates the duplicate-relation error |
 
-## 8. Webhook readiness (fast-follow, not v0)
+The numbering is historical and stable (test files reference rows by number). The gaps are covered elsewhere: row 6 (attachment-first feed policy, > 2048-char externalization, inline fallback) is orchestrator policy, tested in `app/tests/test_transitions.py`; row 7 (`create_mission` labeling/priority/team scoping) is exercised through the decomposition tests; rows 11/12 (`inverseRelations`→`blocked_by` parsing; `issueRelationCreate` payload + duplicate tolerance) run hermetically on `MockTransport` in `app/tests/test_linear_relations.py`.
 
-`watch()` is the seam: v0's implementation polls and diffs; the fast-follow adds a FastAPI webhook receiver (Linear signs payloads with `Linear-Signature` HMAC-SHA256; events exist for Issues, Comments, Projects, Labels) that yields the same `ChangeEvent`s. Nothing above the port changes. Until then, polling every 30–60 s is well within rate limits.
+## 8. Webhook readiness
+
+A push-based `watch()` seam was designed but never implemented; it is recorded as future work in `16-roadmap.md`. v0 polls every 30–60 s, well within rate limits.

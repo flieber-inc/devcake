@@ -23,7 +23,7 @@ The Dev studies the Mission against the actual codebase and classifies it using 
 | `high` | Too large/compound for one plan–execute–review cycle; naturally splits into independent work items. | Rare. |
 
 ### 1.1 Trivial path
-The Dev implements the change immediately (same rules as EXECUTE: branch `devcake/{mission_key}`, commit only at the very end, push, open PR). `result.json`: `outcome: "executed_trivially"` with `pr_url`.
+The Dev implements the change immediately (same rules as EXECUTE: branch `devcake/{mission_key}` — the `mission_branch()` convention, §3, commit only at the very end, push, open PR). `result.json`: `outcome: "executed_trivially"` with `pr_url`.
 
 **Finalization:** transcript + token report → add `DEVCAKE-REVIEW`. The trivial path skips PLAN and EXECUTE, but **never skips REVIEW** — self-assessment is not a quality gate; an independent REVIEW pass always stands between any DevCake-written code and Done/merge (confirmed decision).
 
@@ -37,7 +37,7 @@ No code changes. `result.json`: `outcome: "plan_needed"` with a one-paragraph `s
 **Finalization:** transcript + token report → if a `PLAN.md` was attached: upload it to the activity feed and add `DEVCAKE-EXECUTE` (the PLAN step is skipped — its work already exists); otherwise add `DEVCAKE-PLAN`.
 
 ### 1.3 High-complexity path (decomposition)
-No code changes. The Dev emits a **decomposition manifest** in `result.json` (`outcome: "decomposed"`, `decomposition: [MissionDraft, …]` — `02-domain-model.md` §11), observing:
+No code changes. The Dev emits a **decomposition manifest** in `result.json` (`outcome: "decomposed"`, `decomposition: [{title, description, priority, …}, …]` — entry schema in `02-domain-model.md` §11), observing:
 
 - **Standalone rule:** every child description must read as an independent Mission. Never "Review the work done in this Mission"; instead "Review all work recently done in connection with the creation of feature XYZ". No cross-references between siblings.
 - **Explicit priority** on every child (required field).
@@ -62,10 +62,10 @@ The Dev invokes the harness's plan capability (mapping per harness in `08-harnes
 
 The Dev reads the latest `PLAN.md` and the latest REVIEW report from `ACTIVITY.md`/attachments, then:
 
-1. **Branch:** `devcake/{mission_key}`. If the branch already exists on the remote (a prior EXECUTE loop), check it out and continue on it. **Never force-push.**
+1. **Branch:** `devcake/{mission_key}` — the branch convention is defined once as `mission_branch()` in `ports/forge.py` and imported by the orchestrator and prompt templates alike. If the branch already exists on the remote (a prior EXECUTE loop), check it out and continue on it. **Never force-push.**
 2. Implement; run the repo's tests/build where present.
 3. **Commit only at the very end** (INV-6). Commit message: `[{mission_key}] {concise summary}`.
-4. Push; the PR/MR is opened by the Dev via the forge CLI/API using injected credentials — **idempotently**: if a PR for the branch exists, update it (title/body) instead of creating another. Title: `[{mission_key}] {title}`; body links the Mission URL and the plan.
+4. Push; the PR/MR is opened by the Dev via the forge CLI/API using injected credentials — **idempotently**: if a PR for the branch exists, update it (title/body) instead of creating another. Title: `[{mission_key}] {title}`; body links the Mission URL and the plan. The concrete CLI instructions in the playbook prompt come from the active forge adapter's `ForgeDescriptor.pr_instructions` — never hardcoded per forge.
 
 `result.json`: `outcome: "executed"` with `pr_url` and `summary`.
 
@@ -121,7 +121,7 @@ A **team-scoped run kind** (not a Mission Type — it has no host Mission and no
 
 ## 5. The approval-command footer (normative)
 
-Every REVIEW PR comment (approve *and* reject — on reject it helps a human short-circuit the loop) ends with:
+Every REVIEW PR comment (approve *and* reject — on reject it helps a human short-circuit the loop) ends with the footer supplied by the active forge adapter's `approval_footer()`. For example:
 
 ```
 ---
@@ -130,7 +130,7 @@ To approve and merge this PR yourself:
   glab mr approve <MR_IID> && glab mr merge <MR_IID>                   # GitLab
 ```
 
-rendered with the *concrete* URL/IID substituted — one paste must suffice.
+rendered with the *concrete* URL/IID substituted — one paste must suffice. Each adapter emits only its own dialect (the `gh` line on GitHub, the `glab` line on GitLab).
 
 ## 6. `result.json` schema (normative)
 
@@ -154,7 +154,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice.
 
 A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
 
-**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`missions.LEGAL_OUTCOMES`) — an illegal outcome is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on; the Dev entrypoint mirrors the same table as first-line defense (exit 11), but the app check is the invariant (old images may run):
+**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator.py`, `LEGAL_OUTCOMES`) — an illegal outcome is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on; the Dev entrypoint mirrors the same table as first-line defense (exit 11), but the app check is the invariant (old images may run):
 
 | Run type | Legal outcomes |
 |---|---|
@@ -168,7 +168,7 @@ A **structurally invalid payload** behind a legal outcome (empty decomposition, 
 
 ## 7. Canonical prompts (v0)
 
-The full prompt a Dev receives = **identifying prompt** (Dev Type, below) + **playbook prompt** (per Mission Type, maintained as templates in `app/prompts/`, interpolated with mission metadata). Playbook prompts inline only the mission title and description; the `activity/` folder is presented as **reference material to consult as needed** ("the mission's history and artifacts are in activity/ — grep or read what you need"), never dumped into the prompt (`07-dev-runtime.md` §2). The playbook prompts restate, verbatim, the binding rules from this document: workspace boundaries (INV-6), commit-at-end, branch conventions, the standalone rule, the depth limit, and the `result.json` contract.
+The full prompt a Dev receives = **identifying prompt** (Dev Type, below) + **playbook prompt** (per Mission Type, maintained as templates in `app/devcake/prompts/`, interpolated with mission metadata; the EXECUTE playbook additionally interpolates the forge descriptor's `pr_instructions`). Playbook prompts inline only the mission title and description; the `activity/` folder is presented as **reference material to consult as needed** ("the mission's history and artifacts are in activity/ — grep or read what you need"), never dumped into the prompt (`07-dev-runtime.md` §2). The playbook prompts restate, verbatim, the binding rules from this document: workspace boundaries (INV-6), commit-at-end, branch conventions, the standalone rule, the depth limit, and the `result.json` contract.
 
 ### Senior Dev — identifying prompt
 > You are **Senior Dev**, DevCake's judgment-heavy engineer. You assess, plan, and review software work with the skepticism of a staff engineer who has been burned before. You are precise about scope: you do exactly what your current mission type asks — no more. You never invent requirements, you flag what you cannot verify, and you write conclusions that a teammate can act on without asking follow-up questions.
@@ -176,7 +176,7 @@ The full prompt a Dev receives = **identifying prompt** (Dev Type, below) + **pl
 ### Main Dev — identifying prompt
 > You are **Main Dev**, DevCake's implementation engineer. You turn plans into working, tested code. You follow the plan you are given; where reality contradicts the plan, you implement the smallest sound deviation and document it prominently in your summary. You match the conventions of the codebase you are in, you run the tests, and you never commit until the work is complete.
 
-*(Playbook prompt texts are derived mechanically from §§1–4 of this document; they live in `app/prompts/{onboard,plan,execute,review}.md` and are the single runtime source. When this doc and those files disagree, this doc wins and the files must be fixed.)*
+*(Playbook prompt texts are derived mechanically from §§1–4 of this document; they live as templates in `app/devcake/prompts/__init__.py` and are the single runtime source. When this doc and those templates disagree, this doc wins and the templates must be fixed.)*
 
 ## 8. Token report message format (normative)
 

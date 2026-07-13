@@ -20,37 +20,53 @@ Two container levels, per the mission doc: the compose stack, and the Dev contai
 
 | From → To | Protocol | Purpose |
 |---|---|---|
-| app → Linear | HTTPS GraphQL | poll missions; write comments/labels/status/attachments (sole PMO client — INV-4) |
+| app → PMO (Linear adapter) | HTTPS GraphQL | poll missions; write feed posts/labels/status/attachments (sole PMO client — INV-4) |
 | app → dagu | REST (`/api/v1/dags/dev-run/start`) | trigger a Dev run with a fully-resolved run spec |
 | dagu → docker.sock | Docker API (Moby SDK) | spawn/stop/remove `dev-{run_id}` sibling containers |
 | app → dagu | REST | watchdog kill (`stop` endpoint), run-status queries, startup reconciliation — the app holds no `docker.sock` |
 | dev → redis | Redis Streams | `runspec.get` (env + credentials), `run.started/heartbeat/artifacts`, `activity.get` req/reply |
 | app → redis | Redis Streams | consume ingress (group `app`); serve replies |
-| dev → GitHub/GitLab | HTTPS/git | clone, push, open/update PR (Dev side of `06-forge-adapter.md` §2) |
-| app → GitHub/GitLab | HTTPS | PR comments, approval, merge (decision-bearing side) |
+| dev → forge (GitHub/GitLab adapters) | HTTPS/git | clone, push, open/update PR (Dev side of `06-forge-adapter.md` §2) |
+| app → forge (GitHub/GitLab adapters) | HTTPS | PR comments, approval, merge (decision-bearing side) |
 | admin(browser) → admin(nginx) → app | REST `/api/v1` | config CRUD, health, run history |
 | everything → openobserve | OTLP HTTP (+ container stdout shipping) | traces, logs, metrics (`12-observability.md`) |
 
 ## 3. Hexagonal layering of the app
 
 ```
-app/
-  domain/          # pure logic: Mission derivation, state machine, scheduler,
-                   #   finalization protocol. Imports NO adapter code. No I/O.
-  ports/           # Protocols: PMOPort, ForgePort, ExecutorPort, StatePort
+app/devcake/
+  domain/          # pure logic — imports NO adapter code at runtime
+    model.py       #   entities, Mission Type derivation, label set (02)
+    run.py         #   Run record + state machine
+    orchestrator.py#   poll loop, scheduler, finalization protocol (04)
+    runs.py        #   run bookkeeping
+    oauth.py       #   harness OAuth flows
+    watchdog.py    #   timeout/zombie detection
+    ids.py         #   id generation
+  ports/           # Protocols + the DTOs that cross them
+    pmo.py         #   PMOPort, PMOHealth, PMOCapabilities, PMOTransient (05)
+    forge.py       #   ForgePort, PullRequest, BranchProtection,
+                   #   ForgeDescriptor, ForgeError, mission_branch() (06)
   adapters/
-    linear/        # PMOPort impl (05)
-    github/ gitlab/# ForgePort impls (06)
-    dagu/          # ExecutorPort impl: start_dag, run_status
-    files/         # StatePort impl: /data reads/writes (10)
-    redis/         # ingress consumer + reply publisher (09)
-  api/             # FastAPI: /api/v1 (11), health
+    registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), forges() —
+                   #   the ONE place that knows which adapters exist
+    linear/        #   PMOPort impl (05)
+    github/ gitlab/#   ForgePort impls (06)
+    dagu/          #   Dagu executor: start_dag, run_status
+    files/         #   /data reads/writes: run_store.py, runlog.py (10)
+    redis/         #   messaging.py — ingress consumer + reply publisher (09)
+  api/             # FastAPI: main.py (/api/v1, health — 11), clear.py
   telemetry/       # OTel setup, devcake.* attribute helpers (12)
   prompts/         # playbook prompt templates (03 §7)
-  harness_templates/  # the 3 template files (08)
+  config.py        # single pydantic schema authority for config.yaml (root-level:
+                   #   cross-cutting — consumed by domain, adapters, and api alike)
+  security.py      # redaction choke point, fed token shapes by the registry (14)
+  harness.py       # harness registry: the 3 model/harness pairs (08)
 ```
 
-**Rule:** the domain core is testable with fakes of the four ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`).
+The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members. `ExecutorPort` and `StatePort` are declared-future ports: the `dagu/`, `files/`, and `redis/` adapters are already packaged under `adapters/`, but their port Protocols are not yet formalized (`16-roadmap.md`).
+
+**Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). `domain/*` has zero runtime adapter imports — adapter types appear only under `TYPE_CHECKING`.
 
 ## 4. Data-flow summaries
 

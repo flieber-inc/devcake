@@ -72,14 +72,19 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `DEVCAKE_DEV_TYPE` | 2 | Dev Type name. |
 | `DEVCAKE_SEQ` | 2 | Step number (transcript naming `{seq}_{type}.md`). |
 | `DEVCAKE_REPO_URL` | 2 | Clone URL (credential-free; auth via helper, §5). |
-| `DEVCAKE_DEFAULT_BRANCH` | 2 | The repo's default branch. |
+| `DEVCAKE_DEFAULT_BRANCH` | 2 | The repo's default branch (`config.repo.default_branch` — not necessarily `main`). |
+| `DEVCAKE_CLONE_USER` | 2 | Credential-in-URL user for the https clone (from the forge descriptor, `06-forge-adapter.md` §3a — `x-access-token` / `oauth2`). |
+| `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` | 2 | The Dev's git identity (from the forge descriptor). |
+| `DEVCAKE_FORGE_CLI_ENVS` | 2 | Comma-joined env-var names the entrypoint mirrors `DEVCAKE_FORGE_TOKEN` into for the forge CLI (from the descriptor's `cli_token_envs`, e.g. `GH_TOKEN`). |
 | `DEVCAKE_EXTRA_ARGS` | 2 | Per-Mission-Type extra CLI args from `assignments` (`02-domain-model.md` §9), appended verbatim to the harness invocation (`08-harness-templates.md` §1). May be empty. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OpenObserve OTLP endpoint. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | 2 | Auth header for OTLP ingest. |
 | *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `OPENAI_API_KEY` / `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
-| *forge credentials* | 2 | `DEVCAKE_FORGE`, `DEVCAKE_FORGE_TOKEN` (and optionally the other forge's token for cross-forge reads). |
+| *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active repo's token; optionally the other forge's token for cross-forge reads). `DEVCAKE_FORGE` (the forge id) still ships as the **legacy discriminator** — see the fallback note below. |
 
 Real secrets (harness, forge, OTLP credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §3, `09-messaging.md` §1a).
+
+**Forge dialect fallbacks (`forge_dialect()` in the shared entrypoint):** the descriptor-driven vars (`DEVCAKE_CLONE_USER`, `DEVCAKE_GIT_NAME`, `DEVCAKE_GIT_EMAIL`, `DEVCAKE_FORGE_CLI_ENVS`) win when present; when any is absent the entrypoint reproduces the pre-descriptor behavior bit-for-bit — clone user `oauth2` iff `DEVCAKE_FORGE=gitlab` else `x-access-token`, git identity `DevCake <devcake@users.noreply.github.com>`, and the token mirrored into both `GH_TOKEN` and `GITLAB_TOKEN`. `DEVCAKE_FORGE`/`DEVCAKE_FORGE_TOKEN` are kept as that legacy discriminator/credential contract so image skew is harmless: an old app with a new image and a new app with an old image both behave exactly as v0 did.
 
 ## 4. Exit codes (normative)
 

@@ -85,10 +85,12 @@ volumes:
 ## 3. `.env.example` (full listing)
 
 ```
-# PMO
+# PMO (env name = the registry default, api_key_env — configurable per pmos: entry)
 LINEAR_API_KEY=
 
-# Forge (both may be set; one active repo — 06-forge-adapter.md)
+# Forge (both may be set; exactly one active repo in the config's repos: list —
+# 06-forge-adapter.md). Env names are the adapter registry's token_env_default;
+# token_env is configurable per repos: entry.
 GITHUB_TOKEN=
 GITHUB_REVIEWER_TOKEN=        # optional 2nd account for formal PR approvals
 GITLAB_TOKEN=
@@ -206,13 +208,13 @@ Which Dev image a run uses is `HARNESSES[harness_template].image` (`app/devcake/
 
 ### 8a. Protect the default branch (deployment requirement — docs/14 §2)
 
-Dev containers hold the forge token, and token scoping cannot separate "push a feature branch" from "merge to main" (both are `contents: write`). Before pointing DevCake at a repository:
+Dev containers hold the forge token, and token scoping cannot separate "push a feature branch" from "merge to the default branch" (both are `contents: write`). Before pointing DevCake at a repository, protect **the branch configured as `default_branch` on the `repos:` entry** (not literally `main` — DevCake checks whichever branch the config names):
 
-- **GitHub:** add a ruleset (or classic protection) on the default branch — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW files a formal approval, so `auto_merge` keeps working.
-- **GitLab:** protect the default branch (no direct pushes) and require ≥1 MR approval.
+- **GitHub:** add a ruleset (or classic protection) on that branch — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW files a formal approval, so `auto_merge` keeps working.
+- **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 The forge connection test and the admin header surface the protection state; an unprotected default branch shows a standing amber warning.
-- **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). Schema migrations run automatically (`10-persistence.md` §2).
+- **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). Schema migrations run automatically (`10-persistence.md` §2). `config.yaml` migrates itself on first boot after an upgrade — v1's singular `pmo:`/`repo:` blocks become the plural v2 `pmos:`/`repos:` lists (still exactly one entry each), with the old file kept as `config.yaml.v1.bak`.
 - **Kill a stuck Dev:** admin → Executor tab → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Logs tab (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).

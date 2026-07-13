@@ -41,7 +41,14 @@ Held by exactly **one** service: `dagu` (spawning Devs — the mission-doc archi
 
 ## 5. Transcript redaction (normative)
 
-Before any transcript or report is posted to the PMO System (an external SaaS), the renderer scans for the **known secret values** of the current config (every env-var value referenced by config, every uploaded credential file's key material) plus common token patterns (`ghp_…`, `glpat-…`, `sk-…`, `xai-…`, `lin_api_…`) and replaces them with `«REDACTED»`. The same filter wraps the OTLP log exporter.
+Before any transcript or report is posted to the PMO System (an external SaaS), the renderer scans for the **known secret values** of the current config (every env-var value in the secret list, every uploaded credential file's key material) plus known token patterns and replaces them with `«REDACTED»`. The same filter wraps the OTLP log exporter.
+
+The lists are assembled in two parts (`app/devcake/security.py`):
+
+- **Platform lists** — `PLATFORM_SECRET_ENV_VARS` (harness keys and infra passwords: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `OPENAI_API_KEY`/`CODEX_API_KEY`, `REDIS_PASSWORD`, `DAGU_PASSWORD`, `ADMIN_PASSWORD`, `OO_ROOT_PASSWORD`) and `PLATFORM_TOKEN_PATTERNS` (harness/model key shapes `sk-…`, `xai-…`) — static, not adapter-owned.
+- **Registry contributions** — every **registered** PMO system and forge adapter contributes its `secret_env_vars` and `token_patterns` through its registry entry / `ForgeDescriptor`, **configured or not**, so switching adapters never opens a redaction gap. The forge/PMO token shapes (`ghp_…`, `github_pat_…`, `glpat-…`, `lin_api_…`, `lin_oauth_…`) all come from here, not from a hardcoded list. The registry import is lazy and memoized at the first `redact()` call (security is imported by the adapters themselves, so it can't import them at module load).
+
+`secret_env_vars()` / `token_patterns()` expose the unions, and a **superset tripwire** in `app/tests/test_security.py` pins them: the union must remain a superset of the v0 lists, and every registered adapter's contributions must be included — a refactor can add shapes but can never silently drop one.
 
 ## 6. Dev container hardening
 

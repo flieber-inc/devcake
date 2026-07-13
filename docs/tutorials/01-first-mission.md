@@ -42,7 +42,7 @@ docker compose --profile images build   # builds the Dev images
 
 Open **http://localhost:8080** (your admin user/password from `.env`). The
 header health strip should show every dot green. On this first boot DevCake also
-created its nine `DEVCAKE-*` labels in your Linear team — go look.
+created its ten `DEVCAKE-*` labels in your Linear team — go look.
 
 ## Step 2 — Meet the three tabs
 

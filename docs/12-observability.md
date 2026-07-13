@@ -31,8 +31,8 @@ observability gap.
 | `mission.dispatch` | `poll.cycle` | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type` |
 | `dev.run` | *linked to `mission.dispatch` via TRACEPARENT env* | Dev entrypoint | full registry incl. `devcake.tokens.*`, `devcake.cost.usd`, `devcake.outcome` |
 | `harness.exec` | `dev.run` | Dev entrypoint | `devcake.harness` |
-| `pmo.{op}` | caller | app | op = `list/get/comment/upload/set_status/swap_labels/create/cancel` |
-| `forge.{op}` | caller | app | op = `ensure_pr/comment/approve/merge` |
+| `pmo.{op}` | caller | app | op = `list/get/post_feed/upload/set_status/swap_labels/create` (the `PMOPort` surface) |
+| `forge.{op}` | caller | app | op = `get_pr_by_branch/comment/approve/merge` (the `ForgePort` surface) |
 | `redis.publish` / `redis.consume` | caller | both | `devcake.run.id`, message kind |
 | `run.finalize` | `redis.consume` | app | `devcake.run.id`, `devcake.outcome`, finalized steps |
 
@@ -42,7 +42,7 @@ observability gap.
 
 ```
 devcake.mission.id          devcake.mission.key        devcake.mission.type
-devcake.dev_type            devcake.harness            devcake.pmo.system   (= "linear")
+devcake.dev_type            devcake.harness
 devcake.run.id              devcake.run.seq            devcake.run.attempt
 devcake.tokens.input        devcake.tokens.output
 devcake.tokens.cache_read   devcake.tokens.cache_write

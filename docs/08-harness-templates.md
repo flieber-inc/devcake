@@ -3,7 +3,7 @@
 > **Audience:** implementers. This document absorbs all harness churn: when a CLI changes or a model is swapped, only this doc (and the template files it specifies) change.
 > **Depends on:** `07-dev-runtime.md` (container contract), `02-domain-model.md` (DevType, TokenReport).
 
-A **harness template** fully describes how one model/harness pair runs inside a Dev container. Exactly three exist, hardcoded as one small config file each under `app/harness_templates/` — *hardcoded but easy to edit*: adding a fourth template or changing a model is a one-file change plus an image build (§8).
+A **harness template** fully describes how one model/harness pair runs inside a Dev container. Exactly three exist, hardcoded as entries in the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2) — *hardcoded but easy to edit*: adding a fourth template or changing a model is a one-file change plus an image build (§8).
 
 | Template id | Model | Harness CLI | v0 Dev Type |
 |---|---|---|---|

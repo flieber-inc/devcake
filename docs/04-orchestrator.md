@@ -16,7 +16,7 @@ Every `poll_interval_seconds` (default 30):
 1. Fetch all non-terminal Projects and Issues in the configured team via `PMOPort.list_missions(team_ref)` and normalize to `Mission` DTOs.
 2. Derive each Mission's type per the table in `02-domain-model.md` §2.
 3. **Project auto-completion sweep:** for each Project carrying `DEVCAKE-TRACKING`, check its child Issues; if all are `done`/`canceled` (and it has ≥1 child), set the Project's status to `done`, remove `DEVCAKE-TRACKING`, and post a completion comment. (State is derived entirely from the PMO — no local tracking.)
-4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). While the PR is still open and a deferred-merge retry window is active (`auto_merge` ON, latest merge-state feed marker is `` `devcake:merge-retry` ``), the sweep also drives the retry: `mergeable()` each cycle — ready → merge and complete; conflict → conflict-rework routing; computing/CI → wait; window elapsed → terminal hand-off, once. Done is only ever declared after the merge is real.
+4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter (`get_pr_by_branch`/`pr_state`, which return normalized `PullRequest` DTOs — attribute access, never raw forge JSON) — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). While the PR is still open and a deferred-merge retry window is active (`auto_merge` ON, latest merge-state feed marker is `` `devcake:merge-retry` ``), the sweep also drives the retry: `mergeable()` each cycle — ready → merge and complete; conflict → conflict-rework routing; computing/CI → wait; window elapsed → terminal hand-off, once. Done is only ever declared after the merge is real.
 5. Run the scheduling algorithm (§3) over the derived candidates — **unless `intake_paused`** (`02-domain-model.md` §9): while paused, steps 1–4 and 6 still run (sweeps, health, snapshot), the ingress consumer still finalizes in-flight runs, and the watchdog still enforces timeouts; only NEW dispatches (missions and MAPPER runs) are withheld.
 6. **Relations Mapper cadence (`MapperService`):** when `relations_mapper.enabled` with a valid `dev_type`, no MAPPER run active, `interval_minutes` elapsed, and the service not **degraded** (3 most recent MAPPER runs all dead — store-derived, restart-safe) → dispatch a MAPPER run (`03-mission-lifecycle.md` §4b). One lock serializes this with the manual "Run now" endpoint; the watermark advances only after a successful dispatch. MAPPER runs count toward `global_max`.
 7. Refresh the poll cache under `/data/cache/` (advisory only) and emit the `poll.cycle` span with counts (`12-observability.md`).
@@ -34,7 +34,7 @@ A poll cycle that fails on a PMO transient error is skipped after retries (`15-e
 
 **The gate is a poll artifact (`MissionManager.gate_map`), not a scheduling side effect:** the poll loop computes it EVERY cycle — paused or not — and both `schedule()` and the `/api/v1/missions` snapshot consume the same map. Pause freezes dispatch, never information: relations edited in Linear during a pause are reflected within one poll interval.
 
-**Dependency-cycle detection (§2a):** `gate_map` runs a pure cycle finder (`pmo.find_cycles`) over the snapshot's blocked-by graph. A cycle is an *unsatisfiable* wait — every member is parked until a human deletes a relation — so members get the explicit reason `dependency cycle: A → B → A — will never unblock; delete one relation in Linear` instead of ordinary blocking, `/api/v1/health` reports `dependency_cycles`, and the admin header shows an amber banner. Nothing prevents a human from creating a cycle (the PMO accepts both relations); DevCake's job is to make the deadlock unmistakable.
+**Dependency-cycle detection (§2a):** `gate_map` runs a pure cycle finder (`find_cycles`, `domain/model.py`) over the snapshot's blocked-by graph. A cycle is an *unsatisfiable* wait — every member is parked until a human deletes a relation — so members get the explicit reason `dependency cycle: A → B → A — will never unblock; delete one relation in Linear` instead of ordinary blocking, `/api/v1/health` reports `dependency_cycles`, and the admin header shows an amber banner. Nothing prevents a human from creating a cycle (the PMO accepts both relations); DevCake's job is to make the deadlock unmistakable.
 
 > **Philosophy — blocking is deliberately pipeline-coarse.** A blocked Mission does not ONBOARD, PLAN, or anything else until its blockers are done. Better bottlenecked by a single well-ordered lane than accumulating parallel garbage: routing quality is the product thesis (founder decision 2026-07-12).
 
@@ -64,7 +64,7 @@ Properties:
 
 ```
 def dispatch(mission, dev_type):
-    live = pmo.get_mission(mission.pmo_id)         # live re-read: INV-1, INV-3
+    live = pmo.get(mission.ref)                    # live re-read: INV-1, INV-3
     if derive_type(live) != mission.type: return   # world moved on; skip silently
     if open_blockers(live): return                 # blocked-by re-check, live (§2)
     run = Run(run_id=f"{mission.key}-{seq}-{mission.type}-{ulid()[-6:]}",   # 02 §7
@@ -79,7 +79,7 @@ def dispatch(mission, dev_type):
                            "TRACEPARENT": traceparent},
                    dag_run_id=run.run_id)
     if live.status == "backlog":
-        pmo.set_status(mission.pmo_id, "in_progress")   # (3) reflect pull in PMO
+        pmo.set_status(mission.ref, "in_progress")      # (3) reflect pull in PMO
         audit_log.append(...)                      # feeds the grace cycle (§2)
 ```
 
@@ -101,17 +101,17 @@ Finalization side-effect order is fixed:
 
 ```
 def compare_and_transition(run, intended: Transition):
-    live = pmo.get_mission(run.mission_pmo_id)          # re-read, live
+    live = pmo.get(run.mission_ref)                     # re-read, live
     if stage_label(live) != run.stage_label_at_dispatch:
         # A human (or another actor) changed state mid-run.
-        pmo.post_comment(run.mission_pmo_id,
+        pmo.post_feed(run.mission_ref,
             "DevCake completed a {type} run, but the mission's state was changed "
             "externally while it ran. Its output is posted above; no status/label "
             "changes were applied.")
         return EXTERNAL_TRANSITION                       # not an error; 15-errors §
-    pmo.swap_labels(run.mission_pmo_id,
+    pmo.swap_labels(run.mission_ref,
                     remove=intended.remove, add=intended.add)   # single adapter call
-    if intended.status: pmo.set_status(run.mission_pmo_id, intended.status)
+    if intended.status: pmo.set_status(run.mission_ref, intended.status)
     audit_log.append(...)
 ```
 

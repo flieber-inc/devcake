@@ -1,0 +1,106 @@
+# ADR-0008 — Pluggable PMO and Forge Adapters
+
+**Status:** accepted (2026-07-13) · **Relates to:** ADR-0003 (PMO as source of truth), ADR-0004 (label namespace), ADR-0006/0007 (Linear-specific policies)
+
+## Context
+
+v0 shipped with Linear as the only PMO and GitHub/GitLab as duck-typed forge
+twins. The PMO abstraction was half-built (a stale 10-method Protocol that
+consumers bypassed by typing against `LinearAdapter` and reaching into private
+methods); the forge had no port at all ("normalize to the GitHubForge dict
+shape" was the de-facto contract); the dev-side forge dialect was
+string-templated across `prompts.py`, the Dev entrypoint, and `security.py`;
+and docs/01 described a hexagonal layout that did not exist. Future versions
+must add PMO systems and forges **additively** — multiple of each per
+instance, eventually — without touching the core.
+
+## Decisions
+
+1. **Hexagonal tree, for real.** The code now matches docs/01 §3:
+   `domain/` (pure logic, zero runtime adapter imports — typing-only under
+   `TYPE_CHECKING`), `ports/` (`PMOPort`, `ForgePort` + boundary DTOs),
+   `adapters/` (`linear/`, `github/`, `gitlab/`, `dagu/`, `files/`, `redis/`,
+   and `registry.py`), `api/`, `telemetry/`, `prompts/`. `config.py`,
+   `security.py`, `harness.py` stay at the package root as cross-cutting
+   concerns. Adapter **construction** lives in `api/main.py` via the registry;
+   the domain receives adapters fully built. `ExecutorPort`/`StatePort` are
+   deliberately NOT formalized (their adapters are packaged; ports are
+   roadmap).
+
+2. **One authoritative `PMOPort`, MissionRef-unified.** The port's reads and
+   writes are keyed by `MissionRef(pmo_id, kind)`; the adapter dispatches
+   issue-vs-project internally (`get`, `get_activity`, `children_of`,
+   `post_feed`, `set_status`, `swap_labels`). *Alternative considered:*
+   capability-driven dispatch (domain consults `capabilities()` and picks
+   per-kind methods) — rejected because it keeps Linear's duality in the
+   domain forever and forces every future PMO to expose a duality it may not
+   have. `pmo_kind` stays on the `Mission` DTO (derivation and ADR-0006 need
+   it); only the storage mechanics moved. Attachment filenames are resolved by
+   the adapter (`AttachmentRef{url, name}`) — the domain never parses vendor
+   asset URLs. `PMOTransient` lives in the port module.
+
+3. **Adapter registry + hot reload.** `adapters/registry.py` is the single
+   place that knows which PMO systems and forges exist (`PMO_SYSTEMS`,
+   `make_pmo`, `make_forge`, `forges()`), including each adapter's secret env
+   vars, token regexes, and paste-guard prefixes. Config `system`/`forge`
+   fields are open strings validated against the registry (an unknown value
+   422s exactly like the old `Literal`s). A config PUT calls
+   `reload_connections()`: both adapters rebuild, and managed labels are
+   re-ensured for the (possibly new) team. `GET /api/v1/connections/registry`
+   feeds the admin SPA, so adding an adapter never edits the UI.
+
+4. **`ForgeDescriptor` owns the dev-side dialect.** Everything forge-specific
+   that is not an API call — PR/MR CLI instructions, clone auth user, git
+   identity, CLI token env names, token secret shapes — ships as a classvar on
+   the adapter. It reaches Dev containers via spec_env
+   (`DEVCAKE_CLONE_USER/GIT_NAME/GIT_EMAIL/FORGE_CLI_ENVS`); the entrypoint's
+   fallbacks reproduce v0 bit-for-bit, so app/image rollout order does not
+   matter (`DEVCAKE_FORGE`/`DEVCAKE_FORGE_TOKEN` remain the legacy contract).
+   The `devcake/{key}` branch convention is defined once:
+   `ports/forge.py:mission_branch()`.
+
+5. **Config schema v2 — plural now, single-instance runtime.** `pmo:`/`repo:`
+   blocks became `pmos:`/`repos:` lists with **exactly one entry enforced**;
+   multi-instance is a future wiring change, not a schema break. Forward-only
+   on-load migration per ADR-0002 (atomic write; `config.yaml.v1.bak` kept as
+   the rollback). `deep_merge` replaces lists wholesale on PUT;
+   `migrate_config_patch` adapts legacy singular PUT bodies — without it,
+   pydantic's ignore-extra behavior would *silently drop* a stale client's
+   edit. Run records carry `pmo_ref`/`repo_ref` (additive defaults, no schema
+   bump) so runs stay disambiguable once instances multiply.
+
+6. **Registry-driven redaction.** `security.py` = static platform lists +
+   contributions from **every registered** adapter (configured or not — no gap
+   when switching). A superset tripwire test pins the v0 lists as literals; it
+   was written before the rewrite and must never be weakened.
+
+7. **Doc fiction removed.** Never-implemented interfaces (`watch()`/
+   `ChangeEvent`, `cancel_mission()`, `MissionDraft`, `ensure_pr()`,
+   `authenticated_clone_url()`, `RepoRef`, `ForgeCapabilities`) are deleted
+   from docs/05–06; the genuinely planned seams are recorded in docs/16.
+
+## Intentional behavior deltas — the complete ledger
+
+The refactor preserves v0 behavior **except** these four (anything else that
+differs is a regression):
+
+| # | Delta | Why |
+|---|---|---|
+| a | PMO test endpoint counts managed labels as the `ALL_LABELS` intersection (was `startswith("DEVCAKE")`), and reports `labels_expected` | The old count inflated on custom DEVCAKE-prefixed labels; the probe now answers "is the managed set bootstrapped?" |
+| b | Config PUT hot-reloads the PMO adapter (key/team changes apply immediately; labels re-ensured) | Previously a silent restart-required trap |
+| c | GitLab API origin derives from the repo URL, `api_base` overrides (GitHub Enterprise likewise) | Self-hosted instances were unreachable; gitlab.com behavior identical |
+| d | `/health` and test endpoints probe via public `health_probe()` (response keys preserved) | Removes private `_team()` reach-ins and raw vendor JSON from the API layer |
+
+## Consequences
+
+- Adding a PMO system = one adapter package implementing `PMOPort` + one
+  `PMO_SYSTEMS` entry (+ contract tests). Adding a forge = adapter +
+  `DESCRIPTOR` + registry entry (+ CLI baked into dev images if its dialect
+  needs one). Neither touches the domain, prompts, entrypoint, redaction, or
+  the SPA.
+- The port contracts are pinned by tests: `test_pmo_contract.py` (surface,
+  signatures, fake drift, unified dispatch) and `test_forge.py` (conformance,
+  DTO shape parity across adapters, descriptor completeness).
+- Multi-instance runtime remains future work: per-mission adapter resolution,
+  per-instance wiring of poll loops/sweeps, and mission→repo mapping (config
+  and Run records are already shaped for it).

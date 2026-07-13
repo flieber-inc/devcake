@@ -14,10 +14,10 @@ The whole system ships as a single `docker-compose up`, stores its local state a
 The following are explicitly **out of scope** for v0 (see `16-roadmap.md` § Post-v0 backlog):
 
 - Webhook-based ingestion (v0 polls; the internal interface is webhook-ready).
-- Multiple repositories or multiple Linear teams per DevCake instance.
+- Multiple repositories or multiple PMO teams per DevCake instance at *runtime* (the config schema is already plural — `pmos:`/`repos:` lists with exactly-one entry enforced — so multi-instance needs no config migration).
 - Human-in-the-loop approval steps *inside* DevCake (approval happens in the PMO System and the forge).
 - Authentication on the admin panel (network isolation only).
-- PMO Systems other than Linear (the adapter interface exists; only Linear is implemented).
+- PMO Systems other than Linear (adapters are pluggable via the registry; Linear is the one implemented).
 
 ## 3. Glossary (normative definitions)
 
@@ -29,7 +29,7 @@ The following are explicitly **out of scope** for v0 (see `16-roadmap.md` § Pos
 | **Dev** | An ephemeral Docker container running one model/harness pair to perform one Mission Step, then exit. |
 | **Dev Type** | A named configuration: harness template + identifying prompt + MCP servers + credentials + concurrency cap. v0 ships two: **Senior Dev** (Claude Fable / Claude Code) and **Main Dev** (Grok 4.5 / Grok Build). |
 | **Harness Template** | One of three hardcoded (but easily editable) model/harness pairs a Dev Type is built from: `claude-code` (Claude Fable), `grok-build` (Grok 4.5), `codex` (gpt-5.6-sol). Specified in `08-harness-templates.md`. |
-| **PMO System** | The external project-management system holding the Missions. v0: Linear (one configured team). Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
+| **PMO System** | The external project-management system holding the Missions. Adapters are pluggable (registered in `adapters/registry.py`); v0: Linear is the one implemented (one configured team). Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
 | **Forge** | The code-hosting platform holding the configured repository: GitHub or GitLab. Accessed only through the `ForgePort` adapter (`06-forge-adapter.md`). |
 | **Run** | The locally persisted record of one Mission Step attempt: telemetry, timing, outcome, token report. Advisory data only — never authoritative (see INV-1). |
 | **Activity feed** | The Mission's chronological record inside the PMO System: description, comments, attachments, status changes. Rendered into `ACTIVITY.md` for each Dev run. |

@@ -1,6 +1,6 @@
 # 02 — Domain Model
 
-> **Audience:** implementers. The code's `models.py` (pydantic) must match this document 1:1 — field names included.
+> **Audience:** implementers. The code's pydantic models — `app/devcake/domain/model.py` (Mission, labels, derivation), `app/devcake/domain/run.py` (Run), `app/devcake/config.py` (AppConfig, DevType) — must match this document 1:1 — field names included.
 > **Depends on:** `00-overview.md` (glossary, invariants).
 
 ## 1. Mission
@@ -9,7 +9,7 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 
 | Field | Type | Notes |
 |---|---|---|
-| `pmo_id` | `str` | The PMO System's stable ID (Linear UUID). Primary key. |
+| `pmo_id` | `str` | The PMO System's stable ID — an opaque vendor id (Linear: a UUID). Primary key. |
 | `pmo_kind` | `"issue" \| "project"` | What the Mission is in the PMO System. |
 | `key` | `str` | Human-readable key, e.g. `ENG-142`. For Linear Projects (which have no issue key): a slug of the project name prefixed `PRJ-`, e.g. `PRJ-payment-revamp`. Used in branch names and transcript labels. |
 | `title` | `str` | |
@@ -20,7 +20,25 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 | `updated_at` | `datetime` | PMO-side last update. Scheduling tiebreaker. |
 | `url` | `str` | Deep link into the PMO System. |
 | `parent_ref` | `str \| None` | For Issues that belong to a Project: the project's `pmo_id`. |
-| `blocked_by` | `list[str]` | `pmo_id`s of Missions that block this one, read from the PMO System's native issue relations (`05-pmo-adapter.md` §6, `adr/0007`). Always `[]` for Projects (Linear relations are issue-scoped). Gates scheduling (`04-orchestrator.md` §2), not derivation. |
+| `blocked_by` | `list[str]` | `pmo_id`s of Missions that block this one, read from the PMO System's native issue relations (`05-pmo-adapter.md` §3, `adr/0007`). Always `[]` for Projects (Linear relations are issue-scoped). Gates scheduling (`04-orchestrator.md` §2), not derivation. |
+
+## 1a. MissionRef and the activity feed DTOs
+
+**`MissionRef`** is a `NamedTuple(pmo_id: str, kind: "issue" | "project")` — the adapter-facing mission handle. The port's unified read/write methods (`get`, `get_activity`, `post_feed`, `set_status`, `swap_labels`, `children_of` — `05-pmo-adapter.md` §1) take a ref; how each kind is stored (Linear's issue/project duality, or nothing of the sort) is the adapter's business, never the domain's. `Mission.ref` is a property returning `MissionRef(pmo_id, pmo_kind)`.
+
+**`Activity`** is `{mission: Mission, entries: list[ActivityEntry]}` — the normalized feed returned by `get_activity`.
+
+**`ActivityEntry`:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `ts` | `datetime` | |
+| `author` | `str` | |
+| `kind` | `"comment" \| "status_change" \| "attachment"` | |
+| `body` | `str` | Markdown. |
+| `attachments` | `list[AttachmentRef]` | Assets referenced from the entry. |
+
+**`AttachmentRef`** is `{url: str, name: str | None}` — `name` is the markdown link text when the feed carried one; the **adapter** resolves it, so the domain never parses vendor asset URLs (`05-pmo-adapter.md` §4).
 
 ## 2. Mission Type derivation (normative table)
 
@@ -156,21 +174,32 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 
 | Field | Type | Notes |
 |---|---|---|
+| `schema_version` | `int` (= 1) | The `pmo_ref`/`repo_ref` additions were **additive with defaults** — no schema bump; pre-existing run JSONs parse unchanged. |
 | `run_id` | `str` | Human-readable and unique: `{mission_key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). Also the Dagu run ID and the Dev container name suffix, so Linear, the Dagu UI, `docker ps`, traces, and Redis streams all speak the same name (confirmed decision). |
-| `mission_pmo_id` | `str` | |
 | `mission_key` | `str` | Denormalized for log/trace readability. |
-| `mission_type` | enum | The type this run was dispatched as. |
+| `mission_pmo_id` | `str` | |
+| `pmo_kind` | `str` (default `"issue"`) | The mission's kind at dispatch. |
+| `pmo_ref` / `repo_ref` | `str` (default `"main"`) | Which configured instance served this run — the `AppConfig.pmos`/`repos` entry `id` (§9). |
+| `mission_type` | `str` | The type this run was dispatched as. |
 | `dev_type` | `str` | |
 | `seq` | `int` | Step number for transcript naming (§8). |
 | `attempt_of_step` | `int` | 1-based attempt counter for this (mission, type, seq). |
-| `dagu_run_id` | `str \| None` | Returned by the Dagu API on trigger. |
-| `state` | `"dispatched" \| "running" \| "finalizing" \| "finished" \| "failed" \| "timed_out" \| "orphaned"` | |
-| `started_at` / `ended_at` | `datetime \| None` | |
-| `exit_code` | `int \| None` | Per the table in `07-dev-runtime.md` §4. |
 | `stage_label_at_dispatch` | `str \| None` | Input to compare-and-transition (`04-orchestrator.md` §4). |
+| `spec_prompt` | `str` | The composed prompt delivered in the run spec. |
+| `state` | `"dispatched" \| "running" \| "finalizing" \| "finished" \| "failed" \| "timed_out" \| "orphaned"` | |
+| `created_at` | `datetime` | |
+| `started_at` / `ended_at` | `datetime \| None` | |
+| `last_heartbeat` | `datetime \| None` | Watchdog input (`04-orchestrator.md` §5). |
+| `timeout_seconds` | `int` (default 7200) | From `dev_timeout_minutes` at dispatch. |
+| `traceparent` | `str \| None` | W3C trace context linking the run's spans (`12-observability.md`). |
+| `redis_password` | `str \| None` | Per-run scoped Redis ACL password (`09-messaging.md` §1a); local, 0600-dir, revoked at finalization. |
+| `spec_env` / `spec_files` | `dict[str, str]` / `list[dict]` | The run spec's env vars and injected files. |
 | `finalized_steps` | `list[str]` | Idempotency checklist: which finalization side effects have durably completed (e.g. `["transcript", "token_report"]`). |
-| `token_report` | `TokenReport \| None` | §10. |
+| `result` | `dict \| None` | The Dev's parsed `result.json` payload. |
+| `token_report` | `dict \| None` | Shape in §10. |
+| `artifact_bytes` | `int \| None` | Size of the collected result payload (finalization telemetry). |
 | `error` | `str \| None` | Mapped error class + message (`15-errors-and-retries.md`). |
+| `verdict` | `str \| None` | App-level judgment when it diverges from the executor's: a run can end `state="finished"` (Dagu succeeded, artifacts were legal) yet carry `"rejected: …"` because the transition refused to act on the outcome. `None` = ordinary success. |
 
 ## 8. `seq` derivation rule (normative)
 
@@ -178,13 +207,14 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 
 ## 9. AppConfig
 
-Persisted at `/data/config/config.yaml` (full annotated example in `10-persistence.md` §3). Shape:
+Persisted at `/data/config/config.yaml` (full annotated example in `10-persistence.md` §3). **Schema v2** (2026-07: singular `pmo:`/`repo:` blocks became plural lists; on-load migration in `10-persistence.md` §3). The persisted shape is already plural so multi-PMO/multi-repo needs no future config migration, but **v0 runs exactly one of each** — an `_exactly_one` field validator rejects any other length (and duplicate instance `id`s). The runtime is written against one PMO and one repo: the `config.pmo` / `config.repo` **property accessors** return the single entry, keeping call sites (`config.pmo.team_key`, `config.repo.url`) stable. Shape:
 
 | Field | Type | Notes |
 |---|---|---|
-| `pmo` | `{system: "linear", api_key_env: str, team_key: str}` | |
+| `schema_version` | `int` (= 2) | v1 files migrate on load (`10-persistence.md` §3). |
+| `pmos` | `list[PMOInstance]` — `{id: str, system: str, api_key_env: str, team_key: str, api_base: str \| None}` | Exactly one entry in v0; `id` defaults to `main`. `system` (default `linear`) is validated against the adapter registry `PMO_SYSTEMS` (`05-pmo-adapter.md` §1a) — a typo is a 422, not a boot crash. `api_base: None` = the adapter's default API host. `PMOInstance.api_key` resolves the env var named by `api_key_env`. |
+| `repos` | `list[RepoInstance]` — `{id: str, forge: str, url: str, api_base: str \| None, default_branch: str, token_env: str, reviewer_token_env: str \| None}` | Exactly one entry in v0; `id` defaults to `main`. `forge` (default `github`) is validated against the registry's `forges()`. `default_branch` defaults to `main`; `reviewer_token_env` is the optional second credential used for formal PR approvals. `RepoInstance.token` resolves `token_env`. |
 | `adoption_mode` | `"opt_in" \| "opt_out"` (default `opt_in`) | `opt_in`: only Missions labeled `DEVCAKE` are adopted. `opt_out`: every non-terminal item in the team is adopted (the original mission-doc behavior — enable deliberately; the admin panel warns about the backlog-wide consequence, `11-admin-panel.md` §2). |
-| `repo` | `{forge: "github" \| "gitlab", url: str, token_env: str, reviewer_token_env: str \| None}` | The single configured repository. `reviewer_token_env` is the optional second credential used for formal PR approvals. |
 | `assignments` | `dict[MissionType, {dev_type: str, extra_cli_args: str}]` | Mission Type → Dev Type name, plus optional **extra CLI args** appended verbatim to the harness invocation for that Mission Type (`08-harness-templates.md` §1). Args are admin-set data, never hardcoded — they are harness-specific, so the admin UI warns and offers to clear them when the Mission Type is reassigned to a Dev Type with a different harness (`11-admin-panel.md` §2). Validation: all four types assigned. |
 | `concurrency` | `{global_max: int}` | Per-type caps live on each DevType. Effective ceiling = min(global_max, Σ per-type) — this is a property of the dispatch check, not a separate rule. |
 | `dev_timeout_minutes` | `int` (default 120) | Enforced by the app watchdog (`04-orchestrator.md` §5), not by Dagu. |
@@ -196,6 +226,7 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
 | `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §2): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
 | `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`junior-dev`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
+| `dismissed_alerts` | `list[str]` (default `[]`) | Admin-UI state: dismissed advisory alerts as `"id:signature"` strings. A list (not a dict) on purpose — `deep_merge` can't delete dict keys, so the UI un-dismisses by PUTting the whole replacement list. |
 
 ## 10. TokenReport
 
@@ -213,16 +244,15 @@ Produced once per Dev run by the harness template's extraction strategy (`08-har
 | `extraction_method` | `"session_json" \| "stdout_parse" \| "unavailable"` | |
 | `notes` | `str \| None` | e.g. which fallback triggered. |
 
-## 11. MissionDraft
+## 11. Decomposition drafts
 
-The payload an ONBOARD Dev emits per decomposed child Mission (inside `result.json`, `03-mission-lifecycle.md` §6) and the app feeds to `PMOPort.create_mission`:
+The entry schema of the decomposition manifest an ONBOARD Dev emits per decomposed child Mission (`result.json` → `decomposition: [...]`, `03-mission-lifecycle.md` §6). Deliberately **not a pydantic model** — the entries are plain dicts validated by the orchestrator, which feeds each one to `PMOPort.create_mission(team_ref, title, description, priority, label_names, parent_ref)`:
 
 | Field | Type | Notes |
 |---|---|---|
-| `title` | `str` | |
-| `description` | `str` | Must read as a **standalone** mission: no references to sibling missions or to "this mission" (`03-mission-lifecycle.md` §2.3). |
-| `priority` | `"urgent" \| "high" \| "medium" \| "low"` | Required — every decomposed Mission gets an explicit priority. |
-| `parent_ref` | `str \| None` | Project `pmo_id` when the children belong inside a decomposed Project. |
-| `blocked_by` | `list[int]` | Optional. 1-based indexes of **earlier** drafts in the same decomposition that must finish before this one starts (`03-mission-lifecycle.md` §1.3). Earlier-only is validated by the app and structurally prevents cycles; the app creates the corresponding PMO relations after creating the children. |
+| `title` | `str` | Also the idempotency key on resume: a child whose title already exists is not re-created. |
+| `description` | `str` | Must read as a **standalone** mission: no references to sibling missions or to "this mission" (`03-mission-lifecycle.md` §2.3). The app appends a provenance footer (`Created by DevCake from {key} — part i/n`). |
+| `priority` | `"urgent" \| "high" \| "medium" \| "low"` | The playbook requires an explicit priority per draft; the app defaults a missing value to `medium`. |
+| `blocked_by` | `list[int]` | Optional. 1-based indexes of **earlier** drafts in the same decomposition that must finish before this one starts (`03-mission-lifecycle.md` §1.3). Earlier-only is validated by the app and structurally prevents cycles; the app wires the corresponding PMO relation immediately after creating each child. |
 
-The app adds the `DEVCAKE-CREATED` label on creation; the Dev does not manage labels (INV-4).
+`parent_ref` is **not** part of the draft — when the decomposed Mission is a Project, the app itself passes the project's `pmo_id` as `create_mission`'s `parent_ref` so the children land inside it. The app adds the `DEVCAKE-CREATED` label (plus `DEVCAKE` in opt-in mode) on creation; the Dev does not manage labels (INV-4).

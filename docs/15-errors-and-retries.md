@@ -7,7 +7,7 @@
 
 | Class | Examples / mapping | Nature |
 |---|---|---|
-| `PMO_TRANSIENT` | Linear 429/`RATELIMITED`, 5xx, network | retryable |
+| `PMO_TRANSIENT` | Linear 429/`RATELIMITED`, 5xx, network — adapters signal it by raising `PMOTransient` (`ports/pmo.py`) | retryable |
 | `PMO_PERMANENT` | Linear auth failure, 404 on team | config/credential problem |
 | `PMO_GONE` | Mission deleted mid-run | external, informational |
 | `FORGE_TRANSIENT` | forge 429/5xx/network | retryable |

@@ -14,7 +14,7 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 | Method + path | Purpose |
 |---|---|
 | `GET /api/v1/health` | Component health + circuit breakers |
-| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline |
+| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**; legacy singular `{"pmo": {…}}`/`{"repo": {…}}` bodies are adapted onto the single entry (merged, never silently dropped). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
 | `GET /api/v1/harnesses` | The harness registry: derived image, credential requirements, OAuth availability per `harness_template` — the Dev Type card renders (and previews unsaved harness switches) from this |
 | `GET /api/v1/dev-types` · `POST /api/v1/dev-types` | List (enriched: `harness` info + `secrets_present`) / create Dev Types |
 | `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login (docs/16 M6); credential lands in `/data/secrets/{name}/` |
@@ -22,7 +22,8 @@ Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header heal
 | `POST /api/v1/dev-types/{name}/credentials` | Either multipart file upload (credentials JSON → `/data/secrets/{name}/`, 0600) or `{"env_var": "NAME"}` reference |
 | `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
 | `GET /api/v1/env-check?names=A,B` | Set/unset status (never values) of env vars in the app's environment — powers the Config tab's inline ✓/✗ on `*_env` fields |
-| `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns team name + label status |
+| `GET /api/v1/connections/registry` | Adapter registry metadata: registered PMO systems + forges (id, display name, default token env), the union of `secret_shape_prefixes` (paste guard), and `managed_labels_expected`. Drives the Config tab's forge selector and PMO copy — adding an adapter never means editing the SPA |
+| `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns `{ok, team, labels, labels_expected, missions_visible}` — `labels` counts the intersection with DevCake's managed label set |
 | `POST /api/v1/connections/forge/test` | Live probe: auth + repo fetch + default branch (+ reviewer token check + branch-protection state) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
 | `GET /api/v1/runs/{run_id}/log?tail=N` | Plain-text condensed run output (from `/data/state/runlogs/`, relayed live by the Dev via `run.log` — `09-messaging.md` §3) |
@@ -46,20 +47,23 @@ Amber/blue strips under the header, all driven by the 10 s health poll: intake p
 field carries a hover `?` tooltip explaining what it means and what shape of
 value it wants. Fields that take an **env var name** (`api_key_env`,
 `token_env`, `reviewer_token_env`) additionally validate live: a value shaped
-like a secret (token prefixes, > 40 chars) shows a red warning that the field
+like a secret (token prefixes — fed by the registry endpoint's
+`secret_shape_prefixes`, never hardcoded in the SPA — or > 40 chars) shows a red warning that the field
 wants the variable's NAME and the secret goes in `.env`; a well-formed name is
 checked against `GET /api/v1/env-check` and shows `✓ set` or `✗ not set`. The
 connection-test endpoints short-circuit with a plain-language error when the
 configured env var resolves empty (instead of `Illegal header value b'Bearer '`).
 
-### PMO connection
+### PMO connection (section anchor `#/config/pmo` — renamed from `linear` with the adapter registry)
+Fields edit `cfg.pmos[0]` (the config schema is plural, exactly-one entry — `02-domain-model.md` §9); the section's copy (system names, default env var) renders from `GET /connections/registry`.
 - API key: env-var name (default `LINEAR_API_KEY`) or direct value (stored to app env file — with a hint that env vars are preferred).
 - **Team picker**: populated by a live Linear query once the key validates (from `connections/pmo/test`).
 - **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* The change is applied only on explicit confirm; flipping back to `opt_in` confirms symmetrically (in-flight runs finish; unlabeled missions are simply no longer scheduled).
 - Poll interval (seconds).
 
 ### Repository
-- Forge selector (GitHub / GitLab) — one active repo.
+Fields edit `cfg.repos[0]` (plural schema, exactly-one entry).
+- Forge selector — options come from the registry endpoint's `forges` list (GitHub / GitLab today); one active repo.
 - Repo URL, token env var, optional **reviewer token** env var (tooltip: enables formal PR approval, `06-forge-adapter.md` §4).
 - **`auto_merge` toggle** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."*
 - **`auto_resolve_merge_conflicts` toggle** — default ON, no confirm dialog (every resulting merge still passes the full EXECUTE→REVIEW gate). Dimmed and non-interactive while `auto_merge` is OFF (the setting is inert without it). Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).

@@ -1,9 +1,9 @@
 # 06 — Forge Adapter: `ForgePort`, GitHub, and GitLab
 
 > **Audience:** implementers.
-> **Depends on:** `02-domain-model.md` (AppConfig.repo), `03-mission-lifecycle.md` (branch/PR conventions).
+> **Depends on:** `02-domain-model.md` (AppConfig.repos), `03-mission-lifecycle.md` (branch/PR conventions).
 
-Both GitHub and GitLab adapters ship in v0 behind `ForgePort`. Exactly **one repository on one forge is active at a time** (`repo` in AppConfig); both credential slots may nevertheless be configured so Devs can read cross-forge dependencies.
+Both GitHub and GitLab adapters ship behind `ForgePort` (`app/devcake/ports/forge.py`). Exactly **one repository on one forge is active at a time** — but the persisted config is already plural (`repos:` list, exactly-one enforced by an AppConfig validator, mirroring `pmos:`), so multi-repo is a declared future seam that needs no schema break. Both credential slots may nevertheless be configured so Devs can read cross-forge dependencies.
 
 Terminology: this doc says "PR" throughout; on GitLab the same operations target Merge Requests.
 
@@ -11,50 +11,98 @@ Terminology: this doc says "PR" throughout; on GitLab the same operations target
 
 ```python
 class ForgePort(Protocol):
-    async def default_branch(self, repo: RepoRef) -> str: ...
-    def authenticated_clone_url(self, repo: RepoRef) -> str: ...
-        # used only to build the credential helper; the token never lands in a URL on disk
-    async def ensure_pr(self, repo: RepoRef, branch: str, title: str, body: str) -> PR: ...
-        # idempotent create-or-get by head branch; updates title/body when it exists
-    async def get_pr(self, repo: RepoRef, pr_ref: str) -> PR: ...
-    async def post_pr_comment(self, pr: PR, markdown: str) -> None: ...
-    async def approve(self, pr: PR, *, use_reviewer_token: bool) -> None: ...
-    async def merge(self, pr: PR) -> None: ...
-        # auto_merge toggle only; squash by default. Adapters retry their
-        # forge's transient merge race (409 head-modified/SHA race) up to 2
-        # times internally; only real failures propagate.
-    async def mergeable(self, pr: PR) -> bool | None: ...
+    descriptor: ClassVar[ForgeDescriptor]        # the dev-side dialect (§3a)
+
+    async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]: ...
+        # NEWEST PR (any state) whose head is the branch; None when there is none
+    async def pr_state(self, pr_number: int) -> PullRequest: ...
+    async def post_pr_comment(self, pr_number: int, markdown: str) -> None: ...
+        # body passes through security.redact before it leaves the app
+    async def approve(self, pr_number: int) -> bool: ...
+        # formal approval with the reviewer token; returns False when none configured (§4)
+    async def merge(self, pr_number: int) -> None: ...
+        # squash merge; retries the forge's transient merge race (409 head-modified/
+        # SHA race) up to 2 times internally — only real failures propagate
+    async def mergeable(self, pr_number: int) -> Optional[bool]: ...
         # single-shot, non-blocking tri-state (§5): False = auto-resolvable by
         # a branch sync; True = ready to merge now; None = wait (computing, CI
         # pending, or any unrecognized state — the safe default)
-    def capabilities(self) -> ForgeCapabilities: ...
-        # e.g. self_approval_allowed, merge_strategies
+    async def default_branch_protection(
+            self, branch: str = "main") -> Optional[BranchProtection]: ...
+        # protection state of the given branch (callers pass config.repo.
+        # default_branch); None when unreadable
+    def approval_footer(self, pr_url: str) -> str: ...
+        # the copy-pasteable approve+merge command footer (D14, §4)
 ```
 
-All adapters raise the same `ForgeError` (with a `status` attribute carrying the HTTP code) — callers never see forge-native exception types.
+All adapters raise the same `ForgeError` (with a `status` attribute carrying the HTTP code) — callers never see forge-native exception types (the GitLab adapter in particular must never leak `httpx` exceptions).
 
-`PR` DTO: `{url, number_or_iid, head_branch, state, approved}`.
+Normalized DTOs (pydantic models in `ports/forge.py`):
 
-## 2. Division of labor: Dev vs. app
+- `PullRequest` — `{number, url, state: "open"|"closed", merged: bool}`. GitLab's `iid` maps to `number`; MR state `"merged"` normalizes to `state="closed"` + `merged=True`; GitHub *list* payloads carry `merged_at` (not `merged`), so the adapter derives `merged` from it.
+- `BranchProtection` — `{protected: bool, requires_reviews: bool|None}` (`None` = couldn't determine).
 
-- The **Dev** (inside its container, during EXECUTE/trivial-ONBOARD/REVIEW) clones, branches, commits at end, pushes, and opens/updates the PR using injected forge credentials and the forge CLI (`gh`/`glab`, shipped in the Dev images). This is unavoidable — the code lives in the Dev's workspace.
-- The **app** performs the *decision-bearing* forge effects at finalization: PR comments with the approval footer, formal approval, and merge (`auto_merge`). This keeps the auditable actions in one instrumented place, driven by `result.json` (INV-4 analog for the forge).
+Earlier drafts of this doc specified `RepoRef`, a `PR` dataclass, `ForgeCapabilities`, `ensure_pr()`, `authenticated_clone_url()`, `get_pr()`, and `capabilities()` — none of that was ever implemented and it is deleted; future port seams live in `16-roadmap.md`. Clone authentication is a dev-side concern: the entrypoint builds a git credential helper (`GIT_ASKPASS`) from the run-spec token, so the token never lands in a URL on disk (`07-dev-runtime.md` §5).
 
-The idempotency rule binds both sides: `ensure_pr` semantics for creation (Dev side uses `gh pr create` guarded by `gh pr view`, or the API equivalent), keyed comments on the app side.
+## 2. Branch convention (single definition)
 
-## 3. Conventions (restated from `03-mission-lifecycle.md`)
+`ports/forge.py` is **the** single definition of DevCake's branch convention, imported by the orchestrator and the prompt templates alike:
 
-- Branch: `devcake/{mission_key}` — reused across EXECUTE loops; never force-pushed; checked out if it already exists on the remote.
+```python
+BRANCH_PREFIX = "devcake/"
+
+def mission_branch(key: str) -> str:      # DEV-35 → devcake/DEV-35
+    return f"{BRANCH_PREFIX}{key}"
+```
+
+Restated from `03-mission-lifecycle.md`:
+
+- Branch: `devcake/{mission_key}` — reused across EXECUTE loops; never force-pushed; checked out if it already exists on the remote. Playbooks receive it via the `{branch}` placeholder, fed by `mission_branch()`.
 - PR title: `[{mission_key}] {title}`; body links the Mission URL and the plan attachment.
-- DevCake never pushes to the default branch. Ever. The only path to the default branch is a PR merge (human, or app under `auto_merge`).
+- DevCake never pushes to the default branch (`config.repo.default_branch`). Ever. The only path to the default branch is a PR merge (human, or app under `auto_merge`).
+
+## 3. Division of labor: Dev vs. app
+
+- The **Dev** (inside its container, during EXECUTE/trivial-ONBOARD/REVIEW) clones, branches, commits at end, pushes, and opens/updates the PR using injected forge credentials and the forge CLI (`gh`/`glab`, shipped in the Dev images). This is unavoidable — the code lives in the Dev's workspace. The dev side is **descriptor-driven, not string-templated**: everything forge-specific the Dev needs (clone auth user, git identity, CLI token envs, PR/MR CLI instructions) comes from the adapter's `ForgeDescriptor` (§3a) — the orchestrator injects it via `spec_env` (`07-dev-runtime.md` §3) and via the EXECUTE playbook's `pr_instructions` slot; the app carries no per-forge tables outside the adapters.
+- The **app** performs the *decision-bearing* forge effects at finalization through `ForgePort` (§1): PR lookup and state, PR comments with the approval footer, formal approval, and merge (`auto_merge`). This keeps the auditable actions in one instrumented place, driven by `result.json` (INV-4 analog for the forge).
+
+The idempotency rule binds both sides: the descriptor's `pr_instructions` template instructs create-or-update by head branch (`gh pr view` before `gh pr create`, `glab mr list` before `glab mr create`); the app side uses `get_pr_by_branch` and keyed comments.
+
+### 3a. `ForgeDescriptor` — the dev-side dialect
+
+Each adapter ships a `DESCRIPTOR` classvar (a `ForgeDescriptor`); prompts, `spec_env`, redaction, and the admin SPA consume it from the registry instead of hardcoding per-forge tables:
+
+| Field | Meaning | Consumed by |
+|---|---|---|
+| `id`, `display_name` | registry key + UI label | registry, admin SPA |
+| `pr_instructions` | PR/MR CLI instructions for the EXECUTE playbook — a template with placeholders `{key}` `{title}` `{default}` `{branch}` (`{branch}` fed by `mission_branch()`, `{default}` by `config.repo.default_branch`) | `prompts.execute_prompt(…, pr_instructions=…)` |
+| `clone_user` | credential-in-URL user for https clones (`x-access-token` / `oauth2`) | `DEVCAKE_CLONE_USER` in `spec_env` |
+| `git_user_name`, `git_email` | the Dev's git identity | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` |
+| `cli_token_envs` | env vars the entrypoint mirrors the forge token into for the CLI (`GH_TOKEN` / `GITLAB_TOKEN`) | `DEVCAKE_FORGE_CLI_ENVS` (comma-joined) |
+| `token_env_default` | default token env name (`GITHUB_TOKEN` / `GITLAB_TOKEN`) | config seeding + admin SPA |
+| `secret_env_vars`, `token_patterns` | the secret shapes this forge's tokens take | `security.redact` (`14-security.md` §5) |
+| `secret_shape_prefixes` | token prefixes (`ghp_`, `glpat-`, …) | admin SPA paste guard |
+
+## 3b. The registry and config
+
+`app/devcake/adapters/registry.py` is the single place that knows which forges exist:
+
+- `forges()` → `{id: ForgeDescriptor}` for every registered forge (feeds the SPA registry endpoint and the redaction contributions). Adapter imports are lazy, so importing the registry never drags in the httpx-heavy adapter modules.
+- `make_forge(inst)` constructs the adapter for the configured `RepoInstance` (`config.repos[0]`), passing `(url, token, reviewer_token, api_base=inst.api_base)`.
+
+`RepoInstance` (`config.py`): `{id, forge, url, api_base, default_branch, token_env, reviewer_token_env}`. The `forge` field is **registry-validated** — an unknown forge id is rejected at config load, before anything runs.
+
+- `api_base` (default `None`): explicit API endpoint override — this is what unlocks **GitHub Enterprise** (`https://ghe.corp/api/v3`).
+- **Self-hosted GitLab needs no `api_base`:** the adapter derives its API origin from the repo URL itself (`https://gitlab.corp.example/grp/repo` → API at `https://gitlab.corp.example/api/v4/…`), identical to the old `https://gitlab.com` default for gitlab.com repos. `api_base` remains the explicit override when the API lives elsewhere.
+- `default_branch` (default `"main"`): replaces the previously hardcoded `"main"` everywhere — the EXECUTE sync instructions, `DEVCAKE_DEFAULT_BRANCH`, and the branch-protection check all use it.
 
 ## 4. The self-approval problem
 
 GitHub and GitLab forbid approving a PR with the account that opened it. Resolution (confirmed with the founder):
 
-1. **Optional reviewer token** — `repo.reviewer_token_env` names a second credential (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(use_reviewer_token=True)` files a formal approval review.
-2. **Without it** — the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
-3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
+1. **Optional reviewer token** — `repo.reviewer_token_env` names a second credential (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`.
+2. **Without it** — `approve()` returns `False` (no error): the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
+3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
 
 ## 5. `auto_merge` and the merge-before-Done rule
 
@@ -83,24 +131,38 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 ## 6. GitHub specifics
 
 - Auth: fine-grained PAT (or classic token). Minimum scopes: `contents: read/write`, `pull_requests: read/write` (fine-grained), or classic `repo`. Reviewer token additionally needs nothing beyond PR review permission.
-- CLI in Dev images: `gh` (authenticated via `GH_TOKEN` env).
-- API: REST for `ensure_pr`/comments/reviews/merge; `merge_method: squash`.
+- CLI in Dev images: `gh` (authenticated via `GH_TOKEN` — the descriptor's `cli_token_envs`, mirrored from the forge token by the entrypoint).
+- API: REST for the app-side operations (PR lookup, comments, reviews, merge with `merge_method: squash`, branch protection); PR creation happens Dev-side via the descriptor's `pr_instructions`. `api_base` overrides `https://api.github.com` for GitHub Enterprise.
+- `default_branch_protection` reads the branch's `protected` flag, classic protection detail (may 403/404 without admin scope), and repository rulesets (the modern mechanism).
 
 ## 7. GitLab specifics
 
-- Auth: project access token or PAT; scopes `api`, `write_repository`. Approvals use the MR Approvals API (availability varies by tier — `capabilities()` reports honestly; when approvals are unavailable, path 2 of §4 applies).
-- CLI in Dev images: `glab` (authenticated via `GITLAB_TOKEN` env).
+- Auth: project access token or PAT; scopes `api`, `write_repository`. Approvals use the MR Approvals API (availability varies by tier) and require the reviewer token — without one, `approve()` returns `False` and path 2 of §4 applies.
+- CLI in Dev images: `glab` (authenticated via `GITLAB_TOKEN`).
 - Merge: `PUT /merge_requests/:iid/merge` with `squash: true`.
+- Self-hosted: the API origin derives from the repo URL (§3b); the project path is URL-encoded (`grp/repo` → `grp%2Frepo`). `default_branch_protection`: a 404 on `/protected_branches/{branch}` means unprotected.
 
 ## 8. Adapter contract tests
 
+What `app/tests/test_forge.py` covers (no network — `_req` is stubbed):
+
 | # | Scenario |
 |---|---|
-| 1 | `ensure_pr` twice for the same branch yields one PR, second call updates title/body |
-| 2 | `default_branch` correct; clone URL never contains a raw token on disk |
-| 3 | `approve` with reviewer token files a formal review; without, raises `CapabilityUnavailable` handled as §4.2 |
-| 4 | `merge` respects squash; surfaces branch-protection failure as `FORGE_PERMANENT` |
-| 5 | PR comment posting is idempotent under retry (keyed by run_id footer) |
-| 6 | Rate-limit and 5xx surface as `FORGE_TRANSIENT` |
-| 7 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
-| 8 | `merge()` retries a 409 twice then succeeds/raises; a 405 raises immediately (no retry); errors are `ForgeError` with `.status` |
+| 1 | Port conformance: both adapters implement every `ForgePort` method with signatures that match the protocol |
+| 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
+| 3 | `merge()` retries a transient 409 twice then succeeds/raises; a 405 raises immediately (no retry) |
+| 4 | Error normalization: both adapters raise `ForgeError` with `.status` from `_req` (GitLab never leaks httpx exceptions) |
+| 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub and GitLab payloads to identical `PullRequest` values (GitHub list `merged_at` → `merged`; GitLab `iid` → `number`, MR `"merged"` → `closed` + `merged=True`); no PR → `None` |
+| 6 | `BranchProtection` DTO: GitHub `protected` flag; GitLab 404 → `protected=False` |
+| 7 | `api_base`: GitHub default vs GHE override; GitLab origin derived from the repo URL, explicit override wins, project path stays URL-encoded |
+| 8 | Registry: `forges()` covers exactly `{github, gitlab}` with real descriptors; `make_forge` constructs each (passing `api_base`); an unknown forge is rejected by `RepoInstance` validation |
+| 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile |
+| 10 | `mission_branch()` single definition: `devcake/` prefix |
+
+## 9. Adding a forge (checklist)
+
+1. One adapter package under `app/devcake/adapters/{forge}/` implementing every `ForgePort` method plus a `DESCRIPTOR` classvar (§3a) — constructor signature `(repo_url, token, reviewer_token=None, api_base=None)`.
+2. One entry in `registry._forge_classes()`.
+3. If the dialect's `pr_instructions` needs a CLI, bake it into the Dev images (`07-dev-runtime.md` §8).
+
+Config validation, redaction, the SPA paste guard, the playbook prompts, and `spec_env` all pick the new forge up from the registry — no other code changes.

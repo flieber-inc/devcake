@@ -14,6 +14,7 @@ import NavGuardDialog from "../components/NavGuardDialog.jsx";
 import useConfigDraft from "../lib/useConfigDraft.js";
 import { describeDiff, AUTO_MERGE_COPY, ADOPTION_COPY } from "../lib/configLabels.js";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
+import { getRegistry, loadRegistry } from "../lib/registry.js";
 
 const MISSION_TYPES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 // harness identities (image, credential requirements, OAuth availability) come
@@ -243,6 +244,8 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
 
 export default function ConfigPage({ section, onSectionInView, registerNavGuard }) {
   const dr = useConfigDraft();
+  const [registry, setRegistry] = useState(getRegistry());
+  useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [harnesses, setHarnesses] = useState({});
   const [healthInfo, setHealthInfo] = useState(null);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
@@ -514,15 +517,15 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
         </div>
       </Section>
 
-      <Section id="linear" title="PMO connection"
-        description="The PMO team DevCake watches, and how it adopts missions. Linear is the supported provider in v0.">
+      <Section id="pmo" title="PMO connection"
+        description={`The PMO team DevCake watches, and how it adopts missions. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}.`}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Field label="Team key"
             help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). DevCake watches only this team.">
             <Input value={cfg.pmos[0].team_key}
             onChange={(e) => setField("cfg.pmos.0.team_key", e.target.value)} /></Field>
           <EnvVarField label="API key env var"
-            help="The NAME of the environment variable in DevCake's .env that holds your Linear API key — not the key itself. Default: LINEAR_API_KEY."
+            help={`The NAME of the environment variable in DevCake's .env that holds your PMO API key — not the key itself. Default: ${registry.pmo_systems.find((s) => s.id === cfg.pmos[0].system)?.api_key_env_default ?? "LINEAR_API_KEY"}.`}
             value={cfg.pmos[0].api_key_env}
             onChange={(e) => setField("cfg.pmos.0.api_key_env", e.target.value)} />
           <Field label="Poll interval (s)"
@@ -568,7 +571,9 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
             help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
             <Select value={cfg.repos[0].forge}
               onChange={(e) => setField("cfg.repos.0.forge", e.target.value)}>
-              <option>github</option><option>gitlab</option>
+              {registry.forges.map((f) => (
+                <option key={f.id} value={f.id}>{f.id}</option>
+              ))}
             </Select>
           </Field>
           <Field label="Repository URL"

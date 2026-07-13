@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { get } from "../api.js";
+import { getRegistry } from "../lib/registry.js";
 
 const inputCls =
   "w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm " +
@@ -50,11 +51,20 @@ export function Field({ label, hint, help, children }) {
 // live set/unset status from the app's environment.
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const SECRET_SHAPE_RE = /^(ghp_|github_pat_|glpat-|sk-|xai-|lin_api_|lin_oauth_)/;
+// harness key shapes stay static; PMO/forge token prefixes come from the
+// adapter registry so a new adapter's secrets are guarded without SPA edits
+const GENERIC_SECRET_PREFIXES = ["sk-", "xai-"];
+
+function secretShapeRe() {
+  const prefixes = [...GENERIC_SECRET_PREFIXES,
+                    ...getRegistry().secret_shape_prefixes];
+  const escaped = prefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`^(${escaped.join("|")})`);
+}
 
 export function envProblem(value) {
   if (!value) return null;
-  if (SECRET_SHAPE_RE.test(value) || value.length > 40)
+  if (secretShapeRe().test(value) || value.length > 40)
     return "This looks like a secret VALUE. This field wants the NAME of an " +
            "environment variable (e.g. GITHUB_TOKEN); the secret itself goes " +
            "in DevCake's .env.";

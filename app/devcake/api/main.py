@@ -460,6 +460,28 @@ async def env_check(names: str = ""):
     return {n: bool(os.environ.get(n, "").strip()) for n in names.split(",") if n}
 
 
+@app.get("/api/v1/connections/registry")
+async def connections_registry():
+    """Available PMO systems and forges with display metadata — drives the
+    admin Config tab's selectors and paste guard, so adding an adapter never
+    means editing the SPA (docs/11)."""
+    from ..adapters.registry import PMO_SYSTEMS, forges
+    forge_descriptors = forges()
+    return {
+        "pmo_systems": [{"id": s.id, "display_name": s.display_name,
+                         "api_key_env_default": s.api_key_env_default}
+                        for s in PMO_SYSTEMS.values()],
+        "forges": [{"id": d.id, "display_name": d.display_name,
+                    "token_env_default": d.token_env_default}
+                   for d in forge_descriptors.values()],
+        "secret_shape_prefixes": sorted(
+            {p for s in PMO_SYSTEMS.values() for p in s.secret_shape_prefixes}
+            | {p for d in forge_descriptors.values()
+               for p in d.secret_shape_prefixes}),
+        "managed_labels_expected": len(ALL_LABELS),
+    }
+
+
 @app.post("/api/v1/connections/pmo/test")
 async def test_pmo():
     if not config.api_key:

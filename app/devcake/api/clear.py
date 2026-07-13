@@ -1,6 +1,6 @@
 """Operator "start fresh" wipe — local run state, Dagu history, OpenObserve data.
 
-Preserves config + secrets (and therefore Linear/GitHub/GitLab state, which
+Preserves config + secrets (and therefore PMO/forge state, which
 lives outside DevCake). Documented consequence of wiping `/data/state` is
 reset attempt counters (docs/10 §5, INV-1).
 """

@@ -168,7 +168,7 @@ class MissionManager:
             if m.pmo_id in cycle_of:
                 loop = " → ".join(cycle_of[m.pmo_id] + [cycle_of[m.pmo_id][0]])
                 gate[m.pmo_id] = (f"dependency cycle: {loop} — will never "
-                                  f"unblock; delete one relation in Linear")
+                                  f"unblock; delete one relation in the PMO")
                 continue
             open_blockers = await self._open_blockers(m, by_id, memo)
             if open_blockers:
@@ -693,7 +693,7 @@ class MissionManager:
             if run.pmo_kind == "project":
                 # _feed suppresses project comments (no comments API) — but a
                 # baton pass MUST be PMO-visible, so it goes out as a project
-                # update, Linear's project-native feed (docs/05 §6)
+                # update via post_feed's project channel (docs/05 §6)
                 try:
                     await self.pmo.post_feed(
                         MissionRef(pmo_id, "project"),
@@ -1129,7 +1129,7 @@ class MissionManager:
                 blocked.pmo_id, "issue",
                 f"🔗 DevCake mapped a blocking relation: this mission is blocked by "
                 f"**{blocker.key}** and will not start before it finishes. Remove "
-                f"the relation in Linear if this is wrong.")
+                f"the relation in the PMO if this is wrong.")
             created += 1
         return created, rejected
 

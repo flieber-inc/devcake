@@ -6,6 +6,7 @@ state.
 """
 
 from datetime import datetime, timezone
+import hashlib
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -19,8 +20,12 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def auth_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 class Run(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     run_id: str
     mission_key: str
     mission_pmo_id: str = ""
@@ -42,11 +47,13 @@ class Run(BaseModel):
     last_heartbeat: Optional[datetime] = None
     timeout_seconds: int = 120 * 60
     traceparent: Optional[str] = None
-    # Per-run scoped Redis ACL password (docs/09 §1a). Local, 0600-dir, and
-    # revoked at finalization — acceptable at-rest exposure for v0.
-    redis_password: Optional[str] = None
+    # One-way verifier for the per-run Redis envelope credential. The raw ACL
+    # password is passed directly to Dagu and is never persisted in run state.
+    auth_digest: Optional[str] = None
+    # Legacy v1 fields remain parseable so startup migration can scrub them.
+    redis_password: Optional[str] = Field(default=None, exclude=True)
     spec_env: dict[str, str] = Field(default_factory=dict)
-    spec_files: list[dict[str, Any]] = Field(default_factory=list)
+    spec_files: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
     finalized_steps: list[str] = Field(default_factory=list)
     result: Optional[dict[str, Any]] = None
     token_report: Optional[dict[str, Any]] = None
@@ -57,4 +64,3 @@ class Run(BaseModel):
     # verdict like "rejected: …" because _transition refused to act on the
     # outcome. None means an ordinary success.
     verdict: Optional[str] = None
-

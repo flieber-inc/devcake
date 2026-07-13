@@ -41,6 +41,16 @@ class BranchProtection(BaseModel):
     requires_reviews: Optional[bool] = None
 
 
+class ForgeHealth(BaseModel):
+    ok: bool
+    repository: str = ""
+    can_push: bool = False
+    # failure not attributable to the credential/permissions (5xx, network,
+    # rate limit) — a retry may succeed, so it must never latch the breaker
+    transient: bool = False
+    detail: str = ""
+
+
 class ForgeDescriptor(BaseModel):
     """Everything forge-specific that is NOT an API call: the dev-side dialect
     (clone auth, git identity, PR/MR CLI instructions) plus the secret shapes
@@ -75,6 +85,7 @@ class ForgePort(Protocol):
 
     descriptor: ClassVar[ForgeDescriptor]
 
+    async def health_probe(self) -> ForgeHealth: ...
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]: ...
     async def pr_state(self, pr_number: int) -> PullRequest: ...
     async def post_pr_comment(self, pr_number: int, markdown: str) -> None: ...

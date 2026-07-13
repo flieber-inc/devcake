@@ -14,7 +14,7 @@
 | `admin` | nginx + static SPA (React/Vite/Tailwind) | Admin panel UI; reverse-proxies `/api`→app; links out to the Dagu and OpenObserve UIs (buttons, no iframes) |
 | `dev-{run_id}` *(ephemeral)* | one of 3 harness images | One Mission Step, then exit (`07-dev-runtime.md`) |
 
-Two container levels, per the mission doc: the compose stack, and the Dev containers Dagu spawns via `docker.sock` — siblings on the same Docker network with host-equivalent network access (`13-deployment.md` §5).
+Two container levels, per the mission doc: the compose stack, and the Dev containers Dagu spawns via `docker.sock`. Dev siblings attach only to `devcake_runtime`; the app/admin/Dagu control plane lives on `devcake_control` (`13-deployment.md` §5).
 
 ## 2. Interaction matrix
 
@@ -81,5 +81,6 @@ The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, an
 | Mission content from Linear → Dev prompts | Untrusted input executed by an agent with repo write access — prompt-injection risk accepted in v0, mitigated by single-team scoping, PR-only writes, and `auto_merge` defaulting off (`14-security.md` §2) |
 | `docker.sock` | Only `dagu` holds it (the app kills/reconciles via the Dagu REST API); never Dev containers |
 | Credentials | Injected at `docker run`, never in images, Dagu params, or logs (`14-security.md` §3) |
+| Dev → control plane | No shared Docker network. FastAPI still requires Basic auth on every non-liveness route and an explicit intent header on mutations. |
 
 **What survives what:** an app restart loses nothing (state = PMO + files + Redis streams); a Dev crash loses only that attempt (labels never advanced — INV-3); a full host loss recovers from the PMO System + `/data` backup.

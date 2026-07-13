@@ -33,6 +33,7 @@ from ..harness import HARNESSES, dev_type_status
 from ..ports.forge import mission_branch
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
+from .auth import credentials_configured, enforce_control_plane_auth
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("devcake")
@@ -54,6 +55,18 @@ forge = make_forge(config.repo)
 mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
 
 
+async def refresh_forge_health() -> dict:
+    try:
+        health = await mission_mgr.forge.health_probe()
+        data = health.model_dump()
+    except Exception as e:
+        # a probe that could not run says nothing about the credential
+        data = {"ok": False, "repository": config.repo.url, "can_push": False,
+                "transient": True, "detail": f"forge probe failed: {str(e)[:200]}"}
+    mission_mgr.apply_forge_health(data)
+    return data
+
+
 def reload_connections() -> None:
     """Hot-reload both adapters after a config PUT: rebuild from the saved
     config, repoint the orchestrator and the module globals the loops read,
@@ -72,6 +85,7 @@ def reload_connections() -> None:
         except Exception:
             log.exception("ensure_labels after config reload failed — labels "
                           "will be ensured on next restart")
+        await refresh_forge_health()
     asyncio.create_task(_ensure(), name="ensure_labels_reload")
 manager.mission_mgr = mission_mgr
 oauth_mgr = OAuthManager(manager, messaging, dev_types)
@@ -93,6 +107,10 @@ async def poll_loop() -> None:
         with tracer.start_as_current_span("poll.cycle") as span:
             span.set_attribute("devcake.poll.cycle", cycle)
             try:
+                # a latched forge breaker re-probes every cycle so a transient
+                # failure (or a rotated-back token) self-heals without an operator
+                if "forge" in mission_mgr.breakers:
+                    await refresh_forge_health()
                 missions = await pmo.list_all(config.pmo.team_key)
                 derived = [(m, derive(m, config.adoption_mode)) for m in missions]
                 candidates = [m for m, d in derived if d.schedulable]
@@ -144,19 +162,39 @@ async def poll_loop() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not credentials_configured():
+        raise RuntimeError("ADMIN_USER and ADMIN_PASSWORD must both be configured")
+    legacy_active = store.scrub_legacy_secrets()
+    for run in legacy_active:
+        await manager.abort_legacy_run(run)
+    offending = store.legacy_secrets_remaining()
+    if offending:
+        raise RuntimeError("legacy run credentials remain on disk after startup scrub in: "
+                           + ", ".join(sorted(offending)))
+    await messaging.scrub_legacy_dead_letters()
     # startup reconciliation (docs/04 §6)
     try:
         await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)          # step 2
         log.info("labels ensured in team %s", config.pmo.team_key)
     except Exception:
         log.exception("label bootstrap failed — poll loop will keep retrying reads")
+    await refresh_forge_health()
     for r in store.active():                                              # step 3
         try:
             status = await executor.status(r.run_id)
             st = str(((status or {}).get("dagRunDetails") or {}).get("status", "")).lower()
             label = str(((status or {}).get("dagRunDetails") or {}).get("statusLabel", "")).lower()
             if status is None or st in ("failed", "aborted", "error")                     or label in ("failed", "aborted", "error", "cancelled"):
+                try:
+                    node_errors = await executor.node_errors(r.run_id) if status else []
+                except Exception:
+                    node_errors = []
                 await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
+                detail = " ".join(str(item.get("error") or "") for item in node_errors)
+                if "exit status 13" in detail.lower():
+                    r.error = mission_mgr._dev_failure_error(
+                        r, {"exit_code": 13, "error_detail": detail})
+                    store.save(r)
             else:
                 log.info("reconciliation: adopted in-flight run %s (dagu: %s)",
                          r.run_id, label or st or "running")
@@ -164,6 +202,7 @@ async def lifespan(app: FastAPI):
             log.exception("reconciliation failed for %s", r.run_id)
     try:
         await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
+        await messaging.delete_acknowledged_ingress()
     except Exception:
         log.exception("pending-entry reclaim failed")
     def _log_task_death(t: asyncio.Task) -> None:
@@ -186,7 +225,14 @@ async def lifespan(app: FastAPI):
             await t
 
 
-app = FastAPI(title="DevCake", lifespan=lifespan)
+app = FastAPI(
+    title="DevCake",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+app.middleware("http")(enforce_control_plane_auth)
 FastAPIInstrumentor.instrument_app(app)
 
 
@@ -245,7 +291,7 @@ async def health():
         "dagu": dagu_ok,
         "openobserve": oo_ok,
         "pmo": pmo_ok,
-        "forge": None,        # wired at M4
+        "forge": getattr(mission_mgr, "forge_health", None),
         "config_valid": True,
         "circuit_breakers": mission_mgr.breakers,
         "intake_paused": config.intake_paused,
@@ -257,6 +303,11 @@ async def health():
         "dependency_cycles": mission_mgr.cycles,
         "mapper_degraded": mapper.degraded(),
     }
+
+
+@app.get("/api/v1/health/live")
+async def liveness():
+    return {"app": True}
 
 
 @app.get("/api/v1/missions")
@@ -286,11 +337,14 @@ async def get_run(run_id: str):
     run = store.get(run_id)
     if run is None:
         raise HTTPException(404)
-    data = run.model_dump()
-    data.pop("redis_password", None)   # never serve credentials
-    data["spec_env"] = {k: ("«redacted»" if "SECRET" in k or "OTLP_BASIC" in k else v)
-                        for k, v in data["spec_env"].items()}
-    return data
+    return run.model_dump(include={
+        "schema_version", "run_id", "mission_key", "mission_pmo_id", "pmo_kind",
+        "pmo_ref", "repo_ref", "mission_type", "dev_type", "seq",
+        "attempt_of_step", "stage_label_at_dispatch", "state", "created_at",
+        "started_at", "ended_at", "last_heartbeat", "timeout_seconds",
+        "finalized_steps", "artifact_bytes", "error",
+        "verdict",
+    })
 
 
 TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
@@ -507,10 +561,14 @@ async def test_forge():
                                       "the env var NAME; the token itself goes in .env"}
     try:
         f = mission_mgr.forge
+        health = await refresh_forge_health()
+        if not health["ok"]:
+            return health
         pr = await f.get_pr_by_branch(mission_branch("__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
         protection = await f.default_branch_protection(config.repo.default_branch)
         return {"ok": True, "forge": config.repo.forge, "repo": config.repo.url,
+                "can_push": health["can_push"],
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
                 "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:

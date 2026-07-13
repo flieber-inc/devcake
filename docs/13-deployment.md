@@ -9,7 +9,7 @@ Goal per the mission doc: **as simple as possible, local-friendly, production-gr
 
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`.
 - Volumes: `devcake_data` (→ `app:/data`), `dagu_data`, `redis_data`, `oo_data`.
-- Network: the default compose network, external name **`devcake_default`** — Dev containers are attached to it by name (§5).
+- Networks: **`devcake_control`** (`app`, `admin`, `dagu`, Redis, OpenObserve, fluent-bit) and **`devcake_runtime`** (ephemeral Devs, Redis, OpenObserve). Devs retain outbound access but cannot resolve or connect directly to `app`, `admin`, or Dagu (§5).
 
 ## 2. Annotated `docker-compose.yml` skeleton
 
@@ -26,7 +26,7 @@ services:
       redis:        { condition: service_healthy }
       openobserve:  { condition: service_started }
       dagu:         { condition: service_healthy }
-    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"],
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/live"],
                    interval: 10s, retries: 5 }
 
   dagu:
@@ -163,7 +163,7 @@ steps:
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}
-      network: devcake_default       # verified: plain custom-network attach
+      network: devcake_runtime       # only Redis/OpenObserve + outbound access
       pull_policy: missing
       keep_container: false          # verified: force-removed on every exit path (incl. stop);
                                      #   post-mortem lives in Dagu step logs + OpenObserve
@@ -180,9 +180,10 @@ steps:
 
 ## 5. Two-level containers and networking
 
-Dagu holds the host `docker.sock`, so Dev containers are **siblings** of the compose stack (docker-outside-of-docker). The DAG's `network: devcake_default` key attaches them at spawn (verified via `docker inspect`), giving them:
-- resolution of `redis:6379` and `openobserve:5080` by service name, and
-- full outbound (host-equivalent) network access, per the mission doc.
+Dagu holds the host `docker.sock`, so Dev containers are **siblings** of the compose stack (docker-outside-of-docker). The DAG's `network: devcake_runtime` key attaches them at spawn (verified via `docker inspect`), giving them:
+- Redis Streams and OpenObserve access by service DNS;
+- full outbound access for forge/package traffic;
+- no Docker-network route or DNS entry for `app`, `admin`, or Dagu. The authenticated API remains defense in depth, not a Dev callback channel.
 
 Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id format of `02-domain-model.md` §7 (`ENG-142-3-EXECUTE-9GX2TQ`) — so the Dagu UI's run list reads as a natural map of Missions and Mission Steps (confirmed decision), and container names, traces, and Redis streams all match it.
 
@@ -215,6 +216,7 @@ Dev containers hold the forge token, and token scoping cannot separate "push a f
 
 The forge connection test and the admin header surface the protection state; an unprotected default branch shows a standing amber warning.
 - **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). Schema migrations run automatically (`10-persistence.md` §2). `config.yaml` migrates itself on first boot after an upgrade — v1's singular `pmo:`/`repo:` blocks become the plural v2 `pmos:`/`repos:` lists (still exactly one entry each), with the old file kept as `config.yaml.v1.bak`.
+- **Upgrade — Dev images are NOT rebuilt implicitly:** any deploy that touches `images/common/dev_entrypoint.py` (or any `images/*` context) must be followed by `docker compose --profile images build`. The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently otherwise — and app-side protocol changes (e.g. the chunk `chunk_id`/`sha256` fields) reject the old senders' output.
 - **Kill a stuck Dev:** admin → Executor tab → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Logs tab (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).

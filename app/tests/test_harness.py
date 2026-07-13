@@ -83,6 +83,70 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
     assert files == []  # claude-code requires no credential files
 
 
+def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
+    """docs/09 §5: the secret half of a run spec is derived from current config
+    whenever an authenticated active run asks — never stored, never expiring."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-000000000000000000000")
+    secrets = tmp_path / "secrets" / "main-dev"
+    secrets.mkdir(parents=True)
+    (secrets / "grok-auth.json").write_text('{"grok": true}')
+
+    from devcake.domain.run import Run
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.config = AppConfig()
+    mgr.dev_types = {"main-dev": DevType(name="main-dev",
+                                         harness_template="grok-build")}
+    run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
+              mission_type="EXECUTE", dev_type="main-dev", seq=1)
+    payload = mgr.runspec_secret_payload(run)
+    assert payload["env"]["XAI_API_KEY"] == "xai-test-000000000000000000000"
+    assert "DEVCAKE_FORGE_TOKEN" in payload["env"]
+    assert "OTEL_EXPORTER_OTLP_BASIC" in payload["env"]
+    assert payload["credential_files"] == [{"path_hint": "~/.grok/auth.json",
+                                            "content": '{"grok": true}',
+                                            "mode": "600"}]
+    run.dev_type = "deleted-dev"
+    assert mgr.runspec_secret_payload(run) is None
+
+
+def test_runspec_get_served_while_active_and_refused_after(tmp_path):
+    from devcake.domain.run import Run
+    from devcake.domain.runs import RunManager
+
+    replies = []
+
+    class FakeMessaging:
+        async def reply(self, run_id, kind, payload):
+            replies.append((kind, payload))
+
+        async def delete_runspec_result(self, rid):
+            pass
+
+        async def delete_runspec_secret(self, rid):
+            pass
+
+    store = RunStore(tmp_path / "runs")
+    manager = RunManager(store, FakeMessaging(), executor=None)
+    run = Run(run_id="HELLO-1-1-HELLO-AAAAAA", mission_key="HELLO",
+              mission_type="HELLO", dev_type="hello-stub", seq=1,
+              spec_env={"PUBLIC": "yes"})
+    run.state = "dispatched"
+    store.save(run)
+
+    run_coro(manager.handle(run.run_id, "runspec.get", {}))
+    kind, payload = replies[-1]
+    assert kind == "runspec.result"
+    assert payload["env"]["PUBLIC"] == "yes"
+    assert payload["env"]["FAKE_SECRET"] == f"devcake-fake-secret-{run.run_id}"
+    assert payload["credential_files"][0]["path_hint"] == "~/.hello/creds.json"
+
+    run.state = "finished"
+    store.save(run)
+    run_coro(manager.handle(run.run_id, "runspec.get", {}))
+    assert replies[-1][0] == "runspec.error"
+
+
 def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     captured = {}

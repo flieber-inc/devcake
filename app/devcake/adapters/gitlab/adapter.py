@@ -8,7 +8,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError,
+from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError, ForgeHealth,
                             PullRequest)
 
 log = logging.getLogger("devcake.forge")
@@ -66,6 +66,28 @@ class GitLabForge:
                 raise ForgeError(f"{method} {path} → {resp.status_code}: "
                                  f"{resp.text[:200]}", status=resp.status_code)
             return resp.json() if resp.text else None
+
+    async def health_probe(self) -> ForgeHealth:
+        try:
+            project = await self._req("GET", "")
+        except ForgeError as e:
+            # 401/403/404 indict the credential; anything else is transient
+            definitive = e.status in (401, 403, 404) and not (
+                e.status == 403 and "rate limit" in str(e).lower())
+            return ForgeHealth(
+                ok=False, repository=self.project, transient=not definitive,
+                detail=f"repository access failed (HTTP {e.status}); grant api and "
+                       "write_repository scopes",
+            )
+        permissions = project.get("permissions") or {}
+        levels = [int((permissions.get(name) or {}).get("access_level") or 0)
+                  for name in ("project_access", "group_access")]
+        can_push = max(levels, default=0) >= 30
+        return ForgeHealth(
+            ok=can_push, repository=str(project.get("path_with_namespace") or self.project),
+            can_push=can_push,
+            detail="" if can_push else "token lacks Developer/write_repository access",
+        )
 
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]:
         mrs = await self._req("GET", f"/merge_requests?source_branch={branch}"

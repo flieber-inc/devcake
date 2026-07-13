@@ -8,6 +8,7 @@ checklist) are the permanent ones from docs/04 §3.1 and docs/09.
 from __future__ import annotations
 
 import base64
+import hmac
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -18,7 +19,7 @@ from opentelemetry.propagate import extract, inject
 
 from ..telemetry import OO_ORG, OO_URL
 from .ids import make_run_id
-from .run import Run, utcnow
+from .run import Run, auth_digest, utcnow
 
 if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtime
     from ..adapters.dagu import DaguExecutor
@@ -101,7 +102,7 @@ class RunManager:
                 seq=seq,
                 timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
                 traceparent=traceparent,
-                redis_password=redis_password,
+                auth_digest=auth_digest(redis_password),
                 spec_env={
                     "DEVCAKE_MISSION_ID": "debug-hello",
                     "DEVCAKE_MISSION_KEY": "HELLO",
@@ -109,17 +110,9 @@ class RunManager:
                     "DEVCAKE_DEV_TYPE": "hello-stub",
                     "DEVCAKE_SEQ": str(seq),
                     "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
-                    "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
                     "HELLO_SLEEP": str(sleep),
                     "HELLO_PAYLOAD_KB": str(payload_kb),
-                    # M1 secrets probe: must NEVER appear in Dagu's UI/run API
-                    "FAKE_SECRET": f"devcake-fake-secret-{run_id}",
                 },
-                spec_files=[{
-                    "path_hint": "~/.hello/creds.json",
-                    "content": '{"fake": true}',
-                    "mode": "600",
-                }],
             )
             self.store.save(run)  # durable intent BEFORE the trigger (docs/04 §3.1)
 
@@ -138,9 +131,29 @@ class RunManager:
 
     # ── ingress handling ─────────────────────────────────────────────────────
 
+    def _runspec_secret(self, run: Run) -> dict | None:
+        """Secret half of a run spec, built from current config on request
+        (docs/09 §5): nothing secret is at rest between dispatch and the Dev's
+        runspec.get, so a slow container start or a Redis restart cannot
+        expire it. The requester is already authenticated (verify_auth)."""
+        if run.mission_type == "HELLO":
+            return {"env": {"OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
+                            "FAKE_SECRET": f"devcake-fake-secret-{run.run_id}"},
+                    "credential_files": [{"path_hint": "~/.hello/creds.json",
+                                          "content": '{"fake": true}',
+                                          "mode": "600"}]}
+        if run.mission_type == "OAUTH":
+            return {"env": {}, "credential_files": []}
+        if self.mission_mgr is None:
+            return None
+        return self.mission_mgr.runspec_secret_payload(run)
+
     def verify_auth(self, run_id: str, auth: str | None) -> bool:
         run = self.store.get(run_id)
-        return bool(run and run.redis_password and auth == run.redis_password)
+        return bool(
+            run and run.auth_digest and auth
+            and hmac.compare_digest(run.auth_digest, auth_digest(auth))
+        )
 
     async def handle(self, run_id: str, kind: str, payload: dict) -> None:
         run = self.store.get(run_id)
@@ -155,13 +168,23 @@ class RunManager:
             run.last_heartbeat = utcnow()
             self.store.save(run)
         elif kind == "runspec.get":
+            secret = (self._runspec_secret(run)
+                      if run.state in ("dispatched", "running") else None)
+            if secret is None:
+                await self.messaging.reply(
+                    run_id, "runspec.error",
+                    {"error": "run is not active or its dev type no longer exists"},
+                )
+                return
             await self.messaging.reply(
                 run_id, "runspec.result",
-                {"env": run.spec_env, "credential_files": run.spec_files,
+                {"env": {**run.spec_env, **(secret.get("env") or {})},
+                 "credential_files": secret.get("credential_files") or [],
                  "prompt": run.spec_prompt},
             )
         elif kind == "runspec.ack":
             await self.messaging.delete_runspec_result(run_id)
+            await self.messaging.delete_runspec_secret(run_id)
         elif kind == "activity.get":
             if self.mission_mgr and run.mission_pmo_id:
                 await self.messaging.reply(
@@ -209,7 +232,8 @@ class RunManager:
             "run.finalize", context=ctx, kind=SpanKind.CONSUMER
         ) as span:
             span.set_attribute("devcake.run.id", run.run_id)
-            run.result = payload.get("result")
+            from ..security import redact_value
+            run.result = redact_value(payload.get("result"))
             run.artifact_bytes = len(str(payload))
             span.set_attribute("devcake.outcome", str((run.result or {}).get("outcome")))
             # M2+: post transcript + token report to the PMO here (INV-5).
@@ -222,11 +246,28 @@ class RunManager:
                     run.finalized_steps.append(step)
                     self.store.save(run)
             run.state, run.ended_at = "finished", utcnow()
-            run.redis_password = None  # revoked → stop persisting it
             self.store.save(run)
             log.info("finalized %s → finished", run.run_id)
 
     # ── watchdog support ─────────────────────────────────────────────────────
+
+    async def abort_legacy_run(self, run: Run) -> None:
+        """Stop a v1 run whose persisted run spec was scrubbed during upgrade."""
+        import contextlib
+        with contextlib.suppress(Exception):
+            await self.executor.stop(run.run_id)
+        with contextlib.suppress(Exception):
+            await self.messaging.delete_run_user(run.run_id)
+        with contextlib.suppress(Exception):
+            await self.messaging.delete_reply_stream(run.run_id)
+        run.state = "orphaned"
+        run.ended_at = utcnow()
+        run.error = "upgrade aborted legacy run after credential-state migration"
+        self.store.save(run)
+        if self.mission_mgr and run.mission_pmo_id:
+            with contextlib.suppress(Exception):
+                await self.mission_mgr.restore_after_failure(run)
+        log.warning("aborted legacy run %s during credential migration", run.run_id)
 
     async def kill(self, run: Run, new_state: str, reason: str) -> None:
         from opentelemetry import trace as _t
@@ -264,8 +305,8 @@ class RunManager:
         await self.messaging.delete_reply_stream(run.run_id)
         run.state = new_state  # type: ignore[assignment]
         run.ended_at = utcnow()
-        run.error = reason
-        run.redis_password = None
+        from ..security import redact
+        run.error = redact(reason)
         self.store.save(run)
         if self.mission_mgr and run.mission_pmo_id:
             await self.mission_mgr.restore_after_failure(run)

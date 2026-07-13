@@ -15,8 +15,9 @@ services:
       redis:       { condition: service_healthy }
       openobserve: { condition: service_started }
       dagu:        { condition: service_healthy }
+    networks: [control]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,6 +40,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock  # ⚠ root-equivalent host access — docs/14 §4
     depends_on:
       fluentbit: { condition: service_started }
+    networks: [control]
     logging: &ship_stdout                 # stdout → fluent-bit → OpenObserve (docs/13 §7)
       driver: fluentd
       options:
@@ -61,6 +63,7 @@ services:
     volumes: [ redis_data:/data ]
     depends_on:
       fluentbit: { condition: service_started }
+    networks: [control, runtime]
     logging: *ship_stdout
     healthcheck:
       test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
@@ -75,6 +78,7 @@ services:
       - ZO_ROOT_USER_PASSWORD=${OO_ROOT_PASSWORD}
     volumes: [ oo_data:/data ]
     ports: [ "5080:5080" ]
+    networks: [control, runtime]
 
   admin:
     build: ./admin                        # nginx + static shell (M0); proxies /api only
@@ -85,6 +89,7 @@ services:
       - ADMIN_USER=${ADMIN_USER}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     depends_on: [ app ]
+    networks: [control]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/nginx-health"]
       interval: 10s
@@ -125,6 +130,15 @@ services:
     volumes:
       - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
     ports: [ "24224:24224" ]              # receives the fluentd logging driver (host side)
+    networks: [control]
+
+networks:
+  control:
+    name: devcake_control
+  # Dev containers need outbound forge/package access. The absence of app,
+  # admin, and Dagu from this network is the control-plane isolation boundary.
+  runtime:
+    name: devcake_runtime
 
 volumes:
   devcake_data: {}

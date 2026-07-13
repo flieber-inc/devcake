@@ -1,7 +1,7 @@
 """docs/14 §5 — the redaction filter (M7 exit criterion)."""
 import os
 
-from devcake.security import MASK, redact
+from devcake.security import MASK, redact, redact_value
 
 
 def test_env_value_redacted(monkeypatch):
@@ -25,6 +25,15 @@ def test_extra_values_and_short_safety():
 def test_plain_text_untouched():
     text = "нормальный transcript with code `git push` and no secrets"
     assert redact(text) == text
+
+
+def test_structured_values_are_redacted_before_persistence(monkeypatch):
+    token = "ghp_" + "q" * 36
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+    value = {"summary": f"leaked {token}", "nested": [token, 7, None]}
+    scrubbed = redact_value(value)
+    assert token not in str(scrubbed)
+    assert scrubbed["nested"][1:] == [7, None]
 
 
 # ── registry-driven redaction: the superset tripwire (docs/14 §5) ────────────
@@ -79,3 +88,21 @@ def test_redact_still_scrubs_all_v0_shapes():
     for s in samples:
         assert s not in out
     assert MASK in out
+
+
+def test_runtime_secret_registry():
+    """Ephemeral per-run credentials (the Redis relay password) are registered
+    at ACL creation and masked until teardown; empty values are ignored."""
+    from devcake.security import register_runtime_secret, unregister_runtime_secret
+
+    secret = "relay-password-0123456789abcdef"
+    register_runtime_secret("run-a", secret)
+    try:
+        assert secret not in redact(f"leak {secret} end")
+        assert MASK in redact(f"leak {secret} end")
+    finally:
+        unregister_runtime_secret("run-a")
+    assert secret in redact(f"leak {secret} end")
+
+    register_runtime_secret("run-b", "")          # ignored, not registered
+    assert redact("nothing to mask") == "nothing to mask"

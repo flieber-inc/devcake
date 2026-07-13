@@ -28,6 +28,8 @@ All local app data lives as plain files on one named volume (`devcake_data`, mou
 - **Atomic writes, always:** write to `{path}.tmp` in the same directory → `fsync` → `rename`. JSONL appends are line-buffered with `fsync` per finalization.
 - **Migrations:** applied on load, before validation, forward-only (`migrate_config` in `config.py`); the atomic-write discipline above is preserved — the migrated file is persisted with the same tmp→fsync→rename path (ADR-0002). Purely **additive** fields with defaults need no version bump: the Run record gained `pmo_ref`/`repo_ref` (both default `"main"`) with no schema change — pre-existing run JSONs parse unchanged.
 
+Run records are schema **v2**. They contain non-secret execution context and a one-way Redis envelope verifier, never raw Redis passwords, forge/model credentials, or credential-file content. Secret run-spec material is not persisted anywhere: the app builds it from current config when the Dev sends `runspec.get` (`09-messaging.md` §§3, 5). On first v2 startup, v1 JSON is rewritten without credential-bearing fields (unparseable files are moved to `runs/quarantine/` — 0600, named in the log — so one corrupt record can never block boot; files the model rejects are still scrubbed at the raw-JSON level); active v1 runs are aborted because they predate the envelope verifier. Startup fails readiness only if a credential field genuinely remains, and the error names the offending files.
+
 ## 3. `config.yaml` — annotated example (normative shape)
 
 Schema **v2**: the connection blocks are plural lists (`pmos:`/`repos:`) with an `id` per entry — the forward-compatible shape for multi-PMO/multi-repo — but **exactly one entry each is enforced in v0** (`02-domain-model.md` §9).

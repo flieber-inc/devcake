@@ -9,7 +9,7 @@ docker compose exec -T -w /srv app python -m pytest tests/ -q
 
 echo "── stub-harness smoke: full dispatch pipeline (Dagu → container → Redis → finalize)"
 source <(grep -E "^ADMIN_(USER|PASSWORD)=" .env | sed 's/^/export /')
-RUN=$(curl -sf -u "$ADMIN_USER:$ADMIN_PASSWORD" -X POST \
+RUN=$(curl -sf -u "$ADMIN_USER:$ADMIN_PASSWORD" -H 'X-DevCake-Request: 1' -X POST \
   "http://localhost:8080/api/v1/debug/dispatch-hello?sleep=2" | python3 -c "import json,sys; print(json.load(sys.stdin)['run_id'])")
 for i in $(seq 1 30); do
   STATE=$(curl -sf -u "$ADMIN_USER:$ADMIN_PASSWORD" \

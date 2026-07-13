@@ -130,7 +130,7 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 
 ## 6. GitHub specifics
 
-- Auth: fine-grained PAT (or classic token). Minimum scopes: `contents: read/write`, `pull_requests: read/write` (fine-grained), or classic `repo`. Reviewer token additionally needs nothing beyond PR review permission.
+- Auth: fine-grained PAT (or classic token). A fine-grained PAT must explicitly select the configured repository under **Repository access** and grant `Contents: read/write` plus `Pull requests: read/write`; a token that authenticates the user but omits the private repository receives 404/403 from GitHub. A classic token needs `repo`. The connection probe requires the repository API's `permissions.push=true` before scheduling is allowed. Reviewer token additionally needs nothing beyond PR review permission.
 - CLI in Dev images: `gh` (authenticated via `GH_TOKEN` — the descriptor's `cli_token_envs`, mirrored from the forge token by the entrypoint).
 - API: REST for the app-side operations (PR lookup, comments, reviews, merge with `merge_method: squash`, branch protection); PR creation happens Dev-side via the descriptor's `pr_instructions`. `api_base` overrides `https://api.github.com` for GitHub Enterprise.
 - `default_branch_protection` reads the branch's `protected` flag, classic protection detail (may 403/404 without admin scope), and repository rulesets (the modern mechanism).

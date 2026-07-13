@@ -164,6 +164,33 @@ def test_logrelay_swallows_send_failures(monkeypatch):
     assert relay.sent == 0
 
 
+def test_logrelay_reports_silent_live_harness_without_flooding(monkeypatch):
+    ticks = iter([100.0, 105.0])
+    monkeypatch.setattr(ep.time, "monotonic", lambda: next(ticks))
+    relay = ep.LogRelay()
+
+    assert not relay.add_silence_notice("grok-build", now=159.9)
+    assert relay.add_silence_notice("grok-build", now=165.0)
+    assert not relay.add_silence_notice("grok-build", now=200.0)
+    assert relay.add_silence_notice("grok-build", now=225.0)
+    assert relay.buf == [
+        "[devcake] grok-build is still running; no visible model output for 65s "
+        "(65s elapsed)",
+        "[devcake] grok-build is still running; no visible model output for 125s "
+        "(125s elapsed)",
+    ]
+
+
+def test_visible_output_resets_silence_notice(monkeypatch):
+    ticks = iter([100.0, 170.0])
+    monkeypatch.setattr(ep.time, "monotonic", lambda: next(ticks))
+    relay = ep.LogRelay()
+    relay.add("model response")
+
+    assert not relay.add_silence_notice("grok-build", now=220.0)
+    assert relay.add_silence_notice("grok-build", now=230.0)
+
+
 # ── forge dialect resolution (descriptor spec_env → clone bootstrap) ─────────
 
 def test_forge_dialect_prefers_descriptor_env():
@@ -187,3 +214,69 @@ def test_forge_dialect_legacy_fallback_bit_for_bit():
     assert user == "x-access-token"                     # pre-descriptor default
     assert (name, email) == ("DevCake", "devcake@users.noreply.github.com")
     assert envs == ["GH_TOKEN", "GITLAB_TOKEN"]         # both, as v0 always set
+
+
+# ── clone failure classification (global forge breaker gate) ─────────────────
+
+def test_clone_error_class_matches_git_credential_wording():
+    real_403 = ("remote: Write access to repository not granted.\n"
+                "fatal: unable to access 'https://github.com/o/r.git/': "
+                "The requested URL returned error: 403")
+    assert ep.clone_error_class(real_403) == "DEV_FORGE_AUTH"
+    assert ep.clone_error_class(
+        "fatal: Authentication failed for 'https://gitlab.com/o/r.git/'"
+    ) == "DEV_FORGE_AUTH"
+    assert ep.clone_error_class(
+        "fatal: could not read Username for 'https://github.com': "
+        "terminal prompts disabled"
+    ) == "DEV_FORGE_AUTH"
+
+
+def test_clone_error_class_ignores_incidental_403():
+    # "403" inside a URL/branch name is not a credential failure
+    assert ep.clone_error_class(
+        "fatal: unable to access 'https://forge/team-403/repo/': "
+        "Connection timed out"
+    ) == "DEV_FORGE"
+    assert ep.clone_error_class("error: RPC failed; HTTP 500") == "DEV_FORGE"
+
+
+# ── oversized-artifact shrinking (a finished run's result must always ship) ──
+
+def test_fit_payload_truncates_oversized_transcript(monkeypatch):
+    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 1024 * 1024)
+    result = {"schema_version": 1, "outcome": "pr_opened", "summary": "s"}
+    payload = {"result": result, "token_report": {"model": "m"},
+               "transcript_md": "x" * (3 * 1024 * 1024)}
+    fitted = ep._fit_payload(payload)
+    assert fitted["result"] == result
+    assert fitted["token_report"] == {"model": "m"}
+    assert "[devcake] transcript_md truncated" in fitted["transcript_md"]
+    assert len(json.dumps(fitted).encode("utf-8")) <= 1024 * 1024
+    assert len(payload["transcript_md"]) == 3 * 1024 * 1024   # input untouched
+
+
+def test_fit_payload_small_payload_untouched():
+    payload = {"result": {"outcome": "hello"}, "transcript_md": "short"}
+    assert ep._fit_payload(payload) is payload
+
+
+def test_fit_payload_raises_only_when_unshrinkable(monkeypatch):
+    import pytest
+    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 1024)
+    with pytest.raises(ValueError):
+        ep._fit_payload({"result": {"outcome": "x" * 5000}})
+
+
+def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
+    import hashlib
+    sent = []
+    monkeypatch.setattr(ep, "send", lambda kind, payload: sent.append((kind, payload)))
+    ep.send_artifacts({"result": {"outcome": "hello"},
+                       "transcript_md": "y" * 900_000})
+    assert len(sent) > 1
+    blob = "".join(p["data"] for _, p in sent)
+    assert json.loads(blob)["result"] == {"outcome": "hello"}
+    assert len({p["chunk_id"] for _, p in sent}) == 1
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    assert all(p["sha256"] == digest and p["of"] == len(sent) for _, p in sent)

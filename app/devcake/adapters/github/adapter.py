@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError,
+from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError, ForgeHealth,
                             PullRequest)
 
 log = logging.getLogger("devcake.forge")
@@ -61,6 +61,29 @@ class GitHubForge:
                 raise ForgeError(f"{method} {path} → {resp.status_code}: "
                                  f"{resp.text[:200]}", status=resp.status_code)
             return resp.json() if resp.text else None
+
+    async def health_probe(self) -> ForgeHealth:
+        repository = f"{self.owner}/{self.repo}"
+        try:
+            repo = await self._req("GET", "")
+        except ForgeError as e:
+            # 401/403/404 indict the credential (bad token, no access, invisible
+            # repo) — except GitHub's rate-limit 403, which is transient
+            definitive = e.status in (401, 403, 404) and not (
+                e.status == 403 and "rate limit" in str(e).lower())
+            hint = ("; for a fine-grained PAT, select this repository and grant "
+                    "Contents and Pull requests read/write")
+            return ForgeHealth(ok=False, repository=repository, transient=not definitive,
+                               detail=f"repository access failed (HTTP {e.status}){hint}")
+        can_push = bool((repo.get("permissions") or {}).get("push"))
+        return ForgeHealth(
+            ok=can_push,
+            repository=repository,
+            can_push=can_push,
+            detail="" if can_push else (
+                "token can read the repository but lacks push permission; grant "
+                "Contents and Pull requests read/write"),
+        )
 
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]:
         """Newest PR (any state) whose head is the given branch."""

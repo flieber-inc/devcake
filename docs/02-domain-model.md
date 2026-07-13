@@ -183,7 +183,7 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | `mission_type` | `str` | The type this run was dispatched as. |
 | `dev_type` | `str` | |
 | `seq` | `int` | Step number for transcript naming (§8). |
-| `attempt_of_step` | `int` | 1-based attempt counter for this (mission, type, seq). |
+| `attempt_of_step` | `int` | 1-based attempt counter for this (mission, type) — seq-independent, since failed runs advance `seq` by posting transcripts. Resets at the newest of: last give-up watermark, any finished run for the mission, or the latest human feed comment (`15-errors-and-retries.md` §3). |
 | `stage_label_at_dispatch` | `str \| None` | Input to compare-and-transition (`04-orchestrator.md` §4). |
 | `spec_prompt` | `str` | The composed prompt delivered in the run spec. |
 | `state` | `"dispatched" \| "running" \| "finalizing" \| "finished" \| "failed" \| "timed_out" \| "orphaned"` | |
@@ -192,8 +192,8 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | `last_heartbeat` | `datetime \| None` | Watchdog input (`04-orchestrator.md` §5). |
 | `timeout_seconds` | `int` (default 7200) | From `dev_timeout_minutes` at dispatch. |
 | `traceparent` | `str \| None` | W3C trace context linking the run's spans (`12-observability.md`). |
-| `redis_password` | `str \| None` | Per-run scoped Redis ACL password (`09-messaging.md` §1a); local, 0600-dir, revoked at finalization. |
-| `spec_env` / `spec_files` | `dict[str, str]` / `list[dict]` | The run spec's env vars and injected files. |
+| `auth_digest` | `str \| None` | SHA-256 verifier for the per-run Redis envelope credential (`09-messaging.md` §1a); the raw password is never persisted. |
+| `spec_env` | `dict[str, str]` | Non-secret run environment only. Secret env and injected files live in the transient Redis run-spec record, not Run JSON. |
 | `finalized_steps` | `list[str]` | Idempotency checklist: which finalization side effects have durably completed (e.g. `["transcript", "token_report"]`). |
 | `result` | `dict \| None` | The Dev's parsed `result.json` payload. |
 | `token_report` | `dict \| None` | Shape in §10. |

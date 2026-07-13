@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from ..harness import HARNESSES
 from .ids import make_run_id
-from .run import Run
+from .run import Run, auth_digest
 
 log = logging.getLogger("devcake.oauth")
 
@@ -49,7 +49,7 @@ class OAuthManager:
         password = await self.messaging.create_run_user(run_id)
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
                   dev_type=dev_type.name, seq=1, timeout_seconds=600,
-                  redis_password=password,
+                  auth_digest=auth_digest(password),
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
                             "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
@@ -97,7 +97,7 @@ class OAuthManager:
         p.write_text(payload["content"])
         p.chmod(0o600)
         s["state"] = "completed"
-        run.state, run.redis_password = "finished", None
+        run.state = "finished"
         self.runs.store.save(run)
         await self.messaging.delete_run_user(run_id)
         await self.messaging.delete_reply_stream(run_id)

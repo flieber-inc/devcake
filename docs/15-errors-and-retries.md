@@ -15,6 +15,7 @@
 | `DEV_CRASH` | exit 10 (harness crash), 14 (MCP setup), 20 (entrypoint); vanished container | counted attempt |
 | `DEV_TIMEOUT` | exit 124 / watchdog kill | counted attempt |
 | `DEV_AUTH` | exit 12 | circuit breaker (§4) — **not** a counted attempt |
+| `DEV_FORGE_AUTH` | exit 13 with GitHub/GitLab auth/permission evidence | global forge circuit breaker; no run dispatch until the configured token can push |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
@@ -34,6 +35,7 @@
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
 | `DEV_AUTH` | no — pointless until creds fixed | **no** | — | circuit breaker (§4) + health strip |
+| `DEV_FORGE_AUTH` | no — pointless until repository access is fixed | **no** | — | global forge breaker + actionable connection-test error |
 | `LABEL_CONFLICT` | n/a — skipped until resolved | no | — | one PMO comment (deduped via local state) asking a human to fix; metric |
 | `EXTERNAL_TRANSITION` | n/a | no | — | explanatory PMO comment; run's artifacts already posted |
 
@@ -47,6 +49,8 @@ After `max_attempts` (default 3) counted failures of the **same step** (mission 
 2. Post a comment: last error class + message, attempt count, and the OpenObserve trace link for the final attempt.
 3. Stop scheduling the Mission (derivation row 8).
 4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event count toward the next give-up (advisory local state — `10-persistence.md` §5).
+
+The counter is **seq-independent** (failed runs post transcripts and advance `seq`, so per-seq counting could retry forever) and resets at the newest of three anchors: the give-up watermark above, **any finished run for the mission** (a later step completing implies the failing step was resolved, possibly by hand), or **the latest human feed comment** (non-sentinel-signed — a human touching the mission is an intervention, and the step deserves fresh attempts).
 
 ## 3a. `DEVCAKE-NEEDS-HUMAN` semantics (not an error class)
 
@@ -70,9 +74,11 @@ Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE
 
 Exit 12 trips a **per-Dev-Type breaker**: all scheduling for that Dev Type pauses (its Missions stay queued, unharmed), the health strip shows the tripped state, and a PMO comment is posted on the mission that tripped it. Half-open probe: the next config write touching that Dev Type's credentials (or a manual "retry" from the admin panel health strip) closes the breaker. Rationale: auth failures burn nothing but fail everything — retrying without new credentials is pure waste.
 
+Exit 13 trips the **global forge breaker** only when the Dev's clone-failure classification is the structured `DEV_FORGE_AUTH` class, which itself requires git's credential wording ("returned error: 403/401", "Authentication failed", "could not read Username", …) — a bare "403" in stderr (rate limit, URL fragment) never halts dispatch. Probes latch the breaker only on **definitive** credential/permission failures (HTTP 401/403/404; a GitHub rate-limit 403 is exempt): 5xx/network/probe errors are marked *transient* and neither latch nor clear it. While the breaker is latched, the poll loop re-probes every cycle — a false latch or a restored token self-heals within one poll interval, while a genuinely revoked token stays latched (and alerted) until fixed. Startup and the Forge connection test run the same probe and require push permission, so a private repository omitted from a fine-grained PAT is rejected before another Dev starts.
+
 ## 5. Poison messages
 
-Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to `devcake:dead`, is XACKed, and increments `devcake.errors.total{class="poison"}`. The affected run is marked `failed` (`DEV_CRASH` rules) so its Mission recovers by rescheduling; the dead entry is kept 7 days for inspection.
+Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to `devcake:dead` as a metadata-only record and is XACKed + XDEL'd, incrementing `devcake.errors.total{class="poison"}`. Malformed entry bodies (non-JSON `m`) are dead-lettered the same way from raw fields — a poison pill can never loop through reclaim forever. Chunk groups are exempt while still receiving new chunks (they poison only after 300 s of stall, `09-messaging.md` §4). The affected run recovers through the normal failure machinery (watchdog timeout → reschedule); `devcake:dead` is capped at ~1000 records for inspection.
 
 ## 6. Alerting (v0)
 

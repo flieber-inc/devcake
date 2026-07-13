@@ -36,6 +36,7 @@ class FakePMO:
         self.relations = []     # (blocker_id, blocked_id)
         self.uploads = []       # (name, bytes)
         self.activity_entries = []
+        self.all_missions = [mission]
 
     async def get(self, ref):
         self._check_ref(ref)
@@ -71,7 +72,17 @@ class FakePMO:
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):
         self.created.append((title, parent_ref))
-        return f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
+        key, pmo_id = f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
+        self.all_missions.append(Mission(
+            pmo_id=pmo_id, pmo_kind="issue", key=key, title=title,
+            description=description, status="backlog", priority=priority,
+            labels=set(label_names), updated_at=datetime.now(timezone.utc),
+            parent_ref=parent_ref,
+        ))
+        return key, pmo_id
+
+    async def list_all(self, team_ref):
+        return list(self.all_missions)
 
     async def create_relation(self, blocker_id, blocked_id):
         self.relations.append((blocker_id, blocked_id))
@@ -280,6 +291,152 @@ def test_malformed_decomposition_fails_run_not_poison(tmp_path):
     assert fake.created == []                     # no children materialized
 
 
+def test_attempts_count_across_transcript_sequences_and_reset(tmp_path, monkeypatch):
+    import devcake.domain.orchestrator as orchestrator_mod
+
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(orchestrator_mod, "AUDIT_PATH", tmp_path / "no-audit.jsonl")
+    for seq in (1, 2):
+        r = _run("ONBOARD", None)
+        r.run_id = f"T-1-{seq}-ONBOARD-FAIL"
+        r.seq = seq
+        r.state = "failed"
+        r.error = "DEV_BAD_OUTPUT"
+        store.save(r)
+    assert mgr._attempt_number("p1", "ONBOARD") == 3
+
+    auth = _run("ONBOARD", None)
+    auth.run_id = "T-1-3-ONBOARD-AUTH"
+    auth.state = "failed"
+    auth.error = "DEV_FORGE_AUTH: denied"
+    store.save(auth)
+    assert mgr._attempt_number("p1", "ONBOARD") == 3
+
+    success = _run("ONBOARD", None)
+    success.run_id = "T-1-4-ONBOARD-OK"
+    success.state = "finished"
+    store.save(success)
+    assert mgr._attempt_number("p1", "ONBOARD") == 1
+
+
+def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
+    """A later step finishing implies the failing step was resolved (manually
+    or otherwise) — the failure count must not leak into the new step."""
+    from datetime import timedelta
+    import devcake.domain.orchestrator as orchestrator_mod
+
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(orchestrator_mod, "AUDIT_PATH", tmp_path / "no-audit.jsonl")
+    t0 = datetime.now(timezone.utc)
+    for i in (1, 2):
+        r = _run("EXECUTE", None)
+        r.run_id = f"T-1-{i}-EXECUTE-FAIL"
+        r.seq = i + 1
+        r.state = "failed"
+        r.error = "DEV_BAD_OUTPUT"
+        r.created_at = t0 + timedelta(seconds=i)
+        store.save(r)
+    assert mgr._attempt_number("p1", "EXECUTE") == 3
+
+    failed_review = _run("REVIEW", None)
+    failed_review.run_id = "T-1-3-REVIEW-FAIL"
+    failed_review.state = "failed"
+    failed_review.error = "DEV_BAD_OUTPUT"
+    failed_review.created_at = t0 + timedelta(seconds=3)
+    store.save(failed_review)
+    assert mgr._attempt_number("p1", "EXECUTE") == 3   # failure ≠ resolution
+
+    stray = _run("MAPPER", None)
+    stray.run_id = "T-0-1-MAPPER-OK"
+    stray.mission_pmo_id = ""
+    stray.state = "finished"
+    stray.created_at = t0 + timedelta(seconds=4)
+    store.save(stray)
+    assert mgr._attempt_number("p1", "EXECUTE") == 3   # other missions don't reset
+
+    ok_review = _run("REVIEW", None)
+    ok_review.run_id = "T-1-4-REVIEW-OK"
+    ok_review.state = "finished"
+    ok_review.created_at = t0 + timedelta(seconds=5)
+    store.save(ok_review)
+    assert mgr._attempt_number("p1", "EXECUTE") == 1
+
+
+def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
+    """A human comment on the mission is an intervention: the step gets fresh
+    attempts. DevCake's own sentinel-signed comments never reset."""
+    from datetime import timedelta
+    import devcake.domain.orchestrator as orchestrator_mod
+
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(orchestrator_mod, "AUDIT_PATH", tmp_path / "no-audit.jsonl")
+    t0 = datetime.now(timezone.utc)
+    for i in (1, 2):
+        r = _run("EXECUTE", None)
+        r.run_id = f"T-1-{i}-EXECUTE-FAIL"
+        r.state = "failed"
+        r.error = "DEV_BAD_OUTPUT"
+        r.created_at = t0 + timedelta(seconds=i)
+        store.save(r)
+
+    devcake_note = ActivityEntry(ts=t0 + timedelta(seconds=10), author="devcake",
+                                 kind="comment", body="posted\n\n`devcake:v1`")
+    old_human = ActivityEntry(ts=t0 - timedelta(minutes=5), author="felix",
+                              kind="comment", body="please pick this up")
+    activity = Activity(mission=m, entries=[devcake_note, old_human])
+    assert mgr._attempt_number("p1", "EXECUTE", activity) == 3
+
+    human = ActivityEntry(ts=t0 + timedelta(seconds=20), author="felix",
+                          kind="comment", body="resolved this by hand, carry on")
+    activity = Activity(mission=m, entries=[devcake_note, old_human, human])
+    assert mgr._attempt_number("p1", "EXECUTE", activity) == 1
+
+
+def test_forge_auth_artifact_trips_global_breaker(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    error = mgr._dev_failure_error(run, {
+        "exit_code": 13,
+        "error_class": "DEV_FORGE_AUTH",
+        "error_detail": "remote returned 403: write access not granted",
+    })
+    assert error.startswith("DEV_FORGE_AUTH:")
+    assert "forge" in mgr.breakers
+
+
+def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
+    """A bare '403' in stderr (rate limit, URL fragment) must not halt all
+    dispatch — only the Dev's structured DEV_FORGE_AUTH class may latch."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    error = mgr._dev_failure_error(run, {
+        "exit_code": 13,
+        "error_detail": "fatal: unable to access 'https://forge/team-403/repo/': timeout",
+    })
+    assert error.startswith("DEV_FORGE")
+    assert "forge" not in mgr.breakers
+
+
+def test_apply_forge_health_breaker_policy(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    mgr.apply_forge_health({"ok": False, "transient": False, "detail": "401 bad token"})
+    assert mgr.breakers["forge"] == "401 bad token"          # definitive latches
+    mgr.apply_forge_health({"ok": False, "transient": True, "detail": "HTTP 500"})
+    assert mgr.breakers["forge"] == "401 bad token"          # transient never clears
+    mgr.breakers.clear()
+    mgr.apply_forge_health({"ok": False, "transient": True, "detail": "HTTP 500"})
+    assert "forge" not in mgr.breakers                       # transient never latches
+    mgr.breakers["forge"] = "stale"
+    mgr.apply_forge_health({"ok": True, "detail": ""})
+    assert "forge" not in mgr.breakers                       # success clears
+
+
 def test_quoted_sentinel_still_classifies_human():
     quoted = ("please also add tests\n\n"
               "> ✋ **DevCake needs a human.** blah\n> `devcake:v1`")
@@ -300,6 +457,45 @@ def test_decomposition_wires_blocked_by_edges(tmp_path):
     assert [t for t, _ in fake.created] == ["docs", "code", "polish"]
     assert fake.relations == [("id-1", "id-2"), ("id-1", "id-3"), ("id-2", "id-3")]
     assert fake.statuses == ["canceled"]
+
+
+def test_decomposition_replay_reuses_marker_parts(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    drafts = [{"title": "docs"}, {"title": "code", "blocked_by": [1]}]
+    first = _run("ONBOARD", None)
+    run_coro(mgr._finalize_decomposition(
+        first, {"outcome": "decomposed", "decomposition": drafts}))
+    assert len(fake.created) == 2
+
+    m.status = "in_progress"
+    second = _run("ONBOARD", None)
+    run_coro(mgr._finalize_decomposition(
+        second, {"outcome": "decomposed", "decomposition": drafts}))
+
+    assert len(fake.created) == 2
+    assert fake.relations[-1] == ("id-1", "id-2")
+    assert "DEVCAKE-NEEDS-HUMAN" not in m.labels
+
+
+def test_decomposition_manifest_conflict_hands_off_without_writes(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "original"}]}))
+    assert len(fake.created) == 1
+
+    m.status = "in_progress"
+    retry = _run("ONBOARD", None)
+    run_coro(mgr._finalize_decomposition(
+        retry,
+        {"outcome": "decomposed", "decomposition": [{"title": "changed"}]}))
+
+    assert len(fake.created) == 1
+    assert "DEVCAKE-NEEDS-HUMAN" in m.labels
+    assert retry.verdict == "handed off: decomposition replay conflict"
+    assert any("no children were created" in comment for comment in fake.comments)
 
 
 def test_decomposition_rejects_forward_or_self_blocked_by(tmp_path):
@@ -378,15 +574,21 @@ def test_reject_report_attached_feed_short_pr_full(tmp_path):
 
 def test_reject_report_upload_redacts_run_password(tmp_path):
     # the attachment bypasses _feed's active-run redaction — the upload must
-    # scrub the finishing run's relay password itself
+    # scrub the finishing run's relay password, which redact() knows through
+    # the runtime registry (populated at ACL creation, live until teardown)
+    from devcake.security import register_runtime_secret, unregister_runtime_secret
+
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
     forge = FakeForge()
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
     run = _run("REVIEW", "DEVCAKE-REVIEW")
-    run.redis_password = "s3cret-relay-pw"
-    report = "leaked: s3cret-relay-pw\n" + "R" * 3000
-    run_coro(mgr._finalize_review(run, {"verdict": "reject",
-                                        "report_md": report}))
+    register_runtime_secret(run.run_id, "s3cret-relay-pw")
+    try:
+        report = "leaked: s3cret-relay-pw\n" + "R" * 3000
+        run_coro(mgr._finalize_review(run, {"verdict": "reject",
+                                            "report_md": report}))
+    finally:
+        unregister_runtime_secret(run.run_id)
     name, data = next(u for u in fake.uploads if u[0] == "1_REVIEW_REPORT.md")
     assert b"s3cret-relay-pw" not in data
 

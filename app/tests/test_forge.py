@@ -144,7 +144,7 @@ def test_req_raises_forge_error_with_status(make, monkeypatch):
 import inspect
 
 from devcake.ports.forge import (BRANCH_PREFIX, BranchProtection, ForgePort,
-                                 PullRequest, mission_branch)
+                                 ForgeHealth, PullRequest, mission_branch)
 
 PORT_METHODS = [n for n, v in vars(ForgePort).items()
                 if callable(v) and not n.startswith("_")]
@@ -219,6 +219,43 @@ def test_branch_protection_dto():
     l._req = gl_404
     p = run_coro(l.default_branch_protection())
     assert p == BranchProtection(protected=False, requires_reviews=None)
+
+
+def test_health_probe_requires_repository_write_access():
+    writable = run_coro(stub_req(
+        gh(), {"permissions": {"pull": True, "push": True}}).health_probe())
+    readonly = run_coro(stub_req(
+        gh(), {"permissions": {"pull": True, "push": False}}).health_probe())
+    assert writable == ForgeHealth(ok=True, repository="o/r", can_push=True)
+    assert not readonly.ok and "lacks push" in readonly.detail
+
+    gitlab = run_coro(stub_req(gl(), {
+        "path_with_namespace": "o/r",
+        "permissions": {"project_access": {"access_level": 30}},
+    }).health_probe())
+    assert gitlab.ok and gitlab.can_push and gitlab.repository == "o/r"
+
+
+def _probe_error(forge, status, text="err"):
+    async def _req(method, path, **kw):
+        raise ForgeError(f"GET → {status}: {text}", status=status)
+    forge._req = _req
+    return run_coro(forge.health_probe())
+
+
+def test_health_probe_distinguishes_transient_from_credential_failure():
+    """Only definitive credential/permission failures may latch the global
+    forge breaker; 5xx/network/rate-limit outcomes are marked transient."""
+    assert _probe_error(gh(), 500).transient
+    assert not _probe_error(gh(), 401).transient
+    assert not _probe_error(gh(), 404).transient
+    assert _probe_error(gh(), 403, "API rate limit exceeded for install").transient
+    assert not _probe_error(gh(), 403, "Resource not accessible").transient
+    assert _probe_error(gl(), 502).transient
+    assert not _probe_error(gl(), 401).transient
+    # the success shape stays non-transient by default
+    ok = run_coro(stub_req(gh(), {"permissions": {"push": True}}).health_probe())
+    assert ok.ok and not ok.transient
 
 
 def test_api_base_defaults_and_overrides():

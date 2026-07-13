@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -24,12 +25,12 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ..config import AppConfig, DevType
 from ..harness import HARNESSES
-from ..security import redact
+from ..security import redact, redact_value
 from ..telemetry import OO_ORG, OO_URL
 from .model import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                     LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW,
-                    LABEL_SKIP, LABEL_TRACKING, Mission, MissionRef, MissionType,
-                    PRIORITY_RANK, STAGE_LABELS, derive, find_cycles)
+                    LABEL_SKIP, LABEL_TRACKING, Activity, Mission, MissionRef,
+                    MissionType, PRIORITY_RANK, STAGE_LABELS, derive, find_cycles)
 from ..ports.forge import mission_branch
 from ..ports.pmo import PMOPort
 from .run import Run, utcnow
@@ -83,6 +84,10 @@ MAX_CONFLICT_RESOLVES = 2
 # author/credential-based — DevCake may post with the operator's own PMO key.
 COMMENT_SENTINEL = "`devcake:v1`"
 SENTINEL_RE = re.compile(r"`devcake:v1`\s*$")
+DECOMPOSITION_MARKER_RE = re.compile(
+    r"`devcake:decomposition:v1 parent=(\S+) manifest=([0-9a-f]{64}) "
+    r"part=(\d+)/(\d+)`"
+)
 
 AUDIT_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "events.jsonl"
 
@@ -106,6 +111,7 @@ class MissionManager:
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
         self.breakers: dict[str, str] = {}  # dev_type → reason (DEV_AUTH circuit breaker)
+        self.forge_health: dict | None = None  # last probe result (advisory; /health)
         self.blocked_reasons: dict[str, str] = {}  # last gate_map (advisory mirror)
         self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map
         self.anomalies: dict[str, str] = {}  # pmo_id → out-of-pipeline anomaly (advisory)
@@ -200,7 +206,8 @@ class MissionManager:
         active = self.runs.store.active()
         for mission, d in candidates:
             dev_type = self.dev_types.get(self.config.assignments[d.mission_type.value].dev_type)
-            if dev_type is None or dev_type.name in self.breakers:
+            if (dev_type is None or dev_type.name in self.breakers
+                    or "forge" in self.breakers):
                 continue  # unassigned or auth breaker tripped (docs/15 §4)
             if sum(1 for r in active if r.dev_type == dev_type.name) >= dev_type.max_concurrency:
                 continue
@@ -254,18 +261,13 @@ class MissionManager:
 
         if mission.pmo_kind == "project":
             seq = 1                       # projects only ever ONBOARD (ADR-0006)
+            activity = None
         else:
             activity = await self.pmo.get_activity(mission.ref)
             seq = self._derive_seq(activity)
-        # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3):
-        # only failures newer than the last give-up event count
-        since = self._last_giveup_ts(mission.pmo_id)
-        attempt = 1 + sum(1 for r in self.runs.store.all()
-                          if r.mission_pmo_id == mission.pmo_id
-                          and r.mission_type == mtype.value and r.seq == seq
-                          and r.state in ("failed", "timed_out", "orphaned")
-                          and "DEV_AUTH" not in (r.error or "")
-                          and (since is None or r.created_at.isoformat() > since))
+        # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3),
+        # a later step finishes, or a human comments on the mission
+        attempt = self._attempt_number(mission.pmo_id, mtype.value, activity)
         if attempt > self.config.max_attempts:
             await self._give_up(live, mtype, attempt - 1)
             return None
@@ -311,7 +313,6 @@ class MissionManager:
                 # on these); the descriptor-driven vars below take precedence
                 # in current images (docs/07)
                 "DEVCAKE_FORGE": self.config.repo.forge,
-                "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
                 "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
                 "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
                 "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
@@ -319,18 +320,16 @@ class MissionManager:
                 "DEVCAKE_EXTRA_ARGS": assignment.extra_cli_args,
                 "DEVCAKE_MODEL": dev_type.model,
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
-                "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
             }
-            env_creds, spec_files = self._credential_spec(dev_type)
-            spec_env.update(env_creds)
+            from .run import auth_digest
             run = Run(
                 run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
                 pmo_kind=mission.pmo_kind,
                 pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
                 dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
                 timeout_seconds=self.config.dev_timeout_minutes * 60,
-                traceparent=traceparent, redis_password=redis_password,
-                spec_env=spec_env, spec_files=spec_files,
+                traceparent=traceparent, auth_digest=auth_digest(redis_password),
+                spec_env=spec_env,
             )
             run.spec_prompt = prompt
             run.stage_label_at_dispatch = self._stage_of(live)
@@ -349,6 +348,20 @@ class MissionManager:
                 self._audit(mission.pmo_id, "set_status", "in_progress")
             log.info("dispatched %s (attempt %d, dev=%s)", run_id, attempt, dev_type.name)
             return run
+
+    def runspec_secret_payload(self, run: Run) -> dict | None:
+        """Secret half of a run spec, built from current config on request
+        (docs/09 §5): nothing secret is at rest between dispatch and the Dev's
+        runspec.get, and a slow container start or Redis restart cannot expire
+        it. verify_auth has already authenticated the requester."""
+        dt = self.dev_types.get(run.dev_type)
+        if dt is None:
+            return None            # dev type deleted mid-run → runspec.error
+        env_creds, spec_files = self._credential_spec(dt)
+        return {"env": {"DEVCAKE_FORGE_TOKEN": self.config.repo.token,
+                        "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
+                        **env_creds},
+                "credential_files": spec_files}
 
     def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:
         """Harness credentials for a run spec: requirements come from the
@@ -380,8 +393,7 @@ class MissionManager:
         no issue-style comments API (verified at M2/M5): their run artifacts
         live in the audit log + OpenObserve; the substance lands on the child
         issues anyway (ADR-0006)."""
-        markdown = redact(markdown, [r.redis_password for r in self.runs.store.active()
-                                     if r.redis_password])
+        markdown = redact(markdown)
         if kind == "project":
             self._audit(pmo_id, "project_feed_suppressed", markdown[:120])
             return
@@ -450,6 +462,32 @@ class MissionManager:
         except FileNotFoundError:
             return None
 
+    def _attempt_number(self, pmo_id: str, mission_type: str,
+                        activity: Activity | None = None) -> int:
+        """Count consecutive counted failures, independent of transcript seq.
+
+        The count resets at the newest of: the last give-up event, ANY finished
+        run for this mission (a later step finishing implies earlier failures
+        were resolved), or the latest human feed comment (a human touching the
+        mission is an intervention — the step deserves fresh attempts)."""
+        all_runs = [r for r in self.runs.store.all() if r.mission_pmo_id == pmo_id]
+        history = [r for r in all_runs if r.mission_type == mission_type]
+        anchors = [s for s in [self._last_giveup_ts(pmo_id),
+                               *(r.created_at.isoformat() for r in all_runs
+                                 if r.state == "finished")] if s]
+        if activity is not None:
+            anchors += [e.ts.isoformat() for e in activity.entries
+                        if e.kind == "comment"
+                        and not self._is_devcake_comment(e.body)]
+        since = max(anchors, default=None)
+        ignored = ("DEV_AUTH", "DEV_FORGE_AUTH", "dev failure artifact (exit 13)")
+        return 1 + sum(
+            1 for r in history
+            if r.state in ("failed", "timed_out", "orphaned")
+            and not any(marker in (r.error or "") for marker in ignored)
+            and (since is None or r.created_at.isoformat() > since)
+        )
+
     async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) -> None:
         if LABEL_FAILED in mission.labels:
             return
@@ -497,7 +535,7 @@ class MissionManager:
                 run.finalized_steps.append("transcript")
                 self.runs.store.save(run)
 
-            run.token_report = token_report      # persisted: cumulative-cost source
+            run.token_report = redact_value(token_report)  # persisted cost source
             # 2 — token report (INV-5: always)
             if "token_report" not in run.finalized_steps:
                 await self._feed(pmo_id, run.pmo_kind,
@@ -514,15 +552,9 @@ class MissionManager:
                 await self.messaging.delete_run_user(run.run_id)
                 await self.messaging.delete_reply_stream(run.run_id)
                 run.result = None
-                if exit_code == 12:  # DEV_AUTH: breaker, never counts as an attempt (docs/15 §4)
-                    self.breakers[run.dev_type] = f"auth failure in {run.run_id}"
-                    run.state = "failed"
-                    run.error = "DEV_AUTH (does not count toward attempts; breaker tripped)"
-                else:
-                    run.state = "failed"
-                    run.error = f"dev failure artifact (exit {exit_code})"
+                run.state = "failed"
+                run.error = self._dev_failure_error(run, payload)
                 run.ended_at = utcnow()
-                run.redis_password = None
                 self.runs.store.save(run)
                 span.set_attribute("devcake.verdict", f"failed: {run.error}")
                 span.set_status(Status(StatusCode.ERROR, run.error))
@@ -543,11 +575,10 @@ class MissionManager:
                 except ValueError as e:
                     await self.messaging.delete_run_user(run.run_id)
                     await self.messaging.delete_reply_stream(run.run_id)
-                    run.result = result
+                    run.result = redact_value(result)
                     run.state = "failed"
-                    run.error = f"DEV_BAD_OUTPUT: {e}"
+                    run.error = redact(f"DEV_BAD_OUTPUT: {e}")
                     run.ended_at = utcnow()
-                    run.redis_password = None
                     self.runs.store.save(run)
                     span.set_attribute("devcake.verdict", f"failed: {run.error}")
                     span.set_status(Status(StatusCode.ERROR, run.error))
@@ -560,9 +591,8 @@ class MissionManager:
 
             await self.messaging.delete_run_user(run.run_id)
             await self.messaging.delete_reply_stream(run.run_id)
-            run.result = result
+            run.result = redact_value(result)
             run.state, run.ended_at = "finished", utcnow()
-            run.redis_password = None
             self.runs.store.save(run)
             # app-level judgment onto the trace: Dagu can report the step green
             # while _transition refused to act — make that visible in OO
@@ -571,6 +601,44 @@ class MissionManager:
                 span.set_status(Status(StatusCode.ERROR, run.verdict))
                 span.add_event("devcake.verdict", {"detail": run.verdict})
             log.info("finalized %s (%s)", run.run_id, outcome)
+
+    def apply_forge_health(self, data: dict) -> None:
+        """Single writer for forge_health + the global forge breaker: latch only
+        on a definitive credential/permission failure, clear only on success —
+        a transient probe failure must neither latch nor clear."""
+        if data.get("ok"):
+            self.forge_health = data
+            self.breakers.pop("forge", None)
+        elif data.get("transient"):
+            self.forge_health = data
+            log.warning("forge probe transient failure (breaker untouched): %s",
+                        data.get("detail"))
+        else:
+            self.forge_health = data
+            self.breakers["forge"] = data.get("detail") or "repository is not writable"
+
+    def _dev_failure_error(self, run: Run, payload: dict) -> str:
+        exit_code = payload.get("exit_code")
+        if exit_code == 12:
+            self.breakers[run.dev_type] = f"auth failure in {run.run_id}"
+            return "DEV_AUTH (does not count toward attempts; breaker tripped)"
+        detail = redact(str(payload.get("error_detail") or ""))
+        detail = " ".join(detail.split())[:500]
+        error_class = str(payload.get("error_class") or "")
+        auth_markers = ("403", "401", "authentication failed", "repository not found",
+                        "write access to repository not granted")
+        if exit_code == 13 and (error_class == "DEV_FORGE_AUTH"
+                                or any(marker in detail.lower()
+                                       for marker in auth_markers)):
+            # only the structured Dev classification may latch the global
+            # breaker — a bare "403"/"401" substring can be a rate limit or an
+            # incidental URL fragment; the poll-loop re-probe clears mistakes
+            if error_class == "DEV_FORGE_AUTH":
+                self.breakers["forge"] = f"repository credential rejected in {run.run_id}"
+            return "DEV_FORGE_AUTH: " + (detail or "repository credential rejected")
+        if exit_code == 13:
+            return "DEV_FORGE: " + (detail or "clone/push setup failed")
+        return f"dev failure artifact (exit {exit_code})"
 
     async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None:
         outcome = result.get("outcome", "")
@@ -588,8 +656,9 @@ class MissionManager:
                 f"human to inspect.")
             self._audit(pmo_id, "illegal_outcome",
                         f"{outcome or '(empty)'} from {run.mission_type}")
-            run.verdict = (f"rejected: outcome {outcome or '(empty)'} is illegal "
-                           f"for {run.mission_type} — parked with DEVCAKE-SKIP")
+            run.verdict = redact(
+                f"rejected: outcome {outcome or '(empty)'} is illegal "
+                f"for {run.mission_type} — parked with DEVCAKE-SKIP")
             log.warning("illegal outcome %r from %s run %s — parked",
                         outcome, run.mission_type, run.run_id)
             return
@@ -598,8 +667,9 @@ class MissionManager:
             await self.pmo.swap_labels(MissionRef(pmo_id, "project"),
                                        remove=set(), add={LABEL_SKIP})
             self._audit(pmo_id, "project_bad_outcome_parked", outcome)
-            run.verdict = (f"rejected: project returned {outcome} (only decomposed "
-                           f"is legal) — parked with DEVCAKE-SKIP")
+            run.verdict = redact(
+                f"rejected: project returned {outcome} (only decomposed "
+                f"is legal) — parked with DEVCAKE-SKIP")
             log.warning("project %s returned %s (only decomposed is legal) — parked",
                         run.mission_key, outcome)
             return
@@ -717,8 +787,8 @@ class MissionManager:
                 f"ℹ️ DevCake received unknown outcome `{outcome}` — parked with "
                 f"`DEVCAKE-SKIP` for a human to inspect.")
             self._audit(pmo_id, "label_add", f"{LABEL_SKIP} (unknown outcome {outcome})")
-            run.verdict = (f"rejected: unknown outcome {outcome} — parked with "
-                           f"DEVCAKE-SKIP")
+            run.verdict = redact(
+                f"rejected: unknown outcome {outcome} — parked with DEVCAKE-SKIP")
 
     async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
         """Detection tripwire (docs/14, ADR-0007 addendum): the Dev's forge token
@@ -883,7 +953,7 @@ class MissionManager:
                     name = f"{run.seq}_REVIEW_REPORT.md"
                     url = await self.pmo.upload_attachment(
                         pmo_id, name,
-                        redact(report, [run.redis_password or ""]).encode())
+                        redact(report).encode())
                     feed_body = (f"🔁 REVIEW rejected (round {rejections}) — back "
                                  f"to EXECUTE. Full report attached: "
                                  f"[{name}]({url})")
@@ -935,33 +1005,102 @@ class MissionManager:
                 raise ValueError(
                     f"decomposition part {i}: blocked_by must be 1-based indexes "
                     f"of EARLIER parts, got {deps!r}")
+        normalized = [{
+            "title": str(d.get("title") or f"part {i}"),
+            "description": str(d.get("description") or ""),
+            "priority": str(d.get("priority") or "medium"),
+            "blocked_by": list(d.get("blocked_by") or []),
+        } for i, d in enumerate(drafts, start=1)]
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=True)
+        manifest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         is_project = live.pmo_kind == "project"
-        existing: dict[str, str] = {}                             # title → issue id
-        if is_project:
-            existing = {m.title: m.pmo_id
-                        for m in await self.pmo.children_of(MissionRef(pmo_id, "project"))}
+
+        existing: dict[int, str] = {}
+        conflicts: list[str] = []
+        legacy_re = re.compile(
+            rf"Created by DevCake from {re.escape(live.key)}\s+—\s+part (\d+)/(\d+)"
+        )
+        for mission in await self.pmo.list_all(self.config.pmo.team_key):
+            if LABEL_CREATED not in mission.labels:
+                continue
+            marker = DECOMPOSITION_MARKER_RE.search(mission.description or "")
+            if marker and marker.group(1) == pmo_id:
+                prior_manifest = marker.group(2)
+                part, total = int(marker.group(3)), int(marker.group(4))
+                if prior_manifest != manifest:
+                    conflicts.append(
+                        f"{mission.key} records a different manifest {prior_manifest[:12]}"
+                    )
+                    continue
+                if total != len(normalized) or part not in range(1, len(normalized) + 1):
+                    conflicts.append(f"{mission.key} has invalid part marker {part}/{total}")
+                    continue
+                if part in existing:
+                    conflicts.append(f"part {part} has multiple existing missions")
+                    continue
+                if mission.title != normalized[part - 1]["title"]:
+                    conflicts.append(f"{mission.key} title disagrees with part {part}")
+                    continue
+                existing[part] = mission.pmo_id
+                continue
+            legacy = legacy_re.search(mission.description or "")
+            if legacy:
+                part, total = int(legacy.group(1)), int(legacy.group(2))
+                if total != len(normalized) or part not in range(1, len(normalized) + 1):
+                    conflicts.append(f"legacy child {mission.key} has part {part}/{total}")
+                elif mission.title != normalized[part - 1]["title"]:
+                    conflicts.append(f"legacy child {mission.key} disagrees with part {part}")
+                elif part in existing:
+                    conflicts.append(f"part {part} has multiple existing missions")
+                else:
+                    existing[part] = mission.pmo_id
+
+        if conflicts:
+            detail = "; ".join(conflicts[:8])
+            await self.pmo.swap_labels(
+                MissionRef(pmo_id, live.pmo_kind), remove=set(),
+                add={LABEL_NEEDS_HUMAN})
+            if live.status == "in_progress":
+                await self.pmo.set_status(MissionRef(pmo_id, live.pmo_kind), "backlog")
+            baton = (
+                "Decomposition replay conflict: no children were created. " + detail
+                + ". Reconcile the existing `DEVCAKE-CREATED` missions, then remove "
+                  "`DEVCAKE-NEEDS-HUMAN` to retry."
+            )
+            await self._feed(pmo_id, live.pmo_kind, baton)
+            if live.pmo_kind == "project":
+                await self.pmo.post_feed(
+                    MissionRef(pmo_id, "project"),
+                    redact(baton) + "\n\n" + COMMENT_SENTINEL)
+            self._audit(pmo_id, "decomposition_conflict", detail)
+            run.verdict = "handed off: decomposition replay conflict"
+            return
+
         labels = {LABEL_CREATED}
         if self.config.adoption_mode == "opt_in":
             labels.add(LABEL_OPTIN)
         created = []
         child_ids: dict[int, str] = {}                            # part index → issue id
-        for i, d in enumerate(drafts, start=1):
-            title = d.get("title", f"part {i}")
-            if title in existing:                                 # idempotent top-up
-                child_id = existing[title]
+        for i, d in enumerate(normalized, start=1):
+            title = d["title"]
+            if i in existing:                                     # idempotent top-up
+                child_id = existing[i]
             else:
                 footer = (f"\n\n---\n_Created by DevCake from {live.key} — "
-                          f"part {i}/{len(drafts)}_")
+                          f"part {i}/{len(normalized)}_\n"
+                          f"`devcake:decomposition:v1 parent={pmo_id} "
+                          f"manifest={manifest} part={i}/{len(normalized)}`")
                 key, child_id = await self.pmo.create_mission(
                     self.config.pmo.team_key, title,
-                    (d.get("description") or "") + footer,
-                    d.get("priority") or "medium", labels,
+                    d["description"] + footer,
+                    d["priority"], labels,
                     parent_ref=pmo_id if is_project else None)
                 created.append(key)
             child_ids[i] = child_id
             # edges wired immediately per child (crash-safe resume; duplicate
             # relations are tolerated by the adapter) — ADR-0007
-            for j in d.get("blocked_by") or []:
+            for j in d["blocked_by"]:
                 blocker_id = child_ids.get(j)
                 if blocker_id:
                     await self.pmo.create_relation(blocker_id, child_id)
@@ -976,7 +1115,7 @@ class MissionManager:
         else:
             await self._feed(
                 pmo_id, "issue",
-                f"🧩 Decomposed into {len(drafts)} standalone issues: {links}. "
+                f"🧩 Decomposed into {len(normalized)} standalone issues: {links}. "
                 f"This issue is canceled in their favor.")
             await self.pmo.set_status(MissionRef(pmo_id, "issue"), "canceled")
             self._audit(pmo_id, "decomposed_canceled", links)
@@ -1019,7 +1158,6 @@ class MissionManager:
                 "DEVCAKE_REPO_URL": self.config.repo.url,
                 "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
                 "DEVCAKE_FORGE": self.config.repo.forge,
-                "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
                 "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
                 "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
                 "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
@@ -1027,17 +1165,15 @@ class MissionManager:
                 "DEVCAKE_EXTRA_ARGS": "",
                 "DEVCAKE_MODEL": dev_type.model,
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
-                "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
             }
-            env_creds, spec_files = self._credential_spec(dev_type)
-            spec_env.update(env_creds)
+            from .run import auth_digest
             run = Run(
                 run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
                 pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
                 dev_type=dev_type.name, seq=seq,
                 timeout_seconds=self.config.dev_timeout_minutes * 60,
-                traceparent=traceparent, redis_password=redis_password,
-                spec_env=spec_env, spec_files=spec_files,
+                traceparent=traceparent, auth_digest=auth_digest(redis_password),
+                spec_env=spec_env,
             )
             run.spec_prompt = mapper_prompt(dev_type.identifying_prompt, eligible)
             self.runs.store.save(run)                              # durable intent first
@@ -1058,7 +1194,7 @@ class MissionManager:
         mission. Failures are logged only; the next interval simply retries."""
         result = payload.get("result") or {}
         outcome = result.get("outcome", "")
-        run.token_report = payload.get("token_report") or {}
+        run.token_report = redact_value(payload.get("token_report") or {})
 
         ctx = None
         if run.traceparent:
@@ -1070,13 +1206,9 @@ class MissionManager:
             span.set_attribute("devcake.outcome", outcome or "(failure artifact)")
             await self.messaging.delete_run_user(run.run_id)
             await self.messaging.delete_reply_stream(run.run_id)
-            run.redis_password = None
             if outcome != "relations_mapped":
-                exit_code = payload.get("exit_code")
-                if exit_code == 12:            # DEV_AUTH breaker, same as finalize()
-                    self.breakers[run.dev_type] = f"auth failure in {run.run_id}"
                 run.state = "failed"
-                run.error = f"mapper returned {outcome or 'failure artifact'} (exit {exit_code})"
+                run.error = self._dev_failure_error(run, payload)
                 run.ended_at = utcnow()
                 self.runs.store.save(run)
                 log.warning("mapper run %s failed: %s", run.run_id, run.error)
@@ -1084,7 +1216,7 @@ class MissionManager:
             created, rejected = await self._apply_mapper_edges(result.get("edges") or [])
             span.set_attribute("devcake.mapper.edges_created", created)
             span.set_attribute("devcake.mapper.edges_rejected", rejected)
-            run.result = result
+            run.result = redact_value(result)
             run.state, run.ended_at = "finished", utcnow()
             self.runs.store.save(run)
             log.info("mapper %s finished: %d edges created, %d rejected",
@@ -1315,7 +1447,7 @@ class MissionManager:
             log.exception("status restore failed for %s", run.run_id)
 
     async def _post_transcript(self, run: Run, transcript: str) -> None:
-        transcript = redact(transcript, [run.redis_password or ""])
+        transcript = redact(transcript)
         name = f"{run.seq}_{run.mission_type}.md"
         body = f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n---\n\n{transcript}"
         if run.pmo_kind == "project":
@@ -1452,7 +1584,7 @@ class MapperService:
         """The interval path, called once per poll cycle (never while paused)."""
         rm = self.config.relations_mapper
         dt = self.dev_type()
-        if not rm.enabled or dt is None:
+        if not rm.enabled or dt is None or "forge" in self.mgr.breakers:
             return
         if time.monotonic() - self._last_at < rm.interval_minutes * 60:
             return
@@ -1476,6 +1608,9 @@ class MapperService:
             raise MapperUnconfigured(
                 "relations_mapper.dev_type must name an existing Dev Type — "
                 "set it on the Config tab")
+        if "forge" in self.mgr.breakers:
+            raise MapperUnconfigured(
+                "forge connection is not writable; fix the repository token first")
         async with self._lock:
             if self.active():
                 raise MapperBusy("a relations-mapper run is already active")

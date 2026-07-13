@@ -29,7 +29,7 @@ Future hardening in §7.
 
 ## 3. Credential handling rules (normative)
 
-1. Secrets never in images, never in git, and **never in Dagu DAG params or YAML** — trigger params are rendered unmasked in the Dagu UI and run API (verified live on v2.10.5). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus one deliberate exception: the per-run scoped Redis ACL credential, revoked at finalization and unreadable by other Devs since the Dagu UI/API is authenticated (`09-messaging.md` §1a). All real secret material travels over the per-run Redis `runspec.get` channel, scoped to exactly the Dev Type's needs, with the reply entry `XDEL`ed on acknowledgment and a 15-minute TTL cap (`09-messaging.md` §§3, 5). Redis itself requires auth; each Dev holds only its own scoped user, and every Dev→app message is identity-verified against it — spoofed run_ids and cross-run reads are rejected (`09-messaging.md` §1a).
+1. Secrets never in images, never in git, never in Run JSON, and **never in Dagu DAG params or YAML** — trigger params are rendered unmasked in the Dagu UI and run API (verified live on v2.10.5). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus one deliberate exception: the per-run scoped Redis ACL credential, revoked at finalization. Run JSON stores only its one-way verifier. Real secret material is never at rest anywhere between dispatch and pickup: the app rebuilds it from current config when an authenticated *active* run sends `runspec.get`, copies it into the per-run reply (15-minute TTL), and XDELs that entry on acknowledgment (`09-messaging.md` §§3, 5).
 2. Uploaded credential JSONs: `/data/secrets/{dev_type}/{secret_file}` (filename fixed by the harness registry, e.g. `grok-auth.json`), `0600`, app-owned; their **content** is delivered in the run spec and written by the Dev entrypoint to the harness path (`0600`), then privileges dropped (`07-dev-runtime.md` §5, `08-harness-templates.md` §4). No bind mounts into Dev containers.
 3. Forge tokens reach git via a credential helper, never embedded in remote URLs on disk (`06-forge-adapter.md` §1).
 4. Secrets never logged: the telemetry layer and the transcript renderer share a redaction filter (§5).
@@ -50,11 +50,14 @@ The lists are assembled in two parts (`app/devcake/security.py`):
 
 `secret_env_vars()` / `token_patterns()` expose the unions, and a **superset tripwire** in `app/tests/test_security.py` pins them: the union must remain a superset of the v0 lists, and every registered adapter's contributions must be included — a refactor can add shapes but can never silently drop one.
 
+- **Runtime registry** — ephemeral per-run credentials (the scoped Redis relay password) exist only as process-local values, so `redact()` learns them through an in-memory registry: registered when the ACL user is created, dropped when it is deleted. Accepted limitation: the registry is empty after an app restart, so a transcript posted post-restart for a pre-restart run misses this layer — the inbound `_scrub_envelope_auth` filter (which masks the credential inside the Dev's own artifact payload) still covers the dominant echo vector, and the ACL user is dead by teardown anyway. Plaintext is deliberately never persisted to close this gap.
+
 ## 6. Dev container hardening
 
 - Non-root harness user (uid 1000 for the whole entrypoint; Claude Code enforces this itself by refusing `--dangerously-skip-permissions` as root — verified at M3).
 - Resource limits (`07-dev-runtime.md` §7).
 - No `docker.sock`; no host or volume mounts at all (credentials arrive via the run-spec channel).
+- Devs attach only to `devcake_runtime`: Redis and OpenObserve are reachable, while the app/admin/Dagu control plane is absent from that network. Outbound forge/package access remains enabled.
 - MCP free-text commands are **arbitrary code execution by design** — an admin-only surface, run inside the disposable container, labeled as such in the UI (`11-admin-panel.md` §2).
 
 ## 7. Future hardening (post-v0 backlog)

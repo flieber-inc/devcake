@@ -26,7 +26,7 @@ steps:
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}
-      network: devcake_default
+      network: devcake_runtime
       pull_policy: missing
       keep_container: false
       startup: entrypoint

@@ -6,10 +6,12 @@ Permanent CI fixture: the deterministic stand-in for real harnesses (docs/16 M7)
 """
 
 import json
+import hashlib
 import os
 import pathlib
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 
 import redis
@@ -34,19 +36,60 @@ r = redis.from_url(REDIS_URL, username=REDIS_USER, password=REDIS_PASSWORD,
 
 
 def send(kind: str, payload: dict) -> None:
-    r.xadd(INGRESS, {"m": json.dumps(
-        {"v": 1, "run_id": RUN_ID, "auth": REDIS_PASSWORD, "kind": kind,
-         "ts": now(), "payload": payload})})
+    envelope = {"v": 1, "run_id": RUN_ID, "auth": REDIS_PASSWORD, "kind": kind,
+                "ts": now(), "payload": payload}
+    for attempt in range(4):
+        try:
+            r.xadd(INGRESS, {"m": json.dumps(envelope)})
+            return
+        except redis.RedisError:
+            if attempt == 3:
+                raise
+            time.sleep(0.25 * (2 ** attempt))
+
+
+MAX_ARTIFACT_BYTES = 50 * 1024 * 1024 - 256 * 1024  # headroom under ingress caps
+SHRINKABLE_FIELDS = ("transcript_md", "plan_md")     # never result/exit_code/token_report
+TRUNCATE_FLOOR = 10_000
+
+
+def _fit_payload(payload: dict) -> dict:
+    """Shrink an oversized artifact instead of dying at the end of the run:
+    halve the largest shrinkable text field (with an explicit notice) until
+    the blob fits, so result/exit_code/token_report always ship."""
+    if len(json.dumps(payload).encode("utf-8")) <= MAX_ARTIFACT_BYTES:
+        return payload
+    payload = dict(payload)
+    while len(json.dumps(payload).encode("utf-8")) > MAX_ARTIFACT_BYTES:
+        shrinkable = [f for f in SHRINKABLE_FIELDS
+                      if isinstance(payload.get(f), str)
+                      and len(payload[f]) > TRUNCATE_FLOOR]
+        if not shrinkable:
+            raise ValueError(
+                "artifact payload exceeds Redis ingress limits even after truncation")
+        field = max(shrinkable, key=lambda f: len(payload[f]))
+        text = payload[field]
+        keep = len(text) // 2
+        payload[field] = (text[:keep] + f"\n\n[devcake] {field} truncated: kept "
+                          f"{keep} of {len(text)} characters to fit ingress limits\n")
+    return payload
 
 
 def send_artifacts(payload: dict) -> None:
+    payload = _fit_payload(payload)
     blob = json.dumps(payload)
     if len(blob) <= CHUNK_LIMIT:
         send("run.artifacts", payload)
         return
     parts = [blob[i:i + CHUNK_SIZE] for i in range(0, len(blob), CHUNK_SIZE)]
+    if len(parts) > 128 or len(blob.encode("utf-8")) > 50 * 1024 * 1024:
+        raise ValueError("artifact payload exceeds Redis ingress limits")
+    chunk_id = uuid.uuid4().hex
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
     for i, part in enumerate(parts, start=1):
-        send("run.artifacts", {"chunk": i, "of": len(parts), "data": part})
+        send("run.artifacts", {"chunk": i, "of": len(parts),
+                               "chunk_id": chunk_id, "sha256": digest,
+                               "data": part})
 
 
 def fetch_runspec() -> dict:
@@ -62,6 +105,10 @@ def fetch_runspec() -> dict:
                 if env.get("kind") == "runspec.result":
                     send("runspec.ack", {})
                     return env["payload"]
+                if env.get("kind") == "runspec.error":
+                    print(env.get("payload", {}).get("error", "run spec unavailable"),
+                          file=sys.stderr)
+                    sys.exit(20)
     print("runspec.get timed out", file=sys.stderr)
     sys.exit(20)
 

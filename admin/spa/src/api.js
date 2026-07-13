@@ -12,7 +12,10 @@ export async function getText(path) {
 export async function send(method, path, body) {
   const r = await fetch(`/api/v1${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-DevCake-Request": "1",
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);

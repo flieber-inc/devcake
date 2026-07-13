@@ -6,6 +6,7 @@ Exit codes per docs/07 §4: 0 ok · 10 harness crash · 11 bad result.json ·
 """
 
 import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 
 import redis
@@ -31,19 +33,74 @@ r = redis.from_url(REDIS_URL, username=os.environ["REDIS_USER"],
 
 
 def send(kind: str, payload: dict) -> None:
-    r.xadd(INGRESS, {"m": json.dumps(
-        {"v": 1, "run_id": RUN_ID, "auth": os.environ["REDIS_PASSWORD"], "kind": kind,
-         "ts": datetime.now(timezone.utc).isoformat(), "payload": payload})})
+    envelope = {"v": 1, "run_id": RUN_ID, "auth": os.environ["REDIS_PASSWORD"],
+                "kind": kind, "ts": datetime.now(timezone.utc).isoformat(),
+                "payload": payload}
+    for attempt in range(4):
+        try:
+            r.xadd(INGRESS, {"m": json.dumps(envelope)})
+            return
+        except redis.RedisError:
+            if attempt == 3:
+                raise
+            time.sleep(0.25 * (2 ** attempt))
+
+
+MAX_ARTIFACT_BYTES = 50 * 1024 * 1024 - 256 * 1024  # headroom under ingress caps
+SHRINKABLE_FIELDS = ("transcript_md", "plan_md")     # never result/exit_code/token_report
+TRUNCATE_FLOOR = 10_000
+
+
+def _fit_payload(payload: dict) -> dict:
+    """Shrink an oversized artifact instead of dying at the end of the run:
+    halve the largest shrinkable text field (with an explicit notice) until
+    the blob fits, so result/exit_code/token_report always ship."""
+    if len(json.dumps(payload).encode("utf-8")) <= MAX_ARTIFACT_BYTES:
+        return payload
+    payload = dict(payload)
+    while len(json.dumps(payload).encode("utf-8")) > MAX_ARTIFACT_BYTES:
+        shrinkable = [f for f in SHRINKABLE_FIELDS
+                      if isinstance(payload.get(f), str)
+                      and len(payload[f]) > TRUNCATE_FLOOR]
+        if not shrinkable:
+            raise ValueError(
+                "artifact payload exceeds Redis ingress limits even after truncation")
+        field = max(shrinkable, key=lambda f: len(payload[f]))
+        text = payload[field]
+        keep = len(text) // 2
+        payload[field] = (text[:keep] + f"\n\n[devcake] {field} truncated: kept "
+                          f"{keep} of {len(text)} characters to fit ingress limits\n")
+    return payload
 
 
 def send_artifacts(payload: dict) -> None:
+    payload = _fit_payload(payload)
     blob = json.dumps(payload)
     if len(blob) <= CHUNK_LIMIT:
         send("run.artifacts", payload)
         return
     parts = [blob[i:i + CHUNK_SIZE] for i in range(0, len(blob), CHUNK_SIZE)]
+    if len(parts) > 128 or len(blob.encode("utf-8")) > 50 * 1024 * 1024:
+        raise ValueError("artifact payload exceeds Redis ingress limits")
+    chunk_id = uuid.uuid4().hex
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
     for i, part in enumerate(parts, start=1):
-        send("run.artifacts", {"chunk": i, "of": len(parts), "data": part})
+        send("run.artifacts", {"chunk": i, "of": len(parts),
+                               "chunk_id": chunk_id, "sha256": digest,
+                               "data": part})
+
+
+def clone_error_class(stderr: str) -> str:
+    """DEV_FORGE_AUTH only on git's credential wording — a bare "403"/"401"
+    can be a rate limit or an incidental URL fragment, and DEV_FORGE_AUTH
+    latches the app's global forge breaker."""
+    lowered = stderr.lower()
+    auth_markers = ("returned error: 403", "returned error: 401",
+                    "authentication failed", "repository not found",
+                    "write access to repository not granted",
+                    "could not read username", "could not read password",
+                    "invalid credentials")
+    return "DEV_FORGE_AUTH" if any(m in lowered for m in auth_markers) else "DEV_FORGE"
 
 
 # ── live output relay (docs/08 §4, docs/09 §2) ──────────────────────────────
@@ -56,6 +113,7 @@ LINE_LIMIT = 2000            # per condensed line
 BATCH_LINES = 50             # per run.log envelope (50×2000 ≈ 100KB « 512KB)
 FLUSH_SECS = 2.0
 MAX_RELAY_LINES = 20_000     # flood guard; Dagu's step log still has everything
+SILENCE_NOTICE_SECS = 60.0   # make a live-but-quiet harness observable
 
 
 class LogRelay:
@@ -67,13 +125,41 @@ class LogRelay:
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.sent = 0
+        now = time.monotonic()
+        self.started_at = now
+        self.last_visible_output_at = now
+        self.last_silence_notice_at = now
 
-    def add(self, text: str) -> None:
+    def add(self, text: str, *, visible_output: bool = True) -> None:
         if self.sent >= MAX_RELAY_LINES:
             return
         with self.lock:
+            if visible_output:
+                self.last_visible_output_at = time.monotonic()
             for line in text.splitlines() or [""]:
                 self.buf.append(line[:LINE_LIMIT])
+
+    def add_silence_notice(self, harness: str, now: float | None = None) -> bool:
+        """Queue at most one progress line per silence interval.
+
+        Some harnesses emit only hidden reasoning events until their final answer.
+        The process and heartbeat remain healthy, but an empty terminal looks hung.
+        These notices report process liveness without exposing hidden reasoning.
+        """
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            quiet_for = now - self.last_visible_output_at
+            if (quiet_for < SILENCE_NOTICE_SECS
+                    or now - self.last_silence_notice_at < SILENCE_NOTICE_SECS):
+                return False
+            elapsed = max(0, int(now - self.started_at))
+            self.last_silence_notice_at = now
+            self.buf.append(
+                f"[devcake] {harness} is still running; "
+                f"no visible model output for {int(quiet_for)}s "
+                f"({elapsed}s elapsed)"
+            )
+        return True
 
     def flush(self) -> None:
         while True:
@@ -117,6 +203,14 @@ def _pump(stream, sink: list, render, relay: LogRelay, echo) -> None:
         print(text, file=echo, flush=True)
         relay.add(text)
     stream.close()
+
+
+def _progress_loop(proc, relay: LogRelay, harness: str) -> None:
+    """Add sparse liveness notices while a harness is alive but silent."""
+    while not relay.stop.wait(min(5.0, SILENCE_NOTICE_SECS)):
+        if proc.poll() is not None:
+            return
+        relay.add_silence_notice(harness)
 
 
 def render_claude(raw: str):
@@ -260,6 +354,10 @@ def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
                 env = json.loads(fields["m"])
                 if env.get("kind") == want:
                     return env["payload"]
+                if env.get("kind") == "runspec.error":
+                    print(env.get("payload", {}).get("error", "run spec unavailable"),
+                          file=sys.stderr)
+                    sys.exit(20)
     print(f"{kind} timed out", file=sys.stderr)
     sys.exit(20)
 
@@ -371,9 +469,12 @@ def main() -> None:
         ["git", "clone", clone_url, str(repo_dir / repo_name)],
         capture_output=True, text=True)
     if clone.returncode != 0:
-        print("clone failed:", clone.stderr[-500:], file=sys.stderr)
+        detail = clone.stderr[-2000:]
+        error_class = clone_error_class(detail)
+        print("clone failed:", detail[-500:], file=sys.stderr)
         send_artifacts({"result": None, "exit_code": 13,
-                        "transcript_md": f"clone failed:\n{clone.stderr[-2000:]}",
+                        "error_class": error_class, "error_detail": detail,
+                        "transcript_md": f"clone failed:\n{detail}",
                         "token_report": {"extraction_method": "unavailable", "model": None}})
         sys.exit(13)
     workdir = repo_dir / repo_name
@@ -436,18 +537,23 @@ def main() -> None:
         with tracer.start_as_current_span("harness.exec"):
             proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, bufsize=1)
+            relay.add(f"[devcake] {harness} started; waiting for model output",
+                      visible_output=False)
             pumps = [threading.Thread(target=_pump, daemon=True, args=(
                          proc.stdout, out_lines, render, relay, sys.stdout)),
                      threading.Thread(target=_pump, daemon=True, args=(
                          proc.stderr, err_lines, render_stderr, relay, sys.stderr))]
             flusher = threading.Thread(target=relay.loop, daemon=True)
-            for t in (*pumps, flusher):
+            progress = threading.Thread(target=_progress_loop, daemon=True,
+                                        args=(proc, relay, harness))
+            for t in (*pumps, flusher, progress):
                 t.start()
             harness_exit = proc.wait()
             for t in pumps:
                 t.join(timeout=10)
             relay.stop.set()
             flusher.join(timeout=10)
+            progress.join(timeout=10)
         span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
     provider.force_flush()
     out, err_text = "".join(out_lines), "".join(err_lines)

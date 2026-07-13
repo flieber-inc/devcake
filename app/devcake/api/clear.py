@@ -157,7 +157,6 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
         log.warning("redis ACL cleanup: %s", e)
     # in-process chunk reassembly
     messaging._chunks.clear()
-    messaging._chunk_totals.clear()
     return {
         "keys_deleted": reply_deleted,
         "ingress_trimmed": ingress_trimmed,

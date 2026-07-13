@@ -7,6 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 # Platform credentials (harness keys, infra passwords) are static; PMO/forge
 # secrets are contributed by EVERY registered adapter via the registry —
@@ -57,6 +58,21 @@ def token_patterns() -> list[re.Pattern]:
 MASK = "«REDACTED»"
 _SECRETS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
 
+# Ephemeral per-run credentials (the Redis relay password) exist only as
+# process-local values — never in env or on disk — so redact() can only learn
+# them through this registry. Registered at ACL-user creation, dropped at
+# teardown; stale entries are harmless (over-redacting a dead random token).
+_runtime_secrets: dict[str, str] = {}
+
+
+def register_runtime_secret(key: str, value: str) -> None:
+    if value:
+        _runtime_secrets[key] = value
+
+
+def unregister_runtime_secret(key: str) -> None:
+    _runtime_secrets.pop(key, None)
+
 
 def _known_values() -> list[str]:
     values = [v for var in secret_env_vars() if (v := os.environ.get(var, "").strip())]
@@ -82,9 +98,21 @@ def redact(text: str, extra_values: list[str] | None = None) -> str:
     """Scrub known secret values + token patterns from PMO-bound content."""
     if not text:
         return text
-    for value in _known_values() + [v for v in (extra_values or []) if v]:
+    runtime = sorted(_runtime_secrets.values(), key=len, reverse=True)
+    for value in _known_values() + runtime + [v for v in (extra_values or []) if v]:
         if len(value) >= 8:
             text = text.replace(value, MASK)
     for pattern in token_patterns():
         text = pattern.sub(MASK, text)
     return text
+
+
+def redact_value(value: Any, extra_values: list[str] | None = None) -> Any:
+    """Recursively scrub strings before Dev-controlled structures are persisted."""
+    if isinstance(value, str):
+        return redact(value, extra_values)
+    if isinstance(value, list):
+        return [redact_value(item, extra_values) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_value(item, extra_values) for key, item in value.items()}
+    return value

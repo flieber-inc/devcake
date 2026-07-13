@@ -111,7 +111,9 @@ entrypoint start
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
   │ 5. run mcp_setup_commands (any failure → exit 14)
   │ 6. launch harness: identifying prompt + mission-type playbook prompt (03-mission-lifecycle.md §7)
-  │      • heartbeat sidecar emits `run.heartbeat` every 60 s throughout
+  │      • heartbeat sidecar emits `run.heartbeat` every 30 s throughout
+  │      • the live log announces harness start and, while user-visible output is
+  │        absent, emits one liveness notice per 60 s (hidden reasoning stays hidden)
   │ 7. harness finishes; entrypoint validates /workspace/out/result.json
   │ 8. collect transcript (08-harness-templates.md §6) + extract TokenReport (§5 there)
   │ 9. publish `run.artifacts` {result.json, transcript_md, token_report} on Redis
@@ -132,7 +134,7 @@ There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint abl
 
 ## 7. Network and resources
 
-- **Network:** full outbound internet access (host-equivalent, per the mission doc) + membership in the compose network (`devcake_default`) for `redis`/`openobserve` name resolution. Attachment mechanism in `13-deployment.md` §5.
+- **Network:** full outbound internet access plus membership in `devcake_runtime` for Redis/OpenObserve name resolution. The app/admin/Dagu control plane is not attached to that network. Attachment mechanism in `13-deployment.md` §5.
 - **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md`).
 - **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root.
 - **Resources:** defaults `cpus: 2`, `memory: 4g`, set at the image/DAG level (there is no per-Dev-Type image override — the image derives from `harness_template`, `08-harness-templates.md` §2).

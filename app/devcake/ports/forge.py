@@ -41,6 +41,27 @@ class BranchProtection(BaseModel):
     requires_reviews: Optional[bool] = None
 
 
+class ForgeDescriptor(BaseModel):
+    """Everything forge-specific that is NOT an API call: the dev-side dialect
+    (clone auth, git identity, PR/MR CLI instructions) plus the secret shapes
+    this forge's tokens take. Each adapter ships one as a DESCRIPTOR classvar;
+    prompts, spec_env, redaction and the admin SPA consume it from the
+    registry instead of hardcoding per-forge tables (docs/06)."""
+    id: str
+    display_name: str
+    # PR/MR CLI instructions for the EXECUTE playbook. Template placeholders:
+    # {key} {title} {default} {branch}
+    pr_instructions: str
+    clone_user: str                     # credential-in-URL user for https clones
+    git_user_name: str = "DevCake"
+    git_email: str = "devcake@users.noreply.github.com"
+    cli_token_envs: list[str]           # env vars the entrypoint mirrors the token into
+    token_env_default: str              # default token env name (config + SPA)
+    secret_env_vars: list[str]          # → security.redact env-value scrubbing
+    token_patterns: list[str]           # → security.redact regex scrubbing
+    secret_shape_prefixes: list[str]    # → SPA paste guard
+
+
 class ForgePort(Protocol):
     """App-side, decision-bearing forge operations. Contract notes (docs/06 §5):
 
@@ -51,6 +72,8 @@ class ForgePort(Protocol):
     - `approve` uses the reviewer token; returns False when none configured.
     - `get_pr_by_branch` returns the NEWEST PR (any state) for the branch.
     """
+
+    descriptor: ClassVar[ForgeDescriptor]
 
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]: ...
     async def pr_state(self, pr_number: int) -> PullRequest: ...

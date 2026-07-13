@@ -18,10 +18,8 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
-from ..adapters.github import GitHubForge
-from ..adapters.gitlab import GitLabForge
 from ..adapters.redis import Messaging
-from ..adapters.registry import make_pmo
+from ..adapters.registry import make_forge, make_pmo
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
                       load_config, load_dev_types, migrate_config_patch,
                       save_config, save_dev_type)
@@ -51,16 +49,8 @@ store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
-def _make_forge(cfg: AppConfig):
-    """Adapter construction lives in the api layer — the domain receives the
-    forge fully built and never imports adapter code (docs/01 §3)."""
-    reviewer = os.environ.get(cfg.repo.reviewer_token_env or "") or None
-    cls = GitLabForge if cfg.repo.forge == "gitlab" else GitHubForge
-    return cls(cfg.repo.url, cfg.repo.token, reviewer)
-
-
 pmo = make_pmo(config.pmo)
-forge = _make_forge(config)
+forge = make_forge(config.repo)
 mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
 
 
@@ -71,7 +61,7 @@ def reload_connections() -> None:
     so a hot-swapped team_key would run unlabeled until restart."""
     global pmo, forge
     pmo = make_pmo(config.pmo)
-    forge = _make_forge(config)
+    forge = make_forge(config.repo)
     mission_mgr.pmo = pmo
     mission_mgr.forge = forge
     _protection_cache["ts"] = 0.0          # repo may have changed — reprobe

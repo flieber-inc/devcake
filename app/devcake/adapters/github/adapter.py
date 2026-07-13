@@ -9,7 +9,8 @@ from typing import Any, Optional
 
 import httpx
 
-from ...ports.forge import BranchProtection, ForgeError, PullRequest
+from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError,
+                            PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -17,6 +18,25 @@ API = "https://api.github.com"
 
 
 class GitHubForge:
+    descriptor = ForgeDescriptor(
+        id="github",
+        display_name="GitHub",
+        pr_instructions=(
+            "Pull request (idempotent): `gh pr view {branch} --json url` — if one "
+            "exists, update it (`gh pr edit`) instead of creating; else "
+            "`gh pr create --head {branch} --title \"[{key}] {title}\" "
+            "--body \"<summary + mission URL>\"`."),
+        clone_user="x-access-token",
+        git_user_name="DevCake",
+        git_email="devcake@users.noreply.github.com",
+        cli_token_envs=["GH_TOKEN"],
+        token_env_default="GITHUB_TOKEN",
+        secret_env_vars=["GITHUB_TOKEN", "GITHUB_REVIEWER_TOKEN"],
+        token_patterns=[r"\bghp_[A-Za-z0-9]{20,}\b",
+                        r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"],
+        secret_shape_prefixes=["ghp_", "github_pat_"],
+    )
+
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None):
         # https://github.com/{owner}/{repo}

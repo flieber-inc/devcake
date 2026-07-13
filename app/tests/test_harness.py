@@ -105,6 +105,9 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     mgr.config = AppConfig()
     mgr.runs = runs
     mgr.messaging = NullMessaging()
+    # dispatch reads the forge descriptor for the dev-side dialect spec_env
+    from devcake.adapters.github import GitHubForge
+    mgr.forge = GitHubForge("https://github.com/o/r", "tok")
 
     dt = DevType(name="senior-dev", harness_template="grok-build",
                  model="grok-4.5")   # the user's exact scenario
@@ -116,3 +119,8 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     assert captured["IMAGE"] == HARNESSES["grok-build"].image
     assert run.spec_env["DEVCAKE_HARNESS"] == "grok-build"
     assert run.spec_env["DEVCAKE_MODEL"] == "grok-4.5"
+    # dev-side forge dialect flows via spec_env from the descriptor (docs/06/07)
+    assert run.spec_env["DEVCAKE_CLONE_USER"] == "x-access-token"
+    assert run.spec_env["DEVCAKE_GIT_EMAIL"] == "devcake@users.noreply.github.com"
+    assert run.spec_env["DEVCAKE_FORGE_CLI_ENVS"] == "GH_TOKEN"
+    assert run.spec_env["DEVCAKE_DEFAULT_BRANCH"] == "main"

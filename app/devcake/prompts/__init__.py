@@ -3,6 +3,7 @@ docs/03 — workspace boundaries, result.json contract, bounded effort. Prompts
 inline only the mission title/description; activity/ is reference material."""
 
 from ..domain.model import Mission
+from ..ports.forge import mission_branch
 
 ONBOARD_PLAYBOOK = """
 ## Your current mission type: ONBOARD (triage)
@@ -40,7 +41,7 @@ Write EXACTLY one of:
   (never force this), also write it to /workspace/out/PLAN.md — a complete, standalone
   markdown plan an implementer can execute without further context.
 - Trivial: implement it in /workspace/repo (commit at the very end only; branch
-  `devcake/{key}`; push; open a PR), then {{"schema_version": 1, "outcome":
+  `{branch}`; push; open a PR), then {{"schema_version": 1, "outcome":
   "executed_trivially", "summary": "...", "pr_url": "..."}}
 - High: {{"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{{"title": "...", "description": "<standalone — reads as an
@@ -96,7 +97,8 @@ decompose it into standalone child issues covering the full extent of the work.
 def onboard_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + ONBOARD_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, description=mission.description or "(no description)",
+        title=mission.title, branch=mission_branch(mission.key),
+        description=mission.description or "(no description)",
         project_note=PROJECT_NOTE if mission.pmo_kind == "project" else "") \
         + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
@@ -137,13 +139,13 @@ smallest sound deviation and document it in your summary.
 
 SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 /workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
-job is to sync `devcake/{key}` with the default branch, resolve the merge
+job is to sync `{branch}` with the default branch, resolve the merge
 conflicts, and push — do NOT redo or extend the mission's implementation.
 
 ### Binding rules (violations fail the run)
 1. Work ONLY inside /workspace/repo/{repo_name}/.
-2. Branch: `devcake/{key}`. If it exists on the remote, check it out and
-   continue on it (`git fetch origin devcake/{key} && git checkout devcake/{key}`);
+2. Branch: `{branch}`. If it exists on the remote, check it out and
+   continue on it (`git fetch origin {branch} && git checkout {branch}`);
    otherwise create it from the default branch. NEVER force-push.
 3. Run the repo's tests/build if present; add tests per the plan.
 4. Before your final commit, sync with the default branch so the PR arrives
@@ -151,7 +153,7 @@ conflicts, and push — do NOT redo or extend the mission's implementation.
    conflicts locally (keep the default branch's state for code your mission
    didn't change). Never rebase.
 5. Commit ONLY at the very end, one commit: `[{key}] <concise summary>`.
-   Then push: `git push -u origin devcake/{key}` (credentials are configured).
+   Then push: `git push -u origin {branch}` (credentials are configured).
 6. {pr_instructions}
 7. Write /workspace/out/result.json EXACTLY as:
    {{"schema_version": 1, "outcome": "executed", "summary": "<what you built,
@@ -165,27 +167,17 @@ conflicts, and push — do NOT redo or extend the mission's implementation.
 """
 
 
-PR_INSTRUCTIONS = {
-    "github": ("Pull request (idempotent): `gh pr view devcake/{key} --json url` — if one "
-               "exists, update it (`gh pr edit`) instead of creating; else "
-               "`gh pr create --head devcake/{key} --title \"[{key}] {title}\" "
-               "--body \"<summary + mission URL>\"`."),
-    "gitlab": ("Merge request (idempotent): `glab mr list --source-branch devcake/{key}` — "
-               "if one exists, update it (`glab mr update`) instead of creating; else "
-               "`glab mr create --source-branch devcake/{key} --target-branch {default} "
-               "--title \"[{key}] {title}\" --description \"<summary + mission URL>\" --yes`. "
-               "glab is authenticated via GITLAB_TOKEN; pass --repo if it asks."),
-}
-
-
 def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
-                   forge: str = "github", default_branch: str = "main") -> str:
-    pr = PR_INSTRUCTIONS.get(forge, PR_INSTRUCTIONS["github"]).format(
-        key=mission.key, title=mission.title, default=default_branch)
+                   pr_instructions: str, default_branch: str = "main") -> str:
+    """pr_instructions is the forge descriptor's CLI-dialect template
+    (docs/06) — placeholders: {key} {title} {default} {branch}."""
+    branch = mission_branch(mission.key)
+    pr = pr_instructions.format(key=mission.key, title=mission.title,
+                                default=default_branch, branch=branch)
     return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
         title=mission.title, repo_name=repo_name, pr_instructions=pr,
-        default=default_branch,
+        default=default_branch, branch=branch,
         description=mission.description or "(no description)") \
         + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
@@ -198,8 +190,8 @@ mission. Rubber-stamping is forbidden — your default posture is distrust; an
 approval must be EARNED by the evidence you gather.
 
 ### Procedure (binding)
-1. The work lives on branch `devcake/{key}` — check it out:
-   `git fetch origin devcake/{key} && git checkout devcake/{key}`.
+1. The work lives on branch `{branch}` — check it out:
+   `git fetch origin {branch} && git checkout {branch}`.
 2. Read the plan and any prior review reports in /workspace/activity/ and diff
    the branch against the default branch. Judge the work against the PLAN and
    the MISSION — flag omissions, not just bugs.
@@ -225,7 +217,8 @@ approval must be EARNED by the evidence you gather.
 def review_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + REVIEW_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, description=mission.description or "(no description)") \
+        title=mission.title, branch=mission_branch(mission.key),
+        description=mission.description or "(no description)") \
         + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 

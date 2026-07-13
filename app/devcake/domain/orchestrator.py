@@ -293,7 +293,7 @@ class MissionManager:
                 MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
                 MissionType.EXECUTE: lambda: execute_prompt(
                     dev_type.identifying_prompt, live, repo_name,
-                    forge=self.config.repo.forge,
+                    pr_instructions=self.forge.descriptor.pr_instructions,
                     default_branch=self.config.repo.default_branch),
                 MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
             }[mtype]()
@@ -307,8 +307,15 @@ class MissionManager:
                 "DEVCAKE_SEQ": str(seq),
                 "DEVCAKE_REPO_URL": self.config.repo.url,
                 "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
+                # legacy discriminator/credential (old images key clone auth
+                # on these); the descriptor-driven vars below take precedence
+                # in current images (docs/07)
                 "DEVCAKE_FORGE": self.config.repo.forge,
                 "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
+                "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
+                "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
+                "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
+                "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
                 "DEVCAKE_EXTRA_ARGS": assignment.extra_cli_args,
                 "DEVCAKE_MODEL": dev_type.model,
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
@@ -1013,6 +1020,10 @@ class MissionManager:
                 "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
                 "DEVCAKE_FORGE": self.config.repo.forge,
                 "DEVCAKE_FORGE_TOKEN": self.config.repo.token,
+                "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
+                "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
+                "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
+                "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
                 "DEVCAKE_EXTRA_ARGS": "",
                 "DEVCAKE_MODEL": dev_type.model,
                 "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",

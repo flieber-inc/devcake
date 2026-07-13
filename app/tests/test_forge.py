@@ -235,3 +235,45 @@ def test_api_base_defaults_and_overrides():
                      api_base="https://gitlab-api.corp.example")
     assert ov.base == "https://gitlab-api.corp.example"
     assert ov.project == "grp%2Frepo"
+
+
+# ── ForgeDescriptor completeness + registry ──────────────────────────────────
+
+from devcake.adapters.registry import forges, make_forge
+from devcake.config import RepoInstance
+from devcake.ports.forge import ForgeDescriptor
+
+
+def test_registry_covers_both_forges_and_constructs():
+    d = forges()
+    assert set(d) == {"github", "gitlab"}
+    assert all(isinstance(v, ForgeDescriptor) for v in d.values())
+    assert isinstance(make_forge(RepoInstance(forge="github",
+                                              url="https://github.com/o/r")),
+                      GitHubForge)
+    gl_inst = RepoInstance(forge="gitlab", url="https://gitlab.corp/o/r",
+                           api_base="https://gitlab-api.corp")
+    f = make_forge(gl_inst)
+    assert isinstance(f, GitLabForge) and f.base == "https://gitlab-api.corp"
+
+
+@pytest.mark.parametrize("cls", [GitHubForge, GitLabForge])
+def test_descriptor_complete_and_renderable(cls):
+    import re as _re
+    d = cls.descriptor
+    for field in ("id", "display_name", "pr_instructions", "clone_user",
+                  "git_user_name", "git_email", "token_env_default"):
+        assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"
+    for field in ("cli_token_envs", "secret_env_vars", "token_patterns",
+                  "secret_shape_prefixes"):
+        assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"
+    # templates must render without KeyError against the documented placeholders
+    d.pr_instructions.format(key="DEV-1", title="t", default="main",
+                             branch="devcake/DEV-1")
+    for pat in d.token_patterns:
+        _re.compile(pat)
+
+
+def test_unknown_forge_rejected_by_config():
+    with pytest.raises(Exception, match="unknown forge"):
+        RepoInstance(forge="gitea", url="https://x/y/z")

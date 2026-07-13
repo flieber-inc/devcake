@@ -5,6 +5,7 @@ never imports this — api/main.py builds adapters here and injects them
 
 from pydantic import BaseModel
 
+from ..ports.forge import ForgeDescriptor, ForgePort
 from ..ports.pmo import PMOPort
 
 
@@ -42,3 +43,28 @@ def make_pmo(inst) -> PMOPort:
         from .linear import LinearAdapter
         return LinearAdapter(inst.api_key)
     raise AssertionError("unreachable")  # registry and constructors in sync
+
+
+def _forge_classes() -> dict[str, type]:
+    # lazy so importing the registry never drags in httpx-heavy adapters
+    from .github import GitHubForge
+    from .gitlab import GitLabForge
+    return {"github": GitHubForge, "gitlab": GitLabForge}
+
+
+def forges() -> dict[str, "ForgeDescriptor"]:
+    """id → descriptor for every registered forge (SPA registry endpoint,
+    redaction contributions)."""
+    return {fid: cls.descriptor for fid, cls in _forge_classes().items()}
+
+
+def make_forge(inst) -> "ForgePort":
+    """Construct the adapter for one configured RepoInstance (config.repos[i])."""
+    import os
+    classes = _forge_classes()
+    if inst.forge not in classes:
+        raise ValueError(f"unknown forge {inst.forge!r} — registered: "
+                         f"{sorted(classes)}")
+    reviewer = os.environ.get(inst.reviewer_token_env or "") or None
+    return classes[inst.forge](inst.url, inst.token, reviewer,
+                               api_base=inst.api_base)

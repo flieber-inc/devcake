@@ -8,12 +8,32 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from ...ports.forge import BranchProtection, ForgeError, PullRequest
+from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError,
+                            PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
 
 class GitLabForge:
+    descriptor = ForgeDescriptor(
+        id="gitlab",
+        display_name="GitLab",
+        pr_instructions=(
+            "Merge request (idempotent): `glab mr list --source-branch {branch}` — "
+            "if one exists, update it (`glab mr update`) instead of creating; else "
+            "`glab mr create --source-branch {branch} --target-branch {default} "
+            "--title \"[{key}] {title}\" --description \"<summary + mission URL>\" --yes`. "
+            "glab is authenticated via GITLAB_TOKEN; pass --repo if it asks."),
+        clone_user="oauth2",
+        git_user_name="DevCake",
+        git_email="devcake@users.noreply.github.com",  # kept verbatim from v0
+        cli_token_envs=["GITLAB_TOKEN"],
+        token_env_default="GITLAB_TOKEN",
+        secret_env_vars=["GITLAB_TOKEN", "GITLAB_REVIEWER_TOKEN"],
+        token_patterns=[r"\bglpat-[A-Za-z0-9_-]{15,}\b"],
+        secret_shape_prefixes=["glpat-"],
+    )
+
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None):
         # api_base overrides; otherwise the instance is the repo URL's origin

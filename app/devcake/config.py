@@ -56,6 +56,15 @@ class RepoInstance(BaseModel):
     token_env: str = "GITHUB_TOKEN"
     reviewer_token_env: str | None = None
 
+    @field_validator("forge")
+    @classmethod
+    def _known_forge(cls, v):
+        from .adapters.registry import forges  # lazy: config stays import-light
+        if v not in forges():
+            raise ValueError(f"unknown forge {v!r} — registered: "
+                             f"{sorted(forges())}")
+        return v
+
     @property
     def token(self) -> str:
         return os.environ.get(self.token_env, "")

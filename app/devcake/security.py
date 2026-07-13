@@ -8,31 +8,58 @@ import os
 import re
 from pathlib import Path
 
-# env vars whose VALUES are secrets (config-referenced + platform credentials)
-SECRET_ENV_VARS = [
-    "LINEAR_API_KEY", "GITHUB_TOKEN", "GITHUB_REVIEWER_TOKEN", "GITLAB_TOKEN",
-    "GITLAB_REVIEWER_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-    "XAI_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "REDIS_PASSWORD",
-    "DAGU_PASSWORD", "ADMIN_PASSWORD", "OO_ROOT_PASSWORD",
+# Platform credentials (harness keys, infra passwords) are static; PMO/forge
+# secrets are contributed by EVERY registered adapter via the registry —
+# configured or not, so switching adapters never opens a redaction gap.
+# test_security.py pins the union as a superset of the v0 lists.
+PLATFORM_SECRET_ENV_VARS = [
+    "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "XAI_API_KEY",
+    "OPENAI_API_KEY", "CODEX_API_KEY", "REDIS_PASSWORD", "DAGU_PASSWORD",
+    "ADMIN_PASSWORD", "OO_ROOT_PASSWORD",
 ]
 
-# common token shapes (docs/14 §5)
-TOKEN_PATTERNS = [
-    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
-    re.compile(r"\bglpat-[A-Za-z0-9_-]{15,}\b"),
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\bxai-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\blin_api_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\blin_oauth_[A-Za-z0-9]{20,}\b"),
+# harness/model key shapes (docs/14 §5) — not adapter-owned
+PLATFORM_TOKEN_PATTERNS = [
+    r"\bsk-[A-Za-z0-9_-]{20,}\b",
+    r"\bxai-[A-Za-z0-9_-]{20,}\b",
 ]
+
+_registry_cache: tuple[list[str], list[str]] | None = None
+
+
+def _registry_contributions() -> tuple[list[str], list[str]]:
+    """(env_vars, pattern_sources) from every registered PMO system and forge.
+    Lazy + memoized: security is imported by adapters, so the registry import
+    must happen at first redact() call, never at module import."""
+    global _registry_cache
+    if _registry_cache is None:
+        from .adapters.registry import PMO_SYSTEMS, forges
+        envs: list[str] = []
+        pats: list[str] = []
+        for s in PMO_SYSTEMS.values():
+            envs += s.secret_env_vars
+            pats += s.token_patterns
+        for d in forges().values():
+            envs += d.secret_env_vars
+            pats += d.token_patterns
+        _registry_cache = (envs, pats)
+    return _registry_cache
+
+
+def secret_env_vars() -> list[str]:
+    return PLATFORM_SECRET_ENV_VARS + _registry_contributions()[0]
+
+
+def token_patterns() -> list[re.Pattern]:
+    return [re.compile(p)
+            for p in PLATFORM_TOKEN_PATTERNS + _registry_contributions()[1]]
 
 MASK = "«REDACTED»"
 _SECRETS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
 
 
 def _known_values() -> list[str]:
-    values = [v for var in SECRET_ENV_VARS if (v := os.environ.get(var, "").strip())]
+    values = [v for var in secret_env_vars() if (v := os.environ.get(var, "").strip())]
     # credential file key material: every long-ish string value in stored JSONs
     for p in _SECRETS_DIR.glob("*/*"):
         try:
@@ -58,6 +85,6 @@ def redact(text: str, extra_values: list[str] | None = None) -> str:
     for value in _known_values() + [v for v in (extra_values or []) if v]:
         if len(value) >= 8:
             text = text.replace(value, MASK)
-    for pattern in TOKEN_PATTERNS:
+    for pattern in token_patterns():
         text = pattern.sub(MASK, text)
     return text

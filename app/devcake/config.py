@@ -29,6 +29,17 @@ class PMOInstance(BaseModel):
     team_key: str = ""
     api_base: str | None = None     # None = the adapter's default API host
 
+    @field_validator("system")
+    @classmethod
+    def _known_system(cls, v):
+        # lazy import: config must stay import-light (adapters import security
+        # and domain; a top-level import here would risk cycles)
+        from .adapters.registry import PMO_SYSTEMS
+        if v not in PMO_SYSTEMS:
+            raise ValueError(f"unknown PMO system {v!r} — registered: "
+                             f"{sorted(PMO_SYSTEMS)}")
+        return v
+
     @property
     def api_key(self) -> str:
         return os.environ.get(self.api_key_env, "")

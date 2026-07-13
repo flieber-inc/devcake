@@ -64,6 +64,24 @@ def test_exactly_one_instance_enforced():
         AppConfig.model_validate(dupes)
 
 
+def test_unknown_pmo_system_rejected():
+    base = AppConfig().model_dump()
+    base["pmos"][0]["system"] = "jira"          # not in the adapter registry
+    with pytest.raises(Exception, match="unknown PMO system"):
+        AppConfig.model_validate(base)
+
+
+def test_make_pmo_dispatches_from_registry():
+    from devcake.adapters.linear import LinearAdapter
+    from devcake.adapters.registry import PMO_SYSTEMS, make_pmo
+    cfg = AppConfig()
+    assert isinstance(make_pmo(cfg.pmo), LinearAdapter)
+    assert set(PMO_SYSTEMS) == {"linear"}
+    info = PMO_SYSTEMS["linear"]
+    assert info.api_key_env_default == "LINEAR_API_KEY"
+    assert info.secret_env_vars and info.token_patterns and info.secret_shape_prefixes
+
+
 def test_legacy_put_body_adapted_not_dropped():
     """pydantic ignores unknown keys, so without the patch adapter a stale
     client's {"pmo": {...}} PUT would silently lose the edit."""

@@ -20,8 +20,8 @@ from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.github import GitHubForge
 from ..adapters.gitlab import GitLabForge
-from ..adapters.linear import LinearAdapter
 from ..adapters.redis import Messaging
+from ..adapters.registry import make_pmo
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
                       load_config, load_dev_types, migrate_config_patch,
                       save_config, save_dev_type)
@@ -58,9 +58,30 @@ def _make_forge(cfg: AppConfig):
     return cls(cfg.repo.url, cfg.repo.token, reviewer)
 
 
-pmo = LinearAdapter(config.api_key)
+pmo = make_pmo(config.pmo)
 forge = _make_forge(config)
 mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
+
+
+def reload_connections() -> None:
+    """Hot-reload both adapters after a config PUT: rebuild from the saved
+    config, repoint the orchestrator and the module globals the loops read,
+    and re-ensure the managed labels — bootstrap is otherwise startup-only,
+    so a hot-swapped team_key would run unlabeled until restart."""
+    global pmo, forge
+    pmo = make_pmo(config.pmo)
+    forge = _make_forge(config)
+    mission_mgr.pmo = pmo
+    mission_mgr.forge = forge
+    _protection_cache["ts"] = 0.0          # repo may have changed — reprobe
+
+    async def _ensure():
+        try:
+            await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)
+        except Exception:
+            log.exception("ensure_labels after config reload failed — labels "
+                          "will be ensured on next restart")
+    asyncio.create_task(_ensure(), name="ensure_labels_reload")
 manager.mission_mgr = mission_mgr
 oauth_mgr = OAuthManager(manager, messaging, dev_types)
 manager.oauth_mgr = oauth_mgr
@@ -356,7 +377,7 @@ async def put_config(body: dict):
     for field in merged.model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
-    mission_mgr.forge = _make_forge(config)  # hot reload after repo changes
+    reload_connections()                     # hot reload pmo + forge
     return config.model_dump()
 
 

@@ -5,13 +5,16 @@
 #
 # Targets: base | hello | claude-code | codex | grok-build
 #
-#   docker buildx bake -f docker-bake.hcl images
-#   docker compose --profile images build
+#   docker buildx bake images
 #
 # Context must be ./images (needs common/dev_entrypoint.py).
+# Pin harness CLIs below — bump intentionally, never float on :latest npm.
 
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 ARG NODE_IMAGE=node:22-bookworm-slim
+# Pinned harness CLIs (npm view @anthropic-ai/claude-code / @openai/codex).
+ARG CLAUDE_CODE_VERSION=2.1.208
+ARG CODEX_VERSION=0.144.3
 
 # ── Node toolchain (copied into node-based harnesses; no nodesource mess) ────
 FROM ${NODE_IMAGE} AS node-tools
@@ -102,12 +105,14 @@ FROM base AS claude-code
 
 LABEL org.opencontainers.image.title="devcake-dev-claude-code"
 
+ARG CLAUDE_CODE_VERSION
+
 # Official Node image toolchain — smaller/faster than nodesource setup scripts.
 COPY --from=node-tools /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-tools /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && npm install -g @anthropic-ai/claude-code \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm cache clean --force
 
 USER dev
@@ -118,11 +123,13 @@ FROM base AS codex
 
 LABEL org.opencontainers.image.title="devcake-dev-codex"
 
+ARG CODEX_VERSION
+
 COPY --from=node-tools /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-tools /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && npm install -g @openai/codex \
+    && npm install -g "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
 
 USER dev

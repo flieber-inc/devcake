@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1
-# DevCake orchestrator (FastAPI). Multi-stage: build venv once, run slim.
-# CI still runs pytest inside this image (scripts/ci_suite.sh) — tests ship with it.
+# DevCake orchestrator (FastAPI).
+# Targets: runtime (prod, default) | test (pytest + tests/ for CI)
+#
+#   docker buildx bake app        # prod — no pytest, no tests/
+#   docker buildx bake app-test   # CI test image
 
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 
-# ── deps stage (cached while requirements.txt is unchanged) ──────────────────
+# ── prod deps (cached while requirements.txt is unchanged) ───────────────────
 FROM ${PYTHON_IMAGE} AS deps
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -21,7 +24,14 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-# ── runtime ─────────────────────────────────────────────────────────────────
+# ── prod + test deps ─────────────────────────────────────────────────────────
+FROM deps AS deps-dev
+
+COPY requirements-dev.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-dev.txt
+
+# ── runtime (production) ─────────────────────────────────────────────────────
 FROM ${PYTHON_IMAGE} AS runtime
 
 LABEL org.opencontainers.image.title="devcake-app" \
@@ -33,8 +43,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     DEVCAKE_DATA_DIR=/data
 
-# Non-root runtime. Named volumes inherit ownership of /data from the image
-# on first create (Docker copies image contents into an empty volume).
 RUN groupadd --gid 1000 app \
     && useradd --uid 1000 --gid app --shell /usr/sbin/nologin --create-home app \
     && mkdir -p /data \
@@ -44,11 +52,23 @@ WORKDIR /srv
 
 COPY --from=deps /opt/venv /opt/venv
 COPY --chown=app:app devcake/ ./devcake/
-COPY --chown=app:app tests/ ./tests/
 
 USER app
 
 EXPOSE 8000
 
-# Exec form so uvicorn is PID 1 (signals + graceful shutdown).
 CMD ["uvicorn", "devcake.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ── test image (CI) — prod code + pytest + tests/ ────────────────────────────
+FROM runtime AS test
+
+LABEL org.opencontainers.image.title="devcake-app-test" \
+      org.opencontainers.image.description="DevCake app + pytest suite"
+
+USER root
+COPY --from=deps-dev /opt/venv /opt/venv
+COPY --chown=app:app tests/ ./tests/
+USER app
+
+# Default for `docker run devcake/app-test` — override as needed.
+CMD ["python", "-m", "pytest", "tests/", "-q"]

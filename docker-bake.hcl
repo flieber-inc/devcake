@@ -4,19 +4,25 @@
 #   docker buildx bake              # control plane: app + admin
 #   docker buildx bake images       # Dev harnesses + hello stub
 #   docker buildx bake all          # everything (first install / upgrade)
-#   TAG=$(git rev-parse --short HEAD) docker buildx bake all
+#   docker buildx bake app-test     # prod app + pytest (CI)
 #
-# Optional: TAG / DEVCAKE_TAG (same value) so bake tags match compose:
-#   export DEVCAKE_TAG=latest   # default
-#   docker buildx bake all && docker compose up -d
+# Local BuildKit cache (mode=max keeps intermediate stages for multi-target):
+#   .buildx-cache/  (gitignored)
+#
+# GitHub Actions — add the CI overlay so cache hits GHA:
+#   docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
 
 variable "TAG" {
   default = "latest"
 }
 
-# Allow DEVCAKE_TAG from .env / shell to drive the same pin as compose.
 variable "DEVCAKE_TAG" {
   default = ""
+}
+
+# Local export/import path for BuildKit cache (override if needed).
+variable "BAKE_CACHE_DIR" {
+  default = ".buildx-cache"
 }
 
 function "image_tag" {
@@ -36,18 +42,35 @@ group "all" {
   targets = ["app", "admin", "hello", "claude-code", "codex", "grok-build"]
 }
 
+# Control plane + CI test image (no harnesses — faster PR loops).
+group "ci" {
+  targets = ["app", "app-test", "admin", "hello"]
+}
+
 target "_common" {
-  # Shared defaults for every DevCake-built image.
   args = {
     BUILDKIT_INLINE_CACHE = "1"
   }
+  # Local persistent cache — survives daemon restarts better than memory alone.
+  # Parallel targets share this dir; mode=max retains intermediate stages.
+  cache-from = ["type=local,src=${BAKE_CACHE_DIR}"]
+  cache-to   = ["type=local,dest=${BAKE_CACHE_DIR},mode=max"]
 }
 
 target "app" {
   inherits   = ["_common"]
   context    = "./app"
   dockerfile = "Dockerfile"
+  target     = "runtime"
   tags       = ["devcake/app:${image_tag()}"]
+}
+
+target "app-test" {
+  inherits   = ["_common"]
+  context    = "./app"
+  dockerfile = "Dockerfile"
+  target     = "test"
+  tags       = ["devcake/app-test:${image_tag()}"]
 }
 
 target "admin" {
@@ -57,7 +80,6 @@ target "admin" {
   tags       = ["devcake/admin:${image_tag()}"]
 }
 
-# Shared BuildKit stages live in images/Dockerfile (base, node-tools, …).
 target "dev-common" {
   inherits   = ["_common"]
   context    = "./images"

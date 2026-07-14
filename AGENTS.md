@@ -23,10 +23,19 @@ Never claim done from "build succeeded" alone when the user-facing path is run/u
 | Command | What it builds |
 |---|---|
 | `docker buildx bake all` | Everything — **use this on first setup and full upgrades** |
-| `docker buildx bake` | Control plane only: `app` + `admin` |
+| `docker buildx bake` | Control plane only: `app` + `admin` (prod — **no** pytest) |
+| `docker buildx bake app-test` | App + pytest + `tests/` for CI (`devcake/app-test`) |
 | `docker buildx bake images` | Dev harnesses + hello stub (shared `base` stage) |
+| `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (PR loop without full harness matrix) |
 | `docker compose up -d` | **Run** the stack (requires images already baked) |
 
+**Build cache:** local `.buildx-cache/` via bake (gitignored). On GitHub Actions:
+
+```bash
+docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
+```
+
+**CI tests:** `scripts/ci_suite.sh` bakes `app-test` and runs pytest on `devcake_control` (prod `app` image has no pytest).
 ### Do
 
 - Build/rebuild with `docker buildx bake` / `bake all` / `bake images` (see `docker-bake.hcl`).

@@ -201,17 +201,22 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 
 | Command | Builds |
 |---|---|
-| `docker buildx bake` | `app` + `admin` (control plane) |
+| `docker buildx bake` | `app` + `admin` (control plane; **prod** app — no pytest) |
+| `docker buildx bake app-test` | `devcake/app-test` (pytest + `tests/` for CI) |
 | `docker buildx bake images` | `hello` + all three harnesses (shared `base` stage) |
+| `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (no full harness matrix) |
 | `docker buildx bake all` | everything — **use this on first install and full upgrades** |
+
+**Cache:** local `.buildx-cache/` (see `BAKE_CACHE_DIR` in `docker-bake.hcl`). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
 
 | Image | Bake target | Context / Dockerfile target | Default tag |
 |---|---|---|---|
-| `devcake/app` | `app` | `./app` | `devcake/app:${TAG}` |
+| `devcake/app` | `app` → `runtime` | `./app` | `devcake/app:${TAG}` |
+| `devcake/app-test` | `app-test` → `test` | `./app` + pytest | `devcake/app-test:${TAG}` |
 | `devcake/admin` | `admin` | `./admin` | `devcake/admin:${TAG}` |
-| `devcake/dev-claude-code` | `claude-code` | `./images` → `claude-code` | `devcake/dev-claude-code:${TAG}` |
+| `devcake/dev-claude-code` | `claude-code` | `./images` → `claude-code` (CLI **pinned**) | `devcake/dev-claude-code:${TAG}` |
 | `devcake/dev-grok-build` | `grok-build` | `./images` → `grok-build` | 〃 |
-| `devcake/dev-codex` | `codex` | `./images` → `codex` | 〃 |
+| `devcake/dev-codex` | `codex` | `./images` → `codex` (CLI **pinned**) | 〃 |
 | `devcake/dev-hello` | `hello` | `./images` → `hello` | CI stub |
 
 `TAG` / `DEVCAKE_TAG` default to `latest`. Pin a release with:

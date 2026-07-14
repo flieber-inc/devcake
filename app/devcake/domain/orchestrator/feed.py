@@ -1,0 +1,96 @@
+"""Feed choke-point, audit log, and provenance helpers (docs/03 §8a, docs/05 §4)."""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
+from ...security import redact
+from ..model import Mission, MissionRef, STAGE_LABELS
+from ..run import utcnow
+from . import markers
+from .markers import COMMENT_SENTINEL, FEED_INLINE_MAX, SENTINEL_RE
+
+log = logging.getLogger("devcake.missions")
+tracer = trace.get_tracer("devcake")
+
+
+def _audit(self, pmo_id: str, action: str, detail: str = "") -> None:
+    markers.AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(markers.AUDIT_PATH, "a") as f:
+        f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                            "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
+    self._grace_next.add(pmo_id)
+    # mirror every audit action as a span so OO alerts can fire on them
+    # (ISSUES #23: `devcake_needs_human` was a file-only record no alert
+    # could ever see). One span name, action as attribute — the alert set
+    # queries devcake_audit_action.
+    with tracer.start_as_current_span("audit.event") as span:
+        span.set_attribute("devcake.audit.action", action)
+        span.set_attribute("devcake.pmo.id", pmo_id)
+        span.set_attribute("devcake.audit.detail", redact(detail)[:500])
+
+
+def _trip_breaker(self, name: str, reason: str) -> None:
+    """Single choke point for tripping a breaker: sets the in-memory dict
+    AND emits a span — breakers had no telemetry at all, so the documented
+    DEV_AUTH alert could never fire (ISSUES #23)."""
+    self.breakers[name] = reason
+    with tracer.start_as_current_span("breaker.trip") as span:
+        span.set_attribute("devcake.breaker", name)
+        span.set_attribute("devcake.reason", redact(reason)[:500])
+        span.set_status(Status(StatusCode.ERROR, f"breaker {name} tripped"))
+
+
+async def _feed(self, pmo_id: str, kind: str, markdown: str) -> None:
+    """The single choke-point for PMO comments: redaction + the provenance
+    sentinel. Bodies over FEED_INLINE_MAX are uploaded as .md attachments
+    and replaced by a short referencing comment (docs/05 §4); the sentinel
+    goes on the comment, never inside the attachment, so provenance
+    classification keeps working. Upload failures fall back to posting
+    inline — an upload outage must never lose feed content. Projects have
+    no issue-style comments API (verified live): their run artifacts
+    live in the audit log + OpenObserve; the substance lands on the child
+    issues anyway (ADR-0006)."""
+    markdown = redact(markdown)
+    if kind == "project":
+        self._audit(pmo_id, "project_feed_suppressed", markdown[:120])
+        return
+    if len(markdown) > FEED_INLINE_MAX:
+        try:
+            name = f"comment-{utcnow():%Y%m%dT%H%M%S}.md"
+            url = await self.pmo.upload_attachment(pmo_id, name,
+                                                   markdown.encode())
+            markdown = (markdown[:300].replace("\n", " ")
+                        + f"… — full text attached: [{name}]({url})")
+        except Exception:
+            log.exception("feed attachment upload failed — posting inline")
+    await self.pmo.post_feed(
+        MissionRef(pmo_id, "issue"),
+        markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
+
+
+def _unquoted(body: str | None) -> str:
+    """Strip `>`-quoted lines: markers/sentinels inside a human's quote of
+    a DevCake comment must never count as DevCake's own."""
+    return "\n".join(line for line in (body or "").splitlines()
+                     if not line.lstrip().startswith(">"))
+
+
+def _is_devcake_comment(body: str | None) -> bool:
+    """Provenance classification (docs/03 §8a): sentinel-signed ⇒ DevCake.
+    `>`-quoted lines are ignored, so a human reply that ENDS by quoting a
+    DevCake comment still classifies as human — misreading a human's
+    instruction as DevCake's own record is the unsafe direction."""
+    return bool(SENTINEL_RE.search(
+        _unquoted(body).rstrip()))
+
+
+def _stage_of(mission: Mission) -> str | None:
+    stage = mission.labels & STAGE_LABELS
+    return next(iter(stage)) if stage else None
+

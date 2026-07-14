@@ -38,7 +38,10 @@ app/devcake/
   domain/          # pure logic — imports NO adapter code at runtime
     model.py       #   entities, Mission Type derivation, label set (02)
     run.py         #   Run record + state machine
-    orchestrator.py#   poll loop, scheduler, finalization protocol (04)
+    orchestrator/  #   package: MissionManager façade + focused modules (04)
+                   #     manager, schedule, dispatch, finalize, transitions,
+                   #     review, decomposition, sweeps, feed, markers, mapper
+    mapper_service.py  # Relations Mapper cadence (ADR-0007; ISSUES #36 first cut)
     runs.py        #   run bookkeeping
     oauth.py       #   harness OAuth flows
     watchdog.py    #   timeout/zombie detection

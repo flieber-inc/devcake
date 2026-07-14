@@ -3,7 +3,9 @@
 > **Audience:** implementers. This is the most correctness-sensitive document in the set.
 > **Depends on:** `00-overview.md` (INV-1…6), `02-domain-model.md` (derivation table, Run, AppConfig).
 
-The orchestrator is the always-on core of the main app. It runs three cooperating loops on one asyncio event loop:
+The orchestrator is the always-on core of the main app. **Implementation** lives under `app/devcake/domain/orchestrator/` as a package (ISSUES #36): `MissionManager` remains the public façade; schedule, dispatch, finalize, transitions, review, decomposition, sweeps, feed policy, and MAPPER mission ops are focused modules. `MapperService` (cadence) stays in `domain/mapper_service.py`. Wiring and the three loops live in `api/main.py`.
+
+It runs three cooperating loops on one asyncio event loop:
 
 1. **Poll loop** — refresh the world from the PMO System, schedule and dispatch work.
 2. **Ingress consumer** — consume Dev messages from Redis and finalize runs (`09-messaging.md`). Also feeds the live run-log store: `run.log {lines}` batches are redacted and appended to `/data/state/runlogs/{run_id}.log`, which the admin panel's run terminal follows over SSE (`11-admin-panel.md` §4). Finalization and every kill path close the log's live followers (end-of-stream sentinel).

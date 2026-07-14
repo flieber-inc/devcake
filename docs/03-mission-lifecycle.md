@@ -154,7 +154,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
 
 A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
 
-**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator.py`, `LEGAL_OUTCOMES`) — an illegal outcome is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on; the Dev entrypoint mirrors the same table as first-line defense (exit 11), but the app check is the invariant (old images may run):
+**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on; the Dev entrypoint mirrors the same table as first-line defense (exit 11), but the app check is the invariant (old images may run):
 
 | Run type | Legal outcomes |
 |---|---|
@@ -201,7 +201,7 @@ Every comment the app posts to the PMO System ends with the footer line:
 `devcake:v1`
 ```
 
-appended by the single posting choke-point (`MissionManager._feed`), after redaction. Classification is **content-based, never author/credential-based** — DevCake may be configured with the operator's own PMO API key, so `author` cannot distinguish DevCake's comments from the operator's. A comment whose body matches ``re.search(r"`devcake:v1`\s*$", body)`` is DevCake's; anything else is treated as a **human comment**.
+appended by the single posting choke-point (`MissionManager._feed` in `domain/orchestrator/feed.py`), after redaction. Classification is **content-based, never author/credential-based** — DevCake may be configured with the operator's own PMO API key, so `author` cannot distinguish DevCake's comments from the operator's. A comment whose body matches ``re.search(r"`devcake:v1`\s*$", body)`` is DevCake's; anything else is treated as a **human comment**.
 
 Consequences:
 

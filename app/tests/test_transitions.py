@@ -296,7 +296,8 @@ def test_attempts_count_across_transcript_sequences_and_reset(tmp_path, monkeypa
 
     m = mission("in_progress", {"DEVCAKE"})
     mgr, _fake, store = make_mgr(tmp_path, m)
-    monkeypatch.setattr(orchestrator_mod, "AUDIT_PATH", tmp_path / "no-audit.jsonl")
+    monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
+                        tmp_path / "no-audit.jsonl")
     for seq in (1, 2):
         r = _run("ONBOARD", None)
         r.run_id = f"T-1-{seq}-ONBOARD-FAIL"
@@ -328,7 +329,8 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
 
     m = mission("in_progress", {"DEVCAKE"})
     mgr, _fake, store = make_mgr(tmp_path, m)
-    monkeypatch.setattr(orchestrator_mod, "AUDIT_PATH", tmp_path / "no-audit.jsonl")
+    monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
+                        tmp_path / "no-audit.jsonl")
     t0 = datetime.now(timezone.utc)
     for i in (1, 2):
         r = _run("EXECUTE", None)
@@ -372,7 +374,8 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
 
     m = mission("in_progress", {"DEVCAKE"})
     mgr, _fake, store = make_mgr(tmp_path, m)
-    monkeypatch.setattr(orchestrator_mod, "AUDIT_PATH", tmp_path / "no-audit.jsonl")
+    monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
+                        tmp_path / "no-audit.jsonl")
     t0 = datetime.now(timezone.utc)
     for i in (1, 2):
         r = _run("EXECUTE", None)

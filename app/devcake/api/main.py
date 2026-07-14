@@ -299,6 +299,9 @@ def _refuse_insecure_passwords() -> None:
         # required since M8: the collector, fluentbit, and push_oo_log all
         # authenticate with the OO service account (ISSUES #13)
         "OO_INGEST_PASSWORD": os.environ.get("OO_INGEST_PASSWORD", ""),
+        # the internal fallback forge's admin (M11) — the sharpest credential
+        # on the runtime network; weak/empty must refuse boot like the rest
+        "GITEA_ADMIN_PASSWORD": os.environ.get("GITEA_ADMIN_PASSWORD", ""),
     }
     bad = [name for name, val in checks.items() if (val or "").strip() in weak]
     if bad:

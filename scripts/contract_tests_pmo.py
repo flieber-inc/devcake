@@ -102,15 +102,26 @@ async def main():
           bodies == ["first comment", "second"] and len(atts) == 1, f"{bodies} {atts}")
     await delete_issue(pmo, tid)
 
-    # 3 — priority normalization incl. unset→medium (fixtures from seed_sandbox)
+    # 3 — priority normalization incl. unset→medium (self-sufficient since
+    # M9: the M2 seed_sandbox fixtures no longer exist in the live team)
     all_missions = await pmo.list_all(team)
-    by_title = {m.title: m for m in all_missions}
-    r1 = by_title.get("[FIXTURE] row1: fresh adopted issue → ONBOARD")
-    r9 = by_title.get("[FIXTURE] row9: in-progress without stage label")
-    check("3", "priority urgent + unset→medium",
-          r1 is not None and r1.priority == "urgent"
-          and r9 is not None and r9.priority == "medium",
-          f"{r1 and r1.priority} {r9 and r9.priority}")
+    t3 = await pmo._team(team)
+    p_urgent = await pmo._gql(
+        """mutation($input: IssueCreateInput!) {
+             issueCreate(input: $input) { issue { id } } }""",
+        {"input": {"teamId": t3["id"], "title": "[CONTRACT] urgent priority",
+                   "priority": 1}})
+    uid = p_urgent["issueCreate"]["issue"]["id"]
+    nid = await make_temp_issue(pmo, team, "[CONTRACT] unset priority", ["DEVCAKE"])
+    try:
+        mu = await pmo.get(MissionRef(uid, "issue"))
+        mn = await pmo.get(MissionRef(nid, "issue"))
+        check("3", "priority urgent + unset→medium",
+              mu.priority == "urgent" and mn.priority == "medium",
+              f"{mu.priority} {mn.priority}")
+    finally:
+        await delete_issue(pmo, uid)
+        await delete_issue(pmo, nid)
 
     # 5 — ensure_labels idempotent & case-insensitive
     t = await pmo._team(team)

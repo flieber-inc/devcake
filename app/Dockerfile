@@ -5,7 +5,8 @@
 #   docker buildx bake app        # prod — no pytest, no tests/
 #   docker buildx bake app-test   # CI test image
 
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+# Digest-pinned (ISSUES #29). Bump: docker buildx imagetools inspect <image:tag>
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 
 # ── prod deps (cached while requirements.txt is unchanged) ───────────────────
 FROM ${PYTHON_IMAGE} AS deps

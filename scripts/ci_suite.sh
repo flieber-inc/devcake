@@ -19,6 +19,9 @@ set +a
 : "${ADMIN_USER:?ADMIN_USER must be set (compose .env)}"
 : "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set (compose .env)}"
 
+echo "── digest-pin gate (ISSUES #29)"
+python3 scripts/check_image_pins.py
+
 echo "── bake app-test (prod image has no pytest)"
 docker buildx bake -f docker-bake.hcl app-test
 

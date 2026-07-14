@@ -38,7 +38,7 @@ services:
       start_period: 15s
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5  # pinned — docs/13-deployment.md §4
+    image: ghcr.io/dagucloud/dagu:2.10.5@sha256:469840b0e3b8e82096eadc93f2bf27b7e7150b0eee8f14343fd545830c2bfa59  # docs/13 §4
     restart: unless-stopped
     ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open
@@ -72,7 +72,7 @@ services:
       start_period: 10s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec",
               "--requirepass", "${REDIS_PASSWORD}"]  # default user = app-only; per-run ACLs for Devs (docs/09 §1a)
@@ -88,7 +88,7 @@ services:
       retries: 5
 
   openobserve:
-    image: public.ecr.aws/zinclabs/openobserve:v0.91.1  # pinned
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.1@sha256:e1ff0445fab3e748ac4cf630308cc8493579e50d19ad255bb3a3b8c1b710aaf7
     restart: unless-stopped
     environment:
       - ZO_ROOT_USER_EMAIL=${OO_ROOT_EMAIL}
@@ -119,7 +119,7 @@ services:
   # services — Dagu spawns them. See docker-bake.hcl group "images".
 
   fluentbit:
-    image: fluent/fluent-bit:3.2
+    image: fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562
     restart: unless-stopped
     command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
     environment:

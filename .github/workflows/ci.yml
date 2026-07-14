@@ -26,6 +26,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Assert image digests pinned (ISSUES #29)
+        run: python3 scripts/check_image_pins.py
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -63,7 +66,7 @@ jobs:
           docker rm -f devcake-ci-redis 2>/dev/null || true
           docker run -d --name devcake-ci-redis --network devcake_control \
             --network-alias redis \
-            redis:7-alpine \
+            redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99 \
             redis-server --requirepass ci-redis-pass --appendonly no
           for i in $(seq 1 30); do
             if docker exec devcake-ci-redis redis-cli --no-auth-warning -a ci-redis-pass ping | grep -q PONG; then

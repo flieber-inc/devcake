@@ -54,6 +54,7 @@ manager = RunManager(store, messaging, executor)
 pmo = make_pmo(config.pmo)
 forge = make_forge(config.repo)
 mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
+manager.set_finalizer(mission_mgr)  # RunFinalizer seam (construct cycle broken)
 
 
 async def refresh_forge_health() -> dict:
@@ -94,8 +95,8 @@ def reload_connections() -> None:
         await refresh_forge_health()
     asyncio.create_task(_ensure(), name="ensure_labels_reload") \
         .add_done_callback(_log_task_death)
-manager.mission_mgr = mission_mgr
-oauth_mgr = OAuthManager(manager, messaging, dev_types)
+oauth_mgr = OAuthManager(manager, messaging, dev_types,
+                         breakers=mission_mgr.breakers)
 manager.oauth_mgr = oauth_mgr
 runlog = RunLogStore()
 manager.runlog = runlog

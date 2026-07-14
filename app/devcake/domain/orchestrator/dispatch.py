@@ -67,7 +67,6 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         inject(carrier)
         traceparent = carrier.get("traceparent", "")
 
-        redis_password = await self.messaging.create_run_user(run_id)
         from ...prompts import (execute_prompt, onboard_prompt, plan_prompt,
                               review_prompt)
         repo_name = self.config.repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
@@ -85,27 +84,20 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             mission_id=mission.pmo_id, mission_key=mission.key,
             mission_type=mtype.value, dev_type=dev_type, seq=seq,
             extra_args=assignment.extra_cli_args)
-        from ..run import auth_digest
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
             pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
             dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
-            traceparent=traceparent, auth_digest=auth_digest(redis_password),
+            traceparent=traceparent,
             spec_env=spec_env,
         )
         run.spec_prompt = prompt
         run.stage_label_at_dispatch = self._stage_of(live)
         run.mission_pmo_id = mission.pmo_id
-        self.runs.store.save(run)                              # durable intent first
-
-        await self.runs.executor.start(
-            params={"RUN_ID": run_id,
-                    "IMAGE": HARNESSES[dev_type.harness_template].image,
-                    "TRACEPARENT": traceparent,
-                    "REDIS_USER": f"dev-{run_id}", "REDIS_PASSWORD": redis_password},
-            dag_run_id=run_id)
+        await self.runs.bootstrap.launch(
+            run, image=HARNESSES[dev_type.harness_template].image)
 
         if live.status == "backlog":
             await self.pmo.set_status(mission.ref, "in_progress")

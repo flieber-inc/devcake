@@ -17,14 +17,14 @@ from . import (decomposition, dispatch, feed, finalize, mapper, review, schedule
                sweeps, transitions)
 from .markers import LEGAL_OUTCOMES  # noqa: F401  — public re-export
 
-if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtime
-    from ...adapters.redis import Messaging
+if TYPE_CHECKING:
+    from ...ports.messaging import MessagingPort
 
 
 class MissionManager:
     def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
                  pmo: PMOPort, forge: ForgePort, runs: RunManager,
-                 messaging: Messaging):
+                 messaging: MessagingPort):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
@@ -85,7 +85,7 @@ MissionManager.activity_payload = dispatch.activity_payload
 MissionManager._checkpoint = finalize._checkpoint
 MissionManager.finalize = finalize.finalize
 MissionManager.apply_forge_health = finalize.apply_forge_health
-MissionManager._dev_failure_error = finalize._dev_failure_error
+MissionManager.dev_failure_error = finalize.dev_failure_error
 MissionManager.restore_after_failure = finalize.restore_after_failure
 MissionManager._post_transcript = finalize._post_transcript
 MissionManager._token_report_md = staticmethod(finalize._token_report_md)

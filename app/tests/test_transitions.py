@@ -149,7 +149,7 @@ def make_mgr(tmp_path, m, forge=None):
         pass
     runs = Runs()
     runs.store = store
-    runs.mission_mgr = None
+    runs.finalizer = None
     mgr = MissionManager.__new__(MissionManager)
     mgr.config = cfg
     mgr.dev_types = {"senior-dev": DevType(name="senior-dev",

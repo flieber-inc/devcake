@@ -43,28 +43,20 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
         inject(carrier)
         traceparent = carrier.get("traceparent", "")
 
-        redis_password = await self.messaging.create_run_user(run_id)
         spec_env = self._protocol_spec_env(
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
             dev_type=dev_type, seq=seq, extra_args="")
-        from ..run import auth_digest
         run = Run(
             run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
             pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
             dev_type=dev_type.name, seq=seq,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
-            traceparent=traceparent, auth_digest=auth_digest(redis_password),
+            traceparent=traceparent,
             spec_env=spec_env,
         )
         run.spec_prompt = mapper_prompt(dev_type.identifying_prompt, eligible)
-        self.runs.store.save(run)                              # durable intent first
-
-        await self.runs.executor.start(
-            params={"RUN_ID": run_id,
-                    "IMAGE": HARNESSES[dev_type.harness_template].image,
-                    "TRACEPARENT": traceparent,
-                    "REDIS_USER": f"dev-{run_id}", "REDIS_PASSWORD": redis_password},
-            dag_run_id=run_id)
+        await self.runs.bootstrap.launch(
+            run, image=HARNESSES[dev_type.harness_template].image)
         log.info("dispatched mapper %s (dev=%s, %d missions in prompt)",
                  run_id, dev_type.name, len(eligible))
         return run
@@ -90,7 +82,7 @@ async def finalize_mapper(self, run: Run, payload: dict) -> None:
         await self.messaging.delete_reply_stream(run.run_id)
         if outcome != "relations_mapped":
             run.state = "failed"
-            run.error = self._dev_failure_error(run, payload)
+            run.error = self.dev_failure_error(run, payload)
             run.ended_at = utcnow()
             self.runs.store.save(run)
             log.warning("mapper run %s failed: %s", run.run_id, run.error)

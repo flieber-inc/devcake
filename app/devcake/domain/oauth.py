@@ -3,17 +3,21 @@ INSIDE the harness images via the normal Dev pipeline — Dagu spawns the
 container, the entrypoint streams the verification URL + user code back over
 Redis (`run.log`), and the resulting credential file arrives on a dedicated
 `oauth.result` message, stored straight to /data/secrets/ (never persisted in
-run records)."""
+run records).
+
+Dispatch spine (ACL → digest → durable save → executor.start) is RunBootstrap;
+this module owns session snapshot + credential landing.
+"""
 
 import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, MutableMapping, Optional
 
 from ..harness import HARNESSES
 from .ids import make_run_id
-from .run import Run, auth_digest
+from .run import Run
 
 log = logging.getLogger("devcake.oauth")
 
@@ -21,10 +25,13 @@ SECRETS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
 
 
 class OAuthManager:
-    def __init__(self, runs, messaging, dev_types):
+    def __init__(self, runs, messaging, dev_types,
+                 breakers: MutableMapping[str, str] | None = None):
         self.runs = runs
         self.messaging = messaging
         self.dev_types = dev_types
+        # optional shared breaker map (MissionManager.breakers); cleared on success
+        self.breakers = breakers
         self.sessions: dict[str, dict[str, Any]] = {}  # run_id → status
 
     async def start(self, dev_type_name: str) -> dict:
@@ -46,19 +53,12 @@ class OAuthManager:
         flow = harness.oauth
         run_id = make_run_id("OAUTH", 1,
                              dev_type.harness_template.split("-")[0].upper())
-        password = await self.messaging.create_run_user(run_id)
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
                   dev_type=dev_type.name, seq=1, timeout_seconds=600,
-                  auth_digest=auth_digest(password),
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
                             "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
-        self.runs.store.save(run)
-        await self.runs.executor.start(
-            params={"RUN_ID": run_id, "IMAGE": harness.image,
-                    "TRACEPARENT": "", "REDIS_USER": f"dev-{run_id}",
-                    "REDIS_PASSWORD": password},
-            dag_run_id=run_id)
+        await self.runs.bootstrap.launch(run, image=harness.image)
         # snapshot everything on_result needs: a dev type deleted or re-harnessed
         # mid-login must not misroute (or KeyError) the credential
         self.sessions[run_id] = {"dev_type": dev_type.name,
@@ -102,8 +102,8 @@ class OAuthManager:
         await self.messaging.delete_run_user(run_id)
         await self.messaging.delete_reply_stream(run_id)
         # a fresh credential clears any auth breaker for this dev type (docs/15 §4)
-        if self.runs.mission_mgr:
-            self.runs.mission_mgr.breakers.pop(s["dev_type"], None)
+        if self.breakers is not None:
+            self.breakers.pop(s["dev_type"], None)
         log.info("oauth: %s credential stored for %s", s["harness"], s["dev_type"])
 
     def status(self, run_id: str) -> Optional[dict]:

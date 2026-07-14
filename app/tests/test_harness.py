@@ -174,11 +174,10 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
         async def create_run_user(self, rid):
             return "pw"
 
-    class Runs:
-        pass
-    runs = Runs()
-    runs.store = RunStore(tmp_path / "runs")
-    runs.executor = FakeExecutor()
+    from devcake.domain.runs import RunManager
+
+    store = RunStore(tmp_path / "runs")
+    runs = RunManager(store, NullMessaging(), FakeExecutor())
 
     mgr = MissionManager.__new__(MissionManager)
     mgr.config = AppConfig()
@@ -203,3 +202,5 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     assert run.spec_env["DEVCAKE_GIT_EMAIL"] == "devcake@users.noreply.github.com"
     assert run.spec_env["DEVCAKE_FORGE_CLI_ENVS"] == "GH_TOKEN"
     assert run.spec_env["DEVCAKE_DEFAULT_BRANCH"] == "main"
+    assert run.auth_digest is not None
+    assert store.get(run.run_id) is not None

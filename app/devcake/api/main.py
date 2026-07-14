@@ -27,8 +27,8 @@ from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_typ
                       save_config, save_dev_type)
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
-from ..domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
-                                   MissionManager)
+from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
+                                   MapperUnconfigured, MissionManager)
 from ..domain.reconcile import reconcile_runs
 from ..domain.runs import RunManager
 from ..domain.watchdog import watchdog_loop
@@ -52,21 +52,71 @@ store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
-pmo = make_pmo(config.pmos[0])
-forge = make_forge(config.repos[0])
-mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
-manager.set_finalizer(mission_mgr)  # RunFinalizer seam (construct cycle broken)
+
+# ── multi-instance wiring (schema v3, ADR-0009) ──────────────────────────────
+# One MissionManager per CONFIGURED PMO instance; shared state is injected:
+# the RunManager/store (global concurrency), ONE dev-type breakers dict
+# (credentials are DevCake-global), and the single forge (plural in M10).
+shared_breakers: dict[str, str] = {}
+managers: dict[str, MissionManager] = {}
+mappers: dict[str, MapperService] = {}
+forge = None                       # None while the repo is unconfigured
+_forge_health: dict = {"value": None}
+
+
+def _build_forge() -> None:
+    global forge
+    inst = config.repos[0]
+    forge = make_forge(inst) if inst.configured else None
+
+
+def build_managers() -> None:
+    """(Re)build the manager set IN PLACE to match config.pmos: existing
+    managers keep their advisory state (grace, anomalies, merge windows) and
+    get repointed adapters; removed instances drop theirs — never leaked."""
+    live = {i.name: i for i in config.pmos if i.configured}
+    for name in [n for n in managers if n not in live]:
+        managers.pop(name)
+        mappers.pop(name, None)
+    for name, inst in live.items():
+        p = make_pmo(inst)
+        if name in managers:
+            mgr = managers[name]
+            mgr.pmo, mgr.forge, mgr.config = p, forge, config
+            mgr.instance, mgr.instance_name = inst, name
+        else:
+            managers[name] = MissionManager(
+                config, dev_types, p, forge, manager, messaging,
+                instance=inst, breakers=shared_breakers)
+            mappers[name] = MapperService(config, dev_types, managers[name])
+
+
+def _managers_in_config_order() -> list[MissionManager]:
+    return [managers[i.name] for i in config.pmos if i.name in managers]
+
+
+_build_forge()
+build_managers()
+router = FinalizerRouter(managers, store)
+manager.set_finalizer(router)  # RunFinalizer seam: routes on run.pmo_ref
 
 
 async def refresh_forge_health() -> dict:
-    try:
-        health = await mission_mgr.forge.health_probe()
-        data = health.model_dump()
-    except Exception as e:
-        # a probe that could not run says nothing about the credential
-        data = {"ok": False, "repository": config.repos[0].url, "can_push": False,
-                "transient": True, "detail": f"forge probe failed: {str(e)[:200]}"}
-    mission_mgr.apply_forge_health(data)
+    if forge is None:
+        data = {"ok": False, "repository": "", "can_push": False,
+                "transient": True, "detail": "repository not configured"}
+    else:
+        try:
+            health = await forge.health_probe()
+            data = health.model_dump()
+        except Exception as e:
+            # a probe that could not run says nothing about the credential
+            data = {"ok": False, "repository": config.repos[0].url,
+                    "can_push": False, "transient": True,
+                    "detail": f"forge probe failed: {str(e)[:200]}"}
+    _forge_health["value"] = data
+    for mgr in managers.values():
+        mgr.apply_forge_health(data)   # latch/clear is idempotent (shared dict)
     return data
 
 
@@ -76,28 +126,27 @@ def _log_task_death(t: asyncio.Task) -> None:
 
 
 def reload_connections() -> None:
-    """Hot-reload both adapters after a config PUT: rebuild from the saved
-    config, repoint the orchestrator and the module globals the loops read,
-    and re-ensure the managed labels — bootstrap is otherwise startup-only,
-    so a hot-swapped team_key would run unlabeled until restart."""
-    global pmo, forge
-    pmo = make_pmo(config.pmos[0])
-    forge = make_forge(config.repos[0])
-    mission_mgr.pmo = pmo
-    mission_mgr.forge = forge
+    """Hot-reload adapters after a config PUT: rebuild the forge, reconcile
+    the manager set, and re-ensure the managed labels per instance —
+    bootstrap is otherwise startup-only, so a hot-swapped team_key would run
+    unlabeled until restart."""
+    _build_forge()
+    build_managers()
     _protection_cache["ts"] = 0.0          # repo may have changed — reprobe
 
     async def _ensure():
-        try:
-            await pmo.ensure_labels(config.pmos[0].team_key, ALL_LABELS)
-        except Exception:
-            log.exception("ensure_labels after config reload failed — labels "
-                          "will be ensured on next restart")
+        for mgr in list(managers.values()):
+            try:
+                await mgr.pmo.ensure_labels(mgr.instance.team_key, ALL_LABELS)
+            except Exception:
+                log.exception("ensure_labels after config reload failed for "
+                              "instance %s — ensured on next restart",
+                              mgr.instance_name)
         await refresh_forge_health()
     asyncio.create_task(_ensure(), name="ensure_labels_reload") \
         .add_done_callback(_log_task_death)
 oauth_mgr = OAuthManager(manager, messaging, dev_types,
-                         breakers=mission_mgr.breakers)
+                         breakers=shared_breakers)
 manager.oauth_mgr = oauth_mgr
 runlog = RunLogStore()
 manager.runlog = runlog
@@ -105,11 +154,73 @@ manager.runlog = runlog
 # poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
 missions_cache: list[dict] = []
 
-mapper = MapperService(config, dev_types, mission_mgr)
+
+def _claim_missions(mgr: MissionManager, fetched: list,
+                    owner: dict[str, str]) -> list:
+    """Cross-instance dedupe on the RAW pmo_id (v0.1 plan H1): a Linear
+    project can be accessible to two teams, so two instances in one
+    workspace would both adopt it — duplicate decomposition, label fights.
+    First configured instance claims it; later instances surface an anomaly
+    and skip. Pure function (hermetically tested)."""
+    missions = []
+    for m in fetched:
+        prior = owner.get(m.pmo_id)
+        if prior is not None and prior != mgr.instance_name:
+            mgr.anomalies[m.pmo_id] = (
+                f"{m.key} is also visible to instance '{prior}' — handled "
+                f"there (shared project?); skipped here")
+            continue
+        owner[m.pmo_id] = mgr.instance_name
+        missions.append(m)
+    return missions
+
+
+async def _poll_instance(mgr: MissionManager, owner: dict[str, str],
+                         cache_rows: list[dict]) -> tuple[int, int, int]:
+    """One instance's poll segment: fetch + cross-instance dedupe + derive +
+    gate + sweeps + schedule + cache rows. Returns (seen, candidates,
+    dispatched). Raises PMOTransient for the caller's per-instance skip."""
+    fetched = await mgr.pmo.list_all(mgr.instance.team_key)
+    missions = _claim_missions(mgr, fetched, owner)
+    derived = [(m, derive(m, config.adoption_mode)) for m in missions]
+    # the gate is a poll artifact, computed EVERY cycle — pause freezes
+    # dispatch, never information (docs/04 §2)
+    gate = await mgr.gate_map(missions)
+    await mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
+    # intake pause (docs/11): no NEW dispatches — in-flight runs still
+    # finalize (ingress consumer) and sweeps above keep running
+    if config.intake_paused:
+        dispatched = 0
+    else:
+        dispatched = await mgr.schedule(missions, gate)
+        await mappers[mgr.instance_name].maybe_dispatch(missions)
+    mgr.rotate_grace()
+    # anomalies are advisory and per-mission: prune once terminal
+    terminal = {m.pmo_id for m in missions if m.status in ("done", "canceled")}
+    for k in list(mgr.anomalies):
+        if k in terminal:
+            del mgr.anomalies[k]
+    id_to_key = {m.pmo_id: m.key for m in missions}
+    cache_rows.extend({
+        "instance": mgr.instance_name,
+        "team": mgr.instance.team_key,
+        "key": m.key, "kind": m.pmo_kind, "title": m.title,
+        "status": m.status, "priority": m.priority,
+        "labels": sorted(m.labels), "mission_type": d.mission_type,
+        "schedulable": d.schedulable,
+        # the blocked-by gate is a scheduler concern, not a derivation row —
+        # surfaced so the admin panel shows why (ADR-0007)
+        "reason": gate.get(m.pmo_id, d.reason),
+        "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
+        "pmo_id": m.pmo_id,
+    } for m, d in derived)
+    return (len(missions), sum(1 for _, d in derived if d.schedulable), dispatched)
 
 
 async def poll_loop() -> None:
-    """Poll cycle (docs/04 §1): fetch + derive + gate + dispatch + sweeps + cache."""
+    """Poll cycle (docs/04 §1): per configured instance — fetch + dedupe +
+    derive + gate + dispatch + sweeps — then the merged cache. A PMOTransient
+    skips only that instance's segment, never the whole cycle."""
     cycle = 0
     while True:
         cycle += 1
@@ -118,50 +229,32 @@ async def poll_loop() -> None:
             try:
                 # a latched forge breaker re-probes every cycle so a transient
                 # failure (or a rotated-back token) self-heals without an operator
-                if "forge" in mission_mgr.breakers:
+                if "forge" in shared_breakers:
                     await refresh_forge_health()
-                missions = await pmo.list_all(config.pmos[0].team_key)
-                derived = [(m, derive(m, config.adoption_mode)) for m in missions]
-                candidates = [m for m, d in derived if d.schedulable]
-                # the gate is a poll artifact, computed EVERY cycle — pause
-                # freezes dispatch, never information (docs/04 §2)
-                gate = await mission_mgr.gate_map(missions)
-                await mission_mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
-                # intake pause (docs/11): no NEW dispatches — in-flight runs still
-                # finalize (ingress consumer) and sweeps above keep running
-                if config.intake_paused:
-                    dispatched = 0
-                else:
-                    dispatched = await mission_mgr.schedule(missions, gate)
-                    await mapper.maybe_dispatch(missions)
-                mission_mgr.rotate_grace()
-                # anomalies are advisory and per-mission: prune once terminal
-                terminal = {m.pmo_id for m in missions
-                            if m.status in ("done", "canceled")}
-                for k in list(mission_mgr.anomalies):
-                    if k in terminal:
-                        del mission_mgr.anomalies[k]
-                missions_cache.clear()
-                id_to_key = {m.pmo_id: m.key for m in missions}
-                missions_cache.extend({
-                    "key": m.key, "kind": m.pmo_kind, "title": m.title,
-                    "status": m.status, "priority": m.priority,
-                    "labels": sorted(m.labels), "mission_type": d.mission_type,
-                    "schedulable": d.schedulable,
-                    # the blocked-by gate is a scheduler concern, not a derivation
-                    # row — surface it here so the admin panel shows why (ADR-0007)
-                    "reason": gate.get(m.pmo_id, d.reason),
-                    "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
-                    "pmo_id": m.pmo_id,
-                } for m, d in derived)
-                span.set_attribute("devcake.missions.seen", len(missions))
-                span.set_attribute("devcake.missions.candidates", len(candidates))
-                span.set_attribute("devcake.missions.dispatched", dispatched)
-                log.info("poll.cycle %d: %d missions, %d candidates, %d dispatched",
-                         cycle, len(missions), len(candidates), dispatched)
-            except PMOTransient as e:
-                span.set_attribute("devcake.outcome", "PMO_TRANSIENT")
-                log.warning("poll.cycle %d skipped: %s", cycle, e)
+                cache_rows: list[dict] = []
+                seen, cand, disp = 0, 0, 0
+                # cross-manager dedupe (v0.1 plan H1): a Linear project can be
+                # accessible to two teams — first configured instance wins,
+                # the loser surfaces an anomaly instead of double-dispatching
+                owner: dict[str, str] = {}          # raw pmo_id → instance name
+                for mgr in _managers_in_config_order():
+                    with tracer.start_as_current_span("poll.instance") as ispan:
+                        ispan.set_attribute("devcake.instance", mgr.instance_name)
+                        try:
+                            s, c, d = await _poll_instance(mgr, owner, cache_rows)
+                            seen, cand, disp = seen + s, cand + c, disp + d
+                        except PMOTransient as e:
+                            # transient PMO trouble skips only THIS instance's
+                            # segment — the others still poll this cycle
+                            ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
+                            log.warning("poll.cycle %d: instance %s skipped: %s",
+                                        cycle, mgr.instance_name, e)
+                missions_cache[:] = cache_rows
+                span.set_attribute("devcake.missions.seen", seen)
+                span.set_attribute("devcake.missions.candidates", cand)
+                span.set_attribute("devcake.missions.dispatched", disp)
+                log.info("poll.cycle %d: %d missions, %d candidates, %d dispatched "
+                         "(%d instances)", cycle, seen, cand, disp, len(managers))
             except Exception:
                 # a poll cycle must NEVER kill the loop — log and try again next tick
                 span.set_attribute("devcake.outcome", "cycle_error")
@@ -226,12 +319,15 @@ async def lifespan(app: FastAPI):
             await messaging.delete_run_user(run_id)
         with contextlib.suppress(Exception):
             await messaging.delete_reply_stream(run_id)
-    # startup reconciliation (docs/04 §6)
-    try:
-        await pmo.ensure_labels(config.pmos[0].team_key, ALL_LABELS)          # step 2
-        log.info("labels ensured in team %s", config.pmos[0].team_key)
-    except Exception:
-        log.exception("label bootstrap failed — poll loop will keep retrying reads")
+    # startup reconciliation (docs/04 §6) — labels per configured instance
+    for mgr in list(managers.values()):
+        try:
+            await mgr.pmo.ensure_labels(mgr.instance.team_key, ALL_LABELS)   # step 2
+            log.info("labels ensured in team %s (instance %s)",
+                     mgr.instance.team_key, mgr.instance_name)
+        except Exception:
+            log.exception("label bootstrap failed for instance %s — poll loop "
+                          "will keep retrying reads", mgr.instance_name)
     await refresh_forge_health()
     await reconcile_runs(manager)
     tasks = [
@@ -281,9 +377,9 @@ async def _branch_protection():
     if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
         _protection_cache["ts"] = time.monotonic()
         try:
-            prot = (await mission_mgr.forge.default_branch_protection(
+            prot = (await forge.default_branch_protection(
                         config.repos[0].default_branch)
-                    if config.repos[0].url else None)
+                    if forge is not None else None)
             # serialized here so the /health JSON shape stays byte-identical
             _protection_cache["value"] = prot.model_dump() if prot else None
         except Exception:
@@ -332,28 +428,55 @@ async def health():
         _check_http(f"{DAGU_URL}/api/v1/health"),
         _check_http(f"{OO_URL}/healthz"),
     )
-    try:
-        pmo_ok = (await pmo.health_probe(config.pmos[0].team_key)).ok
-    except Exception:
-        pmo_ok = False
+    # per-instance PMO health (schema v3): unconfigured instances show grey
+    # (ok: None), never red; the scalar `pmo` aggregate keeps the SPA's
+    # health dot working (true = every configured instance probes ok)
+    pmo_instances: dict[str, dict] = {}
+    for inst in config.pmos:
+        if not inst.configured:
+            pmo_instances[inst.name] = {"ok": None, "configured": False,
+                                        "team": ""}
+            continue
+        mgr = managers.get(inst.name)
+        try:
+            ok = bool(mgr) and (await mgr.pmo.health_probe(inst.team_key)).ok
+        except Exception:
+            ok = False
+        pmo_instances[inst.name] = {"ok": ok, "configured": True,
+                                    "team": inst.team_key}
+    configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
+    prefixed = len(managers) > 1   # advisory text carries the instance when N>1
+
+    def _merged(attr: str) -> dict:
+        out: dict = {}
+        for name, mgr in managers.items():
+            for k, v in getattr(mgr, attr).items():
+                out[k] = f"[{name}] {v}" if prefixed and isinstance(v, str) else v
+        return out
+
     return {
         "app": True,
         "redis": redis_ok,
         "dagu": dagu_ok,
         "openobserve": oo_ok,
         "oo_ingest": await _oo_ingest_check(),
-        "pmo": pmo_ok,
-        "forge": mission_mgr.forge_health,
-        "circuit_breakers": mission_mgr.breakers,
+        "pmo": bool(configured_ok) and all(configured_ok),
+        "pmo_instances": pmo_instances,
+        "forge": _forge_health["value"],
+        "circuit_breakers": shared_breakers,
         "intake_paused": config.intake_paused,
         "active_runs": len(store.active()),
         "forge_protection": await _branch_protection(),
-        "anomalies": mission_mgr.anomalies,
-        "merge_handoffs": mission_mgr.merge_handoffs,
-        "needs_human": mission_mgr.needs_human,
-        "dependency_cycles": mission_mgr.cycles,
-        "blocked_reasons": mission_mgr.blocked_reasons,
-        "mapper_degraded": mapper.degraded(),
+        "anomalies": _merged("anomalies"),
+        "merge_handoffs": _merged("merge_handoffs"),
+        "needs_human": _merged("needs_human"),
+        "dependency_cycles": [
+            ([f"{name}:{k}" for k in cyc] if prefixed else cyc)
+            for name, mgr in managers.items() for cyc in mgr.cycles],
+        "blocked_reasons": _merged("blocked_reasons"),
+        "mapper_degraded": " · ".join(
+            f"[{name}] {msg}" if prefixed else str(msg)
+            for name, mp in mappers.items() if (msg := mp.degraded())) or None,
         "security_warnings": _security_warnings(),
     }
 
@@ -366,7 +489,10 @@ async def liveness():
 @app.get("/api/v1/missions")
 async def list_missions():
     """Current derived Missions (poll-cycle snapshot; advisory cache — INV-1)."""
-    return {"team": config.pmos[0].team_key, "adoption_mode": config.adoption_mode,
+    # rows carry per-instance provenance ("instance"/"team" fields);
+    # `teams` maps every configured instance for group-by consumers
+    return {"teams": {i.name: i.team_key for i in config.pmos if i.configured},
+            "adoption_mode": config.adoption_mode,
             "missions": missions_cache}
 
 
@@ -441,8 +567,9 @@ async def clear_runs():
     with tracer.start_as_current_span("system.clear_runs") as span:
         result = await clear_all(store, executor, messaging, runlog)
         missions_cache.clear()
-        mission_mgr._grace.clear()
-        mission_mgr._grace_next.clear()
+        for mgr in managers.values():
+            mgr._grace.clear()
+            mgr._grace_next.clear()
         # auth breakers stay — they reflect live credential health, not run history
         span.set_attribute("devcake.clear.runs_deleted",
                            int((result.get("local") or {}).get("runs_deleted") or 0))
@@ -475,12 +602,14 @@ async def put_config(body: dict):
     if rm.interval_minutes < 1:
         raise HTTPException(422, "relations_mapper.interval_minutes must be ≥ 1")
     # Dry-run adapter construction before persist (ISSUES #11): a bad URL or
-    # forge shape must not leave a broken config on disk. Empty repo URL is
-    # allowed for first-boot until the operator configures a repository.
+    # forge shape must not leave a broken config on disk. Unconfigured
+    # instances (empty team_key / repo URL) are valid-but-idle (schema v3).
     try:
-        make_pmo(merged.pmo)
-        if merged.repo.url:
-            make_forge(merged.repo)
+        for inst in merged.pmos:
+            make_pmo(inst)
+        for repo in merged.repos:
+            if repo.configured:
+                make_forge(repo)
     except Exception as e:
         raise HTTPException(422, f"adapter construction failed: {e}") from e
     previous = config.model_dump()
@@ -556,7 +685,7 @@ async def upload_credentials(name: str, body: dict):
     p = target / fname
     p.write_text(body.get("content") or "")
     p.chmod(0o600)
-    mission_mgr.breakers.pop(name, None)   # fresh credential clears the breaker
+    shared_breakers.pop(name, None)   # fresh credential clears the breaker
     return {"stored": f"{name}/{fname}"}
 
 
@@ -624,16 +753,27 @@ async def connections_registry():
     }
 
 
-@app.post("/api/v1/connections/pmo/test")
-async def test_pmo():
-    if not config.pmos[0].api_key:
-        return {"ok": False, "error": f"env var {config.pmos[0].api_key_env} is empty or "
+@app.post("/api/v1/connections/pmo/{name}/test")
+async def test_pmo(name: str):
+    inst = next((i for i in config.pmos if i.name == name), None)
+    if inst is None:
+        raise HTTPException(404, f"no PMO instance named {name!r}")
+    if not inst.api_key:
+        return {"ok": False, "error": f"env var {inst.api_key_env} is empty or "
                                       "unset in DevCake's environment — put the API key "
                                       "in .env and restart"}
+    if not inst.configured:
+        return {"ok": False, "error": "team key is empty — the instance is "
+                                      "idle until one is set"}
+    mgr = managers.get(name)
+    if mgr is None:
+        return {"ok": False, "error": "instance not active — save the config "
+                                      "first, then test"}
     try:
-        h = await pmo.health_probe(config.pmos[0].team_key)
-        missions = await pmo.list_all(config.pmos[0].team_key)
-        return {"ok": h.ok, "team": h.workspace or config.pmos[0].team_key,
+        h = await mgr.pmo.health_probe(inst.team_key)
+        missions = await mgr.pmo.list_all(inst.team_key)
+        return {"ok": h.ok, "instance": name,
+                "team": h.workspace or inst.team_key,
                 "labels": h.managed_labels_present,
                 "labels_expected": h.managed_labels_expected,
                 "missions_visible": len(missions)}
@@ -643,12 +783,15 @@ async def test_pmo():
 
 @app.post("/api/v1/connections/forge/test")
 async def test_forge():
+    if forge is None:
+        return {"ok": False, "error": "repository URL is empty — configure a "
+                                      "repository first"}
     if not config.repos[0].token:
         return {"ok": False, "error": f"env var {config.repos[0].resolved_token_env} is empty or "
                                       "unset in DevCake's environment — the field wants "
                                       "the env var NAME; the token itself goes in .env"}
     try:
-        f = mission_mgr.forge
+        f = forge
         health = await refresh_forge_health()
         if not health["ok"]:
             return health
@@ -664,16 +807,23 @@ async def test_forge():
 
 
 @app.post("/api/v1/relations-mapper/run")
-async def run_mapper():
+async def run_mapper(instance: str | None = None):
     """Manual trigger (docs/11): works regardless of the enabled toggle — the
-    toggle governs only the periodic service. Requires a valid dev_type."""
+    toggle governs only the periodic service. Requires a valid dev_type.
+    ?instance= selects the PMO instance; default = the first configured."""
+    names = [i.name for i in config.pmos if i.name in mappers]
+    if not names:
+        raise HTTPException(422, "no configured PMO instance")
+    target = instance or names[0]
+    if target not in mappers:
+        raise HTTPException(404, f"no PMO instance named {target!r}")
     try:
-        run = await mapper.run_now()
+        run = await mappers[target].run_now()
     except MapperUnconfigured as e:
         raise HTTPException(422, str(e))
     except MapperBusy as e:
         raise HTTPException(409, str(e))
-    return {"run_id": run.run_id, "state": run.state}
+    return {"run_id": run.run_id, "state": run.state, "instance": target}
 
 
 # ── GUI OAuth helpers (docs/11 §2) ───────────────────────────────────────────

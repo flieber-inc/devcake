@@ -351,6 +351,10 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
 
   const test = async (kind) =>
     setTestResult({ ...testResult, [kind]: await send("POST", `/connections/${kind}/test`) });
+  // per-PMO-instance test (schema v3): keyed pmo:{name} in testResult
+  const testPmo = async (name) =>
+    setTestResult({ ...testResult,
+                    [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
 
   const runMapper = async () => {
     setMapperMsg("Starting…");
@@ -517,33 +521,63 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
         </div>
       </Section>
 
-      <Section id="pmo" title="PMO connection"
-        description={`The PMO team DevCake watches, and how it adopts missions. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}.`}>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field label="Team key"
-            help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). DevCake watches only this team.">
-            <Input value={cfg.pmos[0].team_key}
-            onChange={(e) => setField("cfg.pmos.0.team_key", e.target.value)} /></Field>
-          <EnvVarField label="API key env var"
-            help={`The NAME of the environment variable in DevCake's .env that holds your PMO API key — not the key itself. Default: ${registry.pmo_systems.find((s) => s.id === cfg.pmos[0].system)?.api_key_env_default ?? "LINEAR_API_KEY"}.`}
-            value={cfg.pmos[0].api_key_env}
-            onChange={(e) => setField("cfg.pmos.0.api_key_env", e.target.value)} />
+      <Section id="pmo" title="PMO connections"
+        description={`The PMO teams DevCake watches (one instance each), and how it adopts missions. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
+        {cfg.pmos.map((inst, idx) => {
+          const tr = testResult[`pmo:${inst.name}`];
+          return (
+            <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                {cfg.pmos.length > 1 && (
+                  <Button kind="danger-ghost" onClick={() =>
+                    setField("cfg.pmos", cfg.pmos.filter((_, i) => i !== idx))}>
+                    Remove
+                  </Button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Instance name"
+                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids — choose once, renaming strands in-flight missions.">
+                  <Input value={inst.name}
+                  onChange={(e) => setField(`cfg.pmos.${idx}.name`, e.target.value)} /></Field>
+                <Field label="Team key"
+                  help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.">
+                  <Input value={inst.team_key}
+                  onChange={(e) => setField(`cfg.pmos.${idx}.team_key`, e.target.value)} /></Field>
+                <EnvVarField label="API key env var"
+                  help={`The NAME of the environment variable in DevCake's .env that holds this instance's PMO API key — not the key itself.`}
+                  value={inst.api_key_env}
+                  fallback={registry.pmo_systems.find((s) => s.id === inst.system)?.api_key_env_default}
+                  onChange={(e) => setField(`cfg.pmos.${idx}.api_key_env`, e.target.value)} />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>
+                <ImmediateBadge text="tests saved values" />
+                {tr && (
+                  <span className={`text-sm ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                    {tr.ok
+                      ? `✓ team ${tr.team}: ${tr.labels}/${tr.labels_expected ?? 10} labels, ${tr.missions_visible} items visible`
+                      : `✗ ${tr.error}`}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div className="flex flex-wrap items-center gap-3">
+          <Button kind="ghost" onClick={() =>
+            setField("cfg.pmos", [...cfg.pmos,
+              { name: `linear${cfg.pmos.length + 1}`, system: "linear",
+                api_key_env: "LINEAR_API_KEY", team_key: "", api_base: null,
+                default_repo: null }])}>
+            + Add PMO instance
+          </Button>
           <Field label="Poll interval (s)"
-            help="How often DevCake polls the PMO for new or changed missions. Lower = faster pickup, more API calls.">
+            help="How often DevCake polls each PMO instance for new or changed missions. Lower = faster pickup, more API calls.">
             <Input type="number"
             value={cfg.poll_interval_seconds}
             onChange={(e) => setField("cfg.poll_interval_seconds", Number(e.target.value))} /></Field>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button kind="ghost" onClick={() => test("pmo")}>Test connection</Button>
-          <ImmediateBadge text="tests saved values" />
-          {testResult.pmo && (
-            <span className={`text-sm ${testResult.pmo.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
-              {testResult.pmo.ok
-                ? `✓ team ${testResult.pmo.team}: ${testResult.pmo.labels}/${testResult.pmo.labels_expected ?? 10} labels, ${testResult.pmo.missions_visible} items visible`
-                : `✗ ${testResult.pmo.error}`}
-            </span>
-          )}
         </div>
         <Field label="Adoption mode"
           help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">

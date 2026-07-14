@@ -115,5 +115,5 @@ class MapperService:
         async with self._lock:
             if self.active():
                 raise MapperBusy("a relations-mapper run is already active")
-            missions = await self.mgr.pmo.list_all(self.config.pmos[0].team_key)
+            missions = await self.mgr.pmo.list_all(self.mgr.instance.team_key)
             return await self.mgr.dispatch_mapper(dt, missions)

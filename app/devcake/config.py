@@ -113,6 +113,10 @@ class RepoInstance(BaseModel):
         return v
 
     @property
+    def configured(self) -> bool:
+        return bool(self.url.strip())
+
+    @property
     def resolved_token_env(self) -> str:
         """token_env, or the forge descriptor's default when unset. Resolved
         at READ time, never materialized into the model: a persisted "" must

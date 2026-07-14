@@ -31,9 +31,12 @@ def env(name, required=True):
     return ""
 
 
+# Tester-side credentials/targets: overridable per run (schema v3 made
+# instances plural — the gate must be able to point at any team/key/repo,
+# not just the .env seeds). Full multi-forge parity is M12 (ISSUES #30).
 KEY = env("LINEAR_API_KEY")
-TEAM = env("DEVCAKE_TEAM_KEY")
-REPO_URL = env("DEVCAKE_REPO_URL")
+TEAM = env("DEVCAKE_TEAM_KEY", required=False)
+REPO_URL = env("DEVCAKE_REPO_URL", required=False)
 FORGE = "github"  # overridden in __main__
 
 
@@ -143,8 +146,26 @@ if __name__ == "__main__":
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--forge", choices=("github", "gitlab"), default="github",
                     help="Forge under test (default: github)")
+    ap.add_argument("--team", default=None,
+                    help="Linear team key to seed the mission in "
+                         "(default: DEVCAKE_TEAM_KEY from .env)")
+    ap.add_argument("--api-key-env", default=None,
+                    help="env-var NAME (read from .env) holding the Linear "
+                         "key for --team (default: LINEAR_API_KEY)")
+    ap.add_argument("--repo-url", default=None,
+                    help="repo the merged PR is asserted in "
+                         "(default: DEVCAKE_REPO_URL from .env)")
     args = ap.parse_args()
     FORGE = args.forge
+    if args.api_key_env:
+        KEY = env(args.api_key_env)
+    if args.team:
+        TEAM = args.team
+    if args.repo_url:
+        REPO_URL = args.repo_url
+    if not TEAM or not REPO_URL:
+        sys.exit("need a team and repo: set DEVCAKE_TEAM_KEY/DEVCAKE_REPO_URL "
+                 "in .env or pass --team/--repo-url")
     for i in range(args.runs):
         run_once(i)
     print(f"ACCEPTANCE GREEN: {args.runs}/{args.runs} unattended golden paths "

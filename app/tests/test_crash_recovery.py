@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from devcake.config import PMOInstance
+
 from devcake.domain.run import Run, utcnow
 from devcake.domain.runs import RunManager
 from devcake.adapters.files.run_store import RunStore
@@ -441,6 +443,7 @@ def test_human_needed_baton_posted_once(tmp_path):
 
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
+    mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
     mgr.dev_types = {}
     mgr.pmo = FakePMO()
@@ -513,6 +516,7 @@ def test_redelivery_own_label_swap_is_not_external_transition(tmp_path):
 
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
+    mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
     mgr.dev_types = {}
     mgr.pmo = FakePMO()

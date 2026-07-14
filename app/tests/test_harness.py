@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import get_args
 
-from devcake.config import AppConfig, DevType
+from devcake.config import PMOInstance, AppConfig, DevType
 from devcake.harness import HARNESSES, dev_type_status
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.model import Mission
@@ -184,6 +184,7 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
 
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
+    mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
     mgr.runs = runs
     mgr.messaging = NullMessaging()
@@ -217,6 +218,7 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     from devcake.config import RepoInstance
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
+    mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
     mgr.forge = make_forge(RepoInstance(url="https://github.com/o/r"))
     env = mgr._protocol_spec_env(

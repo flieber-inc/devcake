@@ -11,6 +11,8 @@ import asyncio
 
 import pytest
 
+from devcake.config import PMOInstance
+
 from devcake.domain.run import Run, auth_digest
 from devcake.domain.run_bootstrap import RunBootstrap
 
@@ -183,6 +185,7 @@ def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
     runs = RunManager(store, FakeMessaging(), executor)
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
+    mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
     mgr.runs = runs
     mgr.messaging = FakeMessaging()

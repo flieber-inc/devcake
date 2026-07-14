@@ -100,7 +100,7 @@ async def finalize_mapper(self, run: Run, payload: dict) -> None:
 async def _apply_mapper_edges(self, edges: list) -> tuple[int, int]:
     """The Dev is advisory; the app is the gatekeeper — drop edges that are
     unknown, self, terminal, duplicate, or cycle-forming (ADR-0007)."""
-    missions = await self.pmo.list_all(self.config.pmos[0].team_key)
+    missions = await self.pmo.list_all(self.instance.team_key)
     by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
     graph = {m.pmo_id: set(m.blocked_by) for m in missions
              if m.pmo_kind == "issue"}                 # node → its blockers

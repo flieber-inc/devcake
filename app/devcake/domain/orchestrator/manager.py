@@ -24,19 +24,24 @@ if TYPE_CHECKING:
 class MissionManager:
     def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
                  pmo: PMOPort, forge: ForgePort, runs: RunManager,
-                 messaging: MessagingPort):
+                 messaging: MessagingPort, *,
+                 instance=None, breakers: dict[str, str] | None = None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
         self.forge = forge
         self.runs = runs
         self.messaging = messaging
-        # this manager's PMO-instance identity (schema v3): the branch/run-id
-        # prefix and the pmo_ref stamped on runs. M9.3 makes managers plural.
-        self.instance_name: str = config.pmos[0].name
+        # this manager's PMO-instance identity (schema v3): one manager per
+        # configured instance (ADR-0009); the name is the branch/run-id
+        # prefix and the pmo_ref stamped on runs
+        self.instance = instance if instance is not None else config.pmos[0]
+        self.instance_name: str = self.instance.name
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
-        self.breakers: dict[str, str] = {}  # dev_type → reason (DEV_AUTH circuit breaker)
+        # dev_type → reason (DEV_AUTH circuit breaker). Credentials are
+        # DevCake-global, so main injects ONE dict shared by all managers.
+        self.breakers: dict[str, str] = breakers if breakers is not None else {}
         self.forge_health: dict | None = None  # last probe result (advisory; /health)
         self.blocked_reasons: dict[str, str] = {}  # last gate_map → /health (advisory)
         self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map

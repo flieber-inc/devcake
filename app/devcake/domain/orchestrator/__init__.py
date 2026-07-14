@@ -6,11 +6,13 @@ imports remain `from devcake.domain.orchestrator import MissionManager, ...`.
 
 from ..mapper_service import MapperBusy, MapperService, MapperUnconfigured
 from . import markers
+from .router import FinalizerRouter
 from .manager import MissionManager
 from .markers import AUDIT_PATH, LEGAL_OUTCOMES
 
 __all__ = [
     "AUDIT_PATH",
+    "FinalizerRouter",
     "LEGAL_OUTCOMES",
     "MapperBusy",
     "MapperService",

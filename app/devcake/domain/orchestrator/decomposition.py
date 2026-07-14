@@ -56,7 +56,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
 
     existing: dict[int, str] = {}
     conflicts: list[str] = []
-    for mission in await self.pmo.list_all(self.config.pmos[0].team_key):
+    for mission in await self.pmo.list_all(self.instance.team_key):
         if LABEL_CREATED not in mission.labels:
             continue
         marker = DECOMPOSITION_MARKER_RE.search(mission.description or "")
@@ -113,7 +113,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
     async def _resolve_existing_child(part: int) -> str | None:
         if part in existing:
             return existing[part]
-        for mission in await self.pmo.list_all(self.config.pmos[0].team_key):
+        for mission in await self.pmo.list_all(self.instance.team_key):
             marker = DECOMPOSITION_MARKER_RE.search(mission.description or "")
             if marker and marker.group(1) == pmo_id \
                     and int(marker.group(3)) == part:
@@ -136,7 +136,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                       f"`devcake:decomposition:v1 parent={pmo_id} "
                       f"manifest={manifest} part={i}/{len(normalized)}`")
             key, child_id = await self.pmo.create_mission(
-                self.config.pmos[0].team_key, title,
+                self.instance.team_key, title,
                 d["description"] + footer,
                 d["priority"], labels,
                 parent_ref=pmo_id if is_project else None)

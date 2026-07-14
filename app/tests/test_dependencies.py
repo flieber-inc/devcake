@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from devcake.config import AppConfig, DevType
+from devcake.config import PMOInstance, AppConfig, DevType
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.model import Mission
 from devcake.adapters.files.run_store import RunStore
@@ -34,6 +34,7 @@ class DepPMO:
 def make_mgr(tmp_path, pmo):
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
+    mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
     mgr.dev_types = {
         "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),

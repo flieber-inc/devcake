@@ -2,6 +2,20 @@
 
 Instructions for coding agents (Claude, Cursor, Grok, Codex, etc.) working in this repo.
 
+## Always Works™ (mandatory before done)
+
+**"Should work" ≠ "does work."** Before marking any change complete, prove it with evidence you personally observed — not assumptions.
+
+| Change type | Minimum proof |
+|---|---|
+| Docker / Bake / Compose | `docker buildx bake …` succeeds **and** `docker compose up -d` + healthchecks pass |
+| App / API | Bake (or restart) app **and** pytest in container **or** real HTTP to the changed path |
+| Admin SPA | `bake admin` **and** load UI / nginx-health |
+| Dev harness / entrypoint | `bake images` (or affected target) **and** smoke CLI + import entrypoint |
+| Docs-only | No runtime required; still re-read for accuracy |
+
+Never claim done from "build succeeded" alone when the user-facing path is run/up. Name anything still unproven.
+
 ## Docker images: Bake only
 
 **DevCake images are built only with Docker Bake.** Compose never builds them.

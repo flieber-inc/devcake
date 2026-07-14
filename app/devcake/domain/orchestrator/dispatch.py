@@ -68,14 +68,14 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
         from ...prompts import (execute_prompt, onboard_prompt, plan_prompt,
                               review_prompt)
-        repo_name = self.config.repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        repo_name = self.config.repos[0].url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(dev_type.identifying_prompt, live),
             MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
             MissionType.EXECUTE: lambda: execute_prompt(
                 dev_type.identifying_prompt, live, repo_name,
                 pr_instructions=self.forge.descriptor.pr_instructions,
-                default_branch=self.config.repo.default_branch),
+                default_branch=self.config.repos[0].default_branch),
             MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
         }[mtype]()
 
@@ -86,7 +86,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
-            pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
+            pmo_ref=self.config.pmos[0].name, repo_ref=self.config.repos[0].name,
             dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
@@ -118,8 +118,8 @@ def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
         "DEVCAKE_DEV_TYPE": dev_type.name,
         "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
         "DEVCAKE_SEQ": str(seq),
-        "DEVCAKE_REPO_URL": self.config.repo.url,
-        "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
+        "DEVCAKE_REPO_URL": self.config.repos[0].url,
+        "DEVCAKE_DEFAULT_BRANCH": self.config.repos[0].default_branch,
         "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
         "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
         "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
@@ -147,8 +147,8 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     # so private repos keep working without a separate RO PAT.
     # Reviewer PAT stays app-side only.
     env: dict[str, str] = {**env_creds}
-    write = self.config.repo.token
-    ro = self.config.repo.token_ro
+    write = self.config.repos[0].token
+    ro = self.config.repos[0].token_ro
     if run.mission_type == "EXECUTE":
         env["DEVCAKE_FORGE_TOKEN"] = write
     else:

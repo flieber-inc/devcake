@@ -23,7 +23,7 @@ from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_pmo
 from .. import security
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
-                      load_config, load_dev_types, reject_v1_patch,
+                      load_config, load_dev_types, reject_stale_patch,
                       save_config, save_dev_type)
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
@@ -52,8 +52,8 @@ store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
-pmo = make_pmo(config.pmo)
-forge = make_forge(config.repo)
+pmo = make_pmo(config.pmos[0])
+forge = make_forge(config.repos[0])
 mission_mgr = MissionManager(config, dev_types, pmo, forge, manager, messaging)
 manager.set_finalizer(mission_mgr)  # RunFinalizer seam (construct cycle broken)
 
@@ -64,7 +64,7 @@ async def refresh_forge_health() -> dict:
         data = health.model_dump()
     except Exception as e:
         # a probe that could not run says nothing about the credential
-        data = {"ok": False, "repository": config.repo.url, "can_push": False,
+        data = {"ok": False, "repository": config.repos[0].url, "can_push": False,
                 "transient": True, "detail": f"forge probe failed: {str(e)[:200]}"}
     mission_mgr.apply_forge_health(data)
     return data
@@ -81,15 +81,15 @@ def reload_connections() -> None:
     and re-ensure the managed labels — bootstrap is otherwise startup-only,
     so a hot-swapped team_key would run unlabeled until restart."""
     global pmo, forge
-    pmo = make_pmo(config.pmo)
-    forge = make_forge(config.repo)
+    pmo = make_pmo(config.pmos[0])
+    forge = make_forge(config.repos[0])
     mission_mgr.pmo = pmo
     mission_mgr.forge = forge
     _protection_cache["ts"] = 0.0          # repo may have changed — reprobe
 
     async def _ensure():
         try:
-            await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)
+            await pmo.ensure_labels(config.pmos[0].team_key, ALL_LABELS)
         except Exception:
             log.exception("ensure_labels after config reload failed — labels "
                           "will be ensured on next restart")
@@ -120,7 +120,7 @@ async def poll_loop() -> None:
                 # failure (or a rotated-back token) self-heals without an operator
                 if "forge" in mission_mgr.breakers:
                     await refresh_forge_health()
-                missions = await pmo.list_all(config.pmo.team_key)
+                missions = await pmo.list_all(config.pmos[0].team_key)
                 derived = [(m, derive(m, config.adoption_mode)) for m in missions]
                 candidates = [m for m, d in derived if d.schedulable]
                 # the gate is a poll artifact, computed EVERY cycle — pause
@@ -228,8 +228,8 @@ async def lifespan(app: FastAPI):
             await messaging.delete_reply_stream(run_id)
     # startup reconciliation (docs/04 §6)
     try:
-        await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)          # step 2
-        log.info("labels ensured in team %s", config.pmo.team_key)
+        await pmo.ensure_labels(config.pmos[0].team_key, ALL_LABELS)          # step 2
+        log.info("labels ensured in team %s", config.pmos[0].team_key)
     except Exception:
         log.exception("label bootstrap failed — poll loop will keep retrying reads")
     await refresh_forge_health()
@@ -282,8 +282,8 @@ async def _branch_protection():
         _protection_cache["ts"] = time.monotonic()
         try:
             prot = (await mission_mgr.forge.default_branch_protection(
-                        config.repo.default_branch)
-                    if config.repo.url else None)
+                        config.repos[0].default_branch)
+                    if config.repos[0].url else None)
             # serialized here so the /health JSON shape stays byte-identical
             _protection_cache["value"] = prot.model_dump() if prot else None
         except Exception:
@@ -333,7 +333,7 @@ async def health():
         _check_http(f"{OO_URL}/healthz"),
     )
     try:
-        pmo_ok = (await pmo.health_probe(config.pmo.team_key)).ok
+        pmo_ok = (await pmo.health_probe(config.pmos[0].team_key)).ok
     except Exception:
         pmo_ok = False
     return {
@@ -366,7 +366,7 @@ async def liveness():
 @app.get("/api/v1/missions")
 async def list_missions():
     """Current derived Missions (poll-cycle snapshot; advisory cache — INV-1)."""
-    return {"team": config.pmo.team_key, "adoption_mode": config.adoption_mode,
+    return {"team": config.pmos[0].team_key, "adoption_mode": config.adoption_mode,
             "missions": missions_cache}
 
 
@@ -464,7 +464,7 @@ async def get_config():
 async def put_config(body: dict):
     global config
     try:
-        reject_v1_patch(body)
+        reject_stale_patch(body)
         merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -626,14 +626,14 @@ async def connections_registry():
 
 @app.post("/api/v1/connections/pmo/test")
 async def test_pmo():
-    if not config.api_key:
-        return {"ok": False, "error": f"env var {config.pmo.api_key_env} is empty or "
+    if not config.pmos[0].api_key:
+        return {"ok": False, "error": f"env var {config.pmos[0].api_key_env} is empty or "
                                       "unset in DevCake's environment — put the API key "
                                       "in .env and restart"}
     try:
-        h = await pmo.health_probe(config.pmo.team_key)
-        missions = await pmo.list_all(config.pmo.team_key)
-        return {"ok": h.ok, "team": h.workspace or config.pmo.team_key,
+        h = await pmo.health_probe(config.pmos[0].team_key)
+        missions = await pmo.list_all(config.pmos[0].team_key)
+        return {"ok": h.ok, "team": h.workspace or config.pmos[0].team_key,
                 "labels": h.managed_labels_present,
                 "labels_expected": h.managed_labels_expected,
                 "missions_visible": len(missions)}
@@ -643,8 +643,8 @@ async def test_pmo():
 
 @app.post("/api/v1/connections/forge/test")
 async def test_forge():
-    if not config.repo.token:
-        return {"ok": False, "error": f"env var {config.repo.resolved_token_env} is empty or "
+    if not config.repos[0].token:
+        return {"ok": False, "error": f"env var {config.repos[0].resolved_token_env} is empty or "
                                       "unset in DevCake's environment — the field wants "
                                       "the env var NAME; the token itself goes in .env"}
     try:
@@ -654,8 +654,8 @@ async def test_forge():
             return health
         pr = await f.get_pr_by_branch(mission_branch("__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
-        protection = await f.default_branch_protection(config.repo.default_branch)
-        return {"ok": True, "forge": config.repo.forge, "repo": config.repo.url,
+        protection = await f.default_branch_protection(config.repos[0].default_branch)
+        return {"ok": True, "forge": config.repos[0].forge, "repo": config.repos[0].url,
                 "can_push": health["can_push"],
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
                 "branch_protection": protection.model_dump() if protection else None}

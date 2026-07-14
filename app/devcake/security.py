@@ -169,15 +169,15 @@ def security_warnings(config) -> list[dict]:
     # Devs export through the otel-collector and receive NO OO credentials —
     # there is no per-run credential whose posture could degrade.)
     warns = []
-    if config.repo.token and not config.repo.token_ro:
+    if config.repos[0].token and not config.repos[0].token_ro:
         warns.append({
             "id": "forge-write-token", "severity": "warning",
             "title": "All mission stages hold the forge WRITE token",
             "body": "No read-only PAT is configured (token_ro_env / "
-                    f"{config.repo.resolved_token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
+                    f"{config.repos[0].resolved_token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
                     "Devs receive the same write-capable forge token as EXECUTE. "
                     "A prompt-injected non-EXECUTE Dev could push to the repo. "
-                    f"Create a read-only PAT and set {config.repo.resolved_token_env}_RO "
+                    f"Create a read-only PAT and set {config.repos[0].resolved_token_env}_RO "
                     "in .env (ISSUES #15).",
         })
     return warns

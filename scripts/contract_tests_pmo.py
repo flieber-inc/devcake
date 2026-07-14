@@ -45,8 +45,8 @@ async def delete_issue(pmo, issue_id):
 
 async def main():
     cfg = load_config()
-    team = cfg.pmo.team_key
-    pmo = LinearAdapter(cfg.api_key)
+    team = cfg.pmos[0].team_key
+    pmo = LinearAdapter(cfg.pmos[0].api_key)
 
     # 1 — team scoping + terminal exclusion
     missions = await pmo.list_missions(team)

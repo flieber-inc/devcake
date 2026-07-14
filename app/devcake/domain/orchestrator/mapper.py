@@ -48,7 +48,7 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
             dev_type=dev_type, seq=seq, extra_args="")
         run = Run(
             run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
-            pmo_ref=self.config.pmo.id, repo_ref=self.config.repo.id,
+            pmo_ref=self.config.pmos[0].name, repo_ref=self.config.repos[0].name,
             dev_type=dev_type.name, seq=seq,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
@@ -100,7 +100,7 @@ async def finalize_mapper(self, run: Run, payload: dict) -> None:
 async def _apply_mapper_edges(self, edges: list) -> tuple[int, int]:
     """The Dev is advisory; the app is the gatekeeper — drop edges that are
     unknown, self, terminal, duplicate, or cycle-forming (ADR-0007)."""
-    missions = await self.pmo.list_all(self.config.pmo.team_key)
+    missions = await self.pmo.list_all(self.config.pmos[0].team_key)
     by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
     graph = {m.pmo_id: set(m.blocked_by) for m in missions
              if m.pmo_kind == "issue"}                 # node → its blockers

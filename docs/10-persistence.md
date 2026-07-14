@@ -36,25 +36,28 @@ Run records are schema **v2**. They contain non-secret execution context and a o
 
 ## 3. `config.yaml` — annotated example (normative shape)
 
-Schema **v2**: the connection blocks are plural lists (`pmos:`/`repos:`) with an `id` per entry — the forward-compatible shape for multi-PMO/multi-repo — but **exactly one entry each is enforced in v0** (`02-domain-model.md` §9).
+Schema **v3** (docs/16 M9): the connection blocks are plural lists of **instances-with-identities** — each entry carries an operator-chosen `name` (lowercase alnum, ≤12 chars, no hyphens; the pattern is `^[a-z][a-z0-9]{0,11}$`). The name is the instance's identity everywhere: `Run.pmo_ref`/`repo_ref`, branch prefixes (`devcake/LINEAR-DEV-17`), run ids. N≥1 PMO instances are supported (unique names; two instances must not target the same `(system, api_base, team_key)`); repos stay exactly-one until M10. An instance with an empty `team_key` (or a repo with an empty `url`) is **valid but idle** — skipped by the poll loop and label bootstrap, shown as unconfigured in `/health`.
+
+**Hand-migration from older schemas** (the app refuses stale files at boot; auto-migration was removed at v0 — there are no deployments): v1 → rename `pmo:`/`repo:` blocks to one-entry `pmos:`/`repos:` lists; v2 → rename each entry's `id:` to a chosen `name:` (e.g. `linear` / `main` — note the format rule above); then set `schema_version: 3`. Existing run records with `pmo_ref: main` stay valid (advisory fields). Alternatively delete the file and reconfigure via the admin panel.
 
 ```yaml
-schema_version: 2
+schema_version: 3
 
-pmos:                                # exactly one entry in v0 (validated); id is what
-- id: main                           #   Run records reference as pmo_ref
+pmos:                                # N≥1 instances; name is what Run records
+- name: linear                       #   reference as pmo_ref, and the branch/run-id prefix (uppercased)
   system: linear                     # must be registered in the adapter registry (05 §1a)
   api_key_env: LINEAR_API_KEY        # name of the env var holding the key (app env / .env)
-  team_key: ENG                      # the single team DevCake watches — nothing outside it
+  team_key: ENG                      # the team this instance watches — nothing outside it
   api_base: null                     # null = the adapter's default API host
+  default_repo: null                 # M10 routing: repo name missions default to (null = zero-repo gate)
 
-repos:                               # exactly one entry in v0 (validated); id → repo_ref
-- id: main
+repos:                               # exactly one entry until M10 (validated); name → repo_ref
+- name: main
   forge: github                      # must be a registered forge (github | gitlab)
   url: https://github.com/acme/product
-  api_base: null                     # null = api.github.com / the repo's origin
+  api_base: null                     # null = the adapter's default API host / the repo's origin
   default_branch: main
-  token_env: GITHUB_TOKEN
+  token_env: ""                      # empty = derived from the forge descriptor (GITHUB_TOKEN)
   reviewer_token_env: null           # optional 2nd credential for formal PR approvals (06 §4)
 
 assignments:                         # every Mission Type must be assigned to exactly one Dev Type.

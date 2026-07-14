@@ -17,15 +17,26 @@ log = logging.getLogger("devcake.config")
 CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "config.yaml"
 
 
+# Operator-chosen instance identity (schema v3, docs/16 M9). Lowercase
+# alnum, ≤12 chars, NO hyphens: the name is embedded uppercased in branch
+# names and run ids ({INSTANCE}-{key}), where a hyphen would make the
+# compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
+_INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
+
+
 class PMOInstance(BaseModel):
-    """One configured PMO connection. v0 runs exactly one (see AppConfig
-    validator); the list shape is the forward-compatible schema so multi-PMO
-    needs no config migration."""
-    id: str = "main"
+    """One configured PMO connection (schema v3: instances-with-identities).
+    An instance with an empty team_key is VALID BUT IDLE — the poll loop and
+    label bootstrap skip it and /health shows it as unconfigured — so an
+    empty first boot (and M12's GUI-only setup) is a defined state."""
+    name: str = Field("linear", pattern=_INSTANCE_NAME_RE)
     system: str = "linear"          # validated against the adapter registry
     api_key_env: str = "LINEAR_API_KEY"
     team_key: str = ""
     api_base: str | None = None     # None = the adapter's default API host
+    # M10 routing: the repo (by name) missions of this instance resolve to
+    # when they carry no `devcake-repo:` marker; None = zero-repo gate
+    default_repo: str | None = None
 
     @field_validator("system")
     @classmethod
@@ -37,6 +48,10 @@ class PMOInstance(BaseModel):
             raise ValueError(f"unknown PMO system {v!r} — registered: "
                              f"{sorted(PMO_SYSTEMS)}")
         return v
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.team_key.strip())
 
     @property
     def api_key(self) -> str:
@@ -51,9 +66,9 @@ def _default_forge() -> str:
 
 
 class RepoInstance(BaseModel):
-    """One configured forge repository. v0 runs exactly one (see AppConfig
-    validator)."""
-    id: str = "main"
+    """One configured forge repository (schema v3: instances-with-identities).
+    An instance with an empty url is valid but unconfigured (first boot)."""
+    name: str = Field("main", pattern=_INSTANCE_NAME_RE)
     forge: str = Field(default_factory=_default_forge)  # registry-validated
     url: str = ""
     api_base: str | None = None     # None = the adapter's default API host / the repo's origin
@@ -202,7 +217,7 @@ DEFAULT_DEV_TYPES = [
 
 
 class AppConfig(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
     pmos: list[PMOInstance] = Field(default_factory=lambda: [PMOInstance()])
     repos: list[RepoInstance] = Field(default_factory=lambda: [RepoInstance()])
     assignments: dict[str, Assignment] = Field(
@@ -231,43 +246,81 @@ class AppConfig(BaseModel):
     # the UI un-dismisses by PUTting the whole replacement list.
     dismissed_alerts: list[str] = Field(default_factory=list)
 
-    @field_validator("pmos", "repos")
+    @field_validator("schema_version")
     @classmethod
-    def _exactly_one(cls, v, info):
-        if len(v) != 1:
-            raise ValueError(f"{info.field_name}: exactly one entry is supported "
-                             "in v0 (multi-instance is a declared future seam)")
-        ids = [e.id for e in v]
-        if len(set(ids)) != len(ids):
-            raise ValueError(f"{info.field_name}: duplicate instance ids")
+    def _current_version(cls, v):
+        # ONE generic refusal for every stale version (v1, v2, future) —
+        # no bespoke per-version detectors (docs/10 §3 has the migration
+        # recipe; there are no deployments to auto-migrate for)
+        if v != 3:
+            raise ValueError(
+                f"config schema_version {v} is not the current version (3) — "
+                "hand-migrate per docs/10 §3 or delete the file and "
+                "reconfigure via the admin panel")
         return v
 
-    # v0 single-instance accessors: the runtime is written against ONE pmo and
-    # ONE repo; these keep call sites (config.pmo.team_key, config.repo.url)
-    # stable while the persisted schema is already plural.
-    @property
-    def pmo(self) -> PMOInstance:
-        return self.pmos[0]
+    @field_validator("pmos")
+    @classmethod
+    def _pmos_valid(cls, v):
+        if not v:
+            raise ValueError("pmos: at least one PMO instance is required "
+                             "(it may be unconfigured — empty team_key)")
+        names = [e.name for e in v]
+        if len(set(names)) != len(names):
+            raise ValueError("pmos: duplicate instance names")
+        # two instances polling the same underlying team would double-
+        # dispatch every mission under two identity prefixes — refuse
+        targets = [(e.system, e.api_base, e.team_key) for e in v if e.configured]
+        if len(set(targets)) != len(targets):
+            raise ValueError("pmos: two instances target the same "
+                             "(system, api_base, team_key) — this would "
+                             "double-dispatch every mission")
+        return v
 
-    @property
-    def repo(self) -> RepoInstance:
-        return self.repos[0]
+    @field_validator("repos")
+    @classmethod
+    def _repos_valid(cls, v):
+        if len(v) != 1:
+            raise ValueError("repos: exactly one entry is supported until "
+                             "M10 (repo multiplicity — docs/16)")
+        names = [e.name for e in v]
+        if len(set(names)) != len(names):
+            raise ValueError("repos: duplicate instance names")
+        return v
 
-    @property
-    def api_key(self) -> str:
-        return self.pmos[0].api_key
+    @model_validator(mode="after")
+    def _default_repo_exists(self):
+        repo_names = {r.name for r in self.repos}
+        for p in self.pmos:
+            if p.default_repo is not None and p.default_repo not in repo_names:
+                raise ValueError(
+                    f"pmos[{p.name}].default_repo {p.default_repo!r} names no "
+                    f"configured repo (have: {sorted(repo_names)})")
+        return self
 
 
-def reject_v1_patch(body: dict) -> None:
-    """Refuse v1-shaped PUT bodies ({"pmo": {…}} / {"repo": {…}}) loudly.
-    Load-bearing, not defensive: pydantic ignores unknown keys, so without
-    this a stale client's PUT would silently DROP the operator's edit
-    instead of failing (the v1→v2 auto-migration was removed at v0)."""
+def reject_stale_patch(body: dict) -> None:
+    """Refuse stale-schema PUT bodies loudly. Load-bearing, not defensive:
+    pydantic ignores unknown keys, so without this a stale client's PUT
+    would silently DROP the operator's edit instead of failing. Detects
+    v1 (singular pmo:/repo: dicts) and v2 (id-keyed instance entries or an
+    explicit old schema_version)."""
     stale = [k for k in ("pmo", "repo") if isinstance(body.get(k), dict)]
     if stale:
         raise ValueError(
             f"singular {'/'.join(stale)!s} config keys are schema v1; "
-            "send the plural v2 shape (pmos:/repos: lists)")
+            "send the current v3 shape (pmos:/repos: name-keyed lists)")
+    for key in ("pmos", "repos"):
+        entries = body.get(key)
+        if isinstance(entries, list) and any(
+                isinstance(e, dict) and "id" in e for e in entries):
+            raise ValueError(
+                f"{key} entries carry the v2 'id' field; schema v3 uses "
+                "operator-chosen 'name' identities — hand-migrate per docs/10 §3")
+    if body.get("schema_version") not in (None, 3):
+        raise ValueError(
+            f"schema_version {body['schema_version']} is stale — the current "
+            "version is 3 (docs/10 §3)")
 
 
 def deep_merge(base: dict, patch: dict) -> dict:
@@ -293,20 +346,40 @@ def _atomic_yaml(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
+def _refuse_stale_file(data: dict) -> None:
+    """Refuse a stale-schema config.yaml loudly at boot (docs/10 §3): the
+    auto-migrations were removed (v0 crystallization; no deployments exist),
+    and silently validating stale data would reset the operator's connections
+    to defaults (pydantic ignores unknown keys). Detection is by SHAPE first
+    (a hand-written current file without schema_version stays fine)."""
+    if "pmo" in data or "repo" in data:
+        raise RuntimeError(
+            f"{CONFIG_PATH} uses the singular v1 shape (pmo:/repo: blocks) — "
+            "hand-migrate per docs/10 §3 (pmos:/repos: name-keyed lists, "
+            "schema_version: 3) or delete the file and reconfigure via the "
+            "admin panel")
+    for key in ("pmos", "repos"):
+        entries = data.get(key)
+        if isinstance(entries, list) and any(
+                isinstance(e, dict) and "id" in e for e in entries):
+            raise RuntimeError(
+                f"{CONFIG_PATH} uses the v2 shape ({key} entries keyed by "
+                "'id') — schema v3 renames each entry's id: to a chosen "
+                "name: (lowercase alnum, e.g. 'linear'); branches and run "
+                "ids will carry the uppercased name as a prefix. Hand-migrate "
+                "per docs/10 §3, then set schema_version: 3")
+    if data.get("schema_version") not in (None, 3):
+        raise RuntimeError(
+            f"{CONFIG_PATH} declares schema_version "
+            f"{data['schema_version']} — the current version is 3; "
+            "hand-migrate per docs/10 §3")
+
+
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
         data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
-        # detect v1 by its singular keys, never by an absent schema_version —
-        # an empty or hand-written v2 file without the version field is fine.
-        # Refuse loudly: silently validating v1 data would reset the
-        # operator's connections to defaults (pydantic ignores unknown keys).
-        if isinstance(data, dict) and ("pmo" in data or "repo" in data):
-            raise RuntimeError(
-                f"{CONFIG_PATH} uses the singular v1 shape (pmo:/repo: "
-                "blocks); the v1→v2 auto-migration was removed at v0 — "
-                "migrate by hand (pmo:→pmos: list, repo:→repos: list, "
-                "schema_version: 2) or delete the file and reconfigure via "
-                "the admin panel")
+        if isinstance(data, dict):
+            _refuse_stale_file(data)
         cfg = AppConfig.model_validate(data)
     else:
         cfg = AppConfig(pmos=[PMOInstance(
@@ -314,11 +387,12 @@ def load_config() -> AppConfig:
         log.info("config: first boot — seeding %s from env", CONFIG_PATH)
     # top-up missing/env-provided fields (a config predating a field picks up
     # its env default here), then persist
-    if not cfg.repo.url and os.environ.get("DEVCAKE_REPO_URL"):
+    if not cfg.repos[0].url and os.environ.get("DEVCAKE_REPO_URL"):
         cfg.repos[0].url = os.environ["DEVCAKE_REPO_URL"]
     _atomic_yaml(CONFIG_PATH, cfg.model_dump())
     log.info("config: team=%s adoption=%s repo=%s",
-             cfg.pmo.team_key, cfg.adoption_mode, cfg.repo.url or "(unset)")
+             cfg.pmos[0].team_key, cfg.adoption_mode,
+             cfg.repos[0].url or "(unset)")
     return cfg
 
 

@@ -1,4 +1,4 @@
-# 16 — Roadmap: Milestones M0–M7
+# 16 — Roadmap: Milestones M0–M12
 
 > **Audience:** the implementing agent(s) and the founder. Each milestone leaves a demoable, committed system; exit criteria are mechanically checkable.
 > Format per milestone: Goal · In scope (docs it implements) · Out of scope · Exit criteria · Demo.
@@ -106,19 +106,124 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 - [x] **Fresh-`/data` operator drill** (carried from M6): volume backed up, wiped, first boot re-seeded config + dev types from env, ensured labels idempotently, health all green with empty secrets awaiting the operator's OAuth click; backup restored intact and CI green after the round trip.
 - [x] OpenObserve **DevCake dashboard** provisioned via API (cost/hour by dev type, runs by outcome, failure signals); alert provisioning ships in `scripts/provision_oo.py` (activates when `OO_ALERT_WEBHOOK` is set).
 
-## Post-v0 shipped
+## M7.1 — Post-v0 shipped
 
 - **2026-07-12 — Traffic control (`adr/0007`):** Mission ordering via native `blocked by` relations (ONBOARD decomposition declares `blocked_by`; scheduler gate honors any relation, human-added included) · `DEVCAKE-NEEDS-HUMAN` hand-off label + `human_needed` outcome (tenth label) · intake pause toggle (`intake_paused` + admin Traffic control section) · comment-provenance sentinel `` `devcake:v1` `` with 🧑/🤖 markers in `ACTIVITY.md` · Relations Mapper service (`MAPPER` run kind: interval + manual trigger + Dev Type combobox + on/off in the admin panel). Requires a dev-image rebuild (new legal outcomes in the entrypoint).
 - **2026-07-12 — Traffic-control hardening (`adr/0007` addendum), same day, post-adversarial-review:** app-side `LEGAL_OUTCOMES` trust boundary · branch-protection verification + out-of-pipeline-merge tripwire (docs/13 §8a, docs/14 §2) · paginated Linear reads + relations-page warnings · `gate_map` as an always-fresh poll artifact + dependency-cycle detection with header banner · hand-off evidence requirement + escalating warnings (never auto-park) · seeded `junior-dev` + `MapperService` (lock, post-success watermark, store-derived degradation) · quote-aware sentinel classification · project-update baton passes (verified live) · stateful pause banner with in-flight count · config deep-merge + mapper Dev Type delete guard.
 
 - **2026-07-13 — Modularization (`adr/0008`):** the hexagonal layout is now real (`app/devcake/` with `domain/`, `ports/`, `adapters/`, `api/`; `domain/*` has zero runtime adapter imports) · pluggable PMO + forge adapter registries (`adapters/registry.py` — `system`/`forge` are registry-validated open strings, not literals) · config schema v2: plural `pmos:`/`repos:` with exactly-one enforced, v1→v2 migrated on load with a `config.yaml.v1.bak` backup · MissionRef-unified `PMOPort` + typed `ForgePort` DTOs (`PullRequest`, `ForgeDescriptor`, `mission_branch()`) · registry-fed admin Config tab (`GET /api/v1/connections/registry`) with config hot-reload on PUT.
 
-- **2026-07-13 — v0 crystallization (this release):** repo-wide cleanup before v0.1 work. Bug fixes (redaction-gap alarm on unreadable secrets files; datetime-safe attempt counting; `security.MASK` single-sourced; background-task death logging on config reload) · telemetry brought up to the "everything traced" invariant (spans now *cover* the PMO writes they name; new `ingress.handle`, `sweep.merge_retry`, `mapper.periodic`, `ingress.forged_drop`, `ingress.poison` spans — `12` §2 is the normative inventory) · **all legacy/compat surfaces removed** (founder decision): the old-image protocol dual-modes (`DEVCAKE_FORGE` discriminator, `forge_dialect()` fallback, pre-marker decomposition regex) AND the v1→v2 data migrations (config auto-migration, run-record secret scrub, Redis legacy scrubs). Consequences: app + dev images MUST rebuild in lockstep (`13` §8); a v1 `config.yaml` is refused at boot with hand-migration instructions; pre-v2 run records quarantine at boot (`10` §5) · `blocked_reasons` exposed in `/health`; meaningless `config_valid` dropped · dead `admin/site/` shell deleted · docs re-baselined against the code.
+- **2026-07-13 — v0 crystallization:** repo-wide cleanup before v0.1 work. Bug fixes (redaction-gap alarm on unreadable secrets files; datetime-safe attempt counting; `security.MASK` single-sourced; background-task death logging on config reload) · telemetry brought up to the "everything traced" invariant (spans now *cover* the PMO writes they name; new `ingress.handle`, `sweep.merge_retry`, `mapper.periodic`, `ingress.forged_drop`, `ingress.poison` spans — `12` §2 is the normative inventory) · **all legacy/compat surfaces removed** (founder decision): the old-image protocol dual-modes (`DEVCAKE_FORGE` discriminator, `forge_dialect()` fallback, pre-marker decomposition regex) AND the v1→v2 data migrations (config auto-migration, run-record secret scrub, Redis legacy scrubs). Consequences: app + dev images MUST rebuild in lockstep (`13` §8); a v1 `config.yaml` is refused at boot with hand-migration instructions; pre-v2 run records quarantine at boot (`10` §5) · `blocked_reasons` exposed in `/health`; meaningless `config_valid` dropped · dead `admin/site/` shell deleted · docs re-baselined against the code.
+
+- **2026-07-14 — ISSUES_LIST hardening + build overhaul:** the 38-item ISSUES_LIST review closed out (finalize-stall watchdog backstop, label-swap write-path pagination, all OO alerts backed by real spans, dismissable `/health` `security_warnings`, `domain/reconcile.py` extraction, CI `-k "not live"` fix) · orchestrator god module split into the `domain/orchestrator/` package (ISSUES #36) · Docker Bake build system merged (bake-only images via `docker buildx bake all`, multi-stage Dockerfiles, GHA bake CI — collaborator contribution) · RunBootstrap + secondary-port extraction (`ports/{executor,state,messaging,finalizer}.py`, `set_finalizer` seam).
 
 - **2026-07-12 — Harness registry (admin authoritative):** found live — changing a Dev Type's harness in the admin panel didn't change what ran (dispatch used the stored `docker_image`; harness selection was image-baked). Reworked: `app/devcake/harness.py` registry is the single source of truth (image + credential requirements + OAuth flow per `harness_template`); `DevType` slimmed (no stored image/credential config; legacy YAML keys dropped on next save); dispatch sends `DEVCAKE_HARNESS` in the run spec (overrides the baked ENV); OAuth became per-Dev-Type (`POST /oauth/dev-types/{name}/start` — fixes credentials landing in the first same-harness Dev Type's dir); Dev Type card shows the derived image + live credential checklist (`GET /harnesses`, enriched `GET /dev-types`).
 
-## Post-v0 backlog / v0.1
+## v0.1 — feature specifications (F1–F5) + milestones M8–M12
 
-Webhook ingestion — a PMO `watch()`/webhook `ChangeEvent` seam replacing polling (+ tunnel guide) · multi-instance **runtime** wiring — the config schema is already plural (`pmos:`/`repos:`); what's missing is per-mission adapter resolution + per-instance wiring · additional PMO adapters (GitHub Issues, GitLab, Monday) with **markdown-fidelity adapter refactor** (ISSUES #35) · `PMOPort.cancel_mission()` · forge capabilities negotiation (`ForgeCapabilities`) · a local forge (Gitea) adapter · `ExecutorPort`/`StatePort` formalization (the `dagu/`, `files/`, `redis/` adapters are already packaged under `adapters/`; their ports are not yet Protocols) · **priority-conditional Dev Type assignment** (e.g. Urgent missions route EXECUTE to Senior Dev — relaxes the strict 1 Mission Type → 1 Dev Type rule; deemed too much for v0) · **Scout Dev experiment** (route ONBOARD to a cheap-model Dev Type via the admin panel — zero code changes required; evaluate decomposition quality for a week before adopting) · admin panel OIDC/SSO (v0 has basic auth) · **network egress allowlists / reduced sandbox-bypass** for non-EXECUTE stages (ISSUES #16) · per-run scoped forge tokens & the rest of `14` §7 · OTel collector insertion + **ingest-only OO credentials** fully replacing root in Devs (ISSUES #13) · **first-class OTel metrics layer** (v0 aggregates via SQL over span attributes — `12` §4; a metrics pipeline earns its keep when dashboards need pre-aggregation or long retention) · mid-run Dev→PMO write relay commands · SQLite `StatePort` swap if run history outgrows files · **full multi-forge acceptance** parity (`scripts/acceptance.py --forge`) (ISSUES #30) · ~~split orchestrator god object into focused modules (ISSUES #36)~~ **done** (`domain/orchestrator/` package) · **public-release hygiene** if audience expands: LICENSE, SECURITY.md, CONTRIBUTING.md, CHANGELOG, SBOM (ISSUES #38) · pin base image digests across all Dockerfiles (ISSUES #29 residual).
+*(Consolidated + triaged 2026-07-14, revised the same day after a devil's-advocate round, then recast as milestones. Standing premise: **there are no deployments** — safecontract was the founder's own test — so v0 parity is explicitly NOT preserved: schema v3 breaks wholesale, shims and fallback modes are deleted rather than deprecated. F1–F5 below are the feature specifications, in implementation order — agnosticism before multiplicity, multiplicity before the internal fallback forge's zero-repo payoff, GUI config last since every prior feature adds config surface it must cover. M8–M12 are the implementation plan in the M0–M7 format: each leaves a demoable, committed system with mechanically checkable exit criteria. The four hardening items triaged into v0.1 are folded into M8 (PR #1, ISSUES #13, #29) and M12 (ISSUES #30).)*
+
+### v0.1 feature specifications
+
+**F1 — Forge-agnosticism hardening.** Nothing forge-specific outside `adapters/` — DevCake must be completely forge-agnostic, and the known violations get corrected first, ahead of everything else. Residuals (audited 2026-07-14): `config.py` defaults (`forge: "github"`, `token_env: "GITHUB_TOKEN"`, github.com-specific URL validation) → derive from the adapter registry/descriptor; the `api/main.py` read-only-token security-warning copy hardcodes GitHub/GitLab wording → registry-fed; `ports/forge.py` default `git_email` (github noreply) → per-descriptor. The CI tripwire asserts on **behavior, not strings**: no `adapters.github`/`adapters.gitlab` imports outside the registry, all defaults resolve through descriptors (a forge-name literal grep is at most a secondary check with an explicit allowlist — comments and docstrings legitimately name forges). `ForgeCapabilities` is deliberately *not* designed here — it gets extracted from real divergence during F4; designing capability negotiation before a third forge exists is speculation.
+
+**F2 — PMO port completion: multi-PMO, additive.** Segregate Linear fully and make DevCake PMO-independent; one instance oversees N≥1 PMO systems at once. Schema v3 is a **wholesale redesign, not a validator relaxation**: `pmos:`/`repos:` become instances-with-identities (operator-chosen instance names), `MissionRef` carries PMO-instance provenance end-to-end, and `mission_branch()` prefixes the instance name (`LINEAR-DEV-17`) so identifiers can never collide across PMOs; the singular `config.pmo`/`config.repo` shims are deleted on day one — no deprecation period. Formalize the **PMO capability contract** any candidate system must satisfy: (a) inputs map straightforwardly to Missions as the unit of work; (b) labels or an equivalent concept assign Mission Steps; (c) traffic control via clear blocked_by relations/dependencies; (d) a reliable activity feed for moving/storing files and data. Encode it as a documented port contract + conformance battery (grow `scripts/contract_tests_pmo.py` into the adapter acceptance gate), plus `PMOPort.cancel_mission()`. **Scope fence (founder decision 2026-07-14): no new PMO adapters ship in v0.1** — Linear stays the only adapter; additivity is proven by running **two Linear instances** (e.g. two sandbox teams) on one DevCake. Cross-PMO `blocked_by` is explicitly unsupported in v0.1 — PMO instances are independent; federation is its own project.
+
+**F3 — Any number of repos, including zero.** An instance configures 0..N repos (schema v3); per-mission resolution assigns **0 or 1** configured repo per mission (the mechanism — assignment config vs. mission metadata — is a **founder decision**), with the resolved forge adapter + credentials wired per-run into the runspec. A mission resolving to zero repos routes to F4's internal fallback forge — downstream (EXECUTE/REVIEW/PR mechanics) never sees a repo-less mission. N-repos-*per-mission* is explicitly out of scope (deferred — cross-repo atomicity is its own project). Ships paired with F4: the zero-repo dispatch path stays gated until the fallback exists. Absorbs the old "multi-instance runtime wiring" item.
+
+**F4 — Internal fallback forge: bundled Gitea.** Gitea joins `docker compose` as the **sixth service**. Any mission that resolves to no configured repo gets a repository auto-created on the internal Gitea at intake (per-Mission, reused across attempts and rework — the PR-reuse mechanics from M4 carry over), plus a repo-scoped token minted for its Devs. Devs receive it as a *perfectly ordinary forge repo*: EXECUTE & REVIEW run their standard PR mechanics on non-code artifacts with zero special-casing — simultaneously the strongest live test of F1's forge-agnosticism and the substrate for the **non-developer workload testing planned for v0.2**. **Because the fallback forge may not be observed by the end-user at all, deliverables must flow back to the PMO:** when a mission on the internal forge reaches its REVIEW-approved merge, the changed files are packaged (zip of the merged change set) and attached to the PMO activity feed (attachment-first policy) — the PMO stays the one place the user looks. Requires the Gitea `ForgePort` adapter (registry entry + `ForgeDescriptor` dialect); support for external/user-supplied Gitea instances comes free. `ForgeCapabilities` is extracted here, from observed three-forge divergence. Gitea admin credentials are a stack bootstrap secret (`.env`, F5 exception). Open **founder decisions**: internal-repo retention/GC after mission completion; whether internal repos surface in the admin panel. Bonus: the zero-repo golden path is entirely local — acceptance runs for it cost no external forge tokens. *(Replaces the earlier "internal Mission worktree / activity mirror" design — see Discarded.)*
+
+**F5 — All operator config via the admin GUI, single-mode.** Everything the operator supplies — PMO instances, repos, credentials, API keys — passes through the Config page, secret *values* included. Env-var indirection is **deleted, not kept as a fallback** (founder decision: one mode, no dual sources of truth — the original PAT-paste incident was indirection confusion). Secrets are stored 0600 under `/data/secrets/`, registered with the redaction layer, never echoed back; the ✓/✗ `env-check` pattern extends to stored-secret status. **Exceptions stay in `.env`:** stack bootstrap secrets only (Dagu, OpenObserve, nginx admin auth, Gitea admin) — what's needed before the GUI itself is up. A standing `security_warnings` breadcrumb marks the posture ("GUI-stored secrets behind basic auth — revisit before exposing beyond localhost") so the decision cannot silently ride into a first real deployment.
+
+## M8 — Forge-agnosticism + hardening spine
+
+**Goal:** the codebase provably forge-agnostic; the in-flight refactor landed; standing security warnings closed. **Implements:** F1; lands PR #1 (`refactor/run-bootstrap-and-secondary-ports`, rebased + fixed 2026-07-14); ISSUES #13, #29.
+**Out of scope:** any new adapter; `ForgeCapabilities` (extracted in M11, once a third forge exists to reveal real divergence).
+
+Exit criteria:
+- [ ] The audited residuals corrected: `config.py` forge/token-env/URL-validation defaults resolve via the adapter registry/descriptor; the `api/main.py` read-only-token warning copy is registry-fed; git identity comes per-descriptor.
+- [ ] CI tripwire green and meaningful: no `adapters.github`/`adapters.gitlab` imports outside the registry; defaults provably resolve through descriptors (a forge-name literal grep is at most a secondary check with an explicit allowlist).
+- [ ] PR #1 merged: `ExecutorPort`/`StatePort`/`MessagingPort`/`RunFinalizer` are Protocols; full suite green.
+- [ ] Devs emit telemetry through an inserted OTel collector using ingest-only OO credentials; the `oo-root-creds` security warning is gone from `/health` (ISSUES #13).
+- [ ] Base image digests pinned across all Dockerfiles; bake CI green (ISSUES #29).
+
+**Demo:** `scripts/ci_suite.sh` green including the tripwire; `/health` clean of `oo-root-creds`; a golden-path run whose Dev traces arrive in OO without root credentials.
+
+## M9 — Multi-PMO port (schema v3)
+
+**Goal:** DevCake is PMO-independent; one instance oversees N≥1 PMO instances. **Implements:** F2.
+**Out of scope:** new PMO adapters (post-v0.1); cross-PMO `blocked_by`; webhooks.
+
+Exit criteria:
+- [ ] Schema v3 (instances-with-identities) boots; a v2 `config.yaml` is refused at boot with hand-migration instructions; the singular `config.pmo`/`config.repo` shims are gone and the suite is migrated.
+- [ ] `MissionRef` carries PMO-instance provenance end-to-end; `mission_branch()` prefixes the instance name — two missions with the same PMO identifier in different instances produce distinct branches, run records, and ACL names.
+- [ ] The PMO capability contract (a–d) is documented and `scripts/contract_tests_pmo.py` has grown into the adapter acceptance gate; `PMOPort.cancel_mission()` implemented and covered.
+- [ ] **Additivity proof:** two Linear instances (two sandbox teams) on one DevCake — missions from both intake, dispatch, and complete; labels ensured idempotently per instance; `/health` reports both.
+
+**Demo:** one admin panel overseeing two Linear teams; two missions with colliding identifiers complete with instance-prefixed branches.
+
+## M10 — Repo multiplicity (0..N per instance, 0-or-1 per mission)
+
+**Goal:** repos become plural and per-mission-resolved. **Implements:** F3.
+**Out of scope:** N repos per mission (deferred); zero-repo dispatch (arrives with M11's fallback).
+
+Exit criteria:
+- [ ] Per-mission repo resolution decided (**founder decision**: assignment config vs. mission metadata) and implemented; the resolved forge adapter + credentials are wired per-run into the runspec.
+- [ ] Two configured repos on different forges in one instance: missions land PRs in the right repos with the right dialects.
+- [ ] Forge health/breaker state is per repo instance, not global — a latched breaker on repo A doesn't stop repo B.
+- [ ] Missions resolving to zero repos derive correctly and are visibly gated (not dispatched) pending M11.
+
+**Demo:** one DevCake, one GitHub repo + one GitLab repo, two missions → two merged PRs, one on each forge.
+
+## M11 — Internal fallback forge (bundled Gitea)
+
+**Goal:** zero-repo missions run fully autonomously on an internal forge; the non-code workload substrate for v0.2 is ready. **Implements:** F4.
+**Out of scope:** the non-developer workload testing itself (v0.2).
+
+Exit criteria:
+- [ ] Gitea is the sixth compose service: healthy from a fresh clone + `.env` (admin credentials bootstrapped as a stack secret), container logs searchable in OO.
+- [ ] The Gitea `ForgePort` adapter passes the forge contract battery; an external/user-supplied Gitea is configurable like any other repo.
+- [ ] Zero-repo dispatch un-gated: a mission with no configured repo gets an auto-created internal repo at intake (per-Mission, reused across attempts/rework) and completes ONBOARD→EXECUTE→REVIEW→merge→Done on it.
+- [ ] **PMO delivery:** on the REVIEW-approved merge of an internal-forge mission, the changed files are zipped and attached to the PMO activity feed — the end-user receives the full deliverable without ever seeing Gitea.
+- [ ] Isolation: mission A's repo-scoped token cannot read or write mission B's internal repo (test in the INV-2 spirit).
+- [ ] `ForgeCapabilities` extracted from real GitHub/GitLab/Gitea divergence; at least one call site branches on capabilities instead of forge identity.
+- [ ] Founder decisions recorded: internal-repo retention/GC; admin-panel surfacing of internal repos.
+
+**Demo:** a Linear issue "produce a market report" with no repo attached → mission completes; the zip lands in the Linear feed; the internal PR sits merged in Gitea.
+
+## M12 — Single-mode GUI config + v0.1 release gate
+
+**Goal:** operable by a stranger without touching `.env` beyond bootstrap; acceptance parity; docs re-baselined; v0.1 tagged. **Implements:** F5; ISSUES #30.
+**Out of scope:** OIDC/SSO (deferred; the `security_warnings` breadcrumb covers the posture).
+
+Exit criteria:
+- [ ] All operator config — PMO instances, repos, credentials, secret values — flows through the Config page; secrets stored 0600 under `/data/secrets/`, redaction-registered, never echoed back; ✓/✗ stored-secret status in the UI.
+- [ ] Env-var indirection removed; `.env` reduced to stack bootstrap secrets (Dagu, OpenObserve, nginx admin auth, Gitea admin); the `security_warnings` breadcrumb ships dismissable.
+- [ ] Fresh-`/data` operator drill, GUI-only: from an empty volume to a completed mission with `.env` untouched beyond bootstrap.
+- [ ] `scripts/acceptance.py --forge` parity across GitHub, GitLab, and Gitea (ISSUES #30; the Gitea lane runs on the bundled local instance — no external tokens spent).
+- [ ] Docs re-baselined against the code across everything v0.1 touched; **v0.1 tagged**.
+
+**Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
+
+## Post-v0.1 backlog
+
+### Deferred (v0.2+)
+
+- **Webhook ingestion** — a PMO `watch()`/webhook `ChangeEvent` seam replacing polling (+ tunnel guide). Deliberately sequenced *after* F2: the multi-PMO port reshapes the exact surface the seam attaches to. Top candidate once v0.1 ships — multi-PMO instances multiply polling cost.
+- **Additional PMO adapters** (GitHub Issues, GitLab, Monday) + the **markdown-fidelity adapter refactor** (ISSUES #35) — deliberately fenced out of v0.1 (founder decision 2026-07-14): v0.1 completes the port; adapters ride on it afterward. First-wave candidate alongside webhooks.
+- **N repos per mission** — cross-repo missions (one PR per repo, set-approval semantics, merge ordering) are a distributed-atomicity project of their own; v0.1 caps per-mission resolution at 0-or-1.
+- **Per-run scoped forge tokens** & the rest of `14` §7 — natural companion to F4's per-mission repo tokens; revisit once that machinery exists.
+- **Network egress allowlists / reduced sandbox-bypass** for non-EXECUTE stages (ISSUES #16).
+- **Priority-conditional Dev Type assignment** (e.g. Urgent missions route EXECUTE to Senior Dev — relaxes the strict 1 Mission Type → 1 Dev Type rule).
+- Admin panel **OIDC/SSO** (v0 has basic auth).
+- **First-class OTel metrics layer** — conditional: earns its keep when dashboards need pre-aggregation or long retention (v0 aggregates via SQL over span attributes — `12` §4).
+- **SQLite `StatePort` swap** — conditional: if run history outgrows files.
+- **Public-release hygiene** — conditional: if audience expands. LICENSE, SECURITY.md, CONTRIBUTING.md, CHANGELOG, SBOM (ISSUES #38).
+
+### Discarded (2026-07-14, with rationale — do not resurrect without new evidence)
+
+- **Scout Dev experiment** — not an engineering item: routing ONBOARD to a cheap-model Dev Type requires zero code changes and can be run from the admin panel any week as an ops experiment. *Ops note: assign ONBOARD to a cheap-model Dev Type, watch decomposition quality for a week, adopt or revert.*
+- **Mid-run Dev→PMO write relay commands** — superseded by F4: the internal fallback repo gives Devs mid-run persistence with diff capture, without opening a live write channel to the PMO. Revisit only if humans need mid-run progress comments in the PMO feed itself.
+- **Internal Mission worktree as an activity mirror** (the original F5 shape: per-Mission git mirror of the `activity/` folder structure, folder-scoped keys, "fewer PMO API calls") — superseded 2026-07-14 by F4's internal fallback forge. The mirror duplicated PMO state and bought a cache-coherence problem against the single-source-of-truth invariant; its real payoff (PR mechanics for non-code artifacts) survives intact in F4 without any mirroring. If diff capture of human activity-feed edits is ever wanted, it's a run-record snapshot diff, not a git server.
 
 *(Note: `auto_merge` was originally slated post-v0 but is a confirmed v0 requirement — it ships in M5/M6.)*

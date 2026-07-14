@@ -6,6 +6,8 @@
 
 Redis Streams mediate **all** Dev↔app traffic. Redis is a **transport buffer, never a source of truth**: a lost message is recoverable because artifacts also exist in Dagu run logs, and the Mission's label was never advanced (INV-3) — the step simply re-runs.
 
+The app's domain programs against **`MessagingPort`** (`ports/messaging.py`); the production adapter is `adapters/redis/messaging.py`. Per-run ACL creation is also the first step of `RunBootstrap.launch` (`04-orchestrator.md` §3.1).
+
 ## 1. Topology
 
 | Stream | Direction | Consumers |

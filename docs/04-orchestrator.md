@@ -64,36 +64,48 @@ Properties:
 
 ### 3.1 Dispatch (ordered, crash-safe)
 
+Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_mapper`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart:
+
 ```
-def dispatch(mission, dev_type):
+def launch(run, *, image):                         # RunBootstrap — all four flavors
+    password = messaging.create_run_user(run.run_id)  # MessagingPort
+    run.auth_digest = sha256(password)                # never persist the raw ACL secret
+    state.save(run)                                   # (1) durable intent BEFORE side effects
+    executor.start(params={                           # (2) ExecutorPort (Dagu in prod)
+        "RUN_ID": run.run_id, "IMAGE": image,         #     non-secret params only (13 §4)
+        "TRACEPARENT": run.traceparent or "",
+        "REDIS_USER": f"dev-{run.run_id}",
+        "REDIS_PASSWORD": password},
+        dag_run_id=run.run_id)
+
+def dispatch(mission, dev_type):                   # MissionManager — mission flavor only
     live = pmo.get(mission.ref)                    # live re-read: INV-1, INV-3
     if derive_type(live) != mission.type: return   # world moved on; skip silently
     if open_blockers(live): return                 # blocked-by re-check, live (§2)
     run = Run(run_id=f"{mission.key}-{seq}-{mission.type}-{ulid()[-6:]}",   # 02 §7
               state="dispatched",
               seq=derive_seq(live),                # 02-domain-model.md §8
-              stage_label_at_dispatch=stage_label(live), ...)
-    run.spec = resolve_run_spec(mission, dev_type) # stage-2 env + credential refs (07 §3)
-    write_run_file(run)                            # (1) durable intent BEFORE side effects
-    dagu.start_dag("dev-run",                      # (2) trigger executor — non-secret params only
-                   params={"RUN_ID": run.run_id,   #     (Dagu params are UI-visible, 13 §4);
-                           "IMAGE": image_tag,  # e.g. devcake/dev-claude-code:latest
-                           "TRACEPARENT": traceparent},
-                   dag_run_id=run.run_id)
+              stage_label_at_dispatch=stage_label(live),
+              spec_env=protocol_spec_env(...), ...)
+    run.spec_prompt = resolve_prompt(mission, dev_type)
+    bootstrap.launch(run, image=harness_image(dev_type))
+    # launch = ACL user → durable Run file BEFORE the Dagu trigger; the image
+    # param is a plain tag (e.g. devcake/dev-claude-code:latest — no digest
+    # pinning; 13-deployment.md §6), and Dagu receives only non-secret params
     if live.status == "backlog":
         pmo.set_status(mission.ref, "in_progress")      # (3) reflect pull in PMO
         audit_log.append(...)                      # feeds the grace cycle (§2)
 ```
 
-Writing the Run file *before* the Dagu trigger means a crash between (1) and (2) leaves a `dispatched` Run with no Dagu counterpart — repaired by startup reconciliation (§6), never dispatched twice (a blind re-trigger with the same `dag_run_id` would 409 regardless — verified, `13-deployment.md` §4).
+Writing the Run file *before* the executor trigger means a crash between (1) and (2) leaves a `dispatched` Run with no Dagu counterpart — repaired by startup reconciliation (§6), never dispatched twice (a blind re-trigger with the same `dag_run_id` would 409 regardless — verified, `13-deployment.md` §4).
 
-**Failure symmetry rule (added at M3):** every side effect of a dispatch whose run then fails must be reverted so the mission re-derives exactly as before the attempt. Concretely, step (3)'s backlog→in_progress write is undone on `failed`/`timed_out`/`orphaned` runs — after a live re-read confirming a human hasn't moved the mission meanwhile. The watchdog's liveness reference is `last_heartbeat or started_at` and Devs send their first heartbeat immediately, so a Dev killed in its first seconds is detected within the heartbeat grace, not at the wall-clock timeout (both gaps found and fixed live at M3).
+**Failure symmetry rule (added at M3):** every side effect of a dispatch whose run then fails must be reverted so the mission re-derives exactly as before the attempt. Concretely, step (3)'s backlog→in_progress write is undone on `failed`/`timed_out`/`orphaned` runs — after a live re-read confirming a human hasn't moved the mission meanwhile. Kill and failed finalization call `RunFinalizer.restore_after_failure` (`ports/finalizer.py`; production adapter = `MissionManager`) so `RunManager` never types against the concrete orchestrator. The watchdog's liveness reference is `last_heartbeat or started_at` and Devs send their first heartbeat immediately, so a Dev killed in its first seconds is detected within the heartbeat grace, not at the wall-clock timeout (both gaps found and fixed live at M3).
 
 The run spec (stage-2 env, credentials, repo info) is fully resolved by the app at dispatch and served to the Dev over `runspec.get` (`09-messaging.md` §3); Dagu receives only non-secret params and executes with zero business logic (app is the brain, Dagu is muscle).
 
 ## 4. No-lock atomicity: compare-and-transition
 
-There are no locks, leases, or checkouts (INV-3). The only synchronization primitive is the PMO System's own state, applied at **finalization** — after the ingress consumer receives the Dev's `run.artifacts` message (`09-messaging.md`).
+There are no locks, leases, or checkouts (INV-3). The only synchronization primitive is the PMO System's own state, applied at **finalization** — after the ingress consumer receives the Dev's `run.artifacts` message (`09-messaging.md`). Ingress lives in `RunManager` (`domain/runs.py`); mission and MAPPER artifacts are routed through the injected **`RunFinalizer`** (`finalize` / `finalize_mapper`); hello and other PMO-less runs use the local finalize checklist. Composition binds `manager.set_finalizer(mission_mgr)` at boot (`01-architecture.md` §3).
 
 Finalization side-effect order is fixed:
 

@@ -17,15 +17,15 @@ instance, eventually — without touching the core.
 ## Decisions
 
 1. **Hexagonal tree, for real.** The code now matches docs/01 §3:
-   `domain/` (pure logic, zero runtime adapter imports — typing-only under
-   `TYPE_CHECKING`), `ports/` (`PMOPort`, `ForgePort` + boundary DTOs),
-   `adapters/` (`linear/`, `github/`, `gitlab/`, `dagu/`, `files/`, `redis/`,
-   and `registry.py`), `api/`, `telemetry/`, `prompts/`. `config.py`,
-   `security.py`, `harness.py` stay at the package root as cross-cutting
-   concerns. Adapter **construction** lives in `api/main.py` via the registry;
-   the domain receives adapters fully built. `ExecutorPort`/`StatePort` are
-   deliberately NOT formalized (their adapters are packaged; ports are
-   roadmap).
+   `domain/` (pure logic, depends on port Protocols), `ports/` (`PMOPort`,
+   `ForgePort` + boundary DTOs; later also run-infrastructure ports — see
+   **Follow-up** below), `adapters/` (`linear/`, `github/`, `gitlab/`, `dagu/`,
+   `files/`, `redis/`, and `registry.py`), `api/`, `telemetry/`, `prompts/`.
+   `config.py`, `security.py`, `harness.py` stay at the package root as
+   cross-cutting concerns. Adapter **construction** lives in `api/main.py`
+   via the registry; the domain receives adapters fully built. *As accepted
+   (2026-07-13):* `ExecutorPort`/`StatePort` were deliberately deferred
+   (adapters packaged; Protocols roadmap).
 
 2. **One authoritative `PMOPort`, MissionRef-unified.** The port's reads and
    writes are keyed by `MissionRef(pmo_id, kind)`; the adapter dispatches
@@ -104,6 +104,25 @@ differs is a regression):
 - Multi-instance runtime remains future work: per-mission adapter resolution,
   per-instance wiring of poll loops/sweeps, and mission→repo mapping (config
   and Run records are already shaped for it).
+
+## Follow-up — run-infrastructure ports + RunBootstrap (2026-07-14)
+
+Second-tier seams deferred in decision §1 are now formalized (docs/01 §3,
+docs/04 §3.1). This does **not** reopen vendor pluggability decisions above.
+
+| Port / module | Role | Production adapter |
+|---|---|---|
+| `ExecutorPort` | start/stop/status Dev runs | `adapters/dagu` |
+| `StatePort` | run-record persistence | `adapters/files` |
+| `MessagingPort` | Redis Streams ACL + ingress/reply | `adapters/redis` |
+| `RunFinalizer` | mission finalize / mapper finalize / INV-3 restore | `MissionManager` |
+| `domain/run_bootstrap.py` | deep dispatch spine shared by hello, mission, mapper, OAuth | — |
+
+`RunManager` binds the finalizer via `set_finalizer` after composition (breaks
+the construct-time `RunManager` ↔ `MissionManager` cycle). Tests pin the
+spine and finalizer routing at `tests/test_run_bootstrap.py`. SQLite (or other)
+`StatePort` swaps remain backlog (`16-roadmap.md`) — the Protocol is the
+stable seam.
 
 ## Addendum — v0 crystallization (2026-07-13)
 

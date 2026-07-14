@@ -7,7 +7,6 @@ oauth) should call launch(); callers own mission-specific fields and spans.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from .run import Run, auth_digest
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
     from ..ports.executor import ExecutorPort
     from ..ports.messaging import MessagingPort
     from ..ports.state import StatePort
-
-log = logging.getLogger("devcake.bootstrap")
 
 
 class RunBootstrap:

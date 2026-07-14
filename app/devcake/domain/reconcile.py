@@ -14,11 +14,11 @@ async def reconcile_runs(manager) -> None:
     (step 4) resumes them.
 
     `manager` is the RunManager — it already carries the store, executor,
-    messaging, and mission_mgr this needs; separate params would let callers
-    wire mismatched objects.
+    messaging, and finalizer (RunFinalizer seam) this needs; separate params
+    would let callers wire mismatched objects.
     """
     store, executor = manager.store, manager.executor
-    messaging, mission_mgr = manager.messaging, manager.mission_mgr
+    messaging, finalizer = manager.messaging, manager.finalizer
     for r in store.active():
         if r.state == "finalizing":
             log.info("reconciliation: leaving finalizing run %s for reclaim",
@@ -36,8 +36,8 @@ async def reconcile_runs(manager) -> None:
                     node_errors = []
                 await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
                 detail = " ".join(str(item.get("error") or "") for item in node_errors)
-                if "exit status 13" in detail.lower():
-                    r.error = mission_mgr._dev_failure_error(
+                if finalizer and "exit status 13" in detail.lower():
+                    r.error = finalizer.dev_failure_error(
                         r, {"exit_code": 13, "error_detail": detail})
                     store.save(r)
             else:

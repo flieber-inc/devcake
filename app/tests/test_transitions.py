@@ -402,7 +402,7 @@ def test_forge_auth_artifact_trips_global_breaker(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, _fake, _store = make_mgr(tmp_path, m)
     run = _run("ONBOARD", None)
-    error = mgr._dev_failure_error(run, {
+    error = mgr.dev_failure_error(run, {
         "exit_code": 13,
         "error_class": "DEV_FORGE_AUTH",
         "error_detail": "remote returned 403: write access not granted",
@@ -417,7 +417,7 @@ def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, _fake, _store = make_mgr(tmp_path, m)
     run = _run("ONBOARD", None)
-    error = mgr._dev_failure_error(run, {
+    error = mgr.dev_failure_error(run, {
         "exit_code": 13,
         "error_detail": "fatal: unable to access 'https://forge/team-403/repo/': timeout",
     })

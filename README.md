@@ -60,11 +60,15 @@ your notes. Want it to stop? `DEVCAKE-SKIP` wins over everything, always.
 ```bash
 git clone https://github.com/fidecastro/devcake && cd devcake
 cp .env.example .env         # REQUIRED: strong ADMIN/REDIS/DAGU/OO passwords
-                             # (empty/default values refuse boot), LINEAR_API_KEY,
-                             # DEVCAKE_TEAM_KEY, GITHUB_TOKEN (or GITLAB_*),
-                             # DEVCAKE_REPO_URL, model credentials (subscription
-                             # OAuth preferred), DOCKER_GID
+                             # (empty or change-me* values refuse boot unless
+                             # DEVCAKE_ALLOW_INSECURE=1 — upgrade note: rotate
+                             # old placeholder passwords before first start),
+                             # LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TOKEN
+                             # (or GITLAB_*), DEVCAKE_REPO_URL, model creds
+                             # (subscription OAuth preferred), DOCKER_GID
                              # (stat -c %g /var/run/docker.sock)
+                             # Optional: OO_INGEST_* (non-root OTLP),
+                             # GITHUB_TOKEN_RO / token_ro_env for non-EXECUTE stages
 docker buildx bake all       # single source of truth for images (app, admin, 3 harnesses + hello)
 docker compose up -d         # run only — control ports bind to 127.0.0.1
 # After upgrades: re-run `docker buildx bake all` — stale local :latest tags

@@ -146,6 +146,16 @@ class LinearAdapter:
                      labels(first: 50) { pageInfo { hasNextPage endCursor }
                                         nodes { name } }
                    } } }""", "projects", {"teamId": team["id"]})
+        # list_all is the scheduler's hot path — paginate labels when the first
+        # page is full so DEVCAKE-SKIP cannot hide past page 1 (ISSUES #7).
+        for n in issues:
+            page = (n.get("labels") or {}).get("pageInfo") or {}
+            if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
+                await self._paginate_issue_labels(n["id"], n)
+        for n in projects:
+            page = (n.get("labels") or {}).get("pageInfo") or {}
+            if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
+                await self._paginate_project_labels(n["id"], n)
         missions = [self._issue_to_mission(n) for n in issues]
         missions += [self._project_to_mission(n) for n in projects]
         return missions
@@ -330,6 +340,10 @@ class LinearAdapter:
                                         nodes { name } }
                      project { id }
                    } } }""", "issues", {"pid": ref.pmo_id})
+        for n in nodes:
+            page = (n.get("labels") or {}).get("pageInfo") or {}
+            if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
+                await self._paginate_issue_labels(n["id"], n)
         return [self._issue_to_mission(n) for n in nodes]
 
     async def _set_issue_status(self, pmo_id: str, status: NormalizedStatus) -> None:

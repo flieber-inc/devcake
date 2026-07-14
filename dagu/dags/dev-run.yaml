@@ -1,12 +1,25 @@
 # dev-run: launch one Dev container. Only non-secret params (+ the per-run scoped
 # Redis ACL credential, docs/09 §1a); everything else reaches the Dev via runspec.get.
 # Shape verified live on Dagu v2.10.5 — docs/13-deployment.md §4.
+#
+# Resource limits (ISSUES #20): Dagu 2.10.5 step `container:` schema does NOT
+# accept cpus/memory/pids_limit (additionalProperties: false — unknown keys fail
+# validation). DAG-level `resources.limits` is best-effort process cgroup for
+# the DAG run, not Docker HostConfig for the sibling Dev container. True
+# container cgroup limits need Dagu host-config support (v0.1). Primary throttle
+# remains app concurrency caps.
 
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
 retry_policy:
   limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting
                                 # (docs/15 §2; the default would retry failed runs 3x)
+
+# Best-effort DAG-run resource budget (process cgroup where supported).
+resources:
+  limits:
+    cpu: "2"
+    memory: "4g"
 
 params:
   - name: RUN_ID
@@ -29,12 +42,6 @@ steps:
       pull_policy: missing
       keep_container: false
       startup: entrypoint
-      # Resource ceilings (docs/07 §7, ISSUES #20). Dagu 2.10 container executor
-      # passes these through to the Docker HostConfig.
-      cpus: "2"
-      memory: "4g"
-      # pids limit if supported by the executor; ignored safely if not.
-      pids_limit: 512
       env:
         DEVCAKE_RUN_ID: ${params.RUN_ID}
         TRACEPARENT: ${params.TRACEPARENT}

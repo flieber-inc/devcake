@@ -21,6 +21,12 @@ async def watchdog_loop(mgr: RunManager) -> None:
     while True:
         try:
             for run in mgr.store.active():
+                # finalizing = app-side PMO/forge work after the Dev has exited.
+                # Never wall-clock-kill it: that would strand mid-finalize work
+                # (especially after crash+reclaim), and artifact redelivery is a
+                # no-op once timed_out. Finalize has its own failure paths.
+                if run.state == "finalizing":
+                    continue
                 age = (utcnow() - run.created_at).total_seconds()
                 if age > run.timeout_seconds:
                     await mgr.kill(run, "timed_out", f"exceeded {run.timeout_seconds}s")

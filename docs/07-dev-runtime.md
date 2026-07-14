@@ -137,7 +137,7 @@ There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint abl
 - **Network:** full outbound internet access plus membership in `devcake_runtime` for Redis/OpenObserve name resolution. The app/admin/Dagu control plane is not attached to that network. Attachment mechanism in `13-deployment.md` §5.
 - **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md`).
 - **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root.
-- **Resources:** defaults `cpus: 2`, `memory: 4g`, `pids_limit: 512` in `dagu/dags/dev-run.yaml` (there is no per-Dev-Type image override — the image derives from `harness_template`, `08-harness-templates.md` §2). Admin Limits records the same defaults as advisory config; the DAG is authoritative until dynamic params are wired.
+- **Resources:** Dagu 2.10.5 step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container. Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps). Admin Limits records intended defaults; full container HostConfig is a v0.1 item.
 
 ## 8. Building a new Dev image (checklist)
 

@@ -738,14 +738,14 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
       </Section>
 
       <Section id="limits" title="Limits"
-        description="Global concurrency and safety ceilings. Dev container resource defaults live in dagu/dags/dev-run.yaml (2 CPU / 4g / 512 pids).">
+        description="Global concurrency and safety ceilings. Dev container Docker HostConfig CPU/memory is not available in Dagu 2.10.5 — concurrency caps are the real throttle.">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field label="Global max Devs" hint="Effective ceiling = min(global, Σ per-type caps)">
+          <Field label="Global max Devs" hint="Effective ceiling = min(global, Σ per-type caps). Primary host-protection control.">
             <Input type="number" value={cfg.concurrency.global_max}
               onChange={(e) => setField("cfg.concurrency.global_max", Number(e.target.value))} />
           </Field>
           <Field label="Dev run timeout (min)"
-            help="Wall-clock limit per Dev run. The watchdog kills anything older; the mission is retried up to its attempt limit.">
+            help="Wall-clock limit per Dev run (dispatched/running only — finalizing is never timeout-killed). The mission is retried up to its attempt limit.">
             <Input type="number" value={cfg.dev_timeout_minutes}
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
           </Field>
@@ -754,19 +754,19 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
             <Input type="number" min={1} value={cfg.review_loop_warning_every}
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
           </Field>
-          <Field label="Dev CPUs (default)"
-            help="Default CPU limit for Dev containers (mirrored in dev-run.yaml). Changing this records intent; rebuild/redeploy the DAG values to apply.">
+          <Field label="Intended Dev CPUs"
+            help="Documented intent only. Dagu 2.10.5 cannot apply Docker HostConfig cpus via the container: field. Edit dagu/dags/dev-run.yaml resources.limits for best-effort process cgroup.">
             <Input type="number" step="0.5" min={0.1}
               value={cfg.concurrency.dev_cpus ?? 2}
               onChange={(e) => setField("cfg.concurrency.dev_cpus", Number(e.target.value))} />
           </Field>
-          <Field label="Dev memory (default)"
-            help="Default memory limit string for Dev containers (e.g. 4g).">
+          <Field label="Intended Dev memory"
+            help="Documented intent only (e.g. 4g). Not enforced on the Dev container until Dagu supports HostConfig limits.">
             <Input value={cfg.concurrency.dev_memory ?? "4g"}
               onChange={(e) => setField("cfg.concurrency.dev_memory", e.target.value)} />
           </Field>
-          <Field label="Dev PIDs limit"
-            help="Default process limit for Dev containers.">
+          <Field label="Intended Dev PIDs"
+            help="Documented intent only. Not applied by Dagu 2.10.5 container schema.">
             <Input type="number" min={32}
               value={cfg.concurrency.dev_pids ?? 512}
               onChange={(e) => setField("cfg.concurrency.dev_pids", Number(e.target.value))} />
@@ -777,7 +777,6 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
           long-lived services use <code className="font-mono text-xs">restart: unless-stopped</code> in
           docker-compose.yml (default on). The SPA cannot rewrite compose — set{" "}
           <code className="font-mono text-xs">restart: &quot;no&quot;</code> in the file to disable.
-          Config flag <code className="font-mono text-xs">compose_restart</code> is advisory.
         </div>
       </Section>
 

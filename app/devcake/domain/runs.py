@@ -6,7 +6,6 @@ hello stub dispatch — the permanent debug/CI fixture (scripts/ci_suite.sh).
 
 from __future__ import annotations
 
-import base64
 import hmac
 import logging
 import os
@@ -58,27 +57,9 @@ def failure_record(run: "Run", outcome: str, reason: str,
     }
 
 
-_OO_ROOT_WARNED = False
-
-
 def _oo_basic_auth() -> str:
-    """Prefer ingest-only OO credentials; fall back to root with warning
-    (ISSUES #13). Mirrored in orchestrator._oo_basic_auth for mission runs."""
-    global _OO_ROOT_WARNED
-    ingest_email = os.environ.get("OO_INGEST_EMAIL", "")
-    ingest_password = os.environ.get("OO_INGEST_PASSWORD", "")
-    if ingest_email and ingest_password:
-        return base64.b64encode(
-            f"{ingest_email}:{ingest_password}".encode()).decode()
-    email = os.environ.get("OO_ROOT_EMAIL", "")
-    password = os.environ.get("OO_ROOT_PASSWORD", "")
-    if not _OO_ROOT_WARNED:
-        _OO_ROOT_WARNED = True
-        log.warning(
-            "OO_INGEST_EMAIL/OO_INGEST_PASSWORD unset — Dev runspecs receive "
-            "OpenObserve ROOT credentials. Create an ingest-only OO user and "
-            "set OO_INGEST_* (ISSUES #13).")
-    return base64.b64encode(f"{email}:{password}".encode()).decode()
+    from .oo_auth import oo_basic_auth
+    return oo_basic_auth()
 
 
 class RunManager:

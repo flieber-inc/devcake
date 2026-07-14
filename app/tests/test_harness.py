@@ -76,24 +76,47 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     whenever an authenticated active run asks — never stored, never expiring."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("XAI_API_KEY", "xai-test-000000000000000000000")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_write_token_for_tests_0001")
+    monkeypatch.setenv("GITHUB_TOKEN_RO", "ghp_readonly_token_for_tests_01")
     secrets = tmp_path / "secrets" / "main-dev"
     secrets.mkdir(parents=True)
     (secrets / "grok-auth.json").write_text('{"grok": true}')
 
     from devcake.domain.run import Run
+    from devcake.config import RepoInstance
     mgr = MissionManager.__new__(MissionManager)
-    mgr.config = AppConfig()
+    cfg = AppConfig()
+    cfg.repos[0] = RepoInstance(
+        url="https://github.com/o/r", token_env="GITHUB_TOKEN",
+        token_ro_env="GITHUB_TOKEN_RO")
+    mgr.config = cfg
     mgr.dev_types = {"main-dev": DevType(name="main-dev",
-                                         harness_template="grok-build")}
+                                         harness_template="grok-build"),
+                     "senior-dev": DevType(name="senior-dev",
+                                           harness_template="claude-code")}
     run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
               mission_type="EXECUTE", dev_type="main-dev", seq=1)
     payload = mgr.runspec_secret_payload(run)
     assert payload["env"]["XAI_API_KEY"] == "xai-test-000000000000000000000"
-    assert "DEVCAKE_FORGE_TOKEN" in payload["env"]
+    assert payload["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_write_token_for_tests_0001"
     assert "OTEL_EXPORTER_OTLP_BASIC" in payload["env"]
     assert payload["credential_files"] == [{"path_hint": "~/.grok/auth.json",
                                             "content": '{"grok": true}',
                                             "mode": "600"}]
+    # Non-EXECUTE stages: prefer RO token (clone-capable), never omit token
+    for mtype in ("PLAN", "REVIEW", "ONBOARD", "MAPPER"):
+        r2 = Run(run_id=f"T-1-1-{mtype}-AAAAAA", mission_key="T-1",
+                 mission_type=mtype, dev_type="senior-dev", seq=1)
+        p2 = mgr.runspec_secret_payload(r2)
+        assert p2 is not None
+        assert p2["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_readonly_token_for_tests_01"
+    # Without RO env: fall back to write token so private repos still clone
+    cfg.repos[0] = RepoInstance(
+        url="https://github.com/o/r", token_env="GITHUB_TOKEN", token_ro_env=None)
+    r3 = Run(run_id="T-1-1-PLAN-BBBBBB", mission_key="T-1",
+             mission_type="PLAN", dev_type="senior-dev", seq=1)
+    p3 = mgr.runspec_secret_payload(r3)
+    assert p3["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_write_token_for_tests_0001"
     run.dev_type = "deleted-dev"
     assert mgr.runspec_secret_payload(run) is None
 

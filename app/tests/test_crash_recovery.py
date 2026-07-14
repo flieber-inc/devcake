@@ -212,3 +212,119 @@ def test_recon_skips_finalizing():
         assert len(others) == 1
         # recon should only kill `others`
         assert others[0].run_id == "R-1"
+
+
+def test_watchdog_never_timeouts_finalizing(tmp_path, monkeypatch):
+    """finalizing runs must not be wall-clock-killed (strand risk after reclaim)."""
+    from devcake.domain import watchdog as wd
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+    executor = FakeExecutor()
+    mgr = RunManager(store, messaging, executor)
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run = _make_run(
+        store, state="finalizing",
+        created_at=utcnow() - timedelta(hours=5),
+        timeout_seconds=60,
+    )
+    cycles = {"n": 0}
+
+    async def fake_sleep(_):
+        cycles["n"] += 1
+        if cycles["n"] >= 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(wd.asyncio, "sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        run_coro(wd.watchdog_loop(mgr))
+    assert store.get(run.run_id).state == "finalizing"
+    assert messaging.deleted_users == []
+
+
+def test_checkpoint_skips_without_unawaited_coro(tmp_path):
+    """_checkpoint must accept a callable — redelivery must not spawn orphan coros."""
+    from devcake.config import AppConfig, DevType
+    from devcake.domain.orchestrator import MissionManager
+    from devcake.domain.model import Mission
+    from datetime import datetime, timezone
+
+    store = RunStore(tmp_path / "runs")
+    run = _make_run(store, state="finalizing")
+    run.finalized_steps = ["already"]
+    store.save(run)
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.runs = type("R", (), {"store": store})()
+    calls = []
+
+    async def side():
+        calls.append(1)
+
+    run_coro(mgr._checkpoint(run, "already", side))
+    assert calls == []  # skipped; side never invoked
+
+
+def test_human_needed_baton_posted_once(tmp_path):
+    """Redelivery after transition:human_needed must not re-feed the baton."""
+    from datetime import datetime, timezone
+    from devcake.config import AppConfig, DevType
+    from devcake.domain.orchestrator import MissionManager
+    from devcake.domain.model import Mission, LABEL_EXECUTE
+
+    m = Mission(
+        pmo_id="p1", pmo_kind="issue", key="T-1", title="t",
+        status="in_progress", labels={LABEL_EXECUTE},
+        updated_at=datetime.now(timezone.utc),
+    )
+    comments = []
+
+    class FakePMO:
+        async def get(self, ref):
+            return m
+
+        async def post_feed(self, ref, markdown):
+            comments.append(markdown)
+
+        async def swap_labels(self, ref, remove, add):
+            m.labels = (m.labels - set(remove)) | set(add)
+
+        async def set_status(self, ref, status):
+            m.status = status
+
+    store = RunStore(tmp_path / "runs")
+
+    class Runs:
+        pass
+    runs = Runs()
+    runs.store = store
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.config = AppConfig()
+    mgr.dev_types = {}
+    mgr.pmo = FakePMO()
+    mgr.runs = runs
+    mgr.messaging = FakeMessaging()
+    mgr._grace = set()
+    mgr._grace_next = set()
+    mgr.breakers = {}
+    mgr.merge_handoffs = {}
+    mgr._merge_window_closed = set()
+    mgr.needs_human = {}
+    mgr._audit = lambda *a, **k: None
+
+    run = Run(
+        run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1", mission_pmo_id="p1",
+        mission_type="EXECUTE", dev_type="main-dev", seq=1,
+        state="finalizing", stage_label_at_dispatch=LABEL_EXECUTE,
+    )
+    store.save(run)
+    result = {"outcome": "human_needed", "summary": "stuck on secrets"}
+    run_coro(mgr._transition(run, result, None))
+    assert sum(1 for c in comments if "needs a human" in c.lower()
+               or "DevCake needs a human" in c) == 1
+    # redelivery: checkpoint skips baton
+    run_coro(mgr._transition(run, result, None))
+    assert sum(1 for c in comments if "needs a human" in c.lower()
+               or "DevCake needs a human" in c) == 1
+    assert "transition:human_needed" in run.finalized_steps

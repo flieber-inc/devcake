@@ -223,8 +223,11 @@ def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict
     harness registry, secret material from /data/secrets/{dev_type}/
     (docs/08 §4)."""
     harness = HARNESSES[dev_type.harness_template]
-    env = {var: os.environ[var] for var in harness.credential_env
-           if os.environ.get(var)}
+    # harness/model key VALUES are GUI-stored (schema v4, F5): read them from
+    # /data/secrets/harness/, no os.environ indirection
+    from ... import secrets as _secrets
+    env = {var: v for var in harness.credential_env
+           if (v := _secrets.read_harness_secret(var))}
     files = []
     secrets_dir = (Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
                    / "secrets" / dev_type.name)

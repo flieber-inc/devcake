@@ -187,8 +187,7 @@ async def resolve_repo_live(self, mission, all_runs=None):
         # operator-name pattern by design — they are synthesized, not input
         inst = RepoInstance.model_construct(
             name=creds.repo_name, forge="gitea", url=creds.clone_url,
-            default_branch="main", token_env="", token_ro_env=None,
-            reviewer_token_env=None, api_base=None)
+            default_branch="main", api_base=None)
         self.forges.register_internal(creds.repo_name, inst, adapter)
         return creds.repo_name
 

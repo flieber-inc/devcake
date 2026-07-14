@@ -52,7 +52,8 @@ def test_dev_type_status_derives_and_reports_secrets(tmp_path, monkeypatch):
 
 def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-000000000000000000000")
+    from devcake import secrets as secrets_store
+    secrets_store.write_harness_secret("XAI_API_KEY", "xai-test-000000000000000000000")
     secrets = tmp_path / "secrets" / "main-dev"
     secrets.mkdir(parents=True)
     (secrets / "grok-auth.json").write_text('{"grok": true}')
@@ -65,7 +66,7 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
                       "content": '{"grok": true}', "mode": "600"}]
 
     # same dev type NAME, different harness → different requirements entirely
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    secrets_store.write_harness_secret("CLAUDE_CODE_OAUTH_TOKEN", "tok")
     env, files = mgr._credential_spec(DevType(name="main-dev",
                                               harness_template="claude-code"))
     assert "CLAUDE_CODE_OAUTH_TOKEN" in env and "XAI_API_KEY" not in env
@@ -76,9 +77,10 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     """docs/09 §5: the secret half of a run spec is derived from current config
     whenever an authenticated active run asks — never stored, never expiring."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("XAI_API_KEY", "xai-test-000000000000000000000")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_write_token_for_tests_0001")
-    monkeypatch.setenv("GITHUB_TOKEN_RO", "ghp_readonly_token_for_tests_01")
+    from devcake import secrets as secrets_store
+    secrets_store.write_harness_secret("XAI_API_KEY", "xai-test-000000000000000000000")
+    secrets_store.write_connection_secret("repo", "main", "token", "ghp_write_token_for_tests_0001")
+    secrets_store.write_connection_secret("repo", "main", "token_ro", "ghp_readonly_token_for_tests_01")
     secrets = tmp_path / "secrets" / "main-dev"
     secrets.mkdir(parents=True)
     (secrets / "grok-auth.json").write_text('{"grok": true}')
@@ -87,9 +89,7 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     from devcake.config import RepoInstance
     mgr = MissionManager.__new__(MissionManager)
     cfg = AppConfig()
-    cfg.repos[0] = RepoInstance(
-        url="https://github.com/o/r", token_env="GITHUB_TOKEN",
-        token_ro_env="GITHUB_TOKEN_RO")
+    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
     mgr.config = cfg
     mgr.forges = FakeForgeRuntime(object(), inst=cfg.repos[0])
     mgr.dev_types = {"main-dev": DevType(name="main-dev",
@@ -115,19 +115,13 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
         p2 = mgr.runspec_secret_payload(r2)
         assert p2 is not None
         assert p2["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_readonly_token_for_tests_01"
-    # token_ro_env unset but the conventional {token_env}_RO name is set:
-    # the fallback must pick it up — the /health warning tells operators to
-    # just set GITHUB_TOKEN_RO in .env, so that must actually work
-    cfg.repos[0] = RepoInstance(
-        url="https://github.com/o/r", token_env="GITHUB_TOKEN", token_ro_env=None)
+    # With no RO token stored: non-EXECUTE stages fall back to the WRITE
+    # token so private repos still clone (the /health warning covers the
+    # posture)
+    secrets_store.write_connection_secret("repo", "main", "token_ro", "")
     mgr.forges = FakeForgeRuntime(object(), inst=cfg.repos[0])
     r3 = Run(run_id="T-1-1-PLAN-BBBBBB", mission_key="T-1",
              mission_type="PLAN", dev_type="senior-dev", seq=1)
-    p3 = mgr.runspec_secret_payload(r3)
-    assert p3["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_readonly_token_for_tests_01"
-    # With no RO credential anywhere: fall back to the write token so private
-    # repos still clone
-    monkeypatch.delenv("GITHUB_TOKEN_RO")
     p4 = mgr.runspec_secret_payload(r3)
     assert p4["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_write_token_for_tests_0001"
     run.dev_type = "deleted-dev"

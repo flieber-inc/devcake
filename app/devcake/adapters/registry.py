@@ -15,7 +15,6 @@ class PMOSystemInfo(BaseModel):
     registered system contributes its token shapes, configured or not."""
     id: str
     display_name: str
-    api_key_env_default: str
     secret_env_vars: list[str]
     token_patterns: list[str]           # regex sources for redaction
     secret_shape_prefixes: list[str]    # SPA paste-guard prefixes
@@ -25,7 +24,6 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
     "linear": PMOSystemInfo(
         id="linear",
         display_name="Linear",
-        api_key_env_default="LINEAR_API_KEY",
         secret_env_vars=["LINEAR_API_KEY"],
         token_patterns=[r"\blin_api_[A-Za-z0-9]{20,}\b",
                         r"\blin_oauth_[A-Za-z0-9]{20,}\b"],
@@ -91,17 +89,15 @@ def make_forge(inst) -> "ForgePort":
     if inst.forge not in classes:
         raise ValueError(f"unknown forge {inst.forge!r} — registered: "
                          f"{sorted(classes)}")
-    # Every forge credential env name is operator-renamable (token_env,
-    # token_ro_env, reviewer_token_env), so the static redaction lists can't
-    # know them — register the resolved values here (construction is the one
-    # choke point every boot/reload/dry-run passes through). Over-registering
-    # a value already covered by the static lists is harmless.
+    # Credential VALUES are GUI-stored (schema v4, F5): the RepoInstance
+    # properties read them by instance name. Register for redaction here —
+    # construction is the one choke point every boot/reload/dry-run passes.
     from ..security import register_runtime_secret
-    reviewer = os.environ.get(inst.reviewer_token_env or "") or None
+    reviewer = inst.reviewer_token or None
     for kind, value in (("token", inst.token),
-                        ("token_ro", getattr(inst, "token_ro", "")),
+                        ("token_ro", inst.token_ro),
                         ("reviewer", reviewer or "")):
         if value:
-            register_runtime_secret(f"forge_{kind}:{inst.forge}", value)
+            register_runtime_secret(f"forge_{kind}:{inst.name}", value)
     return classes[inst.forge](inst.url, inst.token, reviewer,
                                api_base=inst.api_base)

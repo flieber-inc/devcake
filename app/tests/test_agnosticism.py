@@ -79,48 +79,24 @@ def test_no_vendor_adapter_imports_outside_registry():
         "vendor adapter imports outside the registry (F1):\n" + "\n".join(offenders))
 
 
-def test_config_defaults_resolve_through_descriptors():
-    """A reintroduced static default (forge name, token env) fails here."""
+def test_config_default_forge_resolves_through_registry():
+    """A reintroduced static forge-name default fails here (F1)."""
     assert RepoInstance().forge == DEFAULT_FORGE
-    assert RepoInstance().resolved_token_env == forges()[DEFAULT_FORGE].token_env_default
-    for fid, d in forges().items():
-        inst = RepoInstance(forge=fid, url="https://host.example/owner/repo")
-        assert inst.resolved_token_env == d.token_env_default, (
-            f"RepoInstance(forge={fid!r}) token env did not derive from the descriptor")
 
 
-def test_token_env_derivation_survives_forge_switch():
-    """Read-time resolution, never materialized: a persisted empty token_env
-    must re-derive after the operator hot-switches the forge (the verified M6
-    GitHub↔GitLab flow) — and model_dump must keep "" so save_config never
-    bakes one forge's env name into the file."""
-    inst = RepoInstance(url="https://host.example/o/r")   # default forge
-    assert inst.model_dump()["token_env"] == ""
-    switched = RepoInstance(**{**inst.model_dump(), "forge": "gitlab"})
-    assert switched.resolved_token_env == forges()["gitlab"].token_env_default
-    # an explicit operator override always wins, on any forge
-    explicit = RepoInstance(url="https://host.example/o/r", forge="gitlab",
-                            token_env="MY_CUSTOM_TOKEN")
-    assert explicit.resolved_token_env == "MY_CUSTOM_TOKEN"
 
 
-def test_write_token_warning_copy_is_config_fed(monkeypatch):
-    """The forge-write-token warning must name the CONFIGURED forge's token
-    env and no other registered forge's — copy is derived, never hardcoded."""
+def test_write_token_warning_fires_per_repo(tmp_path, monkeypatch):
+    """The forge-write-token warning fires per configured repo with a write
+    token but no RO token — its id is repo-scoped (dismissals don't bleed)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     from devcake import security
-    for fid, d in forges().items():
-        monkeypatch.setenv(d.token_env_default, "tok-value-1234567890")
-        monkeypatch.delenv(f"{d.token_env_default}_RO", raising=False)
-        cfg = AppConfig()
-        cfg.repos[0] = RepoInstance(forge=fid, url="https://host.example/o/r")
-        warns = {w["id"]: w for w in security.security_warnings(cfg)}
-        body = warns["forge-write-token:main"]["body"]
-        assert f"{d.token_env_default}_RO" in body
-        for other_id, other in forges().items():
-            if other_id != fid and other.token_env_default != d.token_env_default:
-                assert other.token_env_default not in body, (
-                    f"warning copy for {fid} names {other_id}'s token env")
-        monkeypatch.delenv(d.token_env_default, raising=False)
+    from devcake import secrets as secrets_store
+    secrets_store.write_connection_secret("repo", "main", "token", "write-tok-123")
+    cfg = AppConfig(repos=[RepoInstance(name="main",
+                                        url="https://host.example/o/r")])
+    warns = {w["id"] for w in security.security_warnings(cfg)}
+    assert "forge-write-token:main" in warns
 
 
 def test_port_declares_no_forge_specific_git_identity():

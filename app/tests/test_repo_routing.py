@@ -130,8 +130,9 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
     forges — each run's spec env + secret payload derive from ITS repo
     (url, dialect, token), never from a global."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_github_token_000000000000")
-    monkeypatch.setenv("GITLAB_TOKEN", "glpat-gitlab_token_000000000")
+    from devcake import secrets as secrets_store
+    secrets_store.write_connection_secret("repo", "ghrepo", "token", "ghp_github_token_000000000000")
+    secrets_store.write_connection_secret("repo", "glrepo", "token", "glpat-gitlab_token_000000000")
     from devcake.adapters.registry import make_forge
     from devcake.config import AppConfig, DevType, RepoInstance
     from devcake.domain.forge_runtime import ForgeRuntime
@@ -160,7 +161,7 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
     assert env_gh["DEVCAKE_CLONE_USER"] == "x-access-token"     # github dialect
     assert env_gl["DEVCAKE_CLONE_USER"] == "oauth2"             # gitlab dialect
 
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    secrets_store.write_harness_secret("CLAUDE_CODE_OAUTH_TOKEN", "tok")
     r_gh = _run("ghrepo"); r_gh.mission_type = "EXECUTE"; r_gh.dev_type = "senior-dev"
     r_gl = _run("glrepo", seq=2); r_gl.mission_type = "EXECUTE"; r_gl.dev_type = "senior-dev"
     assert mgr.runspec_secret_payload(r_gh)["env"]["DEVCAKE_FORGE_TOKEN"] \

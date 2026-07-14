@@ -122,12 +122,12 @@ def test_dev_breakers_shared_advisory_separate():
 # ── unconfigured-idle semantics (schema v3) ─────────────────────────────────
 
 def test_unconfigured_instance_is_valid_but_idle():
-    cfg = AppConfig()                     # seeded unconfigured instance
-    assert cfg.pmos[0].configured is False
-    assert cfg.repos[0].configured is False
-    # a configured one flips the property
-    cfg2 = AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")])
-    assert cfg2.pmos[0].configured is True
+    from devcake.config import PMOInstance as PI
+    cfg = AppConfig()                     # empty first boot (schema v4)
+    assert cfg.pmos == [] and cfg.repos == []
+    # an unconfigured (empty team_key) instance is valid but idle
+    assert PI(name="linear").configured is False
+    assert PI(name="linear", team_key="DEV").configured is True
 
 
 def test_dispatch_stamps_the_dispatching_instances_pmo_ref():

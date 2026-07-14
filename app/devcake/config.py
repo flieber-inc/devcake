@@ -31,7 +31,6 @@ class PMOInstance(BaseModel):
     empty first boot (and M12's GUI-only setup) is a defined state."""
     name: str = Field("linear", pattern=_INSTANCE_NAME_RE)
     system: str = "linear"          # validated against the adapter registry
-    api_key_env: str = "LINEAR_API_KEY"
     team_key: str = ""
     api_base: str | None = None     # None = the adapter's default API host
     # M10 routing: the repo (by name) missions of this instance resolve to
@@ -55,7 +54,10 @@ class PMOInstance(BaseModel):
 
     @property
     def api_key(self) -> str:
-        return os.environ.get(self.api_key_env, "")
+        # single-mode (schema v4, F5): the operator's key VALUE is stored
+        # 0600 under /data/secrets via the GUI — no env-var indirection
+        from . import secrets
+        return secrets.read_connection_secret("pmo", self.name, "api_key")
 
 
 def _default_forge() -> str:
@@ -73,15 +75,10 @@ class RepoInstance(BaseModel):
     url: str = ""
     api_base: str | None = None     # None = the adapter's default API host / the repo's origin
     default_branch: str = "main"
-    # empty = derived from the forge's descriptor (token_env_default)
-    token_env: str = ""
-    # Optional read-only PAT for non-EXECUTE stages (ISSUES #15). When set,
-    # PLAN/REVIEW/MAPPER/ONBOARD clone with it instead of the write token.
-    # When empty (the DEFAULT), every stage receives the WRITE token — the
-    # entrypoint always clones, so omitting it entirely breaks private repos.
-    # Accepted for v0; /health surfaces a dismissable warning (docs/14 §2).
-    token_ro_env: str | None = None
-    reviewer_token_env: str | None = None
+    # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
+    # the `token`/`token_ro`/`reviewer_token` properties read them by instance
+    # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);
+    # when absent, every stage receives the WRITE token — /health warns.
 
     @field_validator("forge")
     @classmethod
@@ -117,28 +114,19 @@ class RepoInstance(BaseModel):
         return bool(self.url.strip())
 
     @property
-    def resolved_token_env(self) -> str:
-        """token_env, or the forge descriptor's default when unset. Resolved
-        at READ time, never materialized into the model: a persisted "" must
-        re-derive after a forge switch (the admin GitHub↔GitLab hot-switch),
-        so save_config never bakes one forge's env name into another's config."""
-        if self.token_env:
-            return self.token_env
-        from .adapters.registry import forges  # lazy: config stays import-light
-        return forges()[self.forge].token_env_default
-
-    @property
     def token(self) -> str:
-        return os.environ.get(self.resolved_token_env, "")
+        from . import secrets
+        return secrets.read_connection_secret("repo", self.name, "token")
 
     @property
     def token_ro(self) -> str:
-        # explicit token_ro_env wins; otherwise the conventional name
-        # ({token_env}_RO) works out of the box — the /health warning and
-        # .env.example both point operators at it
-        if self.token_ro_env:
-            return os.environ.get(self.token_ro_env, "")
-        return os.environ.get(f"{self.resolved_token_env}_RO", "")
+        from . import secrets
+        return secrets.read_connection_secret("repo", self.name, "token_ro")
+
+    @property
+    def reviewer_token(self) -> str:
+        from . import secrets
+        return secrets.read_connection_secret("repo", self.name, "reviewer_token")
 
 
 class Assignment(BaseModel):
@@ -224,9 +212,11 @@ DEFAULT_DEV_TYPES = [
 
 
 class AppConfig(BaseModel):
-    schema_version: int = 3
-    pmos: list[PMOInstance] = Field(default_factory=lambda: [PMOInstance()])
-    repos: list[RepoInstance] = Field(default_factory=lambda: [RepoInstance()])
+    # v4 (M12): secret VALUES are GUI-stored, not env-referenced; a truly
+    # empty first boot (pmos/repos both empty) is a defined idle state
+    schema_version: int = 4
+    pmos: list[PMOInstance] = Field(default_factory=list)
+    repos: list[RepoInstance] = Field(default_factory=list)
     assignments: dict[str, Assignment] = Field(
         default_factory=lambda: dict(DEFAULT_ASSIGNMENTS))
     concurrency: Concurrency = Field(default_factory=Concurrency)
@@ -259,9 +249,9 @@ class AppConfig(BaseModel):
         # ONE generic refusal for every stale version (v1, v2, future) —
         # no bespoke per-version detectors (docs/10 §3 has the migration
         # recipe; there are no deployments to auto-migrate for)
-        if v != 3:
+        if v != 4:
             raise ValueError(
-                f"config schema_version {v} is not the current version (3) — "
+                f"config schema_version {v} is not the current version (4) — "
                 "hand-migrate per docs/10 §3 or delete the file and "
                 "reconfigure via the admin panel")
         return v
@@ -269,9 +259,7 @@ class AppConfig(BaseModel):
     @field_validator("pmos")
     @classmethod
     def _pmos_valid(cls, v):
-        if not v:
-            raise ValueError("pmos: at least one PMO instance is required "
-                             "(it may be unconfigured — empty team_key)")
+        # 0..N PMO instances (M12): empty = idle first boot (GUI-only setup)
         names = [e.name for e in v]
         if len(set(names)) != len(names):
             raise ValueError("pmos: duplicate instance names")
@@ -318,16 +306,24 @@ def _stale_shape_reason(data: dict) -> str | None:
     stale = [k for k in ("pmo", "repo") if isinstance(data.get(k), dict)]
     if stale:
         return (f"singular {'/'.join(stale)!s} config keys are schema v1; "
-                "the current v3 shape is pmos:/repos: name-keyed lists")
+                "the current v4 shape is pmos:/repos: name-keyed lists")
     for key in ("pmos", "repos"):
         entries = data.get(key)
-        if isinstance(entries, list) and any(
-                isinstance(e, dict) and "id" in e for e in entries):
-            return (f"{key} entries carry the v2 'id' field; schema v3 uses "
-                    "operator-chosen 'name' identities")
-    if data.get("schema_version") not in (None, 3):
+        if isinstance(entries, list):
+            if any(isinstance(e, dict) and "id" in e for e in entries):
+                return (f"{key} entries carry the v2 'id' field; schema v4 "
+                        "uses operator-chosen 'name' identities")
+            # v3→v4: env-name references replaced by GUI-stored secret values
+            if any(isinstance(e, dict) and (
+                    "api_key_env" in e or "token_env" in e or
+                    "token_ro_env" in e or "reviewer_token_env" in e)
+                   for e in entries):
+                return (f"{key} entries carry v3 *_env fields; schema v4 stores "
+                        "secret VALUES via the Config page — remove the *_env "
+                        "keys and re-enter secrets in the admin panel")
+    if data.get("schema_version") not in (None, 4):
         return (f"schema_version {data['schema_version']} is stale — the "
-                "current version is 3")
+                "current version is 4")
     return None
 
 
@@ -383,17 +379,14 @@ def load_config() -> AppConfig:
             _refuse_stale_file(data)
         cfg = AppConfig.model_validate(data)
     else:
-        cfg = AppConfig(pmos=[PMOInstance(
-            team_key=os.environ.get("DEVCAKE_TEAM_KEY", ""))])
-        log.info("config: first boot — seeding %s from env", CONFIG_PATH)
-    # top-up missing/env-provided fields (a config predating a field picks up
-    # its env default here), then persist
-    if cfg.repos and not cfg.repos[0].url and os.environ.get("DEVCAKE_REPO_URL"):
-        cfg.repos[0].url = os.environ["DEVCAKE_REPO_URL"]
+        # first boot is EMPTY (schema v4, F5): everything — PMO instances,
+        # repos, credentials — is configured through the GUI; no env seeding
+        cfg = AppConfig()
+        log.info("config: first boot — empty config (%s); configure via the "
+                 "admin panel", CONFIG_PATH)
     _atomic_yaml(CONFIG_PATH, cfg.model_dump())
-    log.info("config: team=%s adoption=%s repos=%s",
-             cfg.pmos[0].team_key, cfg.adoption_mode,
-             [r.url or "(unset)" for r in cfg.repos] or "(none)")
+    log.info("config: %d pmo instance(s), %d repo(s), adoption=%s",
+             len(cfg.pmos), len(cfg.repos), cfg.adoption_mode)
     return cfg
 
 

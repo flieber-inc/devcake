@@ -75,13 +75,14 @@ class GiteaFixture:
             "POST", f"/users/{self.reviewer}/tokens",
             json={"name": f"contract-{self.suffix}",
                   "scopes": ["write:repository", "write:issue"]})["sha1"]
-        os.environ["CONTRACT_FORGE_TOKEN"] = self.admin_token
-        os.environ["CONTRACT_REVIEWER_TOKEN"] = self.reviewer_token
+        # schema v4: token VALUES are stored, not env-referenced
+        from devcake import secrets as _s
+        _s.write_connection_secret("repo", "contract", "token", self.admin_token)
+        _s.write_connection_secret("repo", "contract", "reviewer_token",
+                                   self.reviewer_token)
         return RepoInstance(
             name="contract", forge="gitea",
-            url=f"{GITEA_URL}/{admin_user}/{self.repo}.git",
-            token_env="CONTRACT_FORGE_TOKEN",
-            reviewer_token_env="CONTRACT_REVIEWER_TOKEN")
+            url=f"{GITEA_URL}/{admin_user}/{self.repo}.git")
 
     def make_branch_and_pr(self, branch: str, title: str) -> int:
         admin_user = self.admin[0]
@@ -160,8 +161,10 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
 
     # 6 — approve: False without a reviewer token, True with one (official —
     # the fixture whitelists the reviewer)
-    bare = make_forge(RepoInstance(name="bare", forge=inst.forge, url=inst.url,
-                                   token_env=inst.token_env))
+    from devcake import secrets as _s
+    _s.write_connection_secret("repo", "bare", "token",
+                               _s.read_connection_secret("repo", "contract", "token"))
+    bare = make_forge(RepoInstance(name="bare", forge=inst.forge, url=inst.url))
     check("6", "approve False without reviewer / True with",
           (await bare.approve(n)) is False and (await forge.approve(n)) is True)
 

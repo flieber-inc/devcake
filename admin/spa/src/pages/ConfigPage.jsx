@@ -3,7 +3,7 @@ import { Play, Plus, Trash2, KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Section } from "../components/Card.jsx";
-import { Field, Help, EnvVarField, Input, Select, Textarea } from "../components/Field.jsx";
+import { Field, Help, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
@@ -133,7 +133,10 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
     setEnvSet({});
     const names = (h.credential_env || []).join(",");
     if (names)
-      get(`/env-check?names=${encodeURIComponent(names)}`).then(setEnvSet).catch(() => {});
+      get(`/secrets-check?harness=${encodeURIComponent(names)}`)
+        .then((r) => setEnvSet(Object.fromEntries(
+          Object.entries(r.harness || {}).map(([k, v]) => [k, v.present]))))
+        .catch(() => {});
   }, [d.harness_template]);
   const filePresent = (sf) => (serverDt.secrets_present || []).includes(sf);
   const ready = Object.values(envSet).some(Boolean) ||
@@ -211,15 +214,14 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
             for the old harness are kept but unused.
           </p>
         )}
-        <ul className="space-y-1">
+        <div className="space-y-2">
           {(h.credential_env || []).map((v) => (
-            <li key={v}>
-              {envSet[v] ? "✓" : "✗"} env <span className="font-mono">{v}</span>
-              {!envSet[v] && (
-                <span className="text-neutral-400"> — set in .env and restart</span>
-              )}
-            </li>
+            <SecretField key={v} label={v}
+              help={`API key for the ${d.harness_template} harness. Stored securely — never echoed, never in .env.`}
+              refKey={v} checkKind="harness" paste />
           ))}
+        </div>
+        <ul className="space-y-1">
           {(h.credential_files || []).map((cf) => (
             <li key={cf.secret_file} className="flex items-center gap-2">
               <span>
@@ -591,11 +593,9 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
                   help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.">
                   <Input value={inst.team_key}
                   onChange={(e) => setField(`cfg.pmos.${idx}.team_key`, e.target.value)} /></Field>
-                <EnvVarField label="API key env var"
-                  help={`The NAME of the environment variable in DevCake's .env that holds this instance's PMO API key — not the key itself.`}
-                  value={inst.api_key_env}
-                  fallback={registry.pmo_systems.find((s) => s.id === inst.system)?.api_key_env_default}
-                  onChange={(e) => setField(`cfg.pmos.${idx}.api_key_env`, e.target.value)} />
+                <SecretField label="API key"
+                  help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
+                  refKey={`pmo:${inst.name}:api_key`} paste />
                 <Field label="Default repo"
                   help="Where this instance's missions land when they carry no `devcake-repo:` marker. '(none)' = unrouted missions wait (the internal fallback forge arrives in v0.1 M11).">
                   <Select value={inst.default_repo || ""}
@@ -625,8 +625,7 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
           <Button kind="ghost" onClick={() =>
             setField("cfg.pmos", [...cfg.pmos,
               { name: `linear${cfg.pmos.length + 1}`, system: "linear",
-                api_key_env: "LINEAR_API_KEY", team_key: "", api_base: null,
-                default_repo: null }])}>
+                team_key: "", api_base: null, default_repo: null }])}>
             + Add PMO instance
           </Button>
           <Field label="Poll interval (s)"
@@ -687,15 +686,15 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
                   help="HTTPS URL of the repository, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it. Empty = repo stays idle.">
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
-                <EnvVarField label="Token env var"
-                  help="The NAME of the environment variable in DevCake's .env that holds this repo's access token — never paste the token itself here. Leave empty to use the selected forge's default name. The token needs repo read/write and PR scopes."
-                  value={repo.token_env}
-                  fallback={registry.forges.find((f) => f.id === repo.forge)?.token_env_default}
-                  onChange={(e) => setField(`cfg.repos.${idx}.token_env`, e.target.value)} />
-                <EnvVarField label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals"
-                  help="The NAME of an env var holding a second account's token. When set, REVIEW posts a formal approval from that account before merging. Leave empty to skip formal approvals."
-                  value={repo.reviewer_token_env || ""}
-                  onChange={(e) => setField(`cfg.repos.${idx}.reviewer_token_env`, e.target.value || null)} />
+                <SecretField label="Access token"
+                  help="This repo's forge token (repo read/write + PR scopes). Stored securely — never echoed, never in .env."
+                  refKey={`repo:${repo.name}:token`} paste />
+                <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
+                  help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
+                  refKey={`repo:${repo.name}:token_ro`} paste />
+                <SecretField label="Reviewer token" hint="Optional 2nd account → formal PR approvals"
+                  help="Optional second account's token. When set, REVIEW posts a formal approval from that account before merging."
+                  refKey={`repo:${repo.name}:reviewer_token`} paste />
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testForge(repo.name)}>Test connection</Button>
@@ -714,8 +713,7 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
         <Button kind="ghost" onClick={() =>
           setField("cfg.repos", [...cfg.repos,
             { name: `repo${cfg.repos.length + 1}`, forge: "github", url: "",
-              api_base: null, default_branch: "main", token_env: "",
-              token_ro_env: null, reviewer_token_env: null }])}>
+              api_base: null, default_branch: "main" }])}>
           + Add repository
         </Button>
         <Field label="Auto-merge"

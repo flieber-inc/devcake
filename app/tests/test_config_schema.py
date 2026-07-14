@@ -7,7 +7,7 @@ import yaml
 import pytest
 
 import devcake.config as config_mod
-from devcake.config import AppConfig, PMOInstance, reject_stale_patch
+from devcake.config import AppConfig, PMOInstance, RepoInstance, reject_stale_patch
 
 V1_YAML = """
 schema_version: 1
@@ -23,8 +23,14 @@ adoption_mode: opt_in
 """
 
 
+def _base():
+    return AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")],
+                     repos=[RepoInstance(name="main",
+                                         url="https://github.com/o/r")]).model_dump()
+
+
 def test_instance_validators_v3():
-    base = AppConfig().model_dump()
+    base = _base()
     # N pmos allowed — unique names, distinct configured targets
     two = dict(base, pmos=[dict(base["pmos"][0], team_key="A"),
                            dict(base["pmos"][0], name="linearb", team_key="B")])
@@ -36,8 +42,7 @@ def test_instance_validators_v3():
         AppConfig.model_validate(dict(base, pmos=[
             dict(base["pmos"][0], team_key="A"),
             dict(base["pmos"][0], name="linearb", team_key="A")]))
-    with pytest.raises(Exception, match="at least one"):
-        AppConfig.model_validate(dict(base, pmos=[]))
+    AppConfig.model_validate(dict(base, pmos=[]))   # 0..N since M12
     # repos: 0..N since M10 — empty is the zero-repo gate, dupes refused
     AppConfig.model_validate(dict(base, repos=[]))
     dupes = dict(base, repos=[base["repos"][0], dict(base["repos"][0])])
@@ -59,7 +64,7 @@ def test_instance_name_format_enforced():
 
 
 def test_default_repo_must_name_a_repo():
-    base = AppConfig().model_dump()
+    base = _base()
     base["pmos"][0]["default_repo"] = "nosuchrepo"
     with pytest.raises(Exception, match="names no"):
         AppConfig.model_validate(base)
@@ -68,7 +73,7 @@ def test_default_repo_must_name_a_repo():
 
 
 def test_unknown_pmo_system_rejected():
-    base = AppConfig().model_dump()
+    base = _base()
     base["pmos"][0]["system"] = "jira"          # not in the adapter registry
     with pytest.raises(Exception, match="unknown PMO system"):
         AppConfig.model_validate(base)
@@ -76,7 +81,7 @@ def test_unknown_pmo_system_rejected():
 
 def test_operational_fields_reject_zero_and_negative():
     """ISSUES #8/#9: zero/negative operational values must not validate."""
-    base = AppConfig().model_dump()
+    base = _base()
     with pytest.raises(Exception):
         AppConfig.model_validate({**base, "poll_interval_seconds": 0})
     with pytest.raises(Exception):
@@ -91,7 +96,7 @@ def test_operational_fields_reject_zero_and_negative():
 
 def test_repo_url_shape_validated():
     """ISSUES #10: malformed forge URLs rejected at schema layer."""
-    base = AppConfig().model_dump()
+    base = _base()
     bad = dict(base, repos=[{**base["repos"][0], "url": "not-a-url"}])
     with pytest.raises(Exception, match="invalid"):
         AppConfig.model_validate(bad)
@@ -109,11 +114,11 @@ def test_repo_url_shape_validated():
 def test_make_pmo_dispatches_from_registry():
     from devcake.adapters.linear import LinearAdapter
     from devcake.adapters.registry import PMO_SYSTEMS, make_pmo
-    cfg = AppConfig()
+    cfg = AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")])
     assert isinstance(make_pmo(cfg.pmos[0]), LinearAdapter)
     assert set(PMO_SYSTEMS) == {"linear"}
     info = PMO_SYSTEMS["linear"]
-    assert info.api_key_env_default == "LINEAR_API_KEY"
+    # api_key_env_default removed at v4 (secrets are GUI-stored, not env-named)
     assert info.secret_env_vars and info.token_patterns and info.secret_shape_prefixes
 
 
@@ -166,4 +171,4 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
         config_mod.load_config()
 
     path.write_text("")  # empty file → defaults, same as first boot
-    assert config_mod.load_config().schema_version == 3
+    assert config_mod.load_config().schema_version == 4

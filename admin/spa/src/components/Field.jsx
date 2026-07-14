@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { get } from "../api.js";
+import { get, send } from "../api.js";
 import { getRegistry } from "../lib/registry.js";
 
 const inputCls =
@@ -103,6 +103,62 @@ export function EnvVarField({ label, help, hint, value, onChange, fallback }) {
       )}
       {!problem && effective && isSet === true && (
         <span className="mt-1 block text-xs text-green-700 dark:text-green-400">✓ set{suffix}</span>
+      )}
+    </Field>
+  );
+}
+
+
+// Write-only secret VALUE field (schema v4, F5). The value is never fetched
+// back; ✓/✗ + updated_at come from /secrets-check by ref. Typing a value and
+// blurring (or clicking Save) PUTs it to the store — the input then clears.
+export function SecretField({ label, help, hint, refKey, checkKind = "conn", paste }) {
+  // refKey: "scope:instance:field" for connections, or a var name for harness
+  const [status, setStatus] = useState(null);      // {present, updated_at}
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const refresh = () => {
+    const q = checkKind === "harness"
+      ? `harness=${encodeURIComponent(refKey)}`
+      : `conn=${encodeURIComponent(refKey)}`;
+    get(`/secrets-check?${q}`)
+      .then((r) => setStatus((r[checkKind] || {})[refKey] || { present: false }))
+      .catch(() => setStatus(null));
+  };
+  useEffect(refresh, [refKey]);
+  const submit = async () => {
+    if (!draft) return;
+    setBusy(true);
+    try {
+      if (checkKind === "harness") {
+        await send("PUT", `/harness-secrets/${encodeURIComponent(refKey)}`, { value: draft });
+      } else {
+        const [scope, instance, field] = refKey.split(":");
+        await send("PUT", `/secrets/${scope}/${instance}/${field}`, { value: draft });
+      }
+      setDraft("");
+      refresh();
+    } finally { setBusy(false); }
+  };
+  const shapeWarn = paste && draft && !secretShapeRe().test(draft) && draft.length < 8
+    ? "That does not look like a secret — double-check before saving."
+    : null;
+  return (
+    <Field label={label} help={help} hint={hint}>
+      <div className="flex gap-2">
+        <Input type="password" value={draft} placeholder={status?.present ? "•••••• (stored)" : "paste value"}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()} />
+        <button type="button" disabled={!draft || busy}
+          className="rounded bg-neutral-800 px-3 text-sm text-white disabled:opacity-40 dark:bg-neutral-200 dark:text-black"
+          onClick={submit}>{status?.present ? "Replace" : "Set"}</button>
+      </div>
+      {shapeWarn && <span className="mt-1 block text-xs text-amber-600">⚠ {shapeWarn}</span>}
+      {status && status.present && (
+        <span className="mt-1 block text-xs text-green-700 dark:text-green-400">✓ stored</span>
+      )}
+      {status && !status.present && (
+        <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">✗ not set — enter a value</span>
       )}
     </Field>
   );

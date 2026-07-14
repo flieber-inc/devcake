@@ -21,6 +21,7 @@ from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
+from .. import secrets as secrets_store
 from .. import security
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
                       load_config, load_dev_types, reject_stale_patch,
@@ -345,6 +346,7 @@ async def lifespan(app: FastAPI):
     if not credentials_configured():
         raise RuntimeError("ADMIN_USER and ADMIN_PASSWORD must both be configured")
     _refuse_insecure_passwords()
+    secrets_store.register_all()   # redaction coverage for GUI-stored secrets (M12)
     log.info("boot: schema_version=%s dagu pull_policy=missing image tags "
              "devcake/dev-*:latest — re-run `docker buildx bake all` lockstep "
              "with app upgrades", config.schema_version)
@@ -789,6 +791,61 @@ async def env_check(names: str = ""):
     return {n: bool(os.environ.get(n, "").strip()) for n in names.split(",") if n}
 
 
+# ── GUI-stored secrets (M12, F5): write-only VALUES, never echoed back ───────
+
+_SECRET_SCOPES = {"pmo", "repo"}
+
+
+@app.put("/api/v1/secrets/{scope}/{instance}/{field}")
+async def put_secret(scope: str, instance: str, field: str, body: dict):
+    """Store a connection secret VALUE (never echoed). scope ∈ pmo|repo;
+    instance is the config instance name; field ∈ api_key|token|token_ro|
+    reviewer_token. Writing a repo/pmo secret clears any latched breaker."""
+    if scope not in _SECRET_SCOPES:
+        raise HTTPException(404, f"unknown secret scope {scope!r}")
+    value = body.get("value")
+    if not isinstance(value, str) or not value:
+        raise HTTPException(422, "value must be a non-empty string")
+    secrets_store.write_connection_secret(scope, instance, field, value)
+    if scope == "repo":
+        forge_runtime.breakers.pop(instance, None)
+        _protection_cache["ts"] = 0.0
+    return secrets_store.connection_status(scope, instance, field)
+
+
+@app.delete("/api/v1/secrets/{scope}/{instance}/{field}")
+async def delete_secret(scope: str, instance: str, field: str):
+    if scope not in _SECRET_SCOPES:
+        raise HTTPException(404, f"unknown secret scope {scope!r}")
+    secrets_store.write_connection_secret(scope, instance, field, "")
+    return {"present": False}
+
+
+@app.put("/api/v1/harness-secrets/{var}")
+async def put_harness_secret(var: str, body: dict):
+    """Store a harness/model key VALUE (e.g. ANTHROPIC_API_KEY)."""
+    value = body.get("value")
+    if not isinstance(value, str) or not value:
+        raise HTTPException(422, "value must be a non-empty string")
+    secrets_store.write_harness_secret(var, value)
+    return secrets_store.harness_status(var)
+
+
+@app.get("/api/v1/secrets-check")
+async def secrets_check(conn: str = "", harness: str = ""):
+    """Presence + updated_at (NEVER the value) for the ✓/✗ UI. `conn` is a
+    comma list of scope:instance:field triples; `harness` a comma list of
+    var names."""
+    out: dict = {"conn": {}, "harness": {}}
+    for triple in (t for t in conn.split(",") if t):
+        parts = triple.split(":")
+        if len(parts) == 3:
+            out["conn"][triple] = secrets_store.connection_status(*parts)
+    for var in (v for v in harness.split(",") if v):
+        out["harness"][var] = secrets_store.harness_status(var)
+    return out
+
+
 @app.get("/api/v1/connections/registry")
 async def connections_registry():
     """Available PMO systems and forges with display metadata — drives the
@@ -797,11 +854,9 @@ async def connections_registry():
     from ..adapters.registry import PMO_SYSTEMS, forges
     forge_descriptors = forges()
     return {
-        "pmo_systems": [{"id": s.id, "display_name": s.display_name,
-                         "api_key_env_default": s.api_key_env_default}
+        "pmo_systems": [{"id": s.id, "display_name": s.display_name}
                         for s in PMO_SYSTEMS.values()],
-        "forges": [{"id": d.id, "display_name": d.display_name,
-                    "token_env_default": d.token_env_default}
+        "forges": [{"id": d.id, "display_name": d.display_name}
                    for d in forge_descriptors.values()],
         "secret_shape_prefixes": sorted(
             {p for s in PMO_SYSTEMS.values() for p in s.secret_shape_prefixes}
@@ -816,13 +871,13 @@ async def test_pmo(name: str):
     inst = next((i for i in config.pmos if i.name == name), None)
     if inst is None:
         raise HTTPException(404, f"no PMO instance named {name!r}")
-    if not inst.api_key:
-        return {"ok": False, "error": f"env var {inst.api_key_env} is empty or "
-                                      "unset in DevCake's environment — put the API key "
-                                      "in .env and restart"}
     if not inst.configured:
         return {"ok": False, "error": "team key is empty — the instance is "
                                       "idle until one is set"}
+    if not inst.api_key:
+        return {"ok": False, "error": "API key not set — enter it on the "
+                                      "Config page (it is stored securely, "
+                                      "never in .env)"}
     mgr = managers.get(name)
     if mgr is None:
         return {"ok": False, "error": "instance not active — save the config "
@@ -852,9 +907,9 @@ async def test_forge(name: str):
         return {"ok": False, "error": "repo not active — save the config "
                                       "first, then test"}
     if not inst.token:
-        return {"ok": False, "error": f"env var {inst.resolved_token_env} is empty or "
-                                      "unset in DevCake's environment — the field wants "
-                                      "the env var NAME; the token itself goes in .env"}
+        return {"ok": False, "error": "access token not set — enter it on the "
+                                      "Config page (it is stored securely, "
+                                      "never in .env)"}
     try:
         health = await forge_runtime.refresh_health(name)
         if not health["ok"]:

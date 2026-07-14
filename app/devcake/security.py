@@ -169,7 +169,15 @@ def security_warnings(config) -> list[dict]:
     # (the former `oo-root-creds` warning is structurally gone as of M8:
     # Devs export through the otel-collector and receive NO OO credentials —
     # there is no per-run credential whose posture could degrade.)
-    warns = []
+    warns = [{
+        "id": "gui-secrets-basic-auth", "severity": "info",
+        "title": "GUI-stored secrets behind basic auth",
+        "body": "Operator secrets (PMO/forge tokens, model keys) are stored "
+                "0600 on the app volume and the admin panel is protected only "
+                "by HTTP basic auth. This is fine on localhost/a dedicated "
+                "host; revisit (OIDC/SSO, secret-manager) before exposing "
+                "DevCake beyond localhost (docs/14 §7).",
+    }]
     for repo in config.repos:
         if repo.configured and repo.token and not repo.token_ro:
             # per-repo id (M10): dismissing repo A's warning must not
@@ -178,11 +186,10 @@ def security_warnings(config) -> list[dict]:
                 "id": f"forge-write-token:{repo.name}", "severity": "warning",
                 "title": f"All mission stages hold repo '{repo.name}'s "
                          "WRITE token",
-                "body": "No read-only PAT is configured (token_ro_env / "
-                        f"{repo.resolved_token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
-                        "Devs receive the same write-capable forge token as EXECUTE. "
-                        "A prompt-injected non-EXECUTE Dev could push to the repo. "
-                        f"Create a read-only PAT and set {repo.resolved_token_env}_RO "
-                        "in .env (ISSUES #15).",
+                "body": f"No read-only PAT is set for repo '{repo.name}', so "
+                        "PLAN/REVIEW/MAPPER/ONBOARD Devs receive the same "
+                        "write-capable forge token as EXECUTE. A prompt-injected "
+                        "non-EXECUTE Dev could push to the repo. Add a read-only "
+                        "token for this repo on the Config page (ISSUES #15).",
             })
     return warns

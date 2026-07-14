@@ -184,10 +184,11 @@ async def _poll_instance(mgr: MissionManager,
     fetched = await mgr.pmo.list_all(mgr.instance.team_key)
     fetched_ids = {m.pmo_id for m in fetched}
     missions = _claim_missions(mgr, fetched, _mission_owner)
+    run_snapshot = mgr.runs.store.all()   # one read per segment, not per mission
     for m in missions:
         # per-mission repo resolution (M10): a transient poll artifact —
         # dispatch re-resolves live (sticky) before anything irreversible
-        m.repo, m.repo_reason = mgr._resolve_repo(m)
+        m.repo, m.repo_reason = mgr._resolve_repo(m, all_runs=run_snapshot)
     derived = [(m, derive(m, config.adoption_mode)) for m in missions]
     # the gate is a poll artifact, computed EVERY cycle — pause freezes
     # dispatch, never information (docs/04 §2)

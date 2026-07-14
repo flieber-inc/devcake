@@ -20,6 +20,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 if TYPE_CHECKING:
     from ..config import RepoInstance
@@ -76,10 +77,11 @@ class ForgeRuntime:
                         "untouched): %s", name, data.get("detail"))
             # span-mirrored so the FORGE_TRANSIENT >15m alert has a signal
             # (ISSUES #23) — the log line never reaches the traces stream
+            from ..security import redact
             with tracer.start_as_current_span("forge.probe_transient") as span:
                 span.set_attribute("devcake.repo", name)
                 span.set_attribute("devcake.reason",
-                                   str(data.get("detail") or "")[:500])
+                                   redact(str(data.get("detail") or ""))[:500])
         else:
             self.latch(name, data.get("detail") or "repository is not writable")
 
@@ -87,11 +89,15 @@ class ForgeRuntime:
         """Manually latch a repo breaker (Dev-side DEV_FORGE_AUTH — the
         structured clone-credential classification, docs/15 §4)."""
         if name not in self.breakers:
+            from ..security import redact
             log.error("forge breaker LATCHED for repo %s: %s", name, reason)
-            # same span the OO alert battery queries for dev-type breakers
+            # same span (and ERROR status — docs/12 §2) the OO alert battery
+            # queries for dev-type breakers; reason redacted like every
+            # exported string (adapter errors can embed credentials)
             with tracer.start_as_current_span("breaker.trip") as span:
                 span.set_attribute("devcake.breaker", f"repo:{name}")
-                span.set_attribute("devcake.reason", reason[:500])
+                span.set_attribute("devcake.reason", redact(reason)[:500])
+                span.set_status(Status(StatusCode.ERROR, redact(reason)[:200]))
         self.breakers[name] = reason
 
     async def refresh_health(self, name: str) -> dict:

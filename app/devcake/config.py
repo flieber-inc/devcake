@@ -170,7 +170,10 @@ class DevType(BaseModel):
     flow all DERIVE from harness_template via harness.HARNESSES — the admin
     panel's harness combobox is authoritative. Unknown YAML keys are ignored
     on load and dropped on the next save (pydantic's default)."""
-    name: str
+    # no ":" — dev-type breakers share /health's circuit_breakers map with
+    # per-repo `repo:<name>` entries (M10); a colon would let a dev type
+    # collide with (and mask) a repo breaker
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
@@ -289,9 +292,11 @@ class AppConfig(BaseModel):
         names = [e.name for e in v]
         if len(set(names)) != len(names):
             raise ValueError("repos: duplicate instance names")
-        urls = [(e.forge, e.url) for e in v if e.configured]
+        urls = [(e.forge, e.url.rstrip("/").removesuffix(".git").lower())
+                for e in v if e.configured]
         if len(set(urls)) != len(urls):
-            raise ValueError("repos: two entries target the same repository")
+            raise ValueError("repos: two entries target the same repository "
+                             "(trailing '/' and '.git' are ignored)")
         return v
 
     @model_validator(mode="after")
@@ -383,12 +388,12 @@ def load_config() -> AppConfig:
         log.info("config: first boot — seeding %s from env", CONFIG_PATH)
     # top-up missing/env-provided fields (a config predating a field picks up
     # its env default here), then persist
-    if not cfg.repos[0].url and os.environ.get("DEVCAKE_REPO_URL"):
+    if cfg.repos and not cfg.repos[0].url and os.environ.get("DEVCAKE_REPO_URL"):
         cfg.repos[0].url = os.environ["DEVCAKE_REPO_URL"]
     _atomic_yaml(CONFIG_PATH, cfg.model_dump())
-    log.info("config: team=%s adoption=%s repo=%s",
+    log.info("config: team=%s adoption=%s repos=%s",
              cfg.pmos[0].team_key, cfg.adoption_mode,
-             cfg.repos[0].url or "(unset)")
+             [r.url or "(unset)" for r in cfg.repos] or "(none)")
     return cfg
 
 

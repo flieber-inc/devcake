@@ -94,8 +94,8 @@ export default function deriveAlerts(health) {
       title: "Circuit breaker tripped",
       body:
         breakers.map(([k, v]) => `${k} (${v})`).join(" · ") +
-        (breakers.some(([k]) => k === "forge")
-          ? " — update the configured forge token with repository write access to resume."
+        (breakers.some(([k]) => k.startsWith("repo:"))
+          ? " — update that repository's forge token with write access to resume."
           : " — upload or refresh that Dev Type's credential to resume."),
     });
   }

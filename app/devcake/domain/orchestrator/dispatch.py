@@ -27,12 +27,17 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-def _resolve_repo(self, mission: Mission):
+def _resolve_repo(self, mission: Mission, all_runs: list | None = None):
     """(repo_name | None, gate_reason | None) — marker > instance default >
-    zero-repo gate, STICKY once a run exists (domain/repo_routing.py)."""
+    zero-repo gate, STICKY once a run exists (domain/repo_routing.py).
+    `all_runs`: pre-fetched store snapshot — the poll loop stamps every
+    mission every cycle, so it reads the store ONCE per segment instead of
+    once per mission; dispatch's live re-resolve reads fresh."""
     from ..repo_routing import resolve_repo
+    if all_runs is None:
+        all_runs = self.runs.store.all()
     history = sorted(
-        (r for r in self.runs.store.all()
+        (r for r in all_runs
          if r.mission_pmo_id == mission.pmo_id and self._run_is_ours(r)
          and r.mission_type != "MAPPER"),
         key=lambda r: r.created_at, reverse=True)
@@ -182,6 +187,8 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     if repo is None:
         # the run's repo vanished from config mid-flight → runspec.error
         # (the resolution-failure contract, domain/forge_runtime.py)
+        log.error("runspec for %s refused: repo %r is no longer configured",
+                  run.run_id, run.repo_ref)
         return None
     env: dict[str, str] = {**env_creds}
     write = repo.token

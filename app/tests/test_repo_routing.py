@@ -170,3 +170,53 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
     # breaker isolation at the runtime level: latch ghrepo, glrepo untouched
     rt.latch("ghrepo", "401")
     assert "ghrepo" in rt.breakers and "glrepo" not in rt.breakers
+
+
+def test_resolve_repo_history_assembly(tmp_path):
+    """_resolve_repo's history filter: this mission's runs only, MAPPER runs
+    excluded, foreign-instance records excluded, newest first."""
+    from fakes import FakeForgeRuntime
+    from devcake.adapters.files.run_store import RunStore
+    from devcake.domain.orchestrator import MissionManager
+
+    store = RunStore(tmp_path / "runs")
+    mine_old = _run("alpha"); mine_old.mission_pmo_id = "p1"; mine_old.pmo_ref = "linear"
+    mine_new = _run("beta", seq=2); mine_new.mission_pmo_id = "p1"; mine_new.pmo_ref = "linear"
+    mapper = _run("alpha", seq=3); mapper.mission_pmo_id = "p1"
+    mapper.pmo_ref, mapper.mission_type = "linear", "MAPPER"
+    other_mission = _run("alpha", seq=4); other_mission.mission_pmo_id = "p9"
+    other_instance = _run("alpha", seq=5); other_instance.mission_pmo_id = "p1"
+    other_instance.pmo_ref = "linearb"
+    from datetime import timedelta
+    from devcake.domain.run import utcnow
+    mine_old.created_at = utcnow() - timedelta(hours=2)
+    mine_new.created_at = utcnow() - timedelta(hours=1)
+    for r in (mine_old, mine_new, mapper, other_mission, other_instance):
+        store.save(r)
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = "linear"
+    mgr.instance = INST
+
+    class Runs:
+        pass
+    mgr.runs = Runs()
+    mgr.runs.store = store
+    mgr.forges = FakeForgeRuntime(object())   # instances: {"main"} — irrelevant
+    mgr.forges._inst.name = "main"
+    # repo names must include beta for sticky to resolve
+    from devcake.config import RepoInstance
+    import devcake.domain.repo_routing as rr
+    got = []
+    orig = rr.resolve_repo
+    def spy(mission, instance, names, history):
+        got.append([r.run_id for r in history])
+        return orig(mission, instance, {"alpha", "beta"}, history)
+    rr.resolve_repo = spy
+    try:
+        name, reason = mgr._resolve_repo(_m())
+    finally:
+        rr.resolve_repo = orig
+    # newest-first, only THIS mission's non-mapper, same-instance records
+    assert got[0] == [mine_new.run_id, mine_old.run_id]
+    assert name == "beta" and reason is None      # sticky = newest repo_ref

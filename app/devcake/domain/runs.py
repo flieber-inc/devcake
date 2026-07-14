@@ -183,7 +183,7 @@ class RunManager:
             if secret is None:
                 await self.messaging.reply(
                     run_id, "runspec.error",
-                    {"error": "run is not active or its dev type no longer exists"},
+                    {"error": "run is not active, its dev type was deleted, or its repo was removed from config"},
                 )
                 return
             await self.messaging.reply(

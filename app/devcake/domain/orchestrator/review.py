@@ -21,7 +21,14 @@ async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
     detection only; a human decides (they may have merged early themselves)."""
     forge = self.forges.get(run.repo_ref)
     if forge is None:
-        return    # repo vanished — detection is advisory, nothing to flag
+        # repo vanished: the detection cannot run — say so instead of going
+        # silently blind (an out-of-pipeline merge could slip past unseen)
+        self.anomalies[run.mission_pmo_id] = (
+            f"{run.mission_key}: out-of-pipeline-merge detection suspended — "
+            f"repo '{run.repo_ref}' is no longer configured")
+        log.warning("out-of-pipeline check skipped for %s: repo %r vanished",
+                    run.run_id, run.repo_ref)
+        return
     try:
         pr = await forge.get_pr_by_branch(run_branch(run))
         if not pr:

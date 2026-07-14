@@ -1,19 +1,21 @@
 """Mission scheduling and finalization (docs/04): the full state machine —
 ONBOARD/PLAN/EXECUTE/REVIEW dispatch, every finalization/transition, merge
-sweeps, the relations mapper, and the cross-cutting mechanics (ordering, caps,
-grace cycle, compare-and-transition, attempt counting, circuit breakers).
+sweeps, and the cross-cutting mechanics (ordering, caps, grace cycle,
+compare-and-transition, attempt counting, circuit breakers).
+
+MapperService lives in `mapper_service.py` (ISSUES #36 first cut). Further
+splits (schedule / dispatch / finalize / transitions / decomposition) remain
+v0.1 maintainability work once finalize checkpoints settle.
 """
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import json
 import logging
 import os
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,7 +32,7 @@ from .model import (LABEL_CREATED, LABEL_EXECUTE, LABEL_FAILED, LABEL_MERGE,
                     LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW,
                     LABEL_SKIP, LABEL_TRACKING, Activity, Mission, MissionRef,
                     MissionType, PRIORITY_RANK, STAGE_LABELS, derive, find_cycles)
-from ..ports.forge import mission_branch
+from ..ports.forge import ForgePort, mission_branch
 from ..ports.pmo import PMOPort
 from .run import Run, utcnow
 from .runs import RunManager
@@ -40,6 +42,7 @@ if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtim
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
+_OO_ROOT_WARNED = False
 
 # The full state machine is dispatchable, projects included (ADR-0006).
 DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN,
@@ -92,14 +95,28 @@ AUDIT_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "even
 
 
 def _oo_basic_auth() -> str:
+    """Basic auth for Dev OTLP export. Prefer OO_INGEST_* over root credentials
+    so a compromised Dev does not own the whole OpenObserve tenant (ISSUES #13)."""
+    global _OO_ROOT_WARNED
+    ingest_email = os.environ.get("OO_INGEST_EMAIL", "")
+    ingest_password = os.environ.get("OO_INGEST_PASSWORD", "")
+    if ingest_email and ingest_password:
+        return base64.b64encode(
+            f"{ingest_email}:{ingest_password}".encode()).decode()
     email = os.environ.get("OO_ROOT_EMAIL", "")
     password = os.environ.get("OO_ROOT_PASSWORD", "")
+    if not _OO_ROOT_WARNED:
+        _OO_ROOT_WARNED = True
+        log.warning(
+            "OO_INGEST_EMAIL/OO_INGEST_PASSWORD unset — Dev runspecs receive "
+            "OpenObserve ROOT credentials. Create an ingest-only OO user and "
+            "set OO_INGEST_* (ISSUES #13).")
     return base64.b64encode(f"{email}:{password}".encode()).decode()
 
 
 class MissionManager:
     def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
-                 pmo: PMOPort, forge, runs: RunManager,
+                 pmo: PMOPort, forge: ForgePort, runs: RunManager,
                  messaging: Messaging):
         self.config = config
         self.dev_types = dev_types
@@ -364,10 +381,28 @@ class MissionManager:
         if dt is None:
             return None            # dev type deleted mid-run → runspec.error
         env_creds, spec_files = self._credential_spec(dt)
-        return {"env": {"DEVCAKE_FORGE_TOKEN": self.config.repo.token,
-                        "OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
-                        **env_creds},
-                "credential_files": spec_files}
+        # Stage-scope forge credentials (ISSUES #15): only EXECUTE needs push.
+        # Reviewer PAT stays app-side. Other stages get optional read-only PAT.
+        env: dict[str, str] = {"OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
+                               **env_creds}
+        if run.mission_type == "EXECUTE":
+            # Always present for EXECUTE (may be empty if env unset) so entrypoint
+            # clone/push paths stay consistent.
+            env["DEVCAKE_FORGE_TOKEN"] = self.config.repo.token
+        else:
+            ro = self.config.repo.token_ro
+            if ro:
+                env["DEVCAKE_FORGE_TOKEN"] = ro
+        return {"env": env, "credential_files": spec_files}
+
+    async def _checkpoint(self, run: Run, key: str, coro) -> None:
+        """Idempotent finalize sub-step (ISSUES #4–6): skip if already done;
+        append+save only after the side effect succeeds."""
+        if key in run.finalized_steps:
+            return
+        await coro
+        run.finalized_steps.append(key)
+        self.runs.store.save(run)
 
     def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:
         """Harness credentials for a run spec: requirements come from the
@@ -664,16 +699,18 @@ class MissionManager:
         if outcome not in LEGAL_OUTCOMES.get(run.mission_type, frozenset()):
             # illegal (or unknown) outcome for this step — the trust boundary.
             # Park for a human; never act on it (docs/03 §6, docs/15).
-            await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
-                                   remove=set(), add={LABEL_SKIP})
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"⛔ DevCake received outcome `{outcome or '(empty)'}` from a "
-                f"**{run.mission_type}** run — not a legal outcome for that step. "
-                f"No transition was applied; parked with `DEVCAKE-SKIP` for a "
-                f"human to inspect.")
-            self._audit(pmo_id, "illegal_outcome",
-                        f"{outcome or '(empty)'} from {run.mission_type}")
+            async def _illegal():
+                await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
+                                       remove=set(), add={LABEL_SKIP})
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"⛔ DevCake received outcome `{outcome or '(empty)'}` from a "
+                    f"**{run.mission_type}** run — not a legal outcome for that step. "
+                    f"No transition was applied; parked with `DEVCAKE-SKIP` for a "
+                    f"human to inspect.")
+                self._audit(pmo_id, "illegal_outcome",
+                            f"{outcome or '(empty)'} from {run.mission_type}")
+            await self._checkpoint(run, "transition:illegal", _illegal())
             run.verdict = redact(
                 f"rejected: outcome {outcome or '(empty)'} is illegal "
                 f"for {run.mission_type} — parked with DEVCAKE-SKIP")
@@ -682,9 +719,11 @@ class MissionManager:
             return
         live = await self.pmo.get(MissionRef(pmo_id, run.pmo_kind))               # live re-read
         if run.pmo_kind == "project" and outcome not in ("decomposed", "human_needed"):
-            await self.pmo.swap_labels(MissionRef(pmo_id, "project"),
-                                       remove=set(), add={LABEL_SKIP})
-            self._audit(pmo_id, "project_bad_outcome_parked", outcome)
+            async def _proj_park():
+                await self.pmo.swap_labels(MissionRef(pmo_id, "project"),
+                                           remove=set(), add={LABEL_SKIP})
+                self._audit(pmo_id, "project_bad_outcome_parked", outcome)
+            await self._checkpoint(run, "transition:project_park", _proj_park())
             run.verdict = redact(
                 f"rejected: project returned {outcome} (only decomposed "
                 f"is legal) — parked with DEVCAKE-SKIP")
@@ -692,12 +731,14 @@ class MissionManager:
                         run.mission_key, outcome)
             return
         if self._stage_of(live) != run.stage_label_at_dispatch:
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"ℹ️ DevCake completed a **{run.mission_type}** run (`{run.run_id}`), but "
-                f"this mission's state was changed externally while it ran. The output is "
-                f"posted above; **no status or label changes were applied**.")
-            self._audit(pmo_id, "external_transition", run.run_id)
+            async def _external():
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"ℹ️ DevCake completed a **{run.mission_type}** run (`{run.run_id}`), but "
+                    f"this mission's state was changed externally while it ran. The output is "
+                    f"posted above; **no status or label changes were applied**.")
+                self._audit(pmo_id, "external_transition", run.run_id)
+            await self._checkpoint(run, "transition:external", _external())
             run.verdict = ("skipped: mission state changed externally while the "
                            "run was in flight — no transition applied")
             log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
@@ -707,102 +748,111 @@ class MissionManager:
             await self._flag_out_of_pipeline_merge(run)
 
         if outcome == "planned":
-            url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
-                                                   redact(plan_md or "").encode())
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"📋 DevCake plan for this mission: [PLAN_{run.seq}.md]({url})")
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove={LABEL_PLAN}, add={LABEL_EXECUTE})
-            self._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
+            async def _planned():
+                url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
+                                                       redact(plan_md or "").encode())
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"📋 DevCake plan for this mission: [PLAN_{run.seq}.md]({url})")
+                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                           remove={LABEL_PLAN}, add={LABEL_EXECUTE})
+                self._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
+            await self._checkpoint(run, "transition:planned", _planned())
         elif outcome == "executed":
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove={LABEL_EXECUTE}, add={LABEL_REVIEW})
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"🔀 DevCake opened/updated the pull request: "
-                f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
-            self._audit(pmo_id, "label_swap", f"{LABEL_EXECUTE}→{LABEL_REVIEW}")
+            async def _executed():
+                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                           remove={LABEL_EXECUTE}, add={LABEL_REVIEW})
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"🔀 DevCake opened/updated the pull request: "
+                    f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
+                self._audit(pmo_id, "label_swap", f"{LABEL_EXECUTE}→{LABEL_REVIEW}")
+            await self._checkpoint(run, "transition:executed", _executed())
         elif outcome == "executed_trivially":
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove=set(), add={LABEL_REVIEW})
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"🔀 Trivial path: PR opened ({result.get('pr_url', '?')}) — "
-                f"the trivial path never skips REVIEW (docs/03 §1.1).")
-            self._audit(pmo_id, "label_add", LABEL_REVIEW)
+            async def _trivial():
+                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                           remove=set(), add={LABEL_REVIEW})
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"🔀 Trivial path: PR opened ({result.get('pr_url', '?')}) — "
+                    f"the trivial path never skips REVIEW (docs/03 §1.1).")
+                self._audit(pmo_id, "label_add", LABEL_REVIEW)
+            await self._checkpoint(run, "transition:executed_trivially", _trivial())
         elif outcome == "reviewed":
             await self._finalize_review(run, result)
         elif outcome == "decomposed":
             await self._finalize_decomposition(run, result)
         elif outcome == "plan_needed" and plan_md:
-            url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
-                                                   redact(plan_md).encode())
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"📋 DevCake attached an opportunistic plan from triage: "
-                f"[PLAN_{run.seq}.md]({url}) — skipping the PLAN step.")
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove=set(), add={LABEL_EXECUTE})
-            self._audit(pmo_id, "label_add", LABEL_EXECUTE)
+            async def _plan_attach():
+                url = await self.pmo.upload_attachment(pmo_id, f"PLAN_{run.seq}.md",
+                                                       redact(plan_md).encode())
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"📋 DevCake attached an opportunistic plan from triage: "
+                    f"[PLAN_{run.seq}.md]({url}) — skipping the PLAN step.")
+                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                           remove=set(), add={LABEL_EXECUTE})
+                self._audit(pmo_id, "label_add", LABEL_EXECUTE)
+            await self._checkpoint(run, "transition:plan_needed_attach", _plan_attach())
         elif outcome == "plan_needed":
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove=set(), add={LABEL_PLAN})
-            self._audit(pmo_id, "label_add", LABEL_PLAN)
+            async def _plan_needed():
+                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                           remove=set(), add={LABEL_PLAN})
+                self._audit(pmo_id, "label_add", LABEL_PLAN)
+            await self._checkpoint(run, "transition:plan_needed", _plan_needed())
         elif outcome == "human_needed":
             # deliberate hand-off (docs/03 §4a, ADR-0007): the run finished
             # cleanly, so it never counts toward max_attempts; the stage label
             # stays so work resumes at the same step once the human removes
-            # DEVCAKE-NEEDS-HUMAN. Repeats on the same step escalate a warning —
-            # never an auto-park; the human always decides (founder decision).
-            await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
-                                       remove=set(), add={LABEL_NEEDS_HUMAN})
-            if run.stage_label_at_dispatch is None and live.status == "in_progress":
-                # ONBOARD case: without this, removing the label later lands on
-                # derivation row 9 (in_progress, no stage label) and strands
-                await self.pmo.set_status(MissionRef(pmo_id, run.pmo_kind), "backlog")
-                self._audit(pmo_id, "set_status", "backlog (human hand-off)")
-            nth = 1 + sum(
-                1 for r in self.runs.store.all()
-                if r.mission_pmo_id == pmo_id and r.state == "finished"
-                and (r.result or {}).get("outcome") == "human_needed"
-                and r.stage_label_at_dispatch == run.stage_label_at_dispatch)
-            warn = "" if nth < 2 else (
-                f"⚠️ **Hand-off #{nth} on this step.** If DevCake keeps returning "
-                f"here, the mission may need re-scoping — add `DEVCAKE-SKIP` to "
-                f"stop DevCake on it.\n\n")
-            baton = (f"{warn}✋ **DevCake needs a human.** "
-                     f"{result.get('summary', '(no details reported)')}\n\n"
-                     f"When resolved, remove the `DEVCAKE-NEEDS-HUMAN` label and "
-                     f"DevCake resumes where it left off.")
-            await self._feed(pmo_id, run.pmo_kind, baton)
-            if run.pmo_kind == "project":
-                # _feed suppresses project comments (no comments API) — but a
-                # baton pass MUST be PMO-visible, so it goes out as a project
-                # update via post_feed's project channel (docs/05 §6)
-                try:
-                    await self.pmo.post_feed(
-                        MissionRef(pmo_id, "project"),
-                        redact(baton) + "\n\n" + COMMENT_SENTINEL)
-                except Exception:
-                    log.warning("project-update hand-off failed for %s — "
-                                "summary lives in the audit log only",
-                                run.mission_key, exc_info=True)
-            self._audit(pmo_id, "devcake_needs_human",
-                        f"#{nth}: " + (result.get("summary") or "")[:110])
+            # DEVCAKE-NEEDS-HUMAN. Checkpointed so redelivery never re-posts
+            # the baton (ISSUES #5).
+            async def _human():
+                await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
+                                           remove=set(), add={LABEL_NEEDS_HUMAN})
+                if run.stage_label_at_dispatch is None and live.status == "in_progress":
+                    await self.pmo.set_status(MissionRef(pmo_id, run.pmo_kind), "backlog")
+                    self._audit(pmo_id, "set_status", "backlog (human hand-off)")
+                nth = 1 + sum(
+                    1 for r in self.runs.store.all()
+                    if r.mission_pmo_id == pmo_id and r.state == "finished"
+                    and (r.result or {}).get("outcome") == "human_needed"
+                    and r.stage_label_at_dispatch == run.stage_label_at_dispatch)
+                warn = "" if nth < 2 else (
+                    f"⚠️ **Hand-off #{nth} on this step.** If DevCake keeps returning "
+                    f"here, the mission may need re-scoping — add `DEVCAKE-SKIP` to "
+                    f"stop DevCake on it.\n\n")
+                baton = (f"{warn}✋ **DevCake needs a human.** "
+                         f"{result.get('summary', '(no details reported)')}\n\n"
+                         f"When resolved, remove the `DEVCAKE-NEEDS-HUMAN` label and "
+                         f"DevCake resumes where it left off.")
+                await self._feed(pmo_id, run.pmo_kind, baton)
+                if run.pmo_kind == "project":
+                    try:
+                        await self.pmo.post_feed(
+                            MissionRef(pmo_id, "project"),
+                            redact(baton) + "\n\n" + COMMENT_SENTINEL)
+                    except Exception:
+                        log.warning("project-update hand-off failed for %s — "
+                                    "summary lives in the audit log only",
+                                    run.mission_key, exc_info=True)
+                self._audit(pmo_id, "devcake_needs_human",
+                            f"#{nth}: " + (result.get("summary") or "")[:110])
+            await self._checkpoint(run, "transition:human_needed", _human())
             run.verdict = f"handed off: needs human on {run.mission_type}"
-            # advisory appears immediately (sweeps() keeps it in sync after)
             self.needs_human[pmo_id] = (
                 f"{run.mission_key}: needs human on {run.mission_type}"
                 + (f" — {live.url}" if live.url else ""))
         else:
-            await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
-                                       remove=set(), add={LABEL_SKIP})
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"ℹ️ DevCake received unknown outcome `{outcome}` — parked with "
-                f"`DEVCAKE-SKIP` for a human to inspect.")
-            self._audit(pmo_id, "label_add", f"{LABEL_SKIP} (unknown outcome {outcome})")
+            async def _unknown():
+                await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
+                                           remove=set(), add={LABEL_SKIP})
+                await self._feed(
+                    pmo_id, run.pmo_kind,
+                    f"ℹ️ DevCake received unknown outcome `{outcome}` — parked with "
+                    f"`DEVCAKE-SKIP` for a human to inspect.")
+                self._audit(pmo_id, "label_add",
+                            f"{LABEL_SKIP} (unknown outcome {outcome})")
+            await self._checkpoint(run, "transition:unknown_park", _unknown())
             run.verdict = redact(
                 f"rejected: unknown outcome {outcome} — parked with DEVCAKE-SKIP")
 
@@ -892,109 +942,176 @@ class MissionManager:
         if verdict == "approve":
             formal = False
             if pr:
-                await self.forge.post_pr_comment(
-                    pr.number,
-                    "## DevCake REVIEW: APPROVED-BY-DEVCAKE ✅\n\n" + report + footer)
-                try:
-                    formal = await self.forge.approve(pr.number)
-                except Exception:
-                    log.exception("formal approval failed — falling back to marker")
-            if self.config.auto_merge and pr:
-                try:
-                    await self.forge.merge(pr.number)          # merge BEFORE Done
-                    await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                         remove={LABEL_REVIEW}, add=set())
-                    await self.pmo.set_status(MissionRef(pmo_id, "issue"), "done")
-                    await self._feed(
-                        pmo_id, "issue",
-                        f"✅ REVIEW approved; PR merged ({pr_url}). Mission done.")
-                    self._audit(pmo_id, "review_approve_merged", pr_url)
-                except Exception as e:
-                    # docs/03 §4.1 — three-way failure branch. A detection
-                    # failure means mstate stays None → deferred retry, which
-                    # degrades safely to the hand-off when the window expires.
-                    mstate = None
+                async def _pr_comment():
+                    await self.forge.post_pr_comment(
+                        pr.number,
+                        "## DevCake REVIEW: APPROVED-BY-DEVCAKE ✅\n\n"
+                        + report + footer)
+                await self._checkpoint(run, "review:pr_comment", _pr_comment())
+
+                async def _formal():
                     try:
-                        mstate = await self.forge.mergeable(pr.number)
+                        return await self.forge.approve(pr.number)
                     except Exception:
-                        log.exception("mergeable check failed for %s", pr_url)
-                    if mstate is False and await self._maybe_route_conflict_to_execute(
-                            pmo_id, run.mission_key, pr_url, LABEL_REVIEW):
-                        return
+                        log.exception("formal approval failed — falling back to marker")
+                        return False
+                if "review:formal_approve" not in run.finalized_steps:
+                    formal = await _formal()
+                    run.finalized_steps.append("review:formal_approve")
+                    self.runs.store.save(run)
+                else:
+                    formal = True  # already attempted; message is best-effort
+
+            if self.config.auto_merge and pr:
+                if "review:done" not in run.finalized_steps \
+                        and "review:merge_failed" not in run.finalized_steps \
+                        and "review:merge_deferred" not in run.finalized_steps \
+                        and "review:conflict_routed" not in run.finalized_steps:
+                    try:
+                        async def _merge():
+                            await self.forge.merge(pr.number)
+                        await self._checkpoint(run, "review:merge", _merge())
+                        async def _done():
+                            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                                 remove={LABEL_REVIEW}, add=set())
+                            await self.pmo.set_status(MissionRef(pmo_id, "issue"), "done")
+                            await self._feed(
+                                pmo_id, "issue",
+                                f"✅ REVIEW approved; PR merged ({pr_url}). "
+                                f"Mission done.")
+                            self._audit(pmo_id, "review_approve_merged", pr_url)
+                        await self._checkpoint(run, "review:done", _done())
+                    except Exception as e:
+                        # Already-merged treated as success by forge.merge; if we
+                        # still fail, re-probe before posting merge-failed (ISSUES #6).
+                        try:
+                            state = await self.forge.pr_state(pr.number)
+                            if state.merged:
+                                async def _done_merged():
+                                    if "review:merge" not in run.finalized_steps:
+                                        run.finalized_steps.append("review:merge")
+                                        self.runs.store.save(run)
+                                    await self.pmo.swap_labels(
+                                        MissionRef(pmo_id, "issue"),
+                                        remove={LABEL_REVIEW}, add=set())
+                                    await self.pmo.set_status(
+                                        MissionRef(pmo_id, "issue"), "done")
+                                    await self._feed(
+                                        pmo_id, "issue",
+                                        f"✅ REVIEW approved; PR merged ({pr_url}). "
+                                        f"Mission done.")
+                                    self._audit(pmo_id, "review_approve_merged", pr_url)
+                                await self._checkpoint(
+                                    run, "review:done", _done_merged())
+                                return
+                        except Exception:
+                            log.exception("pr_state probe after merge fail for %s",
+                                          pr_url)
+                        mstate = None
+                        try:
+                            mstate = await self.forge.mergeable(pr.number)
+                        except Exception:
+                            log.exception("mergeable check failed for %s", pr_url)
+                        if mstate is False:
+                            async def _conflict():
+                                routed = await self._maybe_route_conflict_to_execute(
+                                    pmo_id, run.mission_key, pr_url, LABEL_REVIEW)
+                                if not routed:
+                                    raise RuntimeError("conflict route declined")
+                            try:
+                                await self._checkpoint(
+                                    run, "review:conflict_routed", _conflict())
+                                return
+                            except Exception:
+                                pass
+                        async def _fail_path():
+                            await self.pmo.swap_labels(
+                                MissionRef(pmo_id, "issue"),
+                                remove={LABEL_REVIEW}, add={LABEL_MERGE})
+                            if mstate is not False and \
+                                    self.config.merge_retry_window_minutes > 0:
+                                await self._feed(
+                                    pmo_id, "issue",
+                                    f"⏳ REVIEW approved but the merge is not possible "
+                                    f"yet ({e}) — DevCake keeps retrying for up to "
+                                    f"{self.config.merge_retry_window_minutes} minutes "
+                                    f"(mergeability computing / CI pipeline running). "
+                                    f"You can merge {pr_url} manually at any time. "
+                                    f"{MERGE_RETRY_MARKER}")
+                                self._audit(pmo_id, "merge_deferred", str(e)[:120])
+                                self._merge_window_closed.discard(pmo_id)
+                                run.finalized_steps.append("review:merge_deferred")
+                            else:
+                                await self._feed(
+                                    pmo_id, "issue",
+                                    f"⚠️ REVIEW approved but auto-merge failed ({e}); "
+                                    f"awaiting human merge of {pr_url} "
+                                    f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+                                self._audit(pmo_id, "review_approve_merge_failed",
+                                            str(e)[:120])
+                                run.finalized_steps.append("review:merge_failed")
+                            self.runs.store.save(run)
+                        # Use a synthetic key so the whole fail path is once-only
+                        if "review:merge_failed" not in run.finalized_steps \
+                                and "review:merge_deferred" not in run.finalized_steps:
+                            await _fail_path()
+            elif "review:awaiting_merge" not in run.finalized_steps:
+                async def _await_merge():
                     await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                                remove={LABEL_REVIEW}, add={LABEL_MERGE})
-                    if mstate is not False and \
-                            self.config.merge_retry_window_minutes > 0:
-                        await self._feed(
-                            pmo_id, "issue",
-                            f"⏳ REVIEW approved but the merge is not possible "
-                            f"yet ({e}) — DevCake keeps retrying for up to "
-                            f"{self.config.merge_retry_window_minutes} minutes "
-                            f"(mergeability computing / CI pipeline running). "
-                            f"You can merge {pr_url} manually at any time. "
-                            f"{MERGE_RETRY_MARKER}")
-                        self._audit(pmo_id, "merge_deferred", str(e)[:120])
-                        # a fresh retry marker opens a new episode — the sweep
-                        # must read the feed again
-                        self._merge_window_closed.discard(pmo_id)
-                    else:
-                        await self._feed(
-                            pmo_id, "issue",
-                            f"⚠️ REVIEW approved but auto-merge failed ({e}); "
-                            f"awaiting human merge of {pr_url} "
-                            f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
-                        self._audit(pmo_id, "review_approve_merge_failed",
-                                    str(e)[:120])
-            else:
-                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                           remove={LABEL_REVIEW}, add={LABEL_MERGE})
-                await self._feed(
-                    pmo_id, "issue",
-                    f"✅ REVIEW approved "
-                    f"({'formal approval filed' if formal else 'APPROVED-BY-DEVCAKE marker'}). "
-                    f"Awaiting human merge of {pr_url} — the merge sweep completes "
-                    f"this mission once it merges." + footer)
-                self._audit(pmo_id, "review_approve_awaiting_merge", pr_url)
+                    await self._feed(
+                        pmo_id, "issue",
+                        f"✅ REVIEW approved "
+                        f"({'formal approval filed' if formal else 'APPROVED-BY-DEVCAKE marker'}). "
+                        f"Awaiting human merge of {pr_url} — the merge sweep completes "
+                        f"this mission once it merges." + footer)
+                    self._audit(pmo_id, "review_approve_awaiting_merge", pr_url)
+                await self._checkpoint(run, "review:awaiting_merge", _await_merge())
         else:  # reject
-            rejections = 1 + sum(
-                1 for r in self.runs.store.all()
-                if r.mission_pmo_id == pmo_id and r.mission_type == "REVIEW"
-                and r.state == "finished" and (r.result or {}).get("verdict") == "reject")
-            feed_body = (f"🔁 REVIEW rejected (round {rejections}) — back to "
-                         f"EXECUTE.\n\n" + report)
-            if report:
-                try:  # docs/05 §4: full report as attachment, short feed comment
-                    # redact with THIS run's relay password too — the attachment
-                    # bypasses _feed's active-run redaction
-                    name = f"{run.seq}_REVIEW_REPORT.md"
-                    url = await self.pmo.upload_attachment(
-                        pmo_id, name,
-                        redact(report).encode())
-                    feed_body = (f"🔁 REVIEW rejected (round {rejections}) — back "
-                                 f"to EXECUTE. Full report attached: "
-                                 f"[{name}]({url})")
-                except Exception:
-                    log.exception("review report upload failed — posting inline")
-            await self._feed(pmo_id, "issue", feed_body)
-            if pr:
-                await self.forge.post_pr_comment(
-                    pr.number,
-                    "## DevCake REVIEW: changes requested 🔁\n\n" + report + footer)
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                   remove={LABEL_REVIEW}, add={LABEL_EXECUTE})
-            self._audit(pmo_id, "label_swap", f"{LABEL_REVIEW}→{LABEL_EXECUTE}")
-            every = self.config.review_loop_warning_every
-            if rejections % every == 0:
-                cost = sum((r.token_report or {}).get("cost_usd") or 0
-                           for r in self.runs.store.all() if r.mission_pmo_id == pmo_id)
-                warn = (f"⚠️ **Loop warning:** this mission has been through {rejections} "
-                        f"REVIEW rejections. Cumulative recorded cost so far: ${cost:.2f} "
-                        f"(runs without cost data not included). Add `DEVCAKE-SKIP` to "
-                        f"stop DevCake, or intervene on the PR directly.")
-                await self._feed(pmo_id, "issue", warn)
+            async def _reject():
+                rejections = 1 + sum(
+                    1 for r in self.runs.store.all()
+                    if r.mission_pmo_id == pmo_id and r.mission_type == "REVIEW"
+                    and r.state == "finished"
+                    and (r.result or {}).get("verdict") == "reject")
+                feed_body = (f"🔁 REVIEW rejected (round {rejections}) — back to "
+                             f"EXECUTE.\n\n" + report)
+                if report:
+                    try:
+                        name = f"{run.seq}_REVIEW_REPORT.md"
+                        url = await self.pmo.upload_attachment(
+                            pmo_id, name, redact(report).encode())
+                        feed_body = (
+                            f"🔁 REVIEW rejected (round {rejections}) — back "
+                            f"to EXECUTE. Full report attached: "
+                            f"[{name}]({url})")
+                    except Exception:
+                        log.exception("review report upload failed — posting inline")
+                await self._feed(pmo_id, "issue", feed_body)
                 if pr:
-                    await self.forge.post_pr_comment(pr.number, warn)
-                self._audit(pmo_id, "loop_warning", f"{rejections} rejections")
+                    await self.forge.post_pr_comment(
+                        pr.number,
+                        "## DevCake REVIEW: changes requested 🔁\n\n"
+                        + report + footer)
+                await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                       remove={LABEL_REVIEW}, add={LABEL_EXECUTE})
+                self._audit(pmo_id, "label_swap",
+                            f"{LABEL_REVIEW}→{LABEL_EXECUTE}")
+                every = self.config.review_loop_warning_every
+                if every >= 1 and rejections % every == 0:
+                    cost = sum((r.token_report or {}).get("cost_usd") or 0
+                               for r in self.runs.store.all()
+                               if r.mission_pmo_id == pmo_id)
+                    warn = (f"⚠️ **Loop warning:** this mission has been through "
+                            f"{rejections} REVIEW rejections. Cumulative recorded "
+                            f"cost so far: ${cost:.2f} (runs without cost data not "
+                            f"included). Add `DEVCAKE-SKIP` to stop DevCake, or "
+                            f"intervene on the PR directly.")
+                    await self._feed(pmo_id, "issue", warn)
+                    if pr:
+                        await self.forge.post_pr_comment(pr.number, warn)
+                    self._audit(pmo_id, "loop_warning", f"{rejections} rejections")
+            await self._checkpoint(run, "review:reject", _reject())
 
     # ── decomposition finalization (docs/03 §1.3) ────────────────────────────
 
@@ -1021,9 +1138,11 @@ class MissionManager:
                 raise ValueError(
                     f"decomposition part {i}: blocked_by must be 1-based indexes "
                     f"of EARLIER parts, got {deps!r}")
+        # Redact agent-generated fields before hashing and create_mission so
+        # redelivery and secrets scrubbing stay consistent (ISSUES #12).
         normalized = [{
-            "title": str(d.get("title") or f"part {i}"),
-            "description": str(d.get("description") or ""),
+            "title": redact(str(d.get("title") or f"part {i}")),
+            "description": redact(str(d.get("description") or "")),
             "priority": str(d.get("priority") or "medium"),
             "blocked_by": list(d.get("blocked_by") or []),
         } for i, d in enumerate(drafts, start=1)]
@@ -1059,22 +1178,26 @@ class MissionManager:
 
         if conflicts:
             detail = "; ".join(conflicts[:8])
-            await self.pmo.swap_labels(
-                MissionRef(pmo_id, live.pmo_kind), remove=set(),
-                add={LABEL_NEEDS_HUMAN})
-            if live.status == "in_progress":
-                await self.pmo.set_status(MissionRef(pmo_id, live.pmo_kind), "backlog")
-            baton = (
-                "Decomposition replay conflict: no children were created. " + detail
-                + ". Reconcile the existing `DEVCAKE-CREATED` missions, then remove "
-                  "`DEVCAKE-NEEDS-HUMAN` to retry."
-            )
-            await self._feed(pmo_id, live.pmo_kind, baton)
-            if live.pmo_kind == "project":
-                await self.pmo.post_feed(
-                    MissionRef(pmo_id, "project"),
-                    redact(baton) + "\n\n" + COMMENT_SENTINEL)
-            self._audit(pmo_id, "decomposition_conflict", detail)
+            async def _decomp_conflict():
+                await self.pmo.swap_labels(
+                    MissionRef(pmo_id, live.pmo_kind), remove=set(),
+                    add={LABEL_NEEDS_HUMAN})
+                if live.status == "in_progress":
+                    await self.pmo.set_status(
+                        MissionRef(pmo_id, live.pmo_kind), "backlog")
+                baton = (
+                    "Decomposition replay conflict: no children were created. "
+                    + detail
+                    + ". Reconcile the existing `DEVCAKE-CREATED` missions, "
+                      "then remove `DEVCAKE-NEEDS-HUMAN` to retry."
+                )
+                await self._feed(pmo_id, live.pmo_kind, baton)
+                if live.pmo_kind == "project":
+                    await self.pmo.post_feed(
+                        MissionRef(pmo_id, "project"),
+                        redact(baton) + "\n\n" + COMMENT_SENTINEL)
+                self._audit(pmo_id, "decomposition_conflict", detail)
+            await self._checkpoint(run, "decomp:conflict", _decomp_conflict())
             run.verdict = "handed off: decomposition replay conflict"
             return
 
@@ -1083,10 +1206,27 @@ class MissionManager:
             labels.add(LABEL_OPTIN)
         created = []
         child_ids: dict[int, str] = {}                            # part index → issue id
+
+        async def _resolve_existing_child(part: int) -> str | None:
+            if part in existing:
+                return existing[part]
+            for mission in await self.pmo.list_all(self.config.pmo.team_key):
+                marker = DECOMPOSITION_MARKER_RE.search(mission.description or "")
+                if marker and marker.group(1) == pmo_id \
+                        and int(marker.group(3)) == part:
+                    return mission.pmo_id
+            return None
+
         for i, d in enumerate(normalized, start=1):
             title = d["title"]
-            if i in existing:                                     # idempotent top-up
+            key_child = f"decomp:child:{i}"
+            if i in existing:
                 child_id = existing[i]
+            elif key_child in run.finalized_steps:
+                child_id = await _resolve_existing_child(i)
+                if child_id is None:
+                    raise ValueError(
+                        f"decomposition part {i} checkpointed but child missing")
             else:
                 footer = (f"\n\n---\n_Created by DevCake from {live.key} — "
                           f"part {i}/{len(normalized)}_\n"
@@ -1098,28 +1238,34 @@ class MissionManager:
                     d["priority"], labels,
                     parent_ref=pmo_id if is_project else None)
                 created.append(key)
+                run.finalized_steps.append(key_child)
+                self.runs.store.save(run)
             child_ids[i] = child_id
             # edges wired immediately per child (crash-safe resume; duplicate
             # relations are tolerated by the adapter) — ADR-0007
             for j in d["blocked_by"]:
                 blocker_id = child_ids.get(j)
                 if blocker_id:
-                    await self.pmo.create_relation(blocker_id, child_id)
-                    self._audit(child_id, "relation_created",
-                                f"blocked by part {j} ({blocker_id})")
+                    rel_key = f"decomp:rel:{j}->{i}"
+                    async def _rel(blocker_id=blocker_id, child_id=child_id, j=j):
+                        await self.pmo.create_relation(blocker_id, child_id)
+                        self._audit(child_id, "relation_created",
+                                    f"blocked by part {j} ({blocker_id})")
+                    await self._checkpoint(run, rel_key, _rel())
         links = ", ".join(created) or "(all already existed)"
-        if is_project:
-            await self.pmo.swap_labels(MissionRef(pmo_id, "project"),
-                                       remove=set(), add={LABEL_TRACKING})
-            # projects have no issue-style comments API; recorded in the audit log
-            self._audit(pmo_id, "decomposed_project", links)
-        else:
-            await self._feed(
-                pmo_id, "issue",
-                f"🧩 Decomposed into {len(normalized)} standalone issues: {links}. "
-                f"This issue is canceled in their favor.")
-            await self.pmo.set_status(MissionRef(pmo_id, "issue"), "canceled")
-            self._audit(pmo_id, "decomposed_canceled", links)
+        async def _tracking():
+            if is_project:
+                await self.pmo.swap_labels(MissionRef(pmo_id, "project"),
+                                           remove=set(), add={LABEL_TRACKING})
+                self._audit(pmo_id, "decomposed_project", links)
+            else:
+                await self._feed(
+                    pmo_id, "issue",
+                    f"🧩 Decomposed into {len(normalized)} standalone issues: "
+                    f"{links}. This issue is canceled in their favor.")
+                await self.pmo.set_status(MissionRef(pmo_id, "issue"), "canceled")
+                self._audit(pmo_id, "decomposed_canceled", links)
+        await self._checkpoint(run, "decomp:tracking", _tracking())
 
     # ── Relations Mapper: team-scoped MAPPER runs (ADR-0007) ─────────────────
 
@@ -1535,99 +1681,5 @@ class MissionManager:
         return {"activity_md": "\n".join(lines), "attachments": attachments}
 
 
-# ── Relations Mapper service (docs/04 §1, ADR-0007 addendum) ─────────────────
-
-class MapperBusy(Exception):
-    """A mapper run is already active."""
-
-
-class MapperUnconfigured(Exception):
-    """relations_mapper.dev_type does not name an existing Dev Type."""
-
-
-class MapperService:
-    """Cadence + concurrency for MAPPER runs. One lock closes the manual-vs-
-    interval double-dispatch window; the watermark advances only AFTER a
-    successful dispatch (a transient executor error costs one poll cycle, not a
-    full interval); degradation is derived from the run store — restart-safe,
-    and a successful run clears it naturally."""
-
-    def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
-                 mgr: MissionManager):
-        self.config = config
-        self.dev_types = dev_types
-        self.mgr = mgr
-        self._lock = asyncio.Lock()
-        # first auto-run lands one interval after boot; "Run now" covers immediacy
-        self._last_at = time.monotonic()
-        self._last_periodic_outcome: str | None = None  # span-on-transition dedupe
-
-    def dev_type(self) -> DevType | None:
-        rm = self.config.relations_mapper
-        return self.dev_types.get(rm.dev_type) if rm.dev_type else None
-
-    def active(self) -> bool:
-        return any(r.mission_type == "MAPPER"
-                   for r in self.mgr.runs.store.active())
-
-    def degraded(self) -> str | None:
-        """The 3 most recent MAPPER runs all dead ⇒ the periodic service backs
-        off (docs/15). Run now stays available; a success clears the condition."""
-        recent = sorted((r for r in self.mgr.runs.store.all()
-                         if r.mission_type == "MAPPER"),
-                        key=lambda r: r.created_at, reverse=True)[:3]
-        if len(recent) == 3 and all(r.state in ("failed", "timed_out", "orphaned")
-                                    for r in recent):
-            return recent[0].error or "3 consecutive mapper failures"
-        return None
-
-    async def maybe_dispatch(self, missions: list[Mission]) -> None:
-        """The interval path, called once per poll cycle (never while paused)."""
-        rm = self.config.relations_mapper
-        dt = self.dev_type()
-        if not rm.enabled or dt is None or "forge" in self.mgr.breakers:
-            return
-        if time.monotonic() - self._last_at < rm.interval_minutes * 60:
-            self._last_periodic_outcome = None
-            return
-        # a periodic run is DUE — resolve it, then trace the outcome only on
-        # TRANSITIONS: a mapper stuck degraded/waiting for hours would
-        # otherwise emit an identical (ERROR) span every poll tick
-        outcome, error = None, None
-        degraded = self.degraded()
-        if degraded:
-            outcome, error = "degraded_skip", degraded
-            log.warning("mapper degraded — periodic run skipped (%s)", degraded)
-        else:
-            async with self._lock:
-                if self.active():
-                    outcome = "already_active"
-                elif len(self.mgr.runs.store.active()) >= self.config.concurrency.global_max:
-                    outcome = "concurrency_deferred"  # counts toward the global cap
-                else:
-                    await self.mgr.dispatch_mapper(dt, missions)
-                    self._last_at = time.monotonic()
-                    outcome = "dispatched"
-        if outcome == "dispatched" or outcome != self._last_periodic_outcome:
-            with tracer.start_as_current_span("mapper.periodic") as span:
-                span.set_attribute("devcake.outcome", outcome)
-                if error:
-                    span.set_status(Status(StatusCode.ERROR, error[:200]))
-        self._last_periodic_outcome = outcome
-
-    async def run_now(self) -> Run:
-        """Manual trigger: works regardless of the periodic toggle and of the
-        degraded state — a human pressing the button IS the reset signal."""
-        dt = self.dev_type()
-        if dt is None:
-            raise MapperUnconfigured(
-                "relations_mapper.dev_type must name an existing Dev Type — "
-                "set it on the Config page")
-        if "forge" in self.mgr.breakers:
-            raise MapperUnconfigured(
-                "forge connection is not writable; fix the repository token first")
-        async with self._lock:
-            if self.active():
-                raise MapperBusy("a relations-mapper run is already active")
-            missions = await self.mgr.pmo.list_all(self.config.pmo.team_key)
-            return await self.mgr.dispatch_mapper(dt, missions)
+# ── Relations Mapper (re-export; implementation in mapper_service.py) ───────
+from .mapper_service import MapperBusy, MapperService, MapperUnconfigured  # noqa: E402

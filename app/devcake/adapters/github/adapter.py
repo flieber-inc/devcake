@@ -40,7 +40,11 @@ class GitHubForge:
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None):
         # https://github.com/{owner}/{repo}
-        parts = repo_url.rstrip("/").removesuffix(".git").split("/")
+        parts = [p for p in repo_url.rstrip("/").removesuffix(".git").split("/") if p]
+        if len(parts) < 2 or not parts[-1] or not parts[-2]:
+            raise ValueError(
+                f"invalid GitHub repository URL {repo_url!r}: need "
+                f"https://github.com/owner/repo")
         self.owner, self.repo = parts[-2], parts[-1]
         self.api = api_base or API          # override unlocks GitHub Enterprise
         self.token = token
@@ -113,16 +117,31 @@ class GitHubForge:
     async def merge(self, pr_number: int) -> None:
         """Squash-merge. 409 ("head branch was modified") is a transient race,
         not a real failure — retried in place per the port contract (docs/06 §5)
-        so racy-but-healthy merges never park on DEVCAKE-MERGE."""
+        so racy-but-healthy merges never park on DEVCAKE-MERGE. Already-merged
+        is success (ISSUES #6): redelivery after a successful merge must not
+        report auto-merge failure."""
         for attempt in range(3):
             try:
                 await self._req("PUT", f"/pulls/{pr_number}/merge",
                                 json={"merge_method": "squash"})
                 return
             except ForgeError as e:
-                if e.status != 409 or attempt == 2:
-                    raise
-                await asyncio.sleep(3)
+                # 409: transient race — retry without probing. Other statuses
+                # (405/422 already-merged) probe PR state; redelivery must not
+                # report failure on a merged PR (ISSUES #6).
+                if e.status == 409 and attempt < 2:
+                    await asyncio.sleep(3)
+                    continue
+                if e.status != 409 and await self._already_merged(pr_number):
+                    return
+                raise
+
+    async def _already_merged(self, pr_number: int) -> bool:
+        try:
+            state = await self.pr_state(pr_number)
+            return bool(state.merged)
+        except Exception:
+            return False
 
     async def mergeable(self, pr_number: int) -> Optional[bool]:
         """Port contract (docs/06 §5) — single-shot, non-blocking tri-state:

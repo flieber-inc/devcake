@@ -5,7 +5,7 @@
 
 ## 1. What DevCake is
 
-DevCake is a lightweight, production-grade **agentic developer system**. It runs automated coding agents ("**Devs**") inside Docker containers that systematically resolve work items ("**Missions**") pulled from a project-management system ("**PMO System**" — v0: Linear). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to the main app through Redis Streams, and every component is traced and logged into OpenObserve.
+DevCake is a lightweight **agentic developer system** (v0: founder-operated technical preview). It runs automated coding agents ("**Devs**") inside Docker containers that systematically resolve work items ("**Missions**") pulled from a project-management system ("**PMO System**" — v0: Linear). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to the main app through Redis Streams, and every component is traced and logged into OpenObserve. Core contracts are verified; operational posture continues to harden toward v0.1.
 
 The whole system ships as a single `docker-compose up`, stores its local state as plain files on one volume, and treats the PMO System as the single source of truth — so it recovers from any crash by simply re-reading the world.
 
@@ -16,8 +16,8 @@ The following are explicitly **out of scope** for v0 (see `16-roadmap.md` § Pos
 - Webhook-based ingestion (v0 polls; the internal interface is webhook-ready).
 - Multiple repositories or multiple PMO teams per DevCake instance at *runtime* (the config schema is already plural — `pmos:`/`repos:` lists with exactly-one entry enforced — so multi-instance needs no config migration).
 - Human-in-the-loop approval steps *inside* DevCake (approval happens in the PMO System and the forge).
-- Authentication on the admin panel (network isolation only).
-- PMO Systems other than Linear (adapters are pluggable via the registry; Linear is the one implemented).
+- ~~Authentication on the admin panel~~ — **shipped:** dual HTTP Basic (nginx + FastAPI). Network isolation alone is not the control plane auth story.
+- PMO Systems other than Linear (adapters are pluggable via the registry; Linear is the one implemented). Markdown-fidelity markers are a port requirement (`ports/pmo.py`) — multi-PMO is not adapter-only for ADF/rich-text systems.
 
 ## 3. Glossary (normative definitions)
 

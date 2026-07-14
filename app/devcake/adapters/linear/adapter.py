@@ -43,6 +43,13 @@ _NAMED_ASSET_RE = re.compile(
 # and blind the scheduling gate (docs/05 §6). A full page is logged loudly.
 RELATIONS_PAGE = 50
 
+# Nested issue/project labels page size (ISSUES #7). Was first: 20 with no
+# tripwire — a heavily labeled issue could omit DEVCAKE-SKIP and re-dispatch.
+# Full-page warning matches the relations pattern; get/_get paths also
+# cursor-walk when hasNextPage is set.
+LABELS_PAGE = 50
+MAX_LABEL_PAGES = 5  # 5 × 50 = 250 labels fail-loud ceiling
+
 # get_activity cursor-walk safety ceiling (docs/05 §3): 10 pages × 100 =
 # 1,000 comments — a fail-loud valve (~50× DevCake's post-hygiene comment
 # rate), not a design limit. Newest pages are fetched first, so the newest
@@ -123,7 +130,8 @@ class LinearAdapter:
                    nodes {
                      id identifier title description url updatedAt priority
                      state { name type }
-                     labels(first: 20) { nodes { name } }
+                     labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                        nodes { name } }
                      project { id }
                      inverseRelations(first: 50) { nodes { type issue { id } } }
                    } } }""", "issues", {"teamId": team["id"]})
@@ -135,7 +143,8 @@ class LinearAdapter:
                    nodes {
                      id name description content url updatedAt priority
                      status { name type }
-                     labels(first: 20) { nodes { name } }
+                     labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                        nodes { name } }
                    } } }""", "projects", {"teamId": team["id"]})
         missions = [self._issue_to_mission(n) for n in issues]
         missions += [self._project_to_mission(n) for n in projects]
@@ -153,20 +162,72 @@ class LinearAdapter:
             """query($id: String!) { issue(id: $id) {
                  id identifier title description url updatedAt priority
                  state { name type }
-                 labels(first: 20) { nodes { name } }
+                 labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                    nodes { name } }
                  project { id }
                  inverseRelations(first: 50) { nodes { type issue { id } } }
             } }""", {"id": pmo_id})
-        return self._issue_to_mission(data["issue"])
+        issue = data["issue"]
+        await self._paginate_issue_labels(pmo_id, issue)
+        return self._issue_to_mission(issue)
 
     async def _get_project(self, pmo_id: str) -> Mission:
         data = await self._gql(
             """query($id: String!) { project(id: $id) {
                  id name description content url updatedAt priority
                  status { name type }
-                 labels(first: 20) { nodes { name } }
+                 labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                    nodes { name } }
             } }""", {"id": pmo_id})
-        return self._project_to_mission(data["project"])
+        project = data["project"]
+        await self._paginate_project_labels(pmo_id, project)
+        return self._project_to_mission(project)
+
+    async def _paginate_issue_labels(self, pmo_id: str, issue: dict) -> None:
+        """Cursor-walk issue labels when the first page is full (ISSUES #7)."""
+        conn = issue.get("labels") or {}
+        nodes = list(conn.get("nodes") or [])
+        page_info = conn.get("pageInfo") or {}
+        for _ in range(MAX_LABEL_PAGES - 1):
+            if not page_info.get("hasNextPage"):
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { issue(id: $id) {
+                     labels(first: 50, after: $after) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { name }
+                     } } }""",
+                {"id": pmo_id, "after": page_info["endCursor"]})
+            conn = page["issue"]["labels"]
+            nodes.extend(conn.get("nodes") or [])
+            page_info = conn.get("pageInfo") or {}
+        if page_info.get("hasNextPage"):
+            log.warning("issue %s: label ceiling (%d) hit — labels may be truncated",
+                        issue.get("identifier") or pmo_id,
+                        LABELS_PAGE * MAX_LABEL_PAGES)
+        issue["labels"] = {"nodes": nodes, "pageInfo": page_info}
+
+    async def _paginate_project_labels(self, pmo_id: str, project: dict) -> None:
+        conn = project.get("labels") or {}
+        nodes = list(conn.get("nodes") or [])
+        page_info = conn.get("pageInfo") or {}
+        for _ in range(MAX_LABEL_PAGES - 1):
+            if not page_info.get("hasNextPage"):
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { project(id: $id) {
+                     labels(first: 50, after: $after) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { name }
+                     } } }""",
+                {"id": pmo_id, "after": page_info["endCursor"]})
+            conn = page["project"]["labels"]
+            nodes.extend(conn.get("nodes") or [])
+            page_info = conn.get("pageInfo") or {}
+        if page_info.get("hasNextPage"):
+            log.warning("project %s: label ceiling (%d) hit — labels may be truncated",
+                        pmo_id, LABELS_PAGE * MAX_LABEL_PAGES)
+        project["labels"] = {"nodes": nodes, "pageInfo": page_info}
 
     async def get_activity(self, ref: MissionRef) -> Activity:
         """Issue: the full comment feed. Project: mission + entries=[] —
@@ -183,13 +244,17 @@ class LinearAdapter:
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
                  id identifier title description url updatedAt priority
-                 state { name type } labels(first: 20) { nodes { name } } project { id }
+                 state { name type }
+                 labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                    nodes { name } }
+                 project { id }
                  comments(first: 100, orderBy: createdAt) {
                    pageInfo { hasNextPage endCursor }
                    nodes { body createdAt user { name } }
                  }
             } }""", {"id": pmo_id})
         issue = data["issue"]
+        await self._paginate_issue_labels(pmo_id, issue)
         conn = issue["comments"]
         nodes = list(conn["nodes"])
         for _ in range(MAX_COMMENT_PAGES - 1):
@@ -261,7 +326,8 @@ class LinearAdapter:
                    nodes {
                      id identifier title description url updatedAt priority
                      state { name type }
-                     labels(first: 20) { nodes { name } }
+                     labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                        nodes { name } }
                      project { id }
                    } } }""", "issues", {"pid": ref.pmo_id})
         return [self._issue_to_mission(n) for n in nodes]
@@ -377,7 +443,8 @@ class LinearAdapter:
         by_name = {l["name"].upper(): l["id"] for l in pl["projectLabels"]["nodes"]}
         proj = await self._gql(
             """query($id: String!) { project(id: $id) {
-                 labels(first: 20) { nodes { id name } } } }""", {"id": project_id})
+                 labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                    nodes { id name } } } }""", {"id": project_id})
         current = {l["name"].upper(): l["id"] for l in proj["project"]["labels"]["nodes"]}
         for name in remove:
             current.pop(name.upper(), None)
@@ -439,12 +506,19 @@ class LinearAdapter:
             log.warning("issue %s: inverseRelations page is full (%d) — "
                         "blocked_by may be truncated; the gate could miss a blocker",
                         n.get("identifier"), len(relations))
+        label_nodes = (n.get("labels") or {}).get("nodes") or []
+        label_page = (n.get("labels") or {}).get("pageInfo") or {}
+        if len(label_nodes) >= LABELS_PAGE or label_page.get("hasNextPage"):
+            log.warning("issue %s: labels page is full/truncated (%d) — "
+                        "DEVCAKE-* labels may be missing; risk of re-dispatch "
+                        "(ISSUES #7)",
+                        n.get("identifier"), len(label_nodes))
         return Mission(
             pmo_id=n["id"], pmo_kind="issue", key=n["identifier"], title=n["title"],
             description=n.get("description") or "",
             status=STATE_TYPE_MAP.get(n["state"]["type"], "backlog"),
             priority=PRIORITY_MAP.get(int(n.get("priority") or 0), "medium"),
-            labels={l["name"].upper() for l in n["labels"]["nodes"]},
+            labels={l["name"].upper() for l in label_nodes},
             updated_at=n["updatedAt"], url=n.get("url") or "",
             parent_ref=(n.get("project") or {}).get("id"),
             blocked_by=[r["issue"]["id"] for r in relations
@@ -454,6 +528,12 @@ class LinearAdapter:
     def _project_to_mission(self, n: dict[str, Any]) -> Mission:
         slug = re.sub(r"[^A-Za-z0-9]+", "-", n["name"]).strip("-").lower()[:24]
         status_type = ((n.get("status") or {}).get("type") or "backlog").lower()
+        label_nodes = (n.get("labels") or {}).get("nodes") or []
+        label_page = (n.get("labels") or {}).get("pageInfo") or {}
+        if len(label_nodes) >= LABELS_PAGE or label_page.get("hasNextPage"):
+            log.warning("project %s: labels page is full/truncated (%d) — "
+                        "DEVCAKE-* labels may be missing (ISSUES #7)",
+                        n.get("name"), len(label_nodes))
         return Mission(
             pmo_id=n["id"], pmo_kind="project", key=f"PRJ-{slug}", title=n["name"],
             # Linear caps project `description` at 255 chars (verified live);
@@ -461,6 +541,6 @@ class LinearAdapter:
             description=n.get("content") or n.get("description") or "",
             status=PROJECT_STATUS_MAP.get(status_type, "backlog"),
             priority=PRIORITY_MAP.get(int(n.get("priority") or 0), "medium"),
-            labels={l["name"].upper() for l in (n.get("labels") or {}).get("nodes", [])},
+            labels={l["name"].upper() for l in label_nodes},
             updated_at=n["updatedAt"], url=n.get("url") or "",
         )

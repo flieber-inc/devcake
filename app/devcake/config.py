@@ -52,6 +52,9 @@ class RepoInstance(BaseModel):
     api_base: str | None = None     # None = api.github.com / the repo's origin
     default_branch: str = "main"
     token_env: str = "GITHUB_TOKEN"
+    # Optional read-only PAT for non-EXECUTE stages (ISSUES #15). When empty,
+    # PLAN/REVIEW/MAPPER/ONBOARD receive no forge write token.
+    token_ro_env: str | None = None
     reviewer_token_env: str | None = None
 
     @field_validator("forge")
@@ -63,9 +66,39 @@ class RepoInstance(BaseModel):
                              f"{sorted(forges())}")
         return v
 
+    @field_validator("url")
+    @classmethod
+    def _url_shape(cls, v: str) -> str:
+        """Reject malformed forge URLs that would crash adapter constructors
+        after a config PUT has already persisted (ISSUES #10). Empty is allowed
+        for first-boot until the operator configures a repo."""
+        if not v:
+            return v
+        from urllib.parse import urlsplit
+        parts = urlsplit(v if "://" in v else f"https://{v}")
+        path = (parts.path or "").strip("/").removesuffix(".git")
+        segs = [s for s in path.split("/") if s]
+        if not parts.netloc or len(segs) < 1:
+            raise ValueError(
+                f"invalid repository URL {v!r}: need a host and project path "
+                f"(e.g. https://github.com/owner/repo)")
+        # github.com specifically needs owner/repo (two segments)
+        host = (parts.netloc or "").lower()
+        if host in ("github.com", "www.github.com") and len(segs) < 2:
+            raise ValueError(
+                f"invalid GitHub repository URL {v!r}: need "
+                f"https://github.com/owner/repo")
+        return v
+
     @property
     def token(self) -> str:
         return os.environ.get(self.token_env, "")
+
+    @property
+    def token_ro(self) -> str:
+        if not self.token_ro_env:
+            return ""
+        return os.environ.get(self.token_ro_env, "")
 
 
 class Assignment(BaseModel):
@@ -74,7 +107,12 @@ class Assignment(BaseModel):
 
 
 class Concurrency(BaseModel):
-    global_max: int = 3
+    global_max: int = Field(3, ge=1)
+    # Dev container resource defaults (docs/07 §7) — also mirrored in
+    # dagu/dags/dev-run.yaml; admin Limits surface these for operators.
+    dev_cpus: float = Field(2.0, gt=0, le=64)
+    dev_memory: str = Field("4g", min_length=2)
+    dev_pids: int = Field(512, ge=32, le=100_000)
 
 
 class RelationsMapper(BaseModel):
@@ -83,7 +121,7 @@ class RelationsMapper(BaseModel):
     service is opt-in. dev_type must name an existing Dev Type whenever
     enabled — the seeded junior-dev (cheap model) is the default vehicle."""
     enabled: bool = False
-    interval_minutes: int = 60
+    interval_minutes: int = Field(60, ge=1)
     dev_type: str | None = "junior-dev"
 
 
@@ -98,7 +136,7 @@ class DevType(BaseModel):
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
-    max_concurrency: int = 1
+    max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
 
 
@@ -152,10 +190,11 @@ class AppConfig(BaseModel):
         default_factory=lambda: dict(DEFAULT_ASSIGNMENTS))
     concurrency: Concurrency = Field(default_factory=Concurrency)
     adoption_mode: Literal["opt_in", "opt_out"] = "opt_in"
-    poll_interval_seconds: int = 30
-    dev_timeout_minutes: int = 120
-    max_attempts: int = 3
-    review_loop_warning_every: int = 3
+    poll_interval_seconds: int = Field(30, ge=1, le=3600)
+    dev_timeout_minutes: int = Field(120, ge=1, le=24 * 60)
+    max_attempts: int = Field(3, ge=1, le=50)
+    # ge=1: used as a modulo cadence; 0 would ZeroDivisionError (ISSUES #8/#9)
+    review_loop_warning_every: int = Field(3, ge=1)
     auto_merge: bool = False
     # both inert while auto_merge is OFF (docs/03 §4.1): on a merge conflict,
     # route back to EXECUTE to sync + resolve (max 2 attempts) instead of
@@ -168,6 +207,10 @@ class AppConfig(BaseModel):
     # and sweeps keep running (docs/11)
     intake_paused: bool = False
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    # Compose restart policy is set in docker-compose.yml (unless-stopped).
+    # This flag is advisory for the admin UI — the SPA cannot rewrite compose
+    # (ISSUES #21); operators edit the file to disable.
+    compose_restart: bool = True
     # admin-UI state: dismissed advisory alerts as "id:signature" strings.
     # A list (not a dict) on purpose — deep_merge can't delete dict keys, so
     # the UI un-dismisses by PUTting the whole replacement list.

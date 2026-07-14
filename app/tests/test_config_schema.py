@@ -41,6 +41,36 @@ def test_unknown_pmo_system_rejected():
         AppConfig.model_validate(base)
 
 
+def test_operational_fields_reject_zero_and_negative():
+    """ISSUES #8/#9: zero/negative operational values must not validate."""
+    base = AppConfig().model_dump()
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "poll_interval_seconds": 0})
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "dev_timeout_minutes": -1})
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "max_attempts": 0})
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "review_loop_warning_every": 0})
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "concurrency": {"global_max": 0}})
+
+
+def test_repo_url_shape_validated():
+    """ISSUES #10: malformed forge URLs rejected at schema layer."""
+    base = AppConfig().model_dump()
+    bad = dict(base, repos=[{**base["repos"][0], "url": "not-a-url"}])
+    with pytest.raises(Exception, match="invalid"):
+        AppConfig.model_validate(bad)
+    gh_short = dict(base, repos=[{**base["repos"][0],
+                                  "url": "https://github.com/onlyowner"}])
+    with pytest.raises(Exception, match="GitHub"):
+        AppConfig.model_validate(gh_short)
+    ok = dict(base, repos=[{**base["repos"][0],
+                            "url": "https://github.com/o/r"}])
+    AppConfig.model_validate(ok)
+
+
 def test_make_pmo_dispatches_from_registry():
     from devcake.adapters.linear import LinearAdapter
     from devcake.adapters.registry import PMO_SYSTEMS, make_pmo

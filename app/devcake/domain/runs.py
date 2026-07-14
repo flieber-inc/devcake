@@ -58,9 +58,26 @@ def failure_record(run: "Run", outcome: str, reason: str,
     }
 
 
+_OO_ROOT_WARNED = False
+
+
 def _oo_basic_auth() -> str:
+    """Prefer ingest-only OO credentials; fall back to root with warning
+    (ISSUES #13). Mirrored in orchestrator._oo_basic_auth for mission runs."""
+    global _OO_ROOT_WARNED
+    ingest_email = os.environ.get("OO_INGEST_EMAIL", "")
+    ingest_password = os.environ.get("OO_INGEST_PASSWORD", "")
+    if ingest_email and ingest_password:
+        return base64.b64encode(
+            f"{ingest_email}:{ingest_password}".encode()).decode()
     email = os.environ.get("OO_ROOT_EMAIL", "")
     password = os.environ.get("OO_ROOT_PASSWORD", "")
+    if not _OO_ROOT_WARNED:
+        _OO_ROOT_WARNED = True
+        log.warning(
+            "OO_INGEST_EMAIL/OO_INGEST_PASSWORD unset — Dev runspecs receive "
+            "OpenObserve ROOT credentials. Create an ingest-only OO user and "
+            "set OO_INGEST_* (ISSUES #13).")
     return base64.b64encode(f"{email}:{password}".encode()).decode()
 
 
@@ -228,8 +245,11 @@ class RunManager:
             if self.oauth_mgr:
                 await self.oauth_mgr.on_result(run_id, payload)
         elif kind == "run.artifacts":
-            if run.state == "finished":
-                return  # redelivery: idempotent no-op
+            # Terminal states: redelivery is a pure no-op. Only finished used
+            # to short-circuit; failed/timed_out/orphaned re-entering finalize
+            # double-ran side effects after mid-finalize crashes (ISSUES #1).
+            if run.state in ("finished", "failed", "timed_out", "orphaned"):
+                return
             run.state = "finalizing"
             self.store.save(run)
             if self.mission_mgr and run.mission_type == "MAPPER":
@@ -301,17 +321,39 @@ class RunManager:
                     record["detail"][:500])
 
     async def _kill_inner(self, run: Run, new_state: str, reason: str) -> None:
-        await self.executor.stop(run.run_id)
-        await self._ship_failure(run, new_state, reason)
-        await self.messaging.delete_run_user(run.run_id)
-        await self.messaging.delete_reply_stream(run.run_id)
-        run.state = new_state  # type: ignore[assignment]
-        run.ended_at = utcnow()
-        from ..security import redact
-        run.error = redact(reason)
-        self.store.save(run)
+        # Fail-safe teardown (ISSUES #3): stop/_ship_failure may raise on
+        # transport errors; ACL delete + terminal state MUST still run so the
+        # run leaves store.active() and the watchdog does not re-kill forever.
+        try:
+            try:
+                await self.executor.stop(run.run_id)
+            except Exception:
+                log.exception("executor.stop failed for %s — continuing teardown",
+                              run.run_id)
+            try:
+                await self._ship_failure(run, new_state, reason)
+            except Exception:
+                log.exception("ship_failure failed for %s — continuing teardown",
+                              run.run_id)
+        finally:
+            try:
+                await self.messaging.delete_run_user(run.run_id)
+            except Exception:
+                log.exception("delete_run_user failed for %s", run.run_id)
+            try:
+                await self.messaging.delete_reply_stream(run.run_id)
+            except Exception:
+                log.exception("delete_reply_stream failed for %s", run.run_id)
+            run.state = new_state  # type: ignore[assignment]
+            run.ended_at = utcnow()
+            from ..security import redact
+            run.error = redact(reason)
+            self.store.save(run)
         if self.mission_mgr and run.mission_pmo_id:
-            await self.mission_mgr.restore_after_failure(run)
+            try:
+                await self.mission_mgr.restore_after_failure(run)
+            except Exception:
+                log.exception("restore_after_failure failed for %s", run.run_id)
         if self.oauth_mgr and run.run_id in self.oauth_mgr.sessions:
             self.oauth_mgr.sessions[run.run_id].update(
                 state="failed", error=f"login container died ({reason})")

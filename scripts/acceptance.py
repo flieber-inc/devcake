@@ -5,29 +5,36 @@ travels Backlog → In Progress → (labels progressing) → merged PR → Done 
 transcript + token report for every step. Exits nonzero on any violation.
 
 Run manually before releases (it spends real tokens):
-    python3 scripts/acceptance.py [--runs 2]
+    python3 scripts/acceptance.py [--runs 2] [--forge github|gitlab]
+
+GitHub is the default. GitLab uses GITLAB_TOKEN and api.gitlab.com (or the
+origin of DEVCAKE_REPO_URL). Full multi-forge parity is a v0.1 roadmap item
+(ISSUES #30).
 """
 
 import argparse
 import json
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 API = "https://api.linear.app/graphql"
 
 
-def env(name):
+def env(name, required=True):
     for line in open(".env"):
         if line.startswith(f"{name}="):
             return line.split("=", 1)[1].strip()
-    sys.exit(f"missing {name} in .env")
+    if required:
+        sys.exit(f"missing {name} in .env")
+    return ""
 
 
 KEY = env("LINEAR_API_KEY")
 TEAM = env("DEVCAKE_TEAM_KEY")
-GH = env("GITHUB_TOKEN")
-REPO = env("DEVCAKE_REPO_URL").removeprefix("https://github.com/")
+REPO_URL = env("DEVCAKE_REPO_URL")
+FORGE = "github"  # overridden in __main__
 
 
 def gql(q, v=None):
@@ -38,10 +45,29 @@ def gql(q, v=None):
     return b["data"]
 
 
+def forge_get(forge: str, path: str):
+    if forge == "github":
+        token = env("GITHUB_TOKEN")
+        repo = REPO_URL.removeprefix("https://github.com/").removesuffix(".git")
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}{path}",
+            headers={"Authorization": f"Bearer {token}"})
+        return json.load(urllib.request.urlopen(req))
+    if forge == "gitlab":
+        token = env("GITLAB_TOKEN")
+        parts = urllib.parse.urlsplit(REPO_URL)
+        base = f"{parts.scheme}://{parts.netloc}" if parts.scheme else "https://gitlab.com"
+        project = urllib.parse.quote(parts.path.strip("/").removesuffix(".git"), safe="")
+        req = urllib.request.Request(
+            f"{base}/api/v4/projects/{project}{path}",
+            headers={"PRIVATE-TOKEN": token})
+        return json.load(urllib.request.urlopen(req))
+    sys.exit(f"unknown forge {forge!r}")
+
+
+# Backward-compatible alias used by the rest of this script (GitHub-shaped paths)
 def gh(path):
-    req = urllib.request.Request(f"https://api.github.com{path}",
-                                 headers={"Authorization": f"Bearer {GH}"})
-    return json.load(urllib.request.urlopen(req))
+    return forge_get("github", path)
 
 
 MISSIONS = [
@@ -88,11 +114,23 @@ def run_once(idx: int) -> None:
             assert transcripts, "no transcripts posted"
             assert len(reports) >= len(transcripts), "token report missing for a step (INV-5)"
             assert "DEVCAKE-REVIEW" in seen_labels, "REVIEW was skipped"
-            pr = gh(f"/repos/{REPO}/pulls?head={REPO.split('/')[0]}:devcake/{key}&state=all")
-            assert pr and pr[0]["merged_at"], f"PR for {key} not merged"
+            if FORGE == "github":
+                owner = REPO_URL.removeprefix("https://github.com/").split("/")[0]
+                pr = forge_get(
+                    "github",
+                    f"/pulls?head={owner}:devcake/{key}&state=all")
+                assert pr and pr[0].get("merged_at"), f"PR for {key} not merged"
+                pr_ref = f"PR #{pr[0]['number']}"
+            else:
+                mrs = forge_get(
+                    "gitlab",
+                    f"/merge_requests?source_branch=devcake/{key}&state=all")
+                assert mrs and mrs[0].get("state") == "merged", \
+                    f"MR for {key} not merged"
+                pr_ref = f"MR !{mrs[0]['iid']}"
             print(f"[{idx+1}] {key} DONE: {len(transcripts)} transcripts, "
                   f"{len(reports)} token reports, labels seen {sorted(seen_labels)}, "
-                  f"PR #{pr[0]['number']} merged ✓", flush=True)
+                  f"{pr_ref} merged ✓", flush=True)
             return
         if state == "canceled" or "DEVCAKE-FAILED" in stage:
             sys.exit(f"[{idx+1}] {key} FAILED: state={state} labels={sorted(stage)}")
@@ -103,7 +141,11 @@ def run_once(idx: int) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=2)
+    ap.add_argument("--forge", choices=("github", "gitlab"), default="github",
+                    help="Forge under test (default: github)")
     args = ap.parse_args()
+    FORGE = args.forge
     for i in range(args.runs):
         run_once(i)
-    print(f"ACCEPTANCE GREEN: {args.runs}/{args.runs} unattended golden paths", flush=True)
+    print(f"ACCEPTANCE GREEN: {args.runs}/{args.runs} unattended golden paths "
+          f"({FORGE})", flush=True)

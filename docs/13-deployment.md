@@ -3,7 +3,7 @@
 > **Audience:** operators and implementers.
 > **Depends on:** `01-architecture.md`, `07-dev-runtime.md`, `12-observability.md`, `14-security.md`.
 
-Goal per the mission doc: **as simple as possible, local-friendly, production-grade** — Bake builds images, Compose runs the stack.
+Goal per the mission doc: **as simple as possible, local-friendly technical preview** — Bake builds images, Compose runs the stack (v0.1 hardens operational posture further).
 
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
@@ -143,7 +143,7 @@ OO_UI_URL=http://localhost:5080
 - **v2 YAML is snake_case only** (`timeout_sec`, not `timeoutSec` — camelCase keys are rejected with a hint). The step-level `container:` field is the current preferred syntax; `action: docker.run` and the legacy `type: docker` shapes also parse but are not used here.
 - **Timeout ownership:** the app watchdog owns the real kill (`04-orchestrator.md` §5) via Dagu's **stop endpoint** (verified: SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed → run status `aborted`). Dagu gets a belt-and-suspenders DAG-level `timeout_sec` set to *app timeout + 30 min* so it can never fire first — satisfying the mission-doc requirement that Dagu never times out a run prematurely.
 - **Trigger (verified):** `POST /api/v1/dags/dev-run/start` with body
-  `{"params": "{\"RUN_ID\": \"ENG-142-3-EXECUTE-9GX2TQ\", \"IMAGE\": \"<digest-pinned image>\", \"TRACEPARENT\": \"<w3c>\", …}", "dagRunId": "ENG-142-3-EXECUTE-9GX2TQ"}` —
+  `{"params": "{\"RUN_ID\": \"ENG-142-3-EXECUTE-9GX2TQ\", \"IMAGE\": \"devcake/dev-claude-code:latest\", \"TRACEPARENT\": \"<w3c>\", …}", "dagRunId": "ENG-142-3-EXECUTE-9GX2TQ"}` —
   `params` is a JSON-**encoded string** of named params; the client-chosen `dagRunId` (`^[-a-zA-Z0-9_]+$`, ≤ 64 chars — our human-readable run id fits) makes duplicate triggers return **HTTP 409** `already_exists` (`04-orchestrator.md` §6.3). Auth: `Authorization: Bearer dagu_<api-key>`.
 - **Stop (watchdog kill, verified):** `POST /api/v1/dag-runs/dev-run/{dagRunId}/stop`, empty body, returns 200 immediately (async).
 - **Params are visible unmasked in the Dagu UI and run API** (verified) — therefore params carry only non-secret values (`RUN_ID`, `IMAGE`, `TRACEPARENT`) **plus one deliberate exception**: the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD`), acceptable because the Dagu UI/API is itself authenticated and the credential is revoked at finalization (`09-messaging.md` §1a). All real secrets reach the Dev via the Redis `runspec.get` channel (`14-security.md` §3). Keep params small (they travel as one CLI arg; practical ceiling ~128 KiB).
@@ -197,7 +197,7 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 
 ## 6. Image build matrix (Bake only — `docker-bake.hcl`)
 
-**Compose never builds DevCake images.** Bake is the single source of truth:
+**Compose never builds DevCake images.** Bake is the single source of truth. Run specs still reference Dev images by **tag** (`devcake/dev-*:latest`) — digest pinning is not implemented; re-bake lockstep with app upgrades:
 
 | Command | Builds |
 |---|---|

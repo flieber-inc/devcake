@@ -41,6 +41,13 @@ def test_acl_isolation_inv4(msg):
             await rb.xrange(f"devcake:reply:{rid_a}")
         with pytest.raises(NoPermissionError):
             await rb.get(f"devcake:runspec-secret:{rid_a}")
+        # ISSUES #14: write-only on ingress — Dev must not XREAD shared ingress
+        # (envelopes carry plaintext auth of other runs)
+        from devcake.adapters.redis.messaging import INGRESS
+        with pytest.raises(NoPermissionError):
+            await rb.xrange(INGRESS)
+        # B can still XADD to ingress
+        await rb.xadd(INGRESS, {"m": "{}"})
         # B cannot use a wrong password at all
         with pytest.raises(AuthenticationError):
             bad = aioredis.from_url(REDIS_URL, username=f"dev-{rid_b}", password="wrong",

@@ -75,7 +75,7 @@ def dispatch(mission, dev_type):
     write_run_file(run)                            # (1) durable intent BEFORE side effects
     dagu.start_dag("dev-run",                      # (2) trigger executor — non-secret params only
                    params={"RUN_ID": run.run_id,   #     (Dagu params are UI-visible, 13 §4);
-                           "IMAGE": image_digest,  #     the Dev fetches run.spec via runspec.get
+                           "IMAGE": image_tag,  # e.g. devcake/dev-claude-code:latest
                            "TRACEPARENT": traceparent},
                    dag_run_id=run.run_id)
     if live.status == "backlog":

@@ -1,7 +1,12 @@
-"""Transcript/report redaction (docs/14 §5): everything DevCake posts to the
-PMO System (an external SaaS) is scrubbed of known secret values and common
-token patterns first. A secret that leaks into a Linear comment is unrecoverable
-— this filter is the last line of defense, not the only one."""
+"""Transcript/report redaction (docs/14 §5).
+
+Boundary (honest): app→PMO and app→forge *writes* are scrubbed at choke points
+(`MissionManager._feed`, forge PR comments, `create_mission` titles/bodies).
+This is not a guarantee that every string leaving the process is redacted —
+Dev containers have unrestricted egress and can exfiltrate env/secrets over
+their own sockets (docs/14 §2 accepted risk). A secret that leaks into a
+Linear comment is unrecoverable; this filter is the last line of defense for
+app-mediated posts, not the only control."""
 
 import json
 import logging

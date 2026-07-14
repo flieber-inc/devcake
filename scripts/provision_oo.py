@@ -93,18 +93,30 @@ dest = req("POST", "/alerts/destinations",
            {"name": "devcake-webhook", "url": WEBHOOK, "method": "post",
             "skip_tls_verify": False, "template": "devcake-default"})
 print("destination:", dest)
-for name, sql, period in [
+# Full documented alert set (docs/15 §6, ISSUES #23). Queries match span
+# operation_name / log fields where available; residual gaps are best-effort.
+for name, sql, period, threshold in [
     ("devcake-give-up", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "operation_name = 'mission.give_up'", 10),
+     "operation_name = 'mission.give_up'", 10, 1),
     ("devcake-kills", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "operation_name = 'watchdog.kill'", 10),
+     "operation_name = 'watchdog.kill'", 10, 1),
+    ("devcake-needs-human", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
+     "operation_name = 'devcake_needs_human' OR body LIKE '%needs human%'", 15, 1),
+    ("devcake-dev-auth-breaker", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
+     "body LIKE '%DEV_AUTH%' OR body LIKE '%circuit breaker%'", 15, 1),
+    ("devcake-pmo-forge-transient", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
+     "body LIKE '%PMOTransient%' OR body LIKE '%forge probe transient%'", 15, 3),
+    ("devcake-poison", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
+     "body LIKE '%poison%' OR operation_name = 'messaging.poison'", 10, 1),
+    ("devcake-daily-cost", "SELECT SUM(CAST(devcake_cost_usd AS FLOAT)) as cnt "
+     "FROM \"default\" WHERE devcake_cost_usd IS NOT NULL", 60 * 24, 50),
 ]:
     out = req("POST", "/default/alerts",
               {"name": name, "stream_type": "traces", "stream_name": "default",
                "is_real_time": False,
                "query_condition": {"sql": sql, "type": "sql"},
-               "trigger_condition": {"period": period, "threshold": 1,
-                                     "operator": ">=", "frequency": period,
+               "trigger_condition": {"period": period, "threshold": threshold,
+                                     "operator": ">=", "frequency": min(period, 60),
                                      "silence": 30},
                "destinations": ["devcake-webhook"], "enabled": True})
     print(f"alert {name}:", out)

@@ -37,9 +37,10 @@ your notes. Want it to stop? `DEVCAKE-SKIP` wins over everything, always.
 - **No new interface.** Your PMO system (Linear in v0) is the single source of
   truth; four labels are the whole state machine. Adopt with a label, stop with
   a label.
-- **Reviewed by design.** No DevCake-written code reaches your default branch
-  without an independent AI review — even the "trivial" fast path. Rejections
-  loop back with findings; every third rejection posts a cost warning.
+- **Reviewed by design.** By default, EXECUTE and REVIEW use different Dev Types
+  (and models). That independence is the recommended configuration — the
+  assignments API warns if you point both at the same type. Rejections loop
+  back with findings; every Nth rejection posts a cost warning.
 - **Receipts for everything.** Every step posts its transcript and token bill to
   the ticket; every action — dispatches, kills, sweeps, logins — is an
   OpenTelemetry trace you can pull up by run id.
@@ -47,22 +48,27 @@ your notes. Want it to stop? `DEVCAKE-SKIP` wins over everything, always.
   Build, and Codex per role, on the subscriptions you already pay — connected
   through guided OAuth, stored only on your machine.
 
-> **Status: v0 complete** (2026-07-11), hardened in production use since. The
-> release gate is an acceptance script that took fresh tickets to merged PRs
-> **2/2 with zero human input**, on GitHub and GitLab alike. A 200+-test suite
-> (unit + live-Redis + an end-to-end stub dispatch) pins the core invariants;
-> secret redaction is proven against the live PMO;
-> [`docs/16-roadmap.md`](docs/16-roadmap.md) holds the full verification record.
+> **Status: v0 technical preview** (crystallization 2026-07-13). Contracts and
+> golden-path evidence were verified on 2026-07-11; operational posture continues
+> to harden toward v0.1. The release gate is an acceptance script that takes
+> fresh tickets to merged PRs with zero human input (GitHub by default; GitLab
+> via `--forge gitlab`). A 200+-test suite (unit + live-Redis + stub dispatch)
+> pins the core invariants. See [`docs/16-roadmap.md`](docs/16-roadmap.md).
 
 ## Quickstart
 
 ```bash
 git clone https://github.com/fidecastro/devcake && cd devcake
-cp .env.example .env         # fill: LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TOKEN (or GITLAB_*),
-                             # DEVCAKE_REPO_URL, model credentials (subscription OAuth preferred),
-                             # and DOCKER_GID (stat -c %g /var/run/docker.sock)
+cp .env.example .env         # REQUIRED: strong ADMIN/REDIS/DAGU/OO passwords
+                             # (empty/default values refuse boot), LINEAR_API_KEY,
+                             # DEVCAKE_TEAM_KEY, GITHUB_TOKEN (or GITLAB_*),
+                             # DEVCAKE_REPO_URL, model credentials (subscription
+                             # OAuth preferred), DOCKER_GID
+                             # (stat -c %g /var/run/docker.sock)
 docker buildx bake all       # single source of truth for images (app, admin, 3 harnesses + hello)
-docker compose up -d         # run only — compose never builds DevCake images
+docker compose up -d         # run only — control ports bind to 127.0.0.1
+# After upgrades: re-run `docker buildx bake all` — stale local :latest tags
+# keep running otherwise (Dagu launches Dev images with pull_policy: missing).
 open http://localhost:8080   # admin panel (basic auth from .env) → Config page →
                              # test connections; connect Grok/Codex via the OAuth wizard
 ```

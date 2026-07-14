@@ -166,10 +166,34 @@ async def poll_loop() -> None:
         await asyncio.sleep(config.poll_interval_seconds)
 
 
+def _refuse_insecure_passwords() -> None:
+    """Refuse empty/default infra passwords unless DEVCAKE_ALLOW_INSECURE=1
+    (ISSUES #18)."""
+    if os.environ.get("DEVCAKE_ALLOW_INSECURE", "").strip() in ("1", "true", "yes"):
+        log.warning("DEVCAKE_ALLOW_INSECURE set — skipping password strength checks")
+        return
+    weak = {"", "change-me", "change-me-too", "change-me-as-well", "password", "admin"}
+    checks = {
+        "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD", ""),
+        "REDIS_PASSWORD": os.environ.get("REDIS_PASSWORD", ""),
+        "DAGU_PASSWORD": os.environ.get("DAGU_PASSWORD", ""),
+        "OO_ROOT_PASSWORD": os.environ.get("OO_ROOT_PASSWORD", ""),
+    }
+    bad = [name for name, val in checks.items() if (val or "").strip() in weak]
+    if bad:
+        raise RuntimeError(
+            f"refusing to start with empty/default passwords for: {', '.join(bad)}. "
+            f"Set strong values in .env, or DEVCAKE_ALLOW_INSECURE=1 for local sandbox only.")
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     if not credentials_configured():
         raise RuntimeError("ADMIN_USER and ADMIN_PASSWORD must both be configured")
+    _refuse_insecure_passwords()
+    log.info("boot: schema_version=%s pull_policy=missing image tags "
+             "devcake/dev-*:latest — rebuild Dev images lockstep with app upgrades",
+             config.schema_version)
     # corrupt run records must never wedge boot; a quarantined record is
     # FORGOTTEN, so best-effort teardown of anything it may have left live
     # (container, per-run ACL user, reply stream) — the run id is the handle
@@ -187,12 +211,22 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("label bootstrap failed — poll loop will keep retrying reads")
     await refresh_forge_health()
-    for r in store.active():                                              # step 3
+    # Step 3: orphan dead Dagu runs. Skip state=="finalizing" — those may have
+    # pending run.artifacts on the ingress stream; killing them to orphaned
+    # before reclaim would either re-finalize after orphan (ISSUES #1+#2) or
+    # drop mid-finalize work once terminal redelivery is a no-op. Reclaim
+    # (step 4) resumes them.
+    for r in store.active():
+        if r.state == "finalizing":
+            log.info("reconciliation: leaving finalizing run %s for reclaim",
+                     r.run_id)
+            continue
         try:
             status = await executor.status(r.run_id)
             st = str(((status or {}).get("dagRunDetails") or {}).get("status", "")).lower()
             label = str(((status or {}).get("dagRunDetails") or {}).get("statusLabel", "")).lower()
-            if status is None or st in ("failed", "aborted", "error")                     or label in ("failed", "aborted", "error", "cancelled"):
+            if status is None or st in ("failed", "aborted", "error") \
+                    or label in ("failed", "aborted", "error", "cancelled"):
                 try:
                     node_errors = await executor.node_errors(r.run_id) if status else []
                 except Exception:
@@ -424,10 +458,32 @@ async def put_config(body: dict):
                                  "Dev Type when the mapper is enabled")
     if rm.interval_minutes < 1:
         raise HTTPException(422, "relations_mapper.interval_minutes must be ≥ 1")
+    # Dry-run adapter construction before persist (ISSUES #11): a bad URL or
+    # forge shape must not leave a broken config on disk. Empty repo URL is
+    # allowed for first-boot until the operator configures a repository.
+    try:
+        make_pmo(merged.pmo)
+        if merged.repo.url:
+            make_forge(merged.repo)
+    except Exception as e:
+        raise HTTPException(422, f"adapter construction failed: {e}") from e
+    previous = config.model_dump()
     for field in merged.model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
-    reload_connections()                     # hot reload pmo + forge
+    try:
+        reload_connections()                     # hot reload pmo + forge
+    except Exception as e:
+        log.exception("reload_connections failed — restoring previous config")
+        restored = AppConfig.model_validate(previous)
+        for field in restored.model_fields:
+            setattr(config, field, getattr(restored, field))
+        save_config(config)
+        try:
+            reload_connections()
+        except Exception:
+            log.exception("restore reload also failed")
+        raise HTTPException(500, f"config reload failed; previous config restored: {e}")
     return config.model_dump()
 
 
@@ -505,9 +561,21 @@ async def put_assignments(body: dict):
     unknown = {a.dev_type for a in new.values()} - set(dev_types)
     if unknown:
         raise HTTPException(422, f"unknown dev types: {sorted(unknown)}")
+    # Independent review is default config, not a hard invariant (ISSUES #19)
+    warnings: list[str] = []
+    ex = new.get("EXECUTE")
+    rev = new.get("REVIEW")
+    if ex and rev and ex.dev_type == rev.dev_type:
+        msg = (f"EXECUTE and REVIEW share Dev Type {ex.dev_type!r} — "
+               "independent AI review is not enforced")
+        log.warning(msg)
+        warnings.append(msg)
     config.assignments = new
     save_config(config)
-    return {k: v.model_dump() for k, v in config.assignments.items()}
+    out = {k: v.model_dump() for k, v in config.assignments.items()}
+    if warnings:
+        out["_warnings"] = warnings
+    return out
 
 
 @app.get("/api/v1/env-check")

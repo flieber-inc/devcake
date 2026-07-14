@@ -47,6 +47,10 @@ class GitLabForge:
                 url_path = parts.path
         self.base = api_base or origin or "https://gitlab.com"
         path = url_path.strip("/").removesuffix(".git")
+        if not path:
+            raise ValueError(
+                f"invalid GitLab repository URL {repo_url!r}: need a project "
+                f"path (e.g. https://gitlab.com/group/project)")
         self.project = quote(path, safe="")
         self.token = token
         self.reviewer_token = reviewer_token or None
@@ -117,16 +121,25 @@ class GitLabForge:
 
     async def merge(self, pr_number: int) -> None:
         """Squash-merge. 409 (SHA/branch race) is a transient race, not a real
-        failure — retried in place per the port contract (docs/06 §5)."""
+        failure — retried in place per the port contract (docs/06 §5).
+        Already-merged is success (ISSUES #6)."""
         for attempt in range(3):
             try:
                 await self._req("PUT", f"/merge_requests/{pr_number}/merge",
                                 json={"squash": True})
                 return
             except ForgeError as e:
-                if e.status != 409 or attempt == 2:
-                    raise
-                await asyncio.sleep(3)
+                if e.status == 409 and attempt < 2:
+                    await asyncio.sleep(3)
+                    continue
+                if e.status != 409:
+                    try:
+                        state = await self.pr_state(pr_number)
+                        if state.merged:
+                            return
+                    except Exception:
+                        pass
+                raise
 
     async def mergeable(self, pr_number: int) -> Optional[bool]:
         """Port contract (docs/06 §5) — same tri-state as GitHubForge.mergeable.

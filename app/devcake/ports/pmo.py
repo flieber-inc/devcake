@@ -61,7 +61,15 @@ class PMOPort(Protocol):
     async def children_of(self, ref: MissionRef) -> list[Mission]: ...
 
     # ── writes ───────────────────────────────────────────────────────────────
-    async def post_feed(self, ref: MissionRef, markdown: str) -> None: ...
+    async def post_feed(self, ref: MissionRef, markdown: str) -> None:
+        """Post a feed entry. **Markdown fidelity is a port requirement:**
+        DevCake stores state markers as backticked inline markdown (e.g.
+        ``devcake:v1``, ``devcake:decomposition:v1 …``, merge-retry markers).
+        Adapters must round-trip those bytes such that a later ``get_activity``
+        can re-find them. ADF/rich-text PMOs (e.g. Jira) need an explicit
+        fidelity strategy — multi-PMO is not “just another adapter” for this
+        reason (ISSUES #35)."""
+        ...
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
     async def swap_labels(self, ref: MissionRef, remove: set[str],
                           add: set[str]) -> None: ...

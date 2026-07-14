@@ -29,6 +29,12 @@ steps:
       pull_policy: missing
       keep_container: false
       startup: entrypoint
+      # Resource ceilings (docs/07 §7, ISSUES #20). Dagu 2.10 container executor
+      # passes these through to the Docker HostConfig.
+      cpus: "2"
+      memory: "4g"
+      # pids limit if supported by the executor; ignored safely if not.
+      pids_limit: 512
       env:
         DEVCAKE_RUN_ID: ${params.RUN_ID}
         TRACEPARENT: ${params.TRACEPARENT}

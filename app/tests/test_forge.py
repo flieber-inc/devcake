@@ -102,11 +102,16 @@ def test_merge_gives_up_after_retries_and_405_is_immediate(make, monkeypatch):
 
     async def conflict_405(method, path, **kw):
         calls2.append(path)
+        if method == "GET":
+            # not merged — redelivery probe (ISSUES #6) then re-raise merge error
+            return {"number": 8, "html_url": "https://x/8", "state": "open",
+                    "merged": False, "web_url": "https://x/8", "iid": 8}
         raise ForgeError("conflicts", status=405)
     forge2._req = conflict_405
     with pytest.raises(ForgeError) as e:
         run_coro(forge2.merge(8))
-    assert len(calls2) == 1 and e.value.status == 405   # real failure: no retry
+    # one merge attempt + one already-merged probe; no 409-style retries
+    assert len(calls2) == 2 and e.value.status == 405
 
 
 # ── error normalization: both adapters raise ForgeError with .status ─────────

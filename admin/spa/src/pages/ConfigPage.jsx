@@ -685,6 +685,15 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
 
       <Section id="assignments" title="Assignments"
         description="Which Dev Type handles each mission type.">
+        {dr.draft.assignments?.EXECUTE?.dev_type
+          && dr.draft.assignments?.REVIEW?.dev_type
+          && dr.draft.assignments.EXECUTE.dev_type === dr.draft.assignments.REVIEW.dev_type && (
+          <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+            EXECUTE and REVIEW share the same Dev Type. Independent AI review is the
+            default configuration, not a hard invariant — consider assigning different
+            types (and models) for review independence.
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[32rem] text-sm">
             <thead className="text-left text-xs uppercase tracking-wide text-neutral-400">
@@ -729,7 +738,7 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
       </Section>
 
       <Section id="limits" title="Limits"
-        description="Global concurrency and safety ceilings.">
+        description="Global concurrency and safety ceilings. Dev container resource defaults live in dagu/dags/dev-run.yaml (2 CPU / 4g / 512 pids).">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Field label="Global max Devs" hint="Effective ceiling = min(global, Σ per-type caps)">
             <Input type="number" value={cfg.concurrency.global_max}
@@ -741,10 +750,34 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
           </Field>
           <Field label="Loop warning every N rejections"
-            help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene.">
-            <Input type="number" value={cfg.review_loop_warning_every}
+            help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene. Must be ≥ 1.">
+            <Input type="number" min={1} value={cfg.review_loop_warning_every}
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
           </Field>
+          <Field label="Dev CPUs (default)"
+            help="Default CPU limit for Dev containers (mirrored in dev-run.yaml). Changing this records intent; rebuild/redeploy the DAG values to apply.">
+            <Input type="number" step="0.5" min={0.1}
+              value={cfg.concurrency.dev_cpus ?? 2}
+              onChange={(e) => setField("cfg.concurrency.dev_cpus", Number(e.target.value))} />
+          </Field>
+          <Field label="Dev memory (default)"
+            help="Default memory limit string for Dev containers (e.g. 4g).">
+            <Input value={cfg.concurrency.dev_memory ?? "4g"}
+              onChange={(e) => setField("cfg.concurrency.dev_memory", e.target.value)} />
+          </Field>
+          <Field label="Dev PIDs limit"
+            help="Default process limit for Dev containers.">
+            <Input type="number" min={32}
+              value={cfg.concurrency.dev_pids ?? 512}
+              onChange={(e) => setField("cfg.concurrency.dev_pids", Number(e.target.value))} />
+          </Field>
+        </div>
+        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+          <strong className="font-medium text-neutral-800 dark:text-neutral-100">Compose restart:</strong>{" "}
+          long-lived services use <code className="font-mono text-xs">restart: unless-stopped</code> in
+          docker-compose.yml (default on). The SPA cannot rewrite compose — set{" "}
+          <code className="font-mono text-xs">restart: &quot;no&quot;</code> in the file to disable.
+          Config flag <code className="font-mono text-xs">compose_restart</code> is advisory.
         </div>
       </Section>
 

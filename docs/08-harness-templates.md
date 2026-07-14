@@ -68,7 +68,7 @@ Each template is a target in the multi-stage `images/Dockerfile` (shared `base` 
 | `grok-build` | `grok-build` | Grok Build via official installer, git, shared entrypoint |
 | `codex` | `codex` | Node 22 + Codex CLI, git, shared entrypoint |
 
-Images are built only by Bake (`docker-bake.hcl` — `docker buildx bake images` or `bake all`; `13-deployment.md` §6) and pinned by digest in the run spec. Compose never builds them.
+Images are built only by Bake (`docker-bake.hcl` — `docker buildx bake images` or `bake all`; `13-deployment.md` §6) and referenced by **tag** (`devcake/dev-*:latest`) in the run spec. Digest pinning is not implemented; rebuild Dev images lockstep with app upgrades (Dagu's `pull_policy: missing` keeps stale local tags otherwise). Compose never builds them.
 
 ## 3. Plan-mode mapping (the "/plan function")
 

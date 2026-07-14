@@ -41,6 +41,11 @@ Held by exactly **one** service: `dagu` (spawning Devs — the mission-doc archi
 
 ## 5. Transcript redaction (normative)
 
+**Boundary:** app→PMO and app→forge *writes* are scrubbed at choke points
+(`_feed`, forge PR comments, `create_mission` titles/bodies). This does **not**
+cover Dev container egress sockets — a compromised or prompt-injected Dev can
+still exfiltrate env over the network (accepted risk, §2).
+
 Before any transcript or report is posted to the PMO System (an external SaaS), the renderer scans for the **known secret values** of the current config (every env-var value in the secret list, every uploaded credential file's key material) plus known token patterns and replaces them with `«REDACTED»`. The same filter wraps the OTLP log exporter.
 
 The lists are assembled in two parts (`app/devcake/security.py`):
@@ -60,6 +65,6 @@ The lists are assembled in two parts (`app/devcake/security.py`):
 - Devs attach only to `devcake_runtime`: Redis and OpenObserve are reachable, while the app/admin/Dagu control plane is absent from that network. Outbound forge/package access remains enabled.
 - MCP free-text commands are **arbitrary code execution by design** — an admin-only surface, run inside the disposable container, labeled as such in the UI (`11-admin-panel.md` §3).
 
-## 7. Future hardening (post-v0 backlog)
+## 7. Future hardening (v0.1+ backlog)
 
-gVisor/kata runtime for Devs · per-run scoped forge tokens (GitHub App installation tokens) · egress allowlists per Dev Type · admin panel OIDC/SSO (v0 ships basic auth — `11-admin-panel.md` §6) · prompt-injection detection pass over ACTIVITY.md before harness launch · collector-side telemetry scrubbing.
+gVisor/kata runtime for Devs · tighter stage-scoped forge tokens (write only on EXECUTE; optional RO PAT for other stages is already supported via `token_ro_env`) · egress allowlists per Dev Type · admin panel OIDC/SSO (v0 ships basic auth — `11-admin-panel.md` §6) · prompt-injection detection pass over ACTIVITY.md before harness launch · collector-side telemetry scrubbing · OpenObserve ingest-only credentials always (never root in Dev runspecs — set `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD`). Control-plane ports bind to loopback by default; use a dedicated machine or host firewall when exposing beyond localhost.

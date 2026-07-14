@@ -67,9 +67,12 @@ class Messaging:
 
     async def create_run_user(self, run_id: str) -> str:
         password = secrets.token_urlsafe(24)
+        # Redis 7 key selectors (ISSUES #14): write-only on shared ingress so a
+        # concurrent Dev cannot XREAD other runs' plaintext `auth` envelopes;
+        # read/write only on this run's reply stream.
         await self.redis.execute_command(
             "ACL", "SETUSER", f"dev-{run_id}", "on", f">{password}",
-            f"~{INGRESS}", f"~{reply_stream(run_id)}",
+            f"%W~{INGRESS}", f"%RW~{reply_stream(run_id)}",
             "+xadd", "+xread", "+xlen", "+ping", "+client|setinfo",
         )
         # the only place the plaintext exists app-side — register it here so

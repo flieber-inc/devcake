@@ -9,11 +9,17 @@
 # Image tags must match bake output (default TAG/DEVCAKE_TAG=latest).
 name: devcake
 
+# Control-plane ports bind to loopback by default (ISSUES #17). Remote access
+# requires SSH tunnels or host firewall rules — Dagu holds docker.sock and is
+# root-equivalent if reachable. restart: unless-stopped on long-lived services
+# (ISSUES #21) so host reboots recover the stack automatically.
+
 services:
   app:
     image: devcake/app:${DEVCAKE_TAG:-latest}
     pull_policy: never                  # local bake only — never pull from a registry
     env_file: .env
+    restart: unless-stopped
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
       # test fixture only: tests/test_entrypoint_render.py exercises the Dev
@@ -33,11 +39,12 @@ services:
 
   dagu:
     image: ghcr.io/dagucloud/dagu:2.10.5  # pinned — docs/13-deployment.md §4
-    ports: [ "8525:8080" ]                # UI opened via the admin panel's button (no iframe)
+    restart: unless-stopped
+    ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open
       - DAGU_AUTH_MODE=basic
       - DAGU_AUTH_BASIC_USERNAME=${DAGU_USER}
-      - DAGU_AUTH_BASIC_PASSWORD=${DAGU_PASSWORD}
+      - DAGU_AUTH_BASIC_PASSWORD=${DAGU_PASSWORD:?set a strong DAGU_PASSWORD in .env}
       # entrypoint runs dagu as uid 1000 with group $DOCKER_GID → docker.sock access
       # (least privilege; find yours with: stat -c %g /var/run/docker.sock)
       - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
@@ -66,6 +73,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec",
               "--requirepass", "${REDIS_PASSWORD}"]  # default user = app-only; per-run ACLs for Devs (docs/09 §1a)
     volumes: [ redis_data:/data ]
@@ -81,17 +89,19 @@ services:
 
   openobserve:
     image: public.ecr.aws/zinclabs/openobserve:v0.91.1  # pinned
+    restart: unless-stopped
     environment:
       - ZO_ROOT_USER_EMAIL=${OO_ROOT_EMAIL}
       - ZO_ROOT_USER_PASSWORD=${OO_ROOT_PASSWORD}
     volumes: [ oo_data:/data ]
-    ports: [ "5080:5080" ]
+    ports: [ "127.0.0.1:5080:5080" ]
     networks: [control, runtime]
 
   admin:
     image: devcake/admin:${DEVCAKE_TAG:-latest}
     pull_policy: never                  # local bake only
-    ports: [ "8080:80" ]
+    restart: unless-stopped
+    ports: [ "127.0.0.1:8080:80" ]      # loopback only — docs/14
     environment:
       - DAGU_UI_URL=${DAGU_UI_URL:-http://localhost:8525}
       - OO_UI_URL=${OO_UI_URL:-http://localhost:5080}
@@ -110,13 +120,14 @@ services:
 
   fluentbit:
     image: fluent/fluent-bit:3.2
+    restart: unless-stopped
     command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
     environment:
       - OO_ROOT_EMAIL=${OO_ROOT_EMAIL}
       - OO_ROOT_PASSWORD=${OO_ROOT_PASSWORD}
     volumes:
       - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-    ports: [ "24224:24224" ]              # receives the fluentd logging driver (host side)
+    ports: [ "127.0.0.1:24224:24224" ]     # receives the fluentd logging driver (host side)
     networks: [control]
 
 networks:

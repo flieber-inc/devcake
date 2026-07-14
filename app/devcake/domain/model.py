@@ -66,6 +66,11 @@ class Mission(BaseModel):
     # pmo_ids of missions that block this one (native PMO relations; issues only —
     # projects always have [] since Linear relations are issue-scoped, ADR-0007)
     blocked_by: list[str] = Field(default_factory=list)
+    # per-mission repo resolution (M10; transient poll artifacts, stamped by
+    # the manager each cycle — never persisted): the resolved repo instance
+    # name, or the human-readable reason the mission is gated without one
+    repo: str | None = None
+    repo_reason: str | None = None
 
     @property
     def ref(self) -> MissionRef:

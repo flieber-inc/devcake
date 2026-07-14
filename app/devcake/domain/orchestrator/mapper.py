@@ -24,10 +24,12 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
     finalize_mapper validates and applies whatever it proposes."""
     from ..ids import make_run_id
     from ...prompts import MAPPER_MISSION_CAP, mapper_prompt
-    if self.forge is None:
+    repo_name = self._mapper_repo()
+    if repo_name is None:
         # spec env carries the forge dialect — no repo, no mapper runs either
         raise RuntimeError("no repository configured — mapper runs need the "
                            "forge dialect in their run spec")
+    repo, forge = self.forges.instance(repo_name), self.forges.get(repo_name)
     eligible = [m for m in missions
                 if m.pmo_kind == "issue" and m.status not in ("done", "canceled")
                 and (self.config.adoption_mode != "opt_in"
@@ -49,10 +51,11 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
 
         spec_env = self._protocol_spec_env(
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
-            dev_type=dev_type, seq=seq, extra_args="")
+            dev_type=dev_type, seq=seq, extra_args="",
+            repo=repo, forge=forge)
         run = Run(
             run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
-            pmo_ref=self.instance_name, repo_ref=self.config.repos[0].name,
+            pmo_ref=self.instance_name, repo_ref=repo_name,
             dev_type=dev_type.name, seq=seq,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
             traceparent=traceparent,

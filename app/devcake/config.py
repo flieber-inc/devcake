@@ -284,12 +284,14 @@ class AppConfig(BaseModel):
     @field_validator("repos")
     @classmethod
     def _repos_valid(cls, v):
-        if len(v) != 1:
-            raise ValueError("repos: exactly one entry is supported until "
-                             "M10 (repo multiplicity — docs/16)")
+        # 0..N repos (M10): zero = every mission gates on "no repository"
+        # until the internal fallback forge (M11)
         names = [e.name for e in v]
         if len(set(names)) != len(names):
             raise ValueError("repos: duplicate instance names")
+        urls = [(e.forge, e.url) for e in v if e.configured]
+        if len(set(urls)) != len(urls):
+            raise ValueError("repos: two entries target the same repository")
         return v
 
     @model_validator(mode="after")

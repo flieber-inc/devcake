@@ -42,16 +42,19 @@ export default function deriveAlerts(health) {
     });
   }
 
-  if (health.forge_protection && health.forge_protection.protected === false) {
-    alerts.push({
-      id: "forge",
-      severity: "critical",
-      dismissable: true, // compliance nag — the operator may accept the risk
-      title: "Default branch is unprotected",
-      body:
-        "A Dev's forge token could merge to it without review. Enable branch " +
-        "protection (require PRs + 1 approval); DevCake's own pipeline keeps working.",
-    });
+  // forge_protection is {repoName: protection|null} since M10 (repos plural)
+  for (const [repoName, prot] of Object.entries(health.forge_protection || {})) {
+    if (prot && prot.protected === false) {
+      alerts.push({
+        id: `forge:${repoName}`,
+        severity: "critical",
+        dismissable: true, // compliance nag — the operator may accept the risk
+        title: `Default branch of repo '${repoName}' is unprotected`,
+        body:
+          "A Dev's forge token could merge to it without review. Enable branch " +
+          "protection (require PRs + 1 approval); DevCake's own pipeline keeps working.",
+      });
+    }
   }
 
   // server-computed credential-posture warnings (ISSUES #13/#15): loud but

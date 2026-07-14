@@ -114,7 +114,7 @@ def test_write_token_warning_copy_is_config_fed(monkeypatch):
         cfg = AppConfig()
         cfg.repos[0] = RepoInstance(forge=fid, url="https://host.example/o/r")
         warns = {w["id"]: w for w in security.security_warnings(cfg)}
-        body = warns["forge-write-token"]["body"]
+        body = warns["forge-write-token:main"]["body"]
         assert f"{d.token_env_default}_RO" in body
         for other_id, other in forges().items():
             if other_id != fid and other.token_env_default != d.token_env_default:

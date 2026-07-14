@@ -38,12 +38,15 @@ def test_instance_validators_v3():
             dict(base["pmos"][0], name="linearb", team_key="A")]))
     with pytest.raises(Exception, match="at least one"):
         AppConfig.model_validate(dict(base, pmos=[]))
-    # repos: exactly one until M10
-    with pytest.raises(Exception):
-        AppConfig.model_validate(dict(base, repos=[]))
+    # repos: 0..N since M10 — empty is the zero-repo gate, dupes refused
+    AppConfig.model_validate(dict(base, repos=[]))
     dupes = dict(base, repos=[base["repos"][0], dict(base["repos"][0])])
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="duplicate"):
         AppConfig.model_validate(dupes)
+    two = dict(base, repos=[dict(base["repos"][0], url="https://h/a/r"),
+                            dict(base["repos"][0], name="second",
+                                 url="https://h/b/r")])
+    AppConfig.model_validate(two)
 
 
 def test_instance_name_format_enforced():

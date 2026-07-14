@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 from devcake.config import PMOInstance
+from fakes import FakeForgeRuntime
 
 from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
@@ -105,7 +106,7 @@ class NullMessaging:
 
 def mission(status="in_progress", labels=frozenset({"DEVCAKE"})):
     return Mission(instance="linear", pmo_id="p1", pmo_kind="issue", key="T-1", title="t",
-                   status=status, labels=set(labels),
+                   status=status, labels=set(labels), repo="main",
                    updated_at=datetime.now(timezone.utc))
 
 
@@ -165,11 +166,16 @@ def make_mgr(tmp_path, m, forge=None):
     mgr.runs = runs
     mgr.messaging = NullMessaging()
     mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
+    mgr.blocked_reasons = {}
     mgr.merge_handoffs, mgr._merge_window_closed = {}, set()
     mgr.needs_human = {}
     mgr._audit = lambda *a, **k: None
-    if forge is not None:       # default stays attribute-ABSENT (trust boundary
-        mgr.forge = forge       # test relies on a forge call raising)
+    if forge is not None:
+        mgr.forges = FakeForgeRuntime(forge)
+    else:
+        # no forge: any resolution returns None — the clean-fail paths
+        # (rather than an AttributeError) are the trust boundary under test
+        mgr.forges = FakeForgeRuntime(None)
     return mgr, fake, store
 
 
@@ -405,7 +411,7 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
     assert mgr._attempt_number("p1", "EXECUTE", activity) == 1
 
 
-def test_forge_auth_artifact_trips_global_breaker(tmp_path):
+def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, _fake, _store = make_mgr(tmp_path, m)
     run = _run("ONBOARD", None)
@@ -415,7 +421,8 @@ def test_forge_auth_artifact_trips_global_breaker(tmp_path):
         "error_detail": "remote returned 403: write access not granted",
     })
     assert error.startswith("DEV_FORGE_AUTH:")
-    assert "forge" in mgr.breakers
+    # M10: the latch is per-repo on the runtime, never the dev-type dict
+    assert "main" in mgr.forges.breakers and not mgr.breakers
 
 
 def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
@@ -432,19 +439,23 @@ def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
     assert "forge" not in mgr.breakers
 
 
-def test_apply_forge_health_breaker_policy(tmp_path):
-    m = mission("in_progress", {"DEVCAKE"})
-    mgr, _fake, _store = make_mgr(tmp_path, m)
-    mgr.apply_forge_health({"ok": False, "transient": False, "detail": "401 bad token"})
-    assert mgr.breakers["forge"] == "401 bad token"          # definitive latches
-    mgr.apply_forge_health({"ok": False, "transient": True, "detail": "HTTP 500"})
-    assert mgr.breakers["forge"] == "401 bad token"          # transient never clears
-    mgr.breakers.clear()
-    mgr.apply_forge_health({"ok": False, "transient": True, "detail": "HTTP 500"})
-    assert "forge" not in mgr.breakers                       # transient never latches
-    mgr.breakers["forge"] = "stale"
-    mgr.apply_forge_health({"ok": True, "detail": ""})
-    assert "forge" not in mgr.breakers                       # success clears
+def test_apply_forge_health_breaker_policy():
+    """The latch/clear policy moved to ForgeRuntime (M10): per repo name."""
+    from devcake.domain.forge_runtime import ForgeRuntime
+    rt = ForgeRuntime()
+    rt.apply_health("main", {"ok": False, "transient": False, "detail": "401 bad token"})
+    assert rt.breakers["main"] == "401 bad token"            # definitive latches
+    rt.apply_health("main", {"ok": False, "transient": True, "detail": "HTTP 500"})
+    assert rt.breakers["main"] == "401 bad token"            # transient never clears
+    rt.breakers.clear()
+    rt.apply_health("main", {"ok": False, "transient": True, "detail": "HTTP 500"})
+    assert "main" not in rt.breakers                         # transient never latches
+    rt.breakers["main"] = "stale"
+    rt.apply_health("main", {"ok": True, "detail": ""})
+    assert "main" not in rt.breakers                         # success clears
+    # isolation: repo A's latch never blocks repo B
+    rt.apply_health("a", {"ok": False, "transient": False, "detail": "401"})
+    assert "a" in rt.breakers and "b" not in rt.breakers
 
 
 def test_quoted_sentinel_still_classifies_human():

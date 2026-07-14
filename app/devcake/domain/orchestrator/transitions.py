@@ -114,9 +114,11 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
             self._audit(pmo_id, "label_swap", f"{LABEL_EXECUTE}→{LABEL_REVIEW}")
 
         async def _executed_feed():
+            _f = self.forges.get(run.repo_ref)
+            noun = _f.descriptor.pr_noun if _f else "pull request"
             await self._feed(
                 pmo_id, run.pmo_kind,
-                f"🔀 DevCake opened/updated the {self.forge.descriptor.pr_noun}: "
+                f"🔀 DevCake opened/updated the {noun}: "
                 f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
 
         await self._checkpoint(run, "transition:executed:labels", _executed_labels)

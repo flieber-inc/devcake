@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from devcake.config import PMOInstance
+from fakes import FakeForgeRuntime
 
 from devcake.config import AppConfig, DevType
 from devcake.domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
@@ -51,7 +52,7 @@ def make_mgr(tmp_path, pmo):
     mgr = MissionManager.__new__(MissionManager)
     mgr.instance_name = 'linear'
     mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.forge = SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request'))
+    mgr.forges = FakeForgeRuntime(SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')))
     mgr.config = AppConfig()
     mgr.pmo = pmo
     mgr.runs = SimpleNamespace(store=RunStore(tmp_path / "runs"))

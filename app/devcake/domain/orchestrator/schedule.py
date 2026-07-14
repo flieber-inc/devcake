@@ -68,17 +68,18 @@ async def schedule(self, missions: list[Mission],
     candidates.sort(key=lambda md: (PRIORITY_RANK[md[0].priority],
                                     md[0].updated_at, md[0].pmo_id))
     dispatched = 0
-    # no repository configured (schema v3 idle state) → nothing can dispatch;
-    # surface WHY per candidate instead of crashing on forge.descriptor
-    if self.forge is None:
-        for mission, _ in candidates:
-            self.blocked_reasons[mission.pmo_id] = "no repository configured"
-        return 0
     active = self.runs.store.active()
     for mission, d in candidates:
+        # per-mission repo gate (M10): unresolved missions surface WHY and
+        # never dispatch; a latched breaker on repo A never stops repo B
+        if mission.repo is None:
+            self.blocked_reasons[mission.pmo_id] = (
+                mission.repo_reason or "no repository resolved")
+            continue
+        if mission.repo in self.forges.breakers:
+            continue  # this repo's breaker is latched (docs/15 §4)
         dev_type = self.dev_types.get(self.config.assignments[d.mission_type.value].dev_type)
-        if (dev_type is None or dev_type.name in self.breakers
-                or "forge" in self.breakers):
+        if dev_type is None or dev_type.name in self.breakers:
             continue  # unassigned or auth breaker tripped (docs/15 §4)
         if sum(1 for r in active if r.dev_type == dev_type.name) >= dev_type.max_concurrency:
             continue

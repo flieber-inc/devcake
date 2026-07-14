@@ -170,10 +170,10 @@ Exit criteria:
 **Out of scope:** N repos per mission (deferred); zero-repo dispatch (arrives with M11's fallback).
 
 Exit criteria:
-- [ ] Per-mission repo resolution decided (**founder decision**: assignment config vs. mission metadata) and implemented; the resolved forge adapter + credentials are wired per-run into the runspec.
-- [ ] Two configured repos on different forges in one instance: missions land PRs in the right repos with the right dialects.
-- [ ] Forge health/breaker state is per repo instance, not global — a latched breaker on repo A doesn't stop repo B.
-- [ ] Missions resolving to zero repos derive correctly and are visibly gated (not dispatched) pending M11.
+- [x] Per-mission repo resolution decided (**founder decision 2026-07-14: config default per PMO instance + `` `devcake-repo:<name>` `` description-marker override**) and implemented (`domain/repo_routing.py`) — **STICKY once a run exists**: the latest run's `repo_ref` wins; any conflicting marker/default edit GATES with a human-action reason instead of re-routing (PR-reuse invariant preserved). The resolved repo's adapter + credentials wire per-run into the runspec at request time (`runspec_secret_payload` by `run.repo_ref`; nothing secret at rest).
+- [x] Two configured repos on different forges in one instance route spec env, dialect, and tokens per run — hermetically proven (`test_repo_routing.py`, real GitHub+GitLab adapters via `ForgeRuntime.rebuild`). *Live two-merged-PRs demo pending the same founder blocker as M9's additivity proof (no working forge token in `.env`).*
+- [x] Forge health/breaker state is per repo (`domain/forge_runtime.py`: `apply_health`/`latch` per name, `repo:<name>` breaker keys in `/health`) — a latched breaker on repo A never stops repo B (scheduler gates per candidate). Live-verified: the pre-existing 403 on the configured repo latched exactly `repo:main`. Resolution-failure contract per call-site class: sweeps skip with visible `blocked_reasons`, review/finalize fail the run cleanly, dispatch/runspec refuse.
+- [x] Zero-repo missions derive correctly and are visibly gated (schedule surfaces the reason; `repos: []` is valid config) pending M11.
 
 **Demo:** one DevCake, one GitHub repo + one GitLab repo, two missions → two merged PRs, one on each forge.
 

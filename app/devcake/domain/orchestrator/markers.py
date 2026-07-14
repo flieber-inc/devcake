@@ -59,6 +59,13 @@ FEED_INLINE_MAX = 2048
 # markers must stay inline, never externalized to attachments. NOTE:
 # get_activity reads the newest 100 comments (docs/05 §3, v0 limit) — markers
 # could age out on an extremely chatty mission.
+# Per-mission repo override (M10, founder decision): a backticked line
+# anywhere in the mission DESCRIPTION — `devcake-repo:<name>`. A description
+# marker, not a label: repo names are an open-ended operator-renamable set,
+# while the managed-label set is deliberately fixed (and Linear project
+# labels leak workspace-wide). Mirrors the decomposition-marker precedent.
+REPO_MARKER = re.compile(r"`devcake-repo:([a-z][a-z0-9]{0,11})`", re.IGNORECASE)
+
 CONFLICT_MARKER = re.compile(r"`devcake:conflict-resolve:(\d+)`")
 MERGE_RETRY_MARKER = "`devcake:merge-retry`"
 MERGE_HANDOFF_MARKER = "`devcake:merge-handoff`"

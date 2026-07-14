@@ -351,10 +351,13 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
 
   const test = async (kind) =>
     setTestResult({ ...testResult, [kind]: await send("POST", `/connections/${kind}/test`) });
-  // per-PMO-instance test (schema v3): keyed pmo:{name} in testResult
+  // per-instance tests (schema v3 / M10): keyed pmo:{name} / forge:{name}
   const testPmo = async (name) =>
     setTestResult({ ...testResult,
                     [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
+  const testForge = async (name) =>
+    setTestResult({ ...testResult,
+                    [`forge:${name}`]: await send("POST", `/connections/forge/${name}/test`) });
 
   const runMapper = async () => {
     setMapperMsg("Starting…");
@@ -550,6 +553,16 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
                   value={inst.api_key_env}
                   fallback={registry.pmo_systems.find((s) => s.id === inst.system)?.api_key_env_default}
                   onChange={(e) => setField(`cfg.pmos.${idx}.api_key_env`, e.target.value)} />
+                <Field label="Default repo"
+                  help="Where this instance's missions land when they carry no `devcake-repo:` marker. '(none)' = unrouted missions wait (the internal fallback forge arrives in v0.1 M11).">
+                  <Select value={inst.default_repo || ""}
+                    onChange={(e) => setField(`cfg.pmos.${idx}.default_repo`, e.target.value || null)}>
+                    <option value="">(none)</option>
+                    {cfg.repos.map((r) => (
+                      <option key={r.name} value={r.name}>{r.name}</option>
+                    ))}
+                  </Select>
+                </Field>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>
@@ -598,43 +611,70 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
         </Field>
       </Section>
 
-      <Section id="repository" title="Repository"
-        description="Forge connection, access tokens and merge policy.">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Field label="Forge"
-            help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
-            <Select value={cfg.repos[0].forge}
-              onChange={(e) => setField("cfg.repos.0.forge", e.target.value)}>
-              {registry.forges.map((f) => (
-                <option key={f.id} value={f.id}>{f.id}</option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Repository URL"
-            help="HTTPS URL of the repository DevCake works on, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it.">
-            <Input value={cfg.repos[0].url}
-            onChange={(e) => setField("cfg.repos.0.url", e.target.value)} /></Field>
-          <EnvVarField label="Token env var"
-            help="The NAME of the environment variable in DevCake's .env that holds the forge access token — never paste the token itself here. Leave empty to use the selected forge's default name. The token needs repo read/write and PR scopes."
-            value={cfg.repos[0].token_env}
-            fallback={registry.forges.find((f) => f.id === cfg.repos[0].forge)?.token_env_default}
-            onChange={(e) => setField("cfg.repos.0.token_env", e.target.value)} />
-          <EnvVarField label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals"
-            help="The NAME of an env var holding a second account's token. When set, REVIEW posts a formal approval from that account before merging. Leave empty to skip formal approvals."
-            value={cfg.repos[0].reviewer_token_env || ""}
-            onChange={(e) => setField("cfg.repos.0.reviewer_token_env", e.target.value || null)} />
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button kind="ghost" onClick={() => test("forge")}>Test connection</Button>
-          <ImmediateBadge text="tests saved values" />
-          {testResult.forge && (
-            <span className={`text-sm ${testResult.forge.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
-              {testResult.forge.ok
-                ? `✓ ${testResult.forge.forge} reachable · reviewer token: ${testResult.forge.reviewer_token_configured ? "yes" : "no"}`
-                : `✗ ${testResult.forge.error}`}
-            </span>
-          )}
-        </div>
+      <Section id="repository" title="Repositories"
+        description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait.">
+        {cfg.repos.map((repo, idx) => {
+          const tr = testResult[`forge:${repo.name}`];
+          return (
+            <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                {cfg.repos.length > 0 && (
+                  <Button kind="danger-ghost" onClick={() =>
+                    setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx))}>
+                    Remove
+                  </Button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <Field label="Repo name"
+                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings.">
+                  <Input value={repo.name}
+                  onChange={(e) => setField(`cfg.repos.${idx}.name`, e.target.value)} /></Field>
+                <Field label="Forge"
+                  help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
+                  <Select value={repo.forge}
+                    onChange={(e) => setField(`cfg.repos.${idx}.forge`, e.target.value)}>
+                    {registry.forges.map((f) => (
+                      <option key={f.id} value={f.id}>{f.id}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Repository URL"
+                  help="HTTPS URL of the repository, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it. Empty = repo stays idle.">
+                  <Input value={repo.url}
+                  onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
+                <EnvVarField label="Token env var"
+                  help="The NAME of the environment variable in DevCake's .env that holds this repo's access token — never paste the token itself here. Leave empty to use the selected forge's default name. The token needs repo read/write and PR scopes."
+                  value={repo.token_env}
+                  fallback={registry.forges.find((f) => f.id === repo.forge)?.token_env_default}
+                  onChange={(e) => setField(`cfg.repos.${idx}.token_env`, e.target.value)} />
+                <EnvVarField label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals"
+                  help="The NAME of an env var holding a second account's token. When set, REVIEW posts a formal approval from that account before merging. Leave empty to skip formal approvals."
+                  value={repo.reviewer_token_env || ""}
+                  onChange={(e) => setField(`cfg.repos.${idx}.reviewer_token_env`, e.target.value || null)} />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button kind="ghost" onClick={() => testForge(repo.name)}>Test connection</Button>
+                <ImmediateBadge text="tests saved values" />
+                {tr && (
+                  <span className={`text-sm ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                    {tr.ok
+                      ? `✓ ${tr.forge} reachable · reviewer token: ${tr.reviewer_token_configured ? "yes" : "no"}`
+                      : `✗ ${tr.error}`}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <Button kind="ghost" onClick={() =>
+          setField("cfg.repos", [...cfg.repos,
+            { name: `repo${cfg.repos.length + 1}`, forge: "github", url: "",
+              api_base: null, default_branch: "main", token_env: "",
+              token_ro_env: null, reviewer_token_env: null }])}>
+          + Add repository
+        </Button>
         <Field label="Auto-merge"
           help="ON: after DevCake's REVIEW step approves a PR, it merges itself (squash). OFF: DevCake stops at DEVCAKE-MERGE and waits for you to merge.">
           <div className="flex items-center gap-3 text-sm">

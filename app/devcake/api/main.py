@@ -29,6 +29,7 @@ from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
                                    MapperUnconfigured, MissionManager)
+from ..domain.forge_runtime import ForgeRuntime
 from ..domain.reconcile import reconcile_runs
 from ..domain.runs import RunManager
 from ..domain.watchdog import watchdog_loop
@@ -53,21 +54,15 @@ messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
 manager = RunManager(store, messaging, executor)
 
-# ── multi-instance wiring (schema v3, ADR-0009) ──────────────────────────────
+# ── multi-instance wiring (schema v3, ADR-0009; repos plural per M10) ───────
 # One MissionManager per CONFIGURED PMO instance; shared state is injected:
 # the RunManager/store (global concurrency), ONE dev-type breakers dict
-# (credentials are DevCake-global), and the single forge (plural in M10).
+# (credentials are DevCake-global), and ONE ForgeRuntime (repos belong to
+# the deployment — missions from any instance can route to any repo).
 shared_breakers: dict[str, str] = {}
 managers: dict[str, MissionManager] = {}
 mappers: dict[str, MapperService] = {}
-forge = None                       # None while the repo is unconfigured
-_forge_health: dict = {"value": None}
-
-
-def _build_forge() -> None:
-    global forge
-    inst = config.repos[0]
-    forge = make_forge(inst) if inst.configured else None
+forge_runtime = ForgeRuntime()
 
 
 def build_managers() -> None:
@@ -82,11 +77,11 @@ def build_managers() -> None:
         p = make_pmo(inst)
         if name in managers:
             mgr = managers[name]
-            mgr.pmo, mgr.forge, mgr.config = p, forge, config
+            mgr.pmo, mgr.forges, mgr.config = p, forge_runtime, config
             mgr.instance, mgr.instance_name = inst, name
         else:
             managers[name] = MissionManager(
-                config, dev_types, p, forge, manager, messaging,
+                config, dev_types, p, forge_runtime, manager, messaging,
                 instance=inst, breakers=shared_breakers)
             mappers[name] = MapperService(config, dev_types, managers[name])
 
@@ -95,29 +90,15 @@ def _managers_in_config_order() -> list[MissionManager]:
     return [managers[i.name] for i in config.pmos if i.name in managers]
 
 
-_build_forge()
+forge_runtime.rebuild(config.repos, make_forge)
 build_managers()
 router = FinalizerRouter(managers, store)
 manager.set_finalizer(router)  # RunFinalizer seam: routes on run.pmo_ref
 
 
-async def refresh_forge_health() -> dict:
-    if forge is None:
-        data = {"ok": False, "repository": "", "can_push": False,
-                "transient": True, "detail": "repository not configured"}
-    else:
-        try:
-            health = await forge.health_probe()
-            data = health.model_dump()
-        except Exception as e:
-            # a probe that could not run says nothing about the credential
-            data = {"ok": False, "repository": config.repos[0].url,
-                    "can_push": False, "transient": True,
-                    "detail": f"forge probe failed: {str(e)[:200]}"}
-    _forge_health["value"] = data
-    for mgr in managers.values():
-        mgr.apply_forge_health(data)   # latch/clear is idempotent (shared dict)
-    return data
+async def refresh_forge_health() -> dict[str, dict]:
+    """Probe every configured repo; the runtime latches/clears per repo."""
+    return await forge_runtime.refresh_all()
 
 
 def _log_task_death(t: asyncio.Task) -> None:
@@ -130,9 +111,9 @@ def reload_connections() -> None:
     the manager set, and re-ensure the managed labels per instance —
     bootstrap is otherwise startup-only, so a hot-swapped team_key would run
     unlabeled until restart."""
-    _build_forge()
+    forge_runtime.rebuild(config.repos, make_forge)
     build_managers()
-    _protection_cache["ts"] = 0.0          # repo may have changed — reprobe
+    _protection_cache["ts"] = 0.0          # repos may have changed — reprobe
 
     async def _ensure():
         for mgr in list(managers.values()):
@@ -203,6 +184,10 @@ async def _poll_instance(mgr: MissionManager,
     fetched = await mgr.pmo.list_all(mgr.instance.team_key)
     fetched_ids = {m.pmo_id for m in fetched}
     missions = _claim_missions(mgr, fetched, _mission_owner)
+    for m in missions:
+        # per-mission repo resolution (M10): a transient poll artifact —
+        # dispatch re-resolves live (sticky) before anything irreversible
+        m.repo, m.repo_reason = mgr._resolve_repo(m)
     derived = [(m, derive(m, config.adoption_mode)) for m in missions]
     # the gate is a poll artifact, computed EVERY cycle — pause freezes
     # dispatch, never information (docs/04 §2)
@@ -237,7 +222,8 @@ async def _poll_instance(mgr: MissionManager,
         "schedulable": d.schedulable,
         # the blocked-by gate is a scheduler concern, not a derivation row —
         # surfaced so the admin panel shows why (ADR-0007)
-        "reason": gate.get(m.pmo_id, d.reason),
+        "repo": m.repo,
+        "reason": gate.get(m.pmo_id, m.repo_reason or d.reason),
         "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
         "pmo_id": m.pmo_id,
     } for m, d in derived)
@@ -257,7 +243,9 @@ async def poll_loop() -> None:
             try:
                 # a latched forge breaker re-probes every cycle so a transient
                 # failure (or a rotated-back token) self-heals without an operator
-                if "forge" in shared_breakers:
+                if forge_runtime.breakers:
+                    # a latched repo re-probes every cycle so a transient
+                    # failure (or rotated-back token) self-heals unattended
                     await refresh_forge_health()
                 cache_rows: list[dict] = []
                 seen, cand, disp = 0, 0, 0
@@ -403,20 +391,23 @@ async def _check_redis() -> bool:
 
 # branch-protection probe (A2, docs/14): cached — /health is polled every 10 s
 # by the SPA, the forge API needs at most one look every few minutes
-_protection_cache: dict = {"ts": 0.0, "value": None}
+_protection_cache: dict = {"ts": 0.0, "value": {}}
 
 
-async def _branch_protection():
+async def _branch_protection() -> dict:
+    """{repo_name: BranchProtection|None} across every configured repo."""
     if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
         _protection_cache["ts"] = time.monotonic()
-        try:
-            prot = (await forge.default_branch_protection(
-                        config.repos[0].default_branch)
-                    if forge is not None else None)
-            # serialized here so the /health JSON shape stays byte-identical
-            _protection_cache["value"] = prot.model_dump() if prot else None
-        except Exception:
-            _protection_cache["value"] = None
+        out: dict = {}
+        for name, f in forge_runtime.forges.items():
+            inst = forge_runtime.instance(name)
+            try:
+                prot = await f.default_branch_protection(
+                    inst.default_branch if inst else "main")
+                out[name] = prot.model_dump() if prot else None
+            except Exception:
+                out[name] = None
+        _protection_cache["value"] = out
     return _protection_cache["value"]
 
 
@@ -495,8 +486,11 @@ async def health():
         "oo_ingest": await _oo_ingest_check(),
         "pmo": bool(configured_ok) and all(configured_ok),
         "pmo_instances": pmo_instances,
-        "forge": _forge_health["value"],
-        "circuit_breakers": shared_breakers,
+        "forge": forge_runtime.health,
+        # dev-type breakers + per-repo forge breakers, one map for the SPA
+        "circuit_breakers": {**shared_breakers,
+                             **{f"repo:{k}": v
+                                for k, v in forge_runtime.breakers.items()}},
         "intake_paused": config.intake_paused,
         "active_runs": len(store.active()),
         "forge_protection": await _branch_protection(),
@@ -814,25 +808,31 @@ async def test_pmo(name: str):
         return {"ok": False, "error": str(e)[:300]}
 
 
-@app.post("/api/v1/connections/forge/test")
-async def test_forge():
-    if forge is None:
-        return {"ok": False, "error": "repository URL is empty — configure a "
-                                      "repository first"}
-    if not config.repos[0].token:
-        return {"ok": False, "error": f"env var {config.repos[0].resolved_token_env} is empty or "
+@app.post("/api/v1/connections/forge/{name}/test")
+async def test_forge(name: str):
+    inst = next((r for r in config.repos if r.name == name), None)
+    if inst is None:
+        raise HTTPException(404, f"no repo named {name!r}")
+    if not inst.configured:
+        return {"ok": False, "error": "repository URL is empty — the repo is "
+                                      "idle until one is set"}
+    f = forge_runtime.get(name)
+    if f is None:
+        return {"ok": False, "error": "repo not active — save the config "
+                                      "first, then test"}
+    if not inst.token:
+        return {"ok": False, "error": f"env var {inst.resolved_token_env} is empty or "
                                       "unset in DevCake's environment — the field wants "
                                       "the env var NAME; the token itself goes in .env"}
     try:
-        f = forge
-        health = await refresh_forge_health()
+        health = await forge_runtime.refresh_health(name)
         if not health["ok"]:
             return health
         pr = await f.get_pr_by_branch(mission_branch(config.pmos[0].name, "__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
-        protection = await f.default_branch_protection(config.repos[0].default_branch)
-        return {"ok": True, "forge": config.repos[0].forge, "repo": config.repos[0].url,
-                "can_push": health["can_push"],
+        protection = await f.default_branch_protection(inst.default_branch)
+        return {"ok": True, "repo_name": name, "forge": inst.forge,
+                "repo": inst.url, "can_push": health["can_push"],
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
                 "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:

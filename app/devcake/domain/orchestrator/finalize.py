@@ -126,28 +126,6 @@ async def finalize(self, run: Run, payload: dict) -> None:
         log.info("finalized %s (%s)", run.run_id, outcome)
 
 
-def apply_forge_health(self, data: dict) -> None:
-    """Single writer for forge_health + the global forge breaker: latch only
-    on a definitive credential/permission failure, clear only on success —
-    a transient probe failure must neither latch nor clear."""
-    if data.get("ok"):
-        self.forge_health = data
-        self.breakers.pop("forge", None)
-    elif data.get("transient"):
-        self.forge_health = data
-        log.warning("forge probe transient failure (breaker untouched): %s",
-                    data.get("detail"))
-        # span-mirrored so the FORGE_TRANSIENT >15m alert has a signal
-        # (ISSUES #23) — the log line above never reaches the traces stream
-        with tracer.start_as_current_span("forge.probe_transient") as span:
-            span.set_attribute("devcake.reason",
-                               redact(str(data.get("detail") or ""))[:500])
-    else:
-        self.forge_health = data
-        self._trip_breaker("forge",
-                           data.get("detail") or "repository is not writable")
-
-
 def dev_failure_error(self, run: Run, payload: dict) -> str:
     # public: part of the RunFinalizer port (reconcile enriches exit-13 orphans)
     exit_code = payload.get("exit_code")
@@ -166,8 +144,10 @@ def dev_failure_error(self, run: Run, payload: dict) -> str:
         # breaker — a bare "403"/"401" substring can be a rate limit or an
         # incidental URL fragment; the poll-loop re-probe clears mistakes
         if error_class == "DEV_FORGE_AUTH":
-            self._trip_breaker(
-                "forge", f"repository credential rejected in {run.run_id}")
+            # latch only THIS run's repo (M10): a bad credential on repo A
+            # must never stop repo B's missions
+            self.forges.latch(
+                run.repo_ref, f"repository credential rejected in {run.run_id}")
         return "DEV_FORGE_AUTH: " + (detail or "repository credential rejected")
     if exit_code == 13:
         return "DEV_FORGE: " + (detail or "clone/push setup failed")

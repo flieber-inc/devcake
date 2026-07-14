@@ -71,8 +71,9 @@ class MapperService:
         """The interval path, called once per poll cycle (never while paused)."""
         rm = self.config.relations_mapper
         dt = self.dev_type()
-        if not rm.enabled or dt is None or "forge" in self.mgr.breakers \
-                or self.mgr.forge is None:   # no repo configured → idle
+        repo = self.mgr._mapper_repo()
+        if not rm.enabled or dt is None or repo is None \
+                or repo in self.mgr.forges.breakers:   # no/broken repo → idle
             return
         if time.monotonic() - self._last_at < rm.interval_minutes * 60:
             self._last_periodic_outcome = None
@@ -110,13 +111,14 @@ class MapperService:
             raise MapperUnconfigured(
                 "relations_mapper.dev_type must name an existing Dev Type — "
                 "set it on the Config page")
-        if "forge" in self.mgr.breakers:
-            raise MapperUnconfigured(
-                "forge connection is not writable; fix the repository token first")
-        if self.mgr.forge is None:
+        repo = self.mgr._mapper_repo()
+        if repo is None:
             raise MapperUnconfigured(
                 "no repository configured — mapper runs need the forge "
                 "dialect in their run spec")
+        if repo in self.mgr.forges.breakers:
+            raise MapperUnconfigured(
+                f"repo '{repo}' is not writable; fix its token first")
         async with self._lock:
             if self.active():
                 raise MapperBusy("a relations-mapper run is already active")

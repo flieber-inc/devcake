@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import get_args
 
 from devcake.config import PMOInstance, AppConfig, DevType
+from fakes import FakeForgeRuntime
 from devcake.harness import HARNESSES, dev_type_status
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.model import Mission
@@ -90,6 +91,7 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
         url="https://github.com/o/r", token_env="GITHUB_TOKEN",
         token_ro_env="GITHUB_TOKEN_RO")
     mgr.config = cfg
+    mgr.forges = FakeForgeRuntime(object(), inst=cfg.repos[0])
     mgr.dev_types = {"main-dev": DevType(name="main-dev",
                                          harness_template="grok-build"),
                      "senior-dev": DevType(name="senior-dev",
@@ -118,6 +120,7 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     # just set GITHUB_TOKEN_RO in .env, so that must actually work
     cfg.repos[0] = RepoInstance(
         url="https://github.com/o/r", token_env="GITHUB_TOKEN", token_ro_env=None)
+    mgr.forges = FakeForgeRuntime(object(), inst=cfg.repos[0])
     r3 = Run(run_id="T-1-1-PLAN-BBBBBB", mission_key="T-1",
              mission_type="PLAN", dev_type="senior-dev", seq=1)
     p3 = mgr.runspec_secret_payload(r3)
@@ -190,7 +193,7 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     mgr.messaging = NullMessaging()
     # dispatch reads the forge descriptor for the dev-side dialect spec_env
     from devcake.adapters.github import GitHubForge
-    mgr.forge = GitHubForge("https://github.com/o/r", "tok")
+    mgr.forges = FakeForgeRuntime(GitHubForge("https://github.com/o/r", "tok"))
 
     dt = DevType(name="senior-dev", harness_template="grok-build",
                  model="grok-4.5")   # the user's exact scenario
@@ -220,10 +223,10 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     mgr.instance_name = 'linear'
     mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.config = AppConfig()
-    mgr.forge = make_forge(RepoInstance(url="https://github.com/o/r"))
+    repo = RepoInstance(url="https://github.com/o/r")
     env = mgr._protocol_spec_env(
         mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
         dev_type=DevType(name="main-dev", harness_template="grok-build"),
-        seq=1, extra_args="")
+        seq=1, extra_args="", repo=repo, forge=make_forge(repo))
     assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://otel-collector:4318/v1/traces"
     assert not any("openobserve" in v for v in env.values())

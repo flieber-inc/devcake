@@ -1,0 +1,172 @@
+"""Per-mission repo resolution (M10, docs/16 F3): the marker/default/zero
+table, STICKINESS across routing edits (plan finding H3), and the
+resolution-failure contract (vanished repos never crash or silently wedge)."""
+
+import asyncio
+from datetime import datetime, timezone
+
+from devcake.config import PMOInstance
+from devcake.domain.model import Mission
+from devcake.domain.repo_routing import (REASON_ZERO_REPO, marker_repo,
+                                         resolve_repo)
+from devcake.domain.run import Run
+
+
+def run_coro(c):
+    return asyncio.new_event_loop().run_until_complete(c)
+
+
+def _m(description="", key="T-1"):
+    return Mission(pmo_id="p1", pmo_kind="issue", instance="linear", key=key,
+                   title="t", status="backlog", description=description,
+                   updated_at=datetime.now(timezone.utc))
+
+
+def _run(repo_ref, seq=1):
+    return Run(run_id=f"LINEAR-T-1-{seq}-EXECUTE-AAAAA{seq}", mission_key="T-1",
+               mission_type="EXECUTE", dev_type="d", seq=seq, repo_ref=repo_ref)
+
+
+INST = PMOInstance(name="linear", team_key="DEV")
+INST_DEF = PMOInstance(name="linear", team_key="DEV", default_repo="alpha")
+REPOS = {"alpha", "beta"}
+
+
+def test_marker_parsing():
+    assert marker_repo("body\n`devcake-repo:beta`\nrest") == "beta"
+    assert marker_repo("`devcake-repo:BETA`") == "beta"     # case-insensitive
+    assert marker_repo("devcake-repo:beta") is None         # backticks required
+    assert marker_repo("") is None
+
+
+def test_resolution_table_virgin_missions():
+    # marker wins over the instance default
+    assert resolve_repo(_m("`devcake-repo:beta`"), INST_DEF, REPOS, []) == ("beta", None)
+    # unknown marker gates with the fix-the-marker reason
+    name, reason = resolve_repo(_m("`devcake-repo:gone`"), INST_DEF, REPOS, [])
+    assert name is None and "unknown repo 'gone'" in reason
+    # no marker → instance default
+    assert resolve_repo(_m(), INST_DEF, REPOS, []) == ("alpha", None)
+    # no marker, no default → zero-repo gate (un-gated in M11)
+    assert resolve_repo(_m(), INST, REPOS, []) == (None, REASON_ZERO_REPO)
+
+
+def test_resolution_sticky_once_a_run_exists():
+    """Plan finding H3: attempt 1's PR/branch live on the resolved repo —
+    a marker/default edit must GATE, never silently re-route (duplicate PR)."""
+    history = [_run("beta")]
+    # sticky wins when no fresh signal disagrees (no marker, no default)
+    assert resolve_repo(_m(), INST, REPOS, history) == ("beta", None)
+    # ANY conflicting fresh signal gates — an edited/removed marker OR a
+    # changed instance default both read as mid-mission re-routing
+    name, reason = resolve_repo(_m("`devcake-repo:alpha`"), INST_DEF, REPOS, history)
+    assert name is None and "sticky" in reason and "'beta'" in reason
+    name, reason = resolve_repo(_m(), INST_DEF, REPOS, history)   # default=alpha
+    assert name is None and "sticky" in reason
+    # a matching marker is fine
+    assert resolve_repo(_m("`devcake-repo:beta`"), INST_DEF, REPOS, history) == ("beta", None)
+    # sticky repo vanished from config → gate, explicit restore-or-close reason
+    name, reason = resolve_repo(_m(), INST_DEF, {"alpha"}, history)
+    assert name is None and "no longer configured" in reason
+
+
+def test_vanished_repo_contract_in_sweeps_and_review(tmp_path):
+    """A DEVCAKE-MERGE-parked mission whose repo vanished must surface a
+    visible reason (sweeps) / fail the run cleanly (review) — never crash."""
+    from fakes import FakeForgeRuntime
+    from devcake.domain.orchestrator import MissionManager
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = "linear"
+    mgr.blocked_reasons = {}
+    mgr.merge_handoffs = {}
+    mgr._merge_window_closed = set()
+    mgr.forges = FakeForgeRuntime(None)          # nothing resolves
+    m = _m()
+    m.repo, m.repo_reason = None, "repo 'beta' no longer configured"
+    run_coro(mgr._merge_sweep(m))                # must not raise
+    assert "no longer configured" in mgr.blocked_reasons["p1"]
+
+    run = _run("gone")
+    run.mission_pmo_id = "p1"
+    run_coro(mgr._finalize_review(run, {"verdict": "approve"}))   # must not raise
+    assert "no longer configured" in (run.verdict or "")
+
+
+def test_zero_repo_mission_visible_but_gated(tmp_path):
+    """Zero-repo missions derive fully but never dispatch; the reason is
+    surfaced through blocked_reasons for /health and the missions API."""
+    from fakes import FakeForgeRuntime
+    from devcake.adapters.files.run_store import RunStore
+    from devcake.config import AppConfig, DevType
+    from devcake.domain.orchestrator import MissionManager
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = "linear"
+    mgr.instance = INST
+    mgr.config = AppConfig()
+    mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
+                                           harness_template="claude-code")}
+    mgr.pmo = None
+    mgr.forges = FakeForgeRuntime(None)
+    mgr.breakers, mgr.blocked_reasons, mgr.cycles = {}, {}, []
+    mgr._grace, mgr._grace_next = set(), set()
+
+    class Runs:
+        pass
+    mgr.runs = Runs()
+    mgr.runs.store = RunStore(tmp_path / "runs")
+
+    m = _m()
+    m.labels = {"DEVCAKE"}
+    m.repo, m.repo_reason = None, REASON_ZERO_REPO
+    dispatched = run_coro(mgr.schedule([m], gate={}))
+    assert dispatched == 0
+    assert mgr.blocked_reasons["p1"] == REASON_ZERO_REPO
+
+
+def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
+    """M10 exit criterion, hermetic half: two configured repos on DIFFERENT
+    forges — each run's spec env + secret payload derive from ITS repo
+    (url, dialect, token), never from a global."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_github_token_000000000000")
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-gitlab_token_000000000")
+    from devcake.adapters.registry import make_forge
+    from devcake.config import AppConfig, DevType, RepoInstance
+    from devcake.domain.forge_runtime import ForgeRuntime
+    from devcake.domain.orchestrator import MissionManager
+
+    gh = RepoInstance(name="ghrepo", forge="github", url="https://github.com/o/r")
+    gl = RepoInstance(name="glrepo", forge="gitlab", url="https://gitlab.com/g/p")
+    rt = ForgeRuntime()
+    rt.rebuild([gh, gl], make_forge)
+    assert set(rt.forges) == {"ghrepo", "glrepo"}
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.config = AppConfig()
+    mgr.forges = rt
+    mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
+                                           harness_template="claude-code")}
+    dt = mgr.dev_types["senior-dev"]
+
+    env_gh = mgr._protocol_spec_env(
+        mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
+        dev_type=dt, seq=1, extra_args="", repo=gh, forge=rt.get("ghrepo"))
+    env_gl = mgr._protocol_spec_env(
+        mission_id="p2", mission_key="T-2", mission_type="EXECUTE",
+        dev_type=dt, seq=1, extra_args="", repo=gl, forge=rt.get("glrepo"))
+    assert env_gh["DEVCAKE_REPO_URL"] == gh.url and env_gl["DEVCAKE_REPO_URL"] == gl.url
+    assert env_gh["DEVCAKE_CLONE_USER"] == "x-access-token"     # github dialect
+    assert env_gl["DEVCAKE_CLONE_USER"] == "oauth2"             # gitlab dialect
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    r_gh = _run("ghrepo"); r_gh.mission_type = "EXECUTE"; r_gh.dev_type = "senior-dev"
+    r_gl = _run("glrepo", seq=2); r_gl.mission_type = "EXECUTE"; r_gl.dev_type = "senior-dev"
+    assert mgr.runspec_secret_payload(r_gh)["env"]["DEVCAKE_FORGE_TOKEN"] \
+        == "ghp_github_token_000000000000"
+    assert mgr.runspec_secret_payload(r_gl)["env"]["DEVCAKE_FORGE_TOKEN"] \
+        == "glpat-gitlab_token_000000000"
+    # breaker isolation at the runtime level: latch ghrepo, glrepo untouched
+    rt.latch("ghrepo", "401")
+    assert "ghrepo" in rt.breakers and "glrepo" not in rt.breakers

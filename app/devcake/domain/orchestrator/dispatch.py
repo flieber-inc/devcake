@@ -27,12 +27,42 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
+def _resolve_repo(self, mission: Mission):
+    """(repo_name | None, gate_reason | None) — marker > instance default >
+    zero-repo gate, STICKY once a run exists (domain/repo_routing.py)."""
+    from ..repo_routing import resolve_repo
+    history = sorted(
+        (r for r in self.runs.store.all()
+         if r.mission_pmo_id == mission.pmo_id and self._run_is_ours(r)
+         and r.mission_type != "MAPPER"),
+        key=lambda r: r.created_at, reverse=True)
+    return resolve_repo(mission, self.instance,
+                        set(self.forges.instances), history)
+
+
+def _mapper_repo(self) -> str | None:
+    """The repo a MAPPER run clones (the entrypoint always clones): the
+    instance's default repo when configured, else any configured repo."""
+    if self.instance.default_repo in self.forges.instances:
+        return self.instance.default_repo
+    return next(iter(self.forges.instances), None)
+
+
 async def dispatch(self, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
     live = await self.pmo.get(mission.ref)                     # live re-read
     d = derive(live, self.config.adoption_mode)
     if d.mission_type != mtype:
         return None                                            # world moved on
+    # per-mission repo resolution, re-checked LIVE at dispatch (M10; sticky —
+    # a mid-mission routing change gates instead of re-routing, plan H3)
+    repo_name, gate_reason = self._resolve_repo(live)
+    if repo_name is None:
+        self.blocked_reasons[live.pmo_id] = gate_reason
+        log.info("dispatch of %s refused — %s", live.key, gate_reason)
+        return None
+    repo = self.forges.instance(repo_name)
+    forge = self.forges.get(repo_name)
     if live.blocked_by:
         open_blockers = await self._open_blockers(live, {}, {})  # all live
         if open_blockers:
@@ -69,25 +99,25 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
         from ...prompts import (execute_prompt, onboard_prompt, plan_prompt,
                               review_prompt)
-        repo_name = self.config.repos[0].url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(dev_type.identifying_prompt, live),
             MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
             MissionType.EXECUTE: lambda: execute_prompt(
-                dev_type.identifying_prompt, live, repo_name,
-                pr_instructions=self.forge.descriptor.pr_instructions,
-                default_branch=self.config.repos[0].default_branch),
+                dev_type.identifying_prompt, live, repo_slug,
+                pr_instructions=forge.descriptor.pr_instructions,
+                default_branch=repo.default_branch),
             MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
         }[mtype]()
 
         spec_env = self._protocol_spec_env(
             mission_id=mission.pmo_id, mission_key=mission.key,
             mission_type=mtype.value, dev_type=dev_type, seq=seq,
-            extra_args=assignment.extra_cli_args)
+            extra_args=assignment.extra_cli_args, repo=repo, forge=forge)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
-            pmo_ref=self.instance_name, repo_ref=self.config.repos[0].name,
+            pmo_ref=self.instance_name, repo_ref=repo_name,
             dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
@@ -109,7 +139,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
 def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
                        mission_type: str, dev_type: DevType, seq: int,
-                       extra_args: str) -> dict[str, str]:
+                       extra_args: str, repo, forge) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
     place so mission and mapper dispatches can never drift apart — a var
     missing on one path would crash the entrypoint's strict readers."""
@@ -120,12 +150,12 @@ def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
         "DEVCAKE_DEV_TYPE": dev_type.name,
         "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
         "DEVCAKE_SEQ": str(seq),
-        "DEVCAKE_REPO_URL": self.config.repos[0].url,
-        "DEVCAKE_DEFAULT_BRANCH": self.config.repos[0].default_branch,
-        "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
-        "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
-        "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
-        "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
+        "DEVCAKE_REPO_URL": repo.url,
+        "DEVCAKE_DEFAULT_BRANCH": repo.default_branch,
+        "DEVCAKE_CLONE_USER": forge.descriptor.clone_user,
+        "DEVCAKE_GIT_NAME": forge.descriptor.git_user_name,
+        "DEVCAKE_GIT_EMAIL": forge.descriptor.git_email,
+        "DEVCAKE_FORGE_CLI_ENVS": ",".join(forge.descriptor.cli_token_envs),
         "DEVCAKE_EXTRA_ARGS": extra_args,
         "DEVCAKE_MODEL": dev_type.model,
         # Devs export through the collector, credential-free (ISSUES #13)
@@ -148,9 +178,14 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     # stages prefer token_ro when set, else fall back to the write token
     # so private repos keep working without a separate RO PAT.
     # Reviewer PAT stays app-side only.
+    repo = self.forges.instance(run.repo_ref)
+    if repo is None:
+        # the run's repo vanished from config mid-flight → runspec.error
+        # (the resolution-failure contract, domain/forge_runtime.py)
+        return None
     env: dict[str, str] = {**env_creds}
-    write = self.config.repos[0].token
-    ro = self.config.repos[0].token_ro
+    write = repo.token
+    ro = repo.token_ro
     if run.mission_type == "EXECUTE":
         env["DEVCAKE_FORGE_TOKEN"] = write
     else:

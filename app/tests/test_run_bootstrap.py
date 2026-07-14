@@ -12,6 +12,7 @@ import asyncio
 import pytest
 
 from devcake.config import PMOInstance
+from fakes import FakeForgeRuntime
 
 from devcake.domain.run import Run, auth_digest
 from devcake.domain.run_bootstrap import RunBootstrap
@@ -189,7 +190,7 @@ def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
     mgr.config = AppConfig()
     mgr.runs = runs
     mgr.messaging = FakeMessaging()
-    mgr.forge = GitHubForge("https://github.com/o/r", "tok")
+    mgr.forges = FakeForgeRuntime(GitHubForge("https://github.com/o/r", "tok"))
 
     dt = DevType(name="senior-dev", harness_template="grok-build", model="grok-4.5")
     m = Mission(pmo_id="p1", pmo_kind="issue", key="T-1", title="t",

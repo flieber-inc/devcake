@@ -19,11 +19,14 @@ async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
     can merge unless branch protection forbids it. If the mission's PR turns
     up merged while the mission is still mid-pipeline, say so loudly —
     detection only; a human decides (they may have merged early themselves)."""
+    forge = self.forges.get(run.repo_ref)
+    if forge is None:
+        return    # repo vanished — detection is advisory, nothing to flag
     try:
-        pr = await self.forge.get_pr_by_branch(run_branch(run))
+        pr = await forge.get_pr_by_branch(run_branch(run))
         if not pr:
             return
-        state = await self.forge.pr_state(pr.number)
+        state = await forge.pr_state(pr.number)
         if not state.merged:
             return
         await self._feed(
@@ -94,15 +97,26 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
     verdict = result.get("verdict")
     report = result.get("report_md") or result.get("summary") or ""
-    pr = await self.forge.get_pr_by_branch(run_branch(run))
+    forge = self.forges.get(run.repo_ref)
+    if forge is None:
+        # the run's repo vanished from config mid-flight: fail CLEANLY —
+        # transcripts/report are already posted; no transition is applied
+        # (the resolution-failure contract, domain/forge_runtime.py)
+        run.verdict = redact(
+            f"failed: repo '{run.repo_ref}' is no longer configured — "
+            f"REVIEW outcome not applied")
+        log.error("finalize_review %s: repo %r vanished — no transition",
+                  run.run_id, run.repo_ref)
+        return
+    pr = await forge.get_pr_by_branch(run_branch(run))
     pr_url = (pr.url if pr else None) or result.get("pr_url") or "?"
-    footer = self.forge.approval_footer(pr_url)
+    footer = forge.approval_footer(pr_url)
 
     if verdict == "approve":
         formal = False
         if pr:
             async def _pr_comment():
-                await self.forge.post_pr_comment(
+                await forge.post_pr_comment(
                     pr.number,
                     "## DevCake REVIEW: APPROVED-BY-DEVCAKE ✅\n\n"
                     + report + footer)
@@ -110,7 +124,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
 
             async def _formal():
                 try:
-                    return await self.forge.approve(pr.number)
+                    return await forge.approve(pr.number)
                 except Exception:
                     log.exception("formal approval failed — falling back to marker")
                     return False
@@ -131,7 +145,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                     and "review:conflict_routed" not in run.finalized_steps:
                 try:
                     async def _merge():
-                        await self.forge.merge(pr.number)
+                        await forge.merge(pr.number)
                     await self._checkpoint(run, "review:merge", _merge)
                     async def _done():
                         await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
@@ -147,7 +161,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                     # Already-merged treated as success by forge.merge; if we
                     # still fail, re-probe before posting merge-failed (ISSUES #6).
                     try:
-                        state = await self.forge.pr_state(pr.number)
+                        state = await forge.pr_state(pr.number)
                         if state.merged:
                             async def _done_merged():
                                 if "review:merge" not in run.finalized_steps:
@@ -170,7 +184,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                                       pr_url)
                     mstate = None
                     try:
-                        mstate = await self.forge.mergeable(pr.number)
+                        mstate = await forge.mergeable(pr.number)
                     except Exception:
                         log.exception("mergeable check failed for %s", pr_url)
                     if mstate is False:
@@ -259,7 +273,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
 
         async def _reject_pr_comment():
             if pr:
-                await self.forge.post_pr_comment(
+                await forge.post_pr_comment(
                     pr.number,
                     "## DevCake REVIEW: changes requested 🔁\n\n"
                     + report + footer)
@@ -284,7 +298,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                     f"intervene on the PR directly.")
             await self._feed(pmo_id, "issue", warn)
             if pr:
-                await self.forge.post_pr_comment(pr.number, warn)
+                await forge.post_pr_comment(pr.number, warn)
             self._audit(pmo_id, "loop_warning", f"{rejections} rejections")
 
         await self._checkpoint(run, "review:reject:feed", _reject_feed)

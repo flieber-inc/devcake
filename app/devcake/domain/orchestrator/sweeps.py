@@ -53,14 +53,23 @@ async def sweeps(self, missions: list[Mission]) -> None:
 
 
 async def _merge_sweep(self, m: Mission) -> None:
-    pr = await self.forge.get_pr_by_branch(mission_branch(m.instance, m.key))
+    forge = self.forges.get(m.repo) if m.repo else None
+    if forge is None:
+        # the mission's repo vanished (or resolution gates it): skip with a
+        # VISIBLE reason — a parked DEVCAKE-MERGE mission must never wedge
+        # silently (resolution-failure contract, domain/forge_runtime.py)
+        self.blocked_reasons[m.pmo_id] = (
+            m.repo_reason or f"repo '{m.repo}' no longer configured — "
+            f"merge sweep skipped")
+        return
+    pr = await forge.get_pr_by_branch(mission_branch(m.instance, m.key))
     if not pr:
         # pre-v3 branches carry no instance prefix — re-probe the legacy
         # convention so parked missions from before the upgrade still complete
-        pr = await self.forge.get_pr_by_branch(legacy_branch(m.key))
+        pr = await forge.get_pr_by_branch(legacy_branch(m.key))
     if not pr:
         return
-    state = await self.forge.pr_state(pr.number)
+    state = await forge.pr_state(pr.number)
     if state.merged or state.state == "closed":
         with tracer.start_as_current_span("sweep.merge") as span:
             span.set_attribute("devcake.mission.key", m.key)
@@ -103,6 +112,14 @@ async def _deferred_merge_retry(self, m: Mission, pr,
     external-merge branch above on the next cycle."""
     if m.pmo_id in self._merge_window_closed:
         return  # window known closed — skip the per-cycle feed read
+    forge = self.forges.get(m.repo) if m.repo else None
+    if forge is None:
+        # resolution-failure contract (domain/forge_runtime.py): visible
+        # reason, no crash — the parked mission waits for the repo to return
+        self.blocked_reasons[m.pmo_id] = (
+            m.repo_reason or f"repo '{m.repo}' no longer configured — "
+            f"deferred merge retry skipped")
+        return
     act = await self.pmo.get_activity(m.ref)
     retry_ts = handoff_ts = None
     for e in act.entries:
@@ -132,7 +149,7 @@ async def _deferred_merge_retry(self, m: Mission, pr,
     # window ACTIVE: DevCake is still driving the merge — no human action
     # needed, so the sweep's banner entry comes back off
     self.merge_handoffs.pop(m.pmo_id, None)
-    verdict = await self.forge.mergeable(pr.number)
+    verdict = await forge.mergeable(pr.number)
     if verdict is None:
         return  # still computing / CI running — next cycle re-reads
     # a False verdict can be a non-blocking "behind" (strict up-to-date
@@ -143,7 +160,7 @@ async def _deferred_merge_retry(self, m: Mission, pr,
         span.set_attribute("devcake.mission.key", m.key)
         span.set_attribute("devcake.merge.verdict", str(verdict))
         try:
-            await self.forge.merge(pr.number)
+            await forge.merge(pr.number)
         except Exception:
             if verdict is False:
                 span.set_attribute("devcake.outcome", "conflict")

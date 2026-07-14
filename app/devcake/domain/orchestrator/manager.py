@@ -10,11 +10,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...config import AppConfig, DevType
-from ...ports.forge import ForgePort
 from ...ports.pmo import PMOPort
 from ..runs import RunManager
+from typing import TYPE_CHECKING as _TC
+
 from . import (decomposition, dispatch, feed, finalize, mapper, review, schedule,
                sweeps, transitions)
+
+if _TC:
+    from ..forge_runtime import ForgeRuntime
 from .markers import LEGAL_OUTCOMES  # noqa: F401  — public re-export
 
 if TYPE_CHECKING:
@@ -23,13 +27,16 @@ if TYPE_CHECKING:
 
 class MissionManager:
     def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
-                 pmo: PMOPort, forge: ForgePort, runs: RunManager,
+                 pmo: PMOPort, forges: "ForgeRuntime", runs: RunManager,
                  messaging: MessagingPort, *,
                  instance=None, breakers: dict[str, str] | None = None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
-        self.forge = forge
+        # the SHARED per-repo forge runtime (M10, docs/16 F3): repos belong
+        # to the deployment, not to a PMO instance — one runtime, injected
+        # into every manager; adapters resolve per run/mission
+        self.forges = forges
         self.runs = runs
         self.messaging = messaging
         # this manager's PMO-instance identity (schema v3): one manager per
@@ -42,7 +49,6 @@ class MissionManager:
         # dev_type → reason (DEV_AUTH circuit breaker). Credentials are
         # DevCake-global, so main injects ONE dict shared by all managers.
         self.breakers: dict[str, str] = breakers if breakers is not None else {}
-        self.forge_health: dict | None = None  # last probe result (advisory; /health)
         self.blocked_reasons: dict[str, str] = {}  # last gate_map → /health (advisory)
         self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map
         self.anomalies: dict[str, str] = {}  # pmo_id → out-of-pipeline anomaly (advisory)
@@ -92,7 +98,6 @@ MissionManager._give_up = dispatch._give_up
 MissionManager.activity_payload = dispatch.activity_payload
 MissionManager._checkpoint = finalize._checkpoint
 MissionManager.finalize = finalize.finalize
-MissionManager.apply_forge_health = finalize.apply_forge_health
 MissionManager.dev_failure_error = finalize.dev_failure_error
 MissionManager.restore_after_failure = finalize.restore_after_failure
 MissionManager._post_transcript = finalize._post_transcript
@@ -123,3 +128,5 @@ def _run_is_ours(self, r) -> bool:
 
 
 MissionManager._run_is_ours = _run_is_ours
+MissionManager._resolve_repo = dispatch._resolve_repo
+MissionManager._mapper_repo = dispatch._mapper_repo

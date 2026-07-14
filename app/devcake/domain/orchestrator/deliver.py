@@ -39,8 +39,21 @@ async def deliver_internal_zip(self, run, pr) -> None:
 
 async def deliver_internal_zip_for_mission(self, m, pr) -> None:
     """Merge-sweep-path delivery (auto-merge OFF, human merged in Gitea). The
-    Done label-swap that precedes this call removes the mission from future
-    sweep candidates, so this fires exactly once — no run to key on."""
+    Done label-swap that precedes this call normally removes the mission from
+    future sweep candidates, so it fires once — but a crash between the swap
+    and this call, or a redelivery, could re-enter. Guard durably against a
+    double-attach by checking the feed for the deliverable's own filename
+    (review finding #9)."""
+    if m.repo not in self.forges.internal:
+        return
+    marker = f"{m.key}-deliverable.zip"
+    try:
+        act = await self.pmo.get_activity(m.ref)
+        if any(marker in e.body for e in act.entries):
+            return                               # already delivered
+    except Exception:
+        log.warning("deliverable idempotency check failed for %s — proceeding",
+                    m.key)
     await _deliver_core(self, m.repo, m.key, m.pmo_id, m.pmo_kind, pr)
 
 
@@ -65,9 +78,9 @@ async def _deliver_core(self, repo_ref, mission_key, pmo_id, pmo_kind, pr
         note = (f"📦 Deliverable attached: {len(files) - len(omitted)} file(s) "
                 f"from the approved merge — [{name}]({url}).")
         if omitted:
-            note += (f" {len(omitted)} large file(s) omitted (see MANIFEST.txt "
-                     f"in the zip); the full change set is in the internal PR "
-                     f"{state.url}.")
+            note += (f" {len(omitted)} file(s) omitted (too large, or a fetch "
+                     f"error — see MANIFEST.txt in the zip); the full change "
+                     f"set is in the internal PR {state.url}.")
         await self._feed(pmo_id, pmo_kind, note)
         log.info("delivered %s: %s (%d files)", mission_key, name, len(files))
         return True
@@ -99,13 +112,17 @@ async def _build_zip(forge, files: list[PRFile], ref: str,
     """Zip files at `ref`, largest-last until the cap; omitted files are
     listed in MANIFEST.txt. Returns (zip_bytes, omitted_paths)."""
     fetched: list[tuple[str, bytes]] = []
+    omitted: list[str] = []
     for f in files:
         try:
             fetched.append((f.path, await forge.file_content(f.path, ref)))
         except Exception:
+            # a fetch failure is a REAL omission — count it (review finding
+            # #4: else the feed note over-claims the delivered file count and
+            # MANIFEST.txt never mentions it → silent data loss)
             log.warning("could not fetch %s@%s for the deliverable", f.path, ref)
+            omitted.append(f.path)
     fetched.sort(key=lambda pb: len(pb[1]))       # small first → fit the most
-    omitted: list[str] = []
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         used = 0

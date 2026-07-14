@@ -214,7 +214,9 @@ class GitHubForge:
 
     async def file_content(self, path: str, ref: str) -> bytes:
         import base64
-        data = await self._req("GET", f"/contents/{path}?ref={ref}")
+        from urllib.parse import quote
+        data = await self._req(
+            "GET", f"/contents/{quote(path)}?ref={quote(ref, safe='')}")
         if isinstance(data, dict) and data.get("encoding") == "base64":
             return base64.b64decode(data["content"])
         raise ForgeError(f"unexpected contents payload for {path}")

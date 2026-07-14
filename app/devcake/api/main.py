@@ -194,8 +194,17 @@ async def _poll_instance(mgr: MissionManager,
         # per-mission repo resolution (M10/M11): a transient poll artifact —
         # dispatch re-resolves live (sticky) before anything irreversible.
         # resolve_repo_live un-gates zero-repo missions onto the internal
-        # fallback forge (provisions a per-mission repo at intake)
-        m.repo, m.repo_reason = await mgr.resolve_repo_live(m, all_runs=run_snapshot)
+        # fallback forge (provisions a per-mission repo at intake). A Gitea
+        # outage must GATE the mission, never abort the whole poll cycle for
+        # every instance (review finding #2) — the boot promise that an
+        # outage "degrades only zero-repo missions" depends on this.
+        try:
+            m.repo, m.repo_reason = await mgr.resolve_repo_live(
+                m, all_runs=run_snapshot)
+        except Exception as e:
+            m.repo, m.repo_reason = None, (
+                f"internal forge unreachable — mission gated: {str(e)[:150]}")
+            log.warning("repo resolution failed for %s: %s", m.key, e)
     derived = [(m, derive(m, config.adoption_mode)) for m in missions]
     # the gate is a poll artifact, computed EVERY cycle — pause freezes
     # dispatch, never information (docs/04 §2)

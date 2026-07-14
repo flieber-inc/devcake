@@ -38,6 +38,17 @@ def _secrets_dir() -> Path:
     return Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / "internal_forge"
 
 
+def _svc_user(repo_name: str) -> str:
+    """The per-mission machine-user name — Gitea caps usernames at 40 chars,
+    but repo names run to 60, so a naive `svc-{repo}[:40]` truncation could
+    collide two missions to one user (revoking each other's tokens; review
+    finding #3). Suffix a deterministic hash of the FULL repo name so the
+    name is collision-free while staying readable + ≤40 chars."""
+    import hashlib
+    digest = hashlib.sha1(repo_name.encode()).hexdigest()[:8]
+    return f"svc-{repo_name[:27]}-{digest}"
+
+
 class GiteaProvisioner:
     def __init__(self, url: str | None = None,
                  admin_user: str | None = None,
@@ -79,19 +90,39 @@ class GiteaProvisioner:
         teams = await self._req("GET", f"/orgs/{ORG}/teams")
         owners = next(t["id"] for t in teams if t["name"] == "Owners")
         await self._req("PUT", f"/teams/{owners}/members/{APP_USER}")
-        svc = self._load("service.json")
-        if not svc:
-            svc = {
-                "app_token": await self._mint(APP_USER, "devcake-app",
-                                              ["write:repository", "write:issue",
-                                               "write:organization"]),
-                "reviewer_token": await self._mint(REVIEWER_USER,
-                                                   "devcake-reviewer",
-                                                   ["write:repository",
-                                                    "write:issue"]),
-            }
-            self._store("service.json", svc)
+        svc = self._load("service.json") or {}
+        # re-mint any token that no longer exists in Gitea (review finding #6:
+        # a recreated gitea_data volume leaves stored tokens stale forever —
+        # every internal merge then fails "not enough approvals"). Validated
+        # admin-side by token_last_eight (the token's own scopes can't hit a
+        # generic auth endpoint, and the reviewer isn't an org member).
+        if not await self._service_token_live(APP_USER, "devcake-app",
+                                              svc.get("app_token")):
+            svc["app_token"] = await self._mint(
+                APP_USER, "devcake-app",
+                ["write:repository", "write:issue", "write:organization"])
+        if not await self._service_token_live(REVIEWER_USER, "devcake-reviewer",
+                                              svc.get("reviewer_token")):
+            svc["reviewer_token"] = await self._mint(
+                REVIEWER_USER, "devcake-reviewer",
+                ["write:repository", "write:issue"])
+        self._store("service.json", svc)
         self._register(svc)
+
+    async def _service_token_live(self, user: str, name: str,
+                                  token: str | None) -> bool:
+        """Is the stored service token still the live one? Admin lists the
+        user's tokens and we match on token_last_eight (a token value never
+        appears again after mint, so this is the only way to compare)."""
+        if not token:
+            return False
+        try:
+            toks = await self._req("GET", f"/users/{user}/tokens",
+                                   tolerate=(404,)) or []
+        except Exception:
+            return False
+        return any(t.get("name") == name
+                   and t.get("token_last_eight") == token[-8:] for t in toks)
 
     async def _mint(self, user: str, name: str, scopes: list[str]) -> str:
         # re-minting an existing token name 400s — delete then create
@@ -106,7 +137,7 @@ class GiteaProvisioner:
     async def ensure_mission_repo(self, instance: str, mission_key: str
                                   ) -> MissionRepoCredentials:
         repo = internal_repo_name(instance, mission_key)
-        svc_user = f"svc-{repo}"[:40]
+        svc_user = _svc_user(repo)
         stored = self._load(f"mission-{repo}.json")
         if stored:
             creds = MissionRepoCredentials(**stored)
@@ -191,7 +222,7 @@ class GiteaProvisioner:
         return out
 
     async def delete_repo(self, repo_name: str) -> None:
-        svc_user = f"svc-{repo_name}"[:40]
+        svc_user = _svc_user(repo_name)
         await self._req("DELETE", f"/repos/{ORG}/{repo_name}", tolerate=(404,))
         # purge=true drops ownerships that would otherwise block deletion
         await self._req("DELETE", f"/admin/users/{svc_user}?purge=true",

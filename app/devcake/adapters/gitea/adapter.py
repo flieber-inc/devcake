@@ -134,10 +134,21 @@ class GiteaForge:
 
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]:
         """Newest PR (any state) whose head is the given branch. The server
-        IGNORES a `head` query param (live-verified) — filter client-side."""
-        prs = await self._req("GET", "/pulls?state=all&limit=50")
-        matching = [p for p in (prs or [])
-                    if ((p.get("head") or {}).get("ref")) == branch]
+        IGNORES a `head` query param (live-verified) — filter client-side,
+        paginating so a busy repo (>50 PRs) doesn't hide our PR beyond page 1
+        (review finding #10)."""
+        matching: list[dict] = []
+        page = 1
+        while page <= 20:                # bound: 1000 PRs is plenty of headroom
+            batch = await self._req(
+                "GET", f"/pulls?state=all&sort=recentupdate&limit=50&page={page}")
+            if not batch:
+                break
+            matching.extend(p for p in batch
+                            if ((p.get("head") or {}).get("ref")) == branch)
+            if len(batch) < 50:
+                break
+            page += 1
         if not matching:
             return None
         pr = max(matching, key=lambda p: p.get("number", 0))
@@ -242,9 +253,12 @@ class GiteaForge:
 
     async def file_content(self, path: str, ref: str) -> bytes:
         """Raw bytes of a file at a ref (base64-safe — non-code deliverables
-        are binary: images, xlsx). Uses the contents API, decoding base64."""
+        are binary: images, xlsx). Uses the contents API, decoding base64.
+        Path/ref are percent-encoded so '#'/'?'/'%' in filenames don't
+        corrupt the request (review finding #5)."""
+        from urllib.parse import quote
         data = await self._req(
-            "GET", f"/contents/{path}?ref={ref}")
+            "GET", f"/contents/{quote(path)}?ref={quote(ref, safe='')}")
         if isinstance(data, dict) and data.get("encoding") == "base64":
             return base64.b64decode(data["content"])
         raise ForgeError(f"unexpected contents payload for {path}")

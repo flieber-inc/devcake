@@ -162,16 +162,27 @@ async def resolve_repo_live(self, mission, all_runs=None):
     from ...ports.internal_forge import internal_repo_name
     from ...adapters.registry import make_gitea_adapter
 
+    from ...config import RepoInstance
+
     if all_runs is None:
         all_runs = self.runs.store.all()
 
     async def _provision() -> str:
+        # ensure service accounts first (lazy retry — boot provisioning may
+        # have failed against a not-yet-ready Gitea; review finding #7)
+        svc = self.internal_forge.service_tokens()
+        if not svc:
+            await self.internal_forge.ensure_service_accounts()
+            svc = self.internal_forge.service_tokens() or {}
         creds = await self.internal_forge.ensure_mission_repo(
             self.instance_name, mission.key)
-        svc = self.internal_forge.service_tokens() or {}
-        adapter = make_gitea_adapter(creds.clone_url, creds.token_write,
+        # the APP-SIDE adapter uses the devcake-app SERVICE token (org owner:
+        # write:issue for PR comments + write:repository for merge), NOT the
+        # mission's Dev write token (write:repository only → issue-scope 403s;
+        # review finding #1). The mission's write/read pair is the Dev's,
+        # delivered via runspec.
+        adapter = make_gitea_adapter(creds.clone_url, svc.get("app_token"),
                                      svc.get("reviewer_token"))
-        from ...config import RepoInstance
         # model_construct: internal repo names carry hyphens / exceed the
         # operator-name pattern by design — they are synthesized, not input
         inst = RepoInstance.model_construct(
@@ -181,20 +192,28 @@ async def resolve_repo_live(self, mission, all_runs=None):
         self.forges.register_internal(creds.repo_name, inst, adapter)
         return creds.repo_name
 
+    async def _ensure_registered(name: str) -> None:
+        # already registered this process → no per-cycle I/O (finding #8);
+        # else (re)provision — covers restart recovery + first intake
+        if name not in self.forges.instances:
+            await _provision()
+
+    expected = (internal_repo_name(self.instance_name, mission.key)
+                if self.internal_forge is not None else None)
+
     # restart recovery: a prior run points at this mission's internal repo,
     # but ForgeRuntime lost it on restart — re-register before resolving
-    if self.internal_forge is not None:
-        expected = internal_repo_name(self.instance_name, mission.key)
-        if expected not in self.forges.instances and any(
-                r.repo_ref == expected for r in all_runs
-                if r.mission_pmo_id == mission.pmo_id):
-            await _provision()
+    if expected is not None and any(
+            r.repo_ref == expected for r in all_runs
+            if r.mission_pmo_id == mission.pmo_id):
+        await _ensure_registered(expected)
 
     name, reason = self._resolve_repo(mission, all_runs=all_runs)
     if name is not None:
         return name, reason
     if reason is REASON_ZERO_REPO and self.internal_forge is not None:
-        return await _provision(), None
+        await _ensure_registered(expected)
+        return expected, None
     return None, reason
 
 

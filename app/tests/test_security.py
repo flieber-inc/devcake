@@ -47,6 +47,9 @@ V0_SECRET_ENV_VARS = [
     "GITLAB_REVIEWER_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
     "XAI_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "REDIS_PASSWORD",
     "DAGU_PASSWORD", "ADMIN_PASSWORD", "OO_ROOT_PASSWORD",
+    # added with the ISSUES #13/#15 opt-in credentials — the mitigations must
+    # not themselves open redaction gaps
+    "OO_INGEST_PASSWORD", "GITHUB_TOKEN_RO", "GITLAB_TOKEN_RO",
 ]
 V0_TOKEN_PATTERNS = [
     r"\bghp_[A-Za-z0-9]{20,}\b",
@@ -106,3 +109,55 @@ def test_runtime_secret_registry():
 
     register_runtime_secret("run-b", "")          # ignored, not registered
     assert redact("nothing to mask") == "nothing to mask"
+
+
+def test_oo_ingest_and_ro_forge_tokens_redacted(monkeypatch):
+    """ISSUES #13/#15 follow-up: the opt-in credentials (ingest OO user, RO
+    forge PATs) must be masked like every other platform secret — they are
+    arbitrary strings with no token-shape pattern to fall back on."""
+    monkeypatch.setenv("OO_INGEST_PASSWORD", "ingest-pw-0123456789abcdef")
+    monkeypatch.setenv("GITHUB_TOKEN_RO", "read-only-pat-0123456789abcdef")
+    for leak in ("ingest-pw-0123456789abcdef", "read-only-pat-0123456789abcdef"):
+        out = redact(f"env dump: {leak} end")
+        assert leak not in out and MASK in out
+
+
+def test_custom_token_ro_env_registered_at_forge_construction(monkeypatch):
+    """A custom token_ro_env name is unknown to the static lists — make_forge
+    must register its resolved value as a runtime secret."""
+    from devcake.adapters.registry import make_forge
+    from devcake.config import RepoInstance
+    from devcake.security import unregister_runtime_secret
+
+    monkeypatch.setenv("MY_WEIRD_RO_PAT", "custom-ro-value-0123456789abcdef")
+    inst = RepoInstance(url="https://github.com/o/r", forge="github",
+                        token_ro_env="MY_WEIRD_RO_PAT")
+    try:
+        make_forge(inst)
+        out = redact("leak custom-ro-value-0123456789abcdef end")
+        assert "custom-ro-value" not in out and MASK in out
+    finally:
+        for key in ("forge_token:github", "forge_token_ro:github",
+                    "forge_reviewer:github"):
+            unregister_runtime_secret(key)
+
+
+def test_custom_token_env_registered_at_forge_construction(monkeypatch):
+    """The WRITE token's env name is renamable too — an unusual token shape
+    (e.g. a GitHub App ghs_ token) has no pattern fallback, so make_forge must
+    register the write token as well."""
+    from devcake.adapters.registry import make_forge
+    from devcake.config import RepoInstance
+    from devcake.security import unregister_runtime_secret
+
+    monkeypatch.setenv("MY_FORGE_PAT", "ghs_apptoken0123456789abcdef")
+    inst = RepoInstance(url="https://github.com/o/r", forge="github",
+                        token_env="MY_FORGE_PAT")
+    try:
+        make_forge(inst)
+        out = redact("leak ghs_apptoken0123456789abcdef end")
+        assert "ghs_apptoken" not in out and MASK in out
+    finally:
+        for key in ("forge_token:github", "forge_token_ro:github",
+                    "forge_reviewer:github"):
+            unregister_runtime_secret(key)

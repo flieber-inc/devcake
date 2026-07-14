@@ -205,7 +205,7 @@ class LinearAdapter:
                 """query($id: String!, $after: String!) { issue(id: $id) {
                      labels(first: 50, after: $after) {
                        pageInfo { hasNextPage endCursor }
-                       nodes { name }
+                       nodes { id name }
                      } } }""",
                 {"id": pmo_id, "after": page_info["endCursor"]})
             conn = page["issue"]["labels"]
@@ -228,7 +228,7 @@ class LinearAdapter:
                 """query($id: String!, $after: String!) { project(id: $id) {
                      labels(first: 50, after: $after) {
                        pageInfo { hasNextPage endCursor }
-                       nodes { name }
+                       nodes { id name }
                      } } }""",
                 {"id": pmo_id, "after": page_info["endCursor"]})
             conn = page["project"]["labels"]
@@ -358,15 +358,32 @@ class LinearAdapter:
                  issueUpdate(id: $id, input: {stateId: $stateId}) { success } }""",
             {"id": pmo_id, "stateId": state["id"]})
 
+    @staticmethod
+    def _refuse_truncated_rewrite(conn: dict, what: str) -> None:
+        """Shared fail-loud contract for both label-swap write paths: a
+        rewrite from a truncated read would delete the overflow labels."""
+        if (conn.get("pageInfo") or {}).get("hasNextPage"):
+            raise RuntimeError(
+                f"{what}: more than {LABELS_PAGE * MAX_LABEL_PAGES} labels — "
+                "refusing label swap (rewrite would drop the overflow)")
+
     async def _swap_issue_labels(self, pmo_id: str, remove: set[str],
                                  add: set[str]) -> None:
-        """Single issueUpdate(labelIds) — the closest-to-atomic op Linear offers."""
+        """Single issueUpdate(labelIds) — the closest-to-atomic op Linear offers.
+        Read-modify-write: the read MUST see every label or the rewrite deletes
+        the overflow, so it paginates and refuses to write past the ceiling
+        (ISSUES #7 — the write path is where truncation destroys data)."""
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
-                 team { key } labels(first: 50) { nodes { id name } } } }""", {"id": pmo_id})
-        team = await self._team(data["issue"]["team"]["key"])
+                 team { key }
+                 labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                    nodes { id name } } } }""", {"id": pmo_id})
+        issue = data["issue"]
+        await self._paginate_issue_labels(pmo_id, issue)
+        self._refuse_truncated_rewrite(issue["labels"], f"issue {pmo_id}")
+        team = await self._team(issue["team"]["key"])
         by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
-        current = {l["name"].upper(): l["id"] for l in data["issue"]["labels"]["nodes"]}
+        current = {l["name"].upper(): l["id"] for l in issue["labels"]["nodes"]}
         for name in remove:
             current.pop(name.upper(), None)
         for name in add:
@@ -450,19 +467,44 @@ class LinearAdapter:
                 return
             raise
 
+    async def _all_project_labels(self) -> dict[str, str]:
+        """NAME→id over the whole workspace projectLabels registry, cursor-
+        paginated: a DEVCAKE-* project label beyond page 1 must still resolve
+        (ISSUES #7 twin of the per-project read)."""
+        by_name: dict[str, str] = {}
+        after = None
+        for _ in range(MAX_LABEL_PAGES):
+            page = await self._gql(
+                """query($after: String) { projectLabels(first: 100, after: $after) {
+                     pageInfo { hasNextPage endCursor }
+                     nodes { id name } } }""", {"after": after})
+            conn = page["projectLabels"]
+            by_name.update({l["name"].upper(): l["id"] for l in conn["nodes"]})
+            if not conn["pageInfo"].get("hasNextPage"):
+                break
+            after = conn["pageInfo"]["endCursor"]
+        return by_name
+
     async def _swap_project_labels(self, project_id: str, remove: set[str],
                                    add: set[str]) -> None:
-        """Project labels are a separate workspace-level entity (verified live)."""
-        pl = await self._gql("""query { projectLabels(first: 100) { nodes { id name } } }""")
-        by_name = {l["name"].upper(): l["id"] for l in pl["projectLabels"]["nodes"]}
+        """Project labels are a separate workspace-level entity (verified live).
+        Same read-modify-write hazard as _swap_issue_labels: paginate the read,
+        refuse the rewrite past the ceiling (ISSUES #7)."""
+        by_name = await self._all_project_labels()
         proj = await self._gql(
             """query($id: String!) { project(id: $id) {
                  labels(first: 50) { pageInfo { hasNextPage endCursor }
                                     nodes { id name } } } }""", {"id": project_id})
-        current = {l["name"].upper(): l["id"] for l in proj["project"]["labels"]["nodes"]}
+        project = proj["project"]
+        await self._paginate_project_labels(project_id, project)
+        self._refuse_truncated_rewrite(project["labels"], f"project {project_id}")
+        current = {l["name"].upper(): l["id"] for l in project["labels"]["nodes"]}
         for name in remove:
             current.pop(name.upper(), None)
         for name in add:
+            if name.upper() not in by_name:
+                raise RuntimeError(
+                    f"project label {name} missing — ensure_labels not run?")
             current[name.upper()] = by_name[name.upper()]
         await self._gql(
             """mutation($id: String!, $l: [String!]!) {
@@ -521,9 +563,12 @@ class LinearAdapter:
                         "blocked_by may be truncated; the gate could miss a blocker",
                         n.get("identifier"), len(relations))
         label_nodes = (n.get("labels") or {}).get("nodes") or []
-        label_page = (n.get("labels") or {}).get("pageInfo") or {}
-        if len(label_nodes) >= LABELS_PAGE or label_page.get("hasNextPage"):
-            log.warning("issue %s: labels page is full/truncated (%d) — "
+        label_page = (n.get("labels") or {}).get("pageInfo")
+        # hasNextPage after the pagination walk = genuine truncation (ceiling);
+        # a length check alone would cry wolf on every fully-walked 50+ set
+        if (label_page or {}).get("hasNextPage") or (
+                label_page is None and len(label_nodes) >= LABELS_PAGE):
+            log.warning("issue %s: labels truncated (%d fetched) — "
                         "DEVCAKE-* labels may be missing; risk of re-dispatch "
                         "(ISSUES #7)",
                         n.get("identifier"), len(label_nodes))
@@ -543,9 +588,10 @@ class LinearAdapter:
         slug = re.sub(r"[^A-Za-z0-9]+", "-", n["name"]).strip("-").lower()[:24]
         status_type = ((n.get("status") or {}).get("type") or "backlog").lower()
         label_nodes = (n.get("labels") or {}).get("nodes") or []
-        label_page = (n.get("labels") or {}).get("pageInfo") or {}
-        if len(label_nodes) >= LABELS_PAGE or label_page.get("hasNextPage"):
-            log.warning("project %s: labels page is full/truncated (%d) — "
+        label_page = (n.get("labels") or {}).get("pageInfo")
+        if (label_page or {}).get("hasNextPage") or (
+                label_page is None and len(label_nodes) >= LABELS_PAGE):
+            log.warning("project %s: labels truncated (%d fetched) — "
                         "DEVCAKE-* labels may be missing (ISSUES #7)",
                         n.get("name"), len(label_nodes))
         return Mission(

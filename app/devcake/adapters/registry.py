@@ -65,6 +65,17 @@ def make_forge(inst) -> "ForgePort":
     if inst.forge not in classes:
         raise ValueError(f"unknown forge {inst.forge!r} — registered: "
                          f"{sorted(classes)}")
+    # Every forge credential env name is operator-renamable (token_env,
+    # token_ro_env, reviewer_token_env), so the static redaction lists can't
+    # know them — register the resolved values here (construction is the one
+    # choke point every boot/reload/dry-run passes through). Over-registering
+    # a value already covered by the static lists is harmless.
+    from ..security import register_runtime_secret
     reviewer = os.environ.get(inst.reviewer_token_env or "") or None
+    for kind, value in (("token", inst.token),
+                        ("token_ro", getattr(inst, "token_ro", "")),
+                        ("reviewer", reviewer or "")):
+        if value:
+            register_runtime_secret(f"forge_{kind}:{inst.forge}", value)
     return classes[inst.forge](inst.url, inst.token, reviewer,
                                api_base=inst.api_base)

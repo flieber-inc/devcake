@@ -110,13 +110,20 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
         p2 = mgr.runspec_secret_payload(r2)
         assert p2 is not None
         assert p2["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_readonly_token_for_tests_01"
-    # Without RO env: fall back to write token so private repos still clone
+    # token_ro_env unset but the conventional {token_env}_RO name is set:
+    # the fallback must pick it up — the /health warning tells operators to
+    # just set GITHUB_TOKEN_RO in .env, so that must actually work
     cfg.repos[0] = RepoInstance(
         url="https://github.com/o/r", token_env="GITHUB_TOKEN", token_ro_env=None)
     r3 = Run(run_id="T-1-1-PLAN-BBBBBB", mission_key="T-1",
              mission_type="PLAN", dev_type="senior-dev", seq=1)
     p3 = mgr.runspec_secret_payload(r3)
-    assert p3["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_write_token_for_tests_0001"
+    assert p3["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_readonly_token_for_tests_01"
+    # With no RO credential anywhere: fall back to the write token so private
+    # repos still clone
+    monkeypatch.delenv("GITHUB_TOKEN_RO")
+    p4 = mgr.runspec_secret_payload(r3)
+    assert p4["env"]["DEVCAKE_FORGE_TOKEN"] == "ghp_write_token_for_tests_0001"
     run.dev_type = "deleted-dev"
     assert mgr.runspec_secret_payload(run) is None
 

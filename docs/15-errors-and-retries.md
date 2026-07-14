@@ -78,7 +78,7 @@ Exit 13 trips the **global forge breaker** only when the Dev's clone-failure cla
 
 ## 5. Poison messages
 
-Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to `devcake:dead` as a metadata-only record and is XACKed + XDEL'd, emitting an `ingress.poison` span (ERROR status — `12-observability.md` §2). Malformed entry bodies (non-JSON `m`) are dead-lettered the same way from raw fields — a poison pill can never loop through reclaim forever. Chunk groups are exempt while still receiving new chunks (they poison only after 300 s of stall, `09-messaging.md` §4). The affected run recovers through the normal failure machinery (watchdog timeout → reschedule); `devcake:dead` is capped at ~1000 records for inspection.
+Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to `devcake:dead` as a metadata-only record and is XACKed + XDEL'd, emitting an `ingress.poison` span (ERROR status — `12-observability.md` §2). Malformed entry bodies (non-JSON `m`) are dead-lettered the same way from raw fields — a poison pill can never loop through reclaim forever. Chunk groups are exempt while still receiving new chunks (they poison only after 300 s of stall, `09-messaging.md` §4). The affected run recovers through the normal failure machinery — watchdog timeout for active runs, or the finalize-stall backstop for a `finalizing` run whose poisoned entry can no longer resume it (`04-orchestrator.md` §5) — then reschedule; `devcake:dead` is capped at ~1000 records for inspection.
 
 ## 6. Alerting (v0)
 
@@ -87,8 +87,8 @@ OpenObserve scheduled alerts (`scripts/provision_oo.py`, needs
 there is no metrics pipeline in v0 (`12-observability.md` §4):
 
 1. any give-up — `mission.give_up` spans in a 5-min window;
-1a. any needs-human hand-off — the `devcake_needs_human` audit action / `needs_human` entries in `/health` (same notification channel);
-2. tripped `DEV_AUTH` breaker;
-3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min (`poll.cycle` outcome attribute);
+1a. any needs-human hand-off — `audit.event` spans with `devcake.audit.action = devcake_needs_human` (the audit log is span-mirrored precisely so this alert can fire);
+2. tripped breaker (DEV_AUTH or forge) — `breaker.trip` spans;
+3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min — `poll.cycle` outcome attribute plus `forge.probe_transient` spans;
 4. poison message — `ingress.poison` spans;
-5. daily cost threshold — SUM of `devcake.cost.usd` over `run.finalize` spans (operator-configured).
+5. daily cost threshold — SUM of `devcake.cost.usd` over `run.finalize` spans (`OO_DAILY_COST_ALERT_USD`, default 50).

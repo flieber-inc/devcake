@@ -36,9 +36,13 @@ One machine-specific value: `DOCKER_GID` — find it with
 > as part of the value.
 
 ```bash
-docker buildx bake all    # builds app, admin, and all Dev images (docker-bake.hcl)
-docker compose up -d      # run only — compose does not build DevCake images
+docker buildx bake all    # FIRST: builds app, admin, and all Dev images (docker-bake.hcl)
+docker compose up -d      # then start the stack — compose does not build DevCake images
 ```
+
+(Bake first — otherwise the scheduler can try to dispatch a Dev before its
+image exists. On upgrades, re-run `docker buildx bake all` so app and Dev
+images move together.)
 
 Open **http://localhost:8080** (your admin user/password from `.env`). The
 header health strip should show every dot green. On this first boot DevCake also

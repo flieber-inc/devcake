@@ -52,8 +52,11 @@ class RepoInstance(BaseModel):
     api_base: str | None = None     # None = api.github.com / the repo's origin
     default_branch: str = "main"
     token_env: str = "GITHUB_TOKEN"
-    # Optional read-only PAT for non-EXECUTE stages (ISSUES #15). When empty,
-    # PLAN/REVIEW/MAPPER/ONBOARD receive no forge write token.
+    # Optional read-only PAT for non-EXECUTE stages (ISSUES #15). When set,
+    # PLAN/REVIEW/MAPPER/ONBOARD clone with it instead of the write token.
+    # When empty (the DEFAULT), every stage receives the WRITE token — the
+    # entrypoint always clones, so omitting it entirely breaks private repos.
+    # Accepted for v0; /health surfaces a dismissable warning (docs/14 §2).
     token_ro_env: str | None = None
     reviewer_token_env: str | None = None
 
@@ -96,9 +99,12 @@ class RepoInstance(BaseModel):
 
     @property
     def token_ro(self) -> str:
-        if not self.token_ro_env:
-            return ""
-        return os.environ.get(self.token_ro_env, "")
+        # explicit token_ro_env wins; otherwise the conventional name
+        # ({token_env}_RO, e.g. GITHUB_TOKEN_RO) works out of the box — the
+        # /health warning and .env.example both point operators at it
+        if self.token_ro_env:
+            return os.environ.get(self.token_ro_env, "")
+        return os.environ.get(f"{self.token_env}_RO", "")
 
 
 class Assignment(BaseModel):
@@ -107,12 +113,10 @@ class Assignment(BaseModel):
 
 
 class Concurrency(BaseModel):
+    # concurrency caps are the real host-protection throttle: Dagu 2.10.5
+    # cannot apply Docker HostConfig limits to Dev containers (docs/07 §7);
+    # per-container hard limits return with Dagu host-config support (v0.1)
     global_max: int = Field(3, ge=1)
-    # Dev container resource defaults (docs/07 §7) — also mirrored in
-    # dagu/dags/dev-run.yaml; admin Limits surface these for operators.
-    dev_cpus: float = Field(2.0, gt=0, le=64)
-    dev_memory: str = Field("4g", min_length=2)
-    dev_pids: int = Field(512, ge=32, le=100_000)
 
 
 class RelationsMapper(BaseModel):
@@ -207,10 +211,6 @@ class AppConfig(BaseModel):
     # and sweeps keep running (docs/11)
     intake_paused: bool = False
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
-    # Compose restart policy is set in docker-compose.yml (unless-stopped).
-    # This flag is advisory for the admin UI — the SPA cannot rewrite compose
-    # (ISSUES #21); operators edit the file to disable.
-    compose_restart: bool = True
     # admin-UI state: dismissed advisory alerts as "id:signature" strings.
     # A list (not a dict) on purpose — deep_merge can't delete dict keys, so
     # the UI un-dismisses by PUTting the whole replacement list.

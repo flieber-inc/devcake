@@ -28,6 +28,7 @@ from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
                                    MissionManager)
+from ..domain.reconcile import reconcile_runs
 from ..domain.runs import RunManager
 from ..domain.watchdog import watchdog_loop
 from ..harness import HARNESSES, dev_type_status
@@ -186,14 +187,45 @@ def _refuse_insecure_passwords() -> None:
             f"Set strong values in .env, or DEVCAKE_ALLOW_INSECURE=1 for local sandbox only.")
 
 
+def _security_warnings() -> list[dict]:
+    """Loud-but-dismissable credential-posture warnings (ISSUES #13/#15).
+    Surfaced in /health; the SPA renders them as dismissable alerts (dismissals
+    persist in config.dismissed_alerts, and resurface if the content changes)."""
+    warns = []
+    if not (os.environ.get("OO_INGEST_EMAIL", "").strip()
+            and os.environ.get("OO_INGEST_PASSWORD", "").strip()):
+        warns.append({
+            "id": "oo-root-creds", "severity": "warning",
+            "title": "Devs receive OpenObserve ROOT credentials",
+            "body": "OO_INGEST_EMAIL/OO_INGEST_PASSWORD are unset, so every Dev "
+                    "container gets the root OpenObserve login for telemetry "
+                    "export — a compromised Dev owns all telemetry. Create an "
+                    "ingest-only OO user and set OO_INGEST_* in .env (ISSUES #13).",
+        })
+    if config.repo.token and not config.repo.token_ro:
+        warns.append({
+            "id": "forge-write-token", "severity": "warning",
+            "title": "All mission stages hold the forge WRITE token",
+            "body": "No read-only PAT is configured (token_ro_env / "
+                    f"{config.repo.token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
+                    "Devs receive the same write-capable forge token as EXECUTE. "
+                    "A prompt-injected non-EXECUTE Dev could push to the repo. "
+                    "Create a read-only PAT and set GITHUB_TOKEN_RO (or the "
+                    "GitLab twin) in .env (ISSUES #15).",
+        })
+    return warns
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     if not credentials_configured():
         raise RuntimeError("ADMIN_USER and ADMIN_PASSWORD must both be configured")
     _refuse_insecure_passwords()
-    log.info("boot: schema_version=%s pull_policy=missing image tags "
-             "devcake/dev-*:latest — rebuild Dev images lockstep with app upgrades",
-             config.schema_version)
+    log.info("boot: schema_version=%s dagu pull_policy=missing image tags "
+             "devcake/dev-*:latest — re-run `docker buildx bake all` lockstep "
+             "with app upgrades", config.schema_version)
+    for warn in _security_warnings():   # loud at boot; dismissable in the SPA
+        log.warning("%s — %s", warn["title"], warn["body"])
     # corrupt run records must never wedge boot; a quarantined record is
     # FORGOTTEN, so best-effort teardown of anything it may have left live
     # (container, per-run ACL user, reply stream) — the run id is the handle
@@ -211,41 +243,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("label bootstrap failed — poll loop will keep retrying reads")
     await refresh_forge_health()
-    # Step 3: orphan dead Dagu runs. Skip state=="finalizing" — those may have
-    # pending run.artifacts on the ingress stream; killing them to orphaned
-    # before reclaim would either re-finalize after orphan (ISSUES #1+#2) or
-    # drop mid-finalize work once terminal redelivery is a no-op. Reclaim
-    # (step 4) resumes them.
-    for r in store.active():
-        if r.state == "finalizing":
-            log.info("reconciliation: leaving finalizing run %s for reclaim",
-                     r.run_id)
-            continue
-        try:
-            status = await executor.status(r.run_id)
-            st = str(((status or {}).get("dagRunDetails") or {}).get("status", "")).lower()
-            label = str(((status or {}).get("dagRunDetails") or {}).get("statusLabel", "")).lower()
-            if status is None or st in ("failed", "aborted", "error") \
-                    or label in ("failed", "aborted", "error", "cancelled"):
-                try:
-                    node_errors = await executor.node_errors(r.run_id) if status else []
-                except Exception:
-                    node_errors = []
-                await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
-                detail = " ".join(str(item.get("error") or "") for item in node_errors)
-                if "exit status 13" in detail.lower():
-                    r.error = mission_mgr._dev_failure_error(
-                        r, {"exit_code": 13, "error_detail": detail})
-                    store.save(r)
-            else:
-                log.info("reconciliation: adopted in-flight run %s (dagu: %s)",
-                         r.run_id, label or st or "running")
-        except Exception:
-            log.exception("reconciliation failed for %s", r.run_id)
-    try:
-        await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
-    except Exception:
-        log.exception("pending-entry reclaim failed")
+    await reconcile_runs(manager)
     tasks = [
         asyncio.create_task(poll_loop(), name="poll_loop"),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
@@ -339,6 +337,7 @@ async def health():
         "dependency_cycles": mission_mgr.cycles,
         "blocked_reasons": mission_mgr.blocked_reasons,
         "mapper_degraded": mapper.degraded(),
+        "security_warnings": _security_warnings(),
     }
 
 
@@ -572,10 +571,11 @@ async def put_assignments(body: dict):
         warnings.append(msg)
     config.assignments = new
     save_config(config)
-    out = {k: v.model_dump() for k, v in config.assignments.items()}
-    if warnings:
-        out["_warnings"] = warnings
-    return out
+    # warnings ride in their own field — mixing them into the mission-type
+    # mapping handed clients a phantom "_warnings" mission type
+    return {"assignments": {k: v.model_dump()
+                            for k, v in config.assignments.items()},
+            "warnings": warnings}
 
 
 @app.get("/api/v1/env-check")

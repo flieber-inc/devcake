@@ -754,23 +754,14 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
             <Input type="number" min={1} value={cfg.review_loop_warning_every}
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
           </Field>
-          <Field label="Intended Dev CPUs"
-            help="Documented intent only. Dagu 2.10.5 cannot apply Docker HostConfig cpus via the container: field. Edit dagu/dags/dev-run.yaml resources.limits for best-effort process cgroup.">
-            <Input type="number" step="0.5" min={0.1}
-              value={cfg.concurrency.dev_cpus ?? 2}
-              onChange={(e) => setField("cfg.concurrency.dev_cpus", Number(e.target.value))} />
-          </Field>
-          <Field label="Intended Dev memory"
-            help="Documented intent only (e.g. 4g). Not enforced on the Dev container until Dagu supports HostConfig limits.">
-            <Input value={cfg.concurrency.dev_memory ?? "4g"}
-              onChange={(e) => setField("cfg.concurrency.dev_memory", e.target.value)} />
-          </Field>
-          <Field label="Intended Dev PIDs"
-            help="Documented intent only. Not applied by Dagu 2.10.5 container schema.">
-            <Input type="number" min={32}
-              value={cfg.concurrency.dev_pids ?? 512}
-              onChange={(e) => setField("cfg.concurrency.dev_pids", Number(e.target.value))} />
-          </Field>
+        </div>
+        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+          <strong className="font-medium text-neutral-800 dark:text-neutral-100">Dev container limits:</strong>{" "}
+          Dagu 2.10.5 cannot apply Docker HostConfig CPU/memory/PID limits to Dev
+          containers; <code className="font-mono text-xs">dagu/dags/dev-run.yaml</code>{" "}
+          carries a best-effort <code className="font-mono text-xs">resources.limits</code>{" "}
+          block, and concurrency caps above are the real throttle (docs/07 §7,
+          hard limits are v0.1 backlog).
         </div>
         <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
           <strong className="font-medium text-neutral-800 dark:text-neutral-100">Compose restart:</strong>{" "}

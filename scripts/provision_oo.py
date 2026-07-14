@@ -93,23 +93,30 @@ dest = req("POST", "/alerts/destinations",
            {"name": "devcake-webhook", "url": WEBHOOK, "method": "post",
             "skip_tls_verify": False, "template": "devcake-default"})
 print("destination:", dest)
-# Full documented alert set (docs/15 §6, ISSUES #23). Queries match span
-# operation_name / log fields where available; residual gaps are best-effort.
+# Full documented alert set (docs/15 §6, ISSUES #23). Every query targets a
+# span the app actually emits (verified against the tracer inventory):
+# mission.give_up, watchdog.kill, audit.event (devcake_audit_action mirrors
+# the audit log), breaker.trip, poll.cycle outcome, forge.probe_transient,
+# ingress.poison, and the devcake_cost_usd attribute on run.finalize.
+DAILY_COST_USD = float(env("OO_DAILY_COST_ALERT_USD", "50"))
 for name, sql, period, threshold in [
     ("devcake-give-up", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
      "operation_name = 'mission.give_up'", 10, 1),
     ("devcake-kills", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
      "operation_name = 'watchdog.kill'", 10, 1),
     ("devcake-needs-human", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "operation_name = 'devcake_needs_human' OR body LIKE '%needs human%'", 15, 1),
+     "operation_name = 'audit.event' AND "
+     "devcake_audit_action = 'devcake_needs_human'", 15, 1),
     ("devcake-dev-auth-breaker", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "body LIKE '%DEV_AUTH%' OR body LIKE '%circuit breaker%'", 15, 1),
+     "operation_name = 'breaker.trip'", 15, 1),
     ("devcake-pmo-forge-transient", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "body LIKE '%PMOTransient%' OR body LIKE '%forge probe transient%'", 15, 3),
+     "(operation_name = 'poll.cycle' AND devcake_outcome = 'PMO_TRANSIENT') "
+     "OR operation_name = 'forge.probe_transient'", 15, 3),
     ("devcake-poison", "SELECT COUNT(*) as cnt FROM \"default\" WHERE "
-     "body LIKE '%poison%' OR operation_name = 'messaging.poison'", 10, 1),
+     "operation_name = 'ingress.poison'", 10, 1),
     ("devcake-daily-cost", "SELECT SUM(CAST(devcake_cost_usd AS FLOAT)) as cnt "
-     "FROM \"default\" WHERE devcake_cost_usd IS NOT NULL", 60 * 24, 50),
+     "FROM \"default\" WHERE devcake_cost_usd IS NOT NULL", 60 * 24,
+     DAILY_COST_USD),
 ]:
     out = req("POST", "/default/alerts",
               {"name": name, "stream_type": "traces", "stream_name": "default",

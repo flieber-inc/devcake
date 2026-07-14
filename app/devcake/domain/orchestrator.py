@@ -63,6 +63,25 @@ LEGAL_OUTCOMES: dict[str, frozenset[str]] = {
 
 STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 
+# Stage label each checkpointed swap leaves on the mission (None = stage label
+# removed). Consulted by the redelivery external-transition check in
+# _transition: a live stage matching a present marker's value is our own swap
+# resuming, anything else is an external change and halts the finalize.
+# Stage-label-swapping checkpoints MUST be registered here, or their
+# redeliveries will misread the swap as external (cosmetic skip, safe).
+_SWAP_MARKER_STAGE: dict[str, str | None] = {
+    "transition:planned:labels": LABEL_EXECUTE,
+    "transition:executed:labels": LABEL_REVIEW,
+    "transition:executed_trivially:labels": LABEL_REVIEW,
+    "transition:plan_needed_attach:labels": LABEL_EXECUTE,
+    "transition:plan_needed": LABEL_PLAN,
+    "review:reject:labels": LABEL_EXECUTE,
+    "review:conflict_routed": LABEL_EXECUTE,
+    "review:done": None,           # REVIEW removed, mission done
+    "review:merge_failed": None,   # REVIEW→MERGE; MERGE is not a stage label
+    "review:merge_deferred": None,
+}
+
 # docs/05 §4: feed comments longer than this are uploaded as .md attachments
 # and referenced from a short comment. docs/07 §2 externalizes long bodies
 # into the Dev's activity folder at the same threshold, so Devs always see
@@ -139,9 +158,27 @@ class MissionManager:
             f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
                                 "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
         self._grace_next.add(pmo_id)
+        # mirror every audit action as a span so OO alerts can fire on them
+        # (ISSUES #23: `devcake_needs_human` was a file-only record no alert
+        # could ever see). One span name, action as attribute — the alert set
+        # queries devcake_audit_action.
+        with tracer.start_as_current_span("audit.event") as span:
+            span.set_attribute("devcake.audit.action", action)
+            span.set_attribute("devcake.pmo.id", pmo_id)
+            span.set_attribute("devcake.audit.detail", redact(detail)[:500])
 
     def rotate_grace(self) -> None:
         self._grace, self._grace_next = self._grace_next, set()
+
+    def _trip_breaker(self, name: str, reason: str) -> None:
+        """Single choke point for tripping a breaker: sets the in-memory dict
+        AND emits a span — breakers had no telemetry at all, so the documented
+        DEV_AUTH alert could never fire (ISSUES #23)."""
+        self.breakers[name] = reason
+        with tracer.start_as_current_span("breaker.trip") as span:
+            span.set_attribute("devcake.breaker", name)
+            span.set_attribute("devcake.reason", redact(reason)[:500])
+            span.set_status(Status(StatusCode.ERROR, f"breaker {name} tripped"))
 
     # ── scheduling (docs/04 §§2–3) ───────────────────────────────────────────
 
@@ -653,14 +690,20 @@ class MissionManager:
             self.forge_health = data
             log.warning("forge probe transient failure (breaker untouched): %s",
                         data.get("detail"))
+            # span-mirrored so the FORGE_TRANSIENT >15m alert has a signal
+            # (ISSUES #23) — the log line above never reaches the traces stream
+            with tracer.start_as_current_span("forge.probe_transient") as span:
+                span.set_attribute("devcake.reason",
+                                   redact(str(data.get("detail") or ""))[:500])
         else:
             self.forge_health = data
-            self.breakers["forge"] = data.get("detail") or "repository is not writable"
+            self._trip_breaker("forge",
+                               data.get("detail") or "repository is not writable")
 
     def _dev_failure_error(self, run: Run, payload: dict) -> str:
         exit_code = payload.get("exit_code")
         if exit_code == 12:
-            self.breakers[run.dev_type] = f"auth failure in {run.run_id}"
+            self._trip_breaker(run.dev_type, f"auth failure in {run.run_id}")
             return "DEV_AUTH (does not count toward attempts; breaker tripped)"
         detail = redact(str(payload.get("error_detail") or ""))
         detail = " ".join(detail.split())[:500]
@@ -674,7 +717,8 @@ class MissionManager:
             # breaker — a bare "403"/"401" substring can be a rate limit or an
             # incidental URL fragment; the poll-loop re-probe clears mistakes
             if error_class == "DEV_FORGE_AUTH":
-                self.breakers["forge"] = f"repository credential rejected in {run.run_id}"
+                self._trip_breaker(
+                    "forge", f"repository credential rejected in {run.run_id}")
             return "DEV_FORGE_AUTH: " + (detail or "repository credential rejected")
         if exit_code == 13:
             return "DEV_FORGE: " + (detail or "clone/push setup failed")
@@ -717,7 +761,20 @@ class MissionManager:
             log.warning("project %s returned %s (only decomposed is legal) — parked",
                         run.mission_key, outcome)
             return
-        if self._stage_of(live) != run.stage_label_at_dispatch:
+        # A redelivery must not mistake its OWN checkpointed label swap for an
+        # external change — but a change a human made BETWEEN deliveries (e.g.
+        # canceling the mission while the app was down) must still halt the
+        # resumed finalize. So: the live stage is acceptable iff it equals the
+        # dispatch stage OR the exact stage a checkpointed swap of ours left
+        # behind (_SWAP_MARKER_STAGE). Markers that never touch stage labels
+        # (feeds, uploads, pr comments) deliberately contribute nothing, and
+        # unmapped future markers degrade to the strict pre-swap check, never
+        # to suppression.
+        expected_stages = {run.stage_label_at_dispatch}
+        expected_stages.update(
+            stage for marker, stage in _SWAP_MARKER_STAGE.items()
+            if marker in run.finalized_steps)
+        if self._stage_of(live) not in expected_stages:
             async def _external():
                 await self._feed(
                     pmo_id, run.pmo_kind,

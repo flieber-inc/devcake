@@ -19,10 +19,12 @@ finished, reviewed work comes back — with a receipt.*)
 
 The second pillar makes the first one safe: **autonomy with receipts.** Every
 step an agent takes posts its full transcript and its token bill to the ticket
-it worked on; every action is traceable end to end; nothing reaches your main
-branch without an independent, deliberately skeptical AI review — and, unless
-you switch on auto-merge, your explicit approval. Autonomy you can audit is the
-only autonomy worth shipping.
+it worked on; dispatches, kills, sweeps, and PMO writes are traced and audited;
+in the default configuration nothing reaches your main branch without a
+deliberately skeptical AI review by a *different* model — and, unless you
+switch on auto-merge, your explicit approval. (Review independence is
+recommended configuration, warned when violated — not a hard invariant;
+`docs/14` §2.) Autonomy you can audit is the only autonomy worth shipping.
 
 **Every sentence that claims autonomy must earn a trust clause.** That's the
 tone rule in miniature.
@@ -78,7 +80,7 @@ tone rule in miniature.
 |---|---|
 | **Roof (motto)** | *You never operate it.* |
 | **Pillar 1 — No new interface** | Your task board is the product. Labels are the controls; tickets are the conversations; your approval is the deploy button. |
-| **Pillar 2 — Autonomy with receipts** | Every step posts its transcript and its token bill to the ticket. Every action is a trace. Nothing merges un-reviewed; "Done" never lies. |
+| **Pillar 2 — Autonomy with receipts** | Every step posts its transcript and its token bill to the ticket. Dispatches, kills, sweeps, and PMO writes are traced and audited. By default nothing merges without independent AI review; "Done" never lies. |
 | **Pillar 3 — Your models, your box** | Self-hosted in one compose file. Mix Claude/Grok/Codex per role, on your own subscriptions. Your credentials never leave your machine. |
 | **Foundation** | Verified, not vibed: unattended acceptance 2/2 (tickets → merged PRs), both GitHub and GitLab, invariant test suite, live-proven secret redaction. |
 

@@ -24,7 +24,7 @@ log = logging.getLogger("devcake.security")
 PLATFORM_SECRET_ENV_VARS = [
     "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "XAI_API_KEY",
     "OPENAI_API_KEY", "CODEX_API_KEY", "REDIS_PASSWORD", "DAGU_PASSWORD",
-    "ADMIN_PASSWORD", "OO_ROOT_PASSWORD",
+    "ADMIN_PASSWORD", "OO_ROOT_PASSWORD", "OO_INGEST_PASSWORD",
 ]
 
 # harness/model key shapes (docs/14 §5) — not adapter-owned

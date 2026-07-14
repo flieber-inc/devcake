@@ -155,6 +155,29 @@ class Messaging:
                     log.exception("periodic pending-entry reclaim failed")
                 last_reclaim = time.monotonic()
 
+    async def unresolved_run_ids(self) -> set[str]:
+        """run_ids with entries still on the ingress stream. Handled entries are
+        XACK+XDELed and poisoned groups are dead-lettered off the stream, so
+        anything here is unhandled, in-flight, or awaiting redelivery. The
+        watchdog uses this to distinguish a finalizing run that redelivery will
+        still resume from one whose artifacts entry is gone (nothing can ever
+        resume it)."""
+        out: set[str] = set()
+        start = "-"
+        while True:
+            entries = await self.redis.xrange(INGRESS, min=start, max="+", count=200)
+            for _entry_id, fields in entries:
+                try:
+                    envelope = json.loads((fields or {}).get("m", "{}"))
+                    run_id = str(envelope.get("run_id", ""))
+                except Exception:
+                    continue
+                if run_id:
+                    out.add(run_id)
+            if len(entries) < 200:
+                return out
+            start = "(" + entries[-1][0]
+
     async def _ack_delete(self, entry_ids: list[str]) -> None:
         if not entry_ids:
             return

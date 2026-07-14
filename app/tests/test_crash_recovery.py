@@ -443,6 +443,8 @@ def test_human_needed_baton_posted_once(tmp_path):
     mgr.config = AppConfig()
     mgr.dev_types = {}
     mgr.pmo = FakePMO()
+    from types import SimpleNamespace
+    mgr.forge = SimpleNamespace(descriptor=SimpleNamespace(pr_noun="pull request"))
     mgr.runs = runs
     mgr.messaging = FakeMessaging()
     mgr._grace = set()
@@ -512,6 +514,8 @@ def test_redelivery_own_label_swap_is_not_external_transition(tmp_path):
     mgr.config = AppConfig()
     mgr.dev_types = {}
     mgr.pmo = FakePMO()
+    from types import SimpleNamespace
+    mgr.forge = SimpleNamespace(descriptor=SimpleNamespace(pr_noun="pull request"))
     mgr.runs = runs
     mgr.messaging = FakeMessaging()
     mgr._grace = set()

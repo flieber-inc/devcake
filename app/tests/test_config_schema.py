@@ -62,10 +62,12 @@ def test_repo_url_shape_validated():
     bad = dict(base, repos=[{**base["repos"][0], "url": "not-a-url"}])
     with pytest.raises(Exception, match="invalid"):
         AppConfig.model_validate(bad)
-    gh_short = dict(base, repos=[{**base["repos"][0],
-                                  "url": "https://github.com/onlyowner"}])
-    with pytest.raises(Exception, match="GitHub"):
-        AppConfig.model_validate(gh_short)
+    # one path segment is malformed on EVERY forge (owner/repo minimum) —
+    # and the error copy must stay forge-neutral (F1)
+    short = dict(base, repos=[{**base["repos"][0],
+                               "url": "https://github.com/onlyowner"}])
+    with pytest.raises(Exception, match="owner/repo"):
+        AppConfig.model_validate(short)
     ok = dict(base, repos=[{**base["repos"][0],
                             "url": "https://github.com/o/r"}])
     AppConfig.model_validate(ok)

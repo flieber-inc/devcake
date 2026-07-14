@@ -45,6 +45,12 @@ def make_pmo(inst) -> PMOPort:
     raise AssertionError("unreachable")  # registry and constructors in sync
 
 
+# The seed default for a first-boot RepoInstance. This is the ONE place a
+# forge-name literal may act as a default — it lives inside adapters/, where
+# forge knowledge belongs; config derives from it lazily (F1, docs/16 M8).
+DEFAULT_FORGE = "github"
+
+
 def _forge_classes() -> dict[str, type]:
     # lazy so importing the registry never drags in httpx-heavy adapters
     from .github import GitHubForge

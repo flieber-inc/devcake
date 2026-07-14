@@ -157,3 +157,34 @@ def redact_value(value: Any, extra_values: list[str] | None = None) -> Any:
     if isinstance(value, dict):
         return {key: redact_value(item, extra_values) for key, item in value.items()}
     return value
+
+
+def security_warnings(config) -> list[dict]:
+    """Loud-but-dismissable credential-posture warnings (ISSUES #13/#15).
+    Surfaced in /health; the SPA renders them as dismissable alerts (dismissals
+    persist in config.dismissed_alerts, and resurface if the content changes).
+    Lives here (not api/) so the copy is testable without the api singletons;
+    all wording derives from config/descriptors — never from forge names (F1)."""
+    warns = []
+    if not (os.environ.get("OO_INGEST_EMAIL", "").strip()
+            and os.environ.get("OO_INGEST_PASSWORD", "").strip()):
+        warns.append({
+            "id": "oo-root-creds", "severity": "warning",
+            "title": "Devs receive OpenObserve ROOT credentials",
+            "body": "OO_INGEST_EMAIL/OO_INGEST_PASSWORD are unset, so every Dev "
+                    "container gets the root OpenObserve login for telemetry "
+                    "export — a compromised Dev owns all telemetry. Create an "
+                    "ingest-only OO user and set OO_INGEST_* in .env (ISSUES #13).",
+        })
+    if config.repo.token and not config.repo.token_ro:
+        warns.append({
+            "id": "forge-write-token", "severity": "warning",
+            "title": "All mission stages hold the forge WRITE token",
+            "body": "No read-only PAT is configured (token_ro_env / "
+                    f"{config.repo.token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
+                    "Devs receive the same write-capable forge token as EXECUTE. "
+                    "A prompt-injected non-EXECUTE Dev could push to the repo. "
+                    f"Create a read-only PAT and set {config.repo.token_env}_RO "
+                    "in .env (ISSUES #15).",
+        })
+    return warns

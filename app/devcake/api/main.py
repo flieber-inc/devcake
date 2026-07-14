@@ -21,6 +21,7 @@ from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_pmo
+from .. import security
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
                       load_config, load_dev_types, reject_v1_patch,
                       save_config, save_dev_type)
@@ -189,32 +190,9 @@ def _refuse_insecure_passwords() -> None:
 
 
 def _security_warnings() -> list[dict]:
-    """Loud-but-dismissable credential-posture warnings (ISSUES #13/#15).
-    Surfaced in /health; the SPA renders them as dismissable alerts (dismissals
-    persist in config.dismissed_alerts, and resurface if the content changes)."""
-    warns = []
-    if not (os.environ.get("OO_INGEST_EMAIL", "").strip()
-            and os.environ.get("OO_INGEST_PASSWORD", "").strip()):
-        warns.append({
-            "id": "oo-root-creds", "severity": "warning",
-            "title": "Devs receive OpenObserve ROOT credentials",
-            "body": "OO_INGEST_EMAIL/OO_INGEST_PASSWORD are unset, so every Dev "
-                    "container gets the root OpenObserve login for telemetry "
-                    "export — a compromised Dev owns all telemetry. Create an "
-                    "ingest-only OO user and set OO_INGEST_* in .env (ISSUES #13).",
-        })
-    if config.repo.token and not config.repo.token_ro:
-        warns.append({
-            "id": "forge-write-token", "severity": "warning",
-            "title": "All mission stages hold the forge WRITE token",
-            "body": "No read-only PAT is configured (token_ro_env / "
-                    f"{config.repo.token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
-                    "Devs receive the same write-capable forge token as EXECUTE. "
-                    "A prompt-injected non-EXECUTE Dev could push to the repo. "
-                    "Create a read-only PAT and set GITHUB_TOKEN_RO (or the "
-                    "GitLab twin) in .env (ISSUES #15).",
-        })
-    return warns
+    """Credential-posture warnings — body lives in security.security_warnings
+    so the copy is testable without this module's singletons (F1 tripwire)."""
+    return security.security_warnings(config)
 
 
 @contextlib.asynccontextmanager

@@ -116,7 +116,7 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
         async def _executed_feed():
             await self._feed(
                 pmo_id, run.pmo_kind,
-                f"🔀 DevCake opened/updated the pull request: "
+                f"🔀 DevCake opened/updated the {self.forge.descriptor.pr_noun}: "
                 f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
 
         await self._checkpoint(run, "transition:executed:labels", _executed_labels)

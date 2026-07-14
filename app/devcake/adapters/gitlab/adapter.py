@@ -26,7 +26,10 @@ class GitLabForge:
             "glab is authenticated via GITLAB_TOKEN; pass --repo if it asks."),
         clone_user="oauth2",
         git_user_name="DevCake",
-        git_email="devcake@users.noreply.github.com",  # kept verbatim from v0
+        # GitLab's real noreply form needs a numeric user id, so it can't be
+        # static — use a neutral non-deliverable identity (RFC 2606)
+        git_email="devcake@devcake.invalid",
+        pr_noun="merge request",
         cli_token_envs=["GITLAB_TOKEN"],
         token_env_default="GITLAB_TOKEN",
         secret_env_vars=["GITLAB_TOKEN", "GITLAB_REVIEWER_TOKEN",

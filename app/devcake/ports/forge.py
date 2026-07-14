@@ -64,7 +64,10 @@ class ForgeDescriptor(BaseModel):
     pr_instructions: str
     clone_user: str                     # credential-in-URL user for https clones
     git_user_name: str = "DevCake"
-    git_email: str = "devcake@users.noreply.github.com"
+    # required, no default: a git identity is forge-specific knowledge, so the
+    # port must not bake one in (F1) — every adapter supplies its own
+    git_email: str
+    pr_noun: str = "pull request"       # user-facing noun ("merge request" on GitLab)
     cli_token_envs: list[str]           # env vars the entrypoint mirrors the token into
     token_env_default: str              # default token env name (config + SPA)
     secret_env_vars: list[str]          # → security.redact env-value scrubbing

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 log = logging.getLogger("devcake.config")
 
@@ -43,15 +43,23 @@ class PMOInstance(BaseModel):
         return os.environ.get(self.api_key_env, "")
 
 
+def _default_forge() -> str:
+    # lazy: config stays import-light; the default forge id is registry
+    # knowledge, not config knowledge (F1)
+    from .adapters.registry import DEFAULT_FORGE
+    return DEFAULT_FORGE
+
+
 class RepoInstance(BaseModel):
     """One configured forge repository. v0 runs exactly one (see AppConfig
     validator)."""
     id: str = "main"
-    forge: str = "github"           # validated against the adapter registry
+    forge: str = Field(default_factory=_default_forge)  # registry-validated
     url: str = ""
-    api_base: str | None = None     # None = api.github.com / the repo's origin
+    api_base: str | None = None     # None = the adapter's default API host / the repo's origin
     default_branch: str = "main"
-    token_env: str = "GITHUB_TOKEN"
+    # empty = derived from the forge's descriptor (token_env_default)
+    token_env: str = ""
     # Optional read-only PAT for non-EXECUTE stages (ISSUES #15). When set,
     # PLAN/REVIEW/MAPPER/ONBOARD clone with it instead of the write token.
     # When empty (the DEFAULT), every stage receives the WRITE token — the
@@ -81,17 +89,23 @@ class RepoInstance(BaseModel):
         parts = urlsplit(v if "://" in v else f"https://{v}")
         path = (parts.path or "").strip("/").removesuffix(".git")
         segs = [s for s in path.split("/") if s]
-        if not parts.netloc or len(segs) < 1:
+        # forge-neutral rule: every supported forge addresses a repo as at
+        # least <owner-or-group>/<repo> (nested groups add more segments)
+        if not parts.netloc or len(segs) < 2:
             raise ValueError(
-                f"invalid repository URL {v!r}: need a host and project path "
-                f"(e.g. https://github.com/owner/repo)")
-        # github.com specifically needs owner/repo (two segments)
-        host = (parts.netloc or "").lower()
-        if host in ("github.com", "www.github.com") and len(segs) < 2:
-            raise ValueError(
-                f"invalid GitHub repository URL {v!r}: need "
-                f"https://github.com/owner/repo")
+                f"invalid repository URL {v!r}: need a host and an "
+                f"owner/repo project path (e.g. https://<host>/owner/repo)")
         return v
+
+    @model_validator(mode="after")
+    def _derive_token_env(self):
+        """An empty token_env derives from the forge's descriptor — the
+        default env-var name is adapter knowledge, not config knowledge (F1).
+        Runs after field validation, so self.forge is registry-checked."""
+        if not self.token_env:
+            from .adapters.registry import forges  # lazy: import-light
+            self.token_env = forges()[self.forge].token_env_default
+        return self
 
     @property
     def token(self) -> str:
@@ -100,8 +114,8 @@ class RepoInstance(BaseModel):
     @property
     def token_ro(self) -> str:
         # explicit token_ro_env wins; otherwise the conventional name
-        # ({token_env}_RO, e.g. GITHUB_TOKEN_RO) works out of the box — the
-        # /health warning and .env.example both point operators at it
+        # ({token_env}_RO) works out of the box — the /health warning and
+        # .env.example both point operators at it
         if self.token_ro_env:
             return os.environ.get(self.token_ro_env, "")
         return os.environ.get(f"{self.token_env}_RO", "")

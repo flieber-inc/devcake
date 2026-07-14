@@ -581,8 +581,9 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
             <Input value={cfg.repos[0].url}
             onChange={(e) => setField("cfg.repos.0.url", e.target.value)} /></Field>
           <EnvVarField label="Token env var"
-            help="The NAME of the environment variable in DevCake's .env that holds the forge access token (default: GITHUB_TOKEN) — never paste the token itself here. The token needs repo read/write and PR scopes."
+            help="The NAME of the environment variable in DevCake's .env that holds the forge access token — never paste the token itself here. Leave empty to use the selected forge's default name. The token needs repo read/write and PR scopes."
             value={cfg.repos[0].token_env}
+            fallback={registry.forges.find((f) => f.id === cfg.repos[0].forge)?.token_env_default}
             onChange={(e) => setField("cfg.repos.0.token_env", e.target.value)} />
           <EnvVarField label="Reviewer token env var" hint="Optional 2nd account → formal PR approvals"
             help="The NAME of an env var holding a second account's token. When set, REVIEW posts a formal approval from that account before merging. Leave empty to skip formal approvals."

@@ -73,31 +73,36 @@ export function envProblem(value) {
   return null;
 }
 
-export function EnvVarField({ label, help, hint, value, onChange }) {
+// `fallback`: the derived default env-var name (e.g. the forge descriptor's
+// token_env_default) used when the field is left empty — shown as the input
+// placeholder, and the ✓/✗ probe checks it so "empty = derived" stays honest.
+export function EnvVarField({ label, help, hint, value, onChange, fallback }) {
+  const effective = value || fallback || "";
   const [isSet, setIsSet] = useState(null); // null = unknown
   const problem = envProblem(value);
   useEffect(() => {
     setIsSet(null);
-    if (!value || envProblem(value)) return;
+    if (!effective || envProblem(value)) return;
     const t = setTimeout(
-      () => get(`/env-check?names=${encodeURIComponent(value)}`)
-        .then((r) => setIsSet(!!r[value]))
+      () => get(`/env-check?names=${encodeURIComponent(effective)}`)
+        .then((r) => setIsSet(!!r[effective]))
         .catch(() => setIsSet(null)),
       400
     );
     return () => clearTimeout(t);
-  }, [value]);
+  }, [effective]);
+  const suffix = !value && fallback ? ` (default: ${fallback})` : "";
   return (
     <Field label={label} help={help} hint={hint}>
-      <Input value={value || ""} onChange={onChange} />
+      <Input value={value || ""} onChange={onChange} placeholder={fallback || ""} />
       {problem && <span className="mt-1 block text-xs text-red-600">⚠ {problem}</span>}
-      {!problem && value && isSet === false && (
+      {!problem && effective && isSet === false && (
         <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
-          ✗ {value} is not set in DevCake's environment — add it to .env and restart
+          ✗ {effective} is not set in DevCake's environment — add it to .env and restart
         </span>
       )}
-      {!problem && value && isSet === true && (
-        <span className="mt-1 block text-xs text-green-700 dark:text-green-400">✓ set</span>
+      {!problem && effective && isSet === true && (
+        <span className="mt-1 block text-xs text-green-700 dark:text-green-400">✓ set{suffix}</span>
       )}
     </Field>
   );

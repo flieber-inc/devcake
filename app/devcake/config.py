@@ -97,19 +97,20 @@ class RepoInstance(BaseModel):
                 f"owner/repo project path (e.g. https://<host>/owner/repo)")
         return v
 
-    @model_validator(mode="after")
-    def _derive_token_env(self):
-        """An empty token_env derives from the forge's descriptor — the
-        default env-var name is adapter knowledge, not config knowledge (F1).
-        Runs after field validation, so self.forge is registry-checked."""
-        if not self.token_env:
-            from .adapters.registry import forges  # lazy: import-light
-            self.token_env = forges()[self.forge].token_env_default
-        return self
+    @property
+    def resolved_token_env(self) -> str:
+        """token_env, or the forge descriptor's default when unset. Resolved
+        at READ time, never materialized into the model: a persisted "" must
+        re-derive after a forge switch (the admin GitHub↔GitLab hot-switch),
+        so save_config never bakes one forge's env name into another's config."""
+        if self.token_env:
+            return self.token_env
+        from .adapters.registry import forges  # lazy: config stays import-light
+        return forges()[self.forge].token_env_default
 
     @property
     def token(self) -> str:
-        return os.environ.get(self.token_env, "")
+        return os.environ.get(self.resolved_token_env, "")
 
     @property
     def token_ro(self) -> str:
@@ -118,7 +119,7 @@ class RepoInstance(BaseModel):
         # .env.example both point operators at it
         if self.token_ro_env:
             return os.environ.get(self.token_ro_env, "")
-        return os.environ.get(f"{self.token_env}_RO", "")
+        return os.environ.get(f"{self.resolved_token_env}_RO", "")
 
 
 class Assignment(BaseModel):

@@ -41,6 +41,10 @@ class RunStore:
         upper = name.upper()
         return any(part in upper for part in (
             "TOKEN", "PASSWORD", "SECRET", "API_KEY", "AUTHORIZATION",
+            # dead in M8+ runspecs, kept for the quarantine scrub: legacy
+            # (v1-era) records may persist OTEL_EXPORTER_OTLP_BASIC — a
+            # base64 OO login that must never land in quarantine/ plaintext
+            "OTLP_BASIC",
         ))
 
     def _quarantine(self, path: Path, why: str) -> None:

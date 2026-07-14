@@ -82,11 +82,26 @@ def test_no_vendor_adapter_imports_outside_registry():
 def test_config_defaults_resolve_through_descriptors():
     """A reintroduced static default (forge name, token env) fails here."""
     assert RepoInstance().forge == DEFAULT_FORGE
-    assert RepoInstance().token_env == forges()[DEFAULT_FORGE].token_env_default
+    assert RepoInstance().resolved_token_env == forges()[DEFAULT_FORGE].token_env_default
     for fid, d in forges().items():
         inst = RepoInstance(forge=fid, url="https://host.example/owner/repo")
-        assert inst.token_env == d.token_env_default, (
-            f"RepoInstance(forge={fid!r}).token_env did not derive from the descriptor")
+        assert inst.resolved_token_env == d.token_env_default, (
+            f"RepoInstance(forge={fid!r}) token env did not derive from the descriptor")
+
+
+def test_token_env_derivation_survives_forge_switch():
+    """Read-time resolution, never materialized: a persisted empty token_env
+    must re-derive after the operator hot-switches the forge (the verified M6
+    GitHub↔GitLab flow) — and model_dump must keep "" so save_config never
+    bakes one forge's env name into the file."""
+    inst = RepoInstance(url="https://host.example/o/r")   # default forge
+    assert inst.model_dump()["token_env"] == ""
+    switched = RepoInstance(**{**inst.model_dump(), "forge": "gitlab"})
+    assert switched.resolved_token_env == forges()["gitlab"].token_env_default
+    # an explicit operator override always wins, on any forge
+    explicit = RepoInstance(url="https://host.example/o/r", forge="gitlab",
+                            token_env="MY_CUSTOM_TOKEN")
+    assert explicit.resolved_token_env == "MY_CUSTOM_TOKEN"
 
 
 def test_write_token_warning_copy_is_config_fed(monkeypatch):

@@ -19,14 +19,15 @@ def env(name, default=None):
 
 
 OO = env("OO_URL", "http://localhost:5080")
+ORG = env("OO_ORG", "default")   # must match the org the collector/app target
 AUTH = base64.b64encode(f"{env('OO_ROOT_EMAIL')}:{env('OO_ROOT_PASSWORD')}".encode()).decode()
 WEBHOOK = env("OO_ALERT_WEBHOOK", "")
 
 
-def req(method, path, body=None):
-    r = urllib.request.Request(f"{OO}/api/default{path}", method=method,
+def req(method, path, body=None, auth=None):
+    r = urllib.request.Request(f"{OO}/api/{ORG}{path}", method=method,
                                data=json.dumps(body).encode() if body else None,
-                               headers={"Authorization": f"Basic {AUTH}",
+                               headers={"Authorization": f"Basic {auth or AUTH}",
                                         "Content-Type": "application/json"})
     try:
         return json.load(urllib.request.urlopen(r))
@@ -38,18 +39,47 @@ def ensure_ingest_user():
     """Idempotently create the OO service account the stack authenticates
     with (collector, fluentbit, app push_oo_log) — ISSUES #13. Live-verified
     on OO v0.91.1: accepted roles are `admin` and `service_account` ("member"
-    is refused: "Custom roles not allowed"). NOTE (docs/14 §2a): OSS
-    OpenObserve role separation is advisory — the real boundary is that Dev
-    containers hold no OO credentials at all."""
-    email = env("OO_INGEST_EMAIL")
-    password = env("OO_INGEST_PASSWORD")
-    users = req("GET", "/users").get("data") or []
-    if any(u.get("email") == email for u in users):
-        print(f"ingest user: {email} exists")
+    is refused: "Custom roles not allowed"); passwords need upper+lower+digit+
+    special. NOTE (docs/14 §2a): OSS OpenObserve role separation is advisory —
+    the real boundary is that Dev containers hold no OO credentials at all.
+
+    Fail-loud contract: any failure exits non-zero — a missing/broken service
+    account means EVERY telemetry write 401s silently (the app's /health
+    `oo_ingest` probe is the runtime counterpart of this check). If the user
+    exists but the .env password no longer matches (rotation), the password
+    is resynced from .env."""
+    email = env("OO_INGEST_EMAIL", "")
+    password = env("OO_INGEST_PASSWORD", "")
+    if not email.strip() or not password.strip():
+        sys.exit("OO_INGEST_EMAIL / OO_INGEST_PASSWORD must be set in .env "
+                 "(the OO service account — ISSUES #13)")
+    ingest_auth = base64.b64encode(f"{email}:{password}".encode()).decode()
+
+    def creds_work() -> bool:
+        return "_error" not in req("GET", "/streams?type=logs", auth=ingest_auth)
+
+    users = req("GET", "/users")
+    if "_error" in users:
+        sys.exit(f"cannot list OO users (root creds wrong? OO down?): {users}")
+    if any(u.get("email") == email for u in (users.get("data") or [])):
+        if creds_work():
+            print(f"ingest user: {email} exists, credentials verified")
+            return
+        out = req("PUT", f"/users/{email}",
+                  {"new_password": password, "change_password": True})
+        if "_error" in out or not creds_work():
+            sys.exit(f"ingest user {email} exists but .env password does not "
+                     f"authenticate and resync failed: {out}")
+        print(f"ingest user: {email} password resynced from .env")
         return
     out = req("POST", "/users", {"email": email, "password": password,
                                  "first_name": "DevCake", "last_name": "Ingest",
                                  "role": "service_account"})
+    if "_error" in out:
+        sys.exit(f"creating ingest user failed: {out}")
+    if not creds_work():
+        sys.exit(f"ingest user created but credentials do not authenticate — "
+                 f"check OO_URL/OO_ORG ({OO}/api/{ORG})")
     print("ingest user:", out)
 
 

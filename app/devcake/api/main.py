@@ -190,6 +190,14 @@ def _refuse_insecure_passwords() -> None:
         raise RuntimeError(
             f"refusing to start with empty/default passwords for: {', '.join(bad)}. "
             f"Set strong values in .env, or DEVCAKE_ALLOW_INSECURE=1 for local sandbox only.")
+    # the password check above can't catch a blank USER half of the OO
+    # service account — an empty email encodes ':password' and 401s every
+    # telemetry write silently (collector, fluentbit, log-push)
+    if not os.environ.get("OO_INGEST_EMAIL", "").strip():
+        raise RuntimeError(
+            "OO_INGEST_EMAIL must be set (the OO service account — ISSUES #13). "
+            "Set it in .env alongside OO_INGEST_PASSWORD, then run "
+            "scripts/provision_oo.py once.")
 
 
 def _security_warnings() -> list[dict]:
@@ -291,6 +299,32 @@ async def _check_http(url: str) -> bool:
         return False
 
 
+# 60s-cached probe: does the OO service account actually authenticate?
+# Catches "compose up before provision_oo.py" / rotated-password drift —
+# without it, telemetry 401s silently forever (ISSUES #13 review finding).
+_oo_ingest_cache: dict = {"ts": 0.0, "result": None}
+
+
+async def _oo_ingest_check() -> dict:
+    now = time.monotonic()
+    if _oo_ingest_cache["result"] is not None and now - _oo_ingest_cache["ts"] < 60:
+        return _oo_ingest_cache["result"]
+    from ..telemetry import OO_ORG, _basic_auth
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{OO_URL}/api/{OO_ORG}/streams",
+                                 params={"type": "logs"},
+                                 headers={"Authorization": f"Basic {_basic_auth()}"})
+        result = {"ok": r.status_code == 200,
+                  "detail": "" if r.status_code == 200 else
+                  f"HTTP {r.status_code} — the OO service account cannot "
+                  f"authenticate; run scripts/provision_oo.py (ISSUES #13)"}
+    except Exception as e:
+        result = {"ok": False, "detail": f"probe failed: {str(e)[:150]}"}
+    _oo_ingest_cache.update(ts=now, result=result)
+    return result
+
+
 @app.get("/api/v1/health")
 async def health():
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -307,6 +341,7 @@ async def health():
         "redis": redis_ok,
         "dagu": dagu_ok,
         "openobserve": oo_ok,
+        "oo_ingest": await _oo_ingest_check(),
         "pmo": pmo_ok,
         "forge": mission_mgr.forge_health,
         "circuit_breakers": mission_mgr.breakers,
@@ -609,7 +644,7 @@ async def test_pmo():
 @app.post("/api/v1/connections/forge/test")
 async def test_forge():
     if not config.repo.token:
-        return {"ok": False, "error": f"env var {config.repo.token_env} is empty or "
+        return {"ok": False, "error": f"env var {config.repo.resolved_token_env} is empty or "
                                       "unset in DevCake's environment — the field wants "
                                       "the env var NAME; the token itself goes in .env"}
     try:

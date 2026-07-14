@@ -27,24 +27,36 @@ PINNED = re.compile(r"@sha256:[0-9a-f]{64}\b")
 LOCAL_PREFIX = "devcake/"
 
 
-def check_dockerfile(path: Path, offenders: list[str]) -> set[str]:
+def check_dockerfile(path: Path, offenders: list[str]) -> None:
+    """Every FROM must resolve to a pinned ref: stage refs are local; a
+    ${VAR} base is resolved against ANY collected ARG default (not just
+    *_IMAGE-named ones — a rename must not slip past the gate)."""
+    args: dict[str, str] = {}
     stages: set[str] = set()
     for lineno, raw in enumerate(path.read_text().splitlines(), 1):
         line = raw.strip()
-        m = re.match(r"ARG\s+\w*_IMAGE=(\S+)", line)
-        if m and not PINNED.search(m.group(1)):
-            offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line}")
-        m = re.match(r"FROM\s+(\S+)(?:\s+AS\s+(\S+))?", line, re.IGNORECASE)
+        m = re.match(r"ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)", line)
         if m:
-            base, alias = m.group(1), m.group(2)
-            if alias:
-                stages.add(alias)
-            # ${VAR} bases resolve to (checked) ARG defaults; stage refs are local
-            if base.startswith("${") or base in stages:
+            args[m.group(1)] = m.group(2)
+            continue
+        m = re.match(r"FROM\s+(\S+)(?:\s+AS\s+(\S+))?", line, re.IGNORECASE)
+        if not m:
+            continue
+        base, alias = m.group(1), m.group(2)
+        if alias:
+            stages.add(alias)
+        if base in stages:
+            continue                       # local stage reference
+        var = re.fullmatch(r"\$\{(\w+)(?::-[^}]*)?\}", base)
+        if var:
+            base = args.get(var.group(1), "")
+            if not base:
+                offenders.append(
+                    f"{path.relative_to(ROOT)}:{lineno}: FROM ${{{var.group(1)}}} "
+                    f"has no in-file ARG default to verify")
                 continue
-            if not PINNED.search(base):
-                offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line}")
-    return stages
+        if not PINNED.search(base):
+            offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line}")
 
 
 def check_compose(path: Path, offenders: list[str]) -> None:
@@ -53,7 +65,9 @@ def check_compose(path: Path, offenders: list[str]) -> None:
         if not m:
             continue
         ref = m.group(1)
-        if ref.startswith(LOCAL_PREFIX) or ref.startswith("devcake"):
+        # exact-boundary match: only local bake images (devcake/<name>) are
+        # exempt — a registry image merely NAMED devcake-something is not
+        if ref.startswith(LOCAL_PREFIX):
             continue
         if not PINNED.search(ref):
             offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {raw.strip()}")

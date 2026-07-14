@@ -19,6 +19,16 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+# The receiver is unauthenticated (docs/14 §2 honest limit), so bound the
+# blast radius of a flooding Dev: memory_limiter sheds load instead of
+# OOM-killing the collector; batch smooths the upstream write rate.
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  batch: {}
+
 exporters:
   otlphttp/openobserve:
     # the exporter appends /v1/traces itself — do NOT include it here
@@ -31,4 +41,5 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
+      processors: [memory_limiter, batch]
       exporters: [otlphttp/openobserve]

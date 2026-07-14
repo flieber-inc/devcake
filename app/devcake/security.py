@@ -174,10 +174,10 @@ def security_warnings(config) -> list[dict]:
             "id": "forge-write-token", "severity": "warning",
             "title": "All mission stages hold the forge WRITE token",
             "body": "No read-only PAT is configured (token_ro_env / "
-                    f"{config.repo.token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
+                    f"{config.repo.resolved_token_env}_RO), so PLAN/REVIEW/MAPPER/ONBOARD "
                     "Devs receive the same write-capable forge token as EXECUTE. "
                     "A prompt-injected non-EXECUTE Dev could push to the repo. "
-                    f"Create a read-only PAT and set {config.repo.token_env}_RO "
+                    f"Create a read-only PAT and set {config.repo.resolved_token_env}_RO "
                     "in .env (ISSUES #15).",
         })
     return warns

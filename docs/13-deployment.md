@@ -209,6 +209,7 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 
 **Cache:** local `.buildx-cache/` (see `BAKE_CACHE_DIR` in `docker-bake.hcl`). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
 
+**GitHub Actions:** `.github/workflows/ci.yml` bakes group `ci` + pytest on every PR; `docker-images.yml` bakes harnesses when `images/**` changes; `docker-publish.yml` (manual) pushes all images to GHCR.
 | Image | Bake target | Context / Dockerfile target | Default tag |
 |---|---|---|---|
 | `devcake/app` | `app` → `runtime` | `./app` | `devcake/app:${TAG}` |

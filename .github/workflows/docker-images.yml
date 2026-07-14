@@ -1,0 +1,69 @@
+# Bake Dev harness images (shared base stage) with GHA BuildKit cache.
+# Heavy job — runs when harness sources change, and always on main.
+name: Docker images
+
+on:
+  pull_request:
+    paths:
+      - "images/**"
+      - "docker-bake.hcl"
+      - "docker-bake.ci.hcl"
+      - ".github/workflows/docker-images.yml"
+  push:
+    branches: [main]
+    paths:
+      - "images/**"
+      - "docker-bake.hcl"
+      - "docker-bake.ci.hcl"
+      - ".github/workflows/docker-images.yml"
+  # Allow manual full rebuild (e.g. after CLI pin bumps).
+  workflow_dispatch:
+
+concurrency:
+  group: docker-images-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DEVCAKE_TAG: latest
+
+jobs:
+  bake-harnesses:
+    name: Bake Dev harnesses
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Bake hello + claude-code + codex + grok-build
+        uses: docker/bake-action@v6
+        with:
+          files: |
+            ./docker-bake.hcl
+            ./docker-bake.ci.hcl
+          targets: images
+          load: true
+          provenance: false
+          sbom: false
+          set: |
+            *.cache-from=type=gha,scope=devcake-images
+            *.cache-to=type=gha,mode=max,scope=devcake-images
+
+      - name: Smoke harness CLIs (pinned versions)
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh "devcake/dev-claude-code:${DEVCAKE_TAG}" -c \
+            'id | grep -q uid=1000; claude --version; test -f /dev_entrypoint.py'
+          docker run --rm --entrypoint sh "devcake/dev-codex:${DEVCAKE_TAG}" -c \
+            'id | grep -q uid=1000; codex --version; test -f /dev_entrypoint.py'
+          docker run --rm --entrypoint sh "devcake/dev-grok-build:${DEVCAKE_TAG}" -c \
+            'id | grep -q uid=1000; grok --version; test -f /dev_entrypoint.py'
+          docker run --rm --entrypoint python "devcake/dev-hello:${DEVCAKE_TAG}" -c \
+            'import redis; print("hello ok")'
+          echo "harness smoke OK"

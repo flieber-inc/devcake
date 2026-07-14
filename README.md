@@ -94,8 +94,9 @@ gets rescheduled.
 ## Documentation
 
 **Agents / automation:** see **[`AGENTS.md`](AGENTS.md)** for Bake-only image builds
-(`docker buildx bake all` — compose never builds DevCake images).
-
+(`docker buildx bake all` — compose never builds DevCake images). CI on GitHub Actions:
+`.github/workflows/ci.yml` (bake + pytest), `docker-images.yml` (harnesses), optional
+`docker-publish.yml` (GHCR, manual).
 Start with **[`docs/00-overview.md`](docs/00-overview.md)** — glossary, the six
 core invariants, and a full walkthrough. Highlights:
 

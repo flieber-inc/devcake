@@ -33,10 +33,18 @@ Never claim done from "build succeeded" alone when the user-facing path is run/u
 
 ```bash
 docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
+# or use workflows — they already pass both files to docker/bake-action
 ```
 
-**CI tests:** `scripts/ci_suite.sh` bakes `app-test` and runs pytest on `devcake_control` (prod `app` image has no pytest).
-### Do
+**GitHub Actions** (`.github/workflows/`):
+
+| Workflow | When | What |
+|---|---|---|
+| `ci.yml` | every PR + `main` | Bake group `ci` (GHA cache) → assert prod has no pytest → Redis + `app-test` pytest → admin/hello smoke |
+| `docker-images.yml` | `images/**` changes + `main` + manual | Bake group `images` → harness CLI smoke (pinned versions) |
+| `docker-publish.yml` | **manual** (`workflow_dispatch`) | Bake `all` + push to GHCR (`ghcr.io/<owner>/devcake-*`) |
+
+**Local CI suite:** `scripts/ci_suite.sh` bakes `app-test` and runs pytest on `devcake_control` (prod `app` image has no pytest). Needs a running compose stack for the hello dispatch half.### Do
 
 - Build/rebuild with `docker buildx bake` / `bake all` / `bake images` (see `docker-bake.hcl`).
 - After changing `app/`, `admin/`, or `images/`, rebake the affected targets (or `bake all`).

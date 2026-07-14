@@ -36,8 +36,8 @@ One machine-specific value: `DOCKER_GID` — find it with
 > as part of the value.
 
 ```bash
-docker compose up -d
-docker compose --profile images build   # builds the Dev images
+docker buildx bake all    # builds app, admin, and all Dev images (docker-bake.hcl)
+docker compose up -d      # run only — compose does not build DevCake images
 ```
 
 Open **http://localhost:8080** (your admin user/password from `.env`). The

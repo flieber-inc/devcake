@@ -23,3 +23,6 @@ dist/
 
 # dagu-generated DAG scan index (rewritten on every boot)
 dagu/dags/.dag.index
+
+# BuildKit local bake cache (docker-bake.hcl BAKE_CACHE_DIR)
+.buildx-cache/

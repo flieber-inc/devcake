@@ -3,7 +3,7 @@
 > **Audience:** operators and implementers.
 > **Depends on:** `01-architecture.md`, `07-dev-runtime.md`, `12-observability.md`, `14-security.md`.
 
-Goal per the mission doc: **as simple as possible, local-friendly, production-grade** — one `docker compose up`.
+Goal per the mission doc: **as simple as possible, local-friendly, production-grade** — Bake builds images, Compose runs the stack.
 
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
@@ -18,7 +18,8 @@ name: devcake
 
 services:
   app:
-    build: ./app
+    image: devcake/app:${DEVCAKE_TAG:-latest}   # built by: docker buildx bake
+    pull_policy: never
     env_file: .env                       # LINEAR_API_KEY, GITHUB_TOKEN, model keys, …
     volumes:
       - devcake_data:/data               # note: NO docker.sock — kill/reconcile go via the Dagu API
@@ -64,7 +65,8 @@ services:
     ports: [ "5080:5080" ]
 
   admin:
-    build: ./admin                        # nginx + built SPA; proxies /api only
+    image: devcake/admin:${DEVCAKE_TAG:-latest}  # built by: docker buildx bake
+    pull_policy: never
     ports: [ "8080:80" ]
     environment:
       - DAGU_UI_URL=${DAGU_UI_URL:-http://localhost:8525}    # targets of the Executor/Logs
@@ -193,17 +195,42 @@ Dagu holds the host `docker.sock`, so Dev containers are **siblings** of the com
 
 Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id format of `02-domain-model.md` §7 (`ENG-142-3-EXECUTE-9GX2TQ`) — so the Dagu UI's run list reads as a natural map of Missions and Mission Steps (confirmed decision), and container names, traces, and Redis streams all match it.
 
-## 6. Image build matrix
+## 6. Image build matrix (Bake only — `docker-bake.hcl`)
 
-| Image | Context | Tag |
-|---|---|---|
-| `devcake/app` | `./app` | `devcake/app:<git-sha>` |
-| `devcake/admin` | `./admin` | same scheme |
-| `devcake/dev-claude-code` | `./images/claude-code` | pinned by digest in run specs |
-| `devcake/dev-grok-build` | `./images/grok-build` | 〃 |
-| `devcake/dev-codex` | `./images/codex` | 〃 |
+**Compose never builds DevCake images.** Bake is the single source of truth:
 
-Which Dev image a run uses is `HARNESSES[harness_template].image` (`app/devcake/harness.py` — `08-harness-templates.md` §2); `docker_image` is no longer stored config. Since any harness is selectable from the admin panel at any time, **all three `devcake/dev-*` images must be built locally**.
+| Command | Builds |
+|---|---|
+| `docker buildx bake` | `app` + `admin` (control plane; **prod** app — no pytest) |
+| `docker buildx bake app-test` | `devcake/app-test` (pytest + `tests/` for CI) |
+| `docker buildx bake images` | `hello` + all three harnesses (shared `base` stage) |
+| `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (no full harness matrix) |
+| `docker buildx bake all` | everything — **use this on first install and full upgrades** |
+
+**Cache:** local `.buildx-cache/` (see `BAKE_CACHE_DIR` in `docker-bake.hcl`). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
+
+**GitHub Actions:** `.github/workflows/ci.yml` bakes group `ci` + pytest on every PR; `docker-images.yml` bakes harnesses when `images/**` changes; `docker-publish.yml` (manual) pushes all images to GHCR.
+| Image | Bake target | Context / Dockerfile target | Default tag |
+|---|---|---|---|
+| `devcake/app` | `app` → `runtime` | `./app` | `devcake/app:${TAG}` |
+| `devcake/app-test` | `app-test` → `test` | `./app` + pytest | `devcake/app-test:${TAG}` |
+| `devcake/admin` | `admin` | `./admin` | `devcake/admin:${TAG}` |
+| `devcake/dev-claude-code` | `claude-code` | `./images` → `claude-code` (CLI **pinned**) | `devcake/dev-claude-code:${TAG}` |
+| `devcake/dev-grok-build` | `grok-build` | `./images` → `grok-build` | 〃 |
+| `devcake/dev-codex` | `codex` | `./images` → `codex` (CLI **pinned**) | 〃 |
+| `devcake/dev-hello` | `hello` | `./images` → `hello` | CI stub |
+
+`TAG` / `DEVCAKE_TAG` default to `latest`. Pin a release with:
+
+```bash
+export DEVCAKE_TAG=$(git rev-parse --short HEAD)
+docker buildx bake all
+docker compose up -d          # compose reads DEVCAKE_TAG for app/admin
+```
+
+Harness images stay at the tag Dagu dispatches (`HARNESSES[…].image` in `app/devcake/harness.py` — still `…:latest` in v0 unless you retag). Production digests are pinned in run specs at dispatch time.
+
+Which Dev image a run uses is `HARNESSES[harness_template].image` (`08-harness-templates.md` §2); `docker_image` is no longer stored config. Since any harness is selectable from the admin panel at any time, **all three `devcake/dev-*` images must be baked locally**.
 
 ## 7. Log shipping for non-instrumented services
 
@@ -211,7 +238,7 @@ Which Dev image a run uses is `HARNESSES[harness_template].image` (`app/devcake/
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config page: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
+- **First run:** `cp .env.example .env` → fill keys → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → Config page: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
 
 ### 8a. Protect the default branch (deployment requirement — docs/14 §2)
 
@@ -221,8 +248,8 @@ Dev containers hold the forge token, and token scoping cannot separate "push a f
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 The forge connection test and the admin header surface the protection state; an unprotected default branch shows a standing amber warning.
-- **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
-- **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker compose --profile images build`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebuilt.
+- **Upgrade:** `docker compose pull` (third-party images only) → `docker buildx bake all` → `docker compose up -d`. State survives (volumes). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
+- **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker buildx bake all`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebaked.
 - **Kill a stuck Dev:** admin → Runs page → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Logs page (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).

@@ -1,0 +1,13 @@
+**/.DS_Store
+**/.git
+**/.gitignore
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/*.md
+**/.env
+**/.env.*
+# Per-harness Dockerfiles are superseded by the multi-target images/Dockerfile
+# but keep them out of the context so edits don't bust unrelated stages.
+**/Dockerfile
+**/.dockerignore

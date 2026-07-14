@@ -61,11 +61,17 @@ git clone https://github.com/fidecastro/devcake && cd devcake
 cp .env.example .env         # fill: LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TOKEN (or GITLAB_*),
                              # DEVCAKE_REPO_URL, model credentials (subscription OAuth preferred),
                              # and DOCKER_GID (stat -c %g /var/run/docker.sock)
-docker compose up -d
-docker compose --profile images build    # the Dev images (3 harnesses + the hello stub);
-                                         # re-run after any upgrade that touches images/
+docker buildx bake all       # single source of truth for images (app, admin, 3 harnesses + hello)
+docker compose up -d         # run only — compose never builds DevCake images
 open http://localhost:8080   # admin panel (basic auth from .env) → Config page →
                              # test connections; connect Grok/Codex via the OAuth wizard
+```
+
+Rebuild after any change to `app/`, `admin/`, or `images/`:
+
+```bash
+docker buildx bake all       # or: bake (app+admin) · bake images (harnesses only)
+docker compose up -d
 ```
 
 Then follow **[Tutorial 1 — your first mission, end to end](docs/tutorials/01-first-mission.md)**
@@ -87,6 +93,10 @@ gets rescheduled.
 
 ## Documentation
 
+**Agents / automation:** see **[`AGENTS.md`](AGENTS.md)** for Bake-only image builds
+(`docker buildx bake all` — compose never builds DevCake images). CI on GitHub Actions:
+`.github/workflows/ci.yml` (bake + pytest), `docker-images.yml` (harnesses), optional
+`docker-publish.yml` (GHCR, manual).
 Start with **[`docs/00-overview.md`](docs/00-overview.md)** — glossary, the six
 core invariants, and a full walkthrough. Highlights:
 

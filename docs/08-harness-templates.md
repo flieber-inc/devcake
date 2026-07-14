@@ -60,15 +60,15 @@ config; the admin panel's harness combobox therefore controls what actually
 runs. Dispatch also sends `DEVCAKE_HARNESS` in the run spec, which overrides
 the image-baked `ENV` (kept as a fallback).
 
-Each template names a Dockerfile under `images/`:
+Each template is a target in the multi-stage `images/Dockerfile` (shared `base` stage for git, forge CLIs, Python relay deps, non-root user):
 
-| Template | Base | Installs |
+| Template | Build target | Installs |
 |---|---|---|
-| `claude-code` | `node:22-bookworm-slim` | `@anthropic-ai/claude-code`, git, `devcake-relay`, entrypoint |
-| `grok-build` | `debian:bookworm-slim` | Grok Build via official installer, git, `devcake-relay`, entrypoint |
-| `codex` | `node:22-bookworm-slim` | Codex CLI, git, `devcake-relay`, entrypoint |
+| `claude-code` | `claude-code` | Node 22 + `@anthropic-ai/claude-code`, git, shared entrypoint |
+| `grok-build` | `grok-build` | Grok Build via official installer, git, shared entrypoint |
+| `codex` | `codex` | Node 22 + Codex CLI, git, shared entrypoint |
 
-Images are built by the compose build matrix (`13-deployment.md` §6) and pinned by digest in the run spec.
+Images are built only by Bake (`docker-bake.hcl` — `docker buildx bake images` or `bake all`; `13-deployment.md` §6) and pinned by digest in the run spec. Compose never builds them.
 
 ## 3. Plan-mode mapping (the "/plan function")
 
@@ -140,7 +140,7 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 ## 8. Adding or changing a template (checklist)
 
 1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow) and the new value to `DevType.harness_template`'s Literal (`config.py`).
-2. Add/adjust the Dockerfile under `images/` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and the compose build matrix.
+2. Add a target to `images/Dockerfile` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and a matching target in `docker-bake.hcl` (group `images` / `all`).
 3. Add the invocation + renderer + token-extraction branches in `images/common/dev_entrypoint.py` (§1, §1a, §5).
 4. Run the M1 hello-world DAG with the new image, then the M3 ONBOARD end-to-end demo.
 5. Update the price table (§5) and this document.

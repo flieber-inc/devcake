@@ -1,8 +1,18 @@
+# DevCake runtime stack.
+#
+# Images are built ONLY via Bake (docker-bake.hcl) — compose never builds:
+#   docker buildx bake all          # first install / full upgrade
+#   docker buildx bake              # app + admin only
+#   docker buildx bake images       # Dev harnesses + hello
+#   docker compose up -d
+#
+# Image tags must match bake output (default TAG/DEVCAKE_TAG=latest).
 name: devcake
 
 services:
   app:
-    build: ./app
+    image: devcake/app:${DEVCAKE_TAG:-latest}
+    pull_policy: never                  # local bake only — never pull from a registry
     env_file: .env
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
@@ -79,7 +89,8 @@ services:
     networks: [control, runtime]
 
   admin:
-    build: ./admin                        # nginx + the admin SPA; proxies /api only
+    image: devcake/admin:${DEVCAKE_TAG:-latest}
+    pull_policy: never                  # local bake only
     ports: [ "8080:80" ]
     environment:
       - DAGU_UI_URL=${DAGU_UI_URL:-http://localhost:8525}
@@ -94,30 +105,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # Dev images: built by compose, never run as services (Dagu spawns them).
-  dev-hello:
-    build: ./images/hello
-    image: devcake/dev-hello:latest
-    profiles: [images]        # `docker compose --profile images build`
-    entrypoint: ["true"]
-
-  dev-claude-code:
-    build: { context: ./images, dockerfile: claude-code/Dockerfile }
-    image: devcake/dev-claude-code:latest
-    profiles: [images]
-    entrypoint: ["true"]
-
-  dev-grok-build:
-    build: { context: ./images, dockerfile: grok-build/Dockerfile }
-    image: devcake/dev-grok-build:latest
-    profiles: [images]
-    entrypoint: ["true"]
-
-  dev-codex:
-    build: { context: ./images, dockerfile: codex/Dockerfile }
-    image: devcake/dev-codex:latest
-    profiles: [images]
-    entrypoint: ["true"]
+  # Dev harness images (devcake/dev-*) are built by Bake, never run as compose
+  # services — Dagu spawns them. See docker-bake.hcl group "images".
 
   fluentbit:
     image: fluent/fluent-bit:3.2

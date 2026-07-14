@@ -1,2 +1,10 @@
 spa/node_modules
 spa/dist
+**/.DS_Store
+**/.git
+**/.gitignore
+**/*.md
+**/Dockerfile*
+**/.dockerignore
+**/.env
+**/.env.*

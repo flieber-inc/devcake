@@ -34,10 +34,11 @@ def env(name, required=True):
 # Tester-side credentials/targets: overridable per run (schema v3 made
 # instances plural — the gate must be able to point at any team/key/repo,
 # not just the .env seeds). Full multi-forge parity is M12 (ISSUES #30).
-KEY = env("LINEAR_API_KEY")
+KEY = env("LINEAR_API_KEY", required=False)
 TEAM = env("DEVCAKE_TEAM_KEY", required=False)
 REPO_URL = env("DEVCAKE_REPO_URL", required=False)
-FORGE = "github"  # overridden in __main__
+FORGE = "github"      # overridden in __main__
+INSTANCE = "linear"   # the DevCake PMO-instance name watching TEAM (branch prefix)
 
 
 def gql(q, v=None):
@@ -64,6 +65,18 @@ def forge_get(forge: str, path: str):
         req = urllib.request.Request(
             f"{base}/api/v4/projects/{project}{path}",
             headers={"PRIVATE-TOKEN": token})
+        return json.load(urllib.request.urlopen(req))
+    if forge == "gitea":
+        # the internal fallback forge — verified via GITEA_ADMIN_* (a stack
+        # bootstrap secret; no external tokens). The zero-repo mission's repo
+        # is devcake-internal/{instance}-{key} (lowercased); its merged PR is
+        # the deliverable's source.
+        import base64
+        user, pw = env("GITEA_ADMIN_USER", required=False) or "devcakeadmin", env("GITEA_ADMIN_PASSWORD")
+        gitea = env("GITEA_UI_URL", required=False) or "http://localhost:3300"
+        auth = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        req = urllib.request.Request(f"{gitea}/api/v1{path}",
+                                     headers={"Authorization": f"Basic {auth}"})
         return json.load(urllib.request.urlopen(req))
     sys.exit(f"unknown forge {forge!r}")
 
@@ -117,20 +130,27 @@ def run_once(idx: int) -> None:
             assert transcripts, "no transcripts posted"
             assert len(reports) >= len(transcripts), "token report missing for a step (INV-5)"
             assert "DEVCAKE-REVIEW" in seen_labels, "REVIEW was skipped"
+            branch = f"devcake/{INSTANCE.upper()}-{key}"   # schema v3 prefix
             if FORGE == "github":
                 owner = REPO_URL.removeprefix("https://github.com/").split("/")[0]
-                pr = forge_get(
-                    "github",
-                    f"/pulls?head={owner}:devcake/{key}&state=all")
+                pr = forge_get("github", f"/pulls?head={owner}:{branch}&state=all")
                 assert pr and pr[0].get("merged_at"), f"PR for {key} not merged"
                 pr_ref = f"PR #{pr[0]['number']}"
-            else:
+            elif FORGE == "gitlab":
                 mrs = forge_get(
-                    "gitlab",
-                    f"/merge_requests?source_branch=devcake/{key}&state=all")
+                    "gitlab", f"/merge_requests?source_branch={branch}&state=all")
                 assert mrs and mrs[0].get("state") == "merged", \
                     f"MR for {key} not merged"
                 pr_ref = f"MR !{mrs[0]['iid']}"
+            else:  # gitea = the zero-repo internal-forge lane
+                assert any("Deliverable attached" in c for c in comments), \
+                    "no deliverable zip attached to the PMO feed"
+                repo = f"{INSTANCE}-{key}".lower()
+                prs = forge_get("gitea",
+                                f"/repos/devcake-internal/{repo}/pulls?state=all")
+                merged = [p for p in prs if p.get("merged")]
+                assert merged, f"internal PR for {key} not merged"
+                pr_ref = f"internal PR #{merged[0]['number']} + deliverable zip"
             print(f"[{idx+1}] {key} DONE: {len(transcripts)} transcripts, "
                   f"{len(reports)} token reports, labels seen {sorted(seen_labels)}, "
                   f"{pr_ref} merged ✓", flush=True)
@@ -144,25 +164,38 @@ def run_once(idx: int) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=2)
-    ap.add_argument("--forge", choices=("github", "gitlab"), default="github",
-                    help="Forge under test (default: github)")
+    ap.add_argument("--forge", choices=("github", "gitlab", "gitea"),
+                    default="github", help="Forge under test. 'gitea' is the "
+                    "zero-repo internal-forge lane (no external tokens)")
     ap.add_argument("--team", default=None,
                     help="Linear team key to seed the mission in "
                          "(default: DEVCAKE_TEAM_KEY from .env)")
+    ap.add_argument("--instance", default=None,
+                    help="DevCake PMO-instance name watching --team "
+                         "(default: linear) — sets the branch/repo prefix")
     ap.add_argument("--api-key-env", default=None,
-                    help="env-var NAME (read from .env) holding the Linear "
-                         "key for --team (default: LINEAR_API_KEY)")
+                    help="env-var NAME (read from .env/shell) holding the "
+                         "Linear key (default: LINEAR_API_KEY)")
     ap.add_argument("--repo-url", default=None,
                     help="repo the merged PR is asserted in "
-                         "(default: DEVCAKE_REPO_URL from .env)")
+                         "(default: DEVCAKE_REPO_URL from .env; unused for gitea)")
     args = ap.parse_args()
     FORGE = args.forge
     if args.api_key_env:
         KEY = env(args.api_key_env)
     if args.team:
         TEAM = args.team
+    if args.instance:
+        INSTANCE = args.instance
     if args.repo_url:
         REPO_URL = args.repo_url
+    if not KEY or not TEAM:
+        sys.exit("need a Linear key and team: set LINEAR_API_KEY + "
+                 "DEVCAKE_TEAM_KEY (or pass --api-key-env/--team). Tester "
+                 "credentials come from the shell/.env, never DevCake's "
+                 "stored secrets.")
+    if FORGE != "gitea" and not REPO_URL:
+        sys.exit(f"--forge {FORGE} needs --repo-url or DEVCAKE_REPO_URL")
     if not TEAM or not REPO_URL:
         sys.exit("need a team and repo: set DEVCAKE_TEAM_KEY/DEVCAKE_REPO_URL "
                  "in .env or pass --team/--repo-url")

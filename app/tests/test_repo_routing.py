@@ -292,3 +292,72 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
     m2 = _m(description="`devcake-repo:nope`")
     name2, reason2 = run_coro(mgr.resolve_repo_live(m2))
     assert name2 is None and "unknown repo 'nope'" in reason2
+
+
+def test_internal_zip_delivery(tmp_path, monkeypatch):
+    """M11 zip delivery: an internal-forge merge packages the changed files
+    and attaches them to the PMO feed; failure never un-Dones the mission."""
+    import zipfile, io
+    from devcake.domain.orchestrator import MissionManager
+    from devcake.ports.forge import PRFile, PullRequest
+
+    uploaded = {}
+    feed = []
+
+    class FakePMO:
+        async def upload_attachment(self, pmo_id, name, data):
+            uploaded[name] = data
+            return f"https://pmo/{name}"
+        def capabilities(self):
+            from devcake.ports.pmo import PMOCapabilities
+            return PMOCapabilities(attachment_max_bytes=10*1024*1024,
+                                   relations_supported=True)
+
+    class FakeForge:
+        async def pr_state(self, n):
+            return PullRequest(number=n, url="http://gitea/pr/1", state="closed", merged=True)
+        async def pr_files(self, n):
+            return [PRFile(path="report/REPORT.md", status="added"),
+                    PRFile(path="report/data.bin", status="added"),
+                    PRFile(path="gone.txt", status="removed")]
+        async def file_content(self, path, ref):
+            return {"report/REPORT.md": b"# report",
+                    "report/data.bin": b"\x00\x01\x02"}[path]
+        async def _req(self, method, path):
+            return {"merge_commit_sha": "abc123"}
+
+    class RT:
+        internal = {"linear-t-1"}
+        def get(self, name): return FakeForge()
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.forges = RT()
+    mgr.pmo = FakePMO()
+
+    async def _feed(pmo_id, kind, md): feed.append(md)
+    mgr._feed = _feed
+    from devcake.domain.orchestrator import deliver
+    mgr._attachment_cap = lambda: 10*1024*1024
+
+    class Runs: pass
+    mgr.runs = Runs()
+    from devcake.adapters.files.run_store import RunStore
+    mgr.runs.store = RunStore(tmp_path / "runs")
+
+    run = _run("linear-t-1"); run.mission_pmo_id = "p1"; run.mission_key = "T-1"
+    run.finalized_steps = []
+    pr = PullRequest(number=1, url="http://gitea/pr/1", state="closed", merged=True)
+    run_coro(mgr.deliver_internal_zip(run, pr))
+
+    assert "T-1-deliverable.zip" in uploaded
+    z = zipfile.ZipFile(io.BytesIO(uploaded["T-1-deliverable.zip"]))
+    names = set(z.namelist())
+    assert "report/REPORT.md" in names and "report/data.bin" in names
+    assert "gone.txt" not in names                 # removed files excluded
+    assert z.read("report/data.bin") == b"\x00\x01\x02"   # binary intact
+    assert any("Deliverable attached" in f for f in feed)
+    assert "deliver:zip" in run.finalized_steps    # idempotency recorded
+    # idempotent: a second call does nothing
+    uploaded.clear()
+    run_coro(mgr.deliver_internal_zip(run, pr))
+    assert not uploaded

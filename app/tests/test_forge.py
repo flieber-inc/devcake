@@ -161,6 +161,14 @@ def _params(fn):
 
 
 @pytest.mark.parametrize("cls", [GitHubForge, GitLabForge, GiteaForge])
+def test_adapters_declare_capabilities(cls):
+    from devcake.ports.forge import ForgeCapabilities
+    assert isinstance(cls.capabilities, ForgeCapabilities)
+    assert cls.capabilities.branch_protection_read in (
+        "writer", "maintainer", "admin")
+
+
+@pytest.mark.parametrize("cls", [GitHubForge, GitLabForge, GiteaForge])
 def test_adapters_implement_full_port(cls):
     for name in PORT_METHODS:
         impl = getattr(cls, name, None)

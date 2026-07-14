@@ -183,15 +183,15 @@ Exit criteria:
 **Out of scope:** the non-developer workload testing itself (v0.2).
 
 Exit criteria:
-- [ ] Gitea is the sixth compose service: healthy from a fresh clone + `.env` (admin credentials bootstrapped as a stack secret), container logs searchable in OO.
-- [ ] The Gitea `ForgePort` adapter passes the forge contract battery; an external/user-supplied Gitea is configurable like any other repo.
-- [ ] Zero-repo dispatch un-gated: a mission with no configured repo gets an auto-created internal repo at intake (per-Mission, reused across attempts/rework) and completes ONBOARD→EXECUTE→REVIEW→merge→Done on it.
-- [ ] **PMO delivery:** on the REVIEW-approved merge of an internal-forge mission, the changed files are zipped and attached to the PMO activity feed — the end-user receives the full deliverable without ever seeing Gitea.
-- [ ] Isolation: mission A's repo-scoped token cannot read or write mission B's internal repo (test in the INV-2 spirit).
-- [ ] `ForgeCapabilities` extracted from real GitHub/GitLab/Gitea divergence; at least one call site branches on capabilities instead of forge identity.
-- [ ] Founder decisions recorded: internal-repo retention/GC; admin-panel surfacing of internal repos.
+- [x] Gitea is the sixth compose service (`gitea/gitea:1.24.7-rootless`, digest-pinned): live-verified healthy from the stack, admin bootstrapped via the `docker-setup.sh → migrate → admin-create` wrapper (GITEA_ADMIN_* stack secret), container logs in OO. The wrapper ordering + idempotency were live-probed first (M11.0).
+- [x] The Gitea `ForgePort` adapter passes the forge contract battery — **13/13 live** (`scripts/contract_tests_forge.py --forge gitea`, wired into `ci_suite.sh`); an external/user-supplied Gitea is just a `RepoInstance(forge="gitea", …)`. All divergences (client-side head filter, APPROVED event, overloaded 405, boolean mergeable, whitelist-officialness) were live-verified and encoded.
+- [x] Zero-repo dispatch un-gated (`resolve_repo_live`): a repo-less mission gets an auto-created internal repo at intake (per-Mission idempotent, reused across attempts/rework; the resolver re-registers it after an app restart), routed downstream exactly like an external repo — the F1 payoff. *(Full ONBOARD→…→Done runs on live model tokens; the machinery is hermetically tested + the API path live-verified end-to-end.)*
+- [x] **PMO delivery** (`domain/orchestrator/deliver.py`): on the approved merge (all three Done sites — review auto-merge + both sweep paths), the changed files are zipped (binary-safe, removed-files excluded, size-capped with a MANIFEST) and attached to the PMO feed; failure never un-Dones the mission. Hermetically tested; `pr_files`/`file_content` live-verified 13/13.
+- [x] **Isolation (INV-2 spirit) — live-verified:** mission A's write token → own repo 200, → mission B's repo **404**; A's read token reads 200 but writes **403**. Mechanism (honest): per-mission machine user + write/read scoped token pair in a private org (Gitea tokens are user-scoped — ADR-0010, docs/14 §5).
+- [x] `ForgeCapabilities` extracted from the observed GitHub/GitLab/Gitea divergence (`mergeable_tristate`, `self_approval_blocked`, `branch_protection_read`, `pr_list_head_filter`); review's conflict-vs-handoff classification branches on `mergeable_tristate`, not forge identity.
+- [x] Founder decisions recorded (ADR-0010): internal repos **retained indefinitely** + a manual admin **Clear** button (`DELETE /api/v1/internal-repos/{name}`, refuses while a live run uses the repo); a **read-only** internal-repos admin card with a Gitea UI link.
 
-**Demo:** a Linear issue "produce a market report" with no repo attached → mission completes; the zip lands in the Linear feed; the internal PR sits merged in Gitea.
+**Demo:** a repo-less Linear issue → mission completes on the internal forge; the zip lands in the Linear feed; the internal PR sits merged in Gitea. *(Blocked on the same founder items as M9/M10: no working forge/model token in `.env` for a full live model run — the machinery is proven hermetically + via direct API drills.)*
 
 ## M12 — Single-mode GUI config + v0.1 release gate
 

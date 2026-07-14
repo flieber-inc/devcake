@@ -242,6 +242,49 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
 
 // ── the page ─────────────────────────────────────────────────────────────────
 
+// Read-only internal-forge repos (M11, founder decision: retain-by-default +
+// a manual Clear). Hidden entirely when the internal forge is disabled.
+function InternalReposSection({ onClear }) {
+  const [data, setData] = useState(null);
+  const load = () => get("/internal-repos").then(setData).catch(() => setData({ repos: [] }));
+  useEffect(() => { load(); }, []);
+  if (!data || data.repos.length === 0) return null;
+  return (
+    <Section id="internal-forge" title="Internal forge"
+      description="Repositories DevCake auto-created for missions with no configured repo. Retained until you clear them; the deliverable is already in the PMO feed.">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-left text-neutral-500">
+            <tr><th className="py-1 pr-3">Mission</th><th className="pr-3">Repo</th>
+              <th className="pr-3">Size</th><th className="pr-3">Open PRs</th><th></th></tr>
+          </thead>
+          <tbody>
+            {data.repos.map((r) => (
+              <tr key={r.name} className="border-t border-neutral-200 dark:border-neutral-800">
+                <td className="py-1.5 pr-3 font-mono">{r.mission_key}</td>
+                <td className="pr-3">
+                  <a className="text-blue-600 hover:underline" href={r.html_url}
+                    target="_blank" rel="noreferrer">{r.name}</a>
+                </td>
+                <td className="pr-3">{Math.round(r.size_kb)} KB</td>
+                <td className="pr-3">{r.open_prs}</td>
+                <td className="text-right">
+                  <Button kind="danger-ghost" icon={Trash2}
+                    onClick={() => onClear(r.name)}>Clear</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {data.ui_url && (
+        <a className="mt-2 inline-block text-sm text-blue-600 hover:underline"
+          href={data.ui_url} target="_blank" rel="noreferrer">Open the Gitea UI →</a>
+      )}
+    </Section>
+  );
+}
+
 export default function ConfigPage({ section, onSectionInView, registerNavGuard }) {
   const dr = useConfigDraft();
   const [registry, setRegistry] = useState(getRegistry());
@@ -712,6 +755,21 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
           </div>
         </div>
       </Section>
+
+      <InternalReposSection
+        onClear={(name) => setConfirm({
+          title: `Clear internal repo '${name}'?`,
+          body: "Deletes the auto-created repository, its machine user (revoking "
+            + "its tokens), and the stored credentials. The deliverable already "
+            + "attached to the PMO feed is untouched. This cannot be undone.",
+          confirmLabel: "Delete the internal repo",
+          danger: true,
+          action: async () => {
+            setConfirm(null);
+            try { await send("DELETE", `/internal-repos/${name}`); }
+            catch (e) { setLoadErr(String(e.message || e)); }
+          },
+        })} />
 
       <Section id="dev-types" title="Dev Types"
         description="Agent configurations — harness, model, concurrency and credentials."

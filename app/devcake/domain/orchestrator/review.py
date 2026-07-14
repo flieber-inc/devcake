@@ -164,6 +164,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                             f"Mission done.")
                         self._audit(pmo_id, "review_approve_merged", pr_url)
                     await self._checkpoint(run, "review:done", _done)
+                    await self.deliver_internal_zip(run, pr)
                 except Exception as e:
                     # Already-merged treated as success by forge.merge; if we
                     # still fail, re-probe before posting merge-failed (ISSUES #6).
@@ -185,6 +186,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                                     f"Mission done.")
                                 self._audit(pmo_id, "review_approve_merged", pr_url)
                             await self._checkpoint(run, "review:done", _done_merged)
+                            await self.deliver_internal_zip(run, pr)
                             return
                     except Exception:
                         log.exception("pr_state probe after merge fail for %s",
@@ -194,7 +196,16 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                         mstate = await forge.mergeable(pr.number)
                     except Exception:
                         log.exception("mergeable check failed for %s", pr_url)
-                    if mstate is False:
+                    # capability branch (M11): a `False` verdict is trustworthy
+                    # as a real conflict only when the forge exposes a genuine
+                    # mergeable tri-state (GitHub/GitLab). On a boolean-only
+                    # forge (Gitea) it can be a transient not-computed-yet, so
+                    # don't route to EXECUTE rework on the verdict alone — the
+                    # merge already failed above; hand off to a human instead
+                    caps = getattr(forge, "capabilities", None)
+                    trust_conflict = mstate is False and (
+                        caps is None or caps.mergeable_tristate)
+                    if trust_conflict:
                         if "review:conflict_routed" in run.finalized_steps:
                             return
                         try:

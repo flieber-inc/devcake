@@ -8,8 +8,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError, ForgeHealth,
-                            PullRequest)
+from ...ports.forge import (BranchProtection, ForgeCapabilities, ForgeDescriptor,
+                            ForgeError, ForgeHealth, PRFile, PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -37,6 +37,12 @@ class GitLabForge:
         token_patterns=[r"\bglpat-[A-Za-z0-9_-]{15,}\b"],
         secret_shape_prefixes=["glpat-"],
     )
+    # GitLab allows a merge-request author to approve their own MR by default
+    # (self_approval_blocked=False); mergeable via detailed_merge_status is a
+    # real tri-state; MR-list source_branch filters server-side
+    capabilities = ForgeCapabilities(
+        mergeable_tristate=True, self_approval_blocked=False,
+        branch_protection_read="maintainer", pr_list_head_filter=True)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None):
@@ -63,7 +69,7 @@ class GitLabForge:
         return {"PRIVATE-TOKEN": self.reviewer_token if reviewer else self.token}
 
     async def _req(self, method: str, path: str, *, reviewer: bool = False,
-                   **kwargs) -> Any:
+                   raw: bool = False, **kwargs) -> Any:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.request(
                 method, f"{self.base}/api/v4/projects/{self.project}{path}",
@@ -73,6 +79,8 @@ class GitLabForge:
                 # handle ForgeError only, never httpx exceptions
                 raise ForgeError(f"{method} {path} → {resp.status_code}: "
                                  f"{resp.text[:200]}", status=resp.status_code)
+            if raw:                       # file_content wants bytes, not JSON
+                return resp.content
             return resp.json() if resp.text else None
 
     async def health_probe(self) -> ForgeHealth:
@@ -181,6 +189,25 @@ class GitLabForge:
             return None
         except Exception:
             return None
+
+    async def pr_files(self, pr_number: int) -> list[PRFile]:
+        # MR changes: one call returns the full change list (paginated by the
+        # diffs endpoint; the changes endpoint returns all for typical MRs)
+        data = await self._req("GET", f"/merge_requests/{pr_number}/changes")
+        out: list[PRFile] = []
+        for ch in (data.get("changes") or []):
+            status = ("added" if ch.get("new_file") else
+                      "removed" if ch.get("deleted_file") else
+                      "renamed" if ch.get("renamed_file") else "modified")
+            out.append(PRFile(path=ch.get("new_path") or ch.get("old_path") or "",
+                              status=status))
+        return out
+
+    async def file_content(self, path: str, ref: str) -> bytes:
+        from urllib.parse import quote
+        raw = await self._req("GET",
+            f"/repository/files/{quote(path, safe='')}/raw?ref={ref}", raw=True)
+        return raw
 
     @staticmethod
     def approval_footer(pr_url: str) -> str:

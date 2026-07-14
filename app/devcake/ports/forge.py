@@ -68,6 +68,33 @@ class BranchProtection(BaseModel):
     requires_reviews: Optional[bool] = None
 
 
+class PRFile(BaseModel):
+    """One changed file in a PR (M11 deliverable zip)."""
+    path: str
+    status: str                    # added | modified | removed | renamed
+    additions: int = 0
+    deletions: int = 0
+
+
+class ForgeCapabilities(BaseModel):
+    """Behavioral divergence between forges, extracted from the observed
+    GitHub/GitLab/Gitea differences (M11, F4). Call sites branch on these
+    instead of on forge identity — a fourth forge declares its own row and
+    needs no `if forge.id == …` edits anywhere (F1 spirit)."""
+    # does mergeable() carry a real tri-state, or only True/False/None-on-
+    # absent? Gitea has no mergeable_state equivalent → False (the sweep's
+    # merge-FIRST ordering supplies the missing wait dimension)
+    mergeable_tristate: bool = True
+    # does the server reject a PR author approving their own PR? (GitHub/
+    # Gitea yes; GitLab allows by default)
+    self_approval_blocked: bool = True
+    # scope needed to READ branch protection: "writer" | "maintainer" | "admin"
+    branch_protection_read: str = "admin"
+    # does the PR-list `head` query param filter server-side? (Gitea ignores
+    # it → the adapter filters client-side; capability documents the fact)
+    pr_list_head_filter: bool = True
+
+
 class ForgeHealth(BaseModel):
     ok: bool
     repository: str = ""
@@ -114,6 +141,7 @@ class ForgePort(Protocol):
     """
 
     descriptor: ClassVar[ForgeDescriptor]
+    capabilities: ClassVar[ForgeCapabilities]
 
     async def health_probe(self) -> ForgeHealth: ...
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]: ...
@@ -124,4 +152,7 @@ class ForgePort(Protocol):
     async def mergeable(self, pr_number: int) -> Optional[bool]: ...
     async def default_branch_protection(
         self, branch: str = "main") -> Optional[BranchProtection]: ...
+    # deliverable packaging (M11): the merged change set → zip → PMO feed
+    async def pr_files(self, pr_number: int) -> list[PRFile]: ...
+    async def file_content(self, path: str, ref: str) -> bytes: ...
     def approval_footer(self, pr_url: str) -> str: ...

@@ -27,8 +27,11 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError,
-                            ForgeHealth, PullRequest)
+import base64
+
+from ...ports.forge import (BranchProtection, ForgeCapabilities,
+                            ForgeDescriptor, ForgeError, ForgeHealth, PRFile,
+                            PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -64,6 +67,12 @@ class GiteaForge:
         token_patterns=[],
         secret_shape_prefixes=[],
     )
+    # observed divergence (M11 probe): no mergeable_state → boolean-only;
+    # poster self-approve rejected; protection read needs repo admin; the
+    # PR-list head filter is IGNORED server-side (adapter filters client-side)
+    capabilities = ForgeCapabilities(
+        mergeable_tristate=False, self_approval_blocked=True,
+        branch_protection_read="admin", pr_list_head_filter=False)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None):
@@ -211,6 +220,34 @@ class GiteaForge:
         return BranchProtection(
             protected=True,
             requires_reviews=bool(rule.get("required_approvals", 0) >= 1))
+
+    async def pr_files(self, pr_number: int) -> list[PRFile]:
+        """Changed files across the PR (paginated — large changesets)."""
+        out: list[PRFile] = []
+        page = 1
+        while True:
+            batch = await self._req(
+                "GET", f"/pulls/{pr_number}/files?limit=50&page={page}")
+            if not batch:
+                break
+            for f in batch:
+                out.append(PRFile(path=f.get("filename", ""),
+                                  status=f.get("status", "modified"),
+                                  additions=int(f.get("additions") or 0),
+                                  deletions=int(f.get("deletions") or 0)))
+            if len(batch) < 50:
+                break
+            page += 1
+        return out
+
+    async def file_content(self, path: str, ref: str) -> bytes:
+        """Raw bytes of a file at a ref (base64-safe — non-code deliverables
+        are binary: images, xlsx). Uses the contents API, decoding base64."""
+        data = await self._req(
+            "GET", f"/contents/{path}?ref={ref}")
+        if isinstance(data, dict) and data.get("encoding") == "base64":
+            return base64.b64decode(data["content"])
+        raise ForgeError(f"unexpected contents payload for {path}")
 
     @staticmethod
     def approval_footer(pr_url: str) -> str:

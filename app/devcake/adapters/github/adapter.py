@@ -9,8 +9,8 @@ from typing import Any, Optional
 
 import httpx
 
-from ...ports.forge import (BranchProtection, ForgeDescriptor, ForgeError, ForgeHealth,
-                            PullRequest)
+from ...ports.forge import (BranchProtection, ForgeCapabilities, ForgeDescriptor,
+                            ForgeError, ForgeHealth, PRFile, PullRequest)
 
 log = logging.getLogger("devcake.forge")
 
@@ -37,6 +37,9 @@ class GitHubForge:
                         r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"],
         secret_shape_prefixes=["ghp_", "github_pat_"],
     )
+    capabilities = ForgeCapabilities(
+        mergeable_tristate=True, self_approval_blocked=True,
+        branch_protection_read="admin", pr_list_head_filter=True)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
                  api_base: str | None = None):
@@ -191,6 +194,30 @@ class GitHubForge:
         except ForgeError:
             pass
         return BranchProtection(protected=protected, requires_reviews=requires_reviews)
+
+    async def pr_files(self, pr_number: int) -> list[PRFile]:
+        out: list[PRFile] = []
+        page = 1
+        while True:
+            batch = await self._req(
+                "GET", f"/pulls/{pr_number}/files?per_page=100&page={page}")
+            if not batch:
+                break
+            out.extend(PRFile(path=f["filename"], status=f.get("status", "modified"),
+                              additions=int(f.get("additions") or 0),
+                              deletions=int(f.get("deletions") or 0))
+                       for f in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return out
+
+    async def file_content(self, path: str, ref: str) -> bytes:
+        import base64
+        data = await self._req("GET", f"/contents/{path}?ref={ref}")
+        if isinstance(data, dict) and data.get("encoding") == "base64":
+            return base64.b64decode(data["content"])
+        raise ForgeError(f"unexpected contents payload for {path}")
 
     @staticmethod
     def approval_footer(pr_url: str) -> str:

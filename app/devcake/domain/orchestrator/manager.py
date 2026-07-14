@@ -14,8 +14,8 @@ from ...ports.pmo import PMOPort
 from ..runs import RunManager
 from typing import TYPE_CHECKING as _TC
 
-from . import (decomposition, dispatch, feed, finalize, mapper, review, schedule,
-               sweeps, transitions)
+from . import (decomposition, deliver, dispatch, feed, finalize, mapper, review,
+               schedule, sweeps, transitions)
 
 if _TC:
     from ..forge_runtime import ForgeRuntime
@@ -120,6 +120,19 @@ MissionManager.sweeps = sweeps.sweeps
 MissionManager._merge_sweep = sweeps._merge_sweep
 MissionManager._deferred_merge_retry = sweeps._deferred_merge_retry
 MissionManager._tracking_sweep = sweeps._tracking_sweep
+MissionManager.deliver_internal_zip = deliver.deliver_internal_zip
+MissionManager.deliver_internal_zip_for_mission = deliver.deliver_internal_zip_for_mission
+
+
+def _attachment_cap(self) -> int:
+    """The PMO's attachment size cap (deliverable zip bound)."""
+    try:
+        return self.pmo.capabilities().attachment_max_bytes
+    except Exception:
+        return 25 * 1024 * 1024
+
+
+MissionManager._attachment_cap = _attachment_cap
 
 
 def _run_is_ours(self, r) -> bool:

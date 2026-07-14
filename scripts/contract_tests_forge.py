@@ -192,6 +192,32 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     footer = forge.approval_footer(pr.url)
     check("10", "approval_footer renders", pr.url in footer)
 
+    # 11 — pr_files lists the merged change set (deliverable packaging)
+    merge_sha = None
+    try:
+        raw = await forge._req("GET", f"/pulls/{n}")
+        merge_sha = raw.get("merge_commit_sha")
+    except Exception:
+        pass
+    files = await forge.pr_files(n)
+    check("11", "pr_files lists changed files",
+          any(f.path == "out.bin" for f in files), f"{[f.path for f in files]}")
+
+    # 12 — file_content returns EXACT bytes (base64-safe binary)
+    ok12, note12 = True, ""
+    try:
+        raw = await forge.file_content("out.bin", merge_sha or "main")
+        ok12 = raw == b"contract battery \xf0\x9f\x8d\xb0"
+        note12 = "" if ok12 else f"{raw!r}"
+    except Exception as e:
+        ok12, note12 = False, str(e)[:150]
+    check("12", "file_content exact bytes (binary-safe)", ok12, note12)
+
+    # 13 — capabilities declared
+    caps = forge.capabilities
+    check("13", "capabilities declared",
+          caps.branch_protection_read in ("writer", "maintainer", "admin"))
+
 
 def main():
     lane = os.environ.get("DEVCAKE_CONTRACT_FORGE", "gitea")

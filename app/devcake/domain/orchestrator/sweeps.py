@@ -82,6 +82,7 @@ async def _merge_sweep(self, m: Mission) -> None:
                     m.pmo_id, "issue",
                     f"✅ PR {state.url} merged — mission done (merge sweep).")
                 self._audit(m.pmo_id, "merge_sweep_done", state.url)
+                await self.deliver_internal_zip_for_mission(m, state)
             else:
                 await self.pmo.cancel_mission(m.ref)
                 await self._feed(
@@ -190,6 +191,7 @@ async def _deferred_merge_retry(self, m: Mission, pr,
             m.pmo_id, "issue",
             f"✅ Merged after deferred retry ({pr_url}). Mission done.")
         self._audit(m.pmo_id, "merge_retry_succeeded", pr_url)
+        await self.deliver_internal_zip_for_mission(m, pr)
 
 
 async def _tracking_sweep(self, m: Mission) -> None:

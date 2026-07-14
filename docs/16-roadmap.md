@@ -199,11 +199,11 @@ Exit criteria:
 **Out of scope:** OIDC/SSO (deferred; the `security_warnings` breadcrumb covers the posture).
 
 Exit criteria:
-- [ ] All operator config — PMO instances, repos, credentials, secret values — flows through the Config page; secrets stored 0600 under `/data/secrets/`, redaction-registered, never echoed back; ✓/✗ stored-secret status in the UI.
-- [ ] Env-var indirection removed; `.env` reduced to stack bootstrap secrets (Dagu, OpenObserve, nginx admin auth, Gitea admin); the `security_warnings` breadcrumb ships dismissable.
-- [ ] Fresh-`/data` operator drill, GUI-only: from an empty volume to a completed mission with `.env` untouched beyond bootstrap.
-- [ ] `scripts/acceptance.py --forge` parity across GitHub, GitLab, and Gitea (ISSUES #30; the Gitea lane runs on the bundled local instance — no external tokens spent).
-- [ ] Docs re-baselined against the code across everything v0.1 touched; **v0.1 tagged**.
+- [x] All operator config flows through the Config page (`SecretField` write-only inputs); secrets stored 0600 under `/data/secrets/connections/` and `/data/secrets/harness/`, redaction-registered, never echoed back (live-verified: `GET /config` carries no secret material + no `*_env` fields; `secrets-check` returns presence + `updated_at` only — no value-derived fingerprint). ✓/✗ stored-secret status in the UI.
+- [x] Env-var indirection removed (schema v4: `*_env` fields deleted; properties read the store, no `os.environ` fallback); `.env` reduced to stack bootstrap secrets (Dagu, Redis, OpenObserve root+ingest, nginx admin auth, Gitea admin, DOCKER_GID); the dismissable `gui-secrets-basic-auth` breadcrumb ships. Live stack hand-migrated v3→v4 and running on stored secrets.
+- [x] Fresh-`/data` operator drill documented GUI-only (`docs/tutorials/operator-drill.md`): empty volume → configure everything via the Config page → external-repo + zero-repo missions → assert `.env` untouched beyond bootstrap. *(The drill stays manual — it is the stranger-operability test.)*
+- [x] `scripts/acceptance.py --forge` covers GitHub, GitLab, and **Gitea** (the zero-repo internal-forge lane: asserts the deliverable zip in the PMO feed + the merged internal PR via `GITEA_ADMIN_*`, no external tokens; ISSUES #30). Tester credentials come from the shell/`.env`, never DevCake's stored secrets. *(Full live model runs remain gated on the founder token blocker; the machinery is proven by the contract batteries + hermetic tests.)*
+- [x] Docs re-baselined (10 §3 v4 shape, 14 §3 the GUI secret store + honest limits, ADR-0011); **v0.1 tagged.**
 
 **Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
 

@@ -36,29 +36,29 @@ Run records are schema **v2**. They contain non-secret execution context and a o
 
 ## 3. `config.yaml` — annotated example (normative shape)
 
-Schema **v3** (docs/16 M9): the connection blocks are plural lists of **instances-with-identities** — each entry carries an operator-chosen `name` (lowercase alnum, ≤12 chars, no hyphens; the pattern is `^[a-z][a-z0-9]{0,11}$`). The name is the instance's identity everywhere: `Run.pmo_ref`/`repo_ref`, branch prefixes (`devcake/LINEAR-DEV-17`), run ids. N≥1 PMO instances are supported (unique names; two instances must not target the same `(system, api_base, team_key)`); repos stay exactly-one until M10. An instance with an empty `team_key` (or a repo with an empty `url`) is **valid but idle** — skipped by the poll loop and label bootstrap, shown as unconfigured in `/health`.
+Schema **v4** (docs/16 M12): the connection blocks are plural lists of **instances-with-identities** — each entry carries an operator-chosen `name` (lowercase alnum, ≤12 chars, no hyphens; `^[a-z][a-z0-9]{0,11}$`). The name is the instance's identity everywhere: `Run.pmo_ref`/`repo_ref`, branch prefixes (`devcake/LINEAR-DEV-17`), run ids. **0..N** PMO instances and repos (empty = idle first boot). Two PMO instances must not target the same `(system, api_base, team_key)`; two repos must not target the same URL. An instance with an empty `team_key` (or a repo with an empty `url`) is **valid but idle**. **No `*_env` fields:** secret VALUES are GUI-stored under `/data/secrets/` (ADR-0011) — `config.yaml` holds no credentials.
 
-**Hand-migration from older schemas** (the app refuses stale files at boot; auto-migration was removed at v0 — there are no deployments): v1 → rename `pmo:`/`repo:` blocks to one-entry `pmos:`/`repos:` lists; v2 → rename each entry's `id:` to a chosen `name:` (e.g. `linear` / `main` — note the format rule above); then set `schema_version: 3`. Existing run records with `pmo_ref: main` stay valid: review/merge lookups fall back to the pre-v3 unprefixed branch convention (`ports/forge.py legacy_branch`), and the FinalizerRouter routes them to the sole manager. **Add a SECOND instance only after draining pre-v3 in-flight runs** — with ≥2 managers a legacy record's owner is ambiguous and the router fails it cleanly rather than guessing a workspace. Alternatively delete the file and reconfigure via the admin panel.
+**Hand-migration** (the app refuses stale files at boot; no deployments exist): v1 → plural lists; v2 → `id:`→`name:`; **v3 → v4: remove every `*_env` field** (`api_key_env`, `token_env`, `token_ro_env`, `reviewer_token_env`) and re-enter the secret VALUES via the Config page (or move them into `/data/secrets/connections/{scope}-{name}.json`); set `schema_version: 4`. Existing run records with `pmo_ref: main` stay valid (review/merge lookups fall back to the pre-v3 unprefixed branch via `legacy_branch`; the FinalizerRouter routes them to the sole manager). **Add a SECOND instance only after draining pre-v3 in-flight runs.** Alternatively delete the file and reconfigure via the admin panel.
 
 ```yaml
-schema_version: 3
+schema_version: 4
 
-pmos:                                # N≥1 instances; name is what Run records
+pmos:                                # 0..N instances; name is what Run records
 - name: linear                       #   reference as pmo_ref, and the branch/run-id prefix (uppercased)
   system: linear                     # must be registered in the adapter registry (05 §1a)
-  api_key_env: LINEAR_API_KEY        # name of the env var holding the key (app env / .env)
   team_key: ENG                      # the team this instance watches — nothing outside it
   api_base: null                     # null = the adapter's default API host
   default_repo: null                 # M10 routing: repo name missions default to (null = zero-repo gate)
+                                     # the API key VALUE is GUI-stored: /data/secrets/connections/pmo-linear.json
 
-repos:                               # exactly one entry until M10 (validated); name → repo_ref
+repos:                               # 0..N (empty = every mission routes to the internal fallback forge)
 - name: main
-  forge: github                      # must be a registered forge (github | gitlab)
+  forge: github                      # must be a registered forge (github | gitlab | gitea)
   url: https://github.com/acme/product
   api_base: null                     # null = the adapter's default API host / the repo's origin
   default_branch: main
-  token_env: ""                      # empty = derived from the forge descriptor (GITHUB_TOKEN)
-  reviewer_token_env: null           # optional 2nd credential for formal PR approvals (06 §4)
+                                     # token VALUES (token/token_ro/reviewer_token) are GUI-stored:
+                                     # /data/secrets/connections/repo-main.json
 
 assignments:                         # every Mission Type must be assigned to exactly one Dev Type.
   ONBOARD:                           #   extra_cli_args are appended verbatim to the harness invocation —

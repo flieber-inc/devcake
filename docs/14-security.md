@@ -38,6 +38,7 @@ Future hardening in §7.
 3. Forge tokens reach git via a credential helper, never embedded in remote URLs on disk (`06-forge-adapter.md` §1).
 4. Secrets never logged: the telemetry layer and the transcript renderer share a redaction filter (§5).
 5. Minimum token scopes per forge listed in `06-forge-adapter.md` §§6–7; Linear key is a personal key scoped by team choice.
+6. **Single-mode GUI secret store (schema v4, ADR-0011):** operator secrets (PMO/forge tokens, model keys) are entered as VALUES through the Config page and stored 0600 under `/data/secrets/connections/` and `/data/secrets/harness/` — env-var indirection is deleted. Never echoed back (`GET /config` carries no secret material; `secrets-check` returns presence + timestamp only, no fingerprint). `.env` holds stack bootstrap secrets ONLY (Dagu/Redis/OO/admin-auth/Gitea-admin/DOCKER_GID). A dismissable `gui-secrets-basic-auth` breadcrumb marks the posture (§7).
 
 ## 4. `docker.sock`
 

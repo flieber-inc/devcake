@@ -104,3 +104,22 @@ differs is a regression):
 - Multi-instance runtime remains future work: per-mission adapter resolution,
   per-instance wiring of poll loops/sweeps, and mission→repo mapping (config
   and Run records are already shaped for it).
+
+## Addendum — v0 crystallization (2026-07-13)
+
+Two compatibility surfaces this ADR deliberately kept were removed at the v0
+crystallization (founder decision: app and Dev images always deploy in
+lockstep — `13-deployment.md` §8; no cross-version shims):
+
+- **Decision 4's entrypoint fallbacks are gone.** `forge_dialect()` now
+  *requires* the descriptor vars and crashes loudly when one is missing; the
+  `DEVCAKE_FORGE` legacy discriminator is no longer shipped in spec_env
+  (`DEVCAKE_FORGE_TOKEN`, the credential, remains).
+- **Decision 5's migration machinery is gone.** `migrate_config` (v1→v2
+  on-load, `.v1.bak`) and `migrate_config_patch` were removed; a v1
+  `config.yaml` is refused at boot with hand-migration instructions, and
+  v1-shaped PUT bodies get a 422 (`reject_v1_patch`) — still never silently
+  dropped. Pre-v2 run records quarantine at boot (`10-persistence.md` §5).
+
+The behavior-delta ledger above is unchanged — those four deltas shipped with
+the refactor and stand.

@@ -3,46 +3,78 @@
 > **Audience:** frontend implementer + app API implementer.
 > **Depends on:** `02-domain-model.md` (AppConfig, DevType), `10-persistence.md` (write path), `13-deployment.md` (proxy topology).
 
-Simple but beautiful: a static SPA (React + Vite + Tailwind — one page per tab, no client state library) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). The Dagu and OpenObserve UIs are **not** embedded: the Executor and Logs tabs open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the admin SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL`, `13-deployment.md` §2).
+Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router (`#/overview · #/runs · #/config · #/config/<section> · #/logs`) drives **four pages**: **Overview**, **Runs**, **Config**, **Logs**. The Dagu and OpenObserve UIs are **not** embedded: the Runs and Logs pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
 
-Three tabs: **Config**, **Executor**, **Logs**. Plus an ever-present header health strip (`GET /api/v1/health`: PMO reachable, forge reachable, Redis, Dagu, OpenObserve, config valid, per-Dev-Type circuit-breaker state).
+**Health polling is honest by design:** the SPA polls `GET /api/v1/health` every 10 s, keeps the last-known data on failure, and renders an unreachable backend **RED** (never gray/unknown) — the failure itself is the signal (founder decision, 2026-07-13).
 
-**Milestone note:** the Vite/React/Tailwind SPA shipped at M6 (`admin/spa/`, multi-stage Docker build); the M0–M5 static shell remains in `admin/site/` as a fallback artifact only. All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
+## 0. Sidebar (persistent shell)
+
+- Navigation to the four pages, with scrollspy sub-entries for the Config sections; collapsible to an icon rail.
+- **Mission-intake master switch** — THE operational control, so it lives in the sidebar (visible even collapsed, founder decision) and applies immediately (its own `PUT /config`, outside the Config draft): OFF pauses intake — no new runs start (missions or mapper) while the operator rearranges missions in the PMO. In-flight runs finish normally (pause freezes dispatch, not consequence) and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. Disabled (with an explanatory tooltip) while the backend is unreachable or health is unknown; save errors surface inline — the toggle never fails silently.
+- Component health dots (app/PMO/forge/Redis/Dagu/OpenObserve) from the 10 s health poll, plus a theme toggle.
 
 ## 1. REST API contract (`/api/v1`)
 
 | Method + path | Purpose |
 |---|---|
-| `GET /api/v1/health` | Component health + circuit breakers |
-| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**; legacy singular `{"pmo": {…}}`/`{"repo": {…}}` bodies are adapted onto the single entry (merged, never silently dropped). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
+| `GET /api/v1/health` | Full component health (below) |
+| `GET /api/v1/health/live` | Unauthenticated liveness (`{"app": true}`) — the compose healthcheck |
+| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**; singular v1-shaped `{"pmo": {…}}`/`{"repo": {…}}` bodies are **rejected with 422** (never silently dropped — the v1→v2 migration was removed at v0). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
 | `GET /api/v1/harnesses` | The harness registry: derived image, credential requirements, OAuth availability per `harness_template` — the Dev Type card renders (and previews unsaved harness switches) from this |
 | `GET /api/v1/dev-types` · `POST /api/v1/dev-types` | List (enriched: `harness` info + `secrets_present`) / create Dev Types |
-| `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login (docs/16 M6); credential lands in `/data/secrets/{name}/` |
-| `GET/PUT/DELETE /api/v1/dev-types/{name}` | CRUD one Dev Type. DELETE refuses while assigned to a Mission Type |
-| `POST /api/v1/dev-types/{name}/credentials` | Either multipart file upload (credentials JSON → `/data/secrets/{name}/`, 0600) or `{"env_var": "NAME"}` reference |
+| `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login; credential lands in `/data/secrets/{name}/` |
+| `PUT/DELETE /api/v1/dev-types/{name}` | Update / delete one Dev Type. DELETE refuses while assigned to a Mission Type (or to the Relations Mapper) |
+| `POST /api/v1/dev-types/{name}/credentials` | JSON `{"filename": "...", "content": "..."}` → stored to `/data/secrets/{name}/{filename}` (0600); a fresh credential clears that Dev Type's auth breaker |
 | `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
-| `GET /api/v1/env-check?names=A,B` | Set/unset status (never values) of env vars in the app's environment — powers the Config tab's inline ✓/✗ on `*_env` fields |
-| `GET /api/v1/connections/registry` | Adapter registry metadata: registered PMO systems + forges (id, display name, default token env), the union of `secret_shape_prefixes` (paste guard), and `managed_labels_expected`. Drives the Config tab's forge selector and PMO copy — adding an adapter never means editing the SPA |
+| `GET /api/v1/env-check?names=A,B` | Set/unset status (never values) of env vars in the app's environment — powers the Config page's inline ✓/✗ on `*_env` fields |
+| `GET /api/v1/connections/registry` | Adapter registry metadata: registered PMO systems + forges (id, display name, default token env), the union of `secret_shape_prefixes` (paste guard), and `managed_labels_expected`. Drives the Config page's selectors and PMO copy — adding an adapter never means editing the SPA |
 | `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns `{ok, team, labels, labels_expected, missions_visible}` — `labels` counts the intersection with DevCake's managed label set |
 | `POST /api/v1/connections/forge/test` | Live probe: authenticated repo fetch + explicit push permission + default branch (+ reviewer token check + branch-protection state). A read-only or fine-grained token that omits the configured repository returns `ok: false` and trips the global forge breaker before dispatch; transient probe failures (5xx/network/rate-limit) are reported but never latch the breaker, and a latched breaker re-probes every poll cycle (`15-errors-and-retries.md` §4) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
-| `GET /api/v1/runs/{run_id}` | Fixed allowlist of operational Run fields; run specs, prompts, results/token reports, envelope verifiers, and credential material are never serialized |
+| `GET /api/v1/runs/{run_id}` | Fixed allowlist of operational Run fields (incl. `verdict`); run specs, prompts, results/token reports, envelope verifiers, and credential material are never serialized |
 | `GET /api/v1/runs/{run_id}/log?tail=N` | Plain-text condensed run output (from `/data/state/runlogs/`, relayed live by the Dev via `run.log` — `09-messaging.md` §3) |
 | `GET /api/v1/runs/{run_id}/log/stream` | SSE follow of the same log: replays the stored lines, then streams new ones until the run reaches a terminal state (`event: end`). Sends `X-Accel-Buffering: no` so nginx doesn't buffer; 15 s `: ping` heartbeats stay under nginx's 60 s read timeout |
 | `POST /api/v1/system/clear-runs` | Operator wipe: stop in-flight Devs, delete local run records + audit log, purge Dagu run history, delete OpenObserve log/trace streams. Config + secrets + PMO/forge untouched (`10-persistence.md` §5) |
 | `POST /api/v1/relations-mapper/run` | Manually dispatch a Relations Mapper run (`03-mission-lifecycle.md` §4b). Works regardless of the `enabled` toggle (which governs only the interval service); 422 without a valid `dev_type`, 409 while a mapper run is active |
-| `GET /api/v1/missions` | Debug: current derived Missions + types (M2, `16-roadmap.md`); includes `blocked_by` keys, and the reason string names open blockers |
+| `GET /api/v1/missions` | Current derived Missions + types (poll-cycle snapshot, advisory — INV-1); includes `blocked_by` keys, and the reason string names open blockers |
+| `POST /api/v1/debug/dispatch-hello` | Dispatches the hello stub Dev through the full pipeline (Dagu → container → Redis → finalize). Permanent debug/CI fixture — `scripts/ci_suite.sh` |
 
 All writes go through the app (single validation point, `10-persistence.md` §4).
 
-## 2. Config tab — sections and fields
+### `GET /api/v1/health` payload
 
-### Traffic control (added with adr/0007)
-- **Mission intake toggle** (`intake_paused`) — OFF pauses DevCake's intake: no new runs start (missions or mapper) while the operator rearranges missions in Linear. In-flight runs finish normally (and may still update labels/statuses as they complete — pause freezes dispatch, not consequence), and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. While paused, the header banner is **stateful**: it counts the in-flight runs still finishing ("N runs still finishing…") and flips to "all runs drained; Linear is all yours" at zero — no trip to the Executor tab needed. Save errors surface inline (the toggle never fails silently).
-- **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `junior-dev`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`: last 3 runs dead → periodic backs off; Run now still works and resets it). Deleting the mapper's Dev Type is refused with 409.
+| field | content |
+|---|---|
+| `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; PMO via `health_probe`) |
+| `forge` | the latest `ForgeHealth` dict (`ok`, `can_push`, `transient`, `detail`, …) |
+| `circuit_breakers` | per-Dev-Type auth breakers + the global `forge` breaker (`15-errors-and-retries.md` §4) |
+| `intake_paused` | the master switch state |
+| `active_runs` | count of dispatched/running/finalizing runs |
+| `forge_protection` | default-branch protection probe (cached ~5 min; `null` when unknown) |
+| `anomalies` | per-mission advisory strings (out-of-pipeline merges etc.; pruned when terminal) |
+| `merge_handoffs` | pmo_id → "awaiting human merge" strings — the live merge queue banner |
+| `needs_human` | pmo_id → advisory string, rebuilt each cycle from the `DEVCAKE-NEEDS-HUMAN` label (clears the moment the human removes the label) |
+| `dependency_cycles` | detected blocked-by loops (each names the mission keys in the loop) |
+| `blocked_reasons` | pmo_id → why the scheduler is currently holding a mission back (advisory mirror of the last gate map) |
+| `mapper_degraded` | `null`, or the error string when the last 3 mapper runs all died (periodic service backs off; Run now still works) |
 
-### Header banners (from `GET /health`)
-Amber/blue strips under the header, all driven by the 10 s health poll: intake paused (stateful, above) · **dependency cycle detected** (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · **default branch unprotected** (a Dev's forge token could merge without review — `13-deployment.md` §8a) · **out-of-pipeline activity** (a mission's PR merged mid-pipeline — `15-errors-and-retries.md`) · **awaiting human merge** (every `DEVCAKE-MERGE` mission with an open PR and no actively-running deferred-retry window — the operator's live merge queue, including normal `auto_merge`-OFF parks and terminal auto-merge hand-offs; `03-mission-lifecycle.md` §4.1) · circuit breaker tripped (pre-existing).
+## 2. Overview page
+
+The landing dashboard, fed by the health poll:
+
+- **Component health cards** — every `/health` boolean plus the forge detail; backend unreachable renders RED.
+- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: dependency cycles (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · default branch unprotected (a Dev's forge token could merge without review — `13-deployment.md` §8a) · out-of-pipeline activity (`15-errors-and-retries.md`) · mapper degraded · circuit breakers. Alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
+- **Merge queue** — every `DEVCAKE-MERGE` mission awaiting a human (from `merge_handoffs`), and **Needs attention** — every `DEVCAKE-NEEDS-HUMAN` mission (from `needs_human`), each with its remove-the-label call to action.
+- **Recent runs** — the last 5 from `GET /runs`, linking into the Runs page.
+
+## 3. Config page — draft/Save model and sections
+
+**Unified draft (founder decision, 2026-07-13):** every edit on this page lands in a client-side draft — *nothing* persists until the operator reviews and saves. A **DirtyBar** appears while the draft differs from the server state; **Save** opens a **SaveReviewDialog** listing every pending change (per section) for confirmation, then issues the PUTs (`/config`, `/dev-types/{name}`, `/assignments`) and reports per-section results inline. A **nav guard** intercepts hash navigation away from a dirty draft (revert-and-ask, then replay). Danger confirms (adoption mode, auto-merge) still appear at flip time but only write the draft — the real write happens at Save. The one exception is the sidebar's mission-intake switch, which is deliberately immediate (§0); `dismissed_alerts` writes also bypass the draft (they're UI state, not operator config).
+
+Sections (scrollspy anchors `#/config/<id>`): **Traffic control · PMO · Repository · Dev Types · Assignments · Limits**.
+
+### Traffic control
+- **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `junior-dev`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`). Deleting the mapper's Dev Type is refused with 409.
 
 **Field-level help (added 2026-07-11, after the token_env incident):** every
 field carries a hover `?` tooltip explaining what it means and what shape of
@@ -55,11 +87,11 @@ checked against `GET /api/v1/env-check` and shows `✓ set` or `✗ not set`. Th
 connection-test endpoints short-circuit with a plain-language error when the
 configured env var resolves empty (instead of `Illegal header value b'Bearer '`).
 
-### PMO connection (section anchor `#/config/pmo` — renamed from `linear` with the adapter registry)
-Fields edit `cfg.pmos[0]` (the config schema is plural, exactly-one entry — `02-domain-model.md` §9); the section's copy (system names, default env var) renders from `GET /connections/registry`.
-- API key: env-var name (default `LINEAR_API_KEY`) or direct value (stored to app env file — with a hint that env vars are preferred).
-- **Team picker**: populated by a live Linear query once the key validates (from `connections/pmo/test`).
-- **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* The change is applied only on explicit confirm; flipping back to `opt_in` confirms symmetrically (in-flight runs finish; unlabeled missions are simply no longer scheduled).
+### PMO connection (anchor `#/config/pmo`)
+Fields edit `cfg.pmos[0]` (the config schema is plural, exactly-one entry — `02-domain-model.md` §9); the section's copy (system names, default env var) renders from `GET /connections/registry` and stays **PMO-neutral** — UI copy never couples to Linear specifics (founder decision; Jira/Monday/GitHub-Issues are planned adapters).
+- API key env-var name (default from the registry, e.g. `LINEAR_API_KEY`).
+- Team/workspace key, validated by **Test connection** (`connections/pmo/test`).
+- **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* The confirm writes the draft; Save applies it. Flipping back confirms symmetrically (in-flight runs finish; unlabeled missions are simply no longer scheduled).
 - Poll interval (seconds).
 
 ### Repository
@@ -71,9 +103,9 @@ Fields edit `cfg.repos[0]` (plural schema, exactly-one entry).
 - **`merge_retry_window_minutes` number field** — default 30, min 0; also dimmed while `auto_merge` is OFF. Tooltip: lower it on CI-light repos to surface unmergeable PRs faster; raise it on CI-heavy repos to stop premature `DEVCAKE-MERGE` hand-offs; 0 = hand off immediately. Live-tunable: raising it mid-wait extends an active window.
 
 ### Dev Types
-Card list + editor (2026-07-12 rework — the harness combobox is **authoritative**, `08-harness-templates.md` §2):
-- Name; **harness template** dropdown (options from `GET /harnesses`); **identifying prompt** textarea; **model** pin; per-type **max concurrency** integer.
-- **Runtime & credentials block** (derived, read-only structure): the registry image for the *currently selected* harness, a readiness badge, and a per-requirement checklist — each `credential_env` var with live ✓/✗ from `GET /env-check`, each required secret file with ✓/✗ from the enriched `secrets_present` plus an **upload button** (filename forced to the registry `secret_file`). Flipping the combobox previews the new harness's requirements immediately, with an amber "unsaved harness change" note until Save. Any one ✓ (env var or file) suffices.
+Card list + editor (the harness combobox is **authoritative**, `08-harness-templates.md` §2):
+- Name; **harness template** dropdown (options from `GET /harnesses`); **identifying prompt** textarea; **model** pin (e.g. `claude-fable-5` on the seeded senior-dev); per-type **max concurrency** integer.
+- **Runtime & credentials block** (derived, read-only structure): the registry image for the *currently selected* harness, a readiness badge, and a per-requirement checklist — each `credential_env` var with live ✓/✗ from `GET /env-check`, each required secret file with ✓/✗ from the enriched `secrets_present` plus an **upload button** (sends `{filename, content}`; filename forced to the registry `secret_file`). Flipping the combobox previews the new harness's requirements immediately, with an amber "unsaved harness change" note until Save. Any one ✓ (env var or file) suffices.
 - **Connect via OAuth…** — per **Dev Type** (`POST /oauth/dev-types/{name}/start`), shown when the saved harness has a device-code flow; the credential lands in that Dev Type's `/data/secrets/{name}/` dir (two Dev Types on one harness = two accounts).
 - **MCP servers**: free-text area, one CLI command per line (syntax hint per selected template, `08-harness-templates.md` §7), with the warning: *"These commands run inside the Dev container before the agent starts and are arbitrary code execution by design."* Execution semantics per `07-dev-runtime.md` §5 (failure ⇒ run fails).
 
@@ -85,28 +117,26 @@ Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). 
 - **Dev run timeout** minutes (default 120).
 - Review-loop warning cadence; max attempts.
 
-Save = `PUT` per section; optimistic UI with server errors inline.
+## 4. Runs page
 
-## 3. Executor tab
-
-A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a **"Clear runs"** danger button, above a live run table from `GET /api/v1/runs` — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live at M6). No iframe.
+A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a **"Clear runs"** danger button, above a live run table from `GET /api/v1/runs` (10 s poll) — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Rows show state and, where the app's judgment diverged from the executor's, the `verdict` (rejected/skipped/parked/handed-off — `02-domain-model.md` §7). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live). No iframe.
 
 **Run terminal (popup):** clicking any run row opens a terminal-styled modal (dark chrome, monospace, blinking cursor while live) showing the run's condensed output. Live runs follow `GET /runs/{id}/log/stream` over `EventSource` (the server replays the stored log first, so no separate initial fetch); terminal runs fetch `GET /runs/{id}/log?tail=1000` once. The stream's `end` event prints `[process exited]` and stops the cursor. This is a simulacrum, not a TTY: the harness runs headless (no PTY) and the app deliberately holds no docker.sock (`13-deployment.md` §5), so the feed is the Dev's own `run.log` relay — the same condensed lines Dagu captures in its step log. Client caps at ~5000 lines; ESC / backdrop / ✕ close it.
 
 **Clear runs** opens a React confirmation dialog (never `window.confirm`) and on confirm calls `POST /api/v1/system/clear-runs`. That endpoint:
 
 1. Stops any in-flight Dagu runs (`POST /dags/dev-run/stop-all`).
-2. Deletes every local Run file under `/data/state/runs/`, every run log under `/data/state/runlogs/` (open SSE followers get the end sentinel), and truncates `events.jsonl` (attempt counters and give-up watermarks reset — INV-1 / `10-persistence.md` §5).
+2. Deletes every local Run file under `/data/state/runs/` (including quarantined records), every run log under `/data/state/runlogs/` (open SSE followers get the end sentinel), and truncates `events.jsonl` (attempt counters and give-up watermarks reset — INV-1 / `10-persistence.md` §5).
 3. Deletes every Dagu `dev-run` history record (`DELETE /dag-runs/dev-run/{id}`, paginated list).
 4. Deletes OpenObserve log/trace streams (they recreate on next ingest; dashboards stay).
 5. Trims the Redis ingress stream, drops leftover reply streams and per-run ACL users.
 
-**Preserved:** `/data/config`, `/data/secrets`, Linear/GitHub/GitLab state, circuit breakers (credential health).
+**Preserved:** `/data/config`, `/data/secrets`, PMO/forge state, circuit breakers (credential health).
 
-## 4. Logs tab
+## 5. Logs page
 
-A prominent **"Open OpenObserve ↗"** button (new tab, URL from `OO_UI_URL`), plus three canned deep links (also opening in new tabs): **Errors (last hour)** · **Trace by mission key** (input box → trace search) · **Cost dashboard** (`12-observability.md` §5). No iframe.
+A prominent **"Open OpenObserve ↗"** button (new tab, URL from `OO_UI_URL`), plus canned deep links (also opening in new tabs): **Errors (last hour)** · **Trace by mission key** (input box → trace search) · **Cost dashboard** (`12-observability.md` §5). No iframe.
 
-## 5. Auth
+## 6. Auth
 
 v0 ships **HTTP basic auth at both nginx and FastAPI**, using the same `ADMIN_USER`/`ADMIN_PASSWORD`. Nginx covers the SPA and proxy; FastAPI independently protects every route except minimal `/api/v1/health/live`, so an accidental future network exposure does not bypass authentication. OpenAPI/docs endpoints are disabled. Every `POST`/`PUT`/`PATCH`/`DELETE` additionally requires `X-DevCake-Request: 1`; the SPA sends it from its centralized mutation helper. The browser's native prompt is the login UI. OIDC/SSO is the documented upgrade path (`14-security.md` §7).

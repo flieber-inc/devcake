@@ -16,19 +16,21 @@ All local app data lives as plain files on one named volume (`devcake_data`, mou
     {dev_type}/creds.json       # uploaded credential JSONs; chmod 600, owner app
   state/
     runs/{run_id}.json          # Run records (02-domain-model.md §7), one file per run
+    runs/quarantine/            # unreadable/model-invalid/pre-v2 records, moved aside at boot (§5)
     events.jsonl                # append-only audit log of every PMO write the app performs
-  cache/
-    …                           # last-poll snapshot etc.; rebuildable; deletable at any time
 ```
+
+(The poll snapshot served by `GET /api/v1/missions` is in-memory only — rebuilt
+every cycle, nothing on disk.)
 
 ## 2. Format rules
 
 - **YAML** for anything humans edit (`config/`); **JSON** for machine state (`state/runs/`); **JSONL** for the append-only audit log.
 - Every file carries `schema_version`. The pydantic models (`app/devcake/config.py` for config, `app/devcake/domain/run.py` for run records) are the single schema definition for all of them (`02-domain-model.md`).
 - **Atomic writes, always:** write to `{path}.tmp` in the same directory → `fsync` → `rename`. JSONL appends are line-buffered with `fsync` per finalization.
-- **Migrations:** applied on load, before validation, forward-only (`migrate_config` in `config.py`); the atomic-write discipline above is preserved — the migrated file is persisted with the same tmp→fsync→rename path (ADR-0002). Purely **additive** fields with defaults need no version bump: the Run record gained `pmo_ref`/`repo_ref` (both default `"main"`) with no schema change — pre-existing run JSONs parse unchanged.
+- **Schema evolution:** purely **additive** fields with defaults need no version bump — the Run record gained `pmo_ref`/`repo_ref` (both default `"main"`) that way. There is no auto-migration machinery: the v1→v2 migrators were removed at v0 crystallization (founder decision); pre-v2 data is refused (config) or quarantined (run records) with instructions, never silently upgraded.
 
-Run records are schema **v2**. They contain non-secret execution context and a one-way Redis envelope verifier, never raw Redis passwords, forge/model credentials, or credential-file content. Secret run-spec material is not persisted anywhere: the app builds it from current config when the Dev sends `runspec.get` (`09-messaging.md` §§3, 5). On first v2 startup, v1 JSON is rewritten without credential-bearing fields (unparseable files are moved to `runs/quarantine/` — 0600, named in the log — so one corrupt record can never block boot; files the model rejects are still scrubbed at the raw-JSON level); active v1 runs are aborted because they predate the envelope verifier. Startup fails readiness only if a credential field genuinely remains, and the error names the offending files.
+Run records are schema **v2**. They contain non-secret execution context and a one-way Redis envelope verifier, never raw Redis passwords, forge/model credentials, or credential-file content. Secret run-spec material is not persisted anywhere: the app builds it from current config when the Dev sends `runspec.get` (`09-messaging.md` §§3, 5). At every boot, an integrity sweep (`RunStore.quarantine_unreadable`) moves unparseable, model-invalid, or **pre-v2** records to `runs/quarantine/` (0600, named in the log) — so one corrupt record can never block boot, and a restored v1 backup (which persisted credentials) can never sit silently in the store. A record that still parses as JSON is **scrubbed of known credential-bearing fields before the move** (quarantine must not become secret-at-rest); only unparseable bytes are preserved verbatim, for inspection, under the restrictive modes. Because a quarantined record is forgotten, boot also best-effort tears down anything it may have left live — the Dagu run, the per-run Redis ACL user, the reply stream — keyed on the file's run id. Quarantined files are removed by clear-runs.
 
 ## 3. `config.yaml` — annotated example (normative shape)
 
@@ -87,7 +89,7 @@ relations_mapper:                    # ADR-0007: manual-only by default; periodi
 dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts ("id:signature")
 ```
 
-**v1 → v2 migration (on load, forward-only):** a `config.yaml` with `schema_version: 1` (or none) — singular `pmo:`/`repo:` blocks — is upgraded in memory before validation (`pmo:` → `pmos: [{id: main, …}]`, likewise `repo:`) and persisted atomically; the original file is first copied to **`config.yaml.v1.bak`**, which is the rollback story. The migration is idempotent and there is no down-migrator.
+**v1 configs are refused, not migrated:** a `config.yaml` carrying the singular `pmo:`/`repo:` blocks fails startup with a clear error telling the operator to migrate by hand (`pmo:` → `pmos: [{id: main, …}]`, likewise `repo:`, `schema_version: 2`) or delete the file and reconfigure via the admin panel. Detection keys on the **singular keys, never on an absent `schema_version`** — an empty file or a hand-written v2 config without the version field boots normally (defaults apply). Refusing loudly beats validating silently: pydantic ignores unknown keys, so accepting v1 data would reset the operator's connections to defaults.
 
 `dev_types/{name}.yaml` mirrors the DevType fields of `02-domain-model.md` §6 exactly.
 
@@ -96,16 +98,15 @@ dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts
 The admin panel writes config **through the app's API** (`PUT /api/v1/config`): validation happens once, in the app's pydantic models. PUT semantics:
 
 - The body is a **partial patch**, deep-merged over the current config (`deep_merge`): nested dicts merge recursively, so `{"concurrency": {"global_max": 5}}` never resets sibling fields — but **non-dict values are replaced wholesale**. In particular `pmos`, `repos`, and `dismissed_alerts` are lists: a PUT that touches them must send the **whole replacement list**.
-- **Legacy singular bodies are adapted, not dropped:** `migrate_config_patch` translates a v1-shaped body (`{"pmo": {…}}` / `{"repo": {…}}`) into the plural v2 shape by merging over the current single entry. Load-bearing, not defensive — pydantic ignores unknown keys, so without it a stale client's PUT would silently lose the operator's edit instead of failing.
+- **v1-shaped bodies are rejected, not dropped:** `reject_v1_patch` refuses `{"pmo": {…}}` / `{"repo": {…}}` with a 422 naming the plural v2 shape. Load-bearing, not defensive — pydantic ignores unknown keys, so without the guard a stale client's PUT would silently lose the operator's edit instead of failing.
 - On success the app writes atomically and calls `reload_connections()`: the PMO and forge adapters are **rebuilt immediately** from the saved config and the managed labels are re-ensured (`05-pmo-adapter.md` §1a) — connection changes no longer wait for a restart. The remaining fields hot-apply at the next poll cycle.
 
-Direct file edits are tolerated but take effect on the next app start, when `load_config` re-validates (and, if needed, migrates) the file.
+Direct file edits are tolerated but take effect on the next app start, when `load_config` re-validates the file.
 
 ## 5. What deleting things costs (INV-1 restated)
 
 | Deleted | Consequence |
 |---|---|
-| `/data/cache` | Nothing — rebuilt next poll. |
 | `/data/state` | Run history, attempt counters, and loop-warning dedupe reset. Mission state is untouched (it lives in the PMO); reconciliation (`04-orchestrator.md` §6) rebuilds the in-flight picture from the Dagu API and Redis. Legal at any time. |
 | `/data/secrets` | Dev Types with `credentials_json` mode fail auth (exit 12 → circuit breaker) until re-uploaded. |
 | `/data/config` | The app blocks startup pending reconfiguration (admin panel first-run flow). |

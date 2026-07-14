@@ -49,18 +49,6 @@ def test_dev_type_status_derives_and_reports_secrets(tmp_path, monkeypatch):
     assert claude["secrets_present"] == []
 
 
-def test_legacy_yaml_keys_dropped_on_roundtrip():
-    legacy = {"name": "senior-dev", "harness_template": "grok-build",
-              "docker_image": "devcake/dev-claude-code:latest",   # stale — the bug
-              "credential_env": ["CLAUDE_CODE_OAUTH_TOKEN"],
-              "credential_files": [], "model": "grok-4.5"}
-    dt = DevType.model_validate(legacy)
-    dumped = dt.model_dump()
-    assert dt.harness_template == "grok-build"
-    for key in ("docker_image", "credential_env", "credential_files"):
-        assert key not in dumped
-
-
 def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("XAI_API_KEY", "xai-test-000000000000000000000")
@@ -121,9 +109,6 @@ def test_runspec_get_served_while_active_and_refused_after(tmp_path):
             replies.append((kind, payload))
 
         async def delete_runspec_result(self, rid):
-            pass
-
-        async def delete_runspec_secret(self, rid):
             pass
 
     store = RunStore(tmp_path / "runs")

@@ -26,6 +26,9 @@ class PMOHealth(BaseModel):
 
 
 class PMOCapabilities(BaseModel):
+    """Adapter self-description. No v0 reader — the single Linear adapter's
+    quirks are handled where they occur — but future multi-PMO scheduling and
+    the admin UI select behavior on these flags (kept by founder decision)."""
     projects_supported: bool
     project_labels_supported: bool
     attachment_max_bytes: int
@@ -48,6 +51,9 @@ class PMOPort(Protocol):
     """
 
     # ── reads ────────────────────────────────────────────────────────────────
+    # list_missions (DevCake-labeled only) has no v0 caller — the poll loop
+    # reads list_all — but stays on the contract for adapters/versions where
+    # the filtered read is materially cheaper (kept by founder decision, v0).
     async def list_missions(self, team_ref: str) -> list[Mission]: ...
     async def list_all(self, team_ref: str) -> list[Mission]: ...
     async def get(self, ref: MissionRef) -> Mission: ...

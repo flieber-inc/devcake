@@ -30,8 +30,7 @@ class Run(BaseModel):
     mission_key: str
     mission_pmo_id: str = ""
     pmo_kind: str = "issue"
-    # which configured instance served this run (AppConfig.pmos/repos entry id;
-    # additive with defaults, so pre-v2 run JSONs parse unchanged)
+    # which configured instance served this run (AppConfig.pmos/repos entry id)
     pmo_ref: str = "main"
     repo_ref: str = "main"
     mission_type: str
@@ -50,10 +49,7 @@ class Run(BaseModel):
     # One-way verifier for the per-run Redis envelope credential. The raw ACL
     # password is passed directly to Dagu and is never persisted in run state.
     auth_digest: Optional[str] = None
-    # Legacy v1 fields remain parseable so startup migration can scrub them.
-    redis_password: Optional[str] = Field(default=None, exclude=True)
     spec_env: dict[str, str] = Field(default_factory=dict)
-    spec_files: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
     finalized_steps: list[str] = Field(default_factory=list)
     result: Optional[dict[str, Any]] = None
     token_report: Optional[dict[str, Any]] = None

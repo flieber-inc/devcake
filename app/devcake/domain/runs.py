@@ -160,11 +160,31 @@ class RunManager:
             log.warning("message for unknown run %s (%s)", run_id, kind)
             return
 
-        if kind == "run.started":
-            run.state, run.started_at = "running", utcnow()
-            self.store.save(run)
-        elif kind == "run.heartbeat":
+        # heartbeats (2/min/run) and streamed-log batches (one every few
+        # seconds while a harness talks) are deliberately span-free — pure
+        # liveness/output noise that would drown the run's trace (docs/12 §2)
+        chatty = kind == "run.heartbeat" or (
+            kind == "run.log" and isinstance(payload.get("lines"), list))
+        if chatty:
+            await self._handle_inner(run, run_id, kind, payload)
+            return
+
+        # every other ingress message is handled on a span in the Dev's trace
+        ctx = extract({"traceparent": run.traceparent}) if run.traceparent else None
+        with tracer.start_as_current_span(
+            "ingress.handle", context=ctx, kind=SpanKind.CONSUMER
+        ) as span:
+            span.set_attribute("devcake.run.id", run_id)
+            span.set_attribute("devcake.kind", kind)
+            await self._handle_inner(run, run_id, kind, payload)
+
+    async def _handle_inner(self, run: Run, run_id: str, kind: str,
+                            payload: dict) -> None:
+        if kind == "run.heartbeat":
             run.last_heartbeat = utcnow()
+            self.store.save(run)
+        elif kind == "run.started":
+            run.state, run.started_at = "running", utcnow()
             self.store.save(run)
         elif kind == "runspec.get":
             secret = (self._runspec_secret(run)
@@ -183,7 +203,6 @@ class RunManager:
             )
         elif kind == "runspec.ack":
             await self.messaging.delete_runspec_result(run_id)
-            await self.messaging.delete_runspec_secret(run_id)
         elif kind == "activity.get":
             if self.mission_mgr and run.mission_pmo_id:
                 await self.messaging.reply(
@@ -194,8 +213,9 @@ class RunManager:
                 await self.messaging.reply(run_id, "activity.result",
                                            {"activity_md": "", "attachments": []})
         elif kind == "run.log":
-            # {"lines": [...]} = streamed harness output (docs/09 §2); anything
-            # else keeps the legacy/OAuth behavior ({oauth_url}, {level,message})
+            # {"lines": [...]} = streamed harness output (docs/09 §2);
+            # {"oauth_url"}/{"oauth_error"} = device-code login progress,
+            # routed to the OAuthManager (docs/09 §3)
             if self.runlog is not None and isinstance(payload.get("lines"), list):
                 from ..security import redact
                 self.runlog.append(
@@ -250,24 +270,6 @@ class RunManager:
             log.info("finalized %s → finished", run.run_id)
 
     # ── watchdog support ─────────────────────────────────────────────────────
-
-    async def abort_legacy_run(self, run: Run) -> None:
-        """Stop a v1 run whose persisted run spec was scrubbed during upgrade."""
-        import contextlib
-        with contextlib.suppress(Exception):
-            await self.executor.stop(run.run_id)
-        with contextlib.suppress(Exception):
-            await self.messaging.delete_run_user(run.run_id)
-        with contextlib.suppress(Exception):
-            await self.messaging.delete_reply_stream(run.run_id)
-        run.state = "orphaned"
-        run.ended_at = utcnow()
-        run.error = "upgrade aborted legacy run after credential-state migration"
-        self.store.save(run)
-        if self.mission_mgr and run.mission_pmo_id:
-            with contextlib.suppress(Exception):
-                await self.mission_mgr.restore_after_failure(run)
-        log.warning("aborted legacy run %s during credential migration", run.run_id)
 
     async def kill(self, run: Run, new_state: str, reason: str) -> None:
         from opentelemetry import trace as _t

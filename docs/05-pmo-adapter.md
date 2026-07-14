@@ -13,9 +13,12 @@ Reads and writes are keyed by `MissionRef(pmo_id, kind)` — the adapter dispatc
 class PMOPort(Protocol):
     # ── reads ──
     async def list_missions(self, team_ref: str) -> list[Mission]: ...
-        # non-terminal Projects + Issues of the ONE configured team
+        # non-terminal Projects + Issues of the ONE configured team.
+        # No v0 caller (the poll loop uses list_all) — kept on the contract
+        # for adapters where the filtered read is materially cheaper
+        # (founder decision, v0 crystallization)
     async def list_all(self, team_ref: str) -> list[Mission]: ...
-        # terminal included — the /api/v1/missions debug view
+        # terminal included — the poll loop + /api/v1/missions
     async def get(self, ref: MissionRef) -> Mission: ...
     async def get_activity(self, ref: MissionRef) -> Activity: ...
         # ordered feed; a ref without a comment feed (Linear projects)
@@ -50,6 +53,9 @@ class PMOPort(Protocol):
     # ── meta ──
     async def health_probe(self, team_ref: str) -> PMOHealth: ...
     def capabilities(self) -> PMOCapabilities: ...
+        # adapter self-description. No v0 reader — kept on the contract for
+        # future multi-PMO scheduling / admin-UI behavior selection
+        # (founder decision, v0 crystallization)
 ```
 
 ```python
@@ -77,7 +83,7 @@ class PMOCapabilities(BaseModel):
 - **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `api_key_env_default`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`. The secret fields feed `security.redact` (`14-security.md` §5) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
 - **`make_pmo(inst) -> PMOPort`** constructs the adapter for the one configured `PMOInstance` (`config.pmos[0]`); an unregistered `inst.system` raises.
 - **`PMOInstance.system` is validated against `PMO_SYSTEMS`** at config-load/PUT time (pydantic field validator), so a typo'd system name is a 422, not a boot crash.
-- **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, default env-var names, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin Config tab's selectors and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).
+- **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, default env-var names, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin Config page's selectors and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).
 - **Hot reload:** a successful config `PUT` calls `reload_connections()` — the PMO (and forge) adapters are rebuilt from the saved config, the orchestrator is repointed, and `ensure_labels` is re-run for the (possibly new) team. Label bootstrap is otherwise startup-only; without the re-ensure, a hot-swapped `team_key` would run unlabeled until restart.
 
 The registry also carries the forge side (`forges()` / `make_forge`, `06-forge-adapter.md`); the shapes mirror each other.

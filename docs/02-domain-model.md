@@ -174,7 +174,7 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` (= 1) | The `pmo_ref`/`repo_ref` additions were **additive with defaults** — no schema bump; pre-existing run JSONs parse unchanged. |
+| `schema_version` | `int` (= 2) | Bumped by the credential-state hardening (secrets left the record). Records `< 2` are quarantined at boot, never migrated (`10-persistence.md` §5). The `pmo_ref`/`repo_ref` additions were additive with defaults — no bump of their own. |
 | `run_id` | `str` | Human-readable and unique: `{mission_key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). Also the Dagu run ID and the Dev container name suffix, so Linear, the Dagu UI, `docker ps`, traces, and Redis streams all speak the same name (confirmed decision). |
 | `mission_key` | `str` | Denormalized for log/trace readability. |
 | `mission_pmo_id` | `str` | |
@@ -211,11 +211,11 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` (= 2) | v1 files migrate on load (`10-persistence.md` §3). |
+| `schema_version` | `int` (= 2) | v1 files are refused at boot with hand-migration instructions (`10-persistence.md` §3). |
 | `pmos` | `list[PMOInstance]` — `{id: str, system: str, api_key_env: str, team_key: str, api_base: str \| None}` | Exactly one entry in v0; `id` defaults to `main`. `system` (default `linear`) is validated against the adapter registry `PMO_SYSTEMS` (`05-pmo-adapter.md` §1a) — a typo is a 422, not a boot crash. `api_base: None` = the adapter's default API host. `PMOInstance.api_key` resolves the env var named by `api_key_env`. |
 | `repos` | `list[RepoInstance]` — `{id: str, forge: str, url: str, api_base: str \| None, default_branch: str, token_env: str, reviewer_token_env: str \| None}` | Exactly one entry in v0; `id` defaults to `main`. `forge` (default `github`) is validated against the registry's `forges()`. `default_branch` defaults to `main`; `reviewer_token_env` is the optional second credential used for formal PR approvals. `RepoInstance.token` resolves `token_env`. |
-| `adoption_mode` | `"opt_in" \| "opt_out"` (default `opt_in`) | `opt_in`: only Missions labeled `DEVCAKE` are adopted. `opt_out`: every non-terminal item in the team is adopted (the original mission-doc behavior — enable deliberately; the admin panel warns about the backlog-wide consequence, `11-admin-panel.md` §2). |
-| `assignments` | `dict[MissionType, {dev_type: str, extra_cli_args: str}]` | Mission Type → Dev Type name, plus optional **extra CLI args** appended verbatim to the harness invocation for that Mission Type (`08-harness-templates.md` §1). Args are admin-set data, never hardcoded — they are harness-specific, so the admin UI warns and offers to clear them when the Mission Type is reassigned to a Dev Type with a different harness (`11-admin-panel.md` §2). Validation: all four types assigned. |
+| `adoption_mode` | `"opt_in" \| "opt_out"` (default `opt_in`) | `opt_in`: only Missions labeled `DEVCAKE` are adopted. `opt_out`: every non-terminal item in the team is adopted (the original mission-doc behavior — enable deliberately; the admin panel warns about the backlog-wide consequence, `11-admin-panel.md` §3). |
+| `assignments` | `dict[MissionType, {dev_type: str, extra_cli_args: str}]` | Mission Type → Dev Type name, plus optional **extra CLI args** appended verbatim to the harness invocation for that Mission Type (`08-harness-templates.md` §1). Args are admin-set data, never hardcoded — they are harness-specific, so the admin UI warns and offers to clear them when the Mission Type is reassigned to a Dev Type with a different harness (`11-admin-panel.md` §3). Validation: all four types assigned. |
 | `concurrency` | `{global_max: int}` | Per-type caps live on each DevType. Effective ceiling = min(global_max, Σ per-type) — this is a property of the dispatch check, not a separate rule. |
 | `dev_timeout_minutes` | `int` (default 120) | Enforced by the app watchdog (`04-orchestrator.md` §5), not by Dagu. |
 | `poll_interval_seconds` | `int` (default 30) | |
@@ -224,7 +224,7 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `merge_retry_window_minutes` | `int ≥ 0` (default 30) | Inert while `auto_merge` is off. When a merge is not possible *yet* (CI running, mergeability computing), the merge sweep keeps retrying for this long before the human hand-off; 0 = hand off immediately. Lower on CI-light repos, raise on CI-heavy ones. |
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
-| `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §2): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
+| `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §0): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
 | `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`junior-dev`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
 | `dismissed_alerts` | `list[str]` (default `[]`) | Admin-UI state: dismissed advisory alerts as `"id:signature"` strings. A list (not a dict) on purpose — `deep_merge` can't delete dict keys, so the UI un-dismisses by PUTting the whole replacement list. |
 

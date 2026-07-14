@@ -64,7 +64,7 @@ cp .env.example .env         # fill: LINEAR_API_KEY, DEVCAKE_TEAM_KEY, GITHUB_TO
 docker compose up -d
 docker compose --profile images build    # the Dev images (3 harnesses + the hello stub);
                                          # re-run after any upgrade that touches images/
-open http://localhost:8080   # admin panel (basic auth from .env) → Config tab →
+open http://localhost:8080   # admin panel (basic auth from .env) → Config page →
                              # test connections; connect Grok/Codex via the OAuth wizard
 ```
 

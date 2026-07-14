@@ -6,20 +6,20 @@
 The orchestrator is the always-on core of the main app. It runs three cooperating loops on one asyncio event loop:
 
 1. **Poll loop** — refresh the world from the PMO System, schedule and dispatch work.
-2. **Ingress consumer** — consume Dev messages from Redis and finalize runs (`09-messaging.md`). Also feeds the live run-log store: `run.log {lines}` batches are redacted and appended to `/data/state/runlogs/{run_id}.log`, which the admin panel's run terminal follows over SSE (`11-admin-panel.md` §3). Finalization and every kill path close the log's live followers (end-of-stream sentinel).
+2. **Ingress consumer** — consume Dev messages from Redis and finalize runs (`09-messaging.md`). Also feeds the live run-log store: `run.log {lines}` batches are redacted and appended to `/data/state/runlogs/{run_id}.log`, which the admin panel's run terminal follows over SSE (`11-admin-panel.md` §4). Finalization and every kill path close the log's live followers (end-of-stream sentinel).
 3. **Watchdog** — enforce the Dev timeout and detect orphaned runs.
 
 ## 1. Poll cycle
 
 Every `poll_interval_seconds` (default 30):
 
-1. Fetch all non-terminal Projects and Issues in the configured team via `PMOPort.list_missions(team_ref)` and normalize to `Mission` DTOs.
+1. Fetch all non-terminal Projects and Issues in the configured team via `PMOPort.list_all(team_ref)` and normalize to `Mission` DTOs.
 2. Derive each Mission's type per the table in `02-domain-model.md` §2.
 3. **Project auto-completion sweep:** for each Project carrying `DEVCAKE-TRACKING`, check its child Issues; if all are `done`/`canceled` (and it has ≥1 child), set the Project's status to `done`, remove `DEVCAKE-TRACKING`, and post a completion comment. (State is derived entirely from the PMO — no local tracking.)
 4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter (`get_pr_by_branch`/`pr_state`, which return normalized `PullRequest` DTOs — attribute access, never raw forge JSON) — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). While the PR is still open and a deferred-merge retry window is active (`auto_merge` ON, latest merge-state feed marker is `` `devcake:merge-retry` ``), the sweep also drives the retry: `mergeable()` each cycle — ready → merge and complete; conflict → conflict-rework routing; computing/CI → wait; window elapsed → terminal hand-off, once. Done is only ever declared after the merge is real.
 5. Run the scheduling algorithm (§3) over the derived candidates — **unless `intake_paused`** (`02-domain-model.md` §9): while paused, steps 1–4 and 6 still run (sweeps, health, snapshot), the ingress consumer still finalizes in-flight runs, and the watchdog still enforces timeouts; only NEW dispatches (missions and MAPPER runs) are withheld.
 6. **Relations Mapper cadence (`MapperService`):** when `relations_mapper.enabled` with a valid `dev_type`, no MAPPER run active, `interval_minutes` elapsed, and the service not **degraded** (3 most recent MAPPER runs all dead — store-derived, restart-safe) → dispatch a MAPPER run (`03-mission-lifecycle.md` §4b). One lock serializes this with the manual "Run now" endpoint; the watermark advances only after a successful dispatch. MAPPER runs count toward `global_max`.
-7. Refresh the poll cache under `/data/cache/` (advisory only) and emit the `poll.cycle` span with counts (`12-observability.md`).
+7. Refresh the in-memory missions snapshot served by `GET /api/v1/missions` (advisory only, rebuilt every cycle) and emit the `poll.cycle` span with counts (`12-observability.md`).
 
 A poll cycle that fails on a PMO transient error is skipped after retries (`15-errors-and-retries.md`, `PMO_TRANSIENT`) — the next cycle starts fresh; nothing is lost because nothing local is authoritative.
 
@@ -123,7 +123,7 @@ Because the *label swap is the last PMO mutation* and scheduling only derives wo
 
 ## 5. Watchdog
 
-Runs every 30 s over all Runs in `dispatched | running`:
+Runs every 10 s over all Runs in `dispatched | running`:
 
 - **Timeout:** if `now - started_at > dev_timeout_minutes` (default 120), kill the run via Dagu's stop endpoint — `POST /api/v1/dag-runs/dev-run/{run_id}/stop` (verified: SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed, run `aborted`) — and mark the Run `timed_out`. Counts as a failed attempt (`15-errors-and-retries.md`, `DEV_TIMEOUT`). Dagu-side timeouts are intentionally not relied on — the app owns the kill (single owner; `13-deployment.md` §4 sets a belt-and-suspenders `timeout_sec` well above the app's). The app needs no `docker.sock` for this.
 - **Liveness:** a Run in `running` whose last `run.heartbeat` (`09-messaging.md`) is older than 5 minutes triggers a Dagu run-status query; a non-running Dagu status ⇒ Run `failed` (`DEV_CRASH`).

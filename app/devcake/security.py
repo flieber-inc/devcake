@@ -4,10 +4,13 @@ token patterns first. A secret that leaks into a Linear comment is unrecoverable
 — this filter is the last line of defense, not the only one."""
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("devcake.security")
 
 # Platform credentials (harness keys, infra passwords) are static; PMO/forge
 # secrets are contributed by EVERY registered adapter via the registry —
@@ -74,6 +77,38 @@ def unregister_runtime_secret(key: str) -> None:
     _runtime_secrets.pop(key, None)
 
 
+# Paths already reported as unreadable — _known_values runs on every redact()
+# call, so a broken file must alarm once, not flood the logs.
+_reported_unreadable: set[str] = set()
+# Strong references to in-flight alarm tasks: the event loop only holds weak
+# refs, so a fire-and-forget create_task could be GC'd before it runs.
+_alarm_tasks: set = set()
+
+
+def _report_unreadable(path: Path, exc: Exception) -> None:
+    """A secrets file this filter can't parse is a live redaction gap: its
+    values will NOT be masked in PMO-bound content. Alarm loudly (log + OO
+    run_failures stream, best effort) but never break the redacting caller."""
+    if str(path) in _reported_unreadable:
+        return
+    _reported_unreadable.add(str(path))
+    log.error("unreadable secrets file %s — its values are NOT being redacted: %s",
+              path, exc)
+    try:
+        import asyncio
+        from .telemetry import push_oo_log
+        task = asyncio.get_running_loop().create_task(push_oo_log("run_failures", {
+            "level": "error",
+            "outcome": "redaction_gap",
+            "reason": f"unreadable secrets file: {path.name}",
+            "detail": f"{path}: {exc}",
+        }))
+        _alarm_tasks.add(task)
+        task.add_done_callback(_alarm_tasks.discard)
+    except RuntimeError:
+        pass  # no running event loop (sync caller) — the ERROR log stands
+
+
 def _known_values() -> list[str]:
     values = [v for var in secret_env_vars() if (v := os.environ.get(var, "").strip())]
     # credential file key material: every long-ish string value in stored JSONs
@@ -89,7 +124,8 @@ def _known_values() -> list[str]:
                 elif isinstance(o, str) and len(o) >= 16:
                     values.append(o)
             walk(json.loads(p.read_text()))
-        except Exception:
+        except Exception as exc:
+            _report_unreadable(p, exc)
             continue
     return sorted(set(values), key=len, reverse=True)  # longest first
 

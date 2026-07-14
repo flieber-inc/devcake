@@ -374,15 +374,12 @@ def heartbeat_loop(stop: threading.Event) -> None:
 def forge_dialect(env: dict) -> tuple:
     """(clone_user, git_name, git_email, cli_token_envs) for the clone
     bootstrap. Values come from the app's ForgeDescriptor via spec_env
-    (docs/06, docs/07); the fallbacks reproduce the pre-descriptor behavior
-    bit-for-bit so old-app/new-image and new-app/old-image both keep working."""
-    clone_user = env.get("DEVCAKE_CLONE_USER") or (
-        "oauth2" if env.get("DEVCAKE_FORGE") == "gitlab" else "x-access-token")
-    git_name = env.get("DEVCAKE_GIT_NAME") or "DevCake"
-    git_email = env.get("DEVCAKE_GIT_EMAIL") or "devcake@users.noreply.github.com"
-    cli_envs = [e for e in (env.get("DEVCAKE_FORGE_CLI_ENVS") or "").split(",")
-                if e] or ["GH_TOKEN", "GITLAB_TOKEN"]
-    return clone_user, git_name, git_email, cli_envs
+    (docs/06, docs/07). App and images deploy in lockstep (docs/13 §8), so
+    every var is always present — a KeyError here means a mismatched build
+    and should crash the run loudly."""
+    cli_envs = [e for e in env.get("DEVCAKE_FORGE_CLI_ENVS", "").split(",") if e]
+    return (env["DEVCAKE_CLONE_USER"], env["DEVCAKE_GIT_NAME"],
+            env["DEVCAKE_GIT_EMAIL"], cli_envs)
 
 
 def main() -> None:
@@ -401,7 +398,7 @@ def main() -> None:
     stop = threading.Event()
     threading.Thread(target=heartbeat_loop, args=(stop,), daemon=True).start()
 
-    # ── OAuth helper mode (docs/16 M6): device-code login, not a mission run ──
+    # ── OAuth helper mode (docs/08 §4): device-code login, not a mission run ──
     if env.get("DEVCAKE_OAUTH_MODE"):
         import re as _re
         cmd = env["DEVCAKE_OAUTH_LOGIN_CMD"].split()

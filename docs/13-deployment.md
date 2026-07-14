@@ -56,7 +56,7 @@ services:
     healthcheck: { test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"], interval: 5s, retries: 5 }
 
   openobserve:
-    image: openobserve/openobserve:v0.91.1   # pinned
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.1   # pinned
     environment:
       - ZO_ROOT_USER_EMAIL=${OO_ROOT_EMAIL}
       - ZO_ROOT_USER_PASSWORD=${OO_ROOT_PASSWORD}
@@ -94,6 +94,12 @@ LINEAR_API_KEY=
 GITHUB_TOKEN=
 GITHUB_REVIEWER_TOKEN=        # optional 2nd account for formal PR approvals
 GITLAB_TOKEN=
+GITLAB_REVIEWER_TOKEN=        # optional 2nd GitLab account for formal MR approvals
+                              # (point repos[0].reviewer_token_env at whichever var matches your forge)
+
+# First-boot config seeds (optional; both land in config.yaml on first boot)
+DEVCAKE_TEAM_KEY=             # seeds pmos[0].team_key
+DEVCAKE_REPO_URL=             # seeds repos[0].url
 
 # Model/harness credentials (env_api_key mode; JSON mode uses the admin panel upload)
 ANTHROPIC_API_KEY=
@@ -205,7 +211,7 @@ Which Dev image a run uses is `HARNESSES[harness_template].image` (`app/devcake/
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config tab: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
+- **First run:** `cp .env.example .env` → fill keys → `docker compose up -d` → open `http://localhost:8080` → Config page: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
 
 ### 8a. Protect the default branch (deployment requirement — docs/14 §2)
 
@@ -215,8 +221,8 @@ Dev containers hold the forge token, and token scoping cannot separate "push a f
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 The forge connection test and the admin header surface the protection state; an unprotected default branch shows a standing amber warning.
-- **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). Schema migrations run automatically (`10-persistence.md` §2). `config.yaml` migrates itself on first boot after an upgrade — v1's singular `pmo:`/`repo:` blocks become the plural v2 `pmos:`/`repos:` lists (still exactly one entry each), with the old file kept as `config.yaml.v1.bak`.
-- **Upgrade — Dev images are NOT rebuilt implicitly:** any deploy that touches `images/common/dev_entrypoint.py` (or any `images/*` context) must be followed by `docker compose --profile images build`. The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently otherwise — and app-side protocol changes (e.g. the chunk `chunk_id`/`sha256` fields) reject the old senders' output.
-- **Kill a stuck Dev:** admin → Executor tab → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
-- **Logs:** admin → Logs tab (OpenObserve). One run = one trace ID (`12-observability.md` §2).
+- **Upgrade:** `docker compose pull && docker compose build && docker compose up -d`. State survives (volumes). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
+- **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker compose --profile images build`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebuilt.
+- **Kill a stuck Dev:** admin → Runs page → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
+- **Logs:** admin → Logs page (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).

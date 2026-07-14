@@ -1,5 +1,5 @@
 """ForgePort — GitLab adapter (docs/06 §7). Same shape as GitHubForge; MRs
-instead of PRs. Live-verified E2E against a gitlab.com sandbox (docs/16 M6)."""
+instead of PRs. Live-verified E2E against a gitlab.com sandbox (v0, 2026-07)."""
 
 import asyncio
 import logging

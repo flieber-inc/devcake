@@ -1,5 +1,5 @@
 #!/bin/sh
-# Renders the runtime config for the static shell and builds the htpasswd.
+# Renders the runtime config (/config.js) for the SPA and builds the htpasswd.
 # Runs via the stock nginx image's /docker-entrypoint.d mechanism.
 set -eu
 

@@ -78,15 +78,17 @@ Exit 13 trips the **global forge breaker** only when the Dev's clone-failure cla
 
 ## 5. Poison messages
 
-Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to `devcake:dead` as a metadata-only record and is XACKed + XDEL'd, incrementing `devcake.errors.total{class="poison"}`. Malformed entry bodies (non-JSON `m`) are dead-lettered the same way from raw fields — a poison pill can never loop through reclaim forever. Chunk groups are exempt while still receiving new chunks (they poison only after 300 s of stall, `09-messaging.md` §4). The affected run recovers through the normal failure machinery (watchdog timeout → reschedule); `devcake:dead` is capped at ~1000 records for inspection.
+Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to `devcake:dead` as a metadata-only record and is XACKed + XDEL'd, emitting an `ingress.poison` span (ERROR status — `12-observability.md` §2). Malformed entry bodies (non-JSON `m`) are dead-lettered the same way from raw fields — a poison pill can never loop through reclaim forever. Chunk groups are exempt while still receiving new chunks (they poison only after 300 s of stall, `09-messaging.md` §4). The affected run recovers through the normal failure machinery (watchdog timeout → reschedule); `devcake:dead` is capped at ~1000 records for inspection.
 
 ## 6. Alerting (v0)
 
-OpenObserve scheduled alerts, provisioned at M7:
+OpenObserve scheduled alerts (`scripts/provision_oo.py`, needs
+`OO_ALERT_WEBHOOK` in `.env`), each an SQL condition over the traces stream —
+there is no metrics pipeline in v0 (`12-observability.md` §4):
 
-1. any `DEVCAKE-FAILED` event (`devcake.runs.total{outcome="devcake_failed"}` > 0, 5-min window);
-1a. any `devcake_needs_human` event — a Dev is waiting on a human action (post-v0 provisioning, same channel);
+1. any give-up — `mission.give_up` spans in a 5-min window;
+1a. any needs-human hand-off — the `devcake_needs_human` audit action / `needs_human` entries in `/health` (same notification channel);
 2. tripped `DEV_AUTH` breaker;
-3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min;
-4. poison message;
-5. daily cost threshold on `devcake.cost.usd.total` (operator-configured).
+3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min (`poll.cycle` outcome attribute);
+4. poison message — `ingress.poison` spans;
+5. daily cost threshold — SUM of `devcake.cost.usd` over `run.finalize` spans (operator-configured).

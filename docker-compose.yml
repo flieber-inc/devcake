@@ -4,8 +4,6 @@ services:
   app:
     build: ./app
     env_file: .env
-    environment:
-      - DEVCAKE_POLL_INTERVAL_SECONDS=${DEVCAKE_POLL_INTERVAL_SECONDS:-30}
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
       # test fixture only: tests/test_entrypoint_render.py exercises the Dev
@@ -81,7 +79,7 @@ services:
     networks: [control, runtime]
 
   admin:
-    build: ./admin                        # nginx + static shell (M0); proxies /api only
+    build: ./admin                        # nginx + the admin SPA; proxies /api only
     ports: [ "8080:80" ]
     environment:
       - DAGU_UI_URL=${DAGU_UI_URL:-http://localhost:8525}

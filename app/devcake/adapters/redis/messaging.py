@@ -15,17 +15,19 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 import redis.asyncio as aioredis
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 from redis.exceptions import ResponseError
 
-from ...security import register_runtime_secret, unregister_runtime_secret
+from ...security import MASK, register_runtime_secret, unregister_runtime_secret
 
 log = logging.getLogger("devcake.messaging")
+tracer = trace.get_tracer("devcake")
 
 INGRESS = "devcake:ingress"
 GROUP = "app"
 CONSUMER = "app-1"
 REPLY_TTL_SECONDS = 900          # secret material must not linger (docs/09 §5)
-CHUNK_LIMIT = 512 * 1024         # payloads above this arrive chunked
 MAX_CHUNKS = 128
 MAX_ASSEMBLED_BYTES = 50 * 1024 * 1024
 MAX_ACTIVE_CHUNK_GROUPS = 16
@@ -45,10 +47,6 @@ def reply_stream(run_id: str) -> str:
     return f"devcake:reply:{run_id}"
 
 
-def runspec_secret_key(run_id: str) -> str:
-    return f"devcake:runspec-secret:{run_id}"
-
-
 def chunk_complete_key(run_id: str, chunk_id: str) -> str:
     return f"devcake:chunk-complete:{run_id}:{chunk_id}"
 
@@ -64,58 +62,6 @@ class Messaging:
         except ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise
-
-    async def scrub_legacy_dead_letters(self) -> int:
-        """Remove pre-v2 dead letters that copied raw auth/payload envelopes."""
-        removed = 0
-        for entry_id, fields in await self.redis.xrange(DEAD_STREAM):
-            try:
-                body = json.loads(fields.get("m", ""))
-                safe = isinstance(body, dict) and "payload_keys" in body \
-                    and "auth" not in body and "payload" not in body
-            except Exception:
-                safe = False
-            if not safe:
-                await self.redis.xdel(DEAD_STREAM, entry_id)
-                removed += 1
-        if removed:
-            log.warning("removed %d legacy credential-bearing dead letters", removed)
-        return removed
-
-    async def delete_acknowledged_ingress(self) -> int:
-        """Remove pre-v2 acknowledged history while preserving pending/unread work."""
-        groups = await self.redis.xinfo_groups(INGRESS)
-        group = next((item for item in groups if item.get("name") == GROUP), None)
-        if not group:
-            return 0
-        last_delivered = group.get("last-delivered-id", "0-0")
-        summary = await self.redis.xpending(INGRESS, GROUP)
-        pending_count = int(summary.get("pending", 0))
-        if pending_count > 10_000:
-            log.error("refusing ingress history cleanup with %d pending entries",
-                      pending_count)
-            return 0
-        pending_rows = await self.redis.xpending_range(
-            INGRESS, GROUP, "-", "+", count=max(1, pending_count))
-        pending_ids = {row["message_id"] for row in pending_rows}
-
-        removed = 0
-        minimum = "-"
-        while True:
-            batch = await self.redis.xrange(
-                INGRESS, min=minimum, max=last_delivered, count=250)
-            if not batch:
-                break
-            deletable = [entry_id for entry_id, _fields in batch
-                         if entry_id not in pending_ids]
-            if deletable:
-                removed += await self.redis.xdel(INGRESS, *deletable)
-            if len(batch) < 250:
-                break
-            minimum = f"({batch[-1][0]}"
-        if removed:
-            log.info("removed %d acknowledged legacy ingress entries", removed)
-        return removed
 
     # ── per-run ACL users (docs/09 §1a) ──────────────────────────────────────
 
@@ -134,11 +80,6 @@ class Messaging:
     async def delete_run_user(self, run_id: str) -> None:
         await self.redis.execute_command("ACL", "DELUSER", f"dev-{run_id}")
         unregister_runtime_secret(run_id)
-
-    async def delete_runspec_secret(self, run_id: str) -> None:
-        # runspec secrets are built on request since v2.1 (docs/09 §5) — this
-        # only cleans keys left behind by runs dispatched before the upgrade
-        await self.redis.delete(runspec_secret_key(run_id))
 
     # ── replies (app → one Dev) ──────────────────────────────────────────────
 
@@ -162,7 +103,7 @@ class Messaging:
                 continue
 
     async def delete_reply_stream(self, run_id: str) -> None:
-        await self.redis.delete(reply_stream(run_id), runspec_secret_key(run_id))
+        await self.redis.delete(reply_stream(run_id))
 
     # ── ingress consumption (Devs → app) ─────────────────────────────────────
 
@@ -238,7 +179,7 @@ class Messaging:
         if len(auth) < 16:
             return value
         if isinstance(value, str):
-            return value.replace(auth, "«REDACTED»")
+            return value.replace(auth, MASK)
         if isinstance(value, list):
             return [Messaging._scrub_envelope_auth(item, auth) for item in value]
         if isinstance(value, dict):
@@ -272,28 +213,35 @@ class Messaging:
             return
         entry_ids = list((assembly or {}).get("entry_ids", [])) or [entry_id]
         try:
-            payload = envelope.get("payload")
-            await self.redis.xadd(
-                DEAD_STREAM,
-                {
-                    "m": json.dumps({
-                        "v": envelope.get("v"),
-                        "run_id": envelope.get("run_id", ""),
-                        "kind": envelope.get("kind", ""),
-                        "ts": envelope.get("ts", ""),
-                        "payload_keys": sorted(payload.keys())
-                        if isinstance(payload, dict) else [],
-                    }),
-                    "src": json.dumps(entry_ids),
-                    "chunk_group": json.dumps(key) if key else "",
-                },
-                maxlen=DEAD_STREAM_MAXLEN,
-                approximate=True,
-            )
-            await self._ack_delete(entry_ids)
-            if key:
-                self._chunks.pop(key, None)
-            log.error("ingress: POISON group %s moved to %s", entry_ids, DEAD_STREAM)
+            # reliability event — traced so dead-lettering is queryable in OO
+            with tracer.start_as_current_span("ingress.poison") as span:
+                span.set_attribute("devcake.run.id", str(envelope.get("run_id", "")))
+                span.set_attribute("devcake.kind", str(envelope.get("kind", "")))
+                span.set_attribute("devcake.poison.entries", len(entry_ids))
+                span.set_status(Status(StatusCode.ERROR,
+                                       "poison message dead-lettered"))
+                payload = envelope.get("payload")
+                await self.redis.xadd(
+                    DEAD_STREAM,
+                    {
+                        "m": json.dumps({
+                            "v": envelope.get("v"),
+                            "run_id": envelope.get("run_id", ""),
+                            "kind": envelope.get("kind", ""),
+                            "ts": envelope.get("ts", ""),
+                            "payload_keys": sorted(payload.keys())
+                            if isinstance(payload, dict) else [],
+                        }),
+                        "src": json.dumps(entry_ids),
+                        "chunk_group": json.dumps(key) if key else "",
+                    },
+                    maxlen=DEAD_STREAM_MAXLEN,
+                    approximate=True,
+                )
+                await self._ack_delete(entry_ids)
+                if key:
+                    self._chunks.pop(key, None)
+                log.error("ingress: POISON group %s moved to %s", entry_ids, DEAD_STREAM)
         except Exception:
             log.exception("poison handling failed for %s", entry_id)
 
@@ -307,9 +255,15 @@ class Messaging:
 
         auth = str(envelope.get("auth") or "")
         if not verify_auth(run_id, auth):
-            log.warning("ingress: FORGED/unauthenticated message dropped (run_id=%s kind=%s)",
-                        run_id, kind)
-            await self._ack_delete([entry_id])
+            # security event — traced so forgery attempts are queryable in OO
+            with tracer.start_as_current_span("ingress.forged_drop") as span:
+                span.set_attribute("devcake.run.id", run_id)
+                span.set_attribute("devcake.kind", kind)
+                span.set_status(Status(StatusCode.ERROR,
+                                       "forged/unauthenticated message dropped"))
+                log.warning("ingress: FORGED/unauthenticated message dropped "
+                            "(run_id=%s kind=%s)", run_id, kind)
+                await self._ack_delete([entry_id])
             return
         if "chunk" in payload:  # reassemble chunked payloads (docs/09 §3)
             if kind != "run.artifacts":

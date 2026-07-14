@@ -108,7 +108,7 @@ GitHub and GitLab forbid approving a PR with the account that opened it. Resolut
 
 **Merge always precedes Done, in every path** (confirmed decision — `03-mission-lifecycle.md` §4.1). All DevCake-written code (including the trivial-ONBOARD path, which now always passes REVIEW) reaches Done only through REVIEW approval followed by a real merge:
 
-- `auto_merge` **ON**: after approval, the app merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §2).
+- `auto_merge` **ON**: after approval, the app merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §3).
 - `auto_merge` **OFF**: after approval the Mission carries `DEVCAKE-MERGE` and stays In Progress; the poll-cycle merge sweep (`04-orchestrator.md` §1) marks it Done when a human merges the PR, or Canceled if the PR is closed unmerged.
 
 **Merge-failure classes.** Neither forge's merge status code alone identifies the cause (GitHub 405 covers conflicts, branch protection, AND pending required checks; GitLab 405 covers conflicts, drafts, running/failed pipelines) — so after a failed merge the app reads the port's `mergeable()` and classifies:

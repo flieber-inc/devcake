@@ -1,4 +1,4 @@
-"""docs/14 §5 — the redaction filter (M7 exit criterion)."""
+"""docs/14 §5 — the redaction filter."""
 import os
 
 from devcake.security import MASK, redact, redact_value

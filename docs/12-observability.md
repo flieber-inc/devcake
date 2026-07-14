@@ -18,25 +18,37 @@ observability gap.
 ## 1. Pipeline
 
 - All Python services and Dev entrypoints export **OTLP HTTP directly to OpenObserve** — no collector in v0 (a collector is the documented future insertion point for sampling/routing).
-- Endpoints (org segment required): `http://openobserve:5080/api/default/v1/traces`, `…/v1/logs`, `…/v1/metrics`; auth via `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic <base64(email:password)>"` (or a v0.91+ org ingestion token).
+- Endpoints (org segment required): `http://openobserve:5080/api/default/v1/traces`, `…/v1/logs`. Auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance): the app derives it from `OO_ROOT_EMAIL`/`OO_ROOT_PASSWORD` (`telemetry/__init__.py`); Devs receive the pre-encoded value as `OTEL_EXPORTER_OTLP_BASIC` in the runspec's secret half (`07-dev-runtime.md` §3).
 - Container **stdout** of every compose service (incl. `dagu`, `redis`) is also shipped to OpenObserve (fluent-forward or filelog shipper, `13-deployment.md` §7) so non-instrumented services remain searchable.
 - `service.name`: `devcake-app`, `devcake-admin`, `devcake-dev` (Dev entrypoints; the run's `dev_type` is an attribute, not the service name).
 
 ## 2. Span taxonomy (normative)
 
-| Span | Parent | Emitted by | Required attributes |
+| Span | Parent | Emitted by | Content |
 |---|---|---|---|
-| `poll.cycle` | root | app | counts: missions seen/candidates/dispatched |
-| `mission.evaluate` | `poll.cycle` | app | `devcake.mission.*` |
-| `mission.dispatch` | `poll.cycle` | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type` |
+| `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `PMO_TRANSIENT`/`cycle_error` outcomes |
+| `mission.dispatch` | `poll.cycle` (mapper runs: `mapper.periodic`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
+| `mission.give_up` | `poll.cycle` | app | ERROR status; covers the `DEVCAKE-FAILED` label write + feed post |
+| `sweep.merge` | `poll.cycle` | app | emitted only when the sweep acts (`merged`/`closed`); covers the PMO writes |
+| `sweep.merge_retry` | `poll.cycle` | app | one span per acting deferred-retry decision: `merged` / `conflict` / `conflict_handoff` / `merge_failed_transient` / `window_exhausted` (ERROR) |
+| `sweep.tracking` | `poll.cycle` | app | emitted when a project auto-completes; covers the PMO writes |
+| `mapper.periodic` | `poll.cycle` | app | how a DUE periodic mapper run resolved: `dispatched` / `already_active` / `concurrency_deferred` / `degraded_skip` (ERROR). Emitted on outcome **transitions** (and every dispatch), not per tick — a mapper stuck degraded for hours yields one span, not thousands |
 | `dev.run` | *linked to `mission.dispatch` via TRACEPARENT env* | Dev entrypoint | full registry incl. `devcake.tokens.*`, `devcake.cost.usd`, `devcake.outcome` |
 | `harness.exec` | `dev.run` | Dev entrypoint | `devcake.harness` |
-| `pmo.{op}` | caller | app | op = `list/get/post_feed/upload/set_status/swap_labels/create` (the `PMOPort` surface) |
-| `forge.{op}` | caller | app | op = `get_pr_by_branch/comment/approve/merge` (the `ForgePort` surface) |
-| `redis.publish` / `redis.consume` | caller | both | `devcake.run.id`, message kind |
-| `run.finalize` | `redis.consume` | app | `devcake.run.id`, `devcake.outcome`, finalized steps |
+| `ingress.handle` | `dev.run` (via the run's traceparent) | app | one span per handled ingress message (`devcake.kind`: `run.started`, `runspec.get`, `activity.get`, `oauth.result`, `run.artifacts`, OAuth-shaped `run.log`, …). Deliberately span-free: `run.heartbeat` (2/min/run) and streamed `run.log {lines}` batches (one every few seconds while a harness talks) — pure liveness/output noise that would drown the trace |
+| `run.finalize` | `dev.run` (via the run's traceparent) | app | `devcake.run.id`, `devcake.outcome`, `devcake.tokens.*`, `devcake.cost.usd`, `devcake.verdict` (+ ERROR status on rejections) |
+| `watchdog.kill` | `dev.run` (via the run's traceparent) | app | ERROR status, kill reason, resulting state |
+| `ingress.forged_drop` | root | app | security event: a message that failed envelope auth was dropped (ERROR) |
+| `ingress.poison` | root | app | reliability event: a message group dead-lettered after 5 deliveries (ERROR) |
+| `oauth.start` / `oauth.result` | API request span | app | `devcake.run.id`, `devcake.dev_type` |
+| `system.clear_runs` | API request span | app | deletion counts |
+| *HTTP client spans* | caller | app (auto) | every outbound call — Linear GraphQL, GitHub/GitLab REST, Dagu, OpenObserve — via `HTTPXClientInstrumentor`; there are deliberately no hand-rolled `pmo.*`/`forge.*` spans |
+| *API request spans* | root | app (auto) | every `/api/v1/*` request via `FastAPIInstrumentor` |
 
-**Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3); one trace therefore spans dispatch → container execution → finalization. This is the primary debugging view: "show me everything about run X" is one trace ID.
+Deliberately span-free besides heartbeats: the watchdog's quiet 10 s scan (its
+*actions* — kills and Dagu status probes — are all spanned or auto-instrumented).
+
+**Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3), and every app-side consumer of a run message re-extracts it; one trace therefore spans dispatch → container execution → ingress handling → finalization (or kill). This is the primary debugging view: "show me everything about run X" is one trace ID.
 
 ## 3. Attribute registry (normative — spelled exactly)
 
@@ -51,27 +63,34 @@ devcake.cost.usd            devcake.outcome            (result.json outcome | er
 
 Every log line from app and Dev entrypoint carries `devcake.run.id` and `devcake.mission.key` for correlation.
 
-## 4. Metrics
+## 4. Aggregation model: SQL over spans, not a metrics pipeline
 
-| Metric | Type | Labels |
-|---|---|---|
-| `devcake.runs.active` | gauge | `dev_type` |
-| `devcake.runs.total` | counter | `outcome`, `dev_type`, `mission_type` |
-| `devcake.tokens.total` | counter | `dev_type`, `mission_type`, `direction` (input/output) |
-| `devcake.cost.usd.total` | counter | `dev_type`, `mission_type` |
-| `devcake.review_loops` | counter | `mission_key` |
-| `devcake.poll.duration` | histogram | — |
-| `devcake.errors.total` | counter | `class` (per `15-errors-and-retries.md`) |
+v0 emits **no OTel metric instruments**. Every quantity worth aggregating is
+already a span attribute (§3) or a log record, and OpenObserve queries them
+directly with SQL over the `traces` stream — one pipeline, one place to look.
+(A first-class metrics layer is on the roadmap, `16-roadmap.md`.)
 
-Token/cost numbers are emitted **twice by design**: human-facing in the activity-feed report (INV-5) and machine-facing here — OpenObserve is the cost dashboard.
+Canonical queries (the shapes `scripts/provision_oo.py` installs):
 
-## 5. Pre-provisioned dashboards (created at M0/M3, `16-roadmap.md`)
+| Question | Query over |
+|---|---|
+| Cost / tokens by dev type & mission type | `run.finalize` spans: `devcake.cost.usd`, `devcake.tokens.*`, grouped by `devcake_dev_type` |
+| Runs by outcome | `run.finalize` spans: `devcake.outcome` (+ `devcake.verdict` for app-level rejections) |
+| Failure signals | `watchdog.kill` + `mission.give_up` spans (ERROR status); the `run_failures` log stream (§6) for pre-telemetry deaths |
+| Poison / forgery pressure | `ingress.poison` / `ingress.forged_drop` spans |
+| Poll health & queue depth | `poll.cycle` spans: duration + missions seen/candidates/dispatched |
 
-1. **Cost** — `devcake.cost.usd.total` and `devcake.tokens.total` by dev_type/mission_type; top-10 missions by cost.
-2. **Reliability** — runs by outcome, error classes over time, `DEVCAKE-FAILED` events, review-loop counts.
-3. **Throughput** — active runs vs caps, poll duration, queue depth (candidates not dispatched).
+Token/cost numbers are reported **twice by design**: human-facing in the
+activity-feed report (INV-5) and machine-facing as `run.finalize` span
+attributes — OpenObserve is the cost dashboard.
 
-The admin panel's Logs tab deep-links to these (`11-admin-panel.md` §5).
+## 5. Pre-provisioned dashboard + alerts (`scripts/provision_oo.py`, idempotent)
+
+One **DevCake** dashboard, all panels SQL over the traces stream: **Cost per
+hour (USD, by dev type)** · **Dev runs by outcome (daily)** · **Failure
+signals (kills, give-ups)**. With `OO_ALERT_WEBHOOK` set in `.env`, the script
+also provisions the alert set of `15-errors-and-retries.md` §6 against the
+same stream. The admin panel's Logs page deep-links here (`11-admin-panel.md` §5).
 
 ## 6. Run-failure log stream (`run_failures`) — the executor's dying words
 

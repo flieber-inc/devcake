@@ -111,7 +111,7 @@ class MissionManager:
         self._grace_next: set[str] = set()
         self.breakers: dict[str, str] = {}  # dev_type → reason (DEV_AUTH circuit breaker)
         self.forge_health: dict | None = None  # last probe result (advisory; /health)
-        self.blocked_reasons: dict[str, str] = {}  # last gate_map (advisory mirror)
+        self.blocked_reasons: dict[str, str] = {}  # last gate_map → /health (advisory)
         self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map
         self.anomalies: dict[str, str] = {}  # pmo_id → out-of-pipeline anomaly (advisory)
         # pmo_id → "awaiting human merge" note (advisory; docs/11 banner): set
@@ -299,27 +299,10 @@ class MissionManager:
                 MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
             }[mtype]()
 
-            spec_env = {
-                "DEVCAKE_MISSION_ID": mission.pmo_id,
-                "DEVCAKE_MISSION_KEY": mission.key,
-                "DEVCAKE_MISSION_TYPE": mtype.value,
-                "DEVCAKE_DEV_TYPE": dev_type.name,
-                "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
-                "DEVCAKE_SEQ": str(seq),
-                "DEVCAKE_REPO_URL": self.config.repo.url,
-                "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
-                # legacy discriminator/credential (old images key clone auth
-                # on these); the descriptor-driven vars below take precedence
-                # in current images (docs/07)
-                "DEVCAKE_FORGE": self.config.repo.forge,
-                "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
-                "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
-                "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
-                "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
-                "DEVCAKE_EXTRA_ARGS": assignment.extra_cli_args,
-                "DEVCAKE_MODEL": dev_type.model,
-                "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
-            }
+            spec_env = self._protocol_spec_env(
+                mission_id=mission.pmo_id, mission_key=mission.key,
+                mission_type=mtype.value, dev_type=dev_type, seq=seq,
+                extra_args=assignment.extra_cli_args)
             from .run import auth_digest
             run = Run(
                 run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
@@ -347,6 +330,30 @@ class MissionManager:
                 self._audit(mission.pmo_id, "set_status", "in_progress")
             log.info("dispatched %s (attempt %d, dev=%s)", run_id, attempt, dev_type.name)
             return run
+
+    def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
+                           mission_type: str, dev_type: DevType, seq: int,
+                           extra_args: str) -> dict[str, str]:
+        """The Dev-protocol env contract (docs/07 §3), built in exactly one
+        place so mission and mapper dispatches can never drift apart — a var
+        missing on one path would crash the entrypoint's strict readers."""
+        return {
+            "DEVCAKE_MISSION_ID": mission_id,
+            "DEVCAKE_MISSION_KEY": mission_key,
+            "DEVCAKE_MISSION_TYPE": mission_type,
+            "DEVCAKE_DEV_TYPE": dev_type.name,
+            "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
+            "DEVCAKE_SEQ": str(seq),
+            "DEVCAKE_REPO_URL": self.config.repo.url,
+            "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
+            "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
+            "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
+            "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
+            "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
+            "DEVCAKE_EXTRA_ARGS": extra_args,
+            "DEVCAKE_MODEL": dev_type.model,
+            "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
+        }
 
     def runspec_secret_payload(self, run: Run) -> dict | None:
         """Secret half of a run spec, built from current config on request
@@ -379,7 +386,7 @@ class MissionManager:
                               "content": p.read_text(), "mode": "600"})
             else:
                 log.warning("credential file %s missing for %s — connect via OAuth "
-                            "or upload it on the admin Config tab", p, dev_type.name)
+                            "or upload it on the admin Config page", p, dev_type.name)
         return env, files
 
     async def _feed(self, pmo_id: str, kind: str, markdown: str) -> None:
@@ -389,7 +396,7 @@ class MissionManager:
         goes on the comment, never inside the attachment, so provenance
         classification keeps working. Upload failures fall back to posting
         inline — an upload outage must never lose feed content. Projects have
-        no issue-style comments API (verified at M2/M5): their run artifacts
+        no issue-style comments API (verified live): their run artifacts
         live in the audit log + OpenObserve; the substance lands on the child
         issues anyway (ADR-0006)."""
         markdown = redact(markdown)
@@ -449,14 +456,24 @@ class MissionManager:
         return cand
 
     @staticmethod
-    def _last_giveup_ts(pmo_id: str) -> str | None:
+    def _aware(ts: datetime) -> datetime:
+        """Anchor timestamps come from three sources (audit log, run records,
+        PMO comments); a stray naive one must not crash the scheduler."""
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+    @classmethod
+    def _last_giveup_at(cls, pmo_id: str) -> datetime | None:
         try:
             ts = None
             with open(AUDIT_PATH) as f:
                 for line in f:
-                    e = json.loads(line)
-                    if e.get("pmo_id") == pmo_id and e.get("action") == "devcake_failed":
-                        ts = e["ts"]
+                    try:
+                        e = json.loads(line)
+                        if e.get("pmo_id") == pmo_id \
+                                and e.get("action") == "devcake_failed":
+                            ts = cls._aware(datetime.fromisoformat(e["ts"]))
+                    except Exception:
+                        continue  # one bad audit line must never halt scheduling
             return ts
         except FileNotFoundError:
             return None
@@ -471,11 +488,11 @@ class MissionManager:
         mission is an intervention — the step deserves fresh attempts)."""
         all_runs = [r for r in self.runs.store.all() if r.mission_pmo_id == pmo_id]
         history = [r for r in all_runs if r.mission_type == mission_type]
-        anchors = [s for s in [self._last_giveup_ts(pmo_id),
-                               *(r.created_at.isoformat() for r in all_runs
-                                 if r.state == "finished")] if s]
+        anchors = [t for t in [self._last_giveup_at(pmo_id),
+                               *(self._aware(r.created_at) for r in all_runs
+                                 if r.state == "finished")] if t]
         if activity is not None:
-            anchors += [e.ts.isoformat() for e in activity.entries
+            anchors += [self._aware(e.ts) for e in activity.entries
                         if e.kind == "comment"
                         and not self._is_devcake_comment(e.body)]
         since = max(anchors, default=None)
@@ -484,7 +501,7 @@ class MissionManager:
             1 for r in history
             if r.state in ("failed", "timed_out", "orphaned")
             and not any(marker in (r.error or "") for marker in ignored)
-            and (since is None or r.created_at.isoformat() > since)
+            and (since is None or self._aware(r.created_at) > since)
         )
 
     async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) -> None:
@@ -494,13 +511,15 @@ class MissionManager:
             span.set_attribute("devcake.mission.key", mission.key)
             span.set_attribute("devcake.mission.type", mtype.value)
             span.set_attribute("devcake.run.attempt", attempts)
-        await self.pmo.swap_labels(mission.ref, remove=set(), add={LABEL_FAILED})
-        await self._feed(
-            mission.pmo_id, mission.pmo_kind,
-            f"⚠️ **DevCake gave up on this mission's {mtype.value} step** after "
-            f"{attempts} failed attempts. Remove the `DEVCAKE-FAILED` label to retry. "
-            f"(Traces: search run ids `{mission.key}-*` in OpenObserve.)")
-        self._audit(mission.pmo_id, "devcake_failed", mtype.value)
+            span.set_status(Status(StatusCode.ERROR,
+                                   f"gave up after {attempts} attempts"))
+            await self.pmo.swap_labels(mission.ref, remove=set(), add={LABEL_FAILED})
+            await self._feed(
+                mission.pmo_id, mission.pmo_kind,
+                f"⚠️ **DevCake gave up on this mission's {mtype.value} step** after "
+                f"{attempts} failed attempts. Remove the `DEVCAKE-FAILED` label to retry. "
+                f"(Traces: search run ids `{mission.key}-*` in OpenObserve.)")
+            self._audit(mission.pmo_id, "devcake_failed", mtype.value)
         log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 
     # ── finalization (docs/04 §4) ────────────────────────────────────────────
@@ -697,7 +716,6 @@ class MissionManager:
                                        remove={LABEL_PLAN}, add={LABEL_EXECUTE})
             self._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
         elif outcome == "executed":
-            from .model import LABEL_REVIEW
             await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                        remove={LABEL_EXECUTE}, add={LABEL_REVIEW})
             await self._feed(
@@ -706,7 +724,6 @@ class MissionManager:
                 f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
             self._audit(pmo_id, "label_swap", f"{LABEL_EXECUTE}→{LABEL_REVIEW}")
         elif outcome == "executed_trivially":
-            from .model import LABEL_REVIEW
             await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                        remove=set(), add={LABEL_REVIEW})
             await self._feed(
@@ -1017,9 +1034,6 @@ class MissionManager:
 
         existing: dict[int, str] = {}
         conflicts: list[str] = []
-        legacy_re = re.compile(
-            rf"Created by DevCake from {re.escape(live.key)}\s+—\s+part (\d+)/(\d+)"
-        )
         for mission in await self.pmo.list_all(self.config.pmo.team_key):
             if LABEL_CREATED not in mission.labels:
                 continue
@@ -1042,18 +1056,6 @@ class MissionManager:
                     conflicts.append(f"{mission.key} title disagrees with part {part}")
                     continue
                 existing[part] = mission.pmo_id
-                continue
-            legacy = legacy_re.search(mission.description or "")
-            if legacy:
-                part, total = int(legacy.group(1)), int(legacy.group(2))
-                if total != len(normalized) or part not in range(1, len(normalized) + 1):
-                    conflicts.append(f"legacy child {mission.key} has part {part}/{total}")
-                elif mission.title != normalized[part - 1]["title"]:
-                    conflicts.append(f"legacy child {mission.key} disagrees with part {part}")
-                elif part in existing:
-                    conflicts.append(f"part {part} has multiple existing missions")
-                else:
-                    existing[part] = mission.pmo_id
 
         if conflicts:
             detail = "; ".join(conflicts[:8])
@@ -1147,24 +1149,9 @@ class MissionManager:
             traceparent = carrier.get("traceparent", "")
 
             redis_password = await self.messaging.create_run_user(run_id)
-            spec_env = {
-                "DEVCAKE_MISSION_ID": "",
-                "DEVCAKE_MISSION_KEY": "TEAM",
-                "DEVCAKE_MISSION_TYPE": "MAPPER",
-                "DEVCAKE_DEV_TYPE": dev_type.name,
-                "DEVCAKE_HARNESS": dev_type.harness_template,  # app-authoritative
-                "DEVCAKE_SEQ": str(seq),
-                "DEVCAKE_REPO_URL": self.config.repo.url,
-                "DEVCAKE_DEFAULT_BRANCH": self.config.repo.default_branch,
-                "DEVCAKE_FORGE": self.config.repo.forge,
-                "DEVCAKE_CLONE_USER": self.forge.descriptor.clone_user,
-                "DEVCAKE_GIT_NAME": self.forge.descriptor.git_user_name,
-                "DEVCAKE_GIT_EMAIL": self.forge.descriptor.git_email,
-                "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
-                "DEVCAKE_EXTRA_ARGS": "",
-                "DEVCAKE_MODEL": dev_type.model,
-                "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
-            }
+            spec_env = self._protocol_spec_env(
+                mission_id="", mission_key="TEAM", mission_type="MAPPER",
+                dev_type=dev_type, seq=seq, extra_args="")
             from .run import auth_digest
             run = Run(
                 run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
@@ -1325,21 +1312,20 @@ class MissionManager:
                 span.set_attribute("devcake.mission.key", m.key)
                 span.set_attribute("devcake.outcome",
                                    "merged" if state.merged else "closed")
-        if state.merged:
-            await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
-            await self.pmo.set_status(m.ref, "done")
-            await self._feed(
-                m.pmo_id, "issue",
-                f"✅ PR {state.url} merged — mission done (merge sweep).")
-            self._audit(m.pmo_id, "merge_sweep_done", state.url)
-        elif state.state == "closed":
-            await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
-            await self.pmo.set_status(m.ref, "canceled")
-            await self._feed(
-                m.pmo_id, "issue",
-                f"🚫 PR {state.url} was closed without merging — mission "
-                f"canceled (merge sweep).")
-            self._audit(m.pmo_id, "merge_sweep_canceled", state.url)
+                await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
+                if state.merged:
+                    await self.pmo.set_status(m.ref, "done")
+                    await self._feed(
+                        m.pmo_id, "issue",
+                        f"✅ PR {state.url} merged — mission done (merge sweep).")
+                    self._audit(m.pmo_id, "merge_sweep_done", state.url)
+                else:
+                    await self.pmo.set_status(m.ref, "canceled")
+                    await self._feed(
+                        m.pmo_id, "issue",
+                        f"🚫 PR {state.url} was closed without merging — mission "
+                        f"canceled (merge sweep).")
+                    self._audit(m.pmo_id, "merge_sweep_canceled", state.url)
         else:
             # advisory banner (docs/11): an open PR on DEVCAKE-MERGE awaits a
             # human — unless the deferred-retry window is actively running
@@ -1366,21 +1352,27 @@ class MissionManager:
         retry_ts = handoff_ts = None
         for e in act.entries:
             body = self._unquoted(e.body)
+            ts = self._aware(e.ts)  # a naive PMO timestamp must not TypeError
             if MERGE_RETRY_MARKER in body:
-                retry_ts = max(retry_ts, e.ts) if retry_ts else e.ts
+                retry_ts = max(retry_ts, ts) if retry_ts else ts
             if MERGE_HANDOFF_MARKER in body:
-                handoff_ts = max(handoff_ts, e.ts) if handoff_ts else e.ts
+                handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
         if not retry_ts or (handoff_ts and handoff_ts >= retry_ts):
             self._merge_window_closed.add(m.pmo_id)
             return  # no active retry window (auto_merge-OFF parks land here)
         window = self.config.merge_retry_window_minutes
         if (utcnow() - retry_ts).total_seconds() / 60 > window:
-            await self._feed(
-                m.pmo_id, "issue",
-                f"⚠️ Still unmergeable after {window} min — awaiting human "
-                f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
-            self._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
-            self._merge_window_closed.add(m.pmo_id)
+            with tracer.start_as_current_span("sweep.merge_retry") as span:
+                span.set_attribute("devcake.mission.key", m.key)
+                span.set_attribute("devcake.outcome", "window_exhausted")
+                span.set_status(Status(StatusCode.ERROR,
+                                       f"unmergeable after {window} min"))
+                await self._feed(
+                    m.pmo_id, "issue",
+                    f"⚠️ Still unmergeable after {window} min — awaiting human "
+                    f"merge of {pr_url} (`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+                self._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
+                self._merge_window_closed.add(m.pmo_id)
             return
         # window ACTIVE: DevCake is still driving the merge — no human action
         # needed, so the sweep's banner entry comes back off
@@ -1392,42 +1384,51 @@ class MissionManager:
         # rules are what make it fail) — one plain merge attempt is far
         # cheaper than an EXECUTE rework, so always try the merge first and
         # only route to rework when it actually fails on a real conflict
-        try:
-            await self.forge.merge(pr.number)
-        except Exception:
-            if verdict is False:
-                if not await self._maybe_route_conflict_to_execute(
-                        m.pmo_id, m.key, pr_url, LABEL_MERGE):
-                    await self._feed(
-                        m.pmo_id, "issue",
-                        f"⚠️ Merge conflict on {pr_url} and auto-resolve is "
-                        f"unavailable (toggle off or attempts exhausted) — "
-                        f"awaiting human merge (`DEVCAKE-MERGE`). "
-                        f"{MERGE_HANDOFF_MARKER}")
-                    self._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
-                    self._merge_window_closed.add(m.pmo_id)
-                    self.merge_handoffs[m.pmo_id] = (
-                        f"{m.key}: awaiting human merge — {pr_url}")
-            else:
-                # state may have moved under us; next cycle re-reads
-                log.debug("deferred merge retry failed for %s", m.key,
-                          exc_info=True)
-            return
-        await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
-        await self.pmo.set_status(m.ref, "done")
-        await self._feed(
-            m.pmo_id, "issue",
-            f"✅ Merged after deferred retry ({pr_url}). Mission done.")
-        self._audit(m.pmo_id, "merge_retry_succeeded", pr_url)
+        with tracer.start_as_current_span("sweep.merge_retry") as span:
+            span.set_attribute("devcake.mission.key", m.key)
+            span.set_attribute("devcake.merge.verdict", str(verdict))
+            try:
+                await self.forge.merge(pr.number)
+            except Exception:
+                if verdict is False:
+                    span.set_attribute("devcake.outcome", "conflict")
+                    if not await self._maybe_route_conflict_to_execute(
+                            m.pmo_id, m.key, pr_url, LABEL_MERGE):
+                        span.set_attribute("devcake.outcome", "conflict_handoff")
+                        await self._feed(
+                            m.pmo_id, "issue",
+                            f"⚠️ Merge conflict on {pr_url} and auto-resolve is "
+                            f"unavailable (toggle off or attempts exhausted) — "
+                            f"awaiting human merge (`DEVCAKE-MERGE`). "
+                            f"{MERGE_HANDOFF_MARKER}")
+                        self._audit(m.pmo_id, "merge_retry_exhausted", pr_url)
+                        self._merge_window_closed.add(m.pmo_id)
+                        self.merge_handoffs[m.pmo_id] = (
+                            f"{m.key}: awaiting human merge — {pr_url}")
+                else:
+                    # state may have moved under us; next cycle re-reads
+                    span.set_attribute("devcake.outcome", "merge_failed_transient")
+                    log.debug("deferred merge retry failed for %s", m.key,
+                              exc_info=True)
+                return
+            span.set_attribute("devcake.outcome", "merged")
+            await self.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
+            await self.pmo.set_status(m.ref, "done")
+            await self._feed(
+                m.pmo_id, "issue",
+                f"✅ Merged after deferred retry ({pr_url}). Mission done.")
+            self._audit(m.pmo_id, "merge_retry_succeeded", pr_url)
 
     async def _tracking_sweep(self, m: Mission) -> None:
         children = await self.pmo.children_of(m.ref)
         if children and all(c.status in ("done", "canceled") for c in children):
             with tracer.start_as_current_span("sweep.tracking") as span:
                 span.set_attribute("devcake.mission.key", m.key)
-            await self.pmo.set_status(m.ref, "done")
-            await self.pmo.swap_labels(m.ref, remove={LABEL_TRACKING}, add=set())
-            self._audit(m.pmo_id, "tracking_sweep_completed", f"{len(children)} children")
+                span.set_attribute("devcake.children", len(children))
+                await self.pmo.set_status(m.ref, "done")
+                await self.pmo.swap_labels(m.ref, remove={LABEL_TRACKING}, add=set())
+                self._audit(m.pmo_id, "tracking_sweep_completed",
+                            f"{len(children)} children")
             log.info("project %s auto-completed (%d children done)", m.key, len(children))
 
     async def restore_after_failure(self, run: Run) -> None:
@@ -1559,6 +1560,7 @@ class MapperService:
         self._lock = asyncio.Lock()
         # first auto-run lands one interval after boot; "Run now" covers immediacy
         self._last_at = time.monotonic()
+        self._last_periodic_outcome: str | None = None  # span-on-transition dedupe
 
     def dev_type(self) -> DevType | None:
         rm = self.config.relations_mapper
@@ -1586,18 +1588,32 @@ class MapperService:
         if not rm.enabled or dt is None or "forge" in self.mgr.breakers:
             return
         if time.monotonic() - self._last_at < rm.interval_minutes * 60:
+            self._last_periodic_outcome = None
             return
+        # a periodic run is DUE — resolve it, then trace the outcome only on
+        # TRANSITIONS: a mapper stuck degraded/waiting for hours would
+        # otherwise emit an identical (ERROR) span every poll tick
+        outcome, error = None, None
         degraded = self.degraded()
         if degraded:
+            outcome, error = "degraded_skip", degraded
             log.warning("mapper degraded — periodic run skipped (%s)", degraded)
-            return
-        async with self._lock:
-            if self.active():
-                return
-            if len(self.mgr.runs.store.active()) >= self.config.concurrency.global_max:
-                return                             # counts toward the global cap
-            await self.mgr.dispatch_mapper(dt, missions)
-            self._last_at = time.monotonic()
+        else:
+            async with self._lock:
+                if self.active():
+                    outcome = "already_active"
+                elif len(self.mgr.runs.store.active()) >= self.config.concurrency.global_max:
+                    outcome = "concurrency_deferred"  # counts toward the global cap
+                else:
+                    await self.mgr.dispatch_mapper(dt, missions)
+                    self._last_at = time.monotonic()
+                    outcome = "dispatched"
+        if outcome == "dispatched" or outcome != self._last_periodic_outcome:
+            with tracer.start_as_current_span("mapper.periodic") as span:
+                span.set_attribute("devcake.outcome", outcome)
+                if error:
+                    span.set_status(Status(StatusCode.ERROR, error[:200]))
+        self._last_periodic_outcome = outcome
 
     async def run_now(self) -> Run:
         """Manual trigger: works regardless of the periodic toggle and of the
@@ -1606,7 +1622,7 @@ class MapperService:
         if dt is None:
             raise MapperUnconfigured(
                 "relations_mapper.dev_type must name an existing Dev Type — "
-                "set it on the Config tab")
+                "set it on the Config page")
         if "forge" in self.mgr.breakers:
             raise MapperUnconfigured(
                 "forge connection is not writable; fix the repository token first")

@@ -22,7 +22,7 @@ from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_pmo
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
-                      load_config, load_dev_types, migrate_config_patch,
+                      load_config, load_dev_types, reject_v1_patch,
                       save_config, save_dev_type)
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
@@ -39,7 +39,6 @@ from .auth import credentials_configured, enforce_control_plane_auth
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("devcake")
 
-POLL_INTERVAL = int(os.environ.get("DEVCAKE_POLL_INTERVAL_SECONDS", "30"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
 
@@ -68,6 +67,11 @@ async def refresh_forge_health() -> dict:
     return data
 
 
+def _log_task_death(t: asyncio.Task) -> None:
+    if not t.cancelled() and t.exception():
+        log.error("background task %s DIED", t.get_name(), exc_info=t.exception())
+
+
 def reload_connections() -> None:
     """Hot-reload both adapters after a config PUT: rebuild from the saved
     config, repoint the orchestrator and the module globals the loops read,
@@ -87,7 +91,8 @@ def reload_connections() -> None:
             log.exception("ensure_labels after config reload failed — labels "
                           "will be ensured on next restart")
         await refresh_forge_health()
-    asyncio.create_task(_ensure(), name="ensure_labels_reload")
+    asyncio.create_task(_ensure(), name="ensure_labels_reload") \
+        .add_done_callback(_log_task_death)
 manager.mission_mgr = mission_mgr
 oauth_mgr = OAuthManager(manager, messaging, dev_types)
 manager.oauth_mgr = oauth_mgr
@@ -165,14 +170,16 @@ async def poll_loop() -> None:
 async def lifespan(app: FastAPI):
     if not credentials_configured():
         raise RuntimeError("ADMIN_USER and ADMIN_PASSWORD must both be configured")
-    legacy_active = store.scrub_legacy_secrets()
-    for run in legacy_active:
-        await manager.abort_legacy_run(run)
-    offending = store.legacy_secrets_remaining()
-    if offending:
-        raise RuntimeError("legacy run credentials remain on disk after startup scrub in: "
-                           + ", ".join(sorted(offending)))
-    await messaging.scrub_legacy_dead_letters()
+    # corrupt run records must never wedge boot; a quarantined record is
+    # FORGOTTEN, so best-effort teardown of anything it may have left live
+    # (container, per-run ACL user, reply stream) — the run id is the handle
+    for run_id in store.quarantine_unreadable():
+        with contextlib.suppress(Exception):
+            await executor.stop(run_id)
+        with contextlib.suppress(Exception):
+            await messaging.delete_run_user(run_id)
+        with contextlib.suppress(Exception):
+            await messaging.delete_reply_stream(run_id)
     # startup reconciliation (docs/04 §6)
     try:
         await pmo.ensure_labels(config.pmo.team_key, ALL_LABELS)          # step 2
@@ -203,13 +210,8 @@ async def lifespan(app: FastAPI):
             log.exception("reconciliation failed for %s", r.run_id)
     try:
         await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
-        await messaging.delete_acknowledged_ingress()
     except Exception:
         log.exception("pending-entry reclaim failed")
-    def _log_task_death(t: asyncio.Task) -> None:
-        if not t.cancelled() and t.exception():
-            log.error("background task %s DIED", t.get_name(), exc_info=t.exception())
-
     tasks = [
         asyncio.create_task(poll_loop(), name="poll_loop"),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
@@ -292,8 +294,7 @@ async def health():
         "dagu": dagu_ok,
         "openobserve": oo_ok,
         "pmo": pmo_ok,
-        "forge": getattr(mission_mgr, "forge_health", None),
-        "config_valid": True,
+        "forge": mission_mgr.forge_health,
         "circuit_breakers": mission_mgr.breakers,
         "intake_paused": config.intake_paused,
         "active_runs": len(store.active()),
@@ -302,6 +303,7 @@ async def health():
         "merge_handoffs": mission_mgr.merge_handoffs,
         "needs_human": mission_mgr.needs_human,
         "dependency_cycles": mission_mgr.cycles,
+        "blocked_reasons": mission_mgr.blocked_reasons,
         "mapper_degraded": mapper.degraded(),
     }
 
@@ -412,7 +414,7 @@ async def get_config():
 async def put_config(body: dict):
     global config
     try:
-        body = migrate_config_patch(body, config)
+        reject_v1_patch(body)
         merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
     except Exception as e:
         raise HTTPException(422, str(e))
@@ -511,14 +513,14 @@ async def put_assignments(body: dict):
 @app.get("/api/v1/env-check")
 async def env_check(names: str = ""):
     """Set/unset status (never values) for comma-separated env var names —
-    powers the admin Config tab's inline ✓/✗ next to *_env fields."""
+    powers the admin Config page's inline ✓/✗ next to *_env fields."""
     return {n: bool(os.environ.get(n, "").strip()) for n in names.split(",") if n}
 
 
 @app.get("/api/v1/connections/registry")
 async def connections_registry():
     """Available PMO systems and forges with display metadata — drives the
-    admin Config tab's selectors and paste guard, so adding an adapter never
+    admin Config page's selectors and paste guard, so adding an adapter never
     means editing the SPA (docs/11)."""
     from ..adapters.registry import PMO_SYSTEMS, forges
     forge_descriptors = forges()
@@ -589,7 +591,7 @@ async def run_mapper():
     return {"run_id": run.run_id, "state": run.state}
 
 
-# ── GUI OAuth helpers (docs/16 M6) ───────────────────────────────────────────
+# ── GUI OAuth helpers (docs/11 §2) ───────────────────────────────────────────
 
 @app.post("/api/v1/oauth/dev-types/{name}/start")
 async def oauth_start(name: str):

@@ -44,19 +44,24 @@ Open **http://localhost:8080** (your admin user/password from `.env`). The
 header health strip should show every dot green. On this first boot DevCake also
 created its ten `DEVCAKE-*` labels in your Linear team — go look.
 
-## Step 2 — Meet the three tabs
+## Step 2 — Meet the four pages
 
+- **Overview** — the landing dashboard: component health, advisory alerts,
+  the merge queue, and anything waiting on a human. The sidebar next to it
+  carries the **mission-intake switch** — the one master control.
 - **Config** — every setting: PMO team, repository, Dev Types (with OAuth
   wizards), assignments, limits, and the two big toggles (adoption mode,
-  auto-merge). Secrets stay in `.env`; everything else is editable here.
-- **Executor** — opens Dagu, where every Dev run appears under a name like
-  `DEV-17-3-EXECUTE-560E6T`: *mission* `DEV-17`, *step* 3, *type* EXECUTE.
+  auto-merge). Secrets stay in `.env`; everything else is editable here —
+  nothing saves until you review the change list and hit Save.
+- **Runs** — the live run table (every run appears under a name like
+  `DEV-17-3-EXECUTE-560E6T`: *mission* `DEV-17`, *step* 3, *type* EXECUTE);
+  click a row for its live terminal, or open Dagu for the executor's view.
 - **Logs** — opens OpenObserve. One Dev run = one trace, from dispatch through
   the container to finalization.
 
 ## Step 3 — Log Grok in (one time)
 
-In the admin panel's Config tab, find the **main-dev** card and click
+On the admin panel's Config page, find the **main-dev** card and click
 **"Connect via OAuth…"** — a dialog shows a URL and a code; open, enter, approve
 with your X/xAI account, and the dialog completes itself. (The same wizard works
 for Codex Dev Types. Terminal alternative: `./scripts/grok_login.sh`.) The
@@ -78,7 +83,7 @@ In your sandbox Linear team, create an issue:
 
 Within ~30 seconds (the poll interval) you'll see, in the issue's activity feed:
 
-1. Status flips to **In Progress**; a Dev container appears in the Executor tab.
+1. Status flips to **In Progress**; a Dev container appears on the Runs page.
 2. A transcript comment `1_ONBOARD.md` — the triage verdict and reasoning.
 3. A **token report** — model, tokens, and cost for that step. Every step posts
    one; this is your running bill.
@@ -104,7 +109,7 @@ implementation run would rework the same branch and PR.
 - **`DEVCAKE-FAILED` appears** — three attempts at a step failed; the comment
   says why and links the trace. Fix the cause, **remove the label**, and DevCake
   retries with a fresh attempt counter.
-- **A run seems stuck** — Executor tab → open the run in Dagu → Stop. The
+- **A run seems stuck** — Runs page → open the run in Dagu → Stop. The
   mission reschedules by itself; no cleanup needed.
 - **You want DevCake to leave an issue alone** — add **`DEVCAKE-SKIP`** at any
   time. It always wins.

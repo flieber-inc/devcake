@@ -2,8 +2,8 @@
 (docs/10). Advisory telemetry only (INV-1) — wiping /data/state never corrupts
 mission state. Atomic writes via tmp + fsync + rename."""
 
-import os
 import json
+import os
 import logging
 import tempfile
 from pathlib import Path
@@ -36,13 +36,36 @@ class RunStore:
     def save(self, run: Run) -> None:
         self._write_text(self.root / f"{run.run_id}.json", run.model_dump_json(indent=2))
 
+    @staticmethod
+    def _sensitive_env_name(name: str) -> bool:
+        upper = name.upper()
+        return any(part in upper for part in (
+            "TOKEN", "PASSWORD", "SECRET", "API_KEY", "AUTHORIZATION",
+            "OTLP_BASIC",
+        ))
+
     def _quarantine(self, path: Path, why: str) -> None:
         """Move an unreadable record aside so it can never wedge startup.
 
-        Bytes are preserved (they may contain secret fragments — hence the
-        restrictive modes) but the file leaves the non-recursive *.json glob,
-        so it disappears from all(), the API, and the post-scrub check.
+        A record that still parses as JSON is scrubbed of known
+        credential-bearing fields first — quarantine must not become
+        secret-at-rest (docs/14, docs/10 §5). An unparseable file keeps its
+        bytes (nothing to scrub selectively — hence the restrictive modes).
+        Either way the file leaves the non-recursive *.json glob, so it
+        disappears from all() and the API.
         """
+        try:
+            raw = json.loads(path.read_text())
+            if isinstance(raw, dict):
+                raw.pop("redis_password", None)
+                raw.pop("spec_files", None)
+                env = raw.get("spec_env")
+                if isinstance(env, dict):
+                    raw["spec_env"] = {k: v for k, v in env.items()
+                                       if not self._sensitive_env_name(k)}
+                self._write_text(path, json.dumps(raw, indent=2, default=str))
+        except Exception:
+            pass  # not valid JSON: preserve the bytes under 0600
         qdir = self.root / "quarantine"
         qdir.mkdir(mode=0o700, exist_ok=True)
         dest = qdir / path.name
@@ -68,80 +91,26 @@ class RunStore:
     def active(self) -> list[Run]:
         return [r for r in self.all() if r.state in ("dispatched", "running", "finalizing")]
 
-    @staticmethod
-    def _sensitive_env_name(name: str) -> bool:
-        upper = name.upper()
-        return any(part in upper for part in (
-            "TOKEN", "PASSWORD", "SECRET", "API_KEY", "AUTHORIZATION",
-            "OTLP_BASIC",
-        ))
+    def quarantine_unreadable(self) -> list[str]:
+        """Boot-time integrity sweep: move every unparseable, model-invalid,
+        or pre-v2 run record to quarantine/ so it can never wedge startup or
+        hide silently inside all(). The version floor is a security tripwire,
+        not a migration: v1 records persisted credentials, and the v1→v2
+        scrub was removed at v0 (docs/10 §5).
 
-    def scrub_legacy_secrets(self) -> list[Run]:
-        """Rewrite v1 records without credentials; return active legacy runs.
-
-        Active v1 runs cannot safely be adopted because their short-lived
-        Redis run-spec record never existed. Startup aborts the returned runs.
-        """
-        from ...security import redact_value
-
-        active: list[Run] = []
+        Returns the quarantined run ids (file stems) so the caller can tear
+        down anything the forgotten record may have left live (a running
+        container, a per-run Redis ACL user, a reply stream)."""
+        moved: list[str] = []
         for path in sorted(self.root.glob("*.json")):
             try:
-                raw = json.loads(path.read_text())
-                if not isinstance(raw, dict):
-                    raise ValueError("run record is not a JSON object")
+                run = Run.model_validate_json(path.read_text())
+                if run.schema_version < 2:
+                    raise ValueError("pre-v2 run record (may carry credentials)")
             except Exception as e:
-                self._quarantine(path, f"invalid JSON: {e}")
-                continue
-            legacy = int(raw.get("schema_version", 1)) < 2
-            has_secrets = bool(raw.get("redis_password") or raw.get("spec_files"))
-            env = dict(raw.get("spec_env") or {})
-            filtered = {k: str(v) for k, v in env.items()
-                        if not self._sensitive_env_name(k)}
-            has_secrets = has_secrets or len(filtered) != len(env)
-            if not (legacy or has_secrets):
-                continue
-            raw["schema_version"] = 2
-            raw.pop("redis_password", None)
-            raw.pop("spec_files", None)
-            raw["spec_env"] = filtered
-            raw["result"] = redact_value(raw.get("result"))
-            raw["token_report"] = redact_value(raw.get("token_report"))
-            try:
-                run = Run.model_validate(raw)
-            except Exception as e:
-                # Secrets are gone either way: persist the scrubbed raw record
-                # even when it no longer fits the model.
-                self._write_text(path, json.dumps(raw, indent=2, default=str))
-                log.warning("run record %s scrubbed but not model-valid (%s)%s",
-                            path.name, e,
-                            "; active run could not be aborted"
-                            if raw.get("state") in ("dispatched", "running", "finalizing")
-                            else "")
-                continue
-            if run.state in ("dispatched", "running", "finalizing"):
-                active.append(run)
-            self.save(run)
-        return active
-
-    def legacy_secrets_remaining(self) -> list[str]:
-        """Names of run files still carrying credentials after the scrub."""
-        offending: list[str] = []
-        for path in self.root.glob("*.json"):
-            try:
-                raw = json.loads(path.read_text())
-            except Exception:
-                offending.append(path.name)
-                continue
-            if not isinstance(raw, dict):
-                offending.append(path.name)
-                continue
-            if raw.get("redis_password") or raw.get("spec_files"):
-                offending.append(path.name)
-                continue
-            if any(self._sensitive_env_name(k) for k in (raw.get("spec_env") or {})):
-                offending.append(path.name)
-        return offending
+                self._quarantine(path, str(e))
+                moved.append(path.stem)
+        return moved
 
     def clear(self) -> int:
         """Delete every run record. Returns how many files were removed."""

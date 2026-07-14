@@ -20,3 +20,6 @@ dist/
 .idea/
 .vscode/
 .DS_Store
+
+# dagu-generated DAG scan index (rewritten on every boot)
+dagu/dags/.dag.index

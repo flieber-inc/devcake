@@ -1,4 +1,4 @@
-"""GUI OAuth helpers (docs/16 M6, founder request): device-code login flows run
+"""GUI OAuth helpers (founder request): device-code login flows run
 INSIDE the harness images via the normal Dev pipeline — Dagu spawns the
 container, the entrypoint streams the verification URL + user code back over
 Redis (`run.log`), and the resulting credential file arrives on a dedicated

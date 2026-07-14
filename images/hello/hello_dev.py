@@ -1,8 +1,9 @@
-"""Hello-world stub Dev (docs/16 M1) — exercises the full Dev container contract
+"""Hello-world stub Dev — exercises the full Dev container contract
 (docs/07): scoped Redis auth, runspec.get/ack, run.started, heartbeats,
 dev.run/harness.exec spans linked via TRACEPARENT, and (chunked) run.artifacts.
 
-Permanent CI fixture: the deterministic stand-in for real harnesses (docs/16 M7).
+Permanent CI fixture: the deterministic stand-in for real harnesses
+(scripts/ci_suite.sh).
 """
 
 import json
@@ -144,7 +145,7 @@ def main() -> None:
 
     sleep_s = int(os.environ.get("HELLO_SLEEP", "3"))
     payload_kb = int(os.environ.get("HELLO_PAYLOAD_KB", "1"))
-    heartbeat_every = int(os.environ.get("HELLO_HEARTBEAT", "10"))
+    heartbeat_every = 10  # seconds between heartbeats while "working"
 
     with tracer.start_as_current_span("dev.run", context=ctx) as span:
         span.set_attribute("devcake.run.id", RUN_ID)

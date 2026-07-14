@@ -17,6 +17,7 @@ the handful of interventions you'll actually use.
 | `DEVCAKE-CREATED` | This issue was authored by DevCake (a decomposition child) | Treat as any adopted issue |
 | `DEVCAKE-TRACKING` | A decomposed project; auto-completes when its children finish | — |
 | `DEVCAKE-FAILED` | Gave up after 3 failed attempts (comment explains; trace linked) | Fix the cause, remove the label → fresh retries |
+| `DEVCAKE-NEEDS-HUMAN` | A Dev hit something only you can do (credentials, an external account, a judgment call) — the hand-off comment carries the evidence | Do the thing, remove the label → DevCake resumes |
 | `DEVCAKE-SKIP` | You told DevCake: hands off | Remove to resume |
 
 Statuses mean exactly what they say: **Backlog** = untouched, **In Progress** =
@@ -43,7 +44,7 @@ abandoned (decomposed away, or PR closed unmerged).
 
 Every step posts a token report to the feed — model, token counts (full split
 for Claude and Codex; totals for Grok), and cost where the harness reports it.
-For aggregates, the Logs tab (OpenObserve) carries every run as a trace with
+For aggregates, the Logs page (OpenObserve) carries every run as a trace with
 `devcake.tokens.*` / `devcake.cost.usd` attributes. Watch for the **loop
 warning** comment: every third review rejection it posts the mission's
 cumulative recorded cost — that's your cue to intervene or SKIP.

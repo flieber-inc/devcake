@@ -5,7 +5,6 @@ adoption, polling, assignments, concurrency, merge policy, relations mapper.
 
 import logging
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -93,9 +92,8 @@ class DevType(BaseModel):
 
     Deliberately slim: the Docker image, credential requirements, and OAuth
     flow all DERIVE from harness_template via harness.HARNESSES — the admin
-    panel's harness combobox is authoritative. Legacy YAML keys (docker_image,
-    credential_env, credential_files) are ignored on load and dropped on the
-    next save (pydantic extra="ignore")."""
+    panel's harness combobox is authoritative. Unknown YAML keys are ignored
+    on load and dropped on the next save (pydantic's default)."""
     name: str
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
@@ -202,30 +200,16 @@ class AppConfig(BaseModel):
         return self.pmos[0].api_key
 
 
-def migrate_config(data: dict) -> dict:
-    """v1 (singular pmo:/repo: blocks) → v2 (plural pmos:/repos:, id="main").
-    Idempotent; applied before validation on every load (ADR-0002: migrate on
-    load, persist atomically). Forward-only — load_config keeps a .v1.bak."""
-    if int(data.get("schema_version") or 1) >= 2:
-        return data
-    out = dict(data)
-    out["pmos"] = [{"id": "main", **(out.pop("pmo", None) or {})}]
-    out["repos"] = [{"id": "main", **(out.pop("repo", None) or {})}]
-    out["schema_version"] = 2
-    return out
-
-
-def migrate_config_patch(body: dict, current: "AppConfig") -> dict:
-    """Translate v1-shaped PUT bodies ({"pmo": {…}} / {"repo": {…}}) to the
-    plural v2 shape, merging over the current single entry. Load-bearing, not
-    defensive: pydantic ignores unknown keys, so without this a stale client's
-    PUT would silently DROP the operator's edit instead of failing."""
-    out = dict(body)
-    if isinstance(out.get("pmo"), dict):
-        out["pmos"] = [{**current.pmos[0].model_dump(), **out.pop("pmo")}]
-    if isinstance(out.get("repo"), dict):
-        out["repos"] = [{**current.repos[0].model_dump(), **out.pop("repo")}]
-    return out
+def reject_v1_patch(body: dict) -> None:
+    """Refuse v1-shaped PUT bodies ({"pmo": {…}} / {"repo": {…}}) loudly.
+    Load-bearing, not defensive: pydantic ignores unknown keys, so without
+    this a stale client's PUT would silently DROP the operator's edit
+    instead of failing (the v1→v2 auto-migration was removed at v0)."""
+    stale = [k for k in ("pmo", "repo") if isinstance(body.get(k), dict)]
+    if stale:
+        raise ValueError(
+            f"singular {'/'.join(stale)!s} config keys are schema v1; "
+            "send the plural v2 shape (pmos:/repos: lists)")
 
 
 def deep_merge(base: dict, patch: dict) -> dict:
@@ -254,12 +238,18 @@ def _atomic_yaml(path: Path, data: dict) -> None:
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
         data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
-        if int(data.get("schema_version") or 1) < 2:
-            # forward-only migration: the .bak is the rollback story
-            shutil.copy2(CONFIG_PATH, CONFIG_PATH.with_suffix(".yaml.v1.bak"))
-            log.info("config: migrating %s to schema v2 (backup: config.yaml.v1.bak)",
-                     CONFIG_PATH)
-        cfg = AppConfig.model_validate(migrate_config(data))
+        # detect v1 by its singular keys, never by an absent schema_version —
+        # an empty or hand-written v2 file without the version field is fine.
+        # Refuse loudly: silently validating v1 data would reset the
+        # operator's connections to defaults (pydantic ignores unknown keys).
+        if isinstance(data, dict) and ("pmo" in data or "repo" in data):
+            raise RuntimeError(
+                f"{CONFIG_PATH} uses the singular v1 shape (pmo:/repo: "
+                "blocks); the v1→v2 auto-migration was removed at v0 — "
+                "migrate by hand (pmo:→pmos: list, repo:→repos: list, "
+                "schema_version: 2) or delete the file and reconfigure via "
+                "the admin panel")
+        cfg = AppConfig.model_validate(data)
     else:
         cfg = AppConfig(pmos=[PMOInstance(
             team_key=os.environ.get("DEVCAKE_TEAM_KEY", ""))])

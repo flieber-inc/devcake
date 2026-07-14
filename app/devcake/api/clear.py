@@ -25,7 +25,6 @@ log = logging.getLogger("devcake.clear")
 DATA_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
 STATE_DIR = DATA_DIR / "state"
 AUDIT_PATH = STATE_DIR / "events.jsonl"
-CACHE_DIR = DATA_DIR / "cache"
 
 
 def _oo_auth_header() -> str:
@@ -36,28 +35,17 @@ def _oo_auth_header() -> str:
 
 def clear_local_state(store: RunStore,
                       runlog: RunLogStore | None = None) -> dict[str, int]:
-    """Wipe run files, run logs, audit log, and rebuildable cache.
-    Config/secrets untouched."""
+    """Wipe run files, run logs, and the audit log. Config/secrets untouched."""
     runs_deleted = store.clear()
     runlogs_deleted = runlog.clear() if runlog is not None else 0
     audit_cleared = 0
     if AUDIT_PATH.exists():
         AUDIT_PATH.write_text("")
         audit_cleared = 1
-    cache_deleted = 0
-    if CACHE_DIR.exists():
-        for p in CACHE_DIR.rglob("*"):
-            if p.is_file():
-                try:
-                    p.unlink()
-                    cache_deleted += 1
-                except OSError:
-                    pass
     return {
         "runs_deleted": runs_deleted,
         "runlogs_deleted": runlogs_deleted,
         "audit_cleared": audit_cleared,
-        "cache_files_deleted": cache_deleted,
     }
 
 

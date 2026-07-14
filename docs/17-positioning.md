@@ -67,7 +67,7 @@ tone rule in miniature.
 > mixed per role, on the subscriptions you already pay for. There are no locks:
 > a crashed agent holds nothing, and a human edit to a ticket always beats an
 > in-flight agent. "Done" means *merged* — never before. Everything is traced
-> in OpenTelemetry down to the token counts, a 26-test suite pins the core
+> in OpenTelemetry down to the token counts, a 200+-test suite pins the core
 > invariants, and the release gate is an acceptance script that takes fresh
 > tickets to merged PRs with zero human input. One docker-compose brings up
 > the whole thing.

@@ -23,7 +23,7 @@ class CredentialFile(BaseModel):
 
 
 class OAuthFlow(BaseModel):
-    """Device-code login run inside the harness image (docs/16 M6)."""
+    """Device-code login run inside the harness image (docs/08 §4)."""
     login_cmd: str      # headless login command
     auth_path: str      # where the CLI writes its auth state in-container
     secret_file: str    # stored name under /data/secrets/{dev_type}/

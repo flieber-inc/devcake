@@ -170,7 +170,7 @@ class LinearAdapter:
 
     async def get_activity(self, ref: MissionRef) -> Activity:
         """Issue: the full comment feed. Project: mission + entries=[] —
-        Linear projects have no issue-style comments API (verified M2/M5)."""
+        Linear projects have no issue-style comments API (verified live)."""
         if ref.kind == "project":
             return Activity(mission=await self._get_project(ref.pmo_id), entries=[])
         pmo_id = ref.pmo_id
@@ -226,7 +226,7 @@ class LinearAdapter:
 
     async def post_feed(self, ref: MissionRef, markdown: str) -> None:
         """Issue → comment; project → project update (Linear's project-native
-        feed — projects have no comments API, verified M2/M5)."""
+        feed — projects have no comments API, verified live)."""
         if ref.kind == "project":
             await self._gql(
                 """mutation($p: String!, $b: String!) {
@@ -311,7 +311,7 @@ class LinearAdapter:
                 {"name": name, "teamId": team["id"]})
             log.info("linear: created label %s in team %s", name, team_ref)
         # project labels are a SEPARATE workspace-level entity in Linear (verified
-        # via schema introspection at M2) — ensure the same managed set there too
+        # via schema introspection) — ensure the same managed set there too
         data = await self._gql(
             """query { projectLabels(first: 100) { nodes { id name } } }""")
         existing_p = {l["name"].upper() for l in data["projectLabels"]["nodes"]}
@@ -372,7 +372,7 @@ class LinearAdapter:
 
     async def _swap_project_labels(self, project_id: str, remove: set[str],
                                    add: set[str]) -> None:
-        """Project labels are a separate workspace-level entity (verified at M2)."""
+        """Project labels are a separate workspace-level entity (verified live)."""
         pl = await self._gql("""query { projectLabels(first: 100) { nodes { id name } } }""")
         by_name = {l["name"].upper(): l["id"] for l in pl["projectLabels"]["nodes"]}
         proj = await self._gql(
@@ -456,7 +456,7 @@ class LinearAdapter:
         status_type = ((n.get("status") or {}).get("type") or "backlog").lower()
         return Mission(
             pmo_id=n["id"], pmo_kind="project", key=f"PRJ-{slug}", title=n["name"],
-            # Linear caps project `description` at 255 chars (verified at M5);
+            # Linear caps project `description` at 255 chars (verified live);
             # the long-form body lives in `content`
             description=n.get("content") or n.get("description") or "",
             status=PROJECT_STATUS_MAP.get(status_type, "backlog"),

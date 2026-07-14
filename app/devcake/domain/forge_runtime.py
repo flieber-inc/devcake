@@ -36,6 +36,10 @@ class ForgeRuntime:
         self.instances: dict[str, "RepoInstance"] = {}
         self.health: dict[str, dict] = {}       # advisory; /health
         self.breakers: dict[str, str] = {}      # repo name → reason (latched)
+        # repo names created on the internal fallback forge (M11): these are
+        # NOT config repos — registered dynamically per mission, and flagged
+        # so the merge → zip-to-PMO delivery hook knows to fire
+        self.internal: set[str] = set()
 
     def rebuild(self, repos: list["RepoInstance"], make_forge) -> None:
         """Reconcile with config (boot + hot reload). Unconfigured entries
@@ -54,6 +58,16 @@ class ForgeRuntime:
         for name in list(self.breakers):
             if name not in live:
                 del self.breakers[name]
+
+    def register_internal(self, name: str, inst, forge) -> None:
+        """Register (idempotently) an auto-created internal-forge repo under
+        its own name. Called each cycle a mission routes internal — survives
+        app restarts (ForgeRuntime is rebuilt empty; the provisioner re-reads
+        stored creds). The app-side adapter uses the mission's write token for
+        merges; per-stage Dev tokens flow through the runspec by repo_ref."""
+        self.instances[name] = inst
+        self.forges[name] = forge
+        self.internal.add(name)
 
     def get(self, name: str) -> "ForgePort | None":
         """None = the repo is not (or no longer) configured — the caller's

@@ -20,7 +20,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import Messaging
-from ..adapters.registry import make_forge, make_pmo
+from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import security
 from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
                       load_config, load_dev_types, reject_stale_patch,
@@ -63,6 +63,9 @@ shared_breakers: dict[str, str] = {}
 managers: dict[str, MissionManager] = {}
 mappers: dict[str, MapperService] = {}
 forge_runtime = ForgeRuntime()
+# the bundled internal fallback forge (M11): provisioner is admin-credentialed
+# (GITEA_ADMIN_*); None disables the zero-repo un-gating when Gitea is absent
+internal_forge = make_internal_forge() if os.environ.get("GITEA_ADMIN_PASSWORD") else None
 
 
 def build_managers() -> None:
@@ -79,10 +82,12 @@ def build_managers() -> None:
             mgr = managers[name]
             mgr.pmo, mgr.forges, mgr.config = p, forge_runtime, config
             mgr.instance, mgr.instance_name = inst, name
+            mgr.internal_forge = internal_forge
         else:
             managers[name] = MissionManager(
                 config, dev_types, p, forge_runtime, manager, messaging,
-                instance=inst, breakers=shared_breakers)
+                instance=inst, breakers=shared_breakers,
+                internal_forge=internal_forge)
             mappers[name] = MapperService(config, dev_types, managers[name])
 
 
@@ -186,9 +191,11 @@ async def _poll_instance(mgr: MissionManager,
     missions = _claim_missions(mgr, fetched, _mission_owner)
     run_snapshot = mgr.runs.store.all()   # one read per segment, not per mission
     for m in missions:
-        # per-mission repo resolution (M10): a transient poll artifact —
-        # dispatch re-resolves live (sticky) before anything irreversible
-        m.repo, m.repo_reason = mgr._resolve_repo(m, all_runs=run_snapshot)
+        # per-mission repo resolution (M10/M11): a transient poll artifact —
+        # dispatch re-resolves live (sticky) before anything irreversible.
+        # resolve_repo_live un-gates zero-repo missions onto the internal
+        # fallback forge (provisions a per-mission repo at intake)
+        m.repo, m.repo_reason = await mgr.resolve_repo_live(m, all_runs=run_snapshot)
     derived = [(m, derive(m, config.adoption_mode)) for m in missions]
     # the gate is a poll artifact, computed EVERY cycle — pause freezes
     # dispatch, never information (docs/04 §2)
@@ -344,6 +351,15 @@ async def lifespan(app: FastAPI):
             await messaging.delete_run_user(run_id)
         with contextlib.suppress(Exception):
             await messaging.delete_reply_stream(run_id)
+    # internal fallback forge (M11): provision org + service accounts. Best
+    # effort — a Gitea outage degrades only zero-repo missions, never boot
+    if internal_forge is not None:
+        try:
+            await internal_forge.ensure_service_accounts()
+            log.info("internal forge: service accounts ensured")
+        except Exception:
+            log.exception("internal forge provisioning failed — zero-repo "
+                          "missions will retry once Gitea is reachable")
     # startup reconciliation (docs/04 §6) — labels per configured instance
     for mgr in list(managers.values()):
         try:
@@ -505,6 +521,8 @@ async def health():
             ([f"{name}:{k}" for k in cyc] if prefixed else cyc)
             for name, mgr in managers.items() for cyc in mgr.cycles],
         "blocked_reasons": _merged("blocked_reasons"),
+        "internal_forge": (await internal_forge.health()
+                           if internal_forge is not None else None),
         "mapper_degraded": " · ".join(
             f"[{name}] {msg}" if prefixed else str(msg)
             for name, mp in mappers.items() if (msg := mp.degraded())) or None,
@@ -841,6 +859,41 @@ async def test_forge(name: str):
                 "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
+
+
+@app.get("/api/v1/internal-repos")
+async def list_internal_repos():
+    """Read-only admin surface (M11, founder decision): the auto-created
+    internal-forge repos. Empty list when the internal forge is disabled."""
+    if internal_forge is None:
+        return {"repos": [], "ui_url": None}
+    try:
+        repos = await internal_forge.list_repos()
+    except Exception as e:
+        raise HTTPException(502, f"internal forge unreachable: {str(e)[:200]}")
+    return {"repos": [r.model_dump() for r in repos],
+            "ui_url": os.environ.get("GITEA_UI_URL", "http://localhost:3300")}
+
+
+@app.delete("/api/v1/internal-repos/{name}")
+async def delete_internal_repo(name: str):
+    """Manual Clear (founder decision: retain-by-default, delete-on-demand).
+    Refuses while a live run exists for the mission — its Dev still needs
+    the repo. Deletes repo + machine user (revoking both tokens) + secret."""
+    if internal_forge is None:
+        raise HTTPException(404, "internal forge is not enabled")
+    if any(r.repo_ref == name and r.state in ("dispatched", "running", "finalizing")
+           for r in store.active()):
+        raise HTTPException(409, "a live run is using this repo — wait for it "
+                                 "to finish before clearing")
+    try:
+        await internal_forge.delete_repo(name)
+    except Exception as e:
+        raise HTTPException(502, f"delete failed: {str(e)[:200]}")
+    forge_runtime.forges.pop(name, None)
+    forge_runtime.instances.pop(name, None)
+    forge_runtime.internal.discard(name)
+    return {"deleted": name}
 
 
 @app.post("/api/v1/relations-mapper/run")

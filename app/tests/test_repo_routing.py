@@ -220,3 +220,75 @@ def test_resolve_repo_history_assembly(tmp_path):
     # newest-first, only THIS mission's non-mapper, same-instance records
     assert got[0] == [mine_new.run_id, mine_old.run_id]
     assert name == "beta" and reason is None      # sticky = newest repo_ref
+
+
+def test_internal_repo_naming_and_port_helper():
+    """The internal-repo naming convention lives on the PORT (domain may
+    derive it to detect prior internal routing across restarts) — not in the
+    adapter (F1 import boundary)."""
+    from devcake.ports.internal_forge import internal_repo_name
+    assert internal_repo_name("linear", "DEV-17") == "linear-dev-17"
+    assert internal_repo_name("linteama", "PRJ-Big Report!") == "linteama-prj-big-report"
+    # bounded for the run-id / repo-name budget
+    assert len(internal_repo_name("linear", "X" * 80)) <= 60
+
+
+def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
+    """M11 exit criterion (hermetic half): a mission with no marker and no
+    instance default routes to a provisioned internal repo; a mission with an
+    UNKNOWN marker stays gated (never silently redirected internal)."""
+    from fakes import FakeForgeRuntime
+    from devcake.adapters.files.run_store import RunStore
+    from devcake.domain.orchestrator import MissionManager
+    from devcake.ports.internal_forge import MissionRepoCredentials
+
+    provisioned = []
+
+    class FakeInternal:
+        def service_tokens(self):
+            return {"reviewer_token": "rev-tok"}
+
+        async def ensure_mission_repo(self, instance, key):
+            provisioned.append((instance, key))
+            name = f"{instance}-{key}".lower()
+            return MissionRepoCredentials(
+                repo_name=name, clone_url=f"http://gitea:3000/devcake-internal/{name}.git",
+                username=f"svc-{name}", token_write="w-tok", token_read="r-tok")
+
+    class RT(FakeForgeRuntime):
+        def register_internal(self, name, inst, forge):
+            self.instances[name] = inst
+            self.forges[name] = forge
+            self.internal.add(name)
+
+        @property
+        def instances(self):
+            return self._insts
+
+        @instances.setter
+        def instances(self, v):
+            self._insts = v
+
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = "linear"
+    mgr.instance = INST                                    # no default_repo
+    rt = RT(None)
+    rt._insts = {}
+    mgr.forges = rt
+    mgr.internal_forge = FakeInternal()
+
+    class Runs:
+        pass
+    mgr.runs = Runs()
+    mgr.runs.store = RunStore(tmp_path / "runs")
+
+    # zero-repo mission → internal
+    name, reason = run_coro(mgr.resolve_repo_live(_m()))
+    assert name == "linear-t-1" and reason is None
+    assert provisioned == [("linear", "T-1")]
+    assert "linear-t-1" in rt.internal
+
+    # unknown marker → GATED, never redirected internal
+    m2 = _m(description="`devcake-repo:nope`")
+    name2, reason2 = run_coro(mgr.resolve_repo_live(m2))
+    assert name2 is None and "unknown repo 'nope'" in reason2

@@ -47,10 +47,14 @@ def _resolve_repo(self, mission: Mission, all_runs: list | None = None):
 
 def _mapper_repo(self) -> str | None:
     """The repo a MAPPER run clones (the entrypoint always clones): the
-    instance's default repo when configured, else any configured repo."""
+    instance's default repo when configured, else any configured repo. A
+    MAPPER run reads the whole team's relations, not a mission — it never
+    routes to a per-mission internal repo (returns None → mapper stays idle
+    when only the internal forge exists)."""
     if self.instance.default_repo in self.forges.instances:
         return self.instance.default_repo
-    return next(iter(self.forges.instances), None)
+    external = [n for n in self.forges.instances if n not in self.forges.internal]
+    return external[0] if external else None
 
 
 async def dispatch(self, mission: Mission, mtype: MissionType,
@@ -60,8 +64,9 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
     if d.mission_type != mtype:
         return None                                            # world moved on
     # per-mission repo resolution, re-checked LIVE at dispatch (M10; sticky —
-    # a mid-mission routing change gates instead of re-routing, plan H3)
-    repo_name, gate_reason = self._resolve_repo(live)
+    # a mid-mission routing change gates instead of re-routing, plan H3;
+    # M11: zero-repo missions un-gate onto the internal forge)
+    repo_name, gate_reason = await self.resolve_repo_live(live)
     if repo_name is None:
         self.blocked_reasons[live.pmo_id] = gate_reason
         log.info("dispatch of %s refused — %s", live.key, gate_reason)
@@ -191,6 +196,19 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
                   run.run_id, run.repo_ref)
         return None
     env: dict[str, str] = {**env_creds}
+    if run.repo_ref in self.forges.internal and self.internal_forge is not None:
+        # internal fallback forge (M11): Dev tokens are the mission's
+        # per-user scoped pair (NOT env vars) — write for EXECUTE, read
+        # elsewhere; isolation lives in the token scope (docs/14 §2a)
+        creds = self.internal_forge.mission_credentials(run.repo_ref)
+        if creds is None:
+            log.error("runspec for %s refused: internal repo %r credentials "
+                      "missing", run.run_id, run.repo_ref)
+            return None
+        env["DEVCAKE_FORGE_TOKEN"] = (creds.token_write
+                                      if run.mission_type == "EXECUTE"
+                                      else creds.token_read)
+        return {"env": env, "credential_files": spec_files}
     write = repo.token
     ro = repo.token_ro
     if run.mission_type == "EXECUTE":

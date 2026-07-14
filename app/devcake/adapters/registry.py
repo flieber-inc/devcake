@@ -65,6 +65,25 @@ def forges() -> dict[str, "ForgeDescriptor"]:
     return {fid: cls.descriptor for fid, cls in _forge_classes().items()}
 
 
+def make_internal_forge():
+    """The bundled-Gitea provisioner (docs/16 M11). Sole construction site —
+    keeps the F1 import tripwire honest (adapters.gitea imported only here)."""
+    from .gitea.provision import GiteaProvisioner
+    return GiteaProvisioner()
+
+
+def make_gitea_adapter(url: str, token: str, reviewer_token: str | None = None):
+    """Construct a Gitea ForgePort with EXPLICIT tokens (not env-resolved) —
+    the app-side adapter for an internal-forge mission repo. Registers the
+    tokens for redaction like make_forge does."""
+    from .gitea import GiteaForge
+    from ..security import register_runtime_secret
+    for v in (token, reviewer_token):
+        if v:
+            register_runtime_secret(f"forge_token:gitea:{v[:6]}", v)
+    return GiteaForge(url, token, reviewer_token)
+
+
 def make_forge(inst) -> "ForgePort":
     """Construct the adapter for one configured RepoInstance (config.repos[i])."""
     import os

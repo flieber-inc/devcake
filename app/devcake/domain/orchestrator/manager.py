@@ -29,7 +29,8 @@ class MissionManager:
     def __init__(self, config: AppConfig, dev_types: dict[str, DevType],
                  pmo: PMOPort, forges: "ForgeRuntime", runs: RunManager,
                  messaging: MessagingPort, *,
-                 instance=None, breakers: dict[str, str] | None = None):
+                 instance=None, breakers: dict[str, str] | None = None,
+                 internal_forge=None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
@@ -37,6 +38,9 @@ class MissionManager:
         # to the deployment, not to a PMO instance — one runtime, injected
         # into every manager; adapters resolve per run/mission
         self.forges = forges
+        # the bundled internal fallback forge (M11): None until Gitea is up.
+        # Zero-repo missions provision a per-mission repo here at intake.
+        self.internal_forge = internal_forge
         self.runs = runs
         self.messaging = messaging
         # this manager's PMO-instance identity (schema v3): one manager per
@@ -130,3 +134,55 @@ def _run_is_ours(self, r) -> bool:
 MissionManager._run_is_ours = _run_is_ours
 MissionManager._resolve_repo = dispatch._resolve_repo
 MissionManager._mapper_repo = dispatch._mapper_repo
+
+
+async def resolve_repo_live(self, mission, all_runs=None):
+    """(repo_name | None, gate_reason | None), UN-GATING zero-repo missions
+    onto the internal fallback forge (M11). Async — it may provision a repo.
+
+    Order: re-register any internal repo this mission already used (so the
+    sticky resolver finds it after an app restart), run the sticky resolver,
+    and if that returns the specific zero-repo gate, provision an internal
+    repo. Any OTHER gate (unknown marker, sticky-vanished external, mid-
+    mission change) is a real gate — never silently redirected internal."""
+    from ..repo_routing import REASON_ZERO_REPO
+    from ...ports.internal_forge import internal_repo_name
+    from ...adapters.registry import make_gitea_adapter
+
+    if all_runs is None:
+        all_runs = self.runs.store.all()
+
+    async def _provision() -> str:
+        creds = await self.internal_forge.ensure_mission_repo(
+            self.instance_name, mission.key)
+        svc = self.internal_forge.service_tokens() or {}
+        adapter = make_gitea_adapter(creds.clone_url, creds.token_write,
+                                     svc.get("reviewer_token"))
+        from ...config import RepoInstance
+        # model_construct: internal repo names carry hyphens / exceed the
+        # operator-name pattern by design — they are synthesized, not input
+        inst = RepoInstance.model_construct(
+            name=creds.repo_name, forge="gitea", url=creds.clone_url,
+            default_branch="main", token_env="", token_ro_env=None,
+            reviewer_token_env=None, api_base=None)
+        self.forges.register_internal(creds.repo_name, inst, adapter)
+        return creds.repo_name
+
+    # restart recovery: a prior run points at this mission's internal repo,
+    # but ForgeRuntime lost it on restart — re-register before resolving
+    if self.internal_forge is not None:
+        expected = internal_repo_name(self.instance_name, mission.key)
+        if expected not in self.forges.instances and any(
+                r.repo_ref == expected for r in all_runs
+                if r.mission_pmo_id == mission.pmo_id):
+            await _provision()
+
+    name, reason = self._resolve_repo(mission, all_runs=all_runs)
+    if name is not None:
+        return name, reason
+    if reason is REASON_ZERO_REPO and self.internal_forge is not None:
+        return await _provision(), None
+    return None, reason
+
+
+MissionManager.resolve_repo_live = resolve_repo_live

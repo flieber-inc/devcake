@@ -37,6 +37,7 @@ def make_mgr(tmp_path, pmo):
     mgr.instance_name = 'linear'
     mgr.instance = PMOInstance(name='linear', team_key='DEV')
     mgr.forges = FakeForgeRuntime(SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')))
+    mgr.internal_forge = None
     mgr.config = AppConfig()
     mgr.dev_types = {
         "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),

@@ -14,6 +14,7 @@ class FakeForgeRuntime:
             name="main", url="https://github.com/o/r")
         self.health: dict = {}
         self.breakers: dict = {}
+        self.internal: set = set()
 
     @property
     def forges(self):

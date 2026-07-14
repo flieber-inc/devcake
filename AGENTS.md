@@ -1,6 +1,7 @@
 # Agent notes — DevCake
 
 Instructions for coding agents (Claude, Cursor, Grok, Codex, etc.) working in this repo.
+These rules are **mandatory** unless the user explicitly overrides them for a task.
 
 ## Always Works™ (mandatory before done)
 
@@ -15,6 +16,59 @@ Instructions for coding agents (Claude, Cursor, Grok, Codex, etc.) working in th
 | Docs-only | No runtime required; still re-read for accuracy |
 
 Never claim done from "build succeeded" alone when the user-facing path is run/up. Name anything still unproven.
+
+## Engineering standards (mandatory for new work)
+
+### TDD for new implementations
+
+**New behavior is test-first.** Do not implement production code for a new feature, bug fix with a known reproduction, or new module until a failing test exists.
+
+| Rule | Detail |
+|---|---|
+| **Red → green → (then ship)** | Write a failing test that names the behavior; write the minimum code to pass; only then refactor. |
+| **Vertical slices** | One seam / one behavior at a time. Do **not** bulk-write a suite of imagined tests then implement everything. |
+| **Agree the seam first** | Before the first test: state the public interface under test (function, port Protocol, HTTP path). Tests hit that seam only. |
+| **No private tests** | Do not assert on private helpers, call counts of internal collaborators, or implementation structure. Prefer fakes at **port** seams (`ports/*`). |
+| **Independent expected values** | Assertions use known literals / domain rules — not recomputing the same algorithm as production. |
+| **Where tests live** | `app/tests/test_*.py`. Run with Python **3.12** (prod image). Prefer `docker buildx bake app-test` then pytest in that image, or `PYTHONPATH=app` locally on 3.12. |
+| **When TDD does not apply** | Pure renames, docs-only, config/copy, or mechanical follow-the-existing-pattern refactors with no behavior change — still run existing tests (Always Works™). |
+
+### SOLID (always)
+
+Design and refactors must respect SOLID. Prefer **deep modules** (small interface, large behavior) over shallow pass-through wrappers. Domain vocabulary: see `docs/01-architecture.md` and `docs/02-domain-model.md`. Architecture terms for structure: **module, interface, implementation, depth, seam, adapter, leverage, locality** (not “service/API/boundary” as design words).
+
+| Principle | In this codebase |
+|---|---|
+| **S** — Single responsibility | One reason to change per module. Dispatch spine → `RunBootstrap`; mission transitions → orchestrator; vendor HTTP → adapters. |
+| **O** — Open/closed | Extend via new adapters / new callers of a deep module; do not fork copy-paste spines. |
+| **L** — Liskov | Port adapters are substitutable (prod + test fakes). Fakes must honor the Protocol contract. |
+| **I** — Interface segregation | Prefer focused Protocols (`ports/*`) over god objects callers only use 10% of. |
+| **D** — Dependency inversion | Domain depends on **ports**, not `adapters/*`. Composition root: `api/main.py`. Inject dependencies; do not construct infrastructure inside domain logic. |
+
+**Deletion test:** if deleting a module only moves lines around (no complexity concentrates), it was shallow — do not add more of those.
+
+### Python best practices
+
+| Area | Expectation |
+|---|---|
+| **Version** | Target **Python 3.12** (matches `app/Dockerfile`). Avoid 3.13+–only syntax unless the image moves. |
+| **Style** | Match surrounding code: existing imports, naming, logging, async patterns. Prefer `from __future__ import annotations` where the file already uses it. |
+| **Types** | Annotate public functions and Protocol methods. Use `Protocol` for seams (`ports/`). Prefer `X \| None` over `Optional[X]` in new code when consistent with the file. |
+| **Async** | Domain I/O is async. Tests: use a dedicated event loop helper (`asyncio.new_event_loop().run_until_complete`) — do not rely on deprecated implicit loops. |
+| **Errors** | Raise domain/port exceptions (`PMOTransient`, `ForgeError`, …); do not leak `httpx`/`redis` types upward. |
+| **Secrets** | Never log or persist credentials. Redact via `security.redact` at PMO/forge egress. No secrets in tests beyond obvious fakes. |
+| **Pydantic** | Config and DTOs stay pydantic models; keep field names aligned with `docs/02-domain-model.md`. |
+| **No drive-by** | Do not reformat unrelated files, rename widely without need, or expand scope beyond the task. |
+| **Docs drift** | If you change a public seam (ports, dispatch spine, lifecycle), update the matching `docs/*` in the same change (zero-drift with `docs/01`–`04` and ADRs). |
+
+### Quick anti-patterns (reject these)
+
+- Implementing a feature then “adding tests later”
+- Typing domain code against concrete `DaguExecutor` / `Messaging` / `RunStore` instead of ports
+- Duplicating the ACL → digest → save → start spine outside `RunBootstrap`
+- Giant untested functions in `orchestrator.py` without a public-seam test
+- `except Exception: pass` that swallows real failures without logging
+- Mutating production modules only “to make the test pass” by weakening invariants
 
 ## Docker images: Bake only
 
@@ -44,11 +98,14 @@ docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
 | `docker-images.yml` | `images/**` changes + `main` + manual | Bake group `images` → harness CLI smoke (pinned versions) |
 | `docker-publish.yml` | **manual** (`workflow_dispatch`) | Bake `all` + push to GHCR (`ghcr.io/<owner>/devcake-*`) |
 
-**Local CI suite:** `scripts/ci_suite.sh` bakes `app-test` and runs pytest on `devcake_control` (prod `app` image has no pytest). Needs a running compose stack for the hello dispatch half.### Do
+**Local CI suite:** `scripts/ci_suite.sh` bakes `app-test` and runs pytest on `devcake_control` (prod `app` image has no pytest). Needs a running compose stack for the hello dispatch half.
+
+### Do
 
 - Build/rebuild with `docker buildx bake` / `bake all` / `bake images` (see `docker-bake.hcl`).
 - After changing `app/`, `admin/`, or `images/`, rebake the affected targets (or `bake all`).
 - Keep app/admin tags aligned with compose: `DEVCAKE_TAG` (default `latest`) in bake and compose.
+- For **new behavior**: red→green TDD first (see **Engineering standards**), then bake/prove Always Works™.
 
 ### Do not
 

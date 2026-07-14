@@ -1,3 +1,21 @@
-"""Port Protocols + boundary DTOs: PMOPort (pmo.py), ForgePort (forge.py).
-The executor and run store are concrete adapters injected directly; extracting
-ExecutorPort/StatePort protocols is on the roadmap (docs/16), not built."""
+"""Port Protocols + boundary DTOs.
+
+PMOPort / ForgePort (pluggable vendors — ADR-0008).
+ExecutorPort / StatePort / MessagingPort / RunFinalizer (run infrastructure).
+"""
+
+from .executor import ExecutorPort
+from .finalizer import RunFinalizer
+from .forge import ForgePort
+from .messaging import MessagingPort
+from .pmo import PMOPort
+from .state import StatePort
+
+__all__ = [
+    "ExecutorPort",
+    "ForgePort",
+    "MessagingPort",
+    "PMOPort",
+    "RunFinalizer",
+    "StatePort",
+]

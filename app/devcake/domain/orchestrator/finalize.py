@@ -76,7 +76,7 @@ async def finalize(self, run: Run, payload: dict) -> None:
             await self.messaging.delete_reply_stream(run.run_id)
             run.result = None
             run.state = "failed"
-            run.error = self._dev_failure_error(run, payload)
+            run.error = self.dev_failure_error(run, payload)
             run.ended_at = utcnow()
             self.runs.store.save(run)
             span.set_attribute("devcake.verdict", f"failed: {run.error}")
@@ -148,7 +148,8 @@ def apply_forge_health(self, data: dict) -> None:
                            data.get("detail") or "repository is not writable")
 
 
-def _dev_failure_error(self, run: Run, payload: dict) -> str:
+def dev_failure_error(self, run: Run, payload: dict) -> str:
+    # public: part of the RunFinalizer port (reconcile enriches exit-13 orphans)
     exit_code = payload.get("exit_code")
     if exit_code == 12:
         self._trip_breaker(run.dev_type, f"auth failure in {run.run_id}")

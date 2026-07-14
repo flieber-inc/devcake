@@ -35,29 +35,34 @@ Two container levels, per the mission doc: the compose stack, and the Dev contai
 
 ```
 app/devcake/
-  domain/          # pure logic — imports NO adapter code at runtime
+  domain/          # pure logic — depends on ports, not adapters
     model.py       #   entities, Mission Type derivation, label set (02)
     run.py         #   Run record + state machine
+    run_bootstrap.py#  dispatch spine: ACL → digest → durable save → executor.start (04 §3.1)
     orchestrator/  #   package: MissionManager façade + focused modules (04)
                    #     manager, schedule, dispatch, finalize, transitions,
                    #     review, decomposition, sweeps, feed, markers, mapper
     mapper_service.py  # Relations Mapper cadence (ADR-0007; ISSUES #36 first cut)
-    runs.py        #   run bookkeeping
-    oauth.py       #   harness OAuth flows
+    runs.py        #   ingress, kill, hello dispatch; holds RunBootstrap + RunFinalizer
+    oauth.py       #   harness OAuth flows (launches via RunBootstrap)
     watchdog.py    #   timeout/zombie detection
     ids.py         #   id generation
   ports/           # Protocols + the DTOs that cross them
     pmo.py         #   PMOPort, PMOHealth, PMOCapabilities, PMOTransient (05)
     forge.py       #   ForgePort, PullRequest, BranchProtection,
                    #   ForgeDescriptor, ForgeError, mission_branch() (06)
+    executor.py    #   ExecutorPort — start/stop/status (dagu adapter)
+    state.py       #   StatePort — run-record persistence (files adapter)
+    messaging.py   #   MessagingPort — Redis Streams surface (redis adapter)
+    finalizer.py   #   RunFinalizer — mission finalize/restore (MissionManager)
   adapters/
     registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), forges() —
                    #   the ONE place that knows which adapters exist
     linear/        #   PMOPort impl (05)
     github/ gitlab/#   ForgePort impls (06)
-    dagu/          #   Dagu executor: start_dag, run_status
-    files/         #   /data reads/writes: run_store.py, runlog.py (10)
-    redis/         #   messaging.py — ingress consumer + reply publisher (09)
+    dagu/          #   ExecutorPort impl
+    files/         #   StatePort impl (+ runlog.py) (10)
+    redis/         #   MessagingPort impl — ingress + replies (09)
   api/             # FastAPI: main.py (/api/v1, health — 11), clear.py
   telemetry/       # OTel setup, devcake.* attribute helpers (12)
   prompts/         # playbook prompt templates (03 §7)
@@ -67,9 +72,11 @@ app/devcake/
   harness.py       # harness registry: the 3 model/harness pairs (08)
 ```
 
-The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members. `ExecutorPort` and `StatePort` are declared-future ports: the `dagu/`, `files/`, and `redis/` adapters are already packaged under `adapters/`, but their port Protocols are not yet formalized (`16-roadmap.md`).
+The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.
 
-**Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). `domain/*` has zero runtime adapter imports — adapter types appear only under `TYPE_CHECKING`.
+**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`). Production adapters: Linear, GitHub/GitLab, Dagu, files, Redis Streams; `MissionManager` satisfies `RunFinalizer`. Composition root (`api/main.py`) builds adapters, injects them into `RunManager` / `MissionManager`, then `manager.set_finalizer(mission_mgr)` so ingress/kill never type against the concrete orchestrator. All four dispatch flavors (hello, mission, mapper, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
+
+**Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). Domain modules depend on **port Protocols**, not adapter packages.
 
 ## 4. Data-flow summaries
 

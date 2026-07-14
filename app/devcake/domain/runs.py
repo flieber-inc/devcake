@@ -2,6 +2,9 @@
 run-spec service over runspec.get, envelope auth, ACL lifecycle, trace
 continuity, watchdog kill, and the finalization checklist. Also hosts the
 hello stub dispatch — the permanent debug/CI fixture (scripts/ci_suite.sh).
+
+Dispatch spine (ACL → digest → durable save → executor.start) lives in
+RunBootstrap; this module owns ingress, kill, and hello-specific fields.
 """
 
 from __future__ import annotations
@@ -9,20 +12,19 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from opentelemetry.propagate import extract, inject
 
+from ..ports.executor import ExecutorPort
+from ..ports.finalizer import RunFinalizer
+from ..ports.messaging import MessagingPort
+from ..ports.state import StatePort
 from ..telemetry import OO_ORG, OO_URL
 from .ids import make_run_id
 from .run import Run, auth_digest, utcnow
-
-if TYPE_CHECKING:  # typing only — the domain never imports adapters at runtime
-    from ..adapters.dagu import DaguExecutor
-    from ..adapters.files import RunStore
-    from ..adapters.redis import Messaging
+from .run_bootstrap import RunBootstrap
 
 log = logging.getLogger("devcake.runs")
 tracer = trace.get_tracer("devcake")
@@ -63,13 +65,24 @@ def _oo_basic_auth() -> str:
 
 
 class RunManager:
-    def __init__(self, store: RunStore, messaging: Messaging, executor: DaguExecutor):
+    def __init__(
+        self,
+        store: StatePort,
+        messaging: MessagingPort,
+        executor: ExecutorPort,
+        finalizer: RunFinalizer | None = None,
+    ):
         self.store = store
         self.messaging = messaging
         self.executor = executor
-        self.mission_mgr = None  # wired by main (MissionManager); None for hello-only
-        self.oauth_mgr = None    # wired by main (OAuthManager)
-        self.runlog = None       # wired by main (RunLogStore)
+        self.bootstrap = RunBootstrap(store, messaging, executor)
+        self.finalizer = finalizer  # MissionManager (or fake); optional for hello-only
+        self.oauth_mgr = None       # wired by main (OAuthManager)
+        self.runlog = None          # wired by main (RunLogStore)
+
+    def set_finalizer(self, finalizer: RunFinalizer) -> None:
+        """Bind mission finalization after composition (breaks construct cycle)."""
+        self.finalizer = finalizer
 
     # ── dispatch (docs/04 §3.1, hello variant) ───────────────────────────────
 
@@ -89,8 +102,6 @@ class RunManager:
             inject(carrier)  # W3C traceparent → Dev container (docs/12 §2)
             traceparent = carrier.get("traceparent", "")
 
-            redis_password = await self.messaging.create_run_user(run_id)
-
             run = Run(
                 run_id=run_id,
                 mission_key="HELLO",
@@ -99,7 +110,6 @@ class RunManager:
                 seq=seq,
                 timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
                 traceparent=traceparent,
-                auth_digest=auth_digest(redis_password),
                 spec_env={
                     "DEVCAKE_MISSION_ID": "debug-hello",
                     "DEVCAKE_MISSION_KEY": "HELLO",
@@ -111,18 +121,7 @@ class RunManager:
                     "HELLO_PAYLOAD_KB": str(payload_kb),
                 },
             )
-            self.store.save(run)  # durable intent BEFORE the trigger (docs/04 §3.1)
-
-            await self.executor.start(
-                params={
-                    "RUN_ID": run_id,
-                    "IMAGE": HELLO_IMAGE,
-                    "TRACEPARENT": traceparent,
-                    "REDIS_USER": f"dev-{run_id}",
-                    "REDIS_PASSWORD": redis_password,
-                },
-                dag_run_id=run_id,
-            )
+            await self.bootstrap.launch(run, image=HELLO_IMAGE)
             log.info("dispatched %s (image=%s)", run_id, HELLO_IMAGE)
             return run
 
@@ -141,9 +140,9 @@ class RunManager:
                                           "mode": "600"}]}
         if run.mission_type == "OAUTH":
             return {"env": {}, "credential_files": []}
-        if self.mission_mgr is None:
+        if self.finalizer is None:
             return None
-        return self.mission_mgr.runspec_secret_payload(run)
+        return self.finalizer.runspec_secret_payload(run)
 
     def verify_auth(self, run_id: str, auth: str | None) -> bool:
         run = self.store.get(run_id)
@@ -202,11 +201,11 @@ class RunManager:
         elif kind == "runspec.ack":
             await self.messaging.delete_runspec_result(run_id)
         elif kind == "activity.get":
-            if self.mission_mgr and run.mission_pmo_id:
+            if self.finalizer and run.mission_pmo_id:
                 await self.messaging.reply(
                     run_id, "activity.result",
-                    await self.mission_mgr.activity_payload(run.mission_pmo_id,
-                                                            run.pmo_kind))
+                    await self.finalizer.activity_payload(run.mission_pmo_id,
+                                                          run.pmo_kind))
             else:
                 await self.messaging.reply(run_id, "activity.result",
                                            {"activity_md": "", "attachments": []})
@@ -233,10 +232,10 @@ class RunManager:
                 return
             run.state = "finalizing"
             self.store.save(run)
-            if self.mission_mgr and run.mission_type == "MAPPER":
-                await self.mission_mgr.finalize_mapper(run, payload)
-            elif self.mission_mgr and run.mission_pmo_id:
-                await self.mission_mgr.finalize(run, payload)
+            if self.finalizer and run.mission_type == "MAPPER":
+                await self.finalizer.finalize_mapper(run, payload)
+            elif self.finalizer and run.mission_pmo_id:
+                await self.finalizer.finalize(run, payload)
             else:
                 await self._finalize(run, payload)
             if self.runlog is not None:
@@ -330,9 +329,9 @@ class RunManager:
             from ..security import redact
             run.error = redact(reason)
             self.store.save(run)
-        if self.mission_mgr and run.mission_pmo_id:
+        if self.finalizer and run.mission_pmo_id:
             try:
-                await self.mission_mgr.restore_after_failure(run)
+                await self.finalizer.restore_after_failure(run)
             except Exception:
                 log.exception("restore_after_failure failed for %s", run.run_id)
         if self.oauth_mgr and run.run_id in self.oauth_mgr.sessions:

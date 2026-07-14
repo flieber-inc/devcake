@@ -5,6 +5,8 @@
 
 All local app data lives as plain files on one named volume (`devcake_data`, mounted at `/data`) so it is trivially inspectable, diffable, and recoverable. **Backup story: back up `/data`; everything else is reconstructible.**
 
+Run records are accessed through **`StatePort`** (`ports/state.py`); the production adapter is `adapters/files/run_store.py`. A future SQLite (or other) store is an adapter swap behind that port (`adr/0002`, `16-roadmap.md`) — not a domain change.
+
 ## 1. Layout (normative)
 
 ```

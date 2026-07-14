@@ -92,7 +92,7 @@ def test_artifacts_redelivery_noop_on_all_terminal_states(tmp_path):
         async def finalize_mapper(self, run, payload):
             finalize_calls.append(("mapper", run.run_id))
 
-    mgr.mission_mgr = MM()
+    mgr.set_finalizer(MM())
 
     for state in ("finished", "failed", "timed_out", "orphaned"):
         run = _make_run(store, state=state, run_id=f"R-{state}")
@@ -114,7 +114,7 @@ def test_artifacts_enters_finalize_from_running(tmp_path):
         async def finalize_mapper(self, run, payload):
             pass
 
-    mgr.mission_mgr = MM()
+    mgr.set_finalizer(MM())
     run = _make_run(store, state="running")
     run_coro(mgr.handle(run.run_id, "run.artifacts",
                         {"result": {"outcome": "executed"}}))
@@ -261,7 +261,7 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
     mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
 
     class MM:
-        def _dev_failure_error(self, run, payload):
+        def dev_failure_error(self, run, payload):
             assert payload["exit_code"] == 13
             return "DEV_FORGE: clone failed"
 
@@ -272,7 +272,7 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
         pass
 
     messaging.reclaim_pending = reclaim
-    mgr.mission_mgr = MM()
+    mgr.set_finalizer(MM())
     run_coro(reconcile_runs(mgr))
 
     assert store.get(live.run_id).state == "running"     # adopted

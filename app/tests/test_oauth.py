@@ -3,7 +3,6 @@ dir, using flow + image from the harness registry (session state snapshotted
 at start — a dev type deleted or re-harnessed mid-login must not misroute)."""
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
@@ -33,16 +32,20 @@ class NullMessaging:
 
 
 def make_mgr(tmp_path, monkeypatch):
+    from devcake.domain.runs import RunManager
+
     monkeypatch.setattr(oauth_mod, "SECRETS_DIR", tmp_path / "secrets")
-    runs = SimpleNamespace(store=RunStore(tmp_path / "runs"),
-                           executor=FakeExecutor(),
-                           mission_mgr=SimpleNamespace(breakers={"main-dev": "DEV_AUTH"}))
+    store = RunStore(tmp_path / "runs")
+    executor = FakeExecutor()
+    messaging = NullMessaging()
+    runs = RunManager(store, messaging, executor)
+    breakers = {"main-dev": "DEV_AUTH"}
     dev_types = {
         "main-dev": DevType(name="main-dev", harness_template="grok-build"),
         "second-grok": DevType(name="second-grok", harness_template="grok-build"),
         "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
     }
-    return OAuthManager(runs, NullMessaging(), dev_types)
+    return OAuthManager(runs, messaging, dev_types, breakers=breakers)
 
 
 def test_start_rejects_unknown_and_flowless(tmp_path, monkeypatch):
@@ -63,6 +66,7 @@ def test_start_uses_registry_and_snapshots(tmp_path, monkeypatch):
     assert s["secret_file"] == "grok-auth.json"
     run = mgr.runs.store.get(run_id)
     assert run.spec_env["DEVCAKE_OAUTH_LOGIN_CMD"] == "grok login --device-auth"
+    assert run.auth_digest is not None
 
 
 def test_result_lands_in_named_dev_type_dir(tmp_path, monkeypatch):
@@ -86,4 +90,4 @@ def test_result_clears_breaker_for_that_dev_type(tmp_path, monkeypatch):
     mgr = make_mgr(tmp_path, monkeypatch)
     run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
     run_coro(mgr._on_result_inner(run_id, {"content": "{}"}))
-    assert "main-dev" not in mgr.runs.mission_mgr.breakers
+    assert "main-dev" not in mgr.breakers

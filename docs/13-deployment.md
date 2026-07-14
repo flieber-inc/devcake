@@ -7,9 +7,9 @@ Goal per the mission doc: **as simple as possible, local-friendly technical prev
 
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
-- Services: `app`, `dagu`, `redis`, `openobserve`, `admin`.
+- Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector` (+ the `fluentbit` log shipper).
 - Volumes: `devcake_data` (→ `app:/data`), `dagu_data`, `redis_data`, `oo_data`.
-- Networks: **`devcake_control`** (`app`, `admin`, `dagu`, Redis, OpenObserve, fluent-bit) and **`devcake_runtime`** (ephemeral Devs, Redis, OpenObserve). Devs retain outbound access but cannot resolve or connect directly to `app`, `admin`, or Dagu (§5).
+- Networks: **`devcake_control`** (`app`, `admin`, `dagu`, Redis, OpenObserve, fluent-bit) and **`devcake_runtime`** (ephemeral Devs, Redis, OpenObserve, `otel-collector`). Devs retain outbound access but cannot resolve or connect directly to `app`, `admin`, or Dagu (§5). The collector is the Dev-side telemetry boundary: Devs export OTLP to it credential-free; it alone holds `OO_INGEST_*` (`12-observability.md` §1).
 
 ## 2. Annotated `docker-compose.yml` skeleton
 

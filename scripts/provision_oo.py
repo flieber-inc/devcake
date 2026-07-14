@@ -34,6 +34,28 @@ def req(method, path, body=None):
         return {"_error": e.code, "_body": e.read().decode()[:400]}
 
 
+def ensure_ingest_user():
+    """Idempotently create the OO service account the stack authenticates
+    with (collector, fluentbit, app push_oo_log) — ISSUES #13. Live-verified
+    on OO v0.91.1: accepted roles are `admin` and `service_account` ("member"
+    is refused: "Custom roles not allowed"). NOTE (docs/14 §2a): OSS
+    OpenObserve role separation is advisory — the real boundary is that Dev
+    containers hold no OO credentials at all."""
+    email = env("OO_INGEST_EMAIL")
+    password = env("OO_INGEST_PASSWORD")
+    users = req("GET", "/users").get("data") or []
+    if any(u.get("email") == email for u in users):
+        print(f"ingest user: {email} exists")
+        return
+    out = req("POST", "/users", {"email": email, "password": password,
+                                 "first_name": "DevCake", "last_name": "Ingest",
+                                 "role": "service_account"})
+    print("ingest user:", out)
+
+
+ensure_ingest_user()
+
+
 def panel(pid, title, sql, ptype="line", x=0, y=0, w=12, h=8):
     return {
         "id": f"Panel_ID{pid}", "type": ptype, "title": title, "description": "",

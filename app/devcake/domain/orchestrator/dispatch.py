@@ -14,12 +14,11 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ...harness import HARNESSES
-from ...telemetry import OO_ORG, OO_URL
+from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
-from ..oo_auth import oo_basic_auth as _oo_basic_auth
 from . import markers
 from .markers import FEED_INLINE_MAX, STEP_MARKER
 
@@ -127,7 +126,8 @@ def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
         "DEVCAKE_FORGE_CLI_ENVS": ",".join(self.forge.descriptor.cli_token_envs),
         "DEVCAKE_EXTRA_ARGS": extra_args,
         "DEVCAKE_MODEL": dev_type.model,
-        "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
+        # Devs export through the collector, credential-free (ISSUES #13)
+        "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OTEL_COLLECTOR_URL}/v1/traces",
     }
 
 
@@ -146,8 +146,7 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     # stages prefer token_ro when set, else fall back to the write token
     # so private repos keep working without a separate RO PAT.
     # Reviewer PAT stays app-side only.
-    env: dict[str, str] = {"OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
-                           **env_creds}
+    env: dict[str, str] = {**env_creds}
     write = self.config.repo.token
     ro = self.config.repo.token_ro
     if run.mission_type == "EXECUTE":

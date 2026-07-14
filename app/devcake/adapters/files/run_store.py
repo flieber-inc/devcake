@@ -41,7 +41,6 @@ class RunStore:
         upper = name.upper()
         return any(part in upper for part in (
             "TOKEN", "PASSWORD", "SECRET", "API_KEY", "AUTHORIZATION",
-            "OTLP_BASIC",
         ))
 
     def _quarantine(self, path: Path, why: str) -> None:

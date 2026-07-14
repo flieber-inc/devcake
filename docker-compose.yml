@@ -123,12 +123,30 @@ services:
     restart: unless-stopped
     command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
     environment:
-      - OO_ROOT_EMAIL=${OO_ROOT_EMAIL}
-      - OO_ROOT_PASSWORD=${OO_ROOT_PASSWORD}
+      # OO service account — root creds never leave the openobserve service
+      - OO_INGEST_EMAIL=${OO_INGEST_EMAIL}
+      - OO_INGEST_PASSWORD=${OO_INGEST_PASSWORD}
     volumes:
       - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
     ports: [ "127.0.0.1:24224:24224" ]     # receives the fluentd logging driver (host side)
     networks: [control]
+
+  # Dev-side telemetry boundary (docs/12 §1, ISSUES #13): Devs on
+  # devcake_runtime export OTLP here with NO credentials; only this collector
+  # holds the OO service account. Image is FROM scratch — no shell, so no
+  # container healthcheck (the otlphttp exporter retries; ordering is soft).
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.135.0@sha256:89107a3a8f4636a396927edf7025bb9614b8da2d92f4cc3f43109e8d115736e2
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      - OO_INGEST_EMAIL=${OO_INGEST_EMAIL}
+      - OO_INGEST_PASSWORD=${OO_INGEST_PASSWORD}
+      - OO_ORG=${OO_ORG:-default}
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on: [ openobserve ]
+    networks: [runtime]
 
 networks:
   control:

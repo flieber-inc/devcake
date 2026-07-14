@@ -21,7 +21,7 @@ from ..ports.executor import ExecutorPort
 from ..ports.finalizer import RunFinalizer
 from ..ports.messaging import MessagingPort
 from ..ports.state import StatePort
-from ..telemetry import OO_ORG, OO_URL
+from ..telemetry import OTEL_COLLECTOR_URL
 from .ids import make_run_id
 from .run import Run, auth_digest, utcnow
 from .run_bootstrap import RunBootstrap
@@ -57,11 +57,6 @@ def failure_record(run: "Run", outcome: str, reason: str,
         "trace_id": trace_id,
         "detail": redact(detail),
     }
-
-
-def _oo_basic_auth() -> str:
-    from .oo_auth import oo_basic_auth
-    return oo_basic_auth()
 
 
 class RunManager:
@@ -116,7 +111,7 @@ class RunManager:
                     "DEVCAKE_MISSION_TYPE": "HELLO",
                     "DEVCAKE_DEV_TYPE": "hello-stub",
                     "DEVCAKE_SEQ": str(seq),
-                    "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OO_URL}/api/{OO_ORG}/v1/traces",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OTEL_COLLECTOR_URL}/v1/traces",
                     "HELLO_SLEEP": str(sleep),
                     "HELLO_PAYLOAD_KB": str(payload_kb),
                 },
@@ -133,8 +128,7 @@ class RunManager:
         runspec.get, so a slow container start or a Redis restart cannot
         expire it. The requester is already authenticated (verify_auth)."""
         if run.mission_type == "HELLO":
-            return {"env": {"OTEL_EXPORTER_OTLP_BASIC": _oo_basic_auth(),
-                            "FAKE_SECRET": f"devcake-fake-secret-{run.run_id}"},
+            return {"env": {"FAKE_SECRET": f"devcake-fake-secret-{run.run_id}"},
                     "credential_files": [{"path_hint": "~/.hello/creds.json",
                                           "content": '{"fake": true}',
                                           "mode": "600"}]}

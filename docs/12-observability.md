@@ -17,8 +17,8 @@ observability gap.
 
 ## 1. Pipeline
 
-- All Python services and Dev entrypoints export **OTLP HTTP directly to OpenObserve** — no collector in v0 (a collector is the documented future insertion point for sampling/routing).
-- Endpoints (org segment required): `http://openobserve:5080/api/default/v1/traces`, `…/v1/logs`. Auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance): the app derives it from `OO_ROOT_EMAIL`/`OO_ROOT_PASSWORD` (`telemetry/__init__.py`); Devs receive the pre-encoded value as `OTEL_EXPORTER_OTLP_BASIC` in the runspec's secret half (`07-dev-runtime.md` §3).
+- The **app** exports OTLP HTTP directly to OpenObserve; **Dev entrypoints export to the inserted `otel-collector`** (`http://otel-collector:4318/v1/traces` on `devcake_runtime`, M8/ISSUES #13), **unauthenticated** — the collector alone holds the OO credentials and forwards to `http://openobserve:5080/api/{org}/v1/traces` (`otel/collector-config.yaml`). Devs carry no OO credentials at all; there is no `OTEL_EXPORTER_OTLP_BASIC` anywhere. The app deliberately does NOT route through the collector (a sick collector must never blind the control plane).
+- App auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance), derived from the `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD` service account (`telemetry/__init__.py`); root creds are used only for admin ops (stream deletion `api/clear.py`, `scripts/provision_oo.py` — which also creates the ingest user, role `service_account`).
 - Container **stdout** of every compose service (incl. `dagu`, `redis`) is also shipped to OpenObserve (fluent-forward or filelog shipper, `13-deployment.md` §7) so non-instrumented services remain searchable.
 - `service.name`: `devcake-app`, `devcake-admin`, `devcake-dev` (Dev entrypoints; the run's `dev_type` is an attribute, not the service name).
 

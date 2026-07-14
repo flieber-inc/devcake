@@ -165,17 +165,10 @@ def security_warnings(config) -> list[dict]:
     persist in config.dismissed_alerts, and resurface if the content changes).
     Lives here (not api/) so the copy is testable without the api singletons;
     all wording derives from config/descriptors — never from forge names (F1)."""
+    # (the former `oo-root-creds` warning is structurally gone as of M8:
+    # Devs export through the otel-collector and receive NO OO credentials —
+    # there is no per-run credential whose posture could degrade.)
     warns = []
-    if not (os.environ.get("OO_INGEST_EMAIL", "").strip()
-            and os.environ.get("OO_INGEST_PASSWORD", "").strip()):
-        warns.append({
-            "id": "oo-root-creds", "severity": "warning",
-            "title": "Devs receive OpenObserve ROOT credentials",
-            "body": "OO_INGEST_EMAIL/OO_INGEST_PASSWORD are unset, so every Dev "
-                    "container gets the root OpenObserve login for telemetry "
-                    "export — a compromised Dev owns all telemetry. Create an "
-                    "ingest-only OO user and set OO_INGEST_* in .env (ISSUES #13).",
-        })
     if config.repo.token and not config.repo.token_ro:
         warns.append({
             "id": "forge-write-token", "severity": "warning",

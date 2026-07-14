@@ -1,0 +1,34 @@
+# DevCake otel-collector (docs/12 §1, ISSUES #13): Dev containers on
+# devcake_runtime export OTLP here UNAUTHENTICATED; this collector alone holds
+# the OpenObserve service-account credentials and forwards traces upstream.
+# Devs therefore carry no OO credentials at all — the collector is the
+# security boundary (docs/14 §2a). The app does NOT route through this
+# (it exports directly to OO; a sick collector must never blind the app).
+
+extensions:
+  health_check:                      # GET :13133/ → 200 when the pipeline is up
+    endpoint: 0.0.0.0:13133
+  basicauth/oo:
+    client_auth:
+      username: ${env:OO_INGEST_EMAIL}
+      password: ${env:OO_INGEST_PASSWORD}
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlphttp/openobserve:
+    # the exporter appends /v1/traces itself — do NOT include it here
+    endpoint: http://openobserve:5080/api/${env:OO_ORG}
+    auth:
+      authenticator: basicauth/oo
+
+service:
+  extensions: [health_check, basicauth/oo]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/openobserve]

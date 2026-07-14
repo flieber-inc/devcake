@@ -181,6 +181,9 @@ def _refuse_insecure_passwords() -> None:
         "REDIS_PASSWORD": os.environ.get("REDIS_PASSWORD", ""),
         "DAGU_PASSWORD": os.environ.get("DAGU_PASSWORD", ""),
         "OO_ROOT_PASSWORD": os.environ.get("OO_ROOT_PASSWORD", ""),
+        # required since M8: the collector, fluentbit, and push_oo_log all
+        # authenticate with the OO service account (ISSUES #13)
+        "OO_INGEST_PASSWORD": os.environ.get("OO_INGEST_PASSWORD", ""),
     }
     bad = [name for name, val in checks.items() if (val or "").strip() in weak]
     if bad:

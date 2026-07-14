@@ -53,9 +53,10 @@ DEFAULT_FORGE = "github"
 
 def _forge_classes() -> dict[str, type]:
     # lazy so importing the registry never drags in httpx-heavy adapters
+    from .gitea import GiteaForge
     from .github import GitHubForge
     from .gitlab import GitLabForge
-    return {"github": GitHubForge, "gitlab": GitLabForge}
+    return {"github": GitHubForge, "gitlab": GitLabForge, "gitea": GiteaForge}
 
 
 def forges() -> dict[str, "ForgeDescriptor"]:

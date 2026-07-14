@@ -37,6 +37,9 @@ docker run --rm \
   "devcake/app-test:${DEVCAKE_TAG:-latest}" \
   python -m pytest tests/ -q
 
+echo "── forge contract battery (gitea lane — bundled instance, no external tokens)"
+docker compose exec -T app python - < scripts/contract_tests_forge.py
+
 echo "── stub-harness smoke: full dispatch pipeline (Dagu → container → Redis → finalize)"
 RUN=$(curl -sf -u "$ADMIN_USER:$ADMIN_PASSWORD" -H 'X-DevCake-Request: 1' -X POST \
   "http://localhost:8080/api/v1/debug/dispatch-hello?sleep=2" | python3 -c "import json,sys; print(json.load(sys.stdin)['run_id'])")

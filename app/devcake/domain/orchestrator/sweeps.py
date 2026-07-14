@@ -7,7 +7,7 @@ import logging
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from ...ports.forge import mission_branch
+from ...ports.forge import legacy_branch, mission_branch
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import utcnow
@@ -54,6 +54,10 @@ async def sweeps(self, missions: list[Mission]) -> None:
 
 async def _merge_sweep(self, m: Mission) -> None:
     pr = await self.forge.get_pr_by_branch(mission_branch(m.instance, m.key))
+    if not pr:
+        # pre-v3 branches carry no instance prefix — re-probe the legacy
+        # convention so parked missions from before the upgrade still complete
+        pr = await self.forge.get_pr_by_branch(legacy_branch(m.key))
     if not pr:
         return
     state = await self.forge.pr_state(pr.number)

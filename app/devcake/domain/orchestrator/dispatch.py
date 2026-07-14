@@ -14,6 +14,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ...harness import HARNESSES
+from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
@@ -86,13 +87,14 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
-            pmo_ref=self.config.pmos[0].name, repo_ref=self.config.repos[0].name,
+            pmo_ref=self.instance_name, repo_ref=self.config.repos[0].name,
             dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
             timeout_seconds=self.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
             spec_env=spec_env,
         )
         run.spec_prompt = prompt
+        run.branch = mission_branch(self.instance_name, mission.key)
         run.stage_label_at_dispatch = self._stage_of(live)
         run.mission_pmo_id = mission.pmo_id
         await self.runs.bootstrap.launch(

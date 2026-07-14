@@ -38,6 +38,10 @@ class Run(BaseModel):
     seq: int
     attempt_of_step: int = 1
     stage_label_at_dispatch: Optional[str] = None
+    # the PR branch minted at dispatch (schema v3): stored so review/merge
+    # lookups can never drift from what the Dev actually pushed; "" on
+    # legacy/mapper/hello records (ports.forge.run_branch derives those)
+    branch: str = ""
     spec_prompt: str = ""
     state: RunState = "dispatched"
     created_at: datetime = Field(default_factory=utcnow)

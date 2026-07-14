@@ -303,28 +303,34 @@ class AppConfig(BaseModel):
         return self
 
 
+def _stale_shape_reason(data: dict) -> str | None:
+    """ONE detector for every stale config shape — file loads and PUT bodies
+    share it (a divergent copy was a review finding). Detects v1 (singular
+    pmo:/repo: dicts), v2 (id-keyed instance entries), and explicit old
+    schema_versions. Returns the human reason, or None when current."""
+    stale = [k for k in ("pmo", "repo") if isinstance(data.get(k), dict)]
+    if stale:
+        return (f"singular {'/'.join(stale)!s} config keys are schema v1; "
+                "the current v3 shape is pmos:/repos: name-keyed lists")
+    for key in ("pmos", "repos"):
+        entries = data.get(key)
+        if isinstance(entries, list) and any(
+                isinstance(e, dict) and "id" in e for e in entries):
+            return (f"{key} entries carry the v2 'id' field; schema v3 uses "
+                    "operator-chosen 'name' identities")
+    if data.get("schema_version") not in (None, 3):
+        return (f"schema_version {data['schema_version']} is stale — the "
+                "current version is 3")
+    return None
+
+
 def reject_stale_patch(body: dict) -> None:
     """Refuse stale-schema PUT bodies loudly. Load-bearing, not defensive:
     pydantic ignores unknown keys, so without this a stale client's PUT
-    would silently DROP the operator's edit instead of failing. Detects
-    v1 (singular pmo:/repo: dicts) and v2 (id-keyed instance entries or an
-    explicit old schema_version)."""
-    stale = [k for k in ("pmo", "repo") if isinstance(body.get(k), dict)]
-    if stale:
-        raise ValueError(
-            f"singular {'/'.join(stale)!s} config keys are schema v1; "
-            "send the current v3 shape (pmos:/repos: name-keyed lists)")
-    for key in ("pmos", "repos"):
-        entries = body.get(key)
-        if isinstance(entries, list) and any(
-                isinstance(e, dict) and "id" in e for e in entries):
-            raise ValueError(
-                f"{key} entries carry the v2 'id' field; schema v3 uses "
-                "operator-chosen 'name' identities — hand-migrate per docs/10 §3")
-    if body.get("schema_version") not in (None, 3):
-        raise ValueError(
-            f"schema_version {body['schema_version']} is stale — the current "
-            "version is 3 (docs/10 §3)")
+    would silently DROP the operator's edit instead of failing."""
+    reason = _stale_shape_reason(body)
+    if reason:
+        raise ValueError(f"{reason} (hand-migration recipe: docs/10 §3)")
 
 
 def deep_merge(base: dict, patch: dict) -> dict:
@@ -356,27 +362,11 @@ def _refuse_stale_file(data: dict) -> None:
     and silently validating stale data would reset the operator's connections
     to defaults (pydantic ignores unknown keys). Detection is by SHAPE first
     (a hand-written current file without schema_version stays fine)."""
-    if "pmo" in data or "repo" in data:
+    reason = _stale_shape_reason(data)
+    if reason:
         raise RuntimeError(
-            f"{CONFIG_PATH} uses the singular v1 shape (pmo:/repo: blocks) — "
-            "hand-migrate per docs/10 §3 (pmos:/repos: name-keyed lists, "
-            "schema_version: 3) or delete the file and reconfigure via the "
-            "admin panel")
-    for key in ("pmos", "repos"):
-        entries = data.get(key)
-        if isinstance(entries, list) and any(
-                isinstance(e, dict) and "id" in e for e in entries):
-            raise RuntimeError(
-                f"{CONFIG_PATH} uses the v2 shape ({key} entries keyed by "
-                "'id') — schema v3 renames each entry's id: to a chosen "
-                "name: (lowercase alnum, e.g. 'linear'); branches and run "
-                "ids will carry the uppercased name as a prefix. Hand-migrate "
-                "per docs/10 §3, then set schema_version: 3")
-    if data.get("schema_version") not in (None, 3):
-        raise RuntimeError(
-            f"{CONFIG_PATH} declares schema_version "
-            f"{data['schema_version']} — the current version is 3; "
-            "hand-migrate per docs/10 §3")
+            f"{CONFIG_PATH}: {reason} — hand-migrate per docs/10 §3 or "
+            "delete the file and reconfigure via the admin panel")
 
 
 def load_config() -> AppConfig:

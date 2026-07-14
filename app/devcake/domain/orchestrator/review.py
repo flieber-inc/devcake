@@ -7,7 +7,7 @@ import logging
 from ...security import redact
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
-from ...ports.forge import mission_branch
+from ...ports.forge import mission_branch, run_branch
 from .markers import (CONFLICT_MARKER, MAX_CONFLICT_RESOLVES, MERGE_HANDOFF_MARKER,
                       MERGE_RETRY_MARKER)
 
@@ -20,7 +20,7 @@ async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
     up merged while the mission is still mid-pipeline, say so loudly —
     detection only; a human decides (they may have merged early themselves)."""
     try:
-        pr = await self.forge.get_pr_by_branch(mission_branch(run.pmo_ref, run.mission_key))
+        pr = await self.forge.get_pr_by_branch(run_branch(run))
         if not pr:
             return
         state = await self.forge.pr_state(pr.number)
@@ -94,7 +94,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
     verdict = result.get("verdict")
     report = result.get("report_md") or result.get("summary") or ""
-    pr = await self.forge.get_pr_by_branch(mission_branch(run.pmo_ref, run.mission_key))
+    pr = await self.forge.get_pr_by_branch(run_branch(run))
     pr_url = (pr.url if pr else None) or result.get("pr_url") or "?"
     footer = self.forge.approval_footer(pr_url)
 

@@ -137,7 +137,7 @@ def test_load_config_refuses_v1_file(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True)
     path.write_text(V1_YAML)
     monkeypatch.setattr(config_mod, "CONFIG_PATH", path)
-    with pytest.raises(RuntimeError, match="v1 shape"):
+    with pytest.raises(RuntimeError, match="schema v1"):
         config_mod.load_config()
     # the refusal must not touch the file — the operator migrates it by hand
     assert yaml.safe_load(path.read_text())["schema_version"] == 1
@@ -155,7 +155,7 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
     assert config_mod.load_config().pmos[0].team_key == "DEV"
 
     path.write_text("pmos:\n- id: main\n  team_key: DEV\nrepos:\n- id: main\n")
-    with pytest.raises(RuntimeError, match="v2 shape"):
+    with pytest.raises(RuntimeError, match="v2 .id. field"):
         config_mod.load_config()
 
     path.write_text("schema_version: 2\npmos:\n- name: linear\nrepos:\n- name: main\n")

@@ -68,6 +68,12 @@ async def schedule(self, missions: list[Mission],
     candidates.sort(key=lambda md: (PRIORITY_RANK[md[0].priority],
                                     md[0].updated_at, md[0].pmo_id))
     dispatched = 0
+    # no repository configured (schema v3 idle state) → nothing can dispatch;
+    # surface WHY per candidate instead of crashing on forge.descriptor
+    if self.forge is None:
+        for mission, _ in candidates:
+            self.blocked_reasons[mission.pmo_id] = "no repository configured"
+        return 0
     active = self.runs.store.active()
     for mission, d in candidates:
         dev_type = self.dev_types.get(self.config.assignments[d.mission_type.value].dev_type)

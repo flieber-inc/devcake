@@ -128,3 +128,54 @@ def test_unconfigured_instance_is_valid_but_idle():
     # a configured one flips the property
     cfg2 = AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")])
     assert cfg2.pmos[0].configured is True
+
+
+def test_dispatch_stamps_the_dispatching_instances_pmo_ref():
+    """Review finding: pmo_ref must come from the DISPATCHING manager, never
+    config.pmos[0] — a wrong stamp routes finalize to the wrong workspace
+    and blinds the in-flight guard (duplicate-run storm)."""
+    import inspect
+    from devcake.domain.orchestrator import dispatch as dispatch_mod
+    src = inspect.getsource(dispatch_mod.dispatch)
+    assert "pmo_ref=self.instance_name" in src
+    assert "pmo_ref=self.config.pmos[0]" not in src
+    from devcake.domain.orchestrator import mapper as mapper_mod
+    src = inspect.getsource(mapper_mod.dispatch_mapper)
+    assert "pmo_ref=self.instance_name" in src
+
+
+def test_ownership_survives_a_transient_cycle(tmp_path, monkeypatch):
+    """Review finding: ownership of a shared mission must NOT flip to the
+    second instance just because the owner had one PMOTransient cycle."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api.main import _claim_missions, _release_stale_ownership
+    from devcake.api import main as app_main
+    a, b = _mgr("linteama"), _mgr("linteamb")
+    owner: dict[str, str] = {"proj-1": "linteama"}   # A claimed earlier
+    # A's cycle fails (PMOTransient) → A contributes nothing to polled_ok;
+    # B still must NOT claim proj-1
+    got_b = _claim_missions(b, [_mission("proj-1", "PRJ-s", "linteamb")], owner)
+    assert got_b == [] and owner["proj-1"] == "linteama"
+    # release only when the OWNER successfully polls without the mission
+    monkeypatch.setattr(app_main, "managers", {"linteama": a, "linteamb": b})
+    monkeypatch.setattr(app_main, "_mission_owner", owner)
+    app_main._release_stale_ownership({"linteamb": {"proj-1"}})   # B ok, A failed
+    assert owner.get("proj-1") == "linteama"                      # kept
+    app_main._release_stale_ownership({"linteama": set()})        # A ok, gone
+    assert "proj-1" not in owner
+
+
+def test_run_branch_legacy_fallback():
+    """Pre-v3 records (pmo_ref ''/'main', no stored branch) must resolve to
+    the UNPREFIXED branch their Devs actually pushed."""
+    from devcake.ports.forge import run_branch
+    legacy = Run(run_id="T-9-1-EXECUTE-AAAAAA", mission_key="T-9",
+                 mission_type="EXECUTE", dev_type="d", seq=1, pmo_ref="main")
+    assert run_branch(legacy) == "devcake/T-9"
+    modern = Run(run_id="LINEAR-T-9-2-EXECUTE-BBBBBB", mission_key="T-9",
+                 mission_type="EXECUTE", dev_type="d", seq=2,
+                 pmo_ref="linear", branch="devcake/LINEAR-T-9")
+    assert run_branch(modern) == "devcake/LINEAR-T-9"
+    derived = Run(run_id="LINEAR-T-9-3-EXECUTE-CCCCCC", mission_key="T-9",
+                  mission_type="EXECUTE", dev_type="d", seq=3, pmo_ref="linear")
+    assert run_branch(derived) == "devcake/LINEAR-T-9"

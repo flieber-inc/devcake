@@ -25,6 +25,25 @@ def mission_branch(instance: str, key: str) -> str:
     return f"{BRANCH_PREFIX}{instance.upper()}-{key}"
 
 
+def legacy_branch(key: str) -> str:
+    """The pre-v3 (unprefixed) convention — devcake/DEV-35. Kept ONLY so
+    branches created before the schema-v3 upgrade stay findable: review
+    paths fall back to it for runs without a stored branch, and the merge
+    sweep re-probes it when the prefixed lookup finds no PR (docs/10 §3)."""
+    return f"{BRANCH_PREFIX}{key}"
+
+
+def run_branch(run) -> str:
+    """The PR branch for a run: the branch STORED at dispatch (authoritative
+    since M9 — resolution must never drift mid-mission), else derived; legacy
+    (pre-v3) records derive the unprefixed convention their Devs pushed."""
+    if getattr(run, "branch", ""):
+        return run.branch
+    if run.pmo_ref in ("", "main"):
+        return legacy_branch(run.mission_key)
+    return mission_branch(run.pmo_ref, run.mission_key)
+
+
 class ForgeError(Exception):
     """Raised by all forge adapters for HTTP-level failures (docs/06).
     `status` carries the HTTP status code when one exists. Adapters must never

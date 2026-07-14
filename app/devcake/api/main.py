@@ -155,13 +155,21 @@ manager.runlog = runlog
 missions_cache: list[dict] = []
 
 
+# PERSISTENT cross-instance ownership (v0.1 plan H1 + review finding):
+# pmo_id → owning instance name. Persistence is load-bearing — a per-cycle
+# rebuild would flip ownership of a shared mission the moment its owner has
+# one PMOTransient cycle, double-dispatching it. Released only when the
+# OWNER successfully polls and no longer sees the mission, or leaves config.
+_mission_owner: dict[str, str] = {}
+
+
 def _claim_missions(mgr: MissionManager, fetched: list,
                     owner: dict[str, str]) -> list:
-    """Cross-instance dedupe on the RAW pmo_id (v0.1 plan H1): a Linear
-    project can be accessible to two teams, so two instances in one
-    workspace would both adopt it — duplicate decomposition, label fights.
-    First configured instance claims it; later instances surface an anomaly
-    and skip. Pure function (hermetically tested)."""
+    """Cross-instance dedupe on the RAW pmo_id: a Linear project can be
+    accessible to two teams, so two instances in one workspace would both
+    adopt it — duplicate decomposition, label fights. The first instance to
+    see it claims it (durably — see _mission_owner); others surface an
+    anomaly and skip. Pure function (hermetically tested)."""
     missions = []
     for m in fetched:
         prior = owner.get(m.pmo_id)
@@ -175,13 +183,26 @@ def _claim_missions(mgr: MissionManager, fetched: list,
     return missions
 
 
-async def _poll_instance(mgr: MissionManager, owner: dict[str, str],
-                         cache_rows: list[dict]) -> tuple[int, int, int]:
+def _release_stale_ownership(polled_ok: dict[str, set]) -> None:
+    """Drop ownership entries whose owner left config, or whose owner
+    successfully polled this cycle and no longer sees the mission (done +
+    aged out of list_all, or deleted). A FAILED poll releases nothing."""
+    for pmo_id, name in list(_mission_owner.items()):
+        if name not in managers:
+            del _mission_owner[pmo_id]
+        elif name in polled_ok and pmo_id not in polled_ok[name]:
+            del _mission_owner[pmo_id]
+
+
+async def _poll_instance(mgr: MissionManager,
+                         cache_rows: list[dict]) -> tuple[int, int, int, set]:
     """One instance's poll segment: fetch + cross-instance dedupe + derive +
     gate + sweeps + schedule + cache rows. Returns (seen, candidates,
-    dispatched). Raises PMOTransient for the caller's per-instance skip."""
+    dispatched, fetched_ids). Raises PMOTransient for the caller's
+    per-instance skip."""
     fetched = await mgr.pmo.list_all(mgr.instance.team_key)
-    missions = _claim_missions(mgr, fetched, owner)
+    fetched_ids = {m.pmo_id for m in fetched}
+    missions = _claim_missions(mgr, fetched, _mission_owner)
     derived = [(m, derive(m, config.adoption_mode)) for m in missions]
     # the gate is a poll artifact, computed EVERY cycle — pause freezes
     # dispatch, never information (docs/04 §2)
@@ -193,12 +214,18 @@ async def _poll_instance(mgr: MissionManager, owner: dict[str, str],
         dispatched = 0
     else:
         dispatched = await mgr.schedule(missions, gate)
-        await mappers[mgr.instance_name].maybe_dispatch(missions)
+        # .get: build_managers may drop the instance mid-cycle (hot reload) —
+        # a KeyError here would abort the WHOLE poll cycle (review finding)
+        mp = mappers.get(mgr.instance_name)
+        if mp is not None:
+            await mp.maybe_dispatch(missions)
     mgr.rotate_grace()
-    # anomalies are advisory and per-mission: prune once terminal
-    terminal = {m.pmo_id for m in missions if m.status in ("done", "canceled")}
+    # anomalies are advisory and per-mission: prune on the FETCHED set (not
+    # just claimed missions — a dedupe anomaly references a mission this
+    # instance never claims) once terminal or no longer visible at all
+    terminal = {m.pmo_id for m in fetched if m.status in ("done", "canceled")}
     for k in list(mgr.anomalies):
-        if k in terminal:
+        if k in terminal or k not in fetched_ids:
             del mgr.anomalies[k]
     id_to_key = {m.pmo_id: m.key for m in missions}
     cache_rows.extend({
@@ -214,7 +241,8 @@ async def _poll_instance(mgr: MissionManager, owner: dict[str, str],
         "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
         "pmo_id": m.pmo_id,
     } for m, d in derived)
-    return (len(missions), sum(1 for _, d in derived if d.schedulable), dispatched)
+    return (len(missions), sum(1 for _, d in derived if d.schedulable),
+            dispatched, fetched_ids)
 
 
 async def poll_loop() -> None:
@@ -233,15 +261,13 @@ async def poll_loop() -> None:
                     await refresh_forge_health()
                 cache_rows: list[dict] = []
                 seen, cand, disp = 0, 0, 0
-                # cross-manager dedupe (v0.1 plan H1): a Linear project can be
-                # accessible to two teams — first configured instance wins,
-                # the loser surfaces an anomaly instead of double-dispatching
-                owner: dict[str, str] = {}          # raw pmo_id → instance name
+                polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids
                 for mgr in _managers_in_config_order():
                     with tracer.start_as_current_span("poll.instance") as ispan:
                         ispan.set_attribute("devcake.instance", mgr.instance_name)
                         try:
-                            s, c, d = await _poll_instance(mgr, owner, cache_rows)
+                            s, c, d, ids = await _poll_instance(mgr, cache_rows)
+                            polled_ok[mgr.instance_name] = ids
                             seen, cand, disp = seen + s, cand + c, disp + d
                         except PMOTransient as e:
                             # transient PMO trouble skips only THIS instance's
@@ -249,6 +275,13 @@ async def poll_loop() -> None:
                             ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
                             log.warning("poll.cycle %d: instance %s skipped: %s",
                                         cycle, mgr.instance_name, e)
+                _release_stale_ownership(polled_ok)
+                # a skipped instance keeps its LAST snapshot in the cache
+                # (v0 behavior: transient PMO trouble never blanks the view)
+                cache_rows.extend(
+                    row for row in missions_cache
+                    if row["instance"] in managers
+                    and row["instance"] not in polled_ok)
                 missions_cache[:] = cache_rows
                 span.set_attribute("devcake.missions.seen", seen)
                 span.set_attribute("devcake.missions.candidates", cand)

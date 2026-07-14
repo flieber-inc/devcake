@@ -145,7 +145,7 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 Exit criteria:
 - [ ] The audited residuals corrected: `config.py` forge/token-env/URL-validation defaults resolve via the adapter registry/descriptor; the `api/main.py` read-only-token warning copy is registry-fed; git identity comes per-descriptor.
 - [ ] CI tripwire green and meaningful: no `adapters.github`/`adapters.gitlab` imports outside the registry; defaults provably resolve through descriptors (a forge-name literal grep is at most a secondary check with an explicit allowlist).
-- [ ] PR #1 merged: `ExecutorPort`/`StatePort`/`MessagingPort`/`RunFinalizer` are Protocols; full suite green.
+- [x] PR #1 merged (squash `b1007c3`, 2026-07-14): `ExecutorPort`/`StatePort`/`MessagingPort`/`RunFinalizer` are Protocols; full suite green (243 tests + `ci_suite.sh` + isolated boot smoke).
 - [ ] Devs emit telemetry through an inserted OTel collector using ingest-only OO credentials; the `oo-root-creds` security warning is gone from `/health` (ISSUES #13).
 - [ ] Base image digests pinned across all Dockerfiles; bake CI green (ISSUES #29).
 

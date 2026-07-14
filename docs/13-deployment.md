@@ -207,7 +207,7 @@ Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id 
 | `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (no full harness matrix) |
 | `docker buildx bake all` | everything — **use this on first install and full upgrades** |
 
-**Cache:** local `.buildx-cache/` (see `BAKE_CACHE_DIR` in `docker-bake.hcl`). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
+**Cache:** opt-in local `.buildx-cache/` — `BAKE_LOCAL_CACHE=1 docker buildx bake …` (needs a docker-container builder or the containerd image store; the default `docker` driver cannot export cache, so plain `bake all` works everywhere without it). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
 
 **GitHub Actions:** `.github/workflows/ci.yml` bakes group `ci` + pytest on every PR; `docker-images.yml` bakes harnesses when `images/**` changes; `docker-publish.yml` (manual) pushes all images to GHCR.
 | Image | Bake target | Context / Dockerfile target | Default tag |
@@ -239,6 +239,8 @@ Which Dev image a run uses is `HARNESSES[harness_template].image` (`08-harness-t
 ## 8. Runbook
 
 - **First run:** `cp .env.example .env` → fill keys → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → Config page: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
+- **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
+  `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 
 ### 8a. Protect the default branch (deployment requirement — docs/14 §2)
 

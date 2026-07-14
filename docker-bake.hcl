@@ -6,8 +6,12 @@
 #   docker buildx bake all          # everything (first install / upgrade)
 #   docker buildx bake app-test     # prod app + pytest (CI)
 #
-# Local BuildKit cache (mode=max keeps intermediate stages for multi-target):
-#   .buildx-cache/  (gitignored)
+# Local BuildKit cache is OPT-IN: the default `docker` driver cannot export
+# cache ("Cache export is not supported for the docker driver"), so a stock
+# Docker Engine must be able to run the commands above as-is. To enable it,
+# use a docker-container builder (docker buildx create --use) or the
+# containerd image store, then:
+#   BAKE_LOCAL_CACHE=1 docker buildx bake all     # exports to .buildx-cache/
 #
 # GitHub Actions — add the CI overlay so cache hits GHA:
 #   docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
@@ -23,6 +27,12 @@ variable "DEVCAKE_TAG" {
 # Local export/import path for BuildKit cache (override if needed).
 variable "BAKE_CACHE_DIR" {
   default = ".buildx-cache"
+}
+
+# Set to any nonempty value to enable the local cache export/import
+# (requires a docker-container builder or the containerd image store).
+variable "BAKE_LOCAL_CACHE" {
+  default = ""
 }
 
 function "image_tag" {
@@ -53,8 +63,9 @@ target "_common" {
   }
   # Local persistent cache — survives daemon restarts better than memory alone.
   # Parallel targets share this dir; mode=max retains intermediate stages.
-  cache-from = ["type=local,src=${BAKE_CACHE_DIR}"]
-  cache-to   = ["type=local,dest=${BAKE_CACHE_DIR},mode=max"]
+  # Opt-in (BAKE_LOCAL_CACHE=1): the default docker driver can't export cache.
+  cache-from = BAKE_LOCAL_CACHE != "" ? ["type=local,src=${BAKE_CACHE_DIR}"] : []
+  cache-to   = BAKE_LOCAL_CACHE != "" ? ["type=local,dest=${BAKE_CACHE_DIR},mode=max"] : []
 }
 
 target "app" {

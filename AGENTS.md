@@ -29,7 +29,7 @@ Never claim done from "build succeeded" alone when the user-facing path is run/u
 | `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (PR loop without full harness matrix) |
 | `docker compose up -d` | **Run** the stack (requires images already baked) |
 
-**Build cache:** local `.buildx-cache/` via bake (gitignored). On GitHub Actions:
+**Build cache:** opt-in — `BAKE_LOCAL_CACHE=1` exports to `.buildx-cache/` (gitignored), but needs a docker-container builder or the containerd image store; the default `docker` driver refuses cache export, so plain `bake` commands stay cache-less and work on a stock Docker Engine. On GitHub Actions:
 
 ```bash
 docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all

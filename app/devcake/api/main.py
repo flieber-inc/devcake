@@ -652,7 +652,7 @@ async def test_forge():
         health = await refresh_forge_health()
         if not health["ok"]:
             return health
-        pr = await f.get_pr_by_branch(mission_branch("__connection_test__"))
+        pr = await f.get_pr_by_branch(mission_branch(config.pmos[0].name, "__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
         protection = await f.default_branch_protection(config.repos[0].default_branch)
         return {"ok": True, "forge": config.repos[0].forge, "repo": config.repos[0].url,

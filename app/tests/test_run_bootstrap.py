@@ -182,6 +182,7 @@ def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
     executor = FakeExecutor(store)
     runs = RunManager(store, FakeMessaging(), executor)
     mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = 'linear'
     mgr.config = AppConfig()
     mgr.runs = runs
     mgr.messaging = FakeMessaging()

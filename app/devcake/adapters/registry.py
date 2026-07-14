@@ -41,7 +41,7 @@ def make_pmo(inst) -> PMOPort:
                          f"{sorted(PMO_SYSTEMS)}")
     if inst.system == "linear":
         from .linear import LinearAdapter
-        return LinearAdapter(inst.api_key)
+        return LinearAdapter(inst.api_key, instance=inst.name)
     raise AssertionError("unreachable")  # registry and constructors in sync
 
 

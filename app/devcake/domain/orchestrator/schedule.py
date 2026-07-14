@@ -57,7 +57,8 @@ async def schedule(self, missions: list[Mission],
             continue
         if m.pmo_id in self._grace:
             continue  # grace cycle after our own writes (docs/04 §2)
-        if any(r.mission_pmo_id == m.pmo_id for r in self.runs.store.active()):
+        if any(r.mission_pmo_id == m.pmo_id and self._run_is_ours(r)
+               for r in self.runs.store.active()):
             continue  # in-flight guard
         if m.pmo_id in gate:                   # blocked-by gate (docs/04 §2)
             log.info("mission %s not scheduled — %s", m.key, gate[m.pmo_id])

@@ -20,7 +20,7 @@ async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
     up merged while the mission is still mid-pipeline, say so loudly —
     detection only; a human decides (they may have merged early themselves)."""
     try:
-        pr = await self.forge.get_pr_by_branch(mission_branch(run.mission_key))
+        pr = await self.forge.get_pr_by_branch(mission_branch(run.pmo_ref, run.mission_key))
         if not pr:
             return
         state = await self.forge.pr_state(pr.number)
@@ -77,7 +77,7 @@ async def _maybe_route_conflict_to_execute(self, pmo_id: str, key: str,
             pmo_id, "issue",
             f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
             f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
-            f"Next Dev: sync `{mission_branch(key)}` with the default branch, "
+            f"Next Dev: sync `{mission_branch(self.instance_name, key)}` with the default branch, "
             f"resolve the conflicts, and push; the PR then returns to "
             f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
         await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
@@ -94,7 +94,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
     verdict = result.get("verdict")
     report = result.get("report_md") or result.get("summary") or ""
-    pr = await self.forge.get_pr_by_branch(mission_branch(run.mission_key))
+    pr = await self.forge.get_pr_by_branch(mission_branch(run.pmo_ref, run.mission_key))
     pr_url = (pr.url if pr else None) or result.get("pr_url") or "?"
     footer = self.forge.approval_footer(pr_url)
 
@@ -237,7 +237,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
     else:  # reject
         rejections = 1 + sum(
             1 for r in self.runs.store.all()
-            if r.mission_pmo_id == pmo_id and r.mission_type == "REVIEW"
+            if r.mission_pmo_id == pmo_id and self._run_is_ours(r) and r.mission_type == "REVIEW"
             and r.state == "finished"
             and (r.result or {}).get("verdict") == "reject")
 
@@ -276,7 +276,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                 return
             cost = sum((r.token_report or {}).get("cost_usd") or 0
                        for r in self.runs.store.all()
-                       if r.mission_pmo_id == pmo_id)
+                       if r.mission_pmo_id == pmo_id and self._run_is_ours(r))
             warn = (f"⚠️ **Loop warning:** this mission has been through "
                     f"{rejections} REVIEW rejections. Cumulative recorded "
                     f"cost so far: ${cost:.2f} (runs without cost data not "

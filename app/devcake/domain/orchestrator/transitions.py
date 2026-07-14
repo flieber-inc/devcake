@@ -198,7 +198,7 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
                 self._audit(pmo_id, "set_status", "backlog (human hand-off)")
             nth = 1 + sum(
                 1 for r in self.runs.store.all()
-                if r.mission_pmo_id == pmo_id and r.state == "finished"
+                if r.mission_pmo_id == pmo_id and self._run_is_ours(r) and r.state == "finished"
                 and (r.result or {}).get("outcome") == "human_needed"
                 and r.stage_label_at_dispatch == run.stage_label_at_dispatch)
             warn = "" if nth < 2 else (

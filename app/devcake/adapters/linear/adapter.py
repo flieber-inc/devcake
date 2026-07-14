@@ -58,10 +58,15 @@ MAX_COMMENT_PAGES = 10
 
 
 class LinearAdapter:
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None,
+                 instance: str = ""):
         self._headers = {"Authorization": api_key, "Content-Type": "application/json"}
         self._team_cache: dict[str, dict[str, Any]] = {}
         self._transport = transport  # tests inject a MockTransport (contract test 9)
+        # the configured PMO-instance name this adapter serves (schema v3):
+        # stamped on every Mission at normalization, so provenance can never
+        # be missed by a fetch path
+        self._instance = instance
 
     async def _gql(self, query: str, variables: dict | None = None) -> dict:
         try:
@@ -573,7 +578,8 @@ class LinearAdapter:
                         "(ISSUES #7)",
                         n.get("identifier"), len(label_nodes))
         return Mission(
-            pmo_id=n["id"], pmo_kind="issue", key=n["identifier"], title=n["title"],
+            pmo_id=n["id"], pmo_kind="issue", instance=self._instance,
+            key=n["identifier"], title=n["title"],
             description=n.get("description") or "",
             status=STATE_TYPE_MAP.get(n["state"]["type"], "backlog"),
             priority=PRIORITY_MAP.get(int(n.get("priority") or 0), "medium"),
@@ -595,7 +601,8 @@ class LinearAdapter:
                         "DEVCAKE-* labels may be missing (ISSUES #7)",
                         n.get("name"), len(label_nodes))
         return Mission(
-            pmo_id=n["id"], pmo_kind="project", key=f"PRJ-{slug}", title=n["name"],
+            pmo_id=n["id"], pmo_kind="project", instance=self._instance,
+            key=f"PRJ-{slug}", title=n["name"],
             # Linear caps project `description` at 255 chars (verified live);
             # the long-form body lives in `content`
             description=n.get("content") or n.get("description") or "",

@@ -11,7 +11,7 @@ from devcake.prompts import (execute_prompt, mapper_prompt, onboard_prompt,
 GH_PR = GitHubForge.descriptor.pr_instructions
 GL_PR = GitLabForge.descriptor.pr_instructions
 
-M = Mission(pmo_id="x", pmo_kind="issue", key="T-9", title="t", status="backlog",
+M = Mission(instance="linear", pmo_id="x", pmo_kind="issue", key="T-9", title="t", status="backlog",
             updated_at=datetime.now(timezone.utc))
 
 
@@ -19,7 +19,7 @@ def test_execute_playbook_binding_rules_inv6():
     p = execute_prompt("ID", M, "repo", GH_PR)
     assert "Commit ONLY at the very end" in p
     assert "NEVER force-push" in p
-    assert "devcake/T-9" in p
+    assert "devcake/LINEAR-T-9" in p
     assert "result.json" in p
 
 
@@ -70,10 +70,10 @@ def test_human_comments_note_everywhere():
 
 
 def test_mapper_prompt_embeds_missions():
-    a = Mission(pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
+    a = Mission(instance="linear", pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
                 description="x" * 500, status="backlog",
                 updated_at=datetime.now(timezone.utc))
-    b = Mission(pmo_id="idb", pmo_kind="issue", key="T-2", title="implement",
+    b = Mission(instance="linear", pmo_id="idb", pmo_kind="issue", key="T-2", title="implement",
                 status="backlog", blocked_by=["ida"],
                 updated_at=datetime.now(timezone.utc))
     p = mapper_prompt("ID", [a, b])

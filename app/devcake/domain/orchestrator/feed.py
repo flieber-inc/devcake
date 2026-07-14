@@ -23,6 +23,7 @@ def _audit(self, pmo_id: str, action: str, detail: str = "") -> None:
     markers.AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(markers.AUDIT_PATH, "a") as f:
         f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
+                            "instance": getattr(self, "instance_name", ""),
                             "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
     self._grace_next.add(pmo_id)
     # mirror every audit action as a span so OO alerts can fire on them

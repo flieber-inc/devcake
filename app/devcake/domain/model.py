@@ -50,6 +50,10 @@ class MissionRef(NamedTuple):
 class Mission(BaseModel):
     pmo_id: str
     pmo_kind: Literal["issue", "project"]
+    # which configured PMO instance this mission came from (schema v3) —
+    # stamped by the adapter at normalization (adapters are instance-bound),
+    # so no fetch path can return an unstamped mission
+    instance: str = ""
     key: str
     title: str
     description: str = ""

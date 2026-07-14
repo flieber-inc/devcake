@@ -85,7 +85,7 @@ class RunManager:
         self, sleep: int = 3, payload_kb: int = 1, timeout_seconds: int | None = None
     ) -> Run:
         seq = sum(1 for r in self.store.all() if r.mission_key == "HELLO") + 1
-        run_id = make_run_id("HELLO", seq, "HELLO")
+        run_id = make_run_id("sys", "HELLO", seq, "HELLO")
 
         with tracer.start_as_current_span(
             "mission.dispatch", kind=SpanKind.PRODUCER

@@ -74,7 +74,7 @@ class FakePMO:
         self.created.append((title, parent_ref))
         key, pmo_id = f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
         self.all_missions.append(Mission(
-            pmo_id=pmo_id, pmo_kind="issue", key=key, title=title,
+            instance="linear", pmo_id=pmo_id, pmo_kind="issue", key=key, title=title,
             description=description, status="backlog", priority=priority,
             labels=set(label_names), updated_at=datetime.now(timezone.utc),
             parent_ref=parent_ref,
@@ -99,7 +99,7 @@ class NullMessaging:
 
 
 def mission(status="in_progress", labels=frozenset({"DEVCAKE"})):
-    return Mission(pmo_id="p1", pmo_kind="issue", key="T-1", title="t",
+    return Mission(instance="linear", pmo_id="p1", pmo_kind="issue", key="T-1", title="t",
                    status=status, labels=set(labels),
                    updated_at=datetime.now(timezone.utc))
 
@@ -151,6 +151,7 @@ def make_mgr(tmp_path, m, forge=None):
     runs.store = store
     runs.finalizer = None
     mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = 'linear'
     mgr.config = cfg
     mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
                                            harness_template="claude-code")}

@@ -47,6 +47,7 @@ class MapPMO:
 
 def make_mgr(tmp_path, pmo):
     mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = 'linear'
     mgr.config = AppConfig()
     mgr.pmo = pmo
     mgr.runs = SimpleNamespace(store=RunStore(tmp_path / "runs"))

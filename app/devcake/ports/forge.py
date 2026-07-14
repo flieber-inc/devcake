@@ -12,9 +12,17 @@ from pydantic import BaseModel
 BRANCH_PREFIX = "devcake/"
 
 
-def mission_branch(key: str) -> str:
-    """The working branch for a mission key (e.g. DEV-35 → devcake/DEV-35)."""
-    return f"{BRANCH_PREFIX}{key}"
+def mission_branch(instance: str, key: str) -> str:
+    """The working branch for a mission: devcake/{INSTANCE}-{key}
+    (e.g. instance "linear", DEV-35 → devcake/LINEAR-DEV-35). The uppercased
+    instance prefix keeps identifiers collision-free across PMO instances
+    (schema v3, docs/16 M9); instance names contain no hyphens, so the
+    compound is unambiguous. An empty instance is a provenance bug upstream —
+    fail loudly rather than mint an ambiguous devcake/-KEY branch."""
+    if not instance:
+        raise ValueError(f"mission_branch: empty instance for key {key!r} — "
+                         "provenance was not stamped (schema v3)")
+    return f"{BRANCH_PREFIX}{instance.upper()}-{key}"
 
 
 class ForgeError(Exception):

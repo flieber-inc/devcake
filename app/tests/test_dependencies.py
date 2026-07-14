@@ -33,6 +33,7 @@ class DepPMO:
 
 def make_mgr(tmp_path, pmo):
     mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = 'linear'
     mgr.config = AppConfig()
     mgr.dev_types = {
         "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),

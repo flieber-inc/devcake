@@ -183,6 +183,7 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     runs = RunManager(store, NullMessaging(), FakeExecutor())
 
     mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = 'linear'
     mgr.config = AppConfig()
     mgr.runs = runs
     mgr.messaging = NullMessaging()
@@ -215,6 +216,7 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance
     mgr = MissionManager.__new__(MissionManager)
+    mgr.instance_name = 'linear'
     mgr.config = AppConfig()
     mgr.forge = make_forge(RepoInstance(url="https://github.com/o/r"))
     env = mgr._protocol_spec_env(

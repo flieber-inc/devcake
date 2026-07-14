@@ -97,7 +97,7 @@ decompose it into standalone child issues covering the full extent of the work.
 def onboard_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + ONBOARD_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, branch=mission_branch(mission.key),
+        title=mission.title, branch=mission_branch(mission.instance, mission.key),
         description=mission.description or "(no description)",
         project_note=PROJECT_NOTE if mission.pmo_kind == "project" else "") \
         + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
@@ -171,7 +171,7 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
                    pr_instructions: str, default_branch: str = "main") -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
     (docs/06) — placeholders: {key} {title} {default} {branch}."""
-    branch = mission_branch(mission.key)
+    branch = mission_branch(mission.instance, mission.key)
     pr = pr_instructions.format(key=mission.key, title=mission.title,
                                 default=default_branch, branch=branch)
     return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
@@ -217,7 +217,7 @@ approval must be EARNED by the evidence you gather.
 def review_prompt(identifying_prompt: str, mission: Mission) -> str:
     return identifying_prompt + "\n" + REVIEW_PLAYBOOK.format(
         key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, branch=mission_branch(mission.key),
+        title=mission.title, branch=mission_branch(mission.instance, mission.key),
         description=mission.description or "(no description)") \
         + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 

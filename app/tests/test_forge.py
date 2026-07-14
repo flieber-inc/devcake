@@ -170,7 +170,12 @@ def test_adapters_implement_full_port(cls):
 
 def test_mission_branch_single_definition():
     assert BRANCH_PREFIX == "devcake/"
-    assert mission_branch("DEV-35") == "devcake/DEV-35"
+    assert mission_branch("linear", "DEV-35") == "devcake/LINEAR-DEV-35"
+    # empty instance = missing provenance — must fail loudly, never mint
+    # an ambiguous devcake/-KEY branch
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="provenance"):
+        mission_branch("", "DEV-35")
 
 
 GH_PR_LIST_ITEM = {"number": 8, "html_url": "https://gh/pr/8", "state": "open",

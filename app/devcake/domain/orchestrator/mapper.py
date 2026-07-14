@@ -32,7 +32,7 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
         log.warning("mapper prompt truncated to %d of %d missions",
                     MAPPER_MISSION_CAP, len(eligible))
     seq = 1 + sum(1 for r in self.runs.store.all() if r.mission_type == "MAPPER")
-    run_id = make_run_id("TEAM", seq, "MAPPER")
+    run_id = make_run_id(self.instance_name, "TEAM", seq, "MAPPER")
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)

@@ -31,6 +31,9 @@ class MissionManager:
         self.forge = forge
         self.runs = runs
         self.messaging = messaging
+        # this manager's PMO-instance identity (schema v3): the branch/run-id
+        # prefix and the pmo_ref stamped on runs. M9.3 makes managers plural.
+        self.instance_name: str = config.pmos[0].name
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
         self.breakers: dict[str, str] = {}  # dev_type → reason (DEV_AUTH circuit breaker)
@@ -103,3 +106,15 @@ MissionManager.sweeps = sweeps.sweeps
 MissionManager._merge_sweep = sweeps._merge_sweep
 MissionManager._deferred_merge_retry = sweeps._deferred_merge_retry
 MissionManager._tracking_sweep = sweeps._tracking_sweep
+
+
+def _run_is_ours(self, r) -> bool:
+    """Instance-scope a run record (schema v3). Vendor pmo_ids are UUIDs for
+    Linear, so the mission_pmo_id filters are already collision-free — this
+    is belt-and-braces for a future PMO with colliding ids. Legacy records
+    ("" / pre-v3 "main") always count: hiding them would silently reset
+    attempt counters on upgrade (count, don't hide)."""
+    return r.pmo_ref in ("", "main", self.instance_name)
+
+
+MissionManager._run_is_ours = _run_is_ours

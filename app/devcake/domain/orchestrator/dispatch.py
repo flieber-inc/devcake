@@ -54,7 +54,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
     assignment = self.config.assignments[mtype.value]
     from ..ids import make_run_id
-    run_id = make_run_id(mission.key, seq, mtype.value)
+    run_id = make_run_id(self.instance_name, mission.key, seq, mtype.value)
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)
@@ -226,7 +226,8 @@ def _attempt_number(self, pmo_id: str, mission_type: str,
     run for this mission (a later step finishing implies earlier failures
     were resolved), or the latest human feed comment (a human touching the
     mission is an intervention — the step deserves fresh attempts)."""
-    all_runs = [r for r in self.runs.store.all() if r.mission_pmo_id == pmo_id]
+    all_runs = [r for r in self.runs.store.all()
+                if r.mission_pmo_id == pmo_id and self._run_is_ours(r)]
     history = [r for r in all_runs if r.mission_type == mission_type]
     anchors = [t for t in [self._last_giveup_at(pmo_id),
                            *(self._aware(r.created_at) for r in all_runs

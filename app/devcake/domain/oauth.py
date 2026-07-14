@@ -51,7 +51,7 @@ class OAuthManager:
             raise ValueError(f"harness {dev_type.harness_template!r} has no OAuth "
                              "flow (it authenticates via env token)")
         flow = harness.oauth
-        run_id = make_run_id("OAUTH", 1,
+        run_id = make_run_id("sys", "OAUTH", 1,
                              dev_type.harness_template.split("-")[0].upper())
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
                   dev_type=dev_type.name, seq=1, timeout_seconds=600,

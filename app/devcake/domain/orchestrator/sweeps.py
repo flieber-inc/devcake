@@ -53,7 +53,7 @@ async def sweeps(self, missions: list[Mission]) -> None:
 
 
 async def _merge_sweep(self, m: Mission) -> None:
-    pr = await self.forge.get_pr_by_branch(mission_branch(m.key))
+    pr = await self.forge.get_pr_by_branch(mission_branch(m.instance, m.key))
     if not pr:
         return
     state = await self.forge.pr_state(pr.number)

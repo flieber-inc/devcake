@@ -17,9 +17,16 @@ def _suffix(n: int = 6) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 
 
-def make_run_id(mission_key: str, seq: int, mission_type: str) -> str:
+def make_run_id(instance: str, mission_key: str, seq: int, mission_type: str) -> str:
+    """{INSTANCE}-{key}-{seq}-{TYPE}-{suffix}. The uppercased PMO-instance
+    prefix (schema v3) keeps run ids — and therefore ACL users, container
+    names, and reply streams — collision-free across instances. Instance
+    names are ≤12 lowercase alnum chars (config validator), so the 64-char
+    Dagu budget holds. HELLO/OAUTH runs pass the fixed pseudo-instance "sys"
+    (instance-less by design; they finalize inside RunManager)."""
+    inst = _SAFE.sub("", instance.upper())[:12]
     key = _SAFE.sub("-", mission_key).strip("-")[:24]
     mtype = _SAFE.sub("", mission_type.upper())[:12]
-    run_id = f"{key}-{seq}-{mtype}-{_suffix()}"
+    run_id = f"{inst}-{key}-{seq}-{mtype}-{_suffix()}"
     assert len(run_id) <= 64
     return run_id

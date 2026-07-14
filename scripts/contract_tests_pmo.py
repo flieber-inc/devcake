@@ -1,7 +1,13 @@
-"""PMO adapter contract battery, tests 1–5 & 8–10 (docs/05 §7) — M2 exit criterion.
+"""PMO adapter contract battery — the adapter ACCEPTANCE GATE (docs/05 §0+§7).
 
-Runs INSIDE the app container (imports devcake.*), against the live sandbox team:
+Tests 1–5 & 8–10 (M2 exit criterion) + 11–13 (M9: cancel_mission idempotency,
+marker/markdown fidelity, attachment round-trip). Exit code is the verdict.
+
+Runs INSIDE the app container (imports devcake.*), against a live team:
     docker compose exec -T app python - < scripts/contract_tests_pmo.py
+Instance selection (schema v3): set DEVCAKE_CONTRACT_INSTANCE=<name> in the
+exec env (default: the first configured instance). Run once per instance —
+the additivity proof runs it against both sandbox teams.
 Creates temp issues prefixed [CONTRACT] and deletes them afterwards.
 """
 
@@ -45,8 +51,15 @@ async def delete_issue(pmo, issue_id):
 
 async def main():
     cfg = load_config()
-    team = cfg.pmos[0].team_key
-    pmo = LinearAdapter(cfg.pmos[0].api_key)
+    wanted = os.environ.get("DEVCAKE_CONTRACT_INSTANCE", "")
+    inst = next((i for i in cfg.pmos if i.name == wanted), None) if wanted \
+        else next((i for i in cfg.pmos if i.configured), None)
+    if inst is None:
+        raise SystemExit(f"no configured PMO instance"
+                         f"{f' named {wanted!r}' if wanted else ''}")
+    print(f"instance: {inst.name} (team {inst.team_key})")
+    team = inst.team_key
+    pmo = LinearAdapter(inst.api_key, instance=inst.name)
 
     # 1 — team scoping + terminal exclusion
     missions = await pmo.list_missions(team)
@@ -136,6 +149,54 @@ async def main():
           and caps.projects_supported and caps.project_labels_supported
           and caps.native_label_swap_atomic,
           proj and f"{proj.key} {proj.status} {sorted(proj.labels)}")
+
+    # 11 — cancel_mission: terminal + idempotent (docs/05 §0d)
+    cid = await make_temp_issue(pmo, team, "[CONTRACT] cancel idempotency", ["DEVCAKE"])
+    ok11, note11 = True, ""
+    try:
+        ref = MissionRef(cid, "issue")
+        await pmo.cancel_mission(ref)
+        m1 = await pmo.get(ref)
+        await pmo.cancel_mission(ref)          # second cancel must be success
+        m2 = await pmo.get(ref)
+        ok11 = m1.status == "canceled" and m2.status == "canceled"
+        note11 = f"{m1.status}/{m2.status}"
+    except Exception as e:
+        ok11, note11 = False, str(e)[:120]
+    finally:
+        await delete_issue(pmo, cid)
+    check("11", "cancel_mission terminal + idempotent", ok11, note11)
+
+    # 12 — marker/markdown fidelity: backticked sentinels survive round-trip
+    fid = await make_temp_issue(pmo, team, "[CONTRACT] marker fidelity", ["DEVCAKE"])
+    ok12, note12 = True, ""
+    try:
+        marker = "state check `devcake:v1` and `devcake:conflict-resolve:2` intact"
+        await pmo.post_feed(MissionRef(fid, "issue"), marker)
+        act = await pmo.get_activity(MissionRef(fid, "issue"))
+        ok12 = any("`devcake:v1`" in e.body and "`devcake:conflict-resolve:2`" in e.body
+                   for e in act.entries)
+        note12 = "" if ok12 else "backticked marker bytes did not round-trip"
+    except Exception as e:
+        ok12, note12 = False, str(e)[:120]
+    finally:
+        await delete_issue(pmo, fid)
+    check("12", "post_feed marker fidelity (docs/05 §0d)", ok12, note12)
+
+    # 13 — attachment upload → download round-trip
+    aid = await make_temp_issue(pmo, team, "[CONTRACT] attachment round-trip", ["DEVCAKE"])
+    ok13, note13 = True, ""
+    try:
+        payload = b"contract-battery attachment \xf0\x9f\x8d\xb0 bytes"
+        url = await pmo.upload_attachment(aid, "contract.md", payload)
+        got = await pmo.download_asset(url)
+        ok13 = got == payload
+        note13 = "" if ok13 else f"{len(got)} bytes back, {len(payload)} sent"
+    except Exception as e:
+        ok13, note13 = False, str(e)[:120]
+    finally:
+        await delete_issue(pmo, aid)
+    check("13", "attachment upload/download round-trip", ok13, note13)
 
     width = max(len(n) for _, n, _ in results)
     failures = 0

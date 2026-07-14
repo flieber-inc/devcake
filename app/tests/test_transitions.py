@@ -62,6 +62,9 @@ class FakePMO:
         self.statuses.append(status)
         self.mission.status = status
 
+    async def cancel_mission(self, ref):
+        await self.set_status(ref, "canceled")
+
     async def upload_attachment(self, pmo_id, filename, data):
         self.uploads.append((filename, data))
         return f"https://fake/{filename}"

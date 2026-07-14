@@ -5,6 +5,15 @@
 
 The domain core never sees Linear types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. The Linear adapter (`app/devcake/adapters/linear/adapter.py`) is the only v0 implementation; the port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
+## 0. The PMO capability contract (normative — any candidate system)
+
+A PMO system qualifies for a DevCake adapter iff it satisfies all four capabilities (F2, docs/16 M9). The conformance battery (§7) is the acceptance gate — an adapter that passes it against a live instance is admissible; one that cannot express these capabilities is not "just another adapter" and needs its own design round:
+
+- **(a) Missions as the unit of work.** The system's work items map straightforwardly onto Missions (`02-domain-model.md`): a stable vendor id, title/description, a status that normalizes onto backlog/in-progress/done/canceled, and a priority.
+- **(b) Labels (or an equivalent) assign Mission Steps.** The DEVCAKE-* stage machinery needs an idempotently-creatable, atomically-swappable tag concept readable back on every item (`§5`).
+- **(c) Traffic control via blocked-by relations.** Native "X blocks Y" dependencies, listable per item — the scheduler gate and Relations Mapper ride on them (`adr/0007`).
+- **(d) A reliable activity feed.** Ordered comments + file attachments with **markdown fidelity** for backticked markers (`devcake:v1`, decomposition manifests, merge-retry markers): the feed is DevCake's persistent memory, so a PMO that rewrites comment bytes (ADF/rich-text — Jira) needs an explicit fidelity strategy before an adapter is attempted (ISSUES #35). Abandonment must be expressible (`cancel_mission` — a canceled/archived terminal state).
+
 ## 1. Port interface (normative signatures)
 
 Reads and writes are keyed by `MissionRef(pmo_id, kind)` — the adapter dispatches on `ref.kind` **internally**, so vendor dualities (Linear's issue/project split) never leak into the domain. `PMOTransient` (retryable 429/5xx/network failure, `15-errors-and-retries.md`) also lives in `ports/pmo.py`.

@@ -70,7 +70,7 @@ async def _merge_sweep(self, m: Mission) -> None:
                     f"✅ PR {state.url} merged — mission done (merge sweep).")
                 self._audit(m.pmo_id, "merge_sweep_done", state.url)
             else:
-                await self.pmo.set_status(m.ref, "canceled")
+                await self.pmo.cancel_mission(m.ref)
                 await self._feed(
                     m.pmo_id, "issue",
                     f"🚫 PR {state.url} was closed without merging — mission "

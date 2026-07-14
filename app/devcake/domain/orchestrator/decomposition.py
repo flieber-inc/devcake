@@ -166,7 +166,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                 pmo_id, "issue",
                 f"🧩 Decomposed into {len(normalized)} standalone issues: "
                 f"{links}. This issue is canceled in their favor.")
-            await self.pmo.set_status(MissionRef(pmo_id, "issue"), "canceled")
+            await self.pmo.cancel_mission(MissionRef(pmo_id, "issue"))
             self._audit(pmo_id, "decomposed_canceled", links)
     await self._checkpoint(run, "decomp:tracking", _tracking)
 

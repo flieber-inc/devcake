@@ -324,6 +324,13 @@ class LinearAdapter:
         else:
             await self._set_issue_status(ref.pmo_id, status)
 
+    async def cancel_mission(self, ref: MissionRef) -> None:
+        # Linear's abandonment IS the canceled workflow/project state, so this
+        # delegates to the same mutation; idempotent (already-canceled is a
+        # no-op state write). The port seam exists for PMOs where abandonment
+        # is archive/close instead (docs/05 §0d).
+        await self.set_status(ref, "canceled")
+
     async def swap_labels(self, ref: MissionRef, remove: set[str],
                           add: set[str]) -> None:
         if ref.kind == "project":

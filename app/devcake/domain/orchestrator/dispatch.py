@@ -58,6 +58,20 @@ def _mapper_repo(self) -> str | None:
     return external[0] if external else None
 
 
+def _identifying_prompt(self, dev_type: DevType) -> str:
+    """The Dev Type's identifying prompt via its ACTIVE workflow template
+    (2026-07-15); falls back Development → the stored identifying_prompt
+    field, warning in the log (and /health) on a broken named template."""
+    from ...prompts import templates as prompt_templates
+    text, warn = prompt_templates.resolve_devtype_prompt(
+        dev_type.name,
+        self.config.active_devtype_prompts.get(dev_type.name),
+        fallback=dev_type.identifying_prompt)
+    if warn:
+        log.warning("devtype prompt fallback: %s", warn)
+    return text
+
+
 def _onboard_repo_options(self, primary: str) -> str:
     """The multi-repo triage section for ONBOARD prompts (item 2 full scope,
     founder decision 2026-07-15): empty unless the instance's repo SET has
@@ -197,22 +211,23 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         ref_note = self._reference_repos_note(repo_name)
+        ident = self._identifying_prompt(dev_type)
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(
-                dev_type.identifying_prompt, live, playbook=_pb("ONBOARD"),
+                ident, live, playbook=_pb("ONBOARD"),
                 repo_options=self._onboard_repo_options(repo_name),
                 reference_repos=ref_note),
             MissionType.PLAN: lambda: plan_prompt(
-                dev_type.identifying_prompt, live, playbook=_pb("PLAN"),
+                ident, live, playbook=_pb("PLAN"),
                 reference_repos=ref_note),
             MissionType.EXECUTE: lambda: execute_prompt(
-                dev_type.identifying_prompt, live, repo_slug,
+                ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
                 default_branch=repo.default_branch,
                 playbook=_pb("EXECUTE"),
                 reference_repos=ref_note),
             MissionType.REVIEW: lambda: review_prompt(
-                dev_type.identifying_prompt, live, playbook=_pb("REVIEW"),
+                ident, live, playbook=_pb("REVIEW"),
                 reference_repos=ref_note),
         }[mtype]()
 
@@ -263,7 +278,8 @@ def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
         "DEVCAKE_GIT_EMAIL": forge.descriptor.git_email,
         "DEVCAKE_FORGE_CLI_ENVS": ",".join(forge.descriptor.cli_token_envs),
         "DEVCAKE_EXTRA_ARGS": extra_args,
-        "DEVCAKE_MODEL": dev_type.model,
+        "DEVCAKE_MODEL": (dev_type.model
+                          or HARNESSES[dev_type.harness_template].default_model),
         # Devs export through the collector, credential-free (ISSUES #13)
         "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OTEL_COLLECTOR_URL}/v1/traces",
     }

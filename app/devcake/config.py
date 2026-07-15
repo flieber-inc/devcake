@@ -257,6 +257,9 @@ class AppConfig(BaseModel):
     # existence is validated in the PUT endpoint, not here (no disk I/O in
     # validators).
     active_prompt_templates: dict[str, str] = Field(default_factory=dict)
+    # per-Dev-Type ACTIVE identifying-prompt template (2026-07-15): missing
+    # key ⇒ "Development" (the dev type's original prompt, seeded once)
+    active_devtype_prompts: dict[str, str] = Field(default_factory=dict)
     # admin-UI state: dismissed advisory alerts as "id:signature" strings.
     # A list (not a dict) on purpose — deep_merge can't delete dict keys, so
     # the UI un-dismisses by PUTting the whole replacement list.

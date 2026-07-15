@@ -276,3 +276,26 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
         seq=1, extra_args="", repo=repo, forge=make_forge(repo))
     assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://otel-collector:4318/v1/traces"
     assert not any("openobserve" in v for v in env.values())
+
+
+def test_harness_default_model_flows_into_spec_env(tmp_path):
+    """UX item 2 (2026-07-15): grok-build runs grok-4.5 unless the Dev Type
+    pins its own model; an explicit Dev Type model still wins."""
+    from test_transitions import make_mgr, mission
+    assert HARNESSES["grok-build"].default_model == "grok-4.5"
+    mgr, _f, _s = make_mgr(tmp_path, mission())
+    from devcake.config import RepoInstance
+    repo = RepoInstance(name="main", url="https://github.com/o/r")
+    forge = type("F", (), {"descriptor": type("D", (), {
+        "clone_user": "x", "git_user_name": "n", "git_email": "e",
+        "cli_token_envs": ["T"]})()})()
+    grok = DevType(name="g", harness_template="grok-build")
+    env = mgr._protocol_spec_env(mission_id="p", mission_key="T-1",
+                                 mission_type="EXECUTE", dev_type=grok, seq=1,
+                                 extra_args="", repo=repo, forge=forge)
+    assert env["DEVCAKE_MODEL"] == "grok-4.5"
+    pinned = DevType(name="g2", harness_template="grok-build", model="grok-5")
+    env2 = mgr._protocol_spec_env(mission_id="p", mission_key="T-1",
+                                  mission_type="EXECUTE", dev_type=pinned, seq=1,
+                                  extra_args="", repo=repo, forge=forge)
+    assert env2["DEVCAKE_MODEL"] == "grok-5"

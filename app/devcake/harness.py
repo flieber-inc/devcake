@@ -31,6 +31,9 @@ class OAuthFlow(BaseModel):
 
 class Harness(BaseModel):
     image: str
+    # model the harness runs when the Dev Type's model field is empty
+    # ("" = let the CLI pick its own default)
+    default_model: str = ""
     credential_env: list[str] = Field(default_factory=list)   # any-of passthrough
     credential_files: list[CredentialFile] = Field(default_factory=list)
     oauth: OAuthFlow | None = None
@@ -52,6 +55,7 @@ HARNESSES: dict[str, Harness] = {
     ),
     "grok-build": Harness(
         image=f"devcake/dev-grok-build:{_TAG}",
+        default_model="grok-4.5",
         credential_env=["XAI_API_KEY"],  # API-key mode; OAuth file preferred
         credential_files=[CredentialFile(secret_file="grok-auth.json",
                                          path_hint="~/.grok/auth.json")],
@@ -90,6 +94,7 @@ def dev_type_status(dt) -> dict:
         **dt.model_dump(),
         "harness": {
             "docker_image": h.image,
+            "default_model": h.default_model,
             "credential_env": h.credential_env,
             "credential_files": [cf.model_dump() for cf in h.credential_files],
             "oauth_available": h.oauth is not None,

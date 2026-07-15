@@ -179,16 +179,16 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         </Field>
         <Field label="Model" hint="Empty = harness default"
           help="Pins the model the harness runs (claude --model / codex -m / grok --model), e.g. claude-fable-5 for Claude Code. Leave empty to let the harness pick its own default.">
-          <Input value={d.model || ""} placeholder="e.g. claude-fable-5"
+          <Input value={d.model || ""}
+            placeholder={h.default_model ? `harness default: ${h.default_model}` : "e.g. claude-fable-5"}
             onChange={(e) => set("model", e.target.value)} />
         </Field>
       </div>
-      <Field label="Identifying prompt" hint="Delivered at the start of every run, before the mission playbook.">
-        <Textarea
-          rows={3} value={d.identifying_prompt}
-          onChange={(e) => set("identifying_prompt", e.target.value)}
-        />
-      </Field>
+      <p className="text-xs text-neutral-400">
+        Identifying prompt is template-managed — edit it (or switch workflow)
+        in the <a className="underline" href="#/config/prompts">Prompts
+        section</a> below.
+      </p>
       <Field
         label="MCP setup commands (one per line)"
         hint="⚠ Run inside the Dev container before the agent starts — arbitrary code execution by design. A failing command fails the run."
@@ -422,73 +422,6 @@ export default function ConfigPage({ section, onSectionInView }) {
         ))}
       </div>
 
-      <Section id="traffic" title="Traffic control"
-        description="The Relations Mapper. (Mission intake is the master switch in the sidebar — it applies immediately.)">
-        <div className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-semibold">
-              Relations Mapper
-              <Help text="A Dev tasked strictly with mapping missing 'blocked by' relations between existing missions (it reads every open mission's title and description head). Proposed relations are validated by the app and appear in your PMO; delete a relation there to undo it." />
-            </span>
-            <div className="flex items-center gap-2">
-              <ImmediateBadge text="runs with saved settings" />
-              <Button kind="ghost" icon={Play} onClick={runMapper}
-                disabled={!serverRm.dev_type || mapperDirty}
-                title={mapperDirty
-                  ? "Save your mapper changes first — Run now uses the saved settings"
-                  : !serverRm.dev_type ? "Pick and save a Dev Type first" : undefined}>
-                Run now
-              </Button>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Field label="Dev Type"
-              help="Which Dev Type runs the mapper. The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
-              <Select value={rm.dev_type || ""}
-                onChange={(e) => {
-                  setField("cfg.relations_mapper.dev_type", e.target.value || null);
-                  if (!e.target.value) setField("cfg.relations_mapper.enabled", false);
-                }}>
-                <option value="">(none)</option>
-                {dr.order.map((n) => <option key={n} value={n}>{n}</option>)}
-              </Select>
-            </Field>
-            <Field label="Interval (minutes)"
-              help="Cadence of the periodic service when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
-              <Input type="number" min="1" value={rm.interval_minutes}
-                onChange={(e) => setField("cfg.relations_mapper.interval_minutes", Number(e.target.value))}
-                onBlur={(e) => setField("cfg.relations_mapper.interval_minutes",
-                  Math.max(1, Number(e.target.value) || 60))} />
-            </Field>
-            <Field label="Periodic service" hint="Default OFF — use Run now for one-shot passes">
-              <div className="flex h-9 items-center gap-3 text-sm">
-                <Toggle on={rm.enabled} label="Periodic service"
-                  onClick={() => {
-                    if (!rm.enabled && !rm.dev_type) {
-                      setMapperMsg("✗ pick a Dev Type first");
-                      return;
-                    }
-                    setField("cfg.relations_mapper.enabled", !rm.enabled);
-                  }} />
-                <span>{rm.enabled ? "ON — runs on the interval" : "OFF — manual only"}</span>
-              </div>
-            </Field>
-          </div>
-          {healthInfo?.mapper_degraded && (
-            <p className="text-sm text-amber-600 dark:text-amber-400">
-              ⚠ Periodic service backing off — the last 3 mapper runs failed
-              ({healthInfo.mapper_degraded}). Run now still works; a successful run resumes
-              the schedule.
-            </p>
-          )}
-          {mapperMsg && (
-            <p className={`text-sm ${mapperMsg.startsWith("✗") ? "text-red-600" : "text-green-700 dark:text-green-400"}`}>
-              {mapperMsg}
-            </p>
-          )}
-        </div>
-      </Section>
-
       <Section id="pmo" title="PMO connections"
         description={`The PMO teams DevCake watches (one instance each), and how it adopts missions. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
         {cfg.pmos.map((inst, idx) => {
@@ -608,7 +541,7 @@ export default function ConfigPage({ section, onSectionInView }) {
             </Button>
           </>
         }>
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 grid-cols-1">
           {dr.order.filter((n) => dr.draft.devTypes[n] && dr.server.devTypes[n]).map((name) => (
             <DevTypeCard key={name} name={name}
               draftDt={dr.draft.devTypes[name]}
@@ -722,6 +655,73 @@ export default function ConfigPage({ section, onSectionInView }) {
           long-lived services use <code className="font-mono text-xs">restart: unless-stopped</code> in
           docker-compose.yml (default on). The SPA cannot rewrite compose — set{" "}
           <code className="font-mono text-xs">restart: &quot;no&quot;</code> in the file to disable.
+        </div>
+      </Section>
+
+      <Section id="traffic" title="Traffic control"
+        description="The Relations Mapper. (Mission intake is the master switch in the sidebar — it applies immediately.)">
+        <div className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-semibold">
+              Relations Mapper
+              <Help text="A Dev tasked strictly with mapping missing 'blocked by' relations between existing missions (it reads every open mission's title and description head). Proposed relations are validated by the app and appear in your PMO; delete a relation there to undo it." />
+            </span>
+            <div className="flex items-center gap-2">
+              <ImmediateBadge text="runs with saved settings" />
+              <Button kind="ghost" icon={Play} onClick={runMapper}
+                disabled={!serverRm.dev_type || mapperDirty}
+                title={mapperDirty
+                  ? "Save your mapper changes first — Run now uses the saved settings"
+                  : !serverRm.dev_type ? "Pick and save a Dev Type first" : undefined}>
+                Run now
+              </Button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Field label="Dev Type"
+              help="Which Dev Type runs the mapper. The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
+              <Select value={rm.dev_type || ""}
+                onChange={(e) => {
+                  setField("cfg.relations_mapper.dev_type", e.target.value || null);
+                  if (!e.target.value) setField("cfg.relations_mapper.enabled", false);
+                }}>
+                <option value="">(none)</option>
+                {dr.order.map((n) => <option key={n} value={n}>{n}</option>)}
+              </Select>
+            </Field>
+            <Field label="Interval (minutes)"
+              help="Cadence of the periodic service when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
+              <Input type="number" min="1" value={rm.interval_minutes}
+                onChange={(e) => setField("cfg.relations_mapper.interval_minutes", Number(e.target.value))}
+                onBlur={(e) => setField("cfg.relations_mapper.interval_minutes",
+                  Math.max(1, Number(e.target.value) || 60))} />
+            </Field>
+            <Field label="Periodic service" hint="Default OFF — use Run now for one-shot passes">
+              <div className="flex h-9 items-center gap-3 text-sm">
+                <Toggle on={rm.enabled} label="Periodic service"
+                  onClick={() => {
+                    if (!rm.enabled && !rm.dev_type) {
+                      setMapperMsg("✗ pick a Dev Type first");
+                      return;
+                    }
+                    setField("cfg.relations_mapper.enabled", !rm.enabled);
+                  }} />
+                <span>{rm.enabled ? "ON — runs on the interval" : "OFF — manual only"}</span>
+              </div>
+            </Field>
+          </div>
+          {healthInfo?.mapper_degraded && (
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              ⚠ Periodic service backing off — the last 3 mapper runs failed
+              ({healthInfo.mapper_degraded}). Run now still works; a successful run resumes
+              the schedule.
+            </p>
+          )}
+          {mapperMsg && (
+            <p className={`text-sm ${mapperMsg.startsWith("✗") ? "text-red-600" : "text-green-700 dark:text-green-400"}`}>
+              {mapperMsg}
+            </p>
+          )}
         </div>
       </Section>
 

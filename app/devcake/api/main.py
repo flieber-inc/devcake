@@ -53,6 +53,7 @@ tracer = setup_telemetry()
 config = load_config()
 dev_types = load_dev_types()
 prompt_templates.seed_default_templates()   # /data defaults (v0.1.1)
+prompt_templates.seed_devtype_prompts(dev_types)   # per-dev-type (2026-07-15)
 store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
@@ -581,7 +582,9 @@ async def health():
             for name, mp in mappers.items() if (msg := mp.degraded())) or None,
         # active templates that no longer resolve (fallback-to-default in
         # effect) — the SPA derives a dismissable alert per entry (v0.1.1)
-        "prompt_template_warnings": prompt_templates.template_warnings(config),
+        "prompt_template_warnings": (
+            prompt_templates.template_warnings(config)
+            + prompt_templates.devtype_prompt_warnings(config, dev_types)),
         "security_warnings": _security_warnings(),
     }
 
@@ -711,9 +714,13 @@ async def put_config(body: dict):
         if mt not in PLAYBOOK_VARS:
             raise HTTPException(422, f"active_prompt_templates: unknown "
                                      f"mission type {mt!r}")
-        if name != "default" and prompt_templates.resolve_playbook(mt, name)[1]:
+        if prompt_templates.resolve_playbook(mt, name)[1]:
             raise HTTPException(422, f"active_prompt_templates: no stored "
                                      f"template {mt}/{name}")
+    for dt_name, name in (merged.active_devtype_prompts or {}).items():
+        if dt_name not in dev_types:
+            raise HTTPException(422, f"active_devtype_prompts: unknown "
+                                     f"Dev Type {dt_name!r}")
     # Dry-run adapter construction before persist (ISSUES #11): a bad URL or
     # forge shape must not leave a broken config on disk. Unconfigured
     # instances (empty team_key / repo URL) are valid-but-idle (schema v3).
@@ -771,8 +778,13 @@ async def get_prompt_templates():
     return {
         "variables": {mt: list(v) for mt, v in PLAYBOOK_VARS.items()},
         "templates": prompt_templates.list_templates(),
-        "active": {mt: config.active_prompt_templates.get(mt, "default")
+        "active": {mt: config.active_prompt_templates.get(mt, "Development")
                    for mt in PLAYBOOK_VARS},
+        # dev-type identifying-prompt templates (2026-07-15): same workflow
+        # names, per Dev Type; all editable (Development is seeded user data)
+        "dev_types": prompt_templates.list_devtype_prompts(dev_types),
+        "active_dev": {n: config.active_devtype_prompts.get(n, "Development")
+                       for n in dev_types},
     }
 
 
@@ -803,12 +815,40 @@ async def delete_prompt_template(mission_type: str, name: str):
     return {"deleted": True}
 
 
+@app.put("/api/v1/devtype-prompts/{dev_type}/{name}")
+async def put_devtype_prompt(dev_type: str, name: str, body: dict):
+    if dev_type not in dev_types:
+        raise HTTPException(404, f"no Dev Type named {dev_type!r}")
+    text = body.get("template")
+    if not isinstance(text, str):
+        raise HTTPException(422, "body must carry a string 'template'")
+    try:
+        prompt_templates.save_devtype_prompt(dev_type, name, text)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"dev_type": dev_type, "name": name, "saved": True}
+
+
+@app.delete("/api/v1/devtype-prompts/{dev_type}/{name}")
+async def delete_devtype_prompt(dev_type: str, name: str):
+    active = config.active_devtype_prompts.get(dev_type, "Development")
+    if active == name or (name == "Development" and active in ("Development",)):
+        raise HTTPException(409, f"template {name!r} is ACTIVE for "
+                                 f"{dev_type} — switch first")
+    try:
+        prompt_templates.delete_devtype_prompt(dev_type, name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    return {"deleted": True}
+
+
 @app.get("/api/v1/harnesses")
 async def list_harnesses():
     """The harness registry — image + credential requirements per
     harness_template. Read-only; the admin Dev Type card derives its display
     (including previews of unsaved harness switches) from this."""
     return {name: {"docker_image": h.image,
+                   "default_model": h.default_model,
                    "credential_env": h.credential_env,
                    "credential_files": [cf.model_dump() for cf in h.credential_files],
                    "oauth_available": h.oauth is not None}
@@ -829,6 +869,7 @@ async def upsert_dev_type(body: dict, name: str | None = None):
         raise HTTPException(422, str(e))
     dev_types[dt.name] = dt
     save_dev_type(dt)
+    prompt_templates.seed_devtype_prompts({dt.name: dt})
     return dt.model_dump()
 
 

@@ -45,6 +45,7 @@ _SWAP_MARKER_STAGE: dict[str, str | None] = {
     "review:done": None,           # REVIEW removed, mission done
     "review:merge_failed": None,   # REVIEW→MERGE; MERGE is not a stage label
     "review:merge_deferred": None,
+    "review:awaiting_merge": None,  # REVIEW→MERGE (auto_merge off; audit A6)
 }
 
 # docs/05 §4: feed comments longer than this are uploaded as .md attachments

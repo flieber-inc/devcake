@@ -35,11 +35,27 @@ def _mission(pmo_id: str, key: str, instance: str) -> Mission:
 
 # ── FinalizerRouter ──────────────────────────────────────────────────────────
 
+class RecordingMessaging:
+    def __init__(self):
+        self.deleted_users: list[str] = []
+        self.deleted_streams: list[str] = []
+
+    async def delete_run_user(self, rid):
+        self.deleted_users.append(rid)
+
+    async def delete_reply_stream(self, rid):
+        self.deleted_streams.append(rid)
+
+
 def test_router_unknown_instance_fails_run_cleanly(tmp_path):
     """A run whose instance vanished from config must fail with a persisted,
-    explanatory error — never crash the ingress consumer (plan finding)."""
+    explanatory error — never crash the ingress consumer (plan finding) —
+    AND tear down the run's Redis ACL user + reply stream like every other
+    terminal path (audit A8: they leaked forever, invisible to startup
+    reconciliation which only inspects active runs)."""
     store = RunStore(tmp_path / "runs")
-    router = FinalizerRouter({}, store)
+    messaging = RecordingMessaging()
+    router = FinalizerRouter({}, store, messaging)
     run = Run(run_id="GONE-T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
               mission_type="EXECUTE", dev_type="d", seq=1,
               pmo_ref="gone", state="finalizing")
@@ -48,6 +64,8 @@ def test_router_unknown_instance_fails_run_cleanly(tmp_path):
     saved = store.get(run.run_id)
     assert saved.state == "failed"
     assert "no longer configured" in saved.error
+    assert messaging.deleted_users == [run.run_id]
+    assert messaging.deleted_streams == [run.run_id]
     # runspec + activity degrade instead of raising
     assert router.runspec_secret_payload(run) is None
     assert run_coro(router.activity_payload(run)) == {"activity_md": "",
@@ -67,7 +85,7 @@ def test_router_routes_on_pmo_ref_and_legacy_to_sole_manager(tmp_path):
             calls.append((self.name, run.run_id))
 
     managers = {"linteama": FakeMgr("linteama"), "linteamb": FakeMgr("linteamb")}
-    router = FinalizerRouter(managers, store)
+    router = FinalizerRouter(managers, store, RecordingMessaging())
     run_a = Run(run_id="LINTEAMA-T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
                 mission_type="EXECUTE", dev_type="d", seq=1, pmo_ref="linteama")
     run_coro(router.finalize(run_a, {}))
@@ -81,7 +99,7 @@ def test_router_routes_on_pmo_ref_and_legacy_to_sole_manager(tmp_path):
     run_coro(router.finalize(legacy, {}))       # two managers → ambiguous → fail
     assert store.get(legacy.run_id).state == "failed"
 
-    sole = FinalizerRouter({"only": FakeMgr("only")}, store)
+    sole = FinalizerRouter({"only": FakeMgr("only")}, store, RecordingMessaging())
     legacy2 = Run(run_id="T-1-3-EXECUTE-CCCCCC", mission_key="T-1",
                   mission_type="EXECUTE", dev_type="d", seq=3, pmo_ref="main")
     run_coro(sole.finalize(legacy2, {}))

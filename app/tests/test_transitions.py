@@ -248,6 +248,25 @@ def test_human_needed_allowed_for_projects(tmp_path):
     assert "grant the scope" in body and body.endswith("`devcake:v1`")
 
 
+def test_awaiting_merge_redelivery_not_misread_as_external(tmp_path):
+    """Audit A6: review:awaiting_merge swaps REVIEW→MERGE but was missing
+    from _SWAP_MARKER_STAGE — a crash between the checkpoint and the coarse
+    transition marker made the redelivery see MERGE as an EXTERNAL change,
+    posting a false 'state was changed externally' comment and recording a
+    wrong skipped verdict (the exact defect class the map exists to stop)."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})   # our own swap
+    forge = FakeForge()
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    mgr.config.auto_merge = False
+    run = _run("REVIEW", "DEVCAKE-REVIEW")
+    run.finalized_steps = ["review:awaiting_merge"]            # checkpointed
+    run_coro(mgr._transition(run, {"outcome": "reviewed", "verdict": "approve",
+                                   "report_md": "ok"}, None))
+    assert not any("changed externally" in c for c in fake.comments)
+    assert not (run.verdict or "").startswith("skipped:")
+    assert fake.swaps == []                    # idempotent — no re-swap either
+
+
 def test_illegal_outcome_parks_never_acts(tmp_path):
     # the trust boundary (docs/03 §6): an EXECUTE dev forging "reviewed" must
     # never reach _finalize_review (no forge attribute here — a forge call

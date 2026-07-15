@@ -13,12 +13,14 @@ HELLO/OAUTH runs never reach this router — they finalize inside RunManager.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
 from ..run import Run, utcnow
 
 if TYPE_CHECKING:
+    from ...ports.messaging import MessagingPort
     from ...ports.state import StatePort
     from .manager import MissionManager
 
@@ -28,9 +30,11 @@ _LEGACY_REFS = ("", "main")
 
 
 class FinalizerRouter:
-    def __init__(self, managers: dict[str, "MissionManager"], store: "StatePort"):
+    def __init__(self, managers: dict[str, "MissionManager"], store: "StatePort",
+                 messaging: "MessagingPort"):
         self._managers = managers   # LIVE reference — build_managers mutates it
         self._store = store
+        self._messaging = messaging
 
     def _mgr(self, run: Run) -> "MissionManager | None":
         mgr = self._managers.get(run.pmo_ref)
@@ -42,8 +46,15 @@ class FinalizerRouter:
         return (f"pmo instance {run.pmo_ref!r} is no longer configured — "
                 f"run cannot finalize (configured: {sorted(self._managers)})")
 
-    def _fail(self, run: Run, op: str) -> None:
+    async def _fail(self, run: Run, op: str) -> None:
         log.error("%s for %s: %s", op, run.run_id, self._orphan_error(run))
+        # tear down the run's Redis ACL user + reply stream like every other
+        # terminal path — the run goes terminal here, so reconciliation
+        # (which walks only ACTIVE runs) would never clean them (audit A8)
+        with contextlib.suppress(Exception):
+            await self._messaging.delete_run_user(run.run_id)
+        with contextlib.suppress(Exception):
+            await self._messaging.delete_reply_stream(run.run_id)
         run.state = "failed"
         run.error = self._orphan_error(run)
         run.ended_at = utcnow()
@@ -52,14 +63,14 @@ class FinalizerRouter:
     async def finalize(self, run: Run, payload: dict) -> None:
         mgr = self._mgr(run)
         if mgr is None:
-            self._fail(run, "finalize")
+            await self._fail(run, "finalize")
             return
         await mgr.finalize(run, payload)
 
     async def finalize_mapper(self, run: Run, payload: dict) -> None:
         mgr = self._mgr(run)
         if mgr is None:
-            self._fail(run, "finalize_mapper")
+            await self._fail(run, "finalize_mapper")
             return
         await mgr.finalize_mapper(run, payload)
 

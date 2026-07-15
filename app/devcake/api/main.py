@@ -99,7 +99,7 @@ def _managers_in_config_order() -> list[MissionManager]:
 
 forge_runtime.rebuild(config.repos, make_forge)
 build_managers()
-router = FinalizerRouter(managers, store)
+router = FinalizerRouter(managers, store, messaging)
 manager.set_finalizer(router)  # RunFinalizer seam: routes on run.pmo_ref
 
 

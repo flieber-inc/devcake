@@ -99,7 +99,10 @@ services:
       - ZO_ROOT_USER_PASSWORD=${OO_ROOT_PASSWORD}
     volumes: [ oo_data:/data ]
     ports: [ "127.0.0.1:5080:5080" ]
-    networks: [control, runtime]
+    # control-only (audit A23): post-M8 nothing on devcake_runtime needs OO —
+    # Devs export to the collector, which bridges both networks below. OO on
+    # runtime let a compromised Dev reach the full authenticated OO API.
+    networks: [control]
 
   admin:
     image: devcake/admin:${DEVCAKE_TAG:-latest}
@@ -150,7 +153,9 @@ services:
     volumes:
       - ./otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
     depends_on: [ openobserve ]
-    networks: [runtime]
+    # bridges the two networks (audit A23): Devs reach it on runtime, it
+    # reaches OO over control — OO itself left the runtime network
+    networks: [control, runtime]
 
   # Internal fallback forge (docs/16 M11): zero-repo missions get an
   # auto-created repository here. Straddles both networks — the app

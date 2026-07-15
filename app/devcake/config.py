@@ -351,8 +351,10 @@ def reject_stale_patch(body: dict) -> None:
 
 def deep_merge(base: dict, patch: dict) -> dict:
     """Recursive dict merge for partial config PUTs (docs/11 §1): a nested
-    patch like {"repo": {"url": …}} must not silently reset sibling fields
-    (forge, token_env, …) to their defaults."""
+    patch like {"concurrency": {"global_max": …}} must not silently reset
+    sibling fields to their defaults. NOTE: lists (pmos/repos/dev-type
+    names) replace WHOLESALE — a partial body omitting an instance deletes
+    it (and, at v4, its stored secrets)."""
     merged = dict(base)
     for k, v in patch.items():
         if isinstance(v, dict) and isinstance(merged.get(k), dict):

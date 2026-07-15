@@ -134,6 +134,7 @@ export default function DraftChrome({ registerNavGuard, health }) {
       <NavGuardDialog
         open={!!navPrompt}
         count={dr.diff.length}
+        errors={dr.errors}
         onStay={() => { navPrompt(false); setNavPrompt(null); }}
         onDiscard={() => { dr.discard(); navPrompt(true); setNavPrompt(null); }}
         onSave={() => { setReview({ fromNav: navPrompt }); setNavPrompt(null); }}

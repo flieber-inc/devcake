@@ -11,6 +11,7 @@ import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import { AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
+import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 
 // Repositories page (v0.1.1 B4, founder request): the repository cards +
 // merge policy lifted out of Configuration, plus the internal-forge
@@ -160,6 +161,9 @@ export default function ReposPage() {
   const [internalRefresh, setInternalRefresh] = useState(0);
   const [giteaVariant, setGiteaVariant] = useState({});   // card idx → variant
   const [createFor, setCreateFor] = useState(null);       // card idx | null
+  // cards added/renamed this session stay name-editable even when their name
+  // collides with a still-saved one (the delete-then-re-add / mid-typing trap)
+  const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos);
 
   if (!dr.loaded) {
     return <p className="text-sm text-neutral-400">Loading…{loadErr}</p>;
@@ -167,8 +171,15 @@ export default function ReposPage() {
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
-  // stored tokens key on the repo name — locked once saved (see ConfigPage)
+  // stored tokens key on the repo name — locked once saved. A card counts as
+  // saved only when the server holds its name AND it isn't the card that was
+  // (re)added this session, so a new card can never be born frozen. When a
+  // new card duplicates a saved name (blocked by validation anyway), only the
+  // LAST card with that name is the tracked one — the saved card stays locked.
   const savedRepoNames = new Set((dr.server.cfg.repos || []).map((r) => r.name));
+  const nameLocked = (name, idx) =>
+    savedRepoNames.has(name) &&
+    !(newNames.has(name) && idx === cfg.repos.map((r) => r.name).lastIndexOf(name));
 
   const guardedFlip = (path, value, title, body) =>
     setConfirm({
@@ -195,8 +206,10 @@ export default function ReposPage() {
                 <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
                 {cfg.repos.length > 0 && (
                   <Button kind="danger-ghost" onClick={() => {
-                    const doRemove = () =>
+                    const doRemove = () => {
+                      newNames.untrack(repo.name);
                       setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx));
+                    };
                     if (savedRepoNames.has(repo.name)) {
                       setConfirm({
                         title: `Remove repository "${repo.name}"?`,
@@ -213,8 +226,16 @@ export default function ReposPage() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
                   help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Locked once saved — stored tokens key on it; remove and re-add to rename.">
-                  <Input value={repo.name} disabled={savedRepoNames.has(repo.name)}
-                  onChange={(e) => setField(`cfg.repos.${idx}.name`, e.target.value)} /></Field>
+                  <Input value={repo.name} disabled={nameLocked(repo.name, idx)}
+                  onChange={(e) => {
+                    newNames.rename(repo.name, e.target.value);
+                    setField(`cfg.repos.${idx}.name`, e.target.value);
+                  }} />
+                  {dr.errors[`cfg.repos.${idx}.name`] && (
+                    <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
+                      ✗ {dr.errors[`cfg.repos.${idx}.name`]}
+                    </span>
+                  )}</Field>
                 <Field label="Forge"
                   help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges. 'gitea (internal)' targets the always-on bundled forge — Create repository mints the repo and its tokens for you.">
                   <Select
@@ -252,17 +273,18 @@ export default function ReposPage() {
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
                 <SecretField label="Access token"
-                  help="This repo's forge token (repo read/write + PR scopes). Stored securely — never echoed, never in .env."
+                  help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored securely — never echoed, never in .env."
                   refKey={`repo:${repo.name}:token`} paste
-                  locked={!savedRepoNames.has(repo.name)} />
+                  absentNote="not set — repo is reference-only until an Access token is stored"
+                  locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
-                  refKey={`repo:${repo.name}:token_ro`} paste
-                  locked={!savedRepoNames.has(repo.name)} />
+                  refKey={`repo:${repo.name}:token_ro`} paste optional
+                  locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Reviewer token" hint="Optional 2nd account → formal PR approvals"
                   help="Optional second account's token. When set, REVIEW posts a formal approval from that account before merging."
-                  refKey={`repo:${repo.name}:reviewer_token`} paste
-                  locked={!savedRepoNames.has(repo.name)} />
+                  refKey={`repo:${repo.name}:reviewer_token`} paste optional
+                  locked={!nameLocked(repo.name, idx)} />
               </div>
               {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} />}
               <div className="flex flex-wrap items-center gap-3">
@@ -279,10 +301,13 @@ export default function ReposPage() {
             </div>
           );
         })}
-        <Button kind="ghost" onClick={() =>
+        <Button kind="ghost" onClick={() => {
+          const name = nextFreeName("repo", cfg.repos, dr.server.cfg.repos);
+          newNames.track(name);
           setField("cfg.repos", [...cfg.repos,
-            { name: `repo${cfg.repos.length + 1}`, forge: "github", url: "",
-              api_base: null, default_branch: "main" }])}>
+            { name, forge: "github", url: "",
+              api_base: null, default_branch: "main" }]);
+        }}>
           + Add repository
         </Button>
         <Field label="Auto-merge"
@@ -369,6 +394,7 @@ export default function ReposPage() {
             // the created repo name IS the card name (tokens are stored
             // under repo:{name}); the clone URL wires the card — Save
             // persists it, and secrets-check flips to ✓ stored
+            newNames.rename(cfg.repos[createFor]?.name, out.repo_name);
             setField(`cfg.repos.${createFor}.name`, out.repo_name);
             setField(`cfg.repos.${createFor}.url`, out.clone_url);
             setCreateFor(null);

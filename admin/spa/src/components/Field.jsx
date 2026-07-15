@@ -60,7 +60,12 @@ function secretShapeRe() {
 // Write-only secret VALUE field (schema v4, F5). The value is never fetched
 // back; ✓/✗ + updated_at come from /secrets-check by ref. Typing a value and
 // blurring (or clicking Save) PUTs it to the store — the input then clears.
-export function SecretField({ label, help, hint, refKey, checkKind = "conn", paste, locked }) {
+// `optional`: an absent value is a fine steady state — show a neutral note
+// instead of the amber "enter a value" (which reads as REQUIRED and made the
+// three repo token fields look all-mandatory). `absentNote` overrides the
+// amber copy for required-ish fields with a more precise consequence.
+export function SecretField({ label, help, hint, refKey, checkKind = "conn",
+                              paste, locked, optional, absentNote }) {
   // refKey: "scope:instance:field" for connections, or a var name for harness
   const [status, setStatus] = useState(null);      // {present, updated_at}
   const [draft, setDraft] = useState("");
@@ -137,7 +142,11 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn", pas
         </span>
       )}
       {status && !status.present && (
-        <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">✗ not set — enter a value</span>
+        optional
+          ? <span className="mt-1 block text-xs text-neutral-400">not set (optional)</span>
+          : <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">
+              ✗ {absentNote || "not set — enter a value"}
+            </span>
       )}
     </Field>
   );

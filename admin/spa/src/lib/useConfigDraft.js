@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { diffLeaves, setIn, containerExists } from "./objectPath.js";
+import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "./instanceNames.js";
 
 // Paths that never dirty the draft: server-owned state that immediate
 // actions (sidebar intake switch, alert dismissal, credential uploads)
@@ -80,6 +81,21 @@ export default function useConfigDraft() {
         errs[`devTypes.${name}.max_concurrency`] =
           `${name}: max concurrency must be ≥ 1`;
     }
+    // instance names are validated in the draft so a bad one blocks Save with
+    // an inline message instead of surfacing as the config PUT's raw 422
+    const checkNames = (rows, key, kind) => {
+      const seen = new Set();
+      (rows || []).forEach((r, i) => {
+        if (!INSTANCE_NAME_RE.test(r.name || ""))
+          errs[`cfg.${key}.${i}.name`] =
+            `${kind} name ${r.name ? `"${r.name}"` : "(empty)"} is invalid — ${INSTANCE_NAME_RULE}`;
+        else if (seen.has(r.name))
+          errs[`cfg.${key}.${i}.name`] = `duplicate ${kind} name "${r.name}"`;
+        seen.add(r.name);
+      });
+    };
+    checkNames(draft.cfg.repos, "repos", "repository");
+    checkNames(draft.cfg.pmos, "pmos", "PMO instance");
     return errs;
   }, [draft]);
 

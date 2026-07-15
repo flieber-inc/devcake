@@ -13,6 +13,7 @@ import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
+import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 
 const MISSION_TYPES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 // harness identities (image, credential requirements, OAuth availability) come
@@ -334,6 +335,9 @@ export default function ConfigPage({ section, onSectionInView }) {
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
   const [pageErr, setPageErr] = useState("");
+  // PMO cards added/renamed this session stay name-editable even when their
+  // name collides with a still-saved one (delete-then-re-add / mid-typing trap)
+  const newPmoNames = useNewNames(dr.server?.cfg.pmos, dr.draft?.cfg.pmos);
 
   const loaded = dr.loaded;
 
@@ -385,8 +389,15 @@ export default function ConfigPage({ section, onSectionInView }) {
   const setField = dr.setField;
   // stored secrets are keyed by instance name — renaming a saved instance
   // would orphan them, so the name locks once saved (remove + re-add to
-  // rename; removal also deletes the instance's stored secrets)
+  // rename; removal also deletes the instance's stored secrets). A card
+  // counts as saved only when the server holds its name AND it wasn't
+  // (re)added this session, so a new card can never be born frozen.
   const savedPmoNames = new Set((dr.server.cfg.pmos || []).map((p) => p.name));
+  // only the LAST card carrying a name counts as the session-added one — a
+  // new card duplicating a saved name never unlocks the saved card itself
+  const pmoNameLocked = (name, idx) =>
+    savedPmoNames.has(name) &&
+    !(newPmoNames.has(name) && idx === cfg.pmos.map((p) => p.name).lastIndexOf(name));
 
   // flip-time danger confirms (founder decision): the scary dialog interrupts
   // at flip time, but confirming only writes the DRAFT — nothing persists
@@ -457,8 +468,10 @@ export default function ConfigPage({ section, onSectionInView }) {
                 <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
                 {cfg.pmos.length > 1 && (
                   <Button kind="danger-ghost" onClick={() => {
-                    const doRemove = () =>
+                    const doRemove = () => {
+                      newPmoNames.untrack(inst.name);
                       setField("cfg.pmos", cfg.pmos.filter((_, i) => i !== idx));
+                    };
                     if (savedPmoNames.has(inst.name)) {
                       // saving the removal permanently deletes the stored
                       // secret — worth an explicit confirm (audit A21)
@@ -477,8 +490,16 @@ export default function ConfigPage({ section, onSectionInView }) {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
                   help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
-                  <Input value={inst.name} disabled={savedPmoNames.has(inst.name)}
-                  onChange={(e) => setField(`cfg.pmos.${idx}.name`, e.target.value)} /></Field>
+                  <Input value={inst.name} disabled={pmoNameLocked(inst.name, idx)}
+                  onChange={(e) => {
+                    newPmoNames.rename(inst.name, e.target.value);
+                    setField(`cfg.pmos.${idx}.name`, e.target.value);
+                  }} />
+                  {dr.errors[`cfg.pmos.${idx}.name`] && (
+                    <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
+                      ✗ {dr.errors[`cfg.pmos.${idx}.name`]}
+                    </span>
+                  )}</Field>
                 <Field label="Team key"
                   help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.">
                   <Input value={inst.team_key}
@@ -486,7 +507,7 @@ export default function ConfigPage({ section, onSectionInView }) {
                 <SecretField label="API key"
                   help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
                   refKey={`pmo:${inst.name}:api_key`} paste
-                  locked={!savedPmoNames.has(inst.name)} />
+                  locked={!pmoNameLocked(inst.name, idx)} />
                 <RepoChips label="Repositories"
                   help="The ORDERED set of repos this instance's missions may target — only repos with a stored Access token qualify (work needs push). Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
                   all={cfg.repos} selected={inst.repos || []}
@@ -518,11 +539,14 @@ export default function ConfigPage({ section, onSectionInView }) {
           );
         })}
         <div className="flex flex-wrap items-center gap-3">
-          <Button kind="ghost" onClick={() =>
+          <Button kind="ghost" onClick={() => {
+            const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
+            newPmoNames.track(name);
             setField("cfg.pmos", [...cfg.pmos,
-              { name: `linear${cfg.pmos.length + 1}`, system: "linear",
+              { name, system: "linear",
                 team_key: "", api_base: null, repos: [],
-                reference_repos: [] }])}>
+                reference_repos: [] }]);
+          }}>
             + Add PMO instance
           </Button>
           <Field label="Poll interval (s)"

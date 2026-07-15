@@ -51,6 +51,8 @@ pmos:                                # 0..N instances; name is what Run records
   repos: []                          # the instance's ORDERED repo set (item 2, 2026-07-15):
                                      # first = default for unmarked missions; markers must
                                      # name a listed repo; [] = per-mission internal repos
+  reference_repos: []                # read-only consultation clones for EVERY stage
+                                     # (disjoint from repos; never work targets)
                                      # the API key VALUE is GUI-stored: /data/secrets/connections/pmo-linear.json
 
 repos:                               # 0..N (empty = every mission routes to the internal fallback forge)

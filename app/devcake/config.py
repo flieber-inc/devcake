@@ -42,6 +42,13 @@ class PMOInstance(BaseModel):
     # routes to its own internal-forge repo. (Replaces v4.0's singular
     # default_repo — refused with a hand-migration hint in _stale_shape_reason.)
     repos: list[str] = Field(default_factory=list)
+    # REFERENCE repos (founder request 2026-07-15): configured repo cards
+    # cloned read-only into EVERY stage's workspace as consultation material
+    # (docs sites' source repos, style guides, …) — never work targets:
+    # routing gates a marker that names one, and they are disjoint from the
+    # routing set above by validation. Multiple supported, order = listing
+    # order in the workspace note.
+    reference_repos: list[str] = Field(default_factory=list)
 
     @field_validator("system")
     @classmethod
@@ -314,13 +321,21 @@ class AppConfig(BaseModel):
     def _pmo_repo_sets_valid(self):
         repo_names = {r.name for r in self.repos}
         for p in self.pmos:
-            if len(set(p.repos)) != len(p.repos):
-                raise ValueError(f"pmos[{p.name}].repos: duplicate entries")
-            unknown = [n for n in p.repos if n not in repo_names]
-            if unknown:
+            for field in ("repos", "reference_repos"):
+                names = getattr(p, field)
+                if len(set(names)) != len(names):
+                    raise ValueError(f"pmos[{p.name}].{field}: duplicate entries")
+                unknown = [n for n in names if n not in repo_names]
+                if unknown:
+                    raise ValueError(
+                        f"pmos[{p.name}].{field} {unknown} name no configured "
+                        f"repo (have: {sorted(repo_names)})")
+            overlap = set(p.repos) & set(p.reference_repos)
+            if overlap:
                 raise ValueError(
-                    f"pmos[{p.name}].repos {unknown} name no configured repo "
-                    f"(have: {sorted(repo_names)})")
+                    f"pmos[{p.name}]: {sorted(overlap)} cannot be both a "
+                    f"work repo and a reference repo — reference repos are "
+                    f"read-only context, never routing targets")
         return self
 
 

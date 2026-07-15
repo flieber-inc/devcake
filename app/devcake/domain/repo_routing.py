@@ -76,6 +76,12 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
             return None, (f"unknown repo '{marker}' — fix the "
                           f"`devcake-repo:` marker (configured: "
                           f"{sorted(repo_names) or '(none)'})")
+        if marker in (instance.reference_repos or []):
+            # reference repos are read-only consultation material for every
+            # stage (founder request 2026-07-15) — never a work target
+            return None, (f"repo '{marker}' is a REFERENCE repo of this "
+                          f"instance (read-only context) — work cannot route "
+                          f"to it; fix the marker")
         if allowed and marker not in allowed:
             # the instance's repo SET is its allowed set (item 2): a marker
             # naming a configured-but-unlisted repo gates rather than

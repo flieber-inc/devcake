@@ -91,6 +91,28 @@ def _onboard_repo_options(self, primary: str) -> str:
         f"(`{default}`).\n\n")
 
 
+def _reference_repos_note(self, primary: str) -> str:
+    """The read-only reference-repos section for EVERY stage's prompt
+    (founder request 2026-07-15): consultation material cloned alongside
+    the mission's repository. Empty when the instance has none configured
+    (or they all vanished from config)."""
+    names = [n for n in (self.instance.reference_repos or [])
+             if n != primary and n in self.forges.instances]
+    if not names:
+        return ""
+    lines = []
+    for n in names:
+        inst_x = self.forges.instance(n)
+        slug = inst_x.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        lines.append(f"- `{n}` → /workspace/repo/{slug}/ ({inst_x.url})")
+    return (
+        "\n### Reference repositories (read-only)\n"
+        "Cloned alongside this mission's repository as consultation "
+        "material (documentation, style guides, context). Read them freely; "
+        "NEVER modify them, commit to them, or open PRs against them:\n"
+        + "\n".join(lines) + "\n")
+
+
 async def dispatch(self, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
     try:
@@ -174,19 +196,24 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             return text
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        ref_note = self._reference_repos_note(repo_name)
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(
                 dev_type.identifying_prompt, live, playbook=_pb("ONBOARD"),
-                repo_options=self._onboard_repo_options(repo_name)),
+                repo_options=self._onboard_repo_options(repo_name),
+                reference_repos=ref_note),
             MissionType.PLAN: lambda: plan_prompt(
-                dev_type.identifying_prompt, live, playbook=_pb("PLAN")),
+                dev_type.identifying_prompt, live, playbook=_pb("PLAN"),
+                reference_repos=ref_note),
             MissionType.EXECUTE: lambda: execute_prompt(
                 dev_type.identifying_prompt, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
                 default_branch=repo.default_branch,
-                playbook=_pb("EXECUTE")),
+                playbook=_pb("EXECUTE"),
+                reference_repos=ref_note),
             MissionType.REVIEW: lambda: review_prompt(
-                dev_type.identifying_prompt, live, playbook=_pb("REVIEW")),
+                dev_type.identifying_prompt, live, playbook=_pb("REVIEW"),
+                reference_repos=ref_note),
         }[mtype]()
 
         spec_env = self._protocol_spec_env(
@@ -277,7 +304,11 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
         env["DEVCAKE_FORGE_TOKEN"] = (creds.token_write
                                       if run.mission_type == "EXECUTE"
                                       else creds.token_read)
-        return {"env": env, "credential_files": spec_files}
+        payload = {"env": env, "credential_files": spec_files}
+        extras = self._extra_repos_for(run)   # references reach zero-repo
+        if extras:                            # missions too
+            payload["extra_repos"] = extras
+        return payload
     write = repo.token
     ro = repo.token_ro
     if run.mission_type == "EXECUTE":
@@ -285,25 +316,38 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     else:
         env["DEVCAKE_FORGE_TOKEN"] = ro or write
     payload = {"env": env, "credential_files": spec_files}
-    # multi-repo triage (item 2 full scope): ONBOARD runs of a multi-repo
-    # instance get every OTHER set repo as a read-only sibling clone. Built
-    # at request time like everything else here (nothing secret at rest);
-    # read tokens preferred, write fallback (same rule as the primary).
-    if run.mission_type == "ONBOARD":
-        extras = []
-        for name in (self.instance.repos or []):
-            if name == run.repo_ref:
-                continue
-            inst_x = self.forges.instance(name)
-            forge_x = self.forges.get(name)
-            if inst_x is None or forge_x is None:
-                continue     # removed mid-flight — triage on what remains
-            extras.append({"name": name, "url": inst_x.url,
-                           "clone_user": forge_x.descriptor.clone_user,
-                           "token": inst_x.token_ro or inst_x.token})
-        if extras:
-            payload["extra_repos"] = extras
+    extras = self._extra_repos_for(run)
+    if extras:
+        payload["extra_repos"] = extras
     return payload
+
+
+def _extra_repos_for(self, run: Run) -> list[dict]:
+    """Read-only sibling clones for a run, built at request time (nothing
+    secret at rest); read tokens preferred, write fallback (same rule as
+    the primary token). Two sources:
+    - the routing set's OTHER repos: ONBOARD only (multi-repo triage,
+      item 2 full scope)
+    - the instance's REFERENCE repos: EVERY mission stage (consultation
+      material — docs sources, style guides; founder request 2026-07-15)"""
+    wanted: list[str] = []
+    if run.mission_type == "ONBOARD":
+        wanted += list(self.instance.repos or [])
+    if run.mission_type in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW"):
+        wanted += list(self.instance.reference_repos or [])
+    extras, seen = [], {run.repo_ref}
+    for name in wanted:
+        if name in seen:
+            continue
+        seen.add(name)
+        inst_x = self.forges.instance(name)
+        forge_x = self.forges.get(name)
+        if inst_x is None or forge_x is None:
+            continue         # removed mid-flight — proceed on what remains
+        extras.append({"name": name, "url": inst_x.url,
+                       "clone_user": forge_x.descriptor.clone_user,
+                       "token": inst_x.token_ro or inst_x.token})
+    return extras
 
 
 def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:

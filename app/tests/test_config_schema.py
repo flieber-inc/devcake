@@ -215,3 +215,17 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
 
     path.write_text("")  # empty file → defaults, same as first boot
     assert config_mod.load_config().schema_version == 4
+
+
+def test_reference_repos_validated_and_disjoint():
+    base = _base()
+    base["pmos"][0]["reference_repos"] = ["nosuchrepo"]
+    with pytest.raises(Exception, match="name no configured repo"):
+        AppConfig.model_validate(base)
+    repo = base["repos"][0]["name"]
+    base["pmos"][0]["repos"] = [repo]
+    base["pmos"][0]["reference_repos"] = [repo]
+    with pytest.raises(Exception, match="both a"):
+        AppConfig.model_validate(base)
+    base["pmos"][0]["repos"] = []
+    AppConfig.model_validate(base)

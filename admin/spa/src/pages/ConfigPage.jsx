@@ -258,6 +258,45 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
 
 // ── the page ─────────────────────────────────────────────────────────────────
 
+// Ordered toggle chips over the configured repo cards (PMO repo set +
+// reference repos, v0.1.2): selection order is the list order; entries
+// selected in the SIBLING list render disabled (the two sets are disjoint
+// by config validation).
+function RepoChips({ label, help, all, selected, excluded, excludedNote,
+                     firstBadge = "", onChange }) {
+  return (
+    <Field label={label} help={help}>
+      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+        {all.length === 0 && (
+          <span className="text-xs text-neutral-400">
+            no repositories configured — add them on the Repositories page
+          </span>
+        )}
+        {all.map((r) => {
+          const sel = selected.includes(r.name);
+          const pos = selected.indexOf(r.name);
+          const blocked = !sel && excluded.includes(r.name);
+          return (
+            <button key={r.name} type="button" disabled={blocked}
+              title={blocked ? `already selected as a ${excludedNote}` : undefined}
+              onClick={() => onChange(
+                sel ? selected.filter((n) => n !== r.name)
+                    : [...selected, r.name])}
+              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
+                blocked ? "cursor-not-allowed border-neutral-200 text-neutral-300 dark:border-neutral-800 dark:text-neutral-600"
+                : sel
+                  ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
+                  : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+              }`}>
+              {r.name}{sel && pos === 0 ? firstBadge : ""}
+            </button>
+          );
+        })}
+      </div>
+    </Field>
+  );
+}
+
 export default function ConfigPage({ section, onSectionInView }) {
   // the draft, reload, harnesses and health snapshot come from the shared
   // provider (v0.1.1 B4) — the Repositories page edits the SAME draft, and
@@ -490,33 +529,19 @@ export default function ConfigPage({ section, onSectionInView }) {
                   help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
                   refKey={`pmo:${inst.name}:api_key`} paste
                   locked={!savedPmoNames.has(inst.name)} />
-                <Field label="Repositories"
-                  help="The ORDERED set of repos this instance's missions may target. Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo.">
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    {cfg.repos.length === 0 && (
-                      <span className="text-xs text-neutral-400">
-                        no repositories configured — add them on the Repositories page
-                      </span>
-                    )}
-                    {cfg.repos.map((r) => {
-                      const sel = (inst.repos || []).includes(r.name);
-                      const pos = (inst.repos || []).indexOf(r.name);
-                      return (
-                        <button key={r.name} type="button"
-                          onClick={() => setField(`cfg.pmos.${idx}.repos`,
-                            sel ? (inst.repos || []).filter((n) => n !== r.name)
-                                : [...(inst.repos || []), r.name])}
-                          className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
-                            sel
-                              ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
-                              : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-                          }`}>
-                          {r.name}{sel && pos === 0 ? " · default" : ""}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </Field>
+                <RepoChips label="Repositories"
+                  help="The ORDERED set of repos this instance's missions may target. Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
+                  all={cfg.repos} selected={inst.repos || []}
+                  excluded={inst.reference_repos || []}
+                  excludedNote="reference repo"
+                  firstBadge=" · default"
+                  onChange={(next) => setField(`cfg.pmos.${idx}.repos`, next)} />
+                <RepoChips label="Reference repos"
+                  help="Read-only consultation material (docs sources, style guides) cloned into EVERY stage's workspace alongside the mission's repository. Never a work target — markers naming one gate. Multiple supported."
+                  all={cfg.repos} selected={inst.reference_repos || []}
+                  excluded={inst.repos || []}
+                  excludedNote="work repo"
+                  onChange={(next) => setField(`cfg.pmos.${idx}.reference_repos`, next)} />
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>
@@ -536,7 +561,8 @@ export default function ConfigPage({ section, onSectionInView }) {
           <Button kind="ghost" onClick={() =>
             setField("cfg.pmos", [...cfg.pmos,
               { name: `linear${cfg.pmos.length + 1}`, system: "linear",
-                team_key: "", api_base: null, repos: [] }])}>
+                team_key: "", api_base: null, repos: [],
+                reference_repos: [] }])}>
             + Add PMO instance
           </Button>
           <Field label="Poll interval (s)"

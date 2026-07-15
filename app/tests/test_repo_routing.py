@@ -186,6 +186,8 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
     mgr = MissionManager.__new__(MissionManager)
     mgr.config = AppConfig()
     mgr.forges = rt
+    mgr.instance = PMOInstance(name="linear", team_key="DEV",
+                               repos=["ghrepo", "glrepo"])
     mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
                                            harness_template="claude-code")}
     dt = mgr.dev_types["senior-dev"]
@@ -503,3 +505,63 @@ def test_onboard_runspec_carries_extra_repo_read_tokens(tmp_path, monkeypatch):
     assert "devcake-repo:" in txt and "blocked_by" in txt
     mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
     assert mgr._onboard_repo_options("alpha") == ""
+
+
+def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch):
+    """Founder request 2026-07-15: reference repos (plural) are cloned
+    read-only for EVERY stage, are deduped against ONBOARD's triage
+    siblings, and can never be routing targets."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from test_transitions import make_mgr, mission
+    from devcake import secrets as s
+    from devcake.adapters.registry import make_forge
+    from devcake.config import PMOInstance, RepoInstance
+    from devcake.domain.forge_runtime import ForgeRuntime
+
+    for name in ("alpha", "docs", "guides"):
+        s.write_connection_secret("repo", name, "token_ro", f"{name}-ro-token1")
+        s.write_connection_secret("repo", name, "token", f"{name}-write-tok1")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="alpha", url="https://github.com/o/a"),
+                RepoInstance(name="docs", forge="gitlab",
+                             url="https://gitlab.com/o/docs"),
+                RepoInstance(name="guides", url="https://github.com/o/guides")],
+               make_forge)
+    inst = PMOInstance(name="linear", team_key="DEV", repos=["alpha"],
+                       reference_repos=["docs", "guides"])
+
+    m = mission()
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    mgr.forges = rt
+    mgr.internal_forge = None
+    mgr.instance = inst
+
+    # every stage gets BOTH reference repos with read tokens
+    for mt in ("PLAN", "EXECUTE", "REVIEW", "ONBOARD"):
+        run = Run(run_id=f"LINEAR-T-1-1-{mt}-AAAAAA", mission_key="T-1",
+                  mission_type=mt, dev_type="senior-dev", seq=1,
+                  repo_ref="alpha", pmo_ref="linear", state="dispatched")
+        payload = mgr.runspec_secret_payload(run)
+        names = [x["name"] for x in payload["extra_repos"]]
+        assert names == ["docs", "guides"], (mt, names)
+        assert all(x["token"].endswith("-ro-token1")
+                   for x in payload["extra_repos"])
+
+    # MAPPER never gets extras
+    mapper_run = Run(run_id="LINEAR-TEAM-1-MAPPER-AAAAAA", mission_key="TEAM",
+                     mission_type="MAPPER", dev_type="senior-dev", seq=1,
+                     repo_ref="alpha", pmo_ref="linear", state="dispatched")
+    assert "extra_repos" not in mgr.runspec_secret_payload(mapper_run)
+
+    # a marker naming a reference repo GATES — never a work target
+    name, reason = resolve_repo(_m("`devcake-repo:docs`"), inst,
+                                {"alpha", "docs", "guides"}, [])
+    assert name is None and "REFERENCE" in reason
+
+    # every stage's prompt names the reference clones
+    note = mgr._reference_repos_note("alpha")
+    assert "`docs`" in note and "`guides`" in note and "NEVER modify" in note
+    from devcake.prompts import execute_prompt, plan_prompt
+    out = execute_prompt("ID", m, "a", "pr {branch}", reference_repos=note)
+    assert "Reference repositories (read-only)" in out
+    assert "Reference repositories" in plan_prompt("ID", m, reference_repos=note)

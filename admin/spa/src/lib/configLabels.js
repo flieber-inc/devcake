@@ -74,6 +74,12 @@ export function metaFor(path) {
              multiline: false,
              format: (v) => ((v || []).length ? (v || []).join(" › ") : "(none — internal forge)") };
   }
+  m = path.match(/^cfg\.pmos\.(\d+)\.reference_repos$/);
+  if (m) {
+    return { group: "PMO", label: `Reference repos (instance #${+m[1] + 1})`,
+             multiline: false,
+             format: (v) => ((v || []).length ? (v || []).join(", ") : "(none)") };
+  }
   m = path.match(/^devTypes\.([^.]+)\.(.+)$/);
   if (m && DEV_TYPE_FIELDS[m[2]]) {
     const f = DEV_TYPE_FIELDS[m[2]];

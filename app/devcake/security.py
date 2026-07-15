@@ -115,24 +115,50 @@ def _report_unreadable(path: Path, exc: Exception) -> None:
         pass  # no running event loop (sync caller) — the ERROR log stands
 
 
+# path → (mtime_ns, size, extracted values): redact() runs on every PMO- and
+# forge-bound write, and re-parsing every /data/secrets JSON per call grows
+# with mission count (M11 adds one file per internal mission — audit A28).
+# Unchanged files serve from here; changed files re-parse; removed drop out.
+_scan_cache: dict[str, tuple[int, int, list[str]]] = {}
+
+
+def _file_values(p) -> list[str]:
+    """Long-ish string values of one stored-secret JSON, mtime/size-cached."""
+    st = p.stat()
+    key = str(p)
+    hit = _scan_cache.get(key)
+    if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        return hit[2]
+    found: list[str] = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+        elif isinstance(o, str) and len(o) >= 16:
+            found.append(o)
+
+    walk(json.loads(p.read_text()))
+    _scan_cache[key] = (st.st_mtime_ns, st.st_size, found)
+    return found
+
+
 def _known_values() -> list[str]:
     values = [v for var in secret_env_vars() if (v := os.environ.get(var, "").strip())]
     # credential file key material: every long-ish string value in stored JSONs
+    live_paths = set()
     for p in _SECRETS_DIR.glob("*/*"):
         try:
-            def walk(o):
-                if isinstance(o, dict):
-                    for v in o.values():
-                        walk(v)
-                elif isinstance(o, list):
-                    for v in o:
-                        walk(v)
-                elif isinstance(o, str) and len(o) >= 16:
-                    values.append(o)
-            walk(json.loads(p.read_text()))
+            live_paths.add(str(p))
+            values.extend(_file_values(p))
         except Exception as exc:
             _report_unreadable(p, exc)
             continue
+    for stale in set(_scan_cache) - live_paths:      # deleted files drop out
+        del _scan_cache[stale]
     return sorted(set(values), key=len, reverse=True)  # longest first
 
 

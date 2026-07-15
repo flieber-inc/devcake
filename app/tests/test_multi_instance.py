@@ -332,6 +332,44 @@ def test_dispatch_gates_on_run_id_overflow(tmp_path):
     assert "64" in reason and "marker" in reason
 
 
+def test_config_put_survives_secret_cleanup_failure(tmp_path, monkeypatch):
+    """Audit A21: the config change is APPLIED once reload succeeds — a
+    failure deleting a removed instance's stored secrets must log, not 500
+    an already-applied change."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import main as app_main
+    from devcake.config import RepoInstance
+
+    def boom(scope, name):
+        raise RuntimeError("disk error")
+
+    monkeypatch.setattr(app_main, "reload_connections", lambda: None)
+    monkeypatch.setattr(app_main, "save_config", lambda c: None)
+    monkeypatch.setattr(app_main.secrets_store, "delete_connection_instance", boom)
+    original_repos = app_main.config.repos
+    app_main.config.repos = [RepoInstance(name="gone",
+                                          url="https://github.com/o/r")]
+    try:
+        out = run_coro(app_main.put_config({"repos": []}))   # must not raise
+        assert out["repos"] == []
+    finally:
+        app_main.config.repos = original_repos
+
+
+def test_hello_and_oauth_runs_stamp_sys_pmo_ref():
+    """Audit A29: HELLO/OAUTH runs carried the field default pmo_ref='main'
+    — indistinguishable from legacy pre-v3 mission records by ref. Source-
+    pinned (the dispatch-stamp precedent above): both construction sites
+    must stamp the sys pseudo-instance explicitly."""
+    import inspect
+    from devcake.domain import oauth as oauth_mod
+    from devcake.domain import runs as runs_mod
+    assert 'pmo_ref="sys"' in inspect.getsource(runs_mod.RunManager.dispatch_hello)
+    # oauth's Run construction lives in start()'s traced inner — pin the
+    # module (it has exactly one Run construction site)
+    assert 'pmo_ref="sys"' in inspect.getsource(oauth_mod)
+
+
 def test_run_branch_legacy_fallback():
     """Pre-v3 records (pmo_ref ''/'main', no stored branch) must resolve to
     the UNPREFIXED branch their Devs actually pushed."""

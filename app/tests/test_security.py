@@ -149,6 +149,26 @@ def test_stored_forge_token_registered_at_construction(tmp_path, monkeypatch):
             unregister_runtime_secret(key)
 
 
+def test_known_values_cache_invalidates_on_change(tmp_path, monkeypatch):
+    """Audit A28: redact() re-globbed and re-parsed every /data/secrets JSON
+    on every call (the hot path grows with mission count — M11 adds one file
+    per internal mission). The mtime/size cache must still see changed,
+    added, and removed files immediately."""
+    import json as _json
+    from devcake import security
+    monkeypatch.setattr(security, "_SECRETS_DIR", tmp_path / "secrets")
+    d = tmp_path / "secrets" / "connections"
+    d.mkdir(parents=True)
+    f = d / "repo-main.json"
+    f.write_text(_json.dumps({"token": "first-secret-value-123"}))
+    assert "first-secret-value-123" not in security.redact("x first-secret-value-123")
+    f.write_text(_json.dumps({"token": "second-secret-value-98765"}))
+    assert "second-secret-value-98765" not in security.redact("x second-secret-value-98765")
+    f.unlink()
+    # removed file's values drop out of the scan (runtime registry unaffected)
+    assert "first-secret-value-123" in security.redact("x first-secret-value-123")
+
+
 def test_register_all_boot_coverage_and_key_scheme(tmp_path, monkeypatch):
     """register_all is the boot path that guarantees exact-match redaction
     even BELOW security's 16-char scan floor, and it must register under the

@@ -338,6 +338,34 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
     assert provisioned == [] and name4 is None
 
 
+def test_build_zip_manifest_attributes_omissions_honestly(tmp_path):
+    """Audit A16: MANIFEST.txt blamed every omission on the size cap — a
+    fetch failure was listed under the wrong explanation."""
+    import io
+    import zipfile
+    from devcake.domain.orchestrator.deliver import _SAFETY, _build_zip
+    from devcake.ports.forge import PRFile
+
+    class F:
+        async def file_content(self, path, ref):
+            if path == "bad.bin":
+                raise RuntimeError("500 from forge")
+            return b"x" * (2000 if path == "big.bin" else 10)
+
+    files = [PRFile(path="ok.txt", status="modified"),
+             PRFile(path="bad.bin", status="modified"),
+             PRFile(path="big.bin", status="added")]
+    data, omitted = run_coro(_build_zip(F(), files, "main", cap=_SAFETY + 100))
+    assert set(omitted) == {"bad.bin", "big.bin"}
+    z = zipfile.ZipFile(io.BytesIO(data))
+    assert "ok.txt" in z.namelist()
+    manifest = z.read("MANIFEST.txt").decode()
+    fetch_part = manifest.split("could not be fetched")[1]
+    assert "bad.bin" in fetch_part.split("size cap")[0]
+    cap_part = manifest.split("size cap")[1]
+    assert "big.bin" in cap_part and "bad.bin" not in cap_part
+
+
 def test_internal_zip_delivery(tmp_path, monkeypatch):
     """M11 zip delivery: an internal-forge merge packages the changed files
     and attaches them to the PMO feed; failure never un-Dones the mission."""

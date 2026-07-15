@@ -133,10 +133,12 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
             self._audit(pmo_id, "label_add", LABEL_REVIEW)
 
         async def _trivial_feed():
+            _f = self.forges.get(run.repo_ref)
+            noun = _f.descriptor.pr_noun if _f else "pull request"
             await self._feed(
                 pmo_id, run.pmo_kind,
-                f"🔀 Trivial path: PR opened ({result.get('pr_url', '?')}) — "
-                f"the trivial path never skips REVIEW (docs/03 §1.1).")
+                f"🔀 Trivial path: {noun} opened ({result.get('pr_url', '?')}) "
+                f"— the trivial path never skips REVIEW (docs/03 §1.1).")
 
         await self._checkpoint(run, "transition:executed_trivially:labels",
                                _trivial_labels)

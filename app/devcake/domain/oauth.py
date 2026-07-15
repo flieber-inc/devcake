@@ -54,6 +54,7 @@ class OAuthManager:
         run_id = make_run_id("sys", "OAUTH", 1,
                              dev_type.harness_template.split("-")[0].upper())
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
+                  pmo_ref="sys",   # not the legacy-marker default "main" (A29)
                   dev_type=dev_type.name, seq=1, timeout_seconds=600,
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,

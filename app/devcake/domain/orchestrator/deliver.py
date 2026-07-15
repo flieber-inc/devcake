@@ -112,7 +112,8 @@ async def _build_zip(forge, files: list[PRFile], ref: str,
     """Zip files at `ref`, largest-last until the cap; omitted files are
     listed in MANIFEST.txt. Returns (zip_bytes, omitted_paths)."""
     fetched: list[tuple[str, bytes]] = []
-    omitted: list[str] = []
+    failed_fetch: list[str] = []
+    over_cap: list[str] = []
     for f in files:
         try:
             fetched.append((f.path, await forge.file_content(f.path, ref)))
@@ -121,19 +122,26 @@ async def _build_zip(forge, files: list[PRFile], ref: str,
             # #4: else the feed note over-claims the delivered file count and
             # MANIFEST.txt never mentions it → silent data loss)
             log.warning("could not fetch %s@%s for the deliverable", f.path, ref)
-            omitted.append(f.path)
+            failed_fetch.append(f.path)
     fetched.sort(key=lambda pb: len(pb[1]))       # small first → fit the most
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         used = 0
         for path, content in fetched:
             if used + len(content) + _SAFETY > cap:
-                omitted.append(path)
+                over_cap.append(path)
                 continue
             z.writestr(path, content)
             used += len(content)
-        if omitted:
-            z.writestr("MANIFEST.txt",
-                       "Files omitted (exceeded the attachment size cap):\n"
-                       + "\n".join(omitted) + "\n")
-    return buf.getvalue(), omitted
+        # MANIFEST attributes each omission honestly (audit A16: everything
+        # used to be blamed on the size cap)
+        if failed_fetch or over_cap:
+            manifest = ""
+            if failed_fetch:
+                manifest += ("Files omitted (could not be fetched from the "
+                             "forge):\n" + "\n".join(failed_fetch) + "\n")
+            if over_cap:
+                manifest += ("Files omitted (exceeded the attachment "
+                             "size cap):\n" + "\n".join(over_cap) + "\n")
+            z.writestr("MANIFEST.txt", manifest)
+    return buf.getvalue(), failed_fetch + over_cap

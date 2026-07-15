@@ -93,7 +93,13 @@ class ForgeRuntime:
         """Single writer for per-repo health + breaker latching (moved from
         finalize.apply_forge_health): latch only on definitive (non-transient)
         failures; a transient probe failure neither latches nor clears; any
-        OK probe clears the latch (docs/15 §4)."""
+        OK probe clears the latch (docs/15 §4). No-op for unregistered names
+        (audit A29): a probe completing after a rebuild/delete removed the
+        repo must not resurrect its health entry — refresh_all walks only
+        registered repos, so it would sit stale until the next config PUT."""
+        if name not in self.forges:
+            log.info("health probe for unregistered repo %s dropped", name)
+            return
         self.health[name] = data
         if data.get("ok"):
             if self.breakers.pop(name, None) is not None:
@@ -113,7 +119,11 @@ class ForgeRuntime:
 
     def latch(self, name: str, reason: str) -> None:
         """Manually latch a repo breaker (Dev-side DEV_FORGE_AUTH — the
-        structured clone-credential classification, docs/15 §4)."""
+        structured clone-credential classification, docs/15 §4). No-op for
+        unregistered names (audit A29 — see apply_health)."""
+        if name not in self.forges:
+            log.warning("breaker latch for unregistered repo %s dropped", name)
+            return
         if name not in self.breakers:
             from ..security import redact
             log.error("forge breaker LATCHED for repo %s: %s", name, reason)

@@ -37,7 +37,11 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
     if len(eligible) > MAPPER_MISSION_CAP:
         log.warning("mapper prompt truncated to %d of %d missions",
                     MAPPER_MISSION_CAP, len(eligible))
-    seq = 1 + sum(1 for r in self.runs.store.all() if r.mission_type == "MAPPER")
+    # own-instance MAPPER runs only (audit A29, cosmetic): run ids carry the
+    # instance prefix + random suffix, so no collision — but a cross-instance
+    # count made the human-visible seq misleading
+    seq = 1 + sum(1 for r in self.runs.store.all()
+                  if r.mission_type == "MAPPER" and self._run_is_ours(r))
     run_id = make_run_id(self.instance_name, "TEAM", seq, "MAPPER")
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:

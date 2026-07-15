@@ -338,3 +338,21 @@ def test_descriptor_complete_and_renderable(cls):
 def test_unknown_forge_rejected_by_config():
     with pytest.raises(Exception, match="unknown forge"):
         RepoInstance(forge="fossil", url="https://x/y/z")
+
+
+def test_gitlab_file_content_percent_encodes_ref():
+    """Audit A16: GitHub/Gitea percent-encode path+ref (c57189f) but GitLab
+    left `ref` raw — a '#'/'?'/space in a branch name corrupted the URL."""
+    import asyncio
+    ad = GitLabForge("https://gitlab.com/o/r", "tok")
+    seen = {}
+
+    async def _req(method, path, raw=False):
+        seen["path"] = path
+        return b"data"
+
+    ad._req = _req
+    asyncio.new_event_loop().run_until_complete(
+        ad.file_content("a b.txt", "feature/x y#z"))
+    assert "a%20b.txt" in seen["path"]
+    assert "ref=feature%2Fx%20y%23z" in seen["path"]

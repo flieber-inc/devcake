@@ -257,3 +257,11 @@ def _returns(value):
     async def _f(*a, **k):
         return value
     return _f
+
+
+def test_mapper_seq_scoped_to_own_instance():
+    """Audit A29 (cosmetic): run ids are collision-free regardless, but the
+    human-visible seq counted OTHER instances' MAPPER runs too."""
+    import inspect
+    from devcake.domain.orchestrator import mapper as mapper_mod
+    assert "_run_is_ours" in inspect.getsource(mapper_mod.dispatch_mapper)

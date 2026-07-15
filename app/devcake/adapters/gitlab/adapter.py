@@ -205,8 +205,11 @@ class GitLabForge:
 
     async def file_content(self, path: str, ref: str) -> bytes:
         from urllib.parse import quote
+        # ref percent-encoded too (audit A16): a '#'/'?'/space in a branch
+        # name corrupted the request — the GitHub/Gitea fix missed this one
         raw = await self._req("GET",
-            f"/repository/files/{quote(path, safe='')}/raw?ref={ref}", raw=True)
+            f"/repository/files/{quote(path, safe='')}/raw"
+            f"?ref={quote(ref, safe='')}", raw=True)
         return raw
 
     @staticmethod

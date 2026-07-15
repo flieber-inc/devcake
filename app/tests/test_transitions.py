@@ -458,10 +458,39 @@ def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
     assert "forge" not in mgr.breakers
 
 
+def test_trivial_feed_uses_descriptor_pr_noun(tmp_path):
+    """Audit A29: the trivial-path feed said 'PR opened' regardless of the
+    forge — _executed_feed already used the descriptor noun; the trivial
+    twin did not."""
+    m = mission("in_progress", {"DEVCAKE"})
+    forge = FakeForge()
+    forge.descriptor = type("D", (), {"pr_noun": "merge request"})()
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=forge)
+    run_coro(mgr._transition(_run("ONBOARD", None),
+                             {"outcome": "executed_trivially",
+                              "pr_url": "https://forge/mr/1", "summary": "s"},
+                             None))
+    assert any("merge request" in c for c in fake.comments)
+    assert not any("PR opened" in c for c in fake.comments)
+
+
+def test_apply_health_and_latch_noop_for_unregistered_repo():
+    """Audit A29 (resurrection race): a probe or finalize latch completing
+    AFTER a rebuild/delete removed the repo must not re-create health or
+    breaker entries — refresh_all only walks registered repos, so a stale
+    entry would sit in /health until the next config PUT."""
+    from devcake.domain.forge_runtime import ForgeRuntime
+    rt = ForgeRuntime()
+    rt.apply_health("ghost", {"ok": False, "transient": False, "detail": "401"})
+    rt.latch("ghost", "401")
+    assert "ghost" not in rt.health and "ghost" not in rt.breakers
+
+
 def test_apply_forge_health_breaker_policy():
     """The latch/clear policy moved to ForgeRuntime (M10): per repo name."""
     from devcake.domain.forge_runtime import ForgeRuntime
     rt = ForgeRuntime()
+    rt.forges = {"main": object(), "a": object(), "b": object()}
     rt.apply_health("main", {"ok": False, "transient": False, "detail": "401 bad token"})
     assert rt.breakers["main"] == "401 bad token"            # definitive latches
     rt.apply_health("main", {"ok": False, "transient": True, "detail": "HTTP 500"})

@@ -736,7 +736,14 @@ async def put_config(body: dict):
             log.exception("restore reload also failed")
         raise HTTPException(500, f"config reload failed; previous config restored: {e}")
     for scope, name in removed:                  # only once the new config took
-        secrets_store.delete_connection_instance(scope, name)
+        try:
+            secrets_store.delete_connection_instance(scope, name)
+        except Exception:
+            # the config change is APPLIED at this point — a cleanup failure
+            # must not 500 it (audit A21); the orphaned file is deletable
+            # later and named here
+            log.exception("could not delete stored secrets of removed "
+                          "%s instance %r", scope, name)
     return config.model_dump()
 
 

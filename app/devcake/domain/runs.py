@@ -103,6 +103,7 @@ class RunManager:
                 run_id=run_id,
                 mission_key="HELLO",
                 mission_type="HELLO",
+                pmo_ref="sys",   # not the legacy-marker default "main" (A29)
                 dev_type="hello-stub",
                 seq=seq,
                 timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,

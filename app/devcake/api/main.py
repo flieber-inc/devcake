@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import time
 
 import httpx
@@ -23,9 +24,9 @@ from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import secrets as secrets_store
 from .. import security
-from ..config import (AppConfig, Assignment, DevType, deep_merge, delete_dev_type,
-                      load_config, load_dev_types, reject_stale_patch,
-                      save_config, save_dev_type)
+from ..config import (AppConfig, Assignment, DevType, _INSTANCE_NAME_RE,
+                      deep_merge, delete_dev_type, load_config, load_dev_types,
+                      reject_stale_patch, save_config, save_dev_type)
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
@@ -818,6 +819,30 @@ async def put_assignments(body: dict):
 # ── GUI-stored secrets (M12, F5): write-only VALUES, never echoed back ───────
 
 _SECRET_SCOPES = {"pmo", "repo"}
+# per-scope field allowlist — scope/instance/field all reach the filesystem
+# as path components, so every entry point validates against these (audit A5/A9)
+_SECRET_FIELDS = {"pmo": {"api_key"},
+                  "repo": {"token", "token_ro", "reviewer_token"}}
+_HARNESS_VAR_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+
+def _valid_secret_ref(scope: str, instance: str, field: str) -> bool:
+    return (scope in _SECRET_FIELDS and field in _SECRET_FIELDS[scope]
+            and re.fullmatch(_INSTANCE_NAME_RE, instance) is not None)
+
+
+def _require_secret_ref(scope: str, instance: str, field: str) -> None:
+    if scope not in _SECRET_SCOPES:
+        raise HTTPException(404, f"unknown secret scope {scope!r}")
+    if not _valid_secret_ref(scope, instance, field):
+        raise HTTPException(
+            422, f"invalid secret ref: instance must match {_INSTANCE_NAME_RE}"
+                 f" and field ∈ {sorted(_SECRET_FIELDS[scope])}")
+
+
+def _require_harness_var(var: str) -> None:
+    if not _HARNESS_VAR_RE.fullmatch(var):
+        raise HTTPException(422, "harness var must match ^[A-Z][A-Z0-9_]{0,63}$")
 
 
 @app.put("/api/v1/secrets/{scope}/{instance}/{field}")
@@ -825,8 +850,7 @@ async def put_secret(scope: str, instance: str, field: str, body: dict):
     """Store a connection secret VALUE (never echoed). scope ∈ pmo|repo;
     instance is the config instance name; field ∈ api_key|token|token_ro|
     reviewer_token. Writing a repo/pmo secret clears any latched breaker."""
-    if scope not in _SECRET_SCOPES:
-        raise HTTPException(404, f"unknown secret scope {scope!r}")
+    _require_secret_ref(scope, instance, field)
     value = body.get("value")
     if not isinstance(value, str) or not value:
         raise HTTPException(422, "value must be a non-empty string")
@@ -842,9 +866,8 @@ async def put_secret(scope: str, instance: str, field: str, body: dict):
 
 @app.delete("/api/v1/secrets/{scope}/{instance}/{field}")
 async def delete_secret(scope: str, instance: str, field: str):
-    if scope not in _SECRET_SCOPES:
-        raise HTTPException(404, f"unknown secret scope {scope!r}")
-    secrets_store.write_connection_secret(scope, instance, field, "")
+    _require_secret_ref(scope, instance, field)
+    secrets_store.delete_connection_field(scope, instance, field)
     if scope == "repo":
         forge_runtime.breakers.pop(instance, None)
         _protection_cache["ts"] = 0.0
@@ -855,6 +878,7 @@ async def delete_secret(scope: str, instance: str, field: str):
 @app.put("/api/v1/harness-secrets/{var}")
 async def put_harness_secret(var: str, body: dict):
     """Store a harness/model key VALUE (e.g. ANTHROPIC_API_KEY)."""
+    _require_harness_var(var)
     value = body.get("value")
     if not isinstance(value, str) or not value:
         raise HTTPException(422, "value must be a non-empty string")
@@ -867,18 +891,31 @@ async def put_harness_secret(var: str, body: dict):
     return secrets_store.harness_status(var)
 
 
+@app.delete("/api/v1/harness-secrets/{var}")
+async def delete_harness_secret(var: str):
+    """Revoke a stored harness/model key (audit A10) — previously a
+    compromised key could only be overwritten, never removed, from the GUI.
+    No reload needed: harness keys are read live at dispatch."""
+    _require_harness_var(var)
+    secrets_store.delete_harness_secret(var)
+    return {"present": False}
+
+
 @app.get("/api/v1/secrets-check")
 async def secrets_check(conn: str = "", harness: str = ""):
     """Presence + updated_at (NEVER the value) for the ✓/✗ UI. `conn` is a
     comma list of scope:instance:field triples; `harness` a comma list of
-    var names."""
+    var names. Invalid refs are silently dropped — they previously reached
+    the filesystem, an existence/mtime oracle for arbitrary *.json paths
+    (audit A5)."""
     out: dict = {"conn": {}, "harness": {}}
     for triple in (t for t in conn.split(",") if t):
         parts = triple.split(":")
-        if len(parts) == 3:
+        if len(parts) == 3 and _valid_secret_ref(*parts):
             out["conn"][triple] = secrets_store.connection_status(*parts)
     for var in (v for v in harness.split(",") if v):
-        out["harness"][var] = secrets_store.harness_status(var)
+        if _HARNESS_VAR_RE.fullmatch(var):
+            out["harness"][var] = secrets_store.harness_status(var)
     return out
 
 

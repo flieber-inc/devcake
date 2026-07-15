@@ -88,6 +88,19 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn", pas
       refresh();
     } finally { setBusy(false); }
   };
+  const remove = async () => {
+    if (!window.confirm(`Remove the stored value for ${label}? Runs that need it will fail until a new one is set.`)) return;
+    setBusy(true);
+    try {
+      if (checkKind === "harness") {
+        await send("DELETE", `/harness-secrets/${encodeURIComponent(refKey)}`);
+      } else {
+        const [scope, instance, field] = refKey.split(":");
+        await send("DELETE", `/secrets/${scope}/${instance}/${field}`);
+      }
+      refresh();
+    } finally { setBusy(false); }
+  };
   const shapeWarn = paste && draft && !secretShapeRe().test(draft) && draft.length < 8
     ? "That does not look like a secret — double-check before saving."
     : null;
@@ -115,7 +128,13 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn", pas
       </div>
       {shapeWarn && <span className="mt-1 block text-xs text-amber-600">⚠ {shapeWarn}</span>}
       {status && status.present && (
-        <span className="mt-1 block text-xs text-green-700 dark:text-green-400">✓ stored</span>
+        <span className="mt-1 flex items-center gap-2 text-xs">
+          <span className="text-green-700 dark:text-green-400">✓ stored</span>
+          <button type="button" disabled={busy} onClick={remove}
+            className="text-red-600 underline-offset-2 hover:underline disabled:opacity-40 dark:text-red-400">
+            Remove
+          </button>
+        </span>
       )}
       {status && !status.present && (
         <span className="mt-1 block text-xs text-amber-600 dark:text-amber-400">✗ not set — enter a value</span>

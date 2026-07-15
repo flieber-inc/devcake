@@ -49,13 +49,24 @@ def _atomic_write(path: Path, data: dict) -> None:
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        _fsync_dir(path.parent)          # make the rename itself durable
     except Exception:
         with __import__("contextlib").suppress(FileNotFoundError):
             os.unlink(tmp)
         raise
 
 
+def _fsync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _read(path: Path) -> dict:
+    """Lenient read for status/read-through paths: a corrupt file reads as
+    absent (the redaction scanner alarms on it separately)."""
     if not path.exists():
         return {}
     try:
@@ -65,12 +76,25 @@ def _read(path: Path) -> dict:
         return {}
 
 
+def _read_strict(path: Path) -> dict:
+    """Strict read for read-modify-WRITE paths: silently treating a corrupt
+    file as {} would drop the sibling fields it once held (audit A18)."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception as e:
+        raise ValueError(
+            f"corrupt secret file {path.name!r} — refusing read-modify-write; "
+            f"delete or repair the file under /data/secrets/") from e
+
+
 # ── connection secrets (pmo/repo credentials) ───────────────────────────────
 
 def write_connection_secret(scope: str, instance: str, field: str,
                             value: str) -> None:
     path = _conn_path(scope, instance)
-    data = _read(path)
+    data = _read_strict(path)
     data[field] = value
     _atomic_write(path, data)
     if value:
@@ -79,6 +103,23 @@ def write_connection_secret(scope: str, instance: str, field: str,
 
 def read_connection_secret(scope: str, instance: str, field: str) -> str:
     return _read(_conn_path(scope, instance)).get(field, "")
+
+
+def delete_connection_field(scope: str, instance: str, field: str) -> None:
+    """Remove one field (a REAL delete, not an empty-string write — audit
+    A9/A18); unlink the file once its last field is gone. A missing file is a
+    no-op — deleting must never CREATE a file. The redaction registration is
+    deliberately kept until restart: unregistering a just-revoked value is
+    the risky direction."""
+    path = _conn_path(scope, instance)
+    if not path.exists():
+        return
+    data = _read_strict(path)
+    data.pop(field, None)
+    if data:
+        _atomic_write(path, data)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def delete_connection_instance(scope: str, instance: str) -> None:
@@ -98,6 +139,12 @@ def write_harness_secret(var: str, value: str) -> None:
 
 def read_harness_secret(var: str) -> str:
     return _read(_harness_path(var)).get("value", "")
+
+
+def delete_harness_secret(var: str) -> None:
+    """Revoke a stored harness/model key (audit A10). Redaction registration
+    is kept until restart — the safe direction for a just-revoked value."""
+    _harness_path(var).unlink(missing_ok=True)
 
 
 # ── status (never echoes values) ────────────────────────────────────────────

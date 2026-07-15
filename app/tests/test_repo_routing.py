@@ -294,6 +294,30 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
     name2, reason2 = run_coro(mgr.resolve_repo_live(m2))
     assert name2 is None and "unknown repo 'nope'" in reason2
 
+    # ── audit A4: terminal missions never (re-)provision — Clear sticks ──
+    # restart-recovery bait: a prior run points at the internal repo, the
+    # runtime lost the registration (admin Clear / restart), mission is done
+    rt._insts.pop("linear-t-1", None)
+    rt.internal.discard("linear-t-1")
+    prior = Run(run_id="LINEAR-T-1-2-EXECUTE-BBBBBB", mission_key="T-1",
+                mission_type="EXECUTE", dev_type="d", seq=2,
+                repo_ref="linear-t-1")
+    prior.mission_pmo_id = "p1"
+    mgr.runs.store.save(prior)
+    done = _m()
+    done.status = "done"
+    provisioned.clear()
+    name3, reason3 = run_coro(mgr.resolve_repo_live(done))
+    assert provisioned == []                  # no resurrection of the repo
+    assert name3 is None and reason3          # sticky-vanished gate, unscheduled
+
+    # zero-repo path likewise: a canceled mission with no runs never provisions
+    canceled = _m(key="T-9")
+    canceled.pmo_id = "p9"
+    canceled.status = "canceled"
+    name4, reason4 = run_coro(mgr.resolve_repo_live(canceled))
+    assert provisioned == [] and name4 is None
+
 
 def test_internal_zip_delivery(tmp_path, monkeypatch):
     """M11 zip delivery: an internal-forge merge packages the changed files

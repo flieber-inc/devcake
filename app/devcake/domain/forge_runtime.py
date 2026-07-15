@@ -43,7 +43,13 @@ class ForgeRuntime:
 
     def rebuild(self, repos: list["RepoInstance"], make_forge) -> None:
         """Reconcile with config (boot + hot reload). Unconfigured entries
-        (empty url) build no adapter; removed repos drop health/breakers."""
+        (empty url) build no adapter; removed CONFIG repos drop their
+        health/breakers. Dynamically registered internal-forge entries are
+        carried over untouched (audit A3): every config PUT and secret
+        PUT/DELETE lands here, and wiping them failed in-flight zero-repo
+        runspecs (Dev exit 20, burned attempt) and REVIEW finalizes for up
+        to a poll cycle. Internal entries leave ONLY via the admin delete
+        endpoint, which pops all three maps plus the `internal` name set."""
         live: dict[str, "ForgePort"] = {}
         insts: dict[str, "RepoInstance"] = {}
         for inst in repos:
@@ -51,6 +57,10 @@ class ForgeRuntime:
                 continue
             live[inst.name] = make_forge(inst)
             insts[inst.name] = inst
+        for name in self.internal:
+            if name in self.forges and name not in live:
+                live[name] = self.forges[name]
+                insts[name] = self.instances[name]
         self.forges, self.instances = live, insts
         for name in list(self.health):
             if name not in live:
@@ -61,10 +71,12 @@ class ForgeRuntime:
 
     def register_internal(self, name: str, inst, forge) -> None:
         """Register (idempotently) an auto-created internal-forge repo under
-        its own name. Called each cycle a mission routes internal — survives
-        app restarts (ForgeRuntime is rebuilt empty; the provisioner re-reads
-        stored creds). The app-side adapter uses the mission's write token for
-        merges; per-stage Dev tokens flow through the runspec by repo_ref."""
+        its own name. Called when a mission routes internal — the entry then
+        survives config/secret rebuilds (see rebuild); only a process restart
+        drops it, and resolve_repo_live re-registers from stored creds on the
+        first cycle. The app-side adapter uses the devcake-app SERVICE token
+        (write:issue for PR comments + merge); the mission's write/read Dev
+        token pair flows through the runspec by repo_ref."""
         self.instances[name] = inst
         self.forges[name] = forge
         self.internal.add(name)

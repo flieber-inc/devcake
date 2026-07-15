@@ -200,9 +200,16 @@ async def resolve_repo_live(self, mission, all_runs=None):
     expected = (internal_repo_name(self.instance_name, mission.key)
                 if self.internal_forge is not None else None)
 
+    # a done/canceled mission must never (re-)provision: the poll loop sees
+    # terminal missions too, so without this guard the admin Clear endpoint
+    # was silently undone within one cycle — repo, svc user, and a fresh
+    # token pair resurrected (audit A4). Terminal missions are never
+    # scheduled (derivation row 5), so gating them is inert.
+    terminal = mission.status in ("done", "canceled")
+
     # restart recovery: a prior run points at this mission's internal repo,
     # but ForgeRuntime lost it on restart — re-register before resolving
-    if expected is not None and any(
+    if not terminal and expected is not None and any(
             r.repo_ref == expected for r in all_runs
             if r.mission_pmo_id == mission.pmo_id):
         await _ensure_registered(expected)
@@ -210,7 +217,8 @@ async def resolve_repo_live(self, mission, all_runs=None):
     name, reason = self._resolve_repo(mission, all_runs=all_runs)
     if name is not None:
         return name, reason
-    if reason is REASON_ZERO_REPO and self.internal_forge is not None:
+    if (reason is REASON_ZERO_REPO and self.internal_forge is not None
+            and not terminal):
         await _ensure_registered(expected)
         return expected, None
     return None, reason

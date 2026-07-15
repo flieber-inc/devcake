@@ -53,6 +53,8 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                            ensure_ascii=True)
     manifest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     is_project = live.pmo_kind == "project"
+    from ..repo_routing import marker_repo
+    parent_repo_marker = marker_repo(live.description)
 
     existing: dict[int, str] = {}
     conflicts: list[str] = []
@@ -135,6 +137,13 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                       f"part {i}/{len(normalized)}_\n"
                       f"`devcake:decomposition:v1 parent={pmo_id} "
                       f"manifest={manifest} part={i}/{len(normalized)}`")
+            if parent_repo_marker:
+                # children inherit the parent's repo marker (audit A24,
+                # founder decision 2026-07-14) — the family stays on one
+                # repo instead of splitting to the default / internal repos.
+                # Appended AFTER the manifest hash is computed, like the
+                # rest of the footer, so replay idempotency is unaffected.
+                footer += f"\n`devcake-repo:{parent_repo_marker}`"
             key, child_id = await self.pmo.create_mission(
                 self.instance.team_key, title,
                 d["description"] + footer,

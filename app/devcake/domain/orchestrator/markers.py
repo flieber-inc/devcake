@@ -66,6 +66,10 @@ FEED_INLINE_MAX = 2048
 # while the managed-label set is deliberately fixed (and Linear project
 # labels leak workspace-wide). Mirrors the decomposition-marker precedent.
 REPO_MARKER = re.compile(r"`devcake-repo:([a-z][a-z0-9]{0,11})`", re.IGNORECASE)
+# the permissive twin (audit A26): anything devcake-repo:-SHAPED that the
+# strict pattern rejects is a typo'd routing intent — resolution GATES it
+# instead of silently falling through to the instance default
+RAW_REPO_MARKER = re.compile(r"`devcake-repo:([^`]*)`", re.IGNORECASE)
 
 CONFLICT_MARKER = re.compile(r"`devcake:conflict-resolve:(\d+)`")
 MERGE_RETRY_MARKER = "`devcake:merge-retry`"

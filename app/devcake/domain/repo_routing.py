@@ -3,19 +3,20 @@ mission, resolved as marker > instance default > zero-repo gate — and STICKY
 once a run exists.
 
 Stickiness is load-bearing (v0.1 plan finding H3): attempt 1 mints the branch
-and PR on the resolved repo; if a marker edit or default change re-routed a
-mission mid-flight, rework would open a duplicate PR on the new repo and
-orphan the old one — the PR-reuse invariant (M4) would silently break. So for
-a mission with run history the latest run's repo_ref wins unconditionally,
-and a conflicting edit GATES the mission with an explicit human-action reason
-instead of re-routing.
+and PR on the resolved repo; if a marker edit re-routed a mission mid-flight,
+rework would open a duplicate PR on the new repo and orphan the old one — the
+PR-reuse invariant (M4) would silently break. So for a mission with run
+history the latest run's repo_ref wins; a conflicting MARKER edit gates with
+an explicit human-action reason, while a changed instance DEFAULT does not
+gate — sticky wins silently (founder decision 2026-07-14, audit A25: a
+config default edit must not park every in-flight mission of the instance).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .orchestrator.markers import REPO_MARKER
+from .orchestrator.markers import RAW_REPO_MARKER, REPO_MARKER
 
 if TYPE_CHECKING:
     from ..config import PMOInstance
@@ -44,7 +45,15 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
     mission's repo and must not be passed in.
     """
     marker = marker_repo(mission.description)
-    fresh = marker if marker is not None else instance.default_repo
+    if marker is None:
+        raw = RAW_REPO_MARKER.search(mission.description or "")
+        if raw:
+            # devcake-repo:-shaped but unparseable = a typo'd routing intent
+            # — silently landing on the default (and then latching sticky
+            # there) is the exact hazard the marker exists to avoid (A26)
+            return None, (f"unparseable `devcake-repo:` marker "
+                          f"{raw.group(1)[:40]!r} — repo names are lowercase "
+                          f"alnum, ≤12 chars; fix the marker")
 
     sticky = next((r.repo_ref for r in run_history if r.repo_ref), None)
     if sticky is not None:
@@ -52,11 +61,13 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
             return None, (f"repo '{sticky}' (used by this mission's previous "
                           f"runs) is no longer configured — restore it or "
                           f"have a human close out the mission")
-        if fresh is not None and fresh != sticky:
-            return None, (f"repo routing changed mid-mission ('{sticky}' → "
-                          f"'{fresh}') — resolution is sticky once a run "
-                          f"exists; remove the change or have a human close "
+        if marker is not None and marker != sticky:
+            return None, (f"repo marker changed mid-mission ('{sticky}' → "
+                          f"'{marker}') — resolution is sticky once a run "
+                          f"exists; remove the marker or have a human close "
                           f"out the mission on '{sticky}'")
+        # a changed instance DEFAULT never gates: sticky wins silently
+        # (founder decision 2026-07-14 — see module docstring)
         return sticky, None
 
     if marker is not None:

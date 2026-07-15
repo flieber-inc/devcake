@@ -52,22 +52,41 @@ def test_resolution_table_virgin_missions():
 
 
 def test_resolution_sticky_once_a_run_exists():
-    """Plan finding H3: attempt 1's PR/branch live on the resolved repo —
-    a marker/default edit must GATE, never silently re-route (duplicate PR)."""
+    """Plan finding H3 + founder decision 2026-07-14 (audit A25): attempt
+    1's PR/branch live on the resolved repo. A conflicting MARKER edit
+    gates (explicit per-mission intent, visible human action needed); a
+    changed instance DEFAULT does not — sticky wins silently, because a
+    config default edit must not park every in-flight mission of the
+    instance (and setting a FIRST default must not park every in-flight
+    internal-forge mission)."""
     history = [_run("beta")]
     # sticky wins when no fresh signal disagrees (no marker, no default)
     assert resolve_repo(_m(), INST, REPOS, history) == ("beta", None)
-    # ANY conflicting fresh signal gates — an edited/removed marker OR a
-    # changed instance default both read as mid-mission re-routing
+    # a conflicting marker edit still gates
     name, reason = resolve_repo(_m("`devcake-repo:alpha`"), INST_DEF, REPOS, history)
     assert name is None and "sticky" in reason and "'beta'" in reason
-    name, reason = resolve_repo(_m(), INST_DEF, REPOS, history)   # default=alpha
-    assert name is None and "sticky" in reason
+    # a changed instance default: sticky wins SILENTLY (no gate)
+    assert resolve_repo(_m(), INST_DEF, REPOS, history) == ("beta", None)
     # a matching marker is fine
     assert resolve_repo(_m("`devcake-repo:beta`"), INST_DEF, REPOS, history) == ("beta", None)
     # sticky repo vanished from config → gate, explicit restore-or-close reason
     name, reason = resolve_repo(_m(), INST_DEF, {"alpha"}, history)
     assert name is None and "no longer configured" in reason
+
+
+def test_malformed_marker_gates_instead_of_silent_default():
+    """Audit A26: a `devcake-repo:`-shaped but unparseable marker (hyphens,
+    >12 chars, bad leading char) previously fell through to the instance
+    default — a typo'd routing intent silently landed on the wrong repo and
+    stickiness then latched it there. Gate with a fix-the-marker reason."""
+    for bad in ("`devcake-repo:my-repo`", "`devcake-repo:thirteenchars1`",
+                "`devcake-repo:9lead`", "`devcake-repo:`"):
+        name, reason = resolve_repo(_m(bad), INST_DEF, REPOS, [])
+        assert name is None and "unparseable" in reason, bad
+    # sticky missions gate too — the typo stays visible, nothing re-routes
+    name, reason = resolve_repo(_m("`devcake-repo:my-repo`"), INST_DEF, REPOS,
+                                [_run("beta")])
+    assert name is None and "unparseable" in reason
 
 
 def test_vanished_repo_contract_in_sweeps_and_review(tmp_path):

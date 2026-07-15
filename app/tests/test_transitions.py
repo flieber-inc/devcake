@@ -499,6 +499,36 @@ def test_decomposition_wires_blocked_by_edges(tmp_path):
     assert fake.statuses == ["canceled"]
 
 
+def test_decomposition_children_inherit_repo_marker(tmp_path):
+    """Audit A24 (founder decision 2026-07-14): a marker-routed parent's
+    children carry the same `devcake-repo:` marker — the mission family
+    stays on one repo instead of silently splitting to the instance default
+    (or per-child internal repos)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    m.description = "Do the big thing\n\n`devcake-repo:beta`"
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    drafts = [{"title": "docs"}, {"title": "code", "blocked_by": [1]}]
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None), {"outcome": "decomposed", "decomposition": drafts}))
+    children = fake.all_missions[1:]
+    assert len(children) == 2
+    assert all("`devcake-repo:beta`" in c.description for c in children)
+    # replay with the marker present stays idempotent
+    m.status = "in_progress"
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None), {"outcome": "decomposed", "decomposition": drafts}))
+    assert len(fake.created) == 2
+
+
+def test_decomposition_children_clean_without_marker(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "solo"}]}))
+    assert "devcake-repo" not in fake.all_missions[1].description
+
+
 def test_decomposition_replay_reuses_marker_parts(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)

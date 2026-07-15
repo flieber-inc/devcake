@@ -144,9 +144,16 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-sm font-semibold">{name}</span>
         <div className="flex items-center gap-2">
-          {harnesses[serverDt.harness_template]?.oauth_available && (
-            <Button kind="ghost" icon={KeyRound} onClick={() => onOAuth(name)}>
-              Connect via OAuth…
+          {/* keyed on the DRAFTED harness so switching to an OAuth-capable
+              harness shows the button immediately; disabled until the switch
+              is saved (the device flow runs against the SAVED harness) */}
+          {h.oauth_available && (
+            <Button kind="ghost" icon={KeyRound} disabled={pending}
+              title={pending
+                ? "Save the harness change first — OAuth runs the saved harness's login flow"
+                : undefined}
+              onClick={() => !pending && onOAuth(name)}>
+              Connect via OAuth…{pending ? " (save first)" : ""}
             </Button>
           )}
           <Button kind="danger-ghost" icon={Trash2} onClick={() => onDelete(name)}>Delete</Button>
@@ -210,6 +217,15 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
             ⚠ Unsaved harness change: on Save this Dev Type runs {h.docker_image} and
             needs the credentials listed below. Files under /data/secrets/{name}/
             for the old harness are kept but unused.
+          </p>
+        )}
+        {!h.oauth_available && (
+          <p className="text-neutral-400">
+            {d.harness_template} has no device-code OAuth flow — it
+            authenticates via a pasted key/token below
+            {d.harness_template === "claude-code"
+              ? " (run `claude setup-token` locally and paste the CLAUDE_CODE_OAUTH_TOKEN, or use an ANTHROPIC_API_KEY)"
+              : ""}.
           </p>
         )}
         <div className="space-y-2">

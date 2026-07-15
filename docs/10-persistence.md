@@ -48,7 +48,9 @@ pmos:                                # 0..N instances; name is what Run records
   system: linear                     # must be registered in the adapter registry (05 §1a)
   team_key: ENG                      # the team this instance watches — nothing outside it
   api_base: null                     # null = the adapter's default API host
-  default_repo: null                 # M10 routing: repo name missions default to (null = zero-repo gate)
+  repos: []                          # the instance's ORDERED repo set (item 2, 2026-07-15):
+                                     # first = default for unmarked missions; markers must
+                                     # name a listed repo; [] = per-mission internal repos
                                      # the API key VALUE is GUI-stored: /data/secrets/connections/pmo-linear.json
 
 repos:                               # 0..N (empty = every mission routes to the internal fallback forge)

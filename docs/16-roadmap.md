@@ -219,6 +219,16 @@ A six-agent skeptical audit of the whole v0→v0.1 range confirmed 8 open bugs, 
 
 Suite at close: 334 unit tests; full `ci_suite.sh` (pin gate, gitea battery 13/13, stub-harness smoke) green; SPA flows verified in a real browser. Known deferred: a sweep tool for Gitea svc users orphaned by pre-fix Clears (below), and registering the public `devcake` Docker Hub org (manual founder action — squatting hazard).
 
+## v0.1.2 — live-test fix round + multi-repo PMOs (2026-07-15)
+
+Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design decided the same day:
+
+- **CRITICAL regression fixed:** the A12 label-pagination change nested a paginated labels connection under `teams(filter:)` and blew Linear's ~10k query-complexity budget ("Query too complex", 15560) — every `_team` consumer was down. `_team` now splits into a cheap team-shell query + cursor-paged single-team label reads (live-verified green against the sandbox: 10/10 labels, 35 missions).
+- **PMO repo SET (schema v4.1-shape):** `PMOInstance.default_repo` → ordered `repos: [..]` — first entry is the default for unmarked missions, markers must name a listed repo (unlisted gates), `[]` = per-mission internal repos; sticky-wins semantics preserved; stale `default_repo` shapes refused with a hand-migration hint. SPA: ordered toggle chips on the PMO card.
+- **Repo-aware + multi-clone ONBOARD (founder decision — cross-repo work splits at triage):** multi-repo instances give ONBOARD every set repo as a shallow read-only sibling clone (per-repo read tokens via `extra_repos` in the runspec, non-fatal failures) and a `{repo_options}` playbook section stating the rule: cross-repo work decomposes into one child per repo, each with its own `devcake-repo:` marker + `blocked_by` ordering. EXECUTE/REVIEW keep the one-branch-one-PR contract. Dev images rebuilt lockstep.
+- **Operator repos on the bundled Gitea:** repo cards offer "gitea (internal)" with a Create-repository modal — the repo lands in the separate `devcake-repos` org (never touched by the per-mission list/sweep) with its full card token set minted and stored automatically.
+- **Smaller fixes:** Gitea UI quick link on Overview + a persistent Internal forge section (with the link) even when empty; a bulk "Clear data" action for internal repos; Connect-via-OAuth follows the DRAFTED harness (disabled until saved) — grok/codex flows verified (`codex login --device-auth` live-probed on the pinned CLI); claude-code cards explain the paste-token path.
+
 ## Post-v0.1 backlog
 
 ### Deferred (v0.2+)

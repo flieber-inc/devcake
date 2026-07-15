@@ -53,7 +53,8 @@ class GiteaProvisioner:
     def __init__(self, url: str | None = None,
                  admin_user: str | None = None,
                  admin_password: str | None = None,
-                 public_url: str | None = None):
+                 public_url: str | None = None,
+                 transport: "httpx.AsyncBaseTransport | None" = None):
         # runtime-network origin (Devs clone here); the html links use the
         # operator-facing ROOT_URL (loopback :3300)
         self.url = (url or os.environ.get("DEVCAKE_GITEA_URL",
@@ -62,10 +63,12 @@ class GiteaProvisioner:
             "GITEA_UI_URL", "http://localhost:3300")).rstrip("/")
         self._auth = (admin_user or os.environ.get("GITEA_ADMIN_USER", ""),
                       admin_password or os.environ.get("GITEA_ADMIN_PASSWORD", ""))
+        self._transport = transport      # test injection (LinearAdapter pattern)
 
     async def _req(self, method: str, path: str, ok=(200, 201, 204),
                    tolerate=(), **kw):
-        async with httpx.AsyncClient(timeout=20, auth=self._auth) as client:
+        async with httpx.AsyncClient(timeout=20, auth=self._auth,
+                                     transport=self._transport) as client:
             resp = await client.request(method, f"{self.url}/api/v1{path}", **kw)
         if resp.status_code in ok:
             return resp.json() if resp.text else None
@@ -142,7 +145,18 @@ class GiteaProvisioner:
         if stored:
             creds = MissionRepoCredentials(**stored)
             self._register_mission(creds)
-            if await self._token_works(creds.token_read, repo):
+            # probe BOTH tokens (audit A13: a revoked write token behind a
+            # live read token was reused silently → EXECUTE died at push)
+            read_ok = await self._token_works(creds.token_read, repo)
+            write_ok = await self._token_works(creds.token_write, repo)
+            if read_ok is True and write_ok is True:
+                return creds
+            if read_ok is not False and write_ok is not False:
+                # transient probe (timeout/5xx): NEVER re-mint — the mint is
+                # delete-then-create, so it would revoke the pair an
+                # in-flight Dev already fetched via its runspec (audit A13)
+                log.warning("internal repo %s: token probe transient — "
+                            "reusing stored creds without re-mint", repo)
                 return creds
             log.warning("internal repo %s: stored token rejected — re-minting",
                         repo)
@@ -190,18 +204,26 @@ class GiteaProvisioner:
         self._register_mission(creds)
         return creds
 
-    async def _token_works(self, token: str, repo: str) -> bool:
+    async def _token_works(self, token: str, repo: str) -> bool | None:
         # verify against the mission REPO — a *:repository-scoped token has no
         # read:user scope, so /user would 403 and force a needless re-mint
-        # (which revokes the prior call's still-valid tokens)
+        # (which revokes the prior call's still-valid tokens).
+        # Tri-state (audit A13): True = live; False = DEFINITIVELY rejected
+        # (401/403/404 — bad token or repo gone); None = transient (network
+        # error / 5xx) — the caller must not re-mint on None.
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10,
+                                         transport=self._transport) as client:
                 r = await client.get(
                     f"{self.url}/api/v1/repos/{ORG}/{repo}",
                     headers={"Authorization": f"token {token}"})
-            return r.status_code == 200
         except Exception:
+            return None
+        if r.status_code == 200:
+            return True
+        if r.status_code in (401, 403, 404):
             return False
+        return None
 
     # ── admin surface ────────────────────────────────────────────────────────
 

@@ -74,6 +74,85 @@ def test_swap_issue_labels_refuses_past_ceiling():
     assert mutations == []                   # nothing was rewritten
 
 
+def _team_gql(labels):
+    """A _gql fake serving teams(filter…) page 1 + team(id…) cursor pages."""
+    async def _gql(query, variables=None):
+        v = dict(variables or {})
+        if "teams(filter" in query:
+            return {"teams": {"nodes": [{
+                "id": "team-1", "key": "DEV", "states": {"nodes": []},
+                "labels": _labels_conn(labels, 0, page=100)}]}}
+        if "team(id" in query:
+            return {"team": {"labels": _labels_conn(labels, int(v["after"]),
+                                                    page=100)}}
+        raise AssertionError(f"unexpected query: {query}")
+    return _gql
+
+
+def test_team_labels_paginate_past_first_page():
+    """Audit A12: _team cached only labels(first:100) — a managed label on
+    page 2 was invisible to every cache consumer (ensure_labels re-created
+    it, create_mission KeyError'd, swaps dropped it)."""
+    ad = LinearAdapter("key")
+    labels = [_label(i) for i in range(150)] + [{"id": "dv", "name": "DEVCAKE"}]
+    ad._gql = _team_gql(labels)
+    team = run_coro(ad._team("DEV"))
+    names = {l["name"] for l in team["labels"]["nodes"]}
+    assert "DEVCAKE" in names and len(team["labels"]["nodes"]) == 151
+
+
+def test_team_labels_past_ceiling_fail_loud():
+    ad = LinearAdapter("key")
+    ad._gql = _team_gql([_label(i) for i in range(100 * MAX_LABEL_PAGES + 1)])
+    with pytest.raises(RuntimeError, match="refusing"):
+        run_coro(ad._team("DEV"))
+
+
+def test_ensure_labels_project_half_paginates():
+    """ensure_labels read projectLabels(first:100) with no cursor — a managed
+    project label past 100 was invisibly 'missing' and re-created (API error
+    on the duplicate) every boot (audit A12)."""
+    ad = LinearAdapter("key")
+    plabels = [_label(i) for i in range(100)] + [{"id": "pv", "name": "DEVCAKE"}]
+    created = []
+
+    async def _gql(query, variables=None):
+        v = dict(variables or {})
+        if "projectLabelCreate" in query or "issueLabelCreate" in query:
+            created.append(v["name"])
+            return {"projectLabelCreate": {"success": True},
+                    "issueLabelCreate": {"success": True}}
+        if "projectLabels" in query:
+            start = int(v["after"]) if v.get("after") else 0
+            return {"projectLabels": _labels_conn(plabels, start, page=100)}
+        raise AssertionError(f"unexpected query: {query}")
+
+    async def _team(_key):
+        return {"id": "team-1", "key": "DEV",
+                "labels": {"nodes": [{"id": "x", "name": "DEVCAKE"}]}}
+
+    ad._gql = _gql
+    ad._team = _team
+    run_coro(ad.ensure_labels("DEV", names={"DEVCAKE"}))
+    assert created == []              # the page-2 project label was SEEN
+
+
+def test_all_project_labels_past_ceiling_fail_loud():
+    """Silent truncation would make a DEVCAKE-* label past the ceiling
+    unresolvable with no signal (audit A29)."""
+    ad = LinearAdapter("key")
+    plabels = [_label(i) for i in range(100 * MAX_LABEL_PAGES + 1)]
+
+    async def _gql(query, variables=None):
+        v = dict(variables or {})
+        start = int(v["after"]) if v.get("after") else 0
+        return {"projectLabels": _labels_conn(plabels, start, page=100)}
+
+    ad._gql = _gql
+    with pytest.raises(RuntimeError, match="refusing"):
+        run_coro(ad._all_project_labels())
+
+
 def test_get_issue_paginates_labels():
     """Read path: DEVCAKE-SKIP hiding on page 2 must be seen (ISSUES #7)."""
     ad = LinearAdapter("key")

@@ -93,12 +93,38 @@ class LinearAdapter:
                 """query($key: String!) { teams(filter: {key: {eq: $key}}) { nodes {
                      id key
                      states { nodes { id name type position } }
-                     labels(first: 100) { nodes { id name } }
+                     labels(first: 100) { nodes { id name }
+                                          pageInfo { hasNextPage endCursor } }
                 } } }""", {"key": team_key})
             nodes = data["teams"]["nodes"]
             if not nodes:
                 raise RuntimeError(f"linear: team {team_key!r} not found")
-            self._team_cache[team_key] = nodes[0]
+            team = nodes[0]
+            # cursor-walk the team's labels past page 1 (audit A12): every
+            # consumer — label swaps, create_mission, ensure_labels, the
+            # health probe — reads this cache, so a managed label past 100
+            # team labels must be visible here. Fail loud past the ceiling
+            # (a silently missing DEVCAKE-* label breaks swaps downstream).
+            info = (team["labels"].get("pageInfo") or {})
+            pages = 1
+            while info.get("hasNextPage"):
+                if pages >= MAX_LABEL_PAGES:
+                    raise RuntimeError(
+                        f"linear: team {team_key} has more than "
+                        f"{100 * MAX_LABEL_PAGES} labels — refusing (a "
+                        f"managed label past the ceiling would silently "
+                        f"fail to resolve)")
+                page = await self._gql(
+                    """query($id: String!, $after: String) { team(id: $id) {
+                         labels(first: 100, after: $after) {
+                           nodes { id name }
+                           pageInfo { hasNextPage endCursor } } } }""",
+                    {"id": team["id"], "after": info.get("endCursor")})
+                conn = page["team"]["labels"]
+                team["labels"]["nodes"].extend(conn["nodes"])
+                info = conn["pageInfo"] or {}
+                pages += 1
+            self._team_cache[team_key] = team
         return self._team_cache[team_key]
 
     def _invalidate_team_cache(self) -> None:
@@ -420,10 +446,10 @@ class LinearAdapter:
                 {"name": name, "teamId": team["id"]})
             log.info("linear: created label %s in team %s", name, team_ref)
         # project labels are a SEPARATE workspace-level entity in Linear (verified
-        # via schema introspection) — ensure the same managed set there too
-        data = await self._gql(
-            """query { projectLabels(first: 100) { nodes { id name } } }""")
-        existing_p = {l["name"].upper() for l in data["projectLabels"]["nodes"]}
+        # via schema introspection) — ensure the same managed set there too.
+        # Paginated (audit A12): an unpaginated first-100 read re-created any
+        # managed project label living past page 1 on every boot.
+        existing_p = set((await self._all_project_labels()).keys())
         for name in sorted(names):
             if name.upper() in existing_p:
                 continue
@@ -482,7 +508,9 @@ class LinearAdapter:
     async def _all_project_labels(self) -> dict[str, str]:
         """NAME→id over the whole workspace projectLabels registry, cursor-
         paginated: a DEVCAKE-* project label beyond page 1 must still resolve
-        (ISSUES #7 twin of the per-project read)."""
+        (ISSUES #7 twin of the per-project read). Past the ceiling it raises
+        instead of returning a silent truncation (audit A29 — an unresolvable
+        managed label with no signal)."""
         by_name: dict[str, str] = {}
         after = None
         for _ in range(MAX_LABEL_PAGES):
@@ -493,9 +521,12 @@ class LinearAdapter:
             conn = page["projectLabels"]
             by_name.update({l["name"].upper(): l["id"] for l in conn["nodes"]})
             if not conn["pageInfo"].get("hasNextPage"):
-                break
+                return by_name
             after = conn["pageInfo"]["endCursor"]
-        return by_name
+        raise RuntimeError(
+            f"linear: more than {100 * MAX_LABEL_PAGES} project labels — "
+            f"refusing (a DEVCAKE-* label past the ceiling would silently "
+            f"fail to resolve)")
 
     async def _swap_project_labels(self, project_id: str, remove: set[str],
                                    add: set[str]) -> None:

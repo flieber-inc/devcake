@@ -245,7 +245,8 @@ def test_health_probe_requires_repository_write_access():
         gh(), {"permissions": {"pull": True, "push": True}}).health_probe())
     readonly = run_coro(stub_req(
         gh(), {"permissions": {"pull": True, "push": False}}).health_probe())
-    assert writable == ForgeHealth(ok=True, repository="o/r", can_push=True)
+    assert writable == ForgeHealth(ok=True, repository="o/r",
+                                   can_push=True, can_read=True)
     assert not readonly.ok and "lacks push" in readonly.detail
 
     gitlab = run_coro(stub_req(gl(), {
@@ -253,6 +254,25 @@ def test_health_probe_requires_repository_write_access():
         "permissions": {"project_access": {"access_level": 30}},
     }).health_probe())
     assert gitlab.ok and gitlab.can_push and gitlab.repository == "o/r"
+
+
+def test_health_probe_reports_read_access():
+    """can_read distinguishes "readable but not writable" (the EXPECTED state
+    of a reference-only repo — founder decision 2026-07-15) from "no access
+    at all": ForgeRuntime treats the former as healthy for RO-only repos.
+    Rule: the repository GET succeeded ⇒ can_read, whatever the push bit."""
+    for forge, payload in (
+        (gh(), {"permissions": {"pull": True, "push": False}}),
+        (gl(), {"path_with_namespace": "o/r",
+                "permissions": {"project_access": {"access_level": 20}}}),
+        (GiteaForge("http://gitea:3300/o/r", "tok"),
+         {"permissions": {"pull": True, "push": False}}),
+    ):
+        h = run_coro(stub_req(forge, payload).health_probe())
+        assert h.can_read and not h.ok and not h.can_push, type(forge).__name__
+    # a credential that cannot even see the repo reads as can_read=False
+    assert not _probe_error(gh(), 401).can_read
+    assert not _probe_error(gl(), 404).can_read
 
 
 def _probe_error(forge, status, text="err"):

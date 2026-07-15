@@ -141,6 +141,14 @@ class RepoInstance(BaseModel):
         from . import secrets
         return secrets.read_connection_secret("repo", self.name, "reviewer_token")
 
+    @property
+    def reference_only(self) -> bool:
+        """Stores a read-only token but NO write token (founder decision
+        2026-07-15): a first-class state — the repo serves as reference
+        material for every stage and is never a work target. Health treats
+        readable-but-not-writable as OK for these; no breaker, no nagging."""
+        return bool(self.token_ro) and not self.token
+
 
 class Assignment(BaseModel):
     dev_type: str = ""

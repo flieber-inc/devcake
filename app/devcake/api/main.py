@@ -472,6 +472,10 @@ async def _branch_protection() -> dict:
         out: dict = {}
         for name, f in forge_runtime.forges.items():
             inst = forge_runtime.instance(name)
+            # reference-only repos: DevCake never pushes or merges there, so
+            # the unprotected-default-branch advisory would be pure noise
+            if inst is not None and inst.reference_only:
+                continue
             try:
                 prot = await f.default_branch_protection(
                     inst.default_branch if inst else "main")
@@ -1140,14 +1144,25 @@ async def test_forge(name: str):
     if f is None:
         return {"ok": False, "error": "repo not active — save the config "
                                       "first, then test"}
-    if not inst.token:
-        return {"ok": False, "error": "access token not set — enter it on the "
-                                      "Config page (it is stored securely, "
-                                      "never in .env)"}
+    # a read-only token alone is a valid, testable state (reference-only —
+    # founder decision 2026-07-15); only ZERO stored tokens refuses
+    if not inst.token and not inst.token_ro:
+        return {"ok": False, "error": "no token stored — enter an Access "
+                                      "token (work repo) or a Read-only token "
+                                      "(reference-only) on this card"}
     try:
         health = await forge_runtime.refresh_health(name)
         if not health["ok"]:
             return health
+        # reference-only: read access is the WHOLE contract — the PR-listing
+        # and branch-protection probes need API scopes a read-only PAT may
+        # lack, and DevCake never opens PRs here anyway
+        if inst.reference_only:
+            return {"ok": True, "repo_name": name, "forge": inst.forge,
+                    "repo": inst.url, "can_push": False,
+                    "reference_only": True,
+                    "reviewer_token_configured": False, "probe_pr": None,
+                    "branch_protection": None}
         # v4 allows a repo-only (0-pmo) config — probe with the SYS
         # pseudo-instance then (HELLO/OAUTH precedent, never a real branch)
         probe = config.pmos[0].name if config.pmos else "sys"
@@ -1156,6 +1171,7 @@ async def test_forge(name: str):
         protection = await f.default_branch_protection(inst.default_branch)
         return {"ok": True, "repo_name": name, "forge": inst.forge,
                 "repo": inst.url, "can_push": health["can_push"],
+                "reference_only": inst.reference_only,
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
                 "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:

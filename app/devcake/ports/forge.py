@@ -99,6 +99,11 @@ class ForgeHealth(BaseModel):
     ok: bool
     repository: str = ""
     can_push: bool = False
+    # the repository GET itself succeeded — distinguishes "readable but not
+    # writable" (the EXPECTED healthy state of a reference-only repo, founder
+    # decision 2026-07-15) from "no access at all"; ForgeRuntime rewrites
+    # ok=True for RO-only repos when this is set
+    can_read: bool = False
     # failure not attributable to the credential/permissions (5xx, network,
     # rate limit) — a retry may succeed, so it must never latch the breaker
     transient: bool = False

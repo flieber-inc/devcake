@@ -150,6 +150,15 @@ class ForgeRuntime:
                 data = {"ok": False, "repository": inst.url if inst else "",
                         "can_push": False, "transient": True,
                         "detail": f"forge probe failed: {str(e)[:200]}"}
+        # reference-only repos (read token, no write token — founder decision
+        # 2026-07-15): readable-but-not-writable is their EXPECTED healthy
+        # state, not a latchable failure. A read token that cannot even READ
+        # (can_read False) still latches normally.
+        if (inst is not None and not data["ok"] and not data.get("transient")
+                and data.get("can_read") and inst.reference_only):
+            data = {**data, "ok": True,
+                    "detail": "reference-only: read access verified (no write "
+                              "token stored — never a work target)"}
         self.apply_health(name, data)
         return data
 

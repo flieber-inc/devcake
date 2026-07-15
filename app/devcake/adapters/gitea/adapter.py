@@ -127,6 +127,7 @@ class GiteaForge:
         can_push = bool((repo.get("permissions") or {}).get("push"))
         return ForgeHealth(
             ok=can_push, repository=repository, can_push=can_push,
+            can_read=True,          # the repository GET itself succeeded
             detail="" if can_push else (
                 "token can read the repository but lacks push permission"),
         )

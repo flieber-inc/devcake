@@ -4,8 +4,17 @@ secret PUT/DELETE triggers a rebuild, and wiping the internal registrations
 opened a window where zero-repo runspecs failed and REVIEW finalize spuriously
 errored until the next poll cycle re-registered them (audit A3)."""
 
+import asyncio
+
 from devcake.config import RepoInstance
 from devcake.domain.forge_runtime import ForgeRuntime
+from devcake.ports.forge import ForgeHealth
+
+
+def run_coro(c):
+    # the suite's shared idiom (test_forge.py): run_until_complete on the
+    # persistent loop — asyncio.run() would CLOSE it for later test files
+    return asyncio.get_event_loop().run_until_complete(c)
 
 
 def _ext(name="main"):
@@ -63,3 +72,93 @@ def test_deleted_internal_repo_stays_deleted_across_rebuild():
     rt.rebuild([_ext()], lambda inst: object())
     assert rt.get("linear-t-1") is None
     assert "linear-t-1" not in rt.internal
+
+
+# ── reference-only repos (founder decision 2026-07-15, round 2) ──────────────
+# A repo storing ONLY a read-only token is a first-class reference-only
+# citizen: readable-but-not-writable is its EXPECTED healthy state. It must
+# not latch a breaker, and make_forge must build its adapter with the read
+# token so probes/reads work at all. A read token that cannot even READ is
+# still a real failure and latches normally.
+
+class _ProbeForge:
+    def __init__(self, **health):
+        self._health = health
+
+    async def health_probe(self):
+        return ForgeHealth(**self._health)
+
+
+READABLE_NOT_WRITABLE = dict(
+    ok=False, repository="o/x", can_push=False, can_read=True, transient=False,
+    detail="token can read the repository but lacks push permission")
+
+
+def _store_repo_secrets(tmp_path, monkeypatch, name, **fields):
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    for field, value in fields.items():
+        s.write_connection_secret("repo", name, field, value)
+
+
+def test_reference_only_repo_is_healthy_on_readable_probe(tmp_path, monkeypatch):
+    _store_repo_secrets(tmp_path, monkeypatch, "docs",
+                        token_ro="ro-token-0123456789")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="docs", url="https://github.com/o/docs")],
+               lambda i: _ProbeForge(**READABLE_NOT_WRITABLE))
+    data = run_coro(rt.refresh_health("docs"))
+    assert data["ok"] is True and data["can_push"] is False
+    assert "reference-only" in data["detail"]
+    assert "docs" not in rt.breakers
+
+
+def test_work_repo_lacking_push_still_latches(tmp_path, monkeypatch):
+    _store_repo_secrets(tmp_path, monkeypatch, "app",
+                        token="write-token-0123456789")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="app", url="https://github.com/o/app")],
+               lambda i: _ProbeForge(**READABLE_NOT_WRITABLE))
+    data = run_coro(rt.refresh_health("app"))
+    assert data["ok"] is False
+    assert "app" in rt.breakers
+
+
+def test_reference_only_repo_unreadable_probe_still_latches(tmp_path, monkeypatch):
+    _store_repo_secrets(tmp_path, monkeypatch, "docs",
+                        token_ro="expired-token-0123456789")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="docs", url="https://github.com/o/docs")],
+               lambda i: _ProbeForge(ok=False, repository="o/docs",
+                                     can_push=False, can_read=False,
+                                     transient=False,
+                                     detail="repository access failed (HTTP 401)"))
+    data = run_coro(rt.refresh_health("docs"))
+    assert data["ok"] is False
+    assert "docs" in rt.breakers
+
+
+def test_reference_only_property(tmp_path, monkeypatch):
+    _store_repo_secrets(tmp_path, monkeypatch, "docs", token_ro="r-0123456789")
+    _store_repo_secrets(tmp_path, monkeypatch, "both",
+                        token="w-0123456789", token_ro="r-0123456789")
+    url = "https://github.com/o/x"
+    assert RepoInstance(name="docs", url=url).reference_only
+    assert not RepoInstance(name="both", url=url).reference_only
+    assert not RepoInstance(name="bare", url=url).reference_only   # no tokens
+
+
+def test_make_forge_reference_only_uses_read_token(tmp_path, monkeypatch):
+    _store_repo_secrets(tmp_path, monkeypatch, "docs",
+                        token_ro="ro-value-0123456789abcd")
+    from devcake.adapters.registry import make_forge
+    from devcake.security import unregister_runtime_secret
+    inst = RepoInstance(name="docs", url="https://github.com/o/docs",
+                        forge="github")
+    try:
+        forge = make_forge(inst)
+        assert forge.token == "ro-value-0123456789abcd"
+    finally:
+        for key in ("forge_token:docs", "forge_token_ro:docs",
+                    "forge_reviewer:docs"):
+            unregister_runtime_secret(key)

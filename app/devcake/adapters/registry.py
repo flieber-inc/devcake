@@ -99,5 +99,8 @@ def make_forge(inst) -> "ForgePort":
                         ("reviewer", reviewer or "")):
         if value:
             register_runtime_secret(f"forge_{kind}:{inst.name}", value)
-    return classes[inst.forge](inst.url, inst.token, reviewer,
+    # reference-only repos (founder decision 2026-07-15) store no write token:
+    # build their adapter on the read token so health probes and reads work —
+    # write calls would 403, but routing never targets them with work
+    return classes[inst.forge](inst.url, inst.token or inst.token_ro, reviewer,
                                api_base=inst.api_base)

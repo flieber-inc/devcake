@@ -101,6 +101,7 @@ class GitLabForge:
         return ForgeHealth(
             ok=can_push, repository=str(project.get("path_with_namespace") or self.project),
             can_push=can_push,
+            can_read=True,          # the project GET itself succeeded
             detail="" if can_push else "token lacks Developer/write_repository access",
         )
 

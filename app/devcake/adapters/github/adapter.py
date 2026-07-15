@@ -87,6 +87,7 @@ class GitHubForge:
             ok=can_push,
             repository=repository,
             can_push=can_push,
+            can_read=True,          # the repository GET itself succeeded
             detail="" if can_push else (
                 "token can read the repository but lacks push permission; grant "
                 "Contents and Pull requests read/write"),

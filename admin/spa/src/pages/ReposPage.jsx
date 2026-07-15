@@ -130,8 +130,9 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
   );
 }
 
-// soft warning when a saved repo stores ONLY a read-only token (founder
-// request 2026-07-15): valid — but usable only as reference material
+// neutral state note when a saved repo stores ONLY a read-only token: a
+// first-class reference-only repo (founder decisions 2026-07-15) — health
+// treats it as OK, so the note informs rather than warns
 function RoOnlyNote({ name }) {
   const [state, setState] = useState(null);
   useEffect(() => {
@@ -143,10 +144,11 @@ function RoOnlyNote({ name }) {
   }, [name]);
   if (!state || state.w || !state.ro) return null;
   return (
-    <p className="text-xs text-amber-600 dark:text-amber-400">
-      ⚠ Read-only token only — this repository can serve ONLY as reference
-      material (select it under a PMO's Reference repos). Missions cannot
-      route work to it until an Access token is set.
+    <p className="text-xs text-neutral-500 dark:text-neutral-400">
+      ℹ Reference-only repo (read-only token, no Access token): select it
+      under a PMO's Reference repos — every stage gets a read-only clone as
+      consultation material. It is never a work target; add an Access token
+      later to make it workable.
     </p>
   );
 }
@@ -311,7 +313,9 @@ export default function ReposPage() {
                 {tr && (
                   <span className={`text-sm ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
                     {tr.ok
-                      ? `✓ ${tr.forge} reachable · reviewer token: ${tr.reviewer_token_configured ? "yes" : "no"}`
+                      ? tr.reference_only
+                        ? `✓ ${tr.forge} reachable (read-only) — reference-only repo`
+                        : `✓ ${tr.forge} reachable · reviewer token: ${tr.reviewer_token_configured ? "yes" : "no"}`
                       : `✗ ${tr.error}`}
                   </span>
                 )}

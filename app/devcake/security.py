@@ -218,4 +218,22 @@ def security_warnings(config) -> list[dict]:
                         "non-EXECUTE Dev could push to the repo. Add a read-only "
                         "token for this repo on the Config page (ISSUES #15).",
             })
+    # read-only-only repositories (founder request 2026-07-15): valid — but
+    # only as REFERENCE material. Warn when such a repo sits in a PMO's WORK
+    # set, where EXECUTE would fail at push for lack of a write token.
+    from . import secrets as _secrets
+    for repo in config.repos:
+        has_ro = bool(_secrets.read_connection_secret("repo", repo.name, "token_ro"))
+        has_w = bool(_secrets.read_connection_secret("repo", repo.name, "token"))
+        if has_ro and not has_w and any(
+                repo.name in (p.repos or []) for p in config.pmos):
+            warns.append({
+                "id": f"repo-read-only:{repo.name}", "severity": "warning",
+                "title": f"Repo '{repo.name}' has only a read-only token",
+                "body": (f"'{repo.name}' is in a PMO instance's WORK repo set "
+                         f"but stores no write token — missions routed to it "
+                         f"will fail at push. Read-only repos are meant as "
+                         f"REFERENCE material: move it to the instance's "
+                         f"Reference repos, or add a write token."),
+            })
     return warns

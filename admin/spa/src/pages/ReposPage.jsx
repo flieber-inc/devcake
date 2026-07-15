@@ -129,6 +129,27 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
   );
 }
 
+// soft warning when a saved repo stores ONLY a read-only token (founder
+// request 2026-07-15): valid — but usable only as reference material
+function RoOnlyNote({ name }) {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    get(`/secrets-check?conn=repo:${name}:token,repo:${name}:token_ro`)
+      .then((r) => setState({
+        w: r.conn[`repo:${name}:token`]?.present,
+        ro: r.conn[`repo:${name}:token_ro`]?.present,
+      })).catch(() => setState(null));
+  }, [name]);
+  if (!state || state.w || !state.ro) return null;
+  return (
+    <p className="text-xs text-amber-600 dark:text-amber-400">
+      ⚠ Read-only token only — this repository can serve ONLY as reference
+      material (select it under a PMO's Reference repos). Missions cannot
+      route work to it until an Access token is set.
+    </p>
+  );
+}
+
 export default function ReposPage() {
   const { dr, loadErr } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
@@ -243,6 +264,7 @@ export default function ReposPage() {
                   refKey={`repo:${repo.name}:reviewer_token`} paste
                   locked={!savedRepoNames.has(repo.name)} />
               </div>
+              {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} />}
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testForge(repo.name)}>Test connection</Button>
                 <ImmediateBadge text="tests saved values" />

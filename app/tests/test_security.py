@@ -198,3 +198,25 @@ def test_register_all_boot_coverage_and_key_scheme(tmp_path, monkeypatch):
         unregister_runtime_secret("harness:XAI_API_KEY")
     out = redact("short-key-1 tiny-value9")
     assert "short-key-1" in out and "tiny-value9" in out
+
+
+def test_read_only_repo_in_work_set_warns(tmp_path, monkeypatch):
+    """Founder request 2026-07-15: RO-only repos are valid but reference-
+    only — warn when one sits in a PMO's WORK set."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    from devcake import security
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    s.write_connection_secret("repo", "docs", "token_ro", "ro-only-token-1")
+    cfg = AppConfig(repos=[RepoInstance(name="docs",
+                                        url="https://gitlab.com/o/docs")],
+                    pmos=[PMOInstance(name="linear", team_key="DEV",
+                                      repos=["docs"])])
+    ids = {w["id"] for w in security.security_warnings(cfg)}
+    assert "repo-read-only:docs" in ids
+    # as a REFERENCE repo (the intended use) there is no warning
+    cfg2 = AppConfig(repos=cfg.repos,
+                     pmos=[PMOInstance(name="linear", team_key="DEV",
+                                       reference_repos=["docs"])])
+    ids2 = {w["id"] for w in security.security_warnings(cfg2)}
+    assert "repo-read-only:docs" not in ids2

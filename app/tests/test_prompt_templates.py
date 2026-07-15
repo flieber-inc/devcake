@@ -243,3 +243,32 @@ def test_devtype_prompt_store_seed_resolve_roundtrip(monkeypatch, tmp_path):
     cfg = AppConfig()
     cfg.active_devtype_prompts = {"senior-dev": "ghost"}
     assert len(t.devtype_prompt_warnings(cfg, dts)) == 1
+
+
+def test_rename_dev_type_moves_templates_and_refs(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import main as app_main
+    from devcake.config import DevType
+    monkeypatch.setattr(app_main, "save_config", lambda c: None)
+    monkeypatch.setattr(app_main, "save_dev_type", lambda d: None)
+    monkeypatch.setattr(app_main, "delete_dev_type", lambda n: None)
+    dt = DevType(name="olddev", harness_template="codex",
+                 identifying_prompt="I am old.")
+    app_main.dev_types["olddev"] = dt
+    app_main.config.assignments["EXECUTE"].dev_type = "olddev"
+    app_main.config.active_devtype_prompts["olddev"] = "Customer Success"
+    d = tmp_path / "config" / "devtype_prompt_templates" / "olddev"
+    d.mkdir(parents=True)
+    (d / "Development.yaml").write_text("name: Development\ntemplate: I am old.\n")
+    try:
+        out = run_coro(app_main.rename_dev_type("olddev", {"new_name": "newdev"}))
+        assert out["renamed"] and "newdev" in app_main.dev_types
+        assert "olddev" not in app_main.dev_types
+        assert app_main.config.assignments["EXECUTE"].dev_type == "newdev"
+        assert app_main.config.active_devtype_prompts == {"newdev": "Customer Success"}
+        assert (tmp_path / "config" / "devtype_prompt_templates" / "newdev"
+                / "Development.yaml").exists()
+    finally:
+        app_main.dev_types.pop("newdev", None)
+        app_main.config.assignments["EXECUTE"].dev_type = "main-dev"
+        app_main.config.active_devtype_prompts.pop("newdev", None)

@@ -156,6 +156,13 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               Connect via OAuth…{pending ? " (save first)" : ""}
             </Button>
           )}
+          <Button kind="ghost" onClick={async () => {
+            const nn = window.prompt(`Rename Dev Type "${name}" to:`, name);
+            if (!nn || nn === name) return;
+            try { await send("POST", `/dev-types/${name}/rename`, { new_name: nn }); }
+            catch (e) { window.alert(String(e.message || e)); }
+            onCredChange && onCredChange();   // reload the draft
+          }}>Rename</Button>
           <Button kind="danger-ghost" icon={Trash2} onClick={() => onDelete(name)}>Delete</Button>
         </div>
       </div>
@@ -623,7 +630,8 @@ export default function ConfigPage({ section, onSectionInView }) {
         </div>
       </Section>
 
-      <PromptsSection cfg={cfg} setField={setField} />
+      <PromptsSection cfg={cfg} setField={setField}
+        devTypeNames={Object.keys(dr.draft.devTypes || {})} />
 
       <Section id="limits" title="Limits"
         description="Global concurrency and safety ceilings. Dev container Docker HostConfig CPU/memory is not available in Dagu 2.10.5 — concurrency caps are the real throttle.">

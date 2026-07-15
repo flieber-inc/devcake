@@ -873,6 +873,47 @@ async def upsert_dev_type(body: dict, name: str | None = None):
     return dt.model_dump()
 
 
+@app.post("/api/v1/dev-types/{name}/rename")
+async def rename_dev_type(name: str, body: dict):
+    """Rename a Dev Type in place (2026-07-15): moves its YAML, credential
+    dir, and prompt-template dir, and remaps every reference (assignments,
+    mapper, active prompt selection, breaker)."""
+    import shutil
+    from pathlib import Path as _P
+    new = str(body.get("new_name") or "")
+    if name not in dev_types:
+        raise HTTPException(404, f"no Dev Type named {name!r}")
+    if not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", new) or ":" in new:
+        raise HTTPException(422, "new_name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    if new in dev_types:
+        raise HTTPException(409, f"a Dev Type named {new!r} already exists")
+    dt = dev_types.pop(name).model_copy(update={"name": new})
+    dev_types[new] = dt
+    save_dev_type(dt)
+    delete_dev_type(name)
+    data = _P(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
+    for sub in ("secrets", "config/devtype_prompt_templates"):
+        src = data / sub / name
+        if src.is_dir():
+            shutil.move(str(src), str(data / sub / new))
+    changed = False
+    for mt, a in config.assignments.items():
+        if a.dev_type == name:
+            a.dev_type = new
+            changed = True
+    if config.relations_mapper.dev_type == name:
+        config.relations_mapper.dev_type = new
+        changed = True
+    if name in config.active_devtype_prompts:
+        config.active_devtype_prompts[new] = config.active_devtype_prompts.pop(name)
+        changed = True
+    if changed or True:
+        save_config(config)
+    if name in shared_breakers:
+        shared_breakers[new] = shared_breakers.pop(name)
+    return {"renamed": True, "name": new}
+
+
 @app.delete("/api/v1/dev-types/{name}")
 async def remove_dev_type(name: str):
     if any(a.dev_type == name for a in config.assignments.values()):

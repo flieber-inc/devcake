@@ -73,7 +73,7 @@ function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSa
   );
 }
 
-export default function PromptsSection({ cfg, setField }) {
+export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
   const [data, setData] = useState(null);   // {variables, templates, active, dev_types, active_dev}
   const [modal, setModal] = useState(null); // {mt, kind, initial?}
   const [confirm, setConfirm] = useState(null);
@@ -81,7 +81,9 @@ export default function PromptsSection({ cfg, setField }) {
   const [workflow, setWorkflow] = useState("");
   const [switchNote, setSwitchNote] = useState("");
   const refresh = () => get("/prompt-templates").then(setData).catch(() => setData(null));
-  useEffect(() => { refresh(); }, []);
+  // re-fetch when the live Dev Type set changes — groups are API-driven,
+  // never hardcoded, so a freshly created Dev appears immediately
+  useEffect(() => { refresh(); }, [devTypeNames.sort().join(",")]);
 
   const activeOf = (mt) =>
     (cfg.active_prompt_templates || {})[mt] || (data?.active?.[mt]) || "Development";
@@ -98,7 +100,7 @@ export default function PromptsSection({ cfg, setField }) {
   const applyWorkflow = () => {
     if (!workflow) return;
     const skipped = [];
-    for (const mt of MISSION_TYPES) {
+    for (const mt of Object.keys(data.templates || {})) {
       if ((data.templates?.[mt] || []).some((t) => t.name === workflow))
         setField(`cfg.active_prompt_templates.${mt}`, workflow);
       else skipped.push(mt);
@@ -155,7 +157,12 @@ export default function PromptsSection({ cfg, setField }) {
           {switchNote && <p className="text-xs text-amber-600 dark:text-amber-400">{switchNote}</p>}
         </div>
       )}
-      {data && MISSION_TYPES.map((mt) => {
+      {data && (
+        <h4 className="border-b border-neutral-200 pb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+          Mission Types
+        </h4>
+      )}
+      {data && Object.keys(data.templates || {}).map((mt) => {
         const entries = data.templates?.[mt] || [];
         const active = activeOf(mt);
         return (
@@ -201,6 +208,11 @@ export default function PromptsSection({ cfg, setField }) {
           </div>
         );
       })}
+      {data && (
+        <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+          Dev Types
+        </h4>
+      )}
       {data && Object.keys(data.dev_types || {}).map((n) => {
         const entries = data.dev_types?.[n] || [];
         const active = activeDevOf(n);

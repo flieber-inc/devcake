@@ -257,14 +257,17 @@ class GiteaProvisioner:
         log.info("internal repo deleted: %s (+ %s)", repo_name, svc_user)
 
     async def health(self) -> dict:
+        # ui_url rides along so the SPA can link the Gitea UI from anywhere
+        # (Overview quick link, Repositories page) without an extra fetch
         try:
             org = await self._req("GET", f"/orgs/{ORG}", tolerate=(404,))
             if org is None:
-                return {"ok": False,
+                return {"ok": False, "ui_url": self.public_url,
                         "detail": "org not provisioned yet (boot pending?)"}
-            return {"ok": True, "detail": ""}
+            return {"ok": True, "detail": "", "ui_url": self.public_url}
         except Exception as e:
-            return {"ok": False, "detail": str(e)[:200]}
+            return {"ok": False, "detail": str(e)[:200],
+                    "ui_url": self.public_url}
 
     # ── secret storage (0600, two-level path → auto-redaction scan) ─────────
 

@@ -281,6 +281,11 @@ export default function OverviewPage({
             title="Dagu" desc="Executor DAGs and step-level history" />
           <QuickLink href={ext.ooUrl || "http://localhost:5080"} icon={ScrollText}
             title="OpenObserve" desc="Traces, logs and token costs per run" />
+          {health.internal_forge && (
+            <QuickLink href={health.internal_forge.ui_url || "http://localhost:3300"}
+              icon={GitMerge} title="Gitea (internal forge)"
+              desc="The bundled forge — internal repos, PRs and history" />
+          )}
           <QuickLink href="https://github.com/fidecastro/devcake" icon={BookOpen}
             title="Spec & source" desc="DevCake design docs and repository" />
         </div>

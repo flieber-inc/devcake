@@ -23,16 +23,25 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
   const [data, setData] = useState(null);
   const load = () => get("/internal-repos").then(setData).catch(() => setData({ repos: [] }));
   useEffect(() => { load(); }, [refreshKey]);
-  if (!data || data.repos.length === 0) return null;
+  // hidden only when the internal forge is DISABLED (no ui_url); an empty
+  // repo list keeps the section — and its Gitea UI link — visible
+  if (!data || (!data.ui_url && data.repos.length === 0)) return null;
   return (
     <Section id="internal-forge" title="Internal forge"
       description="Repositories DevCake auto-created for missions with no configured repo. Retained until you clear them; the deliverable is already in the PMO feed."
-      actions={
+      actions={data.repos.length > 0 && (
         <Button kind="danger-ghost" icon={Trash2}
           onClick={() => onClearAll(data.repos.map((r) => r.name))}>
           Clear data
         </Button>
-      }>
+      )}>
+      {data.repos.length === 0 && (
+        <p className="text-sm text-neutral-400">
+          No internal repos right now — a mission that resolves to no
+          configured repository creates one automatically.
+        </p>
+      )}
+      {data.repos.length > 0 && (
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-left text-neutral-500">
@@ -58,6 +67,7 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
           </tbody>
         </table>
       </div>
+      )}
       {data.ui_url && (
         <a className="mt-2 inline-block text-sm text-blue-600 hover:underline"
           href={data.ui_url} target="_blank" rel="noreferrer">Open the Gitea UI →</a>

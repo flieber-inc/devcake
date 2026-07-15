@@ -207,7 +207,11 @@ Exit criteria:
 
 **Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
 
-## v0.1.1 — audit-fix round + Config/Sidebar UX (2026-07-14)
+## v0.1 — FINAL (tagged 2026-07-15)
+
+**The true v0.1 is the tag at the end of the three rounds below** — M8–M12 plus the full audit-fix round and the live-test/UX rounds, consolidated (the interim working tags v0.1.1/v0.1.2 were folded in; the 2026-07-14 pre-audit tag was a release candidate in hindsight). Final state: 347 unit tests, ci_suite green (pin gate, gitea battery 13/13, stub smoke), live Linear connection green, all SPA flows browser-verified.
+
+### v0.1 hardening round — audit fixes + Config/Sidebar UX (2026-07-14)
 
 A six-agent skeptical audit of the whole v0→v0.1 range confirmed 8 open bugs, ~8 claim mismatches, and ~20 risks; all were fixed in a 15-commit round (audit ids A1–A29 in the commit messages), plus four founder-requested UX features:
 
@@ -217,9 +221,9 @@ A six-agent skeptical audit of the whole v0→v0.1 range confirmed 8 open bugs, 
 - **Hygiene:** battery token cleanup (15 leaked admin tokens revoked), fail-loud `provision_oo`, honest zip MANIFEST attribution, GitLab ref encoding, redaction-scan caching, Gitea bootstrap fails loud + admin password rotation syncs from `.env`, OpenObserve left the runtime network (the collector bridges), and the fabricated `-k "not live"` changelog line was removed from this file.
 - **UX (v0.1.1 features):** per-Mission-Type **prompt templates** (stored under `/data/config/prompt_templates/`, safe `{var}` rendering — no format-string escaping — with a Config-page Prompts section, per-type active selection, and health warnings on missing templates); a **Repositories sidebar page** sharing one unified config draft with Configuration (cross-page Save review, single nav guard); the sidebar services grid grew a **Gitea light** (3×2); Overview's Services stat became the **Devs fleet card** (green available / pulsing blue running / red broken, server-computed `credentials_ready`); a save-time warning when `default_repo` changes while runs are in flight.
 
-Suite at close: 334 unit tests; full `ci_suite.sh` (pin gate, gitea battery 13/13, stub-harness smoke) green; SPA flows verified in a real browser. Known deferred: a sweep tool for Gitea svc users orphaned by pre-fix Clears (below), and registering the public `devcake` Docker Hub org (manual founder action — squatting hazard).
+Suite at that round's close: 334 unit tests; full `ci_suite.sh` (pin gate, gitea battery 13/13, stub-harness smoke) green; SPA flows verified in a real browser. Known deferred: a sweep tool for Gitea svc users orphaned by pre-fix Clears (below), and registering the public `devcake` Docker Hub org (manual founder action — squatting hazard).
 
-## v0.1.2 — live-test fix round + multi-repo PMOs (2026-07-15)
+### v0.1 live-test round — fixes, multi-repo PMOs, reference repos, workflow presets (2026-07-15)
 
 Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design decided the same day:
 

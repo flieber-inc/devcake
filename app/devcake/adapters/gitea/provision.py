@@ -31,6 +31,11 @@ from ...ports.internal_forge import (InternalRepo, MissionRepoCredentials,
 log = logging.getLogger("devcake.internal_forge")
 
 ORG = "devcake-internal"
+# operator-CREATED repos (item 4, "gitea (internal)" repo cards) live in
+# their own org: the per-mission admin surface (list/Clear/Clear data)
+# walks devcake-internal only, so operator repos can never be swept or
+# resurrected by the mission lifecycle
+OPERATOR_ORG = "devcake-repos"
 APP_USER = "devcake-app"            # org owner: app-side PR ops + merges
 REVIEWER_USER = "devcake-reviewer"  # formal approvals (whitelisted per repo)
 
@@ -193,6 +198,57 @@ class GiteaProvisioner:
         self._register_mission(creds)
         log.info("internal repo provisioned: %s (user %s)", repo, svc_user)
         return creds
+
+    async def create_operator_repo(self, name: str) -> dict:
+        """Operator-created repo on the bundled Gitea (item 4): the target of
+        a NORMAL "gitea (internal)" repo card. Mints the card's full token
+        set and stores it under repo:{name} in the secret store, so saving a
+        card with this name and the returned clone_url is all that's left:
+        - svc write token (write:repository + write:issue — the card token is
+          used app-side for PR comments and merges, unlike mission repos)
+        - read-only token for non-EXECUTE stages (token_ro)
+        - a reviewer token on the shared devcake-reviewer account, which is
+          whitelisted in the branch protection (formal approvals count)."""
+        from ... import secrets as secrets_store
+        await self._req("POST", "/orgs", tolerate=(409, 422),
+                        json={"username": OPERATOR_ORG, "visibility": "private"})
+        if await self._req("GET", f"/repos/{OPERATOR_ORG}/{name}",
+                           tolerate=(404,)) is not None:
+            raise ValueError(f"repo {OPERATOR_ORG}/{name} already exists — "
+                             f"pick another name")
+        await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos",
+                        json={"name": name, "private": True, "auto_init": True,
+                              "default_branch": "main"})
+        await self._req("POST", f"/repos/{OPERATOR_ORG}/{name}/branch_protections",
+                        tolerate=(403, 409, 422),
+                        json={"branch_name": "main", "required_approvals": 1,
+                              "enable_approvals_whitelist": True,
+                              "approvals_whitelist_username": [REVIEWER_USER]})
+        svc_user = _svc_user(f"op-{name}")
+        await self._req("POST", "/admin/users", tolerate=(409, 422),
+                        json={"username": svc_user,
+                              "email": f"{svc_user}@devcake.example",
+                              "password": f"Xx1!{pysecrets.token_urlsafe(24)}",
+                              "must_change_password": False})
+        await self._req("PUT", f"/repos/{OPERATOR_ORG}/{name}/collaborators/{svc_user}",
+                        json={"permission": "write"})
+        await self._req("PUT", f"/repos/{OPERATOR_ORG}/{name}/collaborators/{REVIEWER_USER}",
+                        json={"permission": "read"})
+        fields = {
+            "token": await self._mint(svc_user, f"op-{name}-w",
+                                      ["write:repository", "write:issue"]),
+            "token_ro": await self._mint(svc_user, f"op-{name}-r",
+                                         ["read:repository"]),
+            "reviewer_token": await self._mint(REVIEWER_USER, f"op-{name}",
+                                               ["write:repository", "write:issue"]),
+        }
+        for field, value in fields.items():
+            secrets_store.write_connection_secret("repo", name, field, value)
+        log.info("operator repo created: %s/%s (user %s; card secrets stored)",
+                 OPERATOR_ORG, name, svc_user)
+        return {"repo_name": name,
+                "clone_url": f"{self.url}/{OPERATOR_ORG}/{name}.git",
+                "html_url": f"{self.public_url}/{OPERATOR_ORG}/{name}"}
 
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission credential pair (runspec token source) —

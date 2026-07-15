@@ -137,13 +137,15 @@ def test_get_activity_names_attachments():
 
 
 def test_health_probe_counts_managed_labels():
-    team = {"id": "t1", "key": "DEV",
-            "states": {"nodes": []},
-            "labels": {"nodes": [{"id": "1", "name": "DEVCAKE"},
-                                 {"id": "2", "name": "DEVCAKE-PLAN"},
-                                 {"id": "3", "name": "DEVCAKE-CUSTOM-EXTRA"},
-                                 {"id": "4", "name": "unrelated"}]}}
-    rec = Recorder({"teams(": {"teams": {"nodes": [team]}}})
+    team = {"id": "t1", "key": "DEV", "states": {"nodes": []}}
+    labels = {"nodes": [{"id": "1", "name": "DEVCAKE"},
+                        {"id": "2", "name": "DEVCAKE-PLAN"},
+                        {"id": "3", "name": "DEVCAKE-CUSTOM-EXTRA"},
+                        {"id": "4", "name": "unrelated"}],
+              "pageInfo": {"hasNextPage": False}}
+    # labels ride the split single-team query (D1 complexity fix)
+    rec = Recorder({"team(id": {"team": {"labels": labels}},
+                    "teams(": {"teams": {"nodes": [team]}}})
     pmo = LinearAdapter("k", transport=httpx.MockTransport(rec.handler))
     h = run(pmo.health_probe("DEV"))
     assert isinstance(h, PMOHealth) and h.ok and h.workspace == "DEV"

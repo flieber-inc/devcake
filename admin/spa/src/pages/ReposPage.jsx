@@ -6,7 +6,7 @@ import { Section } from "../components/Card.jsx";
 import { Field, SecretField, Input, Select } from "../components/Field.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
-import { ConfirmDialog } from "../components/Modal.jsx";
+import { ConfirmDialog, Modal } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import { AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
@@ -76,6 +76,59 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
   );
 }
 
+// "gitea (internal)" is a UI variant, not a forge id — both map to
+// forge:"gitea"; internal is recognized by the bundled instance's clone
+// origin in the URL. Selecting internal offers Create repository.
+const INTERNAL_ORIGIN_MARK = "://gitea:";
+const giteaVariantOf = (repo) =>
+  repo.url && repo.url.includes(INTERNAL_ORIGIN_MARK)
+    ? "gitea-internal" : "gitea-external";
+
+function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
+  const [name, setName] = useState(initialName || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const create = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const out = await send("POST", "/internal-repos/create", { name });
+      onCreated(out);
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal>
+      <h4 className="mb-1 text-base font-semibold tracking-tight">
+        Create repository on the internal Gitea
+      </h4>
+      <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+        Creates a private repo (org <code className="font-mono text-xs">devcake-repos</code>,
+        protected main) and stores its access/read-only/reviewer tokens for
+        this card automatically — save the page afterwards and the card is
+        fully wired.
+      </p>
+      <div className="space-y-3">
+        <Field label="Repository name"
+          hint="Lowercase letters/digits, ≤12 — it becomes the card name too.">
+          <Input value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. notes" />
+        </Field>
+        {err && <p className="text-sm text-red-600 dark:text-red-400">⚠ {err}</p>}
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button disabled={busy || !name} onClick={create}>
+            {busy ? "Creating…" : "Create repository"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function ReposPage() {
   const { dr, loadErr } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
@@ -84,6 +137,8 @@ export default function ReposPage() {
   const [testResult, setTestResult] = useState({});
   const [clearErr, setClearErr] = useState("");
   const [internalRefresh, setInternalRefresh] = useState(0);
+  const [giteaVariant, setGiteaVariant] = useState({});   // card idx → variant
+  const [createFor, setCreateFor] = useState(null);       // card idx | null
 
   if (!dr.loaded) {
     return <p className="text-sm text-neutral-400">Loading…{loadErr}</p>;
@@ -140,14 +195,37 @@ export default function ReposPage() {
                   <Input value={repo.name} disabled={savedRepoNames.has(repo.name)}
                   onChange={(e) => setField(`cfg.repos.${idx}.name`, e.target.value)} /></Field>
                 <Field label="Forge"
-                  help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
-                  <Select value={repo.forge}
-                    onChange={(e) => setField(`cfg.repos.${idx}.forge`, e.target.value)}>
-                    {registry.forges.map((f) => (
+                  help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges. 'gitea (internal)' targets the always-on bundled forge — Create repository mints the repo and its tokens for you.">
+                  <Select
+                    value={repo.forge === "gitea"
+                      ? (giteaVariant[idx] ?? giteaVariantOf(repo))
+                      : repo.forge}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "gitea-internal" || v === "gitea-external") {
+                        setField(`cfg.repos.${idx}.forge`, "gitea");
+                        setGiteaVariant({ ...giteaVariant, [idx]: v });
+                      } else {
+                        setField(`cfg.repos.${idx}.forge`, v);
+                        setGiteaVariant({ ...giteaVariant, [idx]: undefined });
+                      }
+                    }}>
+                    {registry.forges.filter((f) => f.id !== "gitea").map((f) => (
                       <option key={f.id} value={f.id}>{f.id}</option>
                     ))}
+                    <option value="gitea-external">gitea (external)</option>
+                    <option value="gitea-internal">gitea (internal)</option>
                   </Select>
                 </Field>
+                {repo.forge === "gitea" &&
+                  (giteaVariant[idx] ?? giteaVariantOf(repo)) === "gitea-internal" && (
+                  <Field label="Internal repository"
+                    help="Creates a repo on the bundled Gitea and stores this card's tokens automatically. If the URL is already filled, the repo exists.">
+                    <Button kind="ghost" onClick={() => setCreateFor(idx)}>
+                      + Create repository
+                    </Button>
+                  </Field>
+                )}
                 <Field label="Repository URL"
                   help="HTTPS URL of the repository, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it. Empty = repo stays idle.">
                   <Input value={repo.url}
@@ -261,6 +339,19 @@ export default function ReposPage() {
           },
         })} />
 
+      {createFor !== null && (
+        <CreateInternalRepoModal
+          initialName={cfg.repos[createFor]?.name || ""}
+          onClose={() => setCreateFor(null)}
+          onCreated={(out) => {
+            // the created repo name IS the card name (tokens are stored
+            // under repo:{name}); the clone URL wires the card — Save
+            // persists it, and secrets-check flips to ✓ stored
+            setField(`cfg.repos.${createFor}.name`, out.repo_name);
+            setField(`cfg.repos.${createFor}.url`, out.clone_url);
+            setCreateFor(null);
+          }} />
+      )}
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />

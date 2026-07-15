@@ -1094,6 +1094,28 @@ async def list_internal_repos():
             "ui_url": os.environ.get("GITEA_UI_URL", "http://localhost:3300")}
 
 
+@app.post("/api/v1/internal-repos/create")
+async def create_internal_repo(body: dict):
+    """Operator repo on the bundled Gitea (item 4): created in the separate
+    devcake-repos org (never listed or swept by the per-mission surface
+    above); the card's token set is minted and stored under repo:{name}, so
+    saving a repo card with this name + the returned clone_url completes
+    the setup."""
+    if internal_forge is None:
+        raise HTTPException(503, "internal forge is disabled "
+                                 "(GITEA_ADMIN_PASSWORD unset)")
+    name = str(body.get("name") or "")
+    if not re.fullmatch(_INSTANCE_NAME_RE, name):
+        raise HTTPException(422, f"name must match {_INSTANCE_NAME_RE} "
+                                 f"(it doubles as the repo card name)")
+    try:
+        return await internal_forge.create_operator_repo(name)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"internal forge: {str(e)[:200]}")
+
+
 @app.delete("/api/v1/internal-repos/{name}")
 async def delete_internal_repo(name: str):
     """Manual Clear (founder decision: retain-by-default, delete-on-demand).

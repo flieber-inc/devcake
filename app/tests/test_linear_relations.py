@@ -44,8 +44,10 @@ def test_list_all_paginates_issue_pages():
         q, variables = body["query"], body.get("variables", {})
         if "teams(" in q:
             return httpx.Response(200, json={"data": {"teams": {"nodes": [
-                {"id": "tid", "key": "T", "states": {"nodes": []},
-                 "labels": {"nodes": []}}]}}})
+                {"id": "tid", "key": "T", "states": {"nodes": []}}]}}})
+        if "team(id" in q:      # labels ride the split single-team query (D1)
+            return httpx.Response(200, json={"data": {"team": {"labels": {
+                "nodes": [], "pageInfo": {"hasNextPage": False}}}}})
         if "issues(" in q:
             after = variables.get("after")
             seen_cursors.append(after)

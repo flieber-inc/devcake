@@ -87,3 +87,45 @@ def test_revoked_write_token_forces_remint(tmp_path, monkeypatch):
     creds = run_coro(prov.ensure_mission_repo("linear", "T-1"))
     assert len(minted) == 2                      # fresh pair
     assert creds.token_write.startswith("new-tok-")
+
+
+def test_create_operator_repo_mints_and_stores_card_tokens(tmp_path, monkeypatch):
+    """Item 4: a 'gitea (internal)' card's repo lives in the SEPARATE
+    devcake-repos org (the per-mission list/sweep walks devcake-internal
+    only) and its full token set lands in the secret store under the card
+    name — saving the card is all that's left."""
+    import json as _json
+    calls = []
+    minted = []
+
+    def handler(request):
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and "/repos/devcake-repos/newrepo" in path:
+            return httpx.Response(404, json={})
+        if request.method == "POST" and path.endswith("/tokens"):
+            minted.append(path)
+            return httpx.Response(201, json={"sha1": f"tok-{len(minted)}-1234"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    out = run_coro(prov.create_operator_repo("newrepo"))
+    assert out["clone_url"] == "http://gitea:3000/devcake-repos/newrepo.git"
+    assert len(minted) == 3                       # write + ro + reviewer
+    assert any("devcake-repos/newrepo/branch_protections" in p for _, p in calls)
+    stored = _json.loads(
+        (tmp_path / "secrets" / "connections" / "repo-newrepo.json").read_text())
+    assert set(stored) == {"token", "token_ro", "reviewer_token"}
+    assert all(v.startswith("tok-") for v in stored.values())
+
+
+def test_create_operator_repo_refuses_existing(tmp_path, monkeypatch):
+    def handler(request):
+        if request.method == "GET" and "/repos/devcake-repos/taken" in request.url.path:
+            return httpx.Response(200, json={"name": "taken"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="already exists"):
+        run_coro(prov.create_operator_repo("taken"))

@@ -60,6 +60,12 @@ class MissionManager:
         # by the merge sweep for every open-PR DEVCAKE-MERGE mission whose
         # deferred-retry window is not actively running; pruned in sweeps()
         self.merge_handoffs: dict[str, str] = {}
+        # one-shot: set by the config PUT when auto_merge flips OFF→ON
+        # (founder request 2026-07-15) — the next sweep opens a fresh
+        # deferred-merge window for every parked DEVCAKE-MERGE mission, so
+        # the flip retroactively covers the operator's existing merge queue.
+        # In-memory: a restart between flip and sweep loses it (re-toggle).
+        self.rearm_merge_windows: bool = False
         # pmo_id → "needs human" note (advisory; admin Needs-Human panel).
         # Rebuilt every sweep from the DEVCAKE-NEEDS-HUMAN label — declarative,
         # restart-safe, self-pruning. Same "text — url" convention as

@@ -168,6 +168,7 @@ def make_mgr(tmp_path, m, forge=None):
     mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
     mgr.blocked_reasons = {}
     mgr.merge_handoffs, mgr._merge_window_closed = {}, set()
+    mgr.rearm_merge_windows = False
     mgr.needs_human = {}
     mgr._audit = lambda *a, **k: None
     if forge is not None:
@@ -929,3 +930,52 @@ def test_human_needed_sets_verdict_and_advisory(tmp_path):
     assert run.verdict == "handed off: needs human on EXECUTE"
     assert "p1" in mgr.needs_human
     assert mgr.needs_human["p1"].startswith("T-1: needs human")
+
+
+# ── auto-merge OFF→ON re-arm (founder request 2026-07-15) ────────────────────
+# A mission parked at DEVCAKE-MERGE while auto_merge was OFF carries no retry
+# marker, so flipping auto_merge ON used to leave it awaiting a human forever
+# (the sweep closed the window on first read and the skip-set cached it).
+# The config PUT sets a one-shot re-arm flag on an OFF→ON flip: the next
+# sweep posts a fresh retry-window entry (visible, marker-timestamped) for
+# every parked mission; the cycle after that reads the marker and drives the
+# merge inside the normal merge_retry_window_minutes bound.
+
+def test_rearm_reopens_parked_mission_when_auto_merge_flips_on(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    fake.activity_entries = []            # the auto_merge-OFF park: no marker
+    mgr.rearm_merge_windows = True        # what put_config sets on OFF→ON
+    run_coro(mgr.sweeps([m]))             # cycle 1: posts the window entry
+    rearm_comments = [c for c in fake.comments if "`devcake:merge-retry`" in c]
+    assert len(rearm_comments) == 1
+    assert m.pmo_id not in mgr._merge_window_closed
+    assert mgr.rearm_merge_windows is False           # one-shot
+    assert forge.merges == []                         # merge happens NEXT cycle
+    fake.activity_entries = [ActivityEntry(
+        ts=datetime.now(timezone.utc), author="devcake", kind="comment",
+        body=rearm_comments[0])]
+    run_coro(mgr.sweeps([m]))             # cycle 2: fresh marker → merge
+    assert forge.merges == [8]
+    assert m.status == "done"
+
+
+def test_rearm_reaches_missions_already_in_skip_set(tmp_path):
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    fake.activity_entries = []
+    mgr._merge_window_closed = {"p1"}     # cached closed from prior cycles
+    mgr.rearm_merge_windows = True
+    run_coro(mgr.sweeps([m]))
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert "p1" not in mgr._merge_window_closed
+
+
+def test_rearm_noop_when_window_zero(tmp_path):
+    # window 0 = "hand off immediately" — flipping auto_merge ON must not
+    # open a window the operator has configured away
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    fake.activity_entries = []
+    mgr.config.merge_retry_window_minutes = 0
+    mgr.rearm_merge_windows = True
+    run_coro(mgr.sweeps([m]))
+    assert not any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert forge.merges == []

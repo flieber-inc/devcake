@@ -4,7 +4,9 @@
 export const AUTO_MERGE_COPY =
   "DevCake will merge its own pull requests to the default branch without " +
   "human intervention (after its REVIEW step approves). Without a reviewer " +
-  "token, merges proceed without a formal approval on the forge.";
+  "token, merges proceed without a formal approval on the forge. Missions " +
+  "already parked at DEVCAKE-MERGE are picked back up: DevCake reopens " +
+  "their merge window and merges them as they become ready.";
 
 export const ADOPTION_COPY =
   "DevCake will adopt EVERY non-completed Issue and Project in this team — " +

@@ -50,6 +50,9 @@ async def sweeps(self, missions: list[Mission]) -> None:
                 await self._tracking_sweep(m)
         except Exception:
             log.exception("sweep failed for %s", m.key)
+    # the auto_merge OFF→ON re-arm is one-shot: every parked mission got its
+    # fresh window entry this cycle (or was already being driven)
+    self.rearm_merge_windows = False
 
 
 async def _merge_sweep(self, m: Mission) -> None:
@@ -112,7 +115,9 @@ async def _deferred_merge_retry(self, m: Mission, pr,
     throughout: a manual human merge mid-window is caught by the
     external-merge branch above on the next cycle."""
     if m.pmo_id in self._merge_window_closed:
-        return  # window known closed — skip the per-cycle feed read
+        if not self.rearm_merge_windows:
+            return  # window known closed — skip the per-cycle feed read
+        self._merge_window_closed.discard(m.pmo_id)   # re-read the feed once
     forge = self.forges.get(m.repo) if m.repo else None
     if forge is None:
         # resolution-failure contract (domain/forge_runtime.py): visible
@@ -130,10 +135,23 @@ async def _deferred_merge_retry(self, m: Mission, pr,
             retry_ts = max(retry_ts, ts) if retry_ts else ts
         if MERGE_HANDOFF_MARKER in body:
             handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
+    window = self.config.merge_retry_window_minutes
     if not retry_ts or (handoff_ts and handoff_ts >= retry_ts):
+        if self.rearm_merge_windows and window > 0:
+            # auto_merge flipped OFF→ON with this mission parked (founder
+            # request 2026-07-15): open a fresh window. The feed entry IS the
+            # window state (marker timestamp = start), so this is restart-
+            # safe and visible; the next cycle reads it and drives the merge.
+            await self._feed(
+                m.pmo_id, "issue",
+                f"⏳ Auto-merge is now ON — DevCake resumes driving the merge "
+                f"of {pr_url}, retrying for up to {window} minutes before "
+                f"handing back to you. {MERGE_RETRY_MARKER}")
+            self._audit(m.pmo_id, "merge_retry_rearmed", pr_url)
+            self.merge_handoffs.pop(m.pmo_id, None)
+            return
         self._merge_window_closed.add(m.pmo_id)
         return  # no active retry window (auto_merge-OFF parks land here)
-    window = self.config.merge_retry_window_minutes
     if (utcnow() - retry_ts).total_seconds() / 60 > window:
         with tracer.start_as_current_span("sweep.merge_retry") as span:
             span.set_attribute("devcake.mission.key", m.key)

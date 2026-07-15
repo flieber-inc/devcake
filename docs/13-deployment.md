@@ -1,17 +1,36 @@
 # 13 — Deployment: docker-compose, Dagu, Networking, Runbook
 
 > **Audience:** operators and implementers.
-> **Depends on:** `01-architecture.md`, `07-dev-runtime.md`, `12-observability.md`, `14-security.md`.
+> **Depends on:** `01-architecture.md`, `07-dev-runtime.md`, `12-observability.md`,
+> **`14-security.md` (product security contract — read first).**
 
-Goal per the mission doc: **as simple as possible, local-friendly technical preview** — Bake builds images, Compose runs the stack (v0.1 hardens operational posture further).
+**Normative posture:** DevCake runs on a **dedicated host** you control. Dagu
+holds host `docker.sock` (root-equivalent). Control-plane ports bind
+**loopback** by default. Single operator; not multi-tenant SaaS. Operator
+checklist before first real EXECUTE: `14-security.md` §9.
+
+Bake builds images; Compose runs the stack only (never builds `devcake/*`).
 
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
-- Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector` (+ the `fluentbit` log shipper).
-- Volumes: `devcake_data` (→ `app:/data`), `dagu_data`, `redis_data`, `oo_data`.
-- Networks: **`devcake_control`** (`app`, `admin`, `dagu`, Redis, OpenObserve, fluent-bit) and **`devcake_runtime`** (ephemeral Devs, Redis, OpenObserve, `otel-collector`). Devs retain outbound access but cannot resolve or connect directly to `app`, `admin`, or Dagu (§5). The collector is the Dev-side telemetry boundary: Devs export OTLP to it credential-free; it alone holds `OO_INGEST_*` (`12-observability.md` §1).
+- Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,
+  `fluentbit`, `gitea` (internal fallback forge).
+- Volumes: `devcake_data` (→ `app:/data` — **secrets + config + state**),
+  `dagu_data`, `redis_data`, `oo_data`, `gitea_data`.
+- Networks:
+  - **`devcake_control`:** `app`, `admin`, `dagu`, Redis, OpenObserve,
+    fluent-bit, otel-collector, gitea.
+  - **`devcake_runtime`:** ephemeral Devs, Redis, **otel-collector**, gitea.
+    **OpenObserve is not on runtime** (A23). Devs retain outbound forge/package
+    access but cannot resolve `app`, `admin`, or Dagu.
+- The collector is the Dev-side telemetry boundary: Devs export OTLP
+  **credential-free**; only the collector holds `OO_INGEST_*`
+  (`12-observability.md` §1, `14` §10).
 
 ## 2. Annotated `docker-compose.yml` skeleton
+
+Truth is the committed `docker-compose.yml` (digest pins, full healthchecks,
+logging). Skeleton for orientation — **ports are loopback-bound**:
 
 ```yaml
 name: devcake
@@ -20,117 +39,100 @@ services:
   app:
     image: devcake/app:${DEVCAKE_TAG:-latest}   # built by: docker buildx bake
     pull_policy: never
-    env_file: .env                       # LINEAR_API_KEY, GITHUB_TOKEN, model keys, …
+    env_file: .env                       # bootstrap secrets ONLY (schema v4)
     volumes:
-      - devcake_data:/data               # note: NO docker.sock — kill/reconcile go via the Dagu API
-    depends_on:
-      redis:        { condition: service_healthy }
-      openobserve:  { condition: service_started }
-      dagu:         { condition: service_healthy }
-    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/live"],
-                   interval: 10s, retries: 5 }
+      - devcake_data:/data               # NO docker.sock — kill/reconcile via Dagu API
+    networks: [control]
+    # no host ports — reach API only via admin proxy
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5   # PIN the version — project moves fast (see §4)
-    ports: [ "8525:8080" ]                 # UI opened directly via the admin panel's button (no iframe)
+    image: ghcr.io/dagucloud/dagu:2.10.5   # PIN — see §4
+    ports: [ "127.0.0.1:8525:8080" ]      # loopback only — docs/14
     environment:
-      - DAGU_AUTH_MODE=basic               # API 401s without creds; /api/v1/health stays open (verified)
+      - DAGU_AUTH_MODE=basic
       - DAGU_AUTH_BASIC_USERNAME=${DAGU_USER}
       - DAGU_AUTH_BASIC_PASSWORD=${DAGU_PASSWORD}
-      - DOCKER_GID=${DOCKER_GID}           # host docker-group gid → daemon runs uid 1000 : docker
+      - DOCKER_GID=${DOCKER_GID}
     volumes:
       - dagu_data:/var/lib/dagu
-      - ./dagu/dags:/var/lib/dagu/dags     # contains the single dev-run DAG
-      - ./dagu/init:/etc/custom-init.d:ro  # repairs the image's broken DOCKER_GID mechanism (§4)
-      - /var/run/docker.sock:/var/run/docker.sock   # ⚠ root-equivalent host access — 14-security.md §4
-    healthcheck:   # stock image has no curl/wget (verified at M0) — bash /dev/tcp HTTP probe
-      test: ["CMD", "bash", "-c",
-             "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /api/v1/health HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
-      interval: 10s
-      retries: 5
+      # Prefer :ro — DAG YAML is trusted launch code (14 §5). Committed compose
+      # may still be RW; treat host tree as operator-controlled either way.
+      - ./dagu/dags:/var/lib/dagu/dags
+      - ./dagu/init:/etc/custom-init.d:ro
+      - /var/run/docker.sock:/var/run/docker.sock  # ⚠ host root-equivalent — 14 §5
+    networks: [control]
 
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec",
-              "--requirepass", "${REDIS_PASSWORD}"]    # default user = app-only; per-run ACL users for Devs (09 §1a)
-    volumes: [ redis_data:/data ]
-    healthcheck: { test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"], interval: 5s, retries: 5 }
+              "--requirepass", "${REDIS_PASSWORD}"]
+    networks: [control, runtime]
 
   openobserve:
-    image: public.ecr.aws/zinclabs/openobserve:v0.91.1   # pinned
-    environment:
-      - ZO_ROOT_USER_EMAIL=${OO_ROOT_EMAIL}
-      - ZO_ROOT_USER_PASSWORD=${OO_ROOT_PASSWORD}
-    volumes: [ oo_data:/data ]
-    ports: [ "5080:5080" ]
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.1
+    ports: [ "127.0.0.1:5080:5080" ]
+    networks: [control]                  # NOT on runtime
+
+  otel-collector:
+    # Devs → :4318 unauthenticated; collector → OO with OO_INGEST_*
+    networks: [control, runtime]
 
   admin:
-    image: devcake/admin:${DEVCAKE_TAG:-latest}  # built by: docker buildx bake
+    image: devcake/admin:${DEVCAKE_TAG:-latest}
     pull_policy: never
-    ports: [ "8080:80" ]
+    ports: [ "127.0.0.1:8080:80" ]        # loopback only
     environment:
-      - DAGU_UI_URL=${DAGU_UI_URL:-http://localhost:8525}    # targets of the Executor/Logs
-      - OO_UI_URL=${OO_UI_URL:-http://localhost:5080}        #   tabs' open-in-new-tab buttons
-      - ADMIN_USER=${ADMIN_USER}                             # nginx basic auth over the SPA
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}                     #   AND the /api proxy (11 §5)
-    depends_on: [ app ]
+      - ADMIN_USER=${ADMIN_USER}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+    networks: [control]
 
-volumes:
-  devcake_data: {}
-  dagu_data: {}
-  redis_data: {}
-  oo_data: {}
+  gitea:
+    ports: [ "127.0.0.1:3300:3000" ]
+    networks: [control, runtime]         # Devs clone/push; app provisions
+
+# Dev harness images are Bake-built only — never compose services (§6).
 ```
 
-*(The committed file adds the image-build entries for the three Dev images — §6.)*
+Do **not** re-add OpenObserve to `runtime` via override — that reopens the OO
+API to Devs (`14` §10).
 
-## 3. `.env.example` (full listing)
+## 3. `.env` — bootstrap only (schema v4 / ADR-0011)
+
+`.env` holds **stack bootstrap secrets** — passwords and `DOCKER_GID` needed
+before the admin GUI is up. **PMO/forge/model secrets are entered as VALUES on
+the Config page** and stored under `/data/secrets/` (`10-persistence.md`,
+`14` §4). See committed `.env.example` for the full list.
 
 ```
-# PMO (env name = the registry default, api_key_env — configurable per pmos: entry)
-LINEAR_API_KEY=
-
-# Forge (both may be set; exactly one active repo in the config's repos: list —
-# 06-forge-adapter.md). Env names are the adapter registry's token_env_default;
-# token_env is configurable per repos: entry.
-GITHUB_TOKEN=
-GITHUB_REVIEWER_TOKEN=        # optional 2nd account for formal PR approvals
-GITLAB_TOKEN=
-GITLAB_REVIEWER_TOKEN=        # optional 2nd GitLab account for formal MR approvals
-                              # (point repos[0].reviewer_token_env at whichever var matches your forge)
-
-# First-boot config seeds (optional; both land in config.yaml on first boot)
-DEVCAKE_TEAM_KEY=             # seeds pmos[0].team_key
-DEVCAKE_REPO_URL=             # seeds repos[0].url
-
-# Model/harness credentials (env_api_key mode; JSON mode uses the admin panel upload)
-ANTHROPIC_API_KEY=
-CLAUDE_CODE_OAUTH_TOKEN=      # preferred: subscription token from `claude setup-token`
-XAI_API_KEY=
-OPENAI_API_KEY=
-
-# OpenObserve
+# OpenObserve root + ingest service account (required; weak values refuse boot)
 OO_ROOT_EMAIL=admin@example.com
-OO_ROOT_PASSWORD=change-me
+OO_ROOT_PASSWORD=
+OO_INGEST_EMAIL=
+OO_INGEST_PASSWORD=
 
-# Dagu API auth (basic mode — verified env names from source; app + browser use these)
+# Internal Gitea admin (required)
+GITEA_ADMIN_USER=devcakeadmin
+GITEA_ADMIN_PASSWORD=
+
+# Dagu / Redis / admin basic auth
 DAGU_USER=devcake
 DAGU_PASSWORD=
+REDIS_PASSWORD=
+ADMIN_USER=admin
+ADMIN_PASSWORD=
 
-# Host docker group gid, for Dagu's sock access: stat -c %g /var/run/docker.sock
+# Host docker group: stat -c %g /var/run/docker.sock
 DOCKER_GID=
 
-# Redis default-user password (app-only; Devs get per-run ACL users — 09 §1a)
-REDIS_PASSWORD=change-me-too
+# Optional local sandbox only — never in production
+# DEVCAKE_ALLOW_INSECURE=1
 
-# Admin panel basic auth (11 §5)
-ADMIN_USER=admin
-ADMIN_PASSWORD=change-me-as-well
-
-# UI links shown as buttons in the admin panel (defaults fit local compose)
 DAGU_UI_URL=http://localhost:8525
 OO_UI_URL=http://localhost:5080
 ```
+
+Empty or `change-me*` bootstrap passwords refuse app boot unless
+`DEVCAKE_ALLOW_INSECURE=1`.
 
 ## 4. Dagu configuration
 
@@ -171,7 +173,7 @@ steps:
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}
-      network: devcake_runtime       # only Redis/OpenObserve + outbound access
+      network: devcake_runtime       # Redis + otel-collector + Gitea + outbound; NOT OO
       pull_policy: missing
       keep_container: false          # verified: force-removed on every exit path (incl. stop);
                                      #   post-mortem lives in Dagu step logs + OpenObserve
@@ -188,12 +190,31 @@ steps:
 
 ## 5. Two-level containers and networking
 
-Dagu holds the host `docker.sock`, so Dev containers are **siblings** of the compose stack (docker-outside-of-docker). The DAG's `network: devcake_runtime` key attaches them at spawn (verified via `docker inspect`), giving them:
-- Redis Streams and OpenObserve access by service DNS;
-- full outbound access for forge/package traffic;
-- no Docker-network route or DNS entry for `app`, `admin`, or Dagu. The authenticated API remains defense in depth, not a Dev callback channel.
+Dagu holds the host `docker.sock`, so Dev containers are **siblings** of the
+compose stack (docker-outside-of-docker). **Dedicated host only** — socket
+access is root-equivalent (`14-security.md` §5).
 
-Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id format of `02-domain-model.md` §7 (`ENG-142-3-EXECUTE-9GX2TQ`) — so the Dagu UI's run list reads as a natural map of Missions and Mission Steps (confirmed decision), and container names, traces, and Redis streams all match it.
+The DAG's `network: devcake_runtime` key attaches Devs at spawn (verified via
+`docker inspect`), giving them:
+
+- Redis Streams by service DNS (per-run ACL users — `09-messaging.md`);
+- **otel-collector** for OTLP (unauthenticated; no OO credentials in Dev);
+- optional **internal Gitea** for zero-repo missions;
+- full outbound access for forge/package/model traffic (by design — `14` §6);
+- **no** Docker-network route or DNS entry for `app`, `admin`, Dagu, or
+  **OpenObserve**.
+
+Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id
+format of `02-domain-model.md` §7 — container names, traces, and Redis streams
+match.
+
+### 5a. Operator deploy rules (security)
+
+1. Keep published ports on **127.0.0.1** (default compose). Use SSH tunnels for remote access.
+2. Do not run on a shared multi-tenant Docker host.
+3. Treat `/data` volume backups as **secret dumps**.
+4. Before first real EXECUTE: branch protection + team membership + checklist in `14` §9.
+5. Prefer mounting `./dagu/dags` **read-only** into Dagu when compose allows.
 
 ## 6. Image build matrix (Bake only — `docker-bake.hcl`)
 
@@ -238,18 +259,22 @@ Which Dev image a run uses is `HARNESSES[harness_template].image` (`08-harness-t
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → fill keys → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → Config page: PMO connection test, repo connection test, review the three default Dev Types → done. The app bootstraps the ten Linear labels on startup.
+- **First run:** `cp .env.example .env` → strong bootstrap passwords + `DOCKER_GID` → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → Config page: enter PMO/forge/model **secret VALUES**, connection tests, Dev Types → done. Labels bootstrap on startup. Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 
-### 8a. Protect the default branch (deployment requirement — docs/14 §2)
+### 8a. Protect the default branch (operator supply-chain control — docs/14 §2 zone C)
 
-Dev containers hold the forge token, and token scoping cannot separate "push a feature branch" from "merge to the default branch" (both are `contents: write`). Before pointing DevCake at a repository, protect **the branch configured as `default_branch` on the `repos:` entry** (not literally `main` — DevCake checks whichever branch the config names):
+Dev containers hold the forge token, and token scoping cannot separate "push a
+feature branch" from "merge to the default branch" (both are often
+`contents: write`). **You** must protect **the branch named
+`default_branch` on the `repos:` entry** before production-ish use. The app
+**warns** when unprotected; it does not hard-block dispatch (`14` §8).
 
-- **GitHub:** add a ruleset (or classic protection) on that branch — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW files a formal approval, so `auto_merge` keeps working.
+- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW can file a formal approval so `auto_merge` still works if you enable it.
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
-The forge connection test and the admin header surface the protection state; an unprotected default branch shows a standing amber warning.
+Forge connection test and `/health` surface protection state; amber warning when unprotected.
 - **Upgrade:** `docker compose pull` (third-party images only) → `docker buildx bake all` → `docker compose up -d`. State survives (volumes). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
 - **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker buildx bake all`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebaked.
 - **Kill a stuck Dev:** admin → Runs page → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.

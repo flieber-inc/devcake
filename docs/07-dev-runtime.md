@@ -133,10 +133,13 @@ There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint abl
 
 ## 7. Network and resources
 
-- **Network:** full outbound internet access plus membership in `devcake_runtime` for Redis/OpenObserve name resolution. The app/admin/Dagu control plane is not attached to that network. Attachment mechanism in `13-deployment.md` §5.
-- **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md`).
+DevCake is **not** a multi-tenant sandbox product (`14-security.md` §6). Isolation is intentional but limited:
+
+- **Network:** full **outbound** internet (forge, packages, model APIs) plus membership in `devcake_runtime` for Redis, **otel-collector**, and optional internal Gitea. **OpenObserve is not on runtime.** The app/admin/Dagu control plane is not attached. Attachment mechanism in `13-deployment.md` §5.
+- **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md` §5).
 - **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root.
-- **Resources:** Dagu 2.10.5 step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container. Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps); full container HostConfig is a v0.1 item.
+- **MCP / extra CLI args:** admin-configured free-text commands run with `shell=True` / harness flags before/with the agent — **admin-equivalent ACE** inside the disposable container (`11-admin-panel.md`).
+- **Resources:** Dagu 2.10.5 step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container (**engineering debt**, `14` §11). Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps).
 
 ## 8. Building a new Dev image (checklist)
 

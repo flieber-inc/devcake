@@ -100,7 +100,7 @@ The registry also carries the forge side (`forges()` / `make_forge`, `06-forge-a
 ## 2. Linear adapter — connection
 
 - Endpoint: `POST https://api.linear.app/graphql`.
-- Auth: personal API key in the `Authorization` header **without a `Bearer` prefix** (OAuth apps would use `Bearer`; v0 uses a personal API key named by `pmos[0].api_key_env`).
+- Auth: personal API key in the `Authorization` header **without a `Bearer` prefix** (OAuth apps would use `Bearer`; v0 uses a personal API key from the GUI secret store for the instance — ADR-0011).
 - Scope: exactly one team, `pmos[0].team_key` (e.g. `ENG`). **No work is ever done outside the configured team** (mission-doc requirement) — every query filters by team, and `create_mission` targets it explicitly.
 - Rate limits: ~5,000 requests/hour for API-key auth, plus GraphQL complexity limits. At the default 30 s poll of a single team this is comfortable; the adapter still backs off on `RATELIMITED`/429 per `15-errors-and-retries.md` (`_gql` raises `PMOTransient`).
 

@@ -1,35 +1,41 @@
 # 01 — Architecture
 
 > **Audience:** implementers and reviewers.
-> **Depends on:** `00-overview.md`. Details delegated to: `04` (orchestrator), `07` (Dev runtime), `09` (messaging), `13` (deployment).
+> **Depends on:** `00-overview.md`. **Security contract:** `14-security.md`.
+> Details delegated to: `04` (orchestrator), `07` (Dev runtime), `09` (messaging), `13` (deployment).
 
 ## 1. Component inventory
 
 | Service | Image | Role |
 |---|---|---|
 | `app` | built from `app/` (Python 3.12, FastAPI + asyncio) | PMO Handler (poll loop), scheduler, ingress consumer/finalizer, watchdog, `/api/v1`, all PMO+forge writes |
-| `dagu` | `ghcr.io/dagucloud/dagu:<pinned>` | Executor: runs the single parameterized `dev-run` DAG; spawns Dev containers as siblings via host `docker.sock` |
-| `redis` | `redis:7-alpine` | Streams transport between Devs and app (`09-messaging.md`); AOF persistence |
-| `openobserve` | `openobserve/openobserve:<pinned>` | All logs, traces, spans, metrics; cost dashboards |
-| `admin` | nginx + static SPA (React/Vite/Tailwind) | Admin panel UI; reverse-proxies `/api`→app; links out to the Dagu and OpenObserve UIs (buttons, no iframes) |
-| `dev-{run_id}` *(ephemeral)* | one of 3 harness images | One Mission Step, then exit (`07-dev-runtime.md`) |
+| `dagu` | `ghcr.io/dagucloud/dagu:<pinned>` | Executor: runs the single parameterized `dev-run` DAG; spawns Dev containers as siblings via host `docker.sock` (**root-equivalent** — dedicated host only, `14` §5) |
+| `redis` | `redis:7-alpine` | Streams transport between Devs and app (`09-messaging.md`); AOF persistence; on **control + runtime** |
+| `openobserve` | `openobserve/openobserve:<pinned>` | Logs, traces, metrics, cost dashboards — **control network only** (not reachable from Devs) |
+| `otel-collector` | contrib collector (pinned) | Dev-side OTLP receiver (unauthenticated on runtime); forwards to OO with ingest credentials (`12-observability.md`) |
+| `fluentbit` | fluent-bit (pinned) | Ships container stdout to OO |
+| `gitea` | gitea (pinned, rootless) | Internal fallback forge for zero-repo missions; **control + runtime** (ADR-0010) |
+| `admin` | nginx + static SPA (React/Vite/Tailwind) | Admin panel UI; reverse-proxies `/api`→app; links out to Dagu/OO/Gitea UIs (buttons, no iframes); loopback `:8080` |
+| `dev-{run_id}` *(ephemeral)* | harness images from Bake | One Mission Step, then exit (`07-dev-runtime.md`); **runtime network only** |
 
-Two container levels, per the mission doc: the compose stack, and the Dev containers Dagu spawns via `docker.sock`. Dev siblings attach only to `devcake_runtime`; the app/admin/Dagu control plane lives on `devcake_control` (`13-deployment.md` §5).
+Two container levels: the compose stack, and Dev containers Dagu spawns via `docker.sock`. Dev siblings attach only to `devcake_runtime`; app/admin/Dagu/OpenObserve live on `devcake_control` (`13-deployment.md` §5).
 
 ## 2. Interaction matrix
 
 | From → To | Protocol | Purpose |
 |---|---|---|
 | app → PMO (Linear adapter) | HTTPS GraphQL | poll missions; write feed posts/labels/status/attachments (sole PMO client — INV-4) |
-| app → dagu | REST (`/api/v1/dags/dev-run/start`) | trigger a Dev run with a fully-resolved run spec |
+| app → dagu | REST (`/api/v1/dags/dev-run/start`) | trigger a Dev run (non-secret params + per-run Redis ACL) |
 | dagu → docker.sock | Docker API (Moby SDK) | spawn/stop/remove `dev-{run_id}` sibling containers |
-| app → dagu | REST | watchdog kill (`stop` endpoint), run-status queries, startup reconciliation — the app holds no `docker.sock` |
-| dev → redis | Redis Streams | `runspec.get` (env + credentials), `run.started/heartbeat/artifacts`, `activity.get` req/reply |
+| app → dagu | REST | watchdog kill (`stop`), run-status, reconciliation — app holds **no** `docker.sock` |
+| dev → redis | Redis Streams | `runspec.get` (env + credentials), heartbeats/artifacts, `activity.get` |
 | app → redis | Redis Streams | consume ingress (group `app`); serve replies |
-| dev → forge (GitHub/GitLab adapters) | HTTPS/git | clone, push, open/update PR (Dev side of `06-forge-adapter.md` §2) |
-| app → forge (GitHub/GitLab adapters) | HTTPS | PR comments, approval, merge (decision-bearing side) |
-| admin(browser) → admin(nginx) → app | REST `/api/v1` | config CRUD, health, run history |
-| everything → openobserve | OTLP HTTP (+ container stdout shipping) | traces, logs, metrics (`12-observability.md`) |
+| dev → forge (GitHub/GitLab/Gitea) | HTTPS/git | clone, push, open/update PR (Dev side of `06-forge-adapter.md`) |
+| app → forge | HTTPS | PR comments, approval, merge (decision-bearing side) |
+| admin(browser) → admin(nginx) → app | REST `/api/v1` | config CRUD, health, run history (basic auth) |
+| app → openobserve | OTLP HTTP | control-plane traces/logs |
+| dev → otel-collector | OTLP HTTP **unauthenticated** | Dev traces; collector alone holds OO ingest creds (`14` §10) |
+| fluentbit → openobserve | HTTP | container stdout shipping |
 
 ## 3. Hexagonal layering of the app
 
@@ -86,11 +92,18 @@ The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, an
 
 ## 5. Trust boundaries and failure domains
 
-| Boundary | Stance |
-|---|---|
-| Mission content from Linear → Dev prompts | Untrusted input executed by an agent with repo write access — prompt-injection risk accepted in v0, mitigated by single-team scoping, PR-only writes, and `auto_merge` defaulting off (`14-security.md` §2) |
-| `docker.sock` | Only `dagu` holds it (the app kills/reconciles via the Dagu REST API); never Dev containers |
-| Credentials | Injected at `docker run`, never in images, Dagu params, or logs (`14-security.md` §3) |
-| Dev → control plane | No shared Docker network. FastAPI still requires Basic auth on every non-liveness route and an explicit intent header on mutations. |
+Normative product contract: **`14-security.md` §0–2** (three trust zones). Summary:
 
-**What survives what:** an app restart loses nothing (state = PMO + files + Redis streams); a Dev crash loses only that attempt (labels never advanced — INV-3); a full host loss recovers from the PMO System + `/data` backup.
+| Zone | Boundary | Stance |
+|---|---|---|
+| **A — Host / control** | `docker.sock` on Dagu only | Design: dedicated host; app never holds sock |
+| **A** | Admin basic auth + `/data` secrets | Design: single operator; loopback default; volume backup = secret dump |
+| **B — Agent** | Mission + repo content → prompts | **Trusted by design** (prompt injection is not a product defect) |
+| **B** | Dev credentials + open egress | Required for work; redaction does not cover Dev sockets |
+| **B** | Dev → control plane | No Docker route to app/admin/Dagu; runtime isolation is intentional |
+| **C — Supply chain** | Default branch, team membership, auto_merge, RO PAT, independent REVIEW | **Primary mitigation; mostly operator-owned** (warnings, not hard gates) |
+| **Hard product gates** | `LEGAL_OUTCOMES`, INV-4, out-of-pipeline merge detection | Enforced regardless of “adult” ethos |
+
+**Credentials delivery:** real secrets are **not** Dagu/`docker run` env (except the per-run Redis ACL). The app rebuilds secret material on authenticated `runspec.get` (`09-messaging.md`, `14` §4). Never in images, Run JSON, or DAG YAML.
+
+**What survives what:** an app restart loses nothing durable (state = PMO + files + Redis streams); a Dev crash loses only that attempt if labels never advanced (INV-3); host compromise is total for secrets and sock; a full host loss recovers mission state from the PMO System + a carefully handled `/data` backup (treat as secret material).

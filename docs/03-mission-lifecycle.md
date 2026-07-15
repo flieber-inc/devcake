@@ -84,7 +84,7 @@ The Dev must: check out the PR branch in its clone; diff against the plan; hunt 
 **Merge always precedes Done** — a Mission's Done status must never claim more than the repository shows (confirmed decision). Finalization: transcript + token report → forge effects, then the PMO transition:
 
 1. Post the review report as a PR comment, **always ending with the copy-pasteable approval command** (§5).
-2. If a **reviewer token** is configured (`repo.reviewer_token_env`), formally approve the PR with it; otherwise the comment carries the marker `APPROVED-BY-DEVCAKE`.
+2. If a **reviewer token** is configured (GUI secret `reviewer_token` for the repo), formally approve the PR with it; otherwise the comment carries the marker `APPROVED-BY-DEVCAKE`.
 3. Then, by `auto_merge`:
    - **ON:** merge the PR (`06-forge-adapter.md` §5). Success → remove `DEVCAKE-REVIEW`, mission status `done`. Failure branches three ways on the port's `mergeable()` read:
      - **Auto-resolvable** (merge conflict or stale branch) with `auto_resolve_merge_conflicts` ON and fewer than 2 prior attempts → swap `DEVCAKE-REVIEW` → `DEVCAKE-EXECUTE` with a 🧩 resolve directive (🧩 is reserved for this directive; 🔀 already means "PR opened"): the next EXECUTE Dev only syncs the branch with the default branch, resolves the conflicts, and pushes; the PR then returns to REVIEW. Attempts are counted from `` `devcake:conflict-resolve:N` `` markers in the feed (PMO-derivable, quoted lines ignored); the directive posts **before** the label swap so the count never undercounts.

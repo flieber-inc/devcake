@@ -1,77 +1,304 @@
-# 14 — Security
+# 14 — Security (product contract)
 
-> **Audience:** implementers and adopters. An honest threat model for a system that runs autonomous coding agents holding credentials, next to a host Docker socket.
+> **Audience:** operators, implementers, and anyone writing outward-facing claims.
+> **Status:** normative. Other docs link here for trust language; they must not
+> claim a stronger security posture than this file.
+
+## 0. Product security contract
+
+DevCake is a **single-operator agent runtime for a dedicated host** (one VM or
+machine you control). Anyone who can **write tickets** in the configured PMO
+team or **land content** in a configured repository can influence coding agents
+that hold your forge and model credentials. The control plane — admin basic
+auth, Dagu (with host `docker.sock`), and the `/data` secrets volume — is
+**equivalent to host root** for blast-radius purposes.
+
+**Multi-tenant least-privilege SaaS is an explicit non-goal.** Capable defaults
+(agents that can code, push branches, and reach the network) are intentional.
+The primary defense against supply-chain damage is **outside the agent**: forge
+branch protection, who is on the Linear team, human merge (`auto_merge` off by
+default), and optional tighter credentials (read-only PAT, independent REVIEW
+Dev Type). The app **warns** on weak posture; it does not nanny-gate most of
+those choices. See §8.
+
+If that contract is wrong for your environment, do not run DevCake there.
+
+---
 
 ## 1. Asset inventory
 
 | Asset | Blast radius if leaked |
 |---|---|
-| Model credentials (Anthropic/xAI/OpenAI keys, subscription OAuth tokens) | Billing abuse; subscription hijack |
-| Forge tokens (GitHub/GitLab, incl. reviewer token) | Repo write, PR approval/merge — supply-chain-grade |
+| Model credentials (API keys, subscription OAuth tokens) | Billing abuse; subscription hijack |
+| Forge tokens (write / RO / reviewer) | Repo write, PR approval/merge — supply-chain-grade |
 | Linear API key | Read/write of the team's project data |
-| `docker.sock` | **Root-equivalent on the host** |
-| Mission content + repo content | Feeds agent prompts (→ §2) |
+| `docker.sock` (via Dagu) | **Root-equivalent on the host** |
+| `ADMIN_PASSWORD` / GUI secret store | All operator secrets on the volume |
+| `/data` volume (or its backups) | Full secret dump — treat backups like a password-manager export |
+| Mission content + repo content | Feeds agent prompts (trust zone B, §2) |
 
-## 2. Trust model and prompt injection
+---
 
-v0 explicitly **trusts**: the configured repository's content and the Mission descriptions/comments in the configured Linear team. Both flow into agent prompts, so anyone who can write an issue in that team (or land content in the repo) can attempt prompt injection against a Dev that holds forge write credentials.
+## 2. Three trust zones
 
-v0 stance: **accepted risk**, mitigated by:
-- single-team scoping (nothing outside `pmo.team_key` is ever read — `05-pmo-adapter.md` §2);
-- Devs cannot write to the PMO (INV-4); code output lands in PRs (`06-forge-adapter.md` §3);
-- **outcome legality is an app-side invariant** (`03-mission-lifecycle.md` §6, the `LEGAL_OUTCOMES` table): a forged `result.json` (e.g. an EXECUTE run claiming `reviewed`/approve) is parked with `DEVCAKE-SKIP`, never acted on — the app-as-deputy path is closed;
-- `auto_merge` defaults **off**, so a human gate sits before the default branch; the toggle's confirm dialog states the consequence (`11-admin-panel.md` §3);
-- every action is traced (`12-observability.md`) and every PMO write audit-logged (`10-persistence.md`).
+### Zone A — Host / control plane
 
-**Honest limit — every stage holds a clone-capable forge token, and by default it is the WRITE token.** The entrypoint always clones the repository, so PLAN/REVIEW/MAPPER/ONBOARD runs need *a* forge token; with `token_ro_env` unset (the out-of-box default) they receive the same write-capable token as EXECUTE. Configuring a read-only PAT (`GITHUB_TOKEN_RO` / GitLab twin) narrows non-EXECUTE stages to clone-only; until then a prompt-injected non-EXECUTE Dev could push. Accepted for v0: the app logs this loudly at boot and `/health` surfaces a dismissable `forge-write-token` warning in the admin panel; full per-stage scoping is §7 backlog.
+| Surface | Stance |
+|---|---|
+| Host `docker.sock` on **Dagu only** | **Design choice.** Required so Dagu can spawn sibling Dev containers. Dedicated host only (§5). |
+| Admin panel HTTP basic auth + GUI secrets | **Design choice** (simplicity). Fine on loopback / dedicated host; publishing past localhost publishes every PAT (§4). |
+| Bootstrap secrets in `.env` | Stack only (Dagu/Redis/OO/admin/Gitea/DOCKER_GID). Operator PMO/forge/model secrets are GUI-stored (ADR-0011). |
+| Control-plane ports | Bind **loopback by default** (`13-deployment.md`). Remote access = SSH tunnel or host firewall — never “open to the LAN for convenience” without reading this file. |
 
-**Honest limit — telemetry on `devcake_runtime` is forgeable and floodable (M8 trade, accepted).** Devs export OTLP to the `otel-collector` **unauthenticated**, so any container on the runtime network can inject spans — including forged `service.name=devcake-app` spans (the OO alert set is span-driven) — or flood telemetry until the OO volume fills. The collector's `memory_limiter` bounds its own blast radius (shed load, never OOM); OO-side volume exhaustion remains possible, exactly as it was in v0 when Devs held valid credentials. This is strictly better than the v0 posture (Devs held valid OO logins, which allowed the same forging *plus* reads and API access); the enforced boundary is that **Dev containers hold no OO credentials at all** — and, since the v0.1.1 audit round (A23), **OpenObserve itself is off the runtime network**: the collector bridges `runtime`→`control`, so the only OO-adjacent surface a Dev can reach is the collector's unauthenticated OTLP receiver — the authenticated OO API (credential brute-forcing, any future unauth endpoint) is network-unreachable from Dev containers. Two supporting facts, live-verified on OO v0.91.1 OSS: accepted user roles are `admin`/`service_account` only, and role separation is advisory (a `service_account` can read streams and even create users) — so "ingest-only credentials" are not enforceable inside OSS OpenObserve; keeping every credential AND the API surface out of Dev reach is the control that actually holds. Collector bearer-token auth is the documented next hardening step (§7). (A compose override re-adding OO to `runtime` would silently reopen this — nothing gates override files' network stanzas.)
+Compromise of Dagu auth, the admin password, or the host is total for that machine.
 
-**Honest limit — the Dev's own forge token (normative mitigation: branch protection).** An EXECUTE Dev holds `DEVCAKE_FORGE_TOKEN` inside its container (it must, to push its branch and open the PR), and on GitHub, pushing a feature branch and merging a PR both require the same `contents: write` permission — the capability is indivisible at the token level. The playbooks forbid direct merges, but that is guidance, not enforcement. **The effective control is forge-side branch protection on the default branch** (require PRs + ≥1 approval; no bypass for the Dev token's account). DevCake's own pipeline keeps working: the reviewer token files a formal approval before the app merges. Deployment requirement in `13-deployment.md` §8a. DevCake verifies and surfaces this: the forge connection test and `/api/v1/health` report the default branch's protection state, and the admin panel shows an amber warning when unprotected. A **detection tripwire** backs it up: if a mission's PR turns up merged while the mission is still mid-pipeline, the app posts an "out-of-pipeline merge" comment, audits `out_of_pipeline_merge`, and surfaces it in health (`15-errors-and-retries.md`). Per-run scoped forge tokens (§7) would not change this — they hit the same indivisibility.
+### Zone B — Agent execution
 
-Future hardening in §7.
+| Surface | Stance |
+|---|---|
+| Mission text + repo content in prompts | **Trusted by design** (adult-operator / OpenClaw-class). Prompt injection is not a product defect (§3). |
+| Forge + model credentials in the Dev | Required for clone/push and harnesses. Open **egress** by design (forge, package registries, model APIs). |
+| MCP setup commands / `extra_cli_args` | **Admin-equivalent code execution** inside the disposable container (`11-admin-panel.md`). |
+| Harness flags (`--dangerously-skip-permissions`, etc.) | Autonomous coding requires them; Devs are not a secure sandbox product (§6). |
+| Unauthenticated OTLP to `otel-collector` | Residual on the dedicated host (self-noise / volume fill). Ops signal, not a tenancy boundary (§10). |
 
-## 3. Credential handling rules (normative)
+### Zone C — Software supply chain (primary mitigation)
 
-1. Secrets never in images, never in git, never in Run JSON, and **never in Dagu DAG params or YAML** — trigger params are rendered unmasked in the Dagu UI and run API (verified live on v2.10.5). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus one deliberate exception: the per-run scoped Redis ACL credential, revoked at finalization. Run JSON stores only its one-way verifier. Real secret material is never at rest anywhere between dispatch and pickup: the app rebuilds it from current config when an authenticated *active* run sends `runspec.get`, copies it into the per-run reply (15-minute TTL), and XDELs that entry on acknowledgment (`09-messaging.md` §§3, 5).
-2. Uploaded credential JSONs: `/data/secrets/{dev_type}/{secret_file}` (filename fixed by the harness registry, e.g. `grok-auth.json`), `0600`, app-owned; their **content** is delivered in the run spec and written by the Dev entrypoint to the harness path (`0600`), then privileges dropped (`07-dev-runtime.md` §5, `08-harness-templates.md` §4). No bind mounts into Dev containers.
-3. Forge tokens reach git via a credential helper, never embedded in remote URLs on disk (`06-forge-adapter.md` §1).
-4. Secrets never logged: the telemetry layer and the transcript renderer share a redaction filter (§5).
-5. Minimum token scopes per forge listed in `06-forge-adapter.md` §§6–7; Linear key is a personal key scoped by team choice.
-6. **Single-mode GUI secret store (schema v4, ADR-0011):** operator secrets (PMO/forge tokens, model keys) are entered as VALUES through the Config page and stored 0600 under `/data/secrets/connections/` and `/data/secrets/harness/` — env-var indirection is deleted. Never echoed back (`GET /config` carries no secret material; `secrets-check` returns presence + timestamp only, no fingerprint). `.env` holds stack bootstrap secrets ONLY (Dagu/Redis/OO/admin-auth/Gitea-admin/DOCKER_GID). A dismissable `gui-secrets-basic-auth` breadcrumb marks the posture (§7).
+This is where supply-chain attacks are **actually** contained — not inside the
+LLM, and not by pretending tickets are sterile.
 
-## 4. `docker.sock`
+| Control | Owner | App role |
+|---|---|---|
+| Branch protection on the default branch (PR + reviews; Dev token cannot bypass) | **Operator** | Detects/warns unprotected branch; out-of-pipeline merge tripwire |
+| Who can write issues/comments on the configured team | **Operator** | Single-team scope only (`05-pmo-adapter.md`) |
+| Who can push to the repo the agent clones | **Operator** | — |
+| `auto_merge` off (human merges) | **Operator** (default off) | Confirm dialog when enabling |
+| Read-only forge PAT for non-EXECUTE stages | **Operator** (recommended) | Dismissable `forge-write-token` warning if missing |
+| Independent REVIEW Dev Type (different model/role than EXECUTE) | **Operator** (recommended) | API/UI warning if shared — not a hard 422 |
+| LEGAL_OUTCOMES + INV-4 (Dev never writes PMO; forged outcomes cannot approve own work via app deputy path) | **Product (hard)** | Enforced |
 
-Held by exactly **one** service: `dagu` (spawning Devs — the mission-doc architecture requires it). The app kills and reconciles runs through the Dagu REST API instead (verified stop/status endpoints, `13-deployment.md` §4), so it holds no socket. **Never Dev containers.** This is root-equivalent host access and is flagged inline in `docker-compose.yml`; operators uncomfortable with it on shared hosts should run DevCake on a dedicated VM (the recommended production posture anyway).
+---
 
-## 5. Transcript redaction (normative)
+## 3. Prompt injection (design choice, not a bug)
+
+v0 **trusts** the configured repository's content and Mission
+descriptions/comments in the configured PMO team. Both flow into agent prompts.
+Anyone who can write an issue in that team (or land content in the repo) can
+attempt prompt injection against a Dev that may hold forge write credentials and
+model keys.
+
+**Stance:** accepted and intentional. The product *is* “ticket + repo in →
+agent work out.” Users are adults; the job of the docs and product is to
+**identify residual risk, highlight posture, and defend the supply chain**
+(zone C) — not to promise injection-proof agents.
+
+### What a successful injection can do (default-capable config)
+
+- Steer the model’s plan, code, PR description, and review text.
+- With the **write** forge token in-container: push branches, open/alter PRs
+  (playbooks say not to force-push main — guidance, not kernel enforcement).
+- If **no RO PAT** is configured: **every** stage (ONBOARD/PLAN/REVIEW/MAPPER)
+  gets the same write-capable token as EXECUTE — a non-EXECUTE Dev can push.
+- Exfiltrate env secrets over **open egress** (redaction does not cover Dev
+  sockets — §7).
+- With `auto_merge` **on** and weak forge protection: path to default branch
+  depends on forge rules and reviewer token setup (`06-forge-adapter.md`).
+
+### What the app actually enforces (not “the model behaved”)
+
+- Single-team scoping — nothing outside the configured team key is polled.
+- Devs never call the PMO (INV-4); app finalization is the only PMO writer.
+- **`LEGAL_OUTCOMES`** (`03-mission-lifecycle.md` §6): e.g. EXECUTE claiming
+  `reviewed` is refused; parked with `DEVCAKE-SKIP`, never acted on.
+- `auto_merge` defaults **off**.
+- Traces + audit log of PMO writes (`12-observability.md`, `10-persistence.md`).
+- Out-of-pipeline merge **detection** when a PR is merged while the mission is
+  still mid-pipeline (`15-errors-and-retries.md`).
+
+These close **app-as-deputy** and **forged-result** paths. They do **not** stop
+a capable agent from pushing bad code to a feature branch or exfiltrating tokens.
+
+---
+
+## 4. Credential handling (normative)
+
+1. Secrets never in images, never in git, never in Run JSON, and **never in Dagu
+   DAG params or YAML** — trigger params are rendered unmasked in the Dagu UI
+   (verified on v2.10.5). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus
+   one deliberate exception: the per-run scoped Redis ACL credential, revoked at
+   finalization. Secret material is rebuilt on authenticated `runspec.get`
+   (`09-messaging.md` §§3, 5).
+2. Uploaded harness credential files: `/data/secrets/{dev_type}/…`, `0600`,
+   delivered via runspec; entrypoint writes harness path then continues non-root
+   (`07-dev-runtime.md`, `08-harness-templates.md`). No secret bind mounts into Devs.
+3. Forge tokens reach git via credential helper, not embedded remote URLs on disk.
+4. Secrets never logged at app choke points — redaction (§7).
+5. Minimum forge scopes: `06-forge-adapter.md`. Linear key scoped by team choice.
+6. **GUI secret store (schema v4, ADR-0011):** PMO/forge/model values entered in
+   Config; stored `0600` under `/data/secrets/connections/` and
+   `/data/secrets/harness/`. Never echoed (`GET /config` has no secret material;
+   `secrets-check` = presence + timestamp only). `.env` = **bootstrap only**.
+
+**Simplicity vs security:** GUI secrets behind HTTP basic auth on a dedicated
+host with loopback binds is an intentional trade. Residual risk is the operator
+workstation, a mis-bound port, shared `.env`/backups, and anyone who learns
+`ADMIN_PASSWORD`. OIDC/SSO and external secret managers are optional if you
+expose beyond that posture — not required for the default dedicated-host
+deploy.
+
+---
+
+## 5. `docker.sock`
+
+Held by exactly **one** service: **`dagu`**. The app kills and reconciles via
+the Dagu REST API and holds no socket. **Never** Dev containers.
+
+This is root-equivalent host access by design (sibling Dev containers). Normative
+deployment: **dedicated VM/host**, not a shared Docker workstation with other
+tenants’ workloads.
+
+**DAG definitions** under `./dagu/dags` must be treated as trusted code that
+can launch containers. Compose should mount them **read-only** into Dagu
+(`13-deployment.md`); operators must not leave world-writable DAG trees on the
+host.
+
+---
+
+## 6. Dev container isolation (design: not a sandbox product)
+
+Intentional controls:
+
+- Non-root harness user (uid 1000).
+- No `docker.sock`; no host/volume secret mounts (runspec delivery).
+- Attach only to `devcake_runtime`: Redis, otel-collector, internal Gitea.
+  App/admin/Dagu/OpenObserve stay on `devcake_control` (OO left runtime — A23).
+- Outbound network **enabled** (forge, packages, model APIs).
+
+Not claimed:
+
+- Multi-tenant isolation between hostile customers.
+- Egress allowlists (optional future ops hardening, §11).
+- **Docker HostConfig** CPU/memory/PID limits on the Dev container — Dagu 2.10.5
+  `container:` schema has no HostConfig fields; DAG `resources.limits` is
+  process-cgroup only. That is **engineering debt** (noisy-neighbor / fork bomb
+  on the dedicated host), not adult-operator philosophy.
+- MCP free-text commands and harness “skip permissions” flags are powerful on
+  purpose (`11-admin-panel.md`, `08-harness-templates.md`).
+
+Internal Gitea is dual-homed (control + runtime) so Devs can clone/push
+zero-repo missions; the Gitea **admin** password never enters the Dev env
+(ADR-0010).
+
+---
+
+## 7. Transcript redaction (hygiene, not a control plane)
 
 **Boundary:** app→PMO and app→forge *writes* are scrubbed at choke points
-(`_feed`, forge PR comments, `create_mission` titles/bodies). This does **not**
-cover Dev container egress sockets — a compromised or prompt-injected Dev can
-still exfiltrate env over the network (accepted risk, §2).
+(`MissionManager._feed`, forge PR comments, `create_mission` titles/bodies).
+This does **not** cover Dev egress — a prompt-injected Dev can still exfiltrate
+env over the network (§3).
 
-Before any transcript or report is posted to the PMO System (an external SaaS), the renderer scans for the **known secret values** of the current config (every env-var value in the secret list, every uploaded credential file's key material) plus known token patterns and replaces them with `«REDACTED»`. The same filter wraps the OTLP log exporter.
+Before transcripts/reports are posted, `security.redact` replaces known secret
+values and token patterns with `«REDACTED»` (`app/devcake/security.py`):
 
-The lists are assembled in two parts (`app/devcake/security.py`):
+- **Platform lists** — harness keys and infra passwords; model key shapes.
+- **Registry contributions** — every registered PMO/forge adapter’s
+  `secret_env_vars` / `token_patterns` (configured or not). Superset tripwire in
+  `app/tests/test_security.py`.
+- **Gitea internal tokens** — 40 hex; patterns would mask git SHAs. Value
+  registration only (`register_runtime_secret` + `/data/secrets/internal_forge/`).
+- **Runtime registry** — per-run Redis ACL password; empty after app restart
+  (inbound envelope scrub still covers the dominant echo path).
 
-- **Internal fallback forge tokens (M11, docs/16):** Gitea tokens are 40 hex characters — a redaction regex would mask every git SHA in transcripts, so the Gitea descriptor's `token_patterns` is deliberately EMPTY. Value-registration (`register_runtime_secret` at token mint/load) is the ONLY redaction line for internal-forge credentials, backed by the `/data/secrets/internal_forge/*.json` two-level-path scan. Isolation is user-scoped (a per-mission machine user + write/read token pair in a private org — ADR-0010), not scope-scoped; the admin credential that mints them never leaves the app.
+Redaction matters **because Devs hold secrets**. It is the last line of defense
+for **app-mediated** posts to Linear/forges, not a substitute for zone C.
 
-**Platform lists** — `PLATFORM_SECRET_ENV_VARS` (harness keys and infra passwords: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `OPENAI_API_KEY`/`CODEX_API_KEY`, `REDIS_PASSWORD`, `DAGU_PASSWORD`, `ADMIN_PASSWORD`, `OO_ROOT_PASSWORD`) and `PLATFORM_TOKEN_PATTERNS` (harness/model key shapes `sk-…`, `xai-…`) — static, not adapter-owned.
-- **Registry contributions** — every **registered** PMO system and forge adapter contributes its `secret_env_vars` and `token_patterns` through its registry entry / `ForgeDescriptor`, **configured or not**, so switching adapters never opens a redaction gap. The forge/PMO token shapes (`ghp_…`, `github_pat_…`, `glpat-…`, `lin_api_…`, `lin_oauth_…`) all come from here, not from a hardcoded list. The registry import is lazy and memoized at the first `redact()` call (security is imported by the adapters themselves, so it can't import them at module load).
+---
 
-`secret_env_vars()` / `token_patterns()` expose the unions, and a **superset tripwire** in `app/tests/test_security.py` pins them: the union must remain a superset of the v0 lists, and every registered adapter's contributions must be included — a refactor can add shapes but can never silently drop one.
+## 8. Warnings vs gates
 
-- **Runtime registry** — ephemeral per-run credentials (the scoped Redis relay password) exist only as process-local values, so `redact()` learns them through an in-memory registry: registered when the ACL user is created, dropped when it is deleted. Accepted limitation: the registry is empty after an app restart, so a transcript posted post-restart for a pre-restart run misses this layer — the inbound `_scrub_envelope_auth` filter (which masks the credential inside the Dev's own artifact payload) still covers the dominant echo vector, and the ACL user is dead by teardown anyway. Plaintext is deliberately never persisted to close this gap.
+| Signal | Kind | Notes |
+|---|---|---|
+| `forge-write-token:*` | **Warning** (dismissable) | No RO PAT — all stages get write token |
+| Unprotected default branch | **Warning** | Operator must fix forge-side |
+| EXECUTE and REVIEW share Dev Type | **Warning** | Independent review recommended, not enforced |
+| `gui-secrets-basic-auth` | **Info** | Reminder of control-plane posture |
+| `auto_merge` enable | Confirm dialog | Operator accepts merge without human PR click |
+| `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |
+| Out-of-pipeline merge | **Hard detection** | Comment + audit + health |
+| INV-4 (Dev → PMO) | **Hard** | Architecture |
 
-## 6. Dev container hardening
+Dismissing a warning is an **explicit acceptance** of that residual risk. Prefer
+keeping a mental (or health) inventory of active posture issues even after UI
+dismiss.
 
-- Non-root harness user (uid 1000 for the whole entrypoint; Claude Code enforces this itself by refusing `--dangerously-skip-permissions` as root — verified at M3).
-- Resource limits (`07-dev-runtime.md` §7).
-- No `docker.sock`; no host or volume mounts at all (credentials arrive via the run-spec channel).
-- Devs attach only to `devcake_runtime`: Redis, the otel-collector, and the internal Gitea are reachable, while the app/admin/Dagu/OpenObserve control plane is absent from that network (OO left `runtime` in the v0.1.1 round — A23). Outbound forge/package access remains enabled.
-- MCP free-text commands are **arbitrary code execution by design** — an admin-only surface, run inside the disposable container, labeled as such in the UI (`11-admin-panel.md` §3).
+---
 
-## 7. Future hardening (v0.1+ backlog)
+## 9. Operator checklist (before first real EXECUTE)
 
-gVisor/kata runtime for Devs · Docker HostConfig CPU/memory/PID limits on Dev containers (Dagu 2.10.5 `container:` schema has no HostConfig fields; DAG `resources.limits` is process-cgroup only) · prefer RO forge PAT for non-EXECUTE when configured (`token_ro_env`); EXECUTE always gets write; with it unset every stage holds the write token (§2 honest limit — dismissable `forge-write-token` health warning until configured) · egress allowlists per Dev Type · admin panel OIDC/SSO (v0 ships basic auth — `11-admin-panel.md` §6) · prompt-injection detection pass over ACTIVITY.md before harness launch · collector-side telemetry scrubbing · bearer-token auth on the otel-collector's OTLP receiver (Devs export unauthenticated since M8 — §2 honest limit; the collector holds the only OO credential on the Dev side). Control-plane ports bind to loopback by default; use a dedicated machine or host firewall when exposing beyond localhost.
+1. **Dedicated host** — not a shared multi-tenant Docker host.
+2. **Loopback-only** control ports (default compose) or SSH tunnel; do not bind
+   admin/Dagu/OO to the public internet.
+3. **Sandbox PMO team** (or tightly controlled membership) — ticket writers =
+   agent trust.
+4. **Branch protection** on the default branch; Dev token must not bypass.
+5. Leave **`auto_merge` off** until you understand forge approval + reviewer token.
+6. Prefer a **read-only forge PAT** for non-EXECUTE and a **different** Dev Type
+   for REVIEW than EXECUTE.
+7. Strong bootstrap passwords in `.env` (empty/`change-me*` refuse boot unless
+   `DEVCAKE_ALLOW_INSECURE=1` — local sandbox only).
+8. Read `/health` **security_warnings**; do not dismiss unread.
+9. Treat **`/data` backups** as secret material.
+
+Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
+
+---
+
+## 10. Residual risk summary
+
+### Zone A — Host / control plane
+
+| Risk | Blast radius | Owns |
+|---|---|---|
+| Dagu or sock compromise | Host root | Design (dedicated host) |
+| Admin password leak / mis-bound :8080 | All GUI secrets + config mutation + clear-runs | Operator + design |
+| Volume/backup theft | All secrets | Operator (host encryption/backups) |
+
+### Zone B — Agent execution
+
+| Risk | Blast radius | Owns |
+|---|---|---|
+| Prompt injection via ticket/repo | Bad PR content; push; secret exfil | Design + operator (team/repo ACL) |
+| Write token on non-EXECUTE | Push from “read” stages | Operator (RO PAT) |
+| Open egress | Exfil of env | Design |
+| No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) |
+| Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) |
+
+### Zone C — Supply chain
+
+| Risk | Blast radius | Owns |
+|---|---|---|
+| Unprotected default branch | Direct or weak path to main | **Operator** |
+| `auto_merge` + weak review | Merged bad code | Operator |
+| Shared EXECUTE/REVIEW identity | Weaker second look | Operator |
+
+---
+
+## 11. Engineering backlog (not philosophy)
+
+Items that improve safety or hygiene **without** changing the adult-operator
+contract:
+
+- Docker HostConfig CPU/memory/PID limits on Dev containers (when Dagu supports
+  them, or via another spawn path).
+- Compose: read-only mount of `./dagu/dags` if not already.
+- Protocol hardens: credential-upload filename allowlist + size cap; Linear
+  `download_asset` host allowlist / redirect policy; stronger bootstrap password
+  policy than a short deny-list.
+- Optional: gVisor/Kata for Devs; egress proxy allowlists; OIDC if you must
+  expose the admin UI beyond loopback; OTLP bearer auth on the collector
+  (low priority on a dedicated single-tenant host).
+
+**Not backlog (explicit non-goals):** multi-tenant SaaS hardening; treating
+prompt injection as a ship-blocking defect; hard-gating dispatch on every
+advisory warning by default; promising sandboxed multi-customer isolation.

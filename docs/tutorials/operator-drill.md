@@ -3,7 +3,12 @@
 > The stranger-operability test (docs/16 M12): from an empty volume to a
 > completed mission touching `.env` **only** for stack bootstrap secrets.
 > Everything else — PMO instances, repos, tokens, model keys — goes through
-> the Config page. If any step needs `.env`, that is a v0.1 regression.
+> the Config page. If any step needs `.env` for operator secrets, that is a
+> regression (ADR-0011).
+>
+> **Wipe warning:** `docker volume rm …devcake_data` destroys config **and**
+> all GUI secrets on a dedicated host — treat the volume like a secret store
+> (`14-security.md` §1).
 
 ## 0. Bootstrap `.env` (the only file you edit)
 

@@ -1,9 +1,12 @@
 # Tutorial 2 — Operating DevCake Day to Day
 
-You never operate DevCake through its own UI — you operate it **through Linear**.
-Labels and statuses are the whole control surface; DevCake reads them as
-instructions and reports back the same way. This tutorial is the vocabulary plus
-the handful of interventions you'll actually use.
+You never **babysit** DevCake through a chat UI — you operate work **through
+Linear**. Labels and statuses are the control surface; DevCake reads them as
+instructions and reports back the same way. The admin panel is for config,
+health, secrets, and runs — keep it on **localhost** (or SSH tunnel); it is
+host-equivalent power (`14-security.md` §4).
+
+This tutorial is the vocabulary plus the interventions you'll actually use.
 
 ## The label language
 
@@ -53,11 +56,21 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
 
 - **`adoption_mode`** — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
-  working it by priority, spending tokens — flip deliberately).
+  working it by priority, spending tokens — flip deliberately. Remember: the
+  whole team is in the agent trust boundary).
 - **`auto_merge`** — off (default): every merge is yours; `DEVCAKE-MERGE` is the
   handoff point. On: approved PRs merge themselves and missions go straight to
-  Done. All the way autonomous — enable once you trust the review quality, and
-  remember the review Dev is the only gate left.
+  Done. Enable only with **branch protection**, a clear review setup, and eyes
+  open (`14` §2 zone C). Independent REVIEW Dev Type is **recommended**, not
+  enforced.
+
+## Security warnings and daily hygiene
+
+- Read **security_warnings** on Overview/health (write token on all stages,
+  unprotected branch, basic-auth secrets reminder). Dismissing = accepting residual risk.
+- Prefer a **RO forge token** for non-EXECUTE when you can.
+- Do not expose `:8080` / Dagu / OO past loopback without reading `14`.
+- `/data` backups contain every GUI secret — handle like a password export.
 
 ## Scaling up
 

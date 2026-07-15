@@ -59,7 +59,7 @@ Restated from `03-mission-lifecycle.md`:
 
 - Branch: `devcake/{mission_key}` — reused across EXECUTE loops; never force-pushed; checked out if it already exists on the remote. Playbooks receive it via the `{branch}` placeholder, fed by `mission_branch()`.
 - PR title: `[{mission_key}] {title}`; body links the Mission URL and the plan attachment.
-- DevCake never pushes to the default branch (`config.repo.default_branch`). Ever. The only path to the default branch is a PR merge (human, or app under `auto_merge`).
+- DevCake **playbooks** never push to the default branch (`config.repo.default_branch`). The only *intended* path to the default branch is a PR merge (human, or app under `auto_merge`). Enforcement is **forge-side branch protection** (operator-owned, `14-security.md` §2 zone C / `13-deployment.md` §8a) — token capability cannot separate push-branch from merge on many forges. The app **warns** when the default branch is unprotected; it does not hard-block dispatch.
 
 ## 3. Division of labor: Dev vs. app
 
@@ -90,7 +90,7 @@ Each adapter ships a `DESCRIPTOR` classvar (a `ForgeDescriptor`); prompts, `spec
 - `forges()` → `{id: ForgeDescriptor}` for every registered forge (feeds the SPA registry endpoint and the redaction contributions). Adapter imports are lazy, so importing the registry never drags in the httpx-heavy adapter modules.
 - `make_forge(inst)` constructs the adapter for the configured `RepoInstance` (`config.repos[0]`), passing `(url, token, reviewer_token, api_base=inst.api_base)`.
 
-`RepoInstance` (`config.py`): `{id, forge, url, api_base, default_branch, token_env, reviewer_token_env}`. The `forge` field is **registry-validated** — an unknown forge id is rejected at config load, before anything runs.
+`RepoInstance` (`config.py`, schema v4): identity + URL/forge/branch fields in config; **tokens are GUI-stored** (`token` / `token_ro` / `reviewer_token` read-throughs — ADR-0011). The `forge` field is **registry-validated** — an unknown forge id is rejected at config load.
 
 - `api_base` (default `None`): explicit API endpoint override — this is what unlocks **GitHub Enterprise** (`https://ghe.corp/api/v3`).
 - **Self-hosted GitLab needs no `api_base`:** the adapter derives its API origin from the repo URL itself (`https://gitlab.corp.example/grp/repo` → API at `https://gitlab.corp.example/api/v4/…`), identical to the old `https://gitlab.com` default for gitlab.com repos. `api_base` remains the explicit override when the API lives elsewhere.
@@ -100,9 +100,15 @@ Each adapter ships a `DESCRIPTOR` classvar (a `ForgeDescriptor`); prompts, `spec
 
 GitHub and GitLab forbid approving a PR with the account that opened it. Resolution (confirmed with the founder):
 
-1. **Optional reviewer token** — `repo.reviewer_token_env` names a second credential (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`.
+1. **Optional reviewer token** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`.
 2. **Without it** — `approve()` returns `False` (no error): the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
 3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
+
+### Token posture (operator)
+
+- **Write token** is required for EXECUTE (push + open PR).
+- **Read-only PAT** for non-EXECUTE stages is **recommended**; if unset, every stage receives the write token and health shows dismissable `forge-write-token` (`14` §8).
+- **Reviewer token** enables formal PR approval for auto-merge paths.
 
 ## 5. `auto_merge` and the merge-before-Done rule
 

@@ -26,8 +26,10 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `PUT/DELETE /api/v1/dev-types/{name}` | Update / delete one Dev Type. DELETE refuses while assigned to a Mission Type (or to the Relations Mapper) |
 | `POST /api/v1/dev-types/{name}/credentials` | JSON `{"filename": "...", "content": "..."}` → stored to `/data/secrets/{name}/{filename}` (0600); a fresh credential clears that Dev Type's auth breaker |
 | `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
-| `GET /api/v1/env-check?names=A,B` | Set/unset status (never values) of env vars in the app's environment — powers the Config page's inline ✓/✗ on `*_env` fields |
-| `GET /api/v1/connections/registry` | Adapter registry metadata: registered PMO systems + forges (id, display name, default token env), the union of `secret_shape_prefixes` (paste guard), and `managed_labels_expected`. Drives the Config page's selectors and PMO copy — adding an adapter never means editing the SPA |
+| `PUT/DELETE /api/v1/secrets/{scope}/{instance}/{field}` | Write/delete connection secret **VALUES** (pmo `api_key`; repo `token`/`token_ro`/`reviewer_token`) — never echoed (`14` §4, ADR-0011) |
+| `PUT/DELETE /api/v1/harness-secrets/{VAR}` | Write/delete harness/model key VALUES |
+| `GET /api/v1/secrets-check` | Presence + `updated_at` only (no values, no fingerprints) — powers Config ✓/✗ |
+| `GET /api/v1/connections/registry` | Adapter registry metadata: PMO systems + forges, `secret_shape_prefixes` (paste guard), `managed_labels_expected` |
 | `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns `{ok, team, labels, labels_expected, missions_visible}` — `labels` counts the intersection with DevCake's managed label set |
 | `POST /api/v1/connections/forge/test` | Live probe: authenticated repo fetch + explicit push permission + default branch (+ reviewer token check + branch-protection state). A read-only or fine-grained token that omits the configured repository returns `ok: false` and trips the global forge breaker before dispatch; transient probe failures (5xx/network/rate-limit) are reported but never latch the breaker, and a latched breaker re-probes every poll cycle (`15-errors-and-retries.md` §4) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
@@ -76,36 +78,35 @@ Sections (scrollspy anchors `#/config/<id>`): **Traffic control · PMO · Reposi
 ### Traffic control
 - **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `junior-dev`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`). Deleting the mapper's Dev Type is refused with 409.
 
-**Field-level help (added 2026-07-11, after the token_env incident):** every
-field carries a hover `?` tooltip explaining what it means and what shape of
-value it wants. Fields that take an **env var name** (`api_key_env`,
-`token_env`, `reviewer_token_env`) additionally validate live: a value shaped
-like a secret (token prefixes — fed by the registry endpoint's
-`secret_shape_prefixes`, never hardcoded in the SPA — or > 40 chars) shows a red warning that the field
-wants the variable's NAME and the secret goes in `.env`; a well-formed name is
-checked against `GET /api/v1/env-check` and shows `✓ set` or `✗ not set`. The
-connection-test endpoints short-circuit with a plain-language error when the
-configured env var resolves empty (instead of `Illegal header value b'Bearer '`).
+**Secrets (schema v4 / ADR-0011):** operator secrets are entered as **VALUES**
+through write-only `SecretField` controls (`PUT /secrets/…`,
+`PUT /harness-secrets/…`). They are stored `0600` under `/data/secrets/`,
+never echoed by `GET /config` or `secrets-check` (presence + timestamp only).
+`.env` is bootstrap-only. Paste guards use registry `secret_shape_prefixes`.
+Connection tests fail clearly when a required secret is absent.
 
 ### PMO connection (anchor `#/config/pmo`)
-Fields edit `cfg.pmos[0]` (the config schema is plural, exactly-one entry — `02-domain-model.md` §9); the section's copy (system names, default env var) renders from `GET /connections/registry` and stays **PMO-neutral** — UI copy never couples to Linear specifics (founder decision; Jira/Monday/GitHub-Issues are planned adapters).
-- API key env-var name (default from the registry, e.g. `LINEAR_API_KEY`).
-- Team/workspace key, validated by **Test connection** (`connections/pmo/test`).
-- **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* The confirm writes the draft; Save applies it. Flipping back confirms symmetrically (in-flight runs finish; unlabeled missions are simply no longer scheduled).
+Fields edit configured PMO instances (`02-domain-model.md` §9); section copy
+renders from `GET /connections/registry` and stays **PMO-neutral**.
+- System selector, instance name, team/workspace key.
+- **API key VALUE** via secret field (`secrets/pmo/{name}/api_key`) — Set / clear; ✓ from `secrets-check`.
+- Validated by **Test connection** (`connections/pmo/{name}/test`).
+- **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* Remember: the whole team is in the agent trust boundary (`14` §0). The confirm writes the draft; Save applies it.
 - Poll interval (seconds).
 
 ### Repository
-Fields edit `cfg.repos[0]` (plural schema, exactly-one entry).
-- Forge selector — options come from the registry endpoint's `forges` list (GitHub / GitLab today); one active repo.
-- Repo URL, token env var, optional **reviewer token** env var (tooltip: enables formal PR approval, `06-forge-adapter.md` §4).
-- **`auto_merge` toggle** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."*
+Fields edit configured repo instances.
+- Forge selector — options from registry `forges` (GitHub / GitLab / …).
+- Repo URL; **access token / optional RO / optional reviewer** as secret VALUES
+  (`token`, `token_ro`, `reviewer_token`) — not env-var names (`06` token posture, `14` §8).
+- **`auto_merge` toggle** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."* Only enable with branch protection + eyes open (`14` zone C).
 - **`auto_resolve_merge_conflicts` toggle** — default ON, no confirm dialog (every resulting merge still passes the full EXECUTE→REVIEW gate). Dimmed and non-interactive while `auto_merge` is OFF (the setting is inert without it). Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
 - **`merge_retry_window_minutes` number field** — default 30, min 0; also dimmed while `auto_merge` is OFF. Tooltip: lower it on CI-light repos to surface unmergeable PRs faster; raise it on CI-heavy repos to stop premature `DEVCAKE-MERGE` hand-offs; 0 = hand off immediately. Live-tunable: raising it mid-wait extends an active window.
 
 ### Dev Types
 Card list + editor (the harness combobox is **authoritative**, `08-harness-templates.md` §2):
 - Name; **harness template** dropdown (options from `GET /harnesses`); **identifying prompt** textarea; **model** pin (e.g. `claude-fable-5` on the seeded senior-dev); per-type **max concurrency** integer.
-- **Runtime & credentials block** (derived, read-only structure): the registry image for the *currently selected* harness, a readiness badge, and a per-requirement checklist — each `credential_env` var with live ✓/✗ from `GET /env-check`, each required secret file with ✓/✗ from the enriched `secrets_present` plus an **upload button** (sends `{filename, content}`; filename forced to the registry `secret_file`). Flipping the combobox previews the new harness's requirements immediately, with an amber "unsaved harness change" note until Save. Any one ✓ (env var or file) suffices.
+- **Runtime & credentials block** (derived): registry image for the selected harness, readiness badge, per-requirement checklist — harness secret VALUES via `harness-secrets/{VAR}` (✓ from `secrets-check`), credential files via upload (`POST …/credentials` → `/data/secrets/{dev_type}/`). Flipping the combobox previews requirements; amber "unsaved harness change" until Save.
 - **Connect via OAuth…** — per **Dev Type** (`POST /oauth/dev-types/{name}/start`), shown when the saved harness has a device-code flow; the credential lands in that Dev Type's `/data/secrets/{name}/` dir (two Dev Types on one harness = two accounts).
 - **MCP servers**: free-text area, one CLI command per line (syntax hint per selected template, `08-harness-templates.md` §7), with the warning: *"These commands run inside the Dev container before the agent starts and are arbitrary code execution by design."* Execution semantics per `07-dev-runtime.md` §5 (failure ⇒ run fails).
 
@@ -137,6 +138,25 @@ A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a *
 
 A prominent **"Open OpenObserve ↗"** button (new tab, URL from `OO_UI_URL`), plus canned deep links (also opening in new tabs): **Errors (last hour)** · **Trace by mission key** (input box → trace search) · **Cost dashboard** (`12-observability.md` §5). No iframe.
 
-## 6. Auth
+## 6. Auth and control-plane posture
 
-v0 ships **HTTP basic auth at both nginx and FastAPI**, using the same `ADMIN_USER`/`ADMIN_PASSWORD`. Nginx covers the SPA and proxy; FastAPI independently protects every route except minimal `/api/v1/health/live`, so an accidental future network exposure does not bypass authentication. OpenAPI/docs endpoints are disabled. Every `POST`/`PUT`/`PATCH`/`DELETE` additionally requires `X-DevCake-Request: 1`; the SPA sends it from its centralized mutation helper. The browser's native prompt is the login UI. OIDC/SSO is the documented upgrade path (`14-security.md` §7).
+v0 ships **HTTP basic auth at both nginx and FastAPI**, using the same
+`ADMIN_USER`/`ADMIN_PASSWORD`. That is a **design choice** for a
+**single-operator dedicated host** with **loopback** binds (`14-security.md`
+§0, §4) — not multi-tenant RBAC. Admin credentials protect the GUI secret store
+(`/data/secrets`), config (including MCP free-text / `extra_cli_args` = ACE in
+Dev containers), and destructive **Clear runs**.
+
+Nginx covers the SPA and proxy; FastAPI independently protects every route
+except minimal `/api/v1/health/live`. OpenAPI/docs endpoints are disabled.
+Every `POST`/`PUT`/`PATCH`/`DELETE` additionally requires `X-DevCake-Request: 1`;
+the SPA sends it from its centralized mutation helper. The browser's native
+prompt is the login UI.
+
+**Do not bind admin past localhost** without accepting that you are publishing
+every stored PAT. OIDC/SSO is optional if you must expose beyond that posture
+(`14` §11) — not required for the default dedicated-host deploy.
+
+Health **security_warnings** (forge write token, unprotected branch,
+gui-secrets-basic-auth, …) are **advisory** (`14` §8); dismissing them is
+operator acceptance of residual risk.

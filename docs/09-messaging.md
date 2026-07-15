@@ -17,12 +17,16 @@ The app's domain programs against **`MessagingPort`** (`ports/messaging.py`); th
 
 ## 1a. Per-run authentication (Redis ACLs)
 
-Dev containers execute LLM-driven work influenced by untrusted mission text — they are treated as potentially adversarial peers on the network. Redis therefore runs with a password-protected default user (app-only) and **per-run ACL users** the app manages:
+Dev containers execute LLM-driven work influenced by mission text (trusted by
+design as product input — `14-security.md` §3) — they are still treated as
+**potentially adversarial peers on the network** for Redis isolation. Redis
+therefore runs with a password-protected default user (app-only) and **per-run
+ACL users** the app manages:
 
 - At dispatch, the app runs Redis 7 key selectors:
   `ACL SETUSER dev-{run_id} on >{random-password} %W~devcake:ingress %RW~devcake:reply:{run_id} +xadd +xread +xlen +ping +client|setinfo`
   — the Dev can **write** (XADD) to the shared ingress and **read/write** only its own reply stream. It **cannot XREAD ingress** (ingress envelopes carry plaintext `auth` of concurrent runs). It cannot read other runs' reply streams or any other key.
-- The credentials reach the Dev as the `REDIS_USER`/`REDIS_PASSWORD` container env, interpolated from Dagu params. Params are visible only through the Dagu UI/API (authenticated, `13-deployment.md` §4). Residual exposure (operators reading Dagu run history) is accepted: the user is deleted at finalization.
+- The credentials reach the Dev as the `REDIS_USER`/`REDIS_PASSWORD` container env, interpolated from Dagu params. Params are visible only through the Dagu UI/API (authenticated, loopback, dedicated host — `13-deployment.md` §4, `14` §0). Residual exposure (operators reading Dagu run history) is accepted under that posture: the user is deleted at finalization.
 - **Forgery guard:** every Dev→app envelope carries `auth: <its redis password>`. The Run record stores only its SHA-256 verifier; the raw credential is never persisted in `/data`. The app verifies `(run_id, auth)` before processing — a Dev can physically `XADD` a message claiming another `run_id` (ACLs can't inspect payloads), but it cannot forge the token, so spoofed artifacts are rejected. Without write-only ingress, a concurrent Dev could XREAD other passwords and forge finalizations; the selectors close that path.
 - The app deletes the ACL user in finalization (idempotent step) and on watchdog kill; startup reconciliation sweeps `ACL LIST` for `dev-*` users with no live Run.
 

@@ -23,7 +23,7 @@ The entrypoint composes a single prompt: the Dev Type's **identifying prompt** +
 ```bash
 claude -p "$PROMPT" \
   --output-format stream-json --verbose \
-  --dangerously-skip-permissions        # containerized; the container IS the sandbox
+  --dangerously-skip-permissions        # autonomous coding by design; Dev is NOT a multi-tenant sandbox (14 §6)
 ```
 - Do **not** use the `--bare` flag when running on subscription OAuth: `--bare` skips OAuth/keychain reads and requires `ANTHROPIC_API_KEY`. Since DevCake prefers subscription auth (§4), the template omits `--bare`.
 - `--output-format stream-json` emits realtime JSONL events (`system/init`, `assistant`/`user` message events, noise events like `system/thinking_tokens`) ending in one `{type:"result"}` event that carries **the exact fields of the old `json` blob**: `result`, `session_id`, `num_turns`, `duration_ms`, `usage`, `modelUsage`, `total_cost_usd` — token extraction stays first-class, the entrypoint just reads the last `result` event instead of the whole stdout (verified live 2026-07-12). **`--verbose` is mandatory** with `-p` + `stream-json` (the CLI errors out without it).

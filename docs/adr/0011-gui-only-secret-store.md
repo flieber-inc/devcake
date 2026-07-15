@@ -14,7 +14,7 @@
 
 ## Standing posture breadcrumb
 
-A dismissable `gui-secrets-basic-auth` info warning ships in `/health`: "GUI-stored secrets behind basic auth — revisit before exposing beyond localhost." The decision (secrets on disk, admin behind basic auth) is fine for the localhost/dedicated-host posture DevCake targets, but must not silently ride into a first internet-exposed deployment — OIDC/SSO + a secret manager are the documented next step (docs/14 §7).
+A dismissable `gui-secrets-basic-auth` info warning ships in `/health`: "GUI-stored secrets behind basic auth — revisit before exposing beyond localhost." The decision (secrets on disk, admin behind basic auth) is intentional for the localhost/dedicated-host posture DevCake targets — see the product security contract in **docs/14-security.md §0 / §4**. OIDC/SSO + a secret manager remain optional if you expose beyond that posture (docs/14 §11), not required for the default deploy.
 
 ## Consequences
 

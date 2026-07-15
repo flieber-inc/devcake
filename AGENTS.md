@@ -3,6 +3,14 @@
 Instructions for coding agents (Claude, Cursor, Grok, Codex, etc.) working in this repo.
 These rules are **mandatory** unless the user explicitly overrides them for a task.
 
+## Security / product claims
+
+The **product security contract** is [`docs/14-security.md`](docs/14-security.md).
+Do not write docs, README, or PR copy that claims a stronger posture (multi-tenant
+sandbox, guaranteed independent review, secrets never leave the host under
+injection, hard-gated branch protection) than that file. Design choices
+(dedicated host, adult-operator prompt trust, warnings vs gates) are intentional.
+
 ## Always Works™ (mandatory before done)
 
 **"Should work" ≠ "does work."** Before marking any change complete, prove it with evidence you personally observed — not assumptions.

@@ -35,9 +35,13 @@ class PMOInstance(BaseModel):
     system: str = "linear"          # validated against the adapter registry
     team_key: str = ""
     api_base: str | None = None     # None = the adapter's default API host
-    # M10 routing: the repo (by name) missions of this instance resolve to
-    # when they carry no `devcake-repo:` marker; None = zero-repo gate
-    default_repo: str | None = None
+    # The instance's repo SET (item 2, founder decision 2026-07-15): the
+    # ORDERED list of configured repo names this PMO's missions may target.
+    # A `devcake-repo:` marker must name a listed repo; missions without a
+    # marker route to the FIRST entry (the default). Empty = every mission
+    # routes to its own internal-forge repo. (Replaces v4.0's singular
+    # default_repo — refused with a hand-migration hint in _stale_shape_reason.)
+    repos: list[str] = Field(default_factory=list)
 
     @field_validator("system")
     @classmethod
@@ -307,13 +311,16 @@ class AppConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _default_repo_exists(self):
+    def _pmo_repo_sets_valid(self):
         repo_names = {r.name for r in self.repos}
         for p in self.pmos:
-            if p.default_repo is not None and p.default_repo not in repo_names:
+            if len(set(p.repos)) != len(p.repos):
+                raise ValueError(f"pmos[{p.name}].repos: duplicate entries")
+            unknown = [n for n in p.repos if n not in repo_names]
+            if unknown:
                 raise ValueError(
-                    f"pmos[{p.name}].default_repo {p.default_repo!r} names no "
-                    f"configured repo (have: {sorted(repo_names)})")
+                    f"pmos[{p.name}].repos {unknown} name no configured repo "
+                    f"(have: {sorted(repo_names)})")
         return self
 
 
@@ -340,6 +347,12 @@ def _stale_shape_reason(data: dict) -> str | None:
                 return (f"{key} entries carry v3 *_env fields; schema v4 stores "
                         "secret VALUES via the Config page — remove the *_env "
                         "keys and re-enter secrets in the admin panel")
+    # v4.0→v4.1 (item 2): singular default_repo became the ordered repo SET
+    if any(isinstance(e, dict) and "default_repo" in e
+           for e in (data.get("pmos") or []) if isinstance(e, dict)):
+        return ("pmos entries carry the pre-repo-set 'default_repo' field — "
+                "replace it with `repos: [<name>, …]` (ordered; the first "
+                "entry is the default for unmarked missions)")
     if data.get("schema_version") not in (None, 4):
         return (f"schema_version {data['schema_version']} is stale — the "
                 "current version is 4")

@@ -70,16 +70,25 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
         # (founder decision 2026-07-14 — see module docstring)
         return sticky, None
 
+    allowed = list(instance.repos or [])
     if marker is not None:
         if marker not in repo_names:
             return None, (f"unknown repo '{marker}' — fix the "
                           f"`devcake-repo:` marker (configured: "
                           f"{sorted(repo_names) or '(none)'})")
+        if allowed and marker not in allowed:
+            # the instance's repo SET is its allowed set (item 2): a marker
+            # naming a configured-but-unlisted repo gates rather than
+            # silently crossing the instance boundary
+            return None, (f"repo '{marker}' is not in this PMO instance's "
+                          f"repo set {allowed} — add it to the instance's "
+                          f"repositories or fix the marker")
         return marker, None
-    if instance.default_repo is not None:
-        # config cross-validates default_repo against repos; belt-and-braces
-        if instance.default_repo not in repo_names:
-            return None, (f"instance default repo '{instance.default_repo}' "
+    if allowed:
+        # unmarked missions route to the FIRST entry (the default); config
+        # cross-validates set members against repos — belt-and-braces here
+        if allowed[0] not in repo_names:
+            return None, (f"instance default repo '{allowed[0]}' "
                           f"is not configured")
-        return instance.default_repo, None
+        return allowed[0], None
     return None, REASON_ZERO_REPO

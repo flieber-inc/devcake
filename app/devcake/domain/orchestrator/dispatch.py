@@ -51,8 +51,9 @@ def _mapper_repo(self) -> str | None:
     MAPPER run reads the whole team's relations, not a mission — it never
     routes to a per-mission internal repo (returns None → mapper stays idle
     when only the internal forge exists)."""
-    if self.instance.default_repo in self.forges.instances:
-        return self.instance.default_repo
+    for name in (self.instance.repos or []):      # set order = preference
+        if name in self.forges.instances:
+            return name
     external = [n for n in self.forges.instances if n not in self.forges.internal]
     return external[0] if external else None
 

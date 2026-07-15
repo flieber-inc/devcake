@@ -28,7 +28,8 @@ def _run(repo_ref, seq=1):
 
 
 INST = PMOInstance(name="linear", team_key="DEV")
-INST_DEF = PMOInstance(name="linear", team_key="DEV", default_repo="alpha")
+INST_DEF = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
+INST_SET = PMOInstance(name="linear", team_key="DEV", repos=["alpha", "beta"])
 REPOS = {"alpha", "beta"}
 
 
@@ -40,8 +41,8 @@ def test_marker_parsing():
 
 
 def test_resolution_table_virgin_missions():
-    # marker wins over the instance default
-    assert resolve_repo(_m("`devcake-repo:beta`"), INST_DEF, REPOS, []) == ("beta", None)
+    # marker wins over the instance default (within the instance's repo set)
+    assert resolve_repo(_m("`devcake-repo:beta`"), INST_SET, REPOS, []) == ("beta", None)
     # unknown marker gates with the fix-the-marker reason
     name, reason = resolve_repo(_m("`devcake-repo:gone`"), INST_DEF, REPOS, [])
     assert name is None and "unknown repo 'gone'" in reason
@@ -72,6 +73,25 @@ def test_resolution_sticky_once_a_run_exists():
     # sticky repo vanished from config → gate, explicit restore-or-close reason
     name, reason = resolve_repo(_m(), INST_DEF, {"alpha"}, history)
     assert name is None and "no longer configured" in reason
+
+
+def test_repo_set_routing_semantics():
+    """Item 2 (founder decision 2026-07-15): the instance's repo SET is
+    ordered — first entry is the default for unmarked missions; markers
+    may pick any LISTED repo; a configured-but-unlisted repo gates."""
+    # unmarked → first of the set
+    assert resolve_repo(_m(), INST_SET, REPOS, []) == ("alpha", None)
+    # marker picks any listed repo
+    assert resolve_repo(_m("`devcake-repo:beta`"), INST_SET, REPOS, []) == ("beta", None)
+    # configured but NOT in the set → gate with a fix-it reason
+    inst_alpha_only = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
+    name, reason = resolve_repo(_m("`devcake-repo:beta`"), inst_alpha_only,
+                                REPOS, [])
+    assert name is None and "repo set" in reason
+    # empty set → the zero-repo gate (internal forge un-gates it)
+    assert resolve_repo(_m(), INST, REPOS, []) == (None, REASON_ZERO_REPO)
+    # sticky still wins silently over set edits (A25 semantics preserved)
+    assert resolve_repo(_m(), INST_SET, REPOS, [_run("beta")]) == ("beta", None)
 
 
 def test_malformed_marker_gates_instead_of_silent_default():

@@ -11,7 +11,7 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 // by App while a draft page (Configuration / Repositories) is active, so
 // config↔repos switches keep the draft and there is exactly ONE nav-guard
 // registration.
-const DEFAULT_REPO_RE = /^cfg\.pmos\.\d+\.default_repo$/;
+const DEFAULT_REPO_RE = /^cfg\.pmos\.\d+\.repos$/;
 
 export default function DraftChrome({ registerNavGuard, health }) {
   const { dr, reload } = useSharedDraft();
@@ -94,7 +94,7 @@ export default function DraftChrome({ registerNavGuard, health }) {
     setSaveResults(null);
   };
 
-  // default_repo changed while runs are in flight (v0.1.1 B5, founder
+  // the instance repo set changed while runs are in flight (B5, founder
   // decision): sticky-wins-silently backend semantics mean in-flight
   // missions KEEP their repo — warn in the save review so the operator
   // explicitly acknowledges nothing is re-routed. Uses App's live-polled

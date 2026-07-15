@@ -68,10 +68,11 @@ export function metaFor(path) {
     return { group: "Prompts", label: `${m[1]} active template`,
              multiline: false, format: orEmpty };
   }
-  m = path.match(/^cfg\.pmos\.(\d+)\.default_repo$/);
+  m = path.match(/^cfg\.pmos\.(\d+)\.repos$/);
   if (m) {
-    return { group: "PMO", label: `Default repo (instance #${+m[1] + 1})`,
-             multiline: false, format: orEmpty };
+    return { group: "PMO", label: `Repositories (instance #${+m[1] + 1})`,
+             multiline: false,
+             format: (v) => ((v || []).length ? (v || []).join(" › ") : "(none — internal forge)") };
   }
   m = path.match(/^devTypes\.([^.]+)\.(.+)$/);
   if (m && DEV_TYPE_FIELDS[m[2]]) {

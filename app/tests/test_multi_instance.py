@@ -320,8 +320,7 @@ def test_dispatch_gates_on_run_id_overflow(tmp_path):
     m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, _store = make_mgr(tmp_path, m, forge=object())
     mgr.internal_forge = None
-    mgr.instance = PMOInstance(name="linear", team_key="DEV",
-                               default_repo="main")
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
     fake.activity_entries = [ActivityEntry(
         ts=datetime.now(timezone.utc), author="troll", kind="comment",
         body="see `" + "9" * 39 + "_EXECUTE.md` for details")]

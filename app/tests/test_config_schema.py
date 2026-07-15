@@ -76,13 +76,25 @@ def test_reserved_pmo_instance_names_rejected():
                                   url="https://github.com/o/r")])   # still fine
 
 
-def test_default_repo_must_name_a_repo():
+def test_pmo_repo_set_members_must_exist():
     base = _base()
-    base["pmos"][0]["default_repo"] = "nosuchrepo"
-    with pytest.raises(Exception, match="names no"):
+    base["pmos"][0]["repos"] = ["nosuchrepo"]
+    with pytest.raises(Exception, match="name no configured repo"):
         AppConfig.model_validate(base)
-    base["pmos"][0]["default_repo"] = base["repos"][0]["name"]
+    base["pmos"][0]["repos"] = [base["repos"][0]["name"],
+                                base["repos"][0]["name"]]
+    with pytest.raises(Exception, match="duplicate"):
+        AppConfig.model_validate(base)
+    base["pmos"][0]["repos"] = [base["repos"][0]["name"]]
     AppConfig.model_validate(base)
+
+
+def test_pre_repo_set_default_repo_shape_refused():
+    """Item 2: singular default_repo became the ordered repo set — stale
+    bodies/files get the hand-migration hint, never a silent drop."""
+    with pytest.raises(ValueError, match="default_repo"):
+        reject_stale_patch({"pmos": [{"name": "linear",
+                                      "default_repo": "main"}]})
 
 
 def test_unknown_pmo_system_rejected():

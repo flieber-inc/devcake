@@ -490,15 +490,32 @@ export default function ConfigPage({ section, onSectionInView }) {
                   help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
                   refKey={`pmo:${inst.name}:api_key`} paste
                   locked={!savedPmoNames.has(inst.name)} />
-                <Field label="Default repo"
-                  help="Where this instance's missions land when they carry no `devcake-repo:` marker. '(none)' = unrouted missions wait (the internal fallback forge arrives in v0.1 M11).">
-                  <Select value={inst.default_repo || ""}
-                    onChange={(e) => setField(`cfg.pmos.${idx}.default_repo`, e.target.value || null)}>
-                    <option value="">(none)</option>
-                    {cfg.repos.map((r) => (
-                      <option key={r.name} value={r.name}>{r.name}</option>
-                    ))}
-                  </Select>
+                <Field label="Repositories"
+                  help="The ORDERED set of repos this instance's missions may target. Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo.">
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    {cfg.repos.length === 0 && (
+                      <span className="text-xs text-neutral-400">
+                        no repositories configured — add them on the Repositories page
+                      </span>
+                    )}
+                    {cfg.repos.map((r) => {
+                      const sel = (inst.repos || []).includes(r.name);
+                      const pos = (inst.repos || []).indexOf(r.name);
+                      return (
+                        <button key={r.name} type="button"
+                          onClick={() => setField(`cfg.pmos.${idx}.repos`,
+                            sel ? (inst.repos || []).filter((n) => n !== r.name)
+                                : [...(inst.repos || []), r.name])}
+                          className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
+                            sel
+                              ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
+                              : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                          }`}>
+                          {r.name}{sel && pos === 0 ? " · default" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </Field>
               </div>
               <div className="flex flex-wrap items-center gap-3">
@@ -519,7 +536,7 @@ export default function ConfigPage({ section, onSectionInView }) {
           <Button kind="ghost" onClick={() =>
             setField("cfg.pmos", [...cfg.pmos,
               { name: `linear${cfg.pmos.length + 1}`, system: "linear",
-                team_key: "", api_base: null, default_repo: null }])}>
+                team_key: "", api_base: null, repos: [] }])}>
             + Add PMO instance
           </Button>
           <Field label="Poll interval (s)"

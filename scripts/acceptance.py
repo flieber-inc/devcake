@@ -14,6 +14,7 @@ origin of DEVCAKE_REPO_URL). Full multi-forge parity is a v0.1 roadmap item
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.parse
@@ -23,11 +24,16 @@ API = "https://api.linear.app/graphql"
 
 
 def env(name, required=True):
+    # shell environment first, then .env (audit A19: the docs promise
+    # "shell/.env" but only the file was read — an exported override lost)
+    v = os.environ.get(name)
+    if v:
+        return v.strip()
     for line in open(".env"):
         if line.startswith(f"{name}="):
             return line.split("=", 1)[1].strip()
     if required:
-        sys.exit(f"missing {name} in .env")
+        sys.exit(f"missing {name} (export it or set it in .env)")
     return ""
 
 

@@ -6,14 +6,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # shellcheck disable=SC1091
-set -a
-# Load Redis password (and anything else tests may need) from .env
-# without treating the whole file as executable shell.
+# Load Redis password (and anything else tests may need) from .env without
+# treating the whole file as executable shell. Line-wise export (audit A29):
+# `export $(grep … | xargs)` word-split values, so a password containing
+# spaces, quotes, or '#' was mangled or aborted the suite.
 if [[ -f .env ]]; then
-  # shellcheck disable=SC2046
-  export $(grep -E '^(REDIS_PASSWORD|ADMIN_USER|ADMIN_PASSWORD)=' .env | xargs)
+  while IFS= read -r line; do
+    export "${line?}"
+  done < <(grep -E '^(REDIS_PASSWORD|ADMIN_USER|ADMIN_PASSWORD)=' .env)
 fi
-set +a
 
 : "${REDIS_PASSWORD:?REDIS_PASSWORD must be set (compose .env)}"
 : "${ADMIN_USER:?ADMIN_USER must be set (compose .env)}"

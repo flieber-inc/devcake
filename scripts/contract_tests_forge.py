@@ -109,12 +109,22 @@ class GiteaFixture:
 
     def down(self):
         admin_user = self.admin[0]
-        for method, path in (("DELETE", f"/repos/{admin_user}/{self.repo}"),
-                             ("DELETE", f"/admin/users/{self.reviewer}")):
+        for method, path in (
+                ("DELETE", f"/repos/{admin_user}/{self.repo}"),
+                # revoke the admin token minted in up(): one live write-
+                # capable admin token accumulated per ci_suite run (audit A11)
+                ("DELETE", f"/users/{admin_user}/tokens/contract-{self.suffix}"),
+                ("DELETE", f"/admin/users/{self.reviewer}?purge=true")):
             try:
                 self._req(method, path)
             except Exception as e:
                 print(f"cleanup {path}: {e}")
+        try:
+            # drop the battery's secret-store entries (repo/contract/*)
+            from devcake import secrets as _s
+            _s.delete_connection_instance("repo", "contract")
+        except Exception as e:
+            print(f"cleanup secret store: {e}")
 
 
 async def run_battery(inst: RepoInstance, fixture) -> None:

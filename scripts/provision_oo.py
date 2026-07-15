@@ -129,6 +129,16 @@ DASHBOARD = {
     "variables": {"list": []},
 }
 
+failures: list[str] = []   # fail-loud on EVERY error, not only ingest (A20)
+
+
+def _failed(out) -> bool:
+    """A real provisioning failure — an 'already exists' response on re-run
+    is idempotent success, not an error."""
+    if not (isinstance(out, dict) and "_error" in out):
+        return False
+    return "exist" not in str(out.get("_body", "")).lower()
+
 existing = req("GET", "/dashboards")
 names = [d.get("title") for d in (existing.get("dashboards") or [])]
 if "DevCake" in names:
@@ -136,15 +146,21 @@ if "DevCake" in names:
 else:
     out = req("POST", "/dashboards", DASHBOARD)
     print("dashboard:", "created" if "_error" not in out else out)
+    if _failed(out):
+        failures.append(f"dashboard: {out}")
 
 if not WEBHOOK:
     print("alerts: skipped (set OO_ALERT_WEBHOOK in .env to provision — docs/15 §6)")
+    if failures:
+        sys.exit("provision_oo FAILED: " + "; ".join(failures))
     sys.exit(0)
 
 dest = req("POST", "/alerts/destinations",
            {"name": "devcake-webhook", "url": WEBHOOK, "method": "post",
             "skip_tls_verify": False, "template": "devcake-default"})
 print("destination:", dest)
+if _failed(dest):
+    failures.append(f"destination: {dest}")
 # Full documented alert set (docs/15 §6, ISSUES #23). Every query targets a
 # span the app actually emits (verified against the tracer inventory):
 # mission.give_up, watchdog.kill, audit.event (devcake_audit_action mirrors
@@ -179,3 +195,8 @@ for name, sql, period, threshold in [
                                      "silence": 30},
                "destinations": ["devcake-webhook"], "enabled": True})
     print(f"alert {name}:", out)
+    if _failed(out):
+        failures.append(f"alert {name}: {out}")
+
+if failures:
+    sys.exit("provision_oo FAILED: " + "; ".join(failures))

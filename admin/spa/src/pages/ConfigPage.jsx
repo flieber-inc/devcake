@@ -159,7 +159,8 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           <Button kind="danger-ghost" icon={Trash2} onClick={() => onDelete(name)}>Delete</Button>
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* one line: harness · model · a much smaller max-concurrency box */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_6rem]">
         <Field label="Harness template"
           help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements below follow it automatically on Save.">
           <Select
@@ -169,19 +170,19 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
             {Object.keys(harnesses).map((t) => <option key={t}>{t}</option>)}
           </Select>
         </Field>
-        <Field label="Max concurrency"
+        <Field label="Model" hint="Empty = harness default"
+          help="Pins the model the harness runs (claude --model / codex -m / grok --model), e.g. claude-fable-5 for Claude Code. Leave empty to let the harness pick its own default.">
+          <Input value={d.model || ""}
+            placeholder={h.default_model ? `harness default: ${h.default_model}` : "e.g. claude-fable-5"}
+            onChange={(e) => set("model", e.target.value)} />
+        </Field>
+        <Field label="Max conc."
           help="How many Devs of this type may run at once. The global ceiling under Limits still applies on top.">
           <Input
             type="number" min="1" value={d.max_concurrency}
             onChange={(e) => set("max_concurrency", Number(e.target.value))}
             onBlur={(e) => set("max_concurrency", Math.max(1, Number(e.target.value) || 1))}
           />
-        </Field>
-        <Field label="Model" hint="Empty = harness default"
-          help="Pins the model the harness runs (claude --model / codex -m / grok --model), e.g. claude-fable-5 for Claude Code. Leave empty to let the harness pick its own default.">
-          <Input value={d.model || ""}
-            placeholder={h.default_model ? `harness default: ${h.default_model}` : "e.g. claude-fable-5"}
-            onChange={(e) => set("model", e.target.value)} />
         </Field>
       </div>
       <p className="text-xs text-neutral-400">

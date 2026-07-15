@@ -207,6 +207,18 @@ Exit criteria:
 
 **Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
 
+## v0.1.1 — audit-fix round + Config/Sidebar UX (2026-07-14)
+
+A six-agent skeptical audit of the whole v0→v0.1 range confirmed 8 open bugs, ~8 claim mismatches, and ~20 risks; all were fixed in a 15-commit round (audit ids A1–A29 in the commit messages), plus four founder-requested UX features:
+
+- **Correctness/security (P0):** a permanent PMO error (revoked key) no longer starves every later instance's poll segment (`/health` gains `poll_degraded`); `ForgeRuntime.rebuild` preserves internal-forge registrations (config/secret saves no longer fail in-flight zero-repo runs); the admin internal-repo Clear sticks (terminal missions never re-provision); the secrets-check path-traversal oracle is closed and all secret endpoints validate input (DELETE is a real delete; harness keys are revocable); the CI harness smoke can actually fail and the image-pin gate discovers files, scans `COPY --from`, and enforces `pull_policy: never`.
+- **Correctness (P1):** dispatch honors `DEVCAKE_TAG`; `review:awaiting_merge` is a registered swap marker; the FinalizerRouter's orphan-fail path tears down ACL users/reply streams; Linear label reads paginate everywhere (fail-loud ceilings); the Gitea token probe is tri-state (no re-mint on transient, both tokens checked); mission ownership persists across restarts (`/data/state/mission_owner.json`), never releases under an active run, and `main`/`sys` are reserved PMO instance names.
+- **Routing (founder decisions):** a changed instance `default_repo` no longer gates in-flight missions — sticky wins silently; malformed `devcake-repo:` markers gate instead of silently routing to the default; decomposition children inherit the parent's repo marker.
+- **Hygiene:** battery token cleanup (15 leaked admin tokens revoked), fail-loud `provision_oo`, honest zip MANIFEST attribution, GitLab ref encoding, redaction-scan caching, Gitea bootstrap fails loud + admin password rotation syncs from `.env`, OpenObserve left the runtime network (the collector bridges), and the fabricated `-k "not live"` changelog line was removed from this file.
+- **UX (v0.1.1 features):** per-Mission-Type **prompt templates** (stored under `/data/config/prompt_templates/`, safe `{var}` rendering — no format-string escaping — with a Config-page Prompts section, per-type active selection, and health warnings on missing templates); a **Repositories sidebar page** sharing one unified config draft with Configuration (cross-page Save review, single nav guard); the sidebar services grid grew a **Gitea light** (3×2); Overview's Services stat became the **Devs fleet card** (green available / pulsing blue running / red broken, server-computed `credentials_ready`); a save-time warning when `default_repo` changes while runs are in flight.
+
+Suite at close: 334 unit tests; full `ci_suite.sh` (pin gate, gitea battery 13/13, stub-harness smoke) green; SPA flows verified in a real browser. Known deferred: a sweep tool for Gitea svc users orphaned by pre-fix Clears (below), and registering the public `devcake` Docker Hub org (manual founder action — squatting hazard).
+
 ## Post-v0.1 backlog
 
 ### Deferred (v0.2+)
@@ -221,6 +233,7 @@ Exit criteria:
 - **First-class OTel metrics layer** — conditional: earns its keep when dashboards need pre-aggregation or long retention (v0 aggregates via SQL over span attributes — `12` §4).
 - **SQLite `StatePort` swap** — conditional: if run history outgrows files.
 - **Public-release hygiene** — conditional: if audience expands. LICENSE, SECURITY.md, CONTRIBUTING.md, CHANGELOG, SBOM (ISSUES #38).
+- **Internal-forge orphan sweep** — admin tool reconciling Gitea org repos/svc users against `/data/secrets/internal_forge/mission-*.json` (svc users leaked by pre-v0.1.1 Clears are not garbage-collected; the leak itself is fixed).
 
 ### Discarded (2026-07-14, with rationale — do not resurrect without new evidence)
 

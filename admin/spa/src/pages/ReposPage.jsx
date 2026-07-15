@@ -110,7 +110,9 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
         Creates a private repo (org <code className="font-mono text-xs">devcake-repos</code>,
         protected main) and stores its access/read-only/reviewer tokens for
         this card automatically — save the page afterwards and the card is
-        fully wired.
+        fully wired. If the repo already exists in that org it is adopted
+        instead: fresh tokens are minted and stored (the recovery path after
+        removing a card, which deletes its stored tokens).
       </p>
       <div className="space-y-3">
         <Field label="Repository name"

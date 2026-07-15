@@ -111,6 +111,7 @@ def test_create_operator_repo_mints_and_stores_card_tokens(tmp_path, monkeypatch
     prov = _prov(handler, tmp_path, monkeypatch)
     out = run_coro(prov.create_operator_repo("newrepo"))
     assert out["clone_url"] == "http://gitea:3000/devcake-repos/newrepo.git"
+    assert out["adopted"] is False
     assert len(minted) == 3                       # write + ro + reviewer
     assert any("devcake-repos/newrepo/branch_protections" in p for _, p in calls)
     stored = _json.loads(
@@ -119,13 +120,34 @@ def test_create_operator_repo_mints_and_stores_card_tokens(tmp_path, monkeypatch
     assert all(v.startswith("tok-") for v in stored.values())
 
 
-def test_create_operator_repo_refuses_existing(tmp_path, monkeypatch):
+def test_create_operator_repo_adopts_existing(tmp_path, monkeypatch):
+    """Founder report 2026-07-15: removing a repo card deletes its stored
+    tokens while the Gitea repo lives on — and the old 409 ("pick another
+    name") made re-adding it impossible: the card could never receive keys
+    again. An existing devcake-repos repo is now ADOPTED: it is NOT
+    re-created, but guardrails (protection, collaborators) are re-ensured
+    and a FRESH token set is minted and stored under the card name."""
+    import json as _json
+    calls, minted = [], []
+
     def handler(request):
-        if request.method == "GET" and "/repos/devcake-repos/taken" in request.url.path:
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and "/repos/devcake-repos/taken" in path:
             return httpx.Response(200, json={"name": "taken"})
+        if request.method == "POST" and path.endswith("/tokens"):
+            minted.append(path)
+            return httpx.Response(201, json={"sha1": f"tok-{len(minted)}-1234"})
         return httpx.Response(201, json={})
 
     prov = _prov(handler, tmp_path, monkeypatch)
-    import pytest as _pytest
-    with _pytest.raises(ValueError, match="already exists"):
-        run_coro(prov.create_operator_repo("taken"))
+    out = run_coro(prov.create_operator_repo("taken"))
+    assert out["adopted"] is True
+    assert out["clone_url"] == "http://gitea:3000/devcake-repos/taken.git"
+    assert not any(m == "POST" and p.endswith("/orgs/devcake-repos/repos")
+                   for m, p in calls)             # existing repo NOT re-created
+    assert any("devcake-repos/taken/branch_protections" in p for _, p in calls)
+    assert len(minted) == 3
+    stored = _json.loads(
+        (tmp_path / "secrets" / "connections" / "repo-taken.json").read_text())
+    assert set(stored) == {"token", "token_ro", "reviewer_token"}

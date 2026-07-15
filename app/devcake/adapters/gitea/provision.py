@@ -208,17 +208,23 @@ class GiteaProvisioner:
           used app-side for PR comments and merges, unlike mission repos)
         - read-only token for non-EXECUTE stages (token_ro)
         - a reviewer token on the shared devcake-reviewer account, which is
-          whitelisted in the branch protection (formal approvals count)."""
+          whitelisted in the branch protection (formal approvals count).
+
+        An EXISTING devcake-repos repo is ADOPTED, not refused (founder
+        report 2026-07-15): removing a repo card deletes its stored tokens
+        while the Gitea repo lives on, so re-adding needs a re-mint path —
+        the repo is left untouched, guardrails are re-ensured, and a fresh
+        token set replaces whatever the store lost (_mint is delete-then-
+        create, so stale same-named tokens are revoked, never duplicated)."""
         from ... import secrets as secrets_store
         await self._req("POST", "/orgs", tolerate=(409, 422),
                         json={"username": OPERATOR_ORG, "visibility": "private"})
-        if await self._req("GET", f"/repos/{OPERATOR_ORG}/{name}",
-                           tolerate=(404,)) is not None:
-            raise ValueError(f"repo {OPERATOR_ORG}/{name} already exists — "
-                             f"pick another name")
-        await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos",
-                        json={"name": name, "private": True, "auto_init": True,
-                              "default_branch": "main"})
+        adopted = await self._req("GET", f"/repos/{OPERATOR_ORG}/{name}",
+                                  tolerate=(404,)) is not None
+        if not adopted:
+            await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos",
+                            json={"name": name, "private": True,
+                                  "auto_init": True, "default_branch": "main"})
         await self._req("POST", f"/repos/{OPERATOR_ORG}/{name}/branch_protections",
                         tolerate=(403, 409, 422),
                         json={"branch_name": "main", "required_approvals": 1,
@@ -244,11 +250,13 @@ class GiteaProvisioner:
         }
         for field, value in fields.items():
             secrets_store.write_connection_secret("repo", name, field, value)
-        log.info("operator repo created: %s/%s (user %s; card secrets stored)",
-                 OPERATOR_ORG, name, svc_user)
+        log.info("operator repo %s: %s/%s (user %s; card secrets stored)",
+                 "adopted" if adopted else "created", OPERATOR_ORG, name,
+                 svc_user)
         return {"repo_name": name,
                 "clone_url": f"{self.url}/{OPERATOR_ORG}/{name}.git",
-                "html_url": f"{self.public_url}/{OPERATOR_ORG}/{name}"}
+                "html_url": f"{self.public_url}/{OPERATOR_ORG}/{name}",
+                "adopted": adopted}
 
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission credential pair (runspec token source) —

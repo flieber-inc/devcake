@@ -147,8 +147,14 @@ missions_cache: list[dict] = []
 # pmo_id → owning instance name. Persistence is load-bearing — a per-cycle
 # rebuild would flip ownership of a shared mission the moment its owner has
 # one PMOTransient cycle, double-dispatching it. Released only when the
-# OWNER successfully polls and no longer sees the mission, or leaves config.
-_mission_owner: dict[str, str] = {}
+# OWNER successfully polls and no longer sees the mission, or leaves config
+# (and never while a run for the mission is still active — audit A15).
+# Durable across restarts via OwnerStore (audit A15: in-memory-only
+# ownership reopened the duplicate-dispatch window on every restart).
+from ..adapters.files.owner_store import OwnerStore  # noqa: E402
+
+_owner_store = OwnerStore()
+_mission_owner: dict[str, str] = _owner_store.load()
 
 # instance → last poll-segment error (audit A1): a PERMANENT PMO failure
 # (revoked key, deleted team) skips only that instance's segment; this map
@@ -179,8 +185,14 @@ def _claim_missions(mgr: MissionManager, fetched: list,
 def _release_stale_ownership(polled_ok: dict[str, set]) -> None:
     """Drop ownership entries whose owner left config, or whose owner
     successfully polled this cycle and no longer sees the mission (done +
-    aged out of list_all, or deleted). A FAILED poll releases nothing."""
+    aged out of list_all, or deleted). A FAILED poll releases nothing, and
+    neither does an ACTIVE run for the mission (audit A15: releasing while
+    the ex-owner's run still executes lets another instance re-dispatch the
+    same work — the in-flight guard only sees its own pmo_ref)."""
+    in_flight = {r.mission_pmo_id for r in store.active() if r.mission_pmo_id}
     for pmo_id, name in list(_mission_owner.items()):
+        if pmo_id in in_flight:
+            continue
         if name not in managers:
             del _mission_owner[pmo_id]
         elif name in polled_ok and pmo_id not in polled_ok[name]:
@@ -271,6 +283,7 @@ async def run_poll_cycle(cycle: int) -> None:
             cache_rows: list[dict] = []
             seen, cand, disp = 0, 0, 0
             polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids
+            owner_before = dict(_mission_owner)  # persisted iff changed below
             for mgr in _managers_in_config_order():
                 with tracer.start_as_current_span("poll.instance") as ispan:
                     ispan.set_attribute("devcake.instance", mgr.instance_name)
@@ -296,6 +309,8 @@ async def run_poll_cycle(cycle: int) -> None:
                         log.exception("poll.cycle %d: instance %s FAILED — "
                                       "segment skipped", cycle, mgr.instance_name)
             _release_stale_ownership(polled_ok)
+            if _mission_owner != owner_before:   # durable claim (audit A15)
+                _owner_store.save(_mission_owner)
             # a skipped instance keeps its LAST snapshot in the cache
             # (v0 behavior: PMO trouble never blanks the view)
             cache_rows.extend(

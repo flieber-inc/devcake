@@ -183,6 +183,74 @@ def test_ownership_survives_a_transient_cycle(tmp_path, monkeypatch):
     assert "proj-1" not in owner
 
 
+def test_owner_store_roundtrip_and_corrupt_file(tmp_path):
+    """Audit A15: ownership was process-lifetime only — a restart reopened
+    the duplicate-dispatch window ('persistent' was oversold). Now a real
+    file under /data/state."""
+    from devcake.adapters.files.owner_store import OwnerStore
+    path = tmp_path / "state" / "mission_owner.json"
+    s = OwnerStore(path)
+    assert s.load() == {}
+    s.save({"proj-1": "linteama"})
+    assert OwnerStore(path).load() == {"proj-1": "linteama"}   # restart survival
+    path.write_text("{corrupt")
+    assert OwnerStore(path).load() == {}                       # never wedges boot
+
+
+def test_poll_cycle_persists_ownership_changes(tmp_path, monkeypatch):
+    from devcake.adapters.files.owner_store import OwnerStore
+    from devcake.api import main as app_main
+    a = _mgr("linteama")
+    store_path = tmp_path / "state" / "mission_owner.json"
+    monkeypatch.setattr(app_main, "_owner_store", OwnerStore(store_path))
+    monkeypatch.setattr(app_main, "_mission_owner", {})
+    monkeypatch.setattr(app_main, "managers", {"linteama": a})
+    monkeypatch.setattr(app_main, "_managers_in_config_order", lambda: [a])
+    monkeypatch.setattr(app_main, "missions_cache", [])
+
+    async def claiming_poll(mgr, cache_rows):
+        got = app_main._claim_missions(
+            mgr, [_mission("proj-9", "PRJ-9", mgr.instance_name)],
+            app_main._mission_owner)
+        return (len(got), 0, 0, {"proj-9"})
+
+    monkeypatch.setattr(app_main, "_poll_instance", claiming_poll)
+    run_coro(app_main.run_poll_cycle(1))
+    assert OwnerStore(store_path).load() == {"proj-9": "linteama"}
+
+
+def test_release_deferred_while_ex_owner_run_still_active(tmp_path, monkeypatch):
+    """Audit A15: releasing a shared mission the moment its owner no longer
+    sees it (or left config) lets the surviving instance re-dispatch while
+    the ex-owner's run is still executing — duplicate work."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import main as app_main
+    a, b = _mgr("linteama"), _mgr("linteamb")
+
+    class FakeStore:
+        def __init__(self, runs):
+            self.runs = runs
+
+        def active(self):
+            return self.runs
+
+    live = Run(run_id="LINTEAMA-PRJ-1-1-EXECUTE-AAAAAA", mission_key="PRJ-1",
+               mission_type="EXECUTE", dev_type="d", seq=1,
+               pmo_ref="linteama", state="running")
+    live.mission_pmo_id = "proj-1"
+    owner = {"proj-1": "linteama"}
+    monkeypatch.setattr(app_main, "managers", {"linteama": a, "linteamb": b})
+    monkeypatch.setattr(app_main, "_mission_owner", owner)
+    monkeypatch.setattr(app_main, "store", FakeStore([live]))
+    # owner polled green and no longer sees the mission — but its run lives
+    app_main._release_stale_ownership({"linteama": set()})
+    assert owner == {"proj-1": "linteama"}
+    # run finished → release proceeds
+    monkeypatch.setattr(app_main, "store", FakeStore([]))
+    app_main._release_stale_ownership({"linteama": set()})
+    assert owner == {}
+
+
 def test_permanent_pmo_error_starves_no_other_instance(tmp_path, monkeypatch):
     """Audit A1: a NON-transient PMO failure (revoked key → RuntimeError, not
     PMOTransient) on instance A must skip only A's segment — B still polls,

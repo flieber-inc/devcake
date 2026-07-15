@@ -63,6 +63,19 @@ def test_instance_name_format_enforced():
     PMOInstance(name="linearb")
 
 
+def test_reserved_pmo_instance_names_rejected():
+    """Audit A15: 'main' marks legacy pre-v3 run records (pmo_ref default) —
+    a live instance named main would adopt every legacy record directly and
+    count them as its own in the in-flight guard; 'sys' is the HELLO/OAUTH
+    pseudo-instance in run ids. Repo names stay free ('main' is the repo
+    default and harmless — repos never prefix run ids or pmo_refs)."""
+    for reserved in ("main", "sys"):
+        with pytest.raises(Exception, match="reserved"):
+            AppConfig(pmos=[PMOInstance(name=reserved, team_key="DEV")])
+    AppConfig(repos=[RepoInstance(name="main",
+                                  url="https://github.com/o/r")])   # still fine
+
+
 def test_default_repo_must_name_a_repo():
     base = _base()
     base["pmos"][0]["default_repo"] = "nosuchrepo"

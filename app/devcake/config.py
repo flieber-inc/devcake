@@ -265,6 +265,17 @@ class AppConfig(BaseModel):
         names = [e.name for e in v]
         if len(set(names)) != len(names):
             raise ValueError("pmos: duplicate instance names")
+        # PMO-side only (audit A15): 'main' marks legacy pre-v3 run records
+        # (Run.pmo_ref default) — a live instance named main would adopt
+        # every legacy record directly and count them as its own in the
+        # in-flight guard; 'sys' is the HELLO/OAUTH pseudo-instance in run
+        # ids. Repo names stay free ('main' is the default repo card name).
+        reserved = {"main", "sys"} & set(names)
+        if reserved:
+            raise ValueError(
+                f"pmos: reserved instance name(s) {sorted(reserved)} — "
+                f"'main' marks legacy run records, 'sys' the HELLO/OAUTH "
+                f"pseudo-instance; pick another name")
         # two instances polling the same underlying team would double-
         # dispatch every mission under two identity prefixes — refuse
         targets = [(e.system, e.api_base, e.team_key) for e in v if e.configured]

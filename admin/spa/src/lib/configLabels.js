@@ -22,10 +22,7 @@ const EXACT = {
     format: (v) => (v === "opt_out" ? "opt-out (whole team)" : "opt-in (label required)"),
     warning: (o, n) => (n === "opt_out" ? ADOPTION_COPY : null),
   },
-  "cfg.pmos.0.team_key": { group: "PMO", label: "Team key", format: orEmpty },
   "cfg.poll_interval_seconds": { group: "PMO", label: "Poll interval (s)" },
-  "cfg.repos.0.forge": { group: "Repository", label: "Forge" },
-  "cfg.repos.0.url": { group: "Repository", label: "Repository URL", format: orEmpty },
   "cfg.auto_merge": {
     group: "Repository", label: "Auto-merge", format: onOff,
     warning: (o, n) => (n === true ? AUTO_MERGE_COPY : null),
@@ -61,9 +58,34 @@ export const GROUP_ORDER = [
   "Prompts", "Limits", "Other",
 ];
 
+// the instance LISTS diff atomically when a card is added/removed — show the
+// resulting name sets, not [object Object]
+const instanceNames = (v) =>
+  ((v || []).length ? (v || []).map((r) => r.name).join(", ") : "(none)");
+
 export function metaFor(path) {
   if (EXACT[path]) return { multiline: false, format: orEmpty, ...EXACT[path] };
-  let m = path.match(/^cfg\.active_prompt_templates\.([^.]+)$/);
+  if (path === "cfg.repos")
+    return { group: "Repository", label: "Repository cards",
+             multiline: false, format: instanceNames };
+  if (path === "cfg.pmos")
+    return { group: "PMO", label: "PMO instances",
+             multiline: false, format: instanceNames };
+  let m = path.match(/^cfg\.repos\.(\d+)\.([^.]+)$/);
+  if (m) {
+    const FIELDS = { name: "Repo name", forge: "Forge", url: "Repository URL",
+                     default_branch: "Default branch", api_base: "API base" };
+    return { group: "Repository", multiline: false, format: orEmpty,
+             label: `Repo #${+m[1] + 1} · ${FIELDS[m[2]] || m[2]}` };
+  }
+  m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base)$/);
+  if (m) {
+    const FIELDS = { name: "Instance name", system: "System",
+                     team_key: "Team key", api_base: "API base" };
+    return { group: "PMO", multiline: false, format: orEmpty,
+             label: `PMO #${+m[1] + 1} · ${FIELDS[m[2]]}` };
+  }
+  m = path.match(/^cfg\.active_prompt_templates\.([^.]+)$/);
   if (m) {
     return { group: "Prompts", label: `${m[1]} active template`,
              multiline: false, format: orEmpty };

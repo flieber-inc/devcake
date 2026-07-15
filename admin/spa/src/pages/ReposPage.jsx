@@ -209,11 +209,29 @@ export default function ReposPage() {
                     const doRemove = () => {
                       newNames.untrack(repo.name);
                       setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx));
+                      // cascade: the server refuses a PMO that still lists a
+                      // repo name with no card — deselect it everywhere too
+                      cfg.pmos.forEach((p, pi) => {
+                        if ((p.repos || []).includes(repo.name))
+                          setField(`cfg.pmos.${pi}.repos`,
+                            p.repos.filter((n) => n !== repo.name));
+                        if ((p.reference_repos || []).includes(repo.name))
+                          setField(`cfg.pmos.${pi}.reference_repos`,
+                            p.reference_repos.filter((n) => n !== repo.name));
+                      });
                     };
+                    const refPmos = cfg.pmos
+                      .filter((p) => (p.repos || []).includes(repo.name)
+                                  || (p.reference_repos || []).includes(repo.name))
+                      .map((p) => p.name);
                     if (savedRepoNames.has(repo.name)) {
                       setConfirm({
                         title: `Remove repository "${repo.name}"?`,
-                        body: "Removing it and saving permanently deletes its stored tokens (write / read-only / reviewer); missions that used this repo gate until a human closes them out. Nothing changes until you Save.",
+                        body: "Removing it and saving permanently deletes its stored tokens (write / read-only / reviewer); missions that used this repo gate until a human closes them out."
+                          + (refPmos.length
+                              ? ` It is also deselected from PMO connection${refPmos.length > 1 ? "s" : ""} ${refPmos.join(", ")}.`
+                              : "")
+                          + " Nothing changes until you Save.",
                         confirmLabel: "Remove from draft",
                         action: () => { doRemove(); setConfirm(null); },
                       });

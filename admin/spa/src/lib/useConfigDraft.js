@@ -96,6 +96,19 @@ export default function useConfigDraft() {
     };
     checkNames(draft.cfg.repos, "repos", "repository");
     checkNames(draft.cfg.pmos, "pmos", "PMO instance");
+    // a PMO listing a repo name with no card is refused by the server —
+    // surface it inline (removals normally cascade; this catches stragglers)
+    const repoNames = new Set((draft.cfg.repos || []).map((r) => r.name));
+    (draft.cfg.pmos || []).forEach((p, i) => {
+      for (const [field, label] of
+           [["repos", "work repo"], ["reference_repos", "reference repo"]]) {
+        const missing = (p[field] || []).filter((n) => !repoNames.has(n));
+        if (missing.length)
+          errs[`cfg.pmos.${i}.${field}`] =
+            `PMO "${p.name}" lists removed ${label}${missing.length > 1 ? "s" : ""} ` +
+            `${missing.map((m) => `"${m}"`).join(", ")} — deselect there or re-add the repo`;
+      }
+    });
     return errs;
   }, [draft]);
 

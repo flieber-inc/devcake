@@ -304,6 +304,16 @@ function RepoChips({ label, help, all, selected, excluded, excludedNote,
             </button>
           );
         })}
+        {/* selected names whose repo card no longer exists: without this
+            they'd be invisible AND undeselectable — the config PUT then 422s */}
+        {selected.filter((n) => !all.some((r) => r.name === n)).map((n) => (
+          <button key={n} type="button"
+            title="this repo card no longer exists — click to remove the stale entry"
+            onClick={() => onChange(selected.filter((x) => x !== n))}
+            className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
+            {n} ✕
+          </button>
+        ))}
       </div>
     </Field>
   );

@@ -271,6 +271,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
 // selected in the SIBLING list render disabled (the two sets are disjoint
 // by config validation).
 function RepoChips({ label, help, all, selected, excluded, excludedNote,
+                     unavailable = [], unavailableNote = "",
                      firstBadge = "", onChange }) {
   return (
     <Field label={label} help={help}>
@@ -283,10 +284,12 @@ function RepoChips({ label, help, all, selected, excluded, excludedNote,
         {all.map((r) => {
           const sel = selected.includes(r.name);
           const pos = selected.indexOf(r.name);
-          const blocked = !sel && excluded.includes(r.name);
+          const noCreds = !sel && unavailable.includes(r.name);
+          const blocked = !sel && (excluded.includes(r.name) || noCreds);
           return (
             <button key={r.name} type="button" disabled={blocked}
-              title={blocked ? `already selected as a ${excludedNote}` : undefined}
+              title={noCreds ? unavailableNote
+                     : blocked ? `already selected as a ${excludedNote}` : undefined}
               onClick={() => onChange(
                 sel ? selected.filter((n) => n !== r.name)
                     : [...selected, r.name])}
@@ -313,6 +316,20 @@ export default function ConfigPage({ section, onSectionInView }) {
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
+  // repos WITHOUT a stored Access (write) token cannot join a PMO's WORK
+  // set (founder request 2026-07-15) — EXECUTE would fail at push; they
+  // remain selectable as reference repos
+  const [repoHasToken, setRepoHasToken] = useState({});
+  const repoNamesKey = (dr.draft?.cfg.repos || []).map((r) => r.name).join(",");
+  useEffect(() => {
+    const names = repoNamesKey ? repoNamesKey.split(",").filter(Boolean) : [];
+    if (!names.length) { setRepoHasToken({}); return; }
+    const q = names.map((n) => `repo:${n}:token`).join(",");
+    get(`/secrets-check?conn=${encodeURIComponent(q)}`)
+      .then((r) => setRepoHasToken(Object.fromEntries(
+        names.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present]))))
+      .catch(() => setRepoHasToken({}));
+  }, [repoNamesKey]);
   const [oauthFor, setOauthFor] = useState(null);
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
@@ -471,10 +488,12 @@ export default function ConfigPage({ section, onSectionInView }) {
                   refKey={`pmo:${inst.name}:api_key`} paste
                   locked={!savedPmoNames.has(inst.name)} />
                 <RepoChips label="Repositories"
-                  help="The ORDERED set of repos this instance's missions may target. Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
+                  help="The ORDERED set of repos this instance's missions may target — only repos with a stored Access token qualify (work needs push). Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
                   all={cfg.repos} selected={inst.repos || []}
                   excluded={inst.reference_repos || []}
                   excludedNote="reference repo"
+                  unavailable={cfg.repos.map((r) => r.name).filter((n) => !repoHasToken[n])}
+                  unavailableNote="no Access token stored — usable only as a reference repo"
                   firstBadge=" · default"
                   onChange={(next) => setField(`cfg.pmos.${idx}.repos`, next)} />
                 <RepoChips label="Reference repos"

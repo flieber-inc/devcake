@@ -12,8 +12,8 @@ import { getTheme, setTheme, onThemeChange } from "../theme.js";
 const NAV = [
   { page: "overview", href: "#/overview", label: "Overview", icon: LayoutDashboard },
   { page: "runs", href: "#/runs", label: "Runs", icon: SquareTerminal },
-  { page: "config", href: "#/config", label: "Configuration", icon: Settings2 },
   { page: "repos", href: "#/repos", label: "Repositories", icon: FolderGit2 },
+  { page: "config", href: "#/config", label: "Configuration", icon: Settings2 },
   { page: "logs", href: "#/logs", label: "Logs", icon: ScrollText },
 ];
 

@@ -89,24 +89,28 @@ class LinearAdapter:
 
     async def _team(self, team_key: str) -> dict[str, Any]:
         if team_key not in self._team_cache:
+            # SPLIT queries (the M2 field note: Linear's ~10k query-
+            # complexity budget). Nesting labels(first:100) WITH pageInfo
+            # under teams(filter:) blew the budget ('Query too complex',
+            # complexity 15560 — live-reproduced on the connection test), so
+            # the team shell is one cheap query and the labels cursor-walk
+            # rides the single-team query below (audit A12 pagination kept).
             data = await self._gql(
                 """query($key: String!) { teams(filter: {key: {eq: $key}}) { nodes {
                      id key
                      states { nodes { id name type position } }
-                     labels(first: 100) { nodes { id name }
-                                          pageInfo { hasNextPage endCursor } }
                 } } }""", {"key": team_key})
             nodes = data["teams"]["nodes"]
             if not nodes:
                 raise RuntimeError(f"linear: team {team_key!r} not found")
             team = nodes[0]
-            # cursor-walk the team's labels past page 1 (audit A12): every
-            # consumer — label swaps, create_mission, ensure_labels, the
-            # health probe — reads this cache, so a managed label past 100
-            # team labels must be visible here. Fail loud past the ceiling
-            # (a silently missing DEVCAKE-* label breaks swaps downstream).
-            info = (team["labels"].get("pageInfo") or {})
-            pages = 1
+            # every consumer — label swaps, create_mission, ensure_labels,
+            # the health probe — reads this cache, so a managed label past
+            # 100 team labels must be visible here. Fail loud past the
+            # ceiling (a silently missing DEVCAKE-* label breaks swaps).
+            team["labels"] = {"nodes": []}
+            info: dict = {"hasNextPage": True, "endCursor": None}
+            pages = 0
             while info.get("hasNextPage"):
                 if pages >= MAX_LABEL_PAGES:
                     raise RuntimeError(

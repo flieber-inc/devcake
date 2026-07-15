@@ -75,16 +75,19 @@ def test_swap_issue_labels_refuses_past_ceiling():
 
 
 def _team_gql(labels):
-    """A _gql fake serving teams(filter…) page 1 + team(id…) cursor pages."""
+    """A _gql fake serving the SPLIT queries: a labels-free team shell via
+    teams(filter…) — nesting a paginated labels connection there blew
+    Linear's ~10k complexity budget ('Query too complex' 15560, live) —
+    plus team(id…) cursor pages for the labels."""
     async def _gql(query, variables=None):
         v = dict(variables or {})
         if "teams(filter" in query:
+            assert "labels" not in query, "labels must not nest under teams(filter)"
             return {"teams": {"nodes": [{
-                "id": "team-1", "key": "DEV", "states": {"nodes": []},
-                "labels": _labels_conn(labels, 0, page=100)}]}}
+                "id": "team-1", "key": "DEV", "states": {"nodes": []}}]}}
         if "team(id" in query:
-            return {"team": {"labels": _labels_conn(labels, int(v["after"]),
-                                                    page=100)}}
+            start = int(v["after"]) if v.get("after") else 0
+            return {"team": {"labels": _labels_conn(labels, start, page=100)}}
         raise AssertionError(f"unexpected query: {query}")
     return _gql
 

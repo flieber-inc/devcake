@@ -76,10 +76,16 @@ HARNESSES: dict[str, Harness] = {
 def dev_type_status(dt) -> dict:
     """Enriched admin payload for one DevType (GET /api/v1/dev-types): the slim
     stored fields + derived harness info + which secret files actually exist
-    under this Dev Type's /data/secrets dir. Readiness itself is computed by
-    the SPA (env-var status comes from GET /env-check)."""
+    under this Dev Type's /data/secrets dir. credentials_ready is the
+    server-side readiness verdict (any ONE env key stored, or any credential
+    file present, is enough) — the Overview Devs card reads it directly."""
+    from . import secrets as secrets_store
     h = HARNESSES[dt.harness_template]
     secrets = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / dt.name
+    present = (sorted(p.name for p in secrets.glob("*"))
+               if secrets.is_dir() else [])
+    ready = (any(secrets_store.read_harness_secret(var) for var in h.credential_env)
+             or any(cf.secret_file in present for cf in h.credential_files))
     return {
         **dt.model_dump(),
         "harness": {
@@ -88,6 +94,6 @@ def dev_type_status(dt) -> dict:
             "credential_files": [cf.model_dump() for cf in h.credential_files],
             "oauth_available": h.oauth is not None,
         },
-        "secrets_present": sorted(p.name for p in secrets.glob("*"))
-                           if secrets.is_dir() else [],
+        "secrets_present": present,
+        "credentials_ready": ready,
     }

@@ -22,6 +22,25 @@ def test_registry_covers_every_harness_literal():
     assert set(HARNESSES) == set(literals)
 
 
+def test_dev_type_status_credentials_ready(monkeypatch, tmp_path):
+    """Overview 'Devs' card (v0.1.1 B3): readiness is server-computed —
+    any ONE of the harness's env keys in the store, or any credential file
+    present, is enough (the DevTypeCard rule, moved out of the SPA)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    dt = DevType(name="senior-dev", harness_template="claude-code")
+    assert dev_type_status(dt)["credentials_ready"] is False
+    s.write_harness_secret("ANTHROPIC_API_KEY", "sk-ant-value-1234")
+    assert dev_type_status(dt)["credentials_ready"] is True
+
+    g = DevType(name="grokdev", harness_template="grok-build")
+    assert dev_type_status(g)["credentials_ready"] is False
+    d = tmp_path / "secrets" / "grokdev"
+    d.mkdir(parents=True)
+    (d / "grok-auth.json").write_text("{}")
+    assert dev_type_status(g)["credentials_ready"] is True
+
+
 def test_harness_images_honor_devcake_tag(monkeypatch):
     """Audit A7: the documented pin workflow (export DEVCAKE_TAG=<sha> +
     bake + compose up) tags every image, but dispatch hardcoded :latest —

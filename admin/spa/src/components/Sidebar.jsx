@@ -4,6 +4,7 @@ import {
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import StatusDot from "./StatusDot.jsx";
+import { SERVICES, serviceValue } from "../lib/services.js";
 import Toggle from "./Toggle.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 import { getTheme, setTheme, onThemeChange } from "../theme.js";
@@ -146,10 +147,6 @@ function IntakeSwitch({ collapsed, paused, busy, disabled, error, onToggle }) {
   );
 }
 
-const SERVICES = [
-  ["app", "app"], ["pmo", "pmo"], ["redis", "redis"], ["dagu", "dagu"], ["openobserve", "logs"],
-];
-
 export default function Sidebar({
   page, configSection, alertCount, health, healthError,
   intakePaused, intakeBusy, intakeError, onIntakeToggle,
@@ -167,9 +164,11 @@ export default function Sidebar({
     });
   };
 
-  const dotOk = (key) => (healthError && key === "app" ? false : health[key]);
+  const dotOk = (key) =>
+    (healthError && key === "app" ? false : serviceValue(health, key));
   const anyDown = healthError || SERVICES.some(([k]) => dotOk(k) === false);
-  const allKnown = !healthError && SERVICES.every(([k]) => health[k] !== undefined);
+  const allKnown = !healthError &&
+    SERVICES.every(([k]) => serviceValue(health, k) !== undefined);
 
   return (
     <aside
@@ -252,7 +251,7 @@ export default function Sidebar({
             <span className={`h-2 w-2 rounded-full ${anyDown ? "bg-red-500" : allKnown ? "bg-green-500" : "bg-neutral-400"}`} />
           </div>
         ) : (
-          <div className={`flex flex-wrap gap-x-3 gap-y-1 rounded-lg border px-2.5 py-2 ${
+          <div className={`grid grid-cols-3 gap-x-3 gap-y-1 rounded-lg border px-2.5 py-2 ${
             healthError
               ? "border-red-300 dark:border-red-900"
               : "border-neutral-200 dark:border-neutral-800"
@@ -263,7 +262,7 @@ export default function Sidebar({
               </span>
             ))}
             {healthError && (
-              <span className="w-full text-[10px] font-medium text-red-600 dark:text-red-400">
+              <span className="col-span-3 text-[10px] font-medium text-red-600 dark:text-red-400">
                 backend unreachable
               </span>
             )}

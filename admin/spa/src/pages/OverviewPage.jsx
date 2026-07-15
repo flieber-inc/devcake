@@ -1,14 +1,16 @@
 import React, { useState } from "react";
 import {
-  Activity, Play, Pause, HeartPulse, ExternalLink, Workflow, ScrollText,
+  Activity, Play, Pause, Bot, ExternalLink, Workflow, ScrollText,
   BookOpen, Hand, GitMerge,
 } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import { Card } from "../components/Card.jsx";
 import Alert from "../components/Alert.jsx";
+import StatusDot from "../components/StatusDot.jsx";
 import StatusPill from "../components/StatusPill.jsx";
 import RunTerminal from "../components/RunTerminal.jsx";
 import usePoll from "../lib/usePoll.js";
+import { devTypeState } from "../lib/services.js";
 import { relTime, fullTime } from "../lib/format.js";
 import { get } from "../api.js";
 
@@ -117,19 +119,22 @@ function NeedsHumanPanel({ merge, attention }) {
   );
 }
 
-const SERVICES = [
-  ["app", "app"], ["pmo", "pmo"], ["redis", "redis"], ["dagu", "dagu"], ["openobserve", "logs"],
-];
-
 export default function OverviewPage({
   health, alerts, dismissedAlerts = [], onDismissAlert, onRestoreAlert,
 }) {
   const [recent, setRecent] = useState(null);
+  const [devTypes, setDevTypes] = useState(null);
   const [openRun, setOpenRun] = useState(null);
   const [showDismissed, setShowDismissed] = useState(false);
-  usePoll(() => get("/runs?limit=5&offset=0").then(setRecent).catch(() => {}), 10000);
+  // limit=25 (not 5): the Devs card scans for ACTIVE runs per dev type; the
+  // Recent-runs card slices the first five below
+  usePoll(() => get("/runs?limit=25&offset=0").then(setRecent).catch(() => {}), 10000);
+  usePoll(() => get("/dev-types").then(setDevTypes).catch(() => {}), 10000);
 
-  const healthy = SERVICES.filter(([k]) => health[k] === true).length;
+  const devStates = (devTypes || []).map((dt) => ({
+    dt, ...devTypeState(dt, health, recent?.runs),
+  }));
+  const devsOk = devStates.filter((s) => s.state !== "broken").length;
   const paused = !!health.intake_paused;
   const merge = Object.values(health.merge_handoffs || {});
   const attention = Object.values(health.needs_human || {});
@@ -197,17 +202,25 @@ export default function OverviewPage({
             </span>
           )}
         </Stat>
-        <Stat icon={HeartPulse} label="Services">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold tabular-nums tracking-tight">{healthy}/5</span>
-            <span className="flex gap-1">
-              {SERVICES.map(([k]) => (
-                <span key={k} className={`h-1.5 w-1.5 rounded-full ${
-                  health[k] === true ? "bg-green-500" : health[k] === false ? "bg-red-500" : "bg-neutral-400"
-                }`} />
-              ))}
-            </span>
-          </div>
+        <Stat icon={Bot} label="Devs">
+          {/* the Dev fleet in the Runs-table color code (founder decision):
+              green available · blue running · red broken (breaker latched
+              or no credentials). Service health lives in the sidebar. */}
+          {devTypes === null ? (
+            <span className="text-2xl font-bold tracking-tight">—</span>
+          ) : (
+            <div className="space-y-1">
+              <span className="text-2xl font-bold tabular-nums tracking-tight">
+                {devsOk}/{devStates.length}
+              </span>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                {devStates.map((s) => (
+                  <StatusDot key={s.dt.name} state={s.state} label={s.dt.name}
+                    title={s.why || (s.state === "running" ? "run in progress" : "available")} />
+                ))}
+              </div>
+            </div>
+          )}
         </Stat>
         <Stat
           icon={Hand}
@@ -240,7 +253,7 @@ export default function OverviewPage({
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <tbody>
-                  {recent.runs.map((r) => (
+                  {recent.runs.slice(0, 5).map((r) => (
                     <tr
                       key={r.run_id}
                       onClick={() => setOpenRun(r)}

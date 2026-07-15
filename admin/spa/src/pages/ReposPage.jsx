@@ -19,14 +19,20 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // Read-only internal-forge repos (M11, founder decision: retain-by-default +
 // a manual Clear). Hidden entirely when the internal forge is disabled.
-function InternalReposSection({ onClear, refreshKey }) {
+function InternalReposSection({ onClear, onClearAll, refreshKey }) {
   const [data, setData] = useState(null);
   const load = () => get("/internal-repos").then(setData).catch(() => setData({ repos: [] }));
   useEffect(() => { load(); }, [refreshKey]);
   if (!data || data.repos.length === 0) return null;
   return (
     <Section id="internal-forge" title="Internal forge"
-      description="Repositories DevCake auto-created for missions with no configured repo. Retained until you clear them; the deliverable is already in the PMO feed.">
+      description="Repositories DevCake auto-created for missions with no configured repo. Retained until you clear them; the deliverable is already in the PMO feed."
+      actions={
+        <Button kind="danger-ghost" icon={Trash2}
+          onClick={() => onClearAll(data.repos.map((r) => r.name))}>
+          Clear data
+        </Button>
+      }>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-left text-neutral-500">
@@ -209,6 +215,26 @@ export default function ReposPage() {
 
       {clearErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {clearErr}</p>}
       <InternalReposSection refreshKey={internalRefresh}
+        onClearAll={(names) => setConfirm({
+          title: `Clear ALL internal-forge data (${names.length} repo${names.length > 1 ? "s" : ""})?`,
+          body: "Deletes every auto-created repository, its machine user (revoking "
+            + "its tokens), and the stored credentials. A repo currently used by a "
+            + "live run is refused and kept. Deliverables already attached to the "
+            + "PMO feed are untouched. This cannot be undone.",
+          confirmLabel: `Delete ${names.length} internal repo${names.length > 1 ? "s" : ""}`,
+          danger: true,
+          action: async () => {
+            setConfirm(null);
+            setClearErr("");
+            const failed = [];
+            for (const name of names) {
+              try { await send("DELETE", `/internal-repos/${name}`); }
+              catch (e) { failed.push(`${name}: ${String(e.message || e)}`); }
+            }
+            if (failed.length) setClearErr(`kept ${failed.length}: ${failed.join(" · ")}`);
+            setInternalRefresh((n) => n + 1);
+          },
+        })}
         onClear={(name) => setConfirm({
           title: `Clear internal repo '${name}'?`,
           body: "Deletes the auto-created repository, its machine user (revoking "

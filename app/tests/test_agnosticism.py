@@ -84,6 +84,17 @@ def test_config_default_forge_resolves_through_registry():
     assert RepoInstance().forge == DEFAULT_FORGE
 
 
+def test_config_default_forge_is_derived_not_value_equal(monkeypatch):
+    """Audit A14: the value-equality assert above passes even with a
+    hardcoded \"github\" default (it equals DEFAULT_FORGE by coincidence).
+    Prove DERIVATION: move the registry default and the model default must
+    follow. (Pydantic doesn't validate defaults, so the sentinel bypasses
+    the known-forge validator.)"""
+    from devcake.adapters import registry
+    monkeypatch.setattr(registry, "DEFAULT_FORGE", "sentinelforge")
+    assert RepoInstance().forge == "sentinelforge"
+
+
 
 
 def test_write_token_warning_fires_per_repo(tmp_path, monkeypatch):

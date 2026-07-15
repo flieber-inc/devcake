@@ -321,7 +321,7 @@ def test_descriptor_complete_and_renderable(cls):
     import re as _re
     d = cls.descriptor
     for field in ("id", "display_name", "pr_instructions", "clone_user",
-                  "git_user_name", "git_email", "token_env_default", "pr_noun"):
+                  "git_user_name", "git_email", "pr_noun"):
         assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"
     for field in ("cli_token_envs", "secret_env_vars"):
         assert getattr(d, field), f"{cls.__name__}.descriptor.{field} empty"

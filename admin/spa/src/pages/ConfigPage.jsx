@@ -583,8 +583,20 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
                 {cfg.pmos.length > 1 && (
-                  <Button kind="danger-ghost" onClick={() =>
-                    setField("cfg.pmos", cfg.pmos.filter((_, i) => i !== idx))}>
+                  <Button kind="danger-ghost" onClick={() => {
+                    const doRemove = () =>
+                      setField("cfg.pmos", cfg.pmos.filter((_, i) => i !== idx));
+                    if (savedPmoNames.has(inst.name)) {
+                      // saving the removal permanently deletes the stored
+                      // secret — worth an explicit confirm (audit A21)
+                      setConfirm({
+                        title: `Remove PMO instance "${inst.name}"?`,
+                        body: "Removing it and saving permanently deletes its stored API key; in-flight runs of this instance fail cleanly. Nothing changes until you Save.",
+                        confirmLabel: "Remove from draft",
+                        action: () => { doRemove(); setConfirm(null); },
+                      });
+                    } else doRemove();
+                  }}>
                     Remove
                   </Button>
                 )}
@@ -668,8 +680,18 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
                 {cfg.repos.length > 0 && (
-                  <Button kind="danger-ghost" onClick={() =>
-                    setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx))}>
+                  <Button kind="danger-ghost" onClick={() => {
+                    const doRemove = () =>
+                      setField("cfg.repos", cfg.repos.filter((_, i) => i !== idx));
+                    if (savedRepoNames.has(repo.name)) {
+                      setConfirm({
+                        title: `Remove repository "${repo.name}"?`,
+                        body: "Removing it and saving permanently deletes its stored tokens (write / read-only / reviewer); missions that used this repo gate until a human closes them out. Nothing changes until you Save.",
+                        confirmLabel: "Remove from draft",
+                        action: () => { doRemove(); setConfirm(null); },
+                      });
+                    } else doRemove();
+                  }}>
                     Remove
                   </Button>
                 )}

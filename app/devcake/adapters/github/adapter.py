@@ -30,7 +30,6 @@ class GitHubForge:
         git_user_name="DevCake",
         git_email="devcake@users.noreply.github.com",
         cli_token_envs=["GH_TOKEN"],
-        token_env_default="GITHUB_TOKEN",
         secret_env_vars=["GITHUB_TOKEN", "GITHUB_REVIEWER_TOKEN",
                          "GITHUB_TOKEN_RO"],
         token_patterns=[r"\bghp_[A-Za-z0-9]{20,}\b",

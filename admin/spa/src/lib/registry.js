@@ -6,11 +6,11 @@ import { get } from "../api.js";
 
 const FALLBACK = {
   pmo_systems: [
-    { id: "linear", display_name: "Linear", api_key_env_default: "LINEAR_API_KEY" },
+    { id: "linear", display_name: "Linear" },
   ],
   forges: [
-    { id: "github", display_name: "GitHub", token_env_default: "GITHUB_TOKEN" },
-    { id: "gitlab", display_name: "GitLab", token_env_default: "GITLAB_TOKEN" },
+    { id: "github", display_name: "GitHub" },
+    { id: "gitlab", display_name: "GitLab" },
   ],
   secret_shape_prefixes: ["ghp_", "github_pat_", "glpat-", "lin_api_", "lin_oauth_"],
   managed_labels_expected: 10,

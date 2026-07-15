@@ -31,7 +31,6 @@ class GitLabForge:
         git_email="devcake@devcake.invalid",
         pr_noun="merge request",
         cli_token_envs=["GITLAB_TOKEN"],
-        token_env_default="GITLAB_TOKEN",
         secret_env_vars=["GITLAB_TOKEN", "GITLAB_REVIEWER_TOKEN",
                          "GITLAB_TOKEN_RO"],
         token_patterns=[r"\bglpat-[A-Za-z0-9_-]{15,}\b"],

@@ -60,7 +60,6 @@ class GiteaForge:
         git_email="devcake@devcake.invalid",
         pr_noun="pull request",
         cli_token_envs=["GITEA_SERVER_TOKEN"],
-        token_env_default="GITEA_TOKEN",
         secret_env_vars=["GITEA_TOKEN", "GITEA_TOKEN_RO",
                          "GITEA_REVIEWER_TOKEN", "GITEA_SERVER_TOKEN"],
         # DELIBERATELY empty: 40-hex tokens collide with git SHAs (docstring)

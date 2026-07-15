@@ -123,7 +123,6 @@ class ForgeDescriptor(BaseModel):
     git_email: str
     pr_noun: str = "pull request"       # user-facing noun ("merge request" on GitLab)
     cli_token_envs: list[str]           # env vars the entrypoint mirrors the token into
-    token_env_default: str              # default token env name (config + SPA)
     secret_env_vars: list[str]          # → security.redact env-value scrubbing
     token_patterns: list[str]           # → security.redact regex scrubbing
     secret_shape_prefixes: list[str]    # → SPA paste guard

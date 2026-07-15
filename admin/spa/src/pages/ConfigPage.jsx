@@ -8,6 +8,7 @@ import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
+import PromptsSection from "../components/PromptsSection.jsx";
 import DirtyBar from "../components/DirtyBar.jsx";
 import SaveReviewDialog from "../components/SaveReviewDialog.jsx";
 import NavGuardDialog from "../components/NavGuardDialog.jsx";
@@ -898,6 +899,8 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
           </table>
         </div>
       </Section>
+
+      <PromptsSection cfg={cfg} setField={setField} />
 
       <Section id="limits" title="Limits"
         description="Global concurrency and safety ceilings. Dev container Docker HostConfig CPU/memory is not available in Dagu 2.10.5 — concurrency caps are the real throttle.">

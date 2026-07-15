@@ -6,5 +6,6 @@ export const CONFIG_SECTIONS = [
   { id: "repository", label: "Repository" },
   { id: "dev-types", label: "Dev Types" },
   { id: "assignments", label: "Assignments" },
+  { id: "prompts", label: "Prompts" },
   { id: "limits", label: "Limits" },
 ];

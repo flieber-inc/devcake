@@ -127,15 +127,31 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
         from ...prompts import (execute_prompt, onboard_prompt, plan_prompt,
                               review_prompt)
+        from ...prompts import templates as prompt_templates
+
+        def _pb(mt_name: str) -> str:
+            # the ACTIVE template for this mission type (v0.1.1); a missing/
+            # corrupt file falls back to the built-in default — dispatch
+            # never fails on template trouble (warning also in /health)
+            text, warn = prompt_templates.resolve_playbook(
+                mt_name, self.config.active_prompt_templates.get(mt_name))
+            if warn:
+                log.warning("prompt template fallback: %s", warn)
+            return text
+
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         prompt = {
-            MissionType.ONBOARD: lambda: onboard_prompt(dev_type.identifying_prompt, live),
-            MissionType.PLAN: lambda: plan_prompt(dev_type.identifying_prompt, live),
+            MissionType.ONBOARD: lambda: onboard_prompt(
+                dev_type.identifying_prompt, live, playbook=_pb("ONBOARD")),
+            MissionType.PLAN: lambda: plan_prompt(
+                dev_type.identifying_prompt, live, playbook=_pb("PLAN")),
             MissionType.EXECUTE: lambda: execute_prompt(
                 dev_type.identifying_prompt, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
-                default_branch=repo.default_branch),
-            MissionType.REVIEW: lambda: review_prompt(dev_type.identifying_prompt, live),
+                default_branch=repo.default_branch,
+                playbook=_pb("EXECUTE")),
+            MissionType.REVIEW: lambda: review_prompt(
+                dev_type.identifying_prompt, live, playbook=_pb("REVIEW")),
         }[mtype]()
 
         spec_env = self._protocol_spec_env(

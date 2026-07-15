@@ -240,6 +240,12 @@ class AppConfig(BaseModel):
     # and sweeps keep running (docs/11)
     intake_paused: bool = False
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    # per-Mission-Type ACTIVE prompt template (v0.1.1): missing key ⇒ the
+    # built-in "default". A dict map (deep_merge-safe: a patch touching one
+    # type preserves siblings; reset = PUT the value "default"). Name
+    # existence is validated in the PUT endpoint, not here (no disk I/O in
+    # validators).
+    active_prompt_templates: dict[str, str] = Field(default_factory=dict)
     # admin-UI state: dismissed advisory alerts as "id:signature" strings.
     # A list (not a dict) on purpose — deep_merge can't delete dict keys, so
     # the UI un-dismisses by PUTting the whole replacement list.

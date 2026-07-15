@@ -37,6 +37,7 @@ from ..domain.runs import RunManager
 from ..domain.watchdog import watchdog_loop
 from ..harness import HARNESSES, dev_type_status
 from ..ports.forge import mission_branch
+from ..prompts import templates as prompt_templates
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
 from .auth import credentials_configured, enforce_control_plane_auth
@@ -51,6 +52,7 @@ tracer = setup_telemetry()
 
 config = load_config()
 dev_types = load_dev_types()
+prompt_templates.seed_default_templates()   # /data defaults (v0.1.1)
 store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
@@ -577,6 +579,9 @@ async def health():
         "mapper_degraded": " · ".join(
             f"[{name}] {msg}" if prefixed else str(msg)
             for name, mp in mappers.items() if (msg := mp.degraded())) or None,
+        # active templates that no longer resolve (fallback-to-default in
+        # effect) — the SPA derives a dismissable alert per entry (v0.1.1)
+        "prompt_template_warnings": prompt_templates.template_warnings(config),
         "security_warnings": _security_warnings(),
     }
 
@@ -701,6 +706,14 @@ async def put_config(body: dict):
                                  "Dev Type when the mapper is enabled")
     if rm.interval_minutes < 1:
         raise HTTPException(422, "relations_mapper.interval_minutes must be ≥ 1")
+    from ..prompts import PLAYBOOK_VARS
+    for mt, name in (merged.active_prompt_templates or {}).items():
+        if mt not in PLAYBOOK_VARS:
+            raise HTTPException(422, f"active_prompt_templates: unknown "
+                                     f"mission type {mt!r}")
+        if name != "default" and prompt_templates.resolve_playbook(mt, name)[1]:
+            raise HTTPException(422, f"active_prompt_templates: no stored "
+                                     f"template {mt}/{name}")
     # Dry-run adapter construction before persist (ISSUES #11): a bad URL or
     # forge shape must not leave a broken config on disk. Unconfigured
     # instances (empty team_key / repo URL) are valid-but-idle (schema v3).
@@ -745,6 +758,49 @@ async def put_config(body: dict):
             log.exception("could not delete stored secrets of removed "
                           "%s instance %r", scope, name)
     return config.model_dump()
+
+
+# ── per-Mission-Type prompt templates (v0.1.1) ───────────────────────────────
+
+@app.get("/api/v1/prompt-templates")
+async def get_prompt_templates():
+    """Every stored template per mission type (the built-in default first),
+    the per-type variable allowlists (drives the SPA's hint chips), and the
+    active selection."""
+    from ..prompts import PLAYBOOK_VARS
+    return {
+        "variables": {mt: list(v) for mt, v in PLAYBOOK_VARS.items()},
+        "templates": prompt_templates.list_templates(),
+        "active": {mt: config.active_prompt_templates.get(mt, "default")
+                   for mt in PLAYBOOK_VARS},
+    }
+
+
+@app.put("/api/v1/prompt-templates/{mission_type}/{name}")
+async def put_prompt_template(mission_type: str, name: str, body: dict):
+    text = body.get("template")
+    if not isinstance(text, str):
+        raise HTTPException(422, "body must carry a string 'template'")
+    try:
+        prompt_templates.save_template(mission_type, name, text)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"mission_type": mission_type, "name": name, "saved": True}
+
+
+@app.delete("/api/v1/prompt-templates/{mission_type}/{name}")
+async def delete_prompt_template(mission_type: str, name: str):
+    if config.active_prompt_templates.get(mission_type) == name:
+        raise HTTPException(
+            409, f"template {name!r} is the ACTIVE template for "
+                 f"{mission_type} — switch back to 'default' first")
+    try:
+        prompt_templates.delete_template(mission_type, name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return {"deleted": True}
 
 
 @app.get("/api/v1/harnesses")

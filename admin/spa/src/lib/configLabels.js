@@ -23,12 +23,9 @@ const EXACT = {
     warning: (o, n) => (n === "opt_out" ? ADOPTION_COPY : null),
   },
   "cfg.pmos.0.team_key": { group: "PMO", label: "Team key", format: orEmpty },
-  "cfg.pmos.0.api_key_env": { group: "PMO", label: "API key env var", format: orEmpty },
   "cfg.poll_interval_seconds": { group: "PMO", label: "Poll interval (s)" },
   "cfg.repos.0.forge": { group: "Repository", label: "Forge" },
   "cfg.repos.0.url": { group: "Repository", label: "Repository URL", format: orEmpty },
-  "cfg.repos.0.token_env": { group: "Repository", label: "Token env var", format: orEmpty },
-  "cfg.repos.0.reviewer_token_env": { group: "Repository", label: "Reviewer token env var", format: orEmpty },
   "cfg.auto_merge": {
     group: "Repository", label: "Auto-merge", format: onOff,
     warning: (o, n) => (n === true ? AUTO_MERGE_COPY : null),
@@ -60,12 +57,23 @@ const ASSIGNMENT_FIELDS = {
 
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
-  "Traffic control", "PMO", "Repository", "Dev Types", "Assignments", "Limits", "Other",
+  "Traffic control", "PMO", "Repository", "Dev Types", "Assignments",
+  "Prompts", "Limits", "Other",
 ];
 
 export function metaFor(path) {
   if (EXACT[path]) return { multiline: false, format: orEmpty, ...EXACT[path] };
-  let m = path.match(/^devTypes\.([^.]+)\.(.+)$/);
+  let m = path.match(/^cfg\.active_prompt_templates\.([^.]+)$/);
+  if (m) {
+    return { group: "Prompts", label: `${m[1]} active template`,
+             multiline: false, format: orEmpty };
+  }
+  m = path.match(/^cfg\.pmos\.(\d+)\.default_repo$/);
+  if (m) {
+    return { group: "PMO", label: `Default repo (instance #${+m[1] + 1})`,
+             multiline: false, format: orEmpty };
+  }
+  m = path.match(/^devTypes\.([^.]+)\.(.+)$/);
   if (m && DEV_TYPE_FIELDS[m[2]]) {
     const f = DEV_TYPE_FIELDS[m[2]];
     return {

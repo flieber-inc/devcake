@@ -1,9 +1,52 @@
 """Playbook prompts (docs/03 §7). The playbook restates the binding rules from
 docs/03 — workspace boundaries, result.json contract, bounded effort. Prompts
-inline only the mission title/description; activity/ is reference material."""
+inline only the mission title/description; activity/ is reference material.
+
+Operator-editable templates (v0.1.1): each Mission Type's playbook can be
+replaced by a stored template (prompts/templates.py; /data/config/
+prompt_templates/). Templates use the SAME {var} placeholders as the
+constants below, rendered by render_playbook — which substitutes ONLY the
+allowlisted variable names and leaves every other brace literal, so raw JSON
+examples need no {{escaping}} in stored templates. The Python constants
+remain the seed source; DEFAULT_PLAYBOOKS un-doubles their str.format-era
+double braces once, at import.
+"""
+
+import re
 
 from ..domain.model import Mission
 from ..ports.forge import mission_branch
+
+# variables each Mission Type's template may reference (the validation
+# allowlist AND exactly what dispatch provides). MAPPER is deliberately not
+# templated (founder decision 2026-07-14); adding it later = one entry here
+# + one DEFAULT_PLAYBOOKS entry.
+PLAYBOOK_VARS: dict[str, tuple[str, ...]] = {
+    "ONBOARD": ("key", "priority", "url", "title", "branch", "description",
+                "project_note"),
+    "PLAN": ("key", "priority", "url", "title", "description"),
+    "EXECUTE": ("key", "priority", "url", "title", "repo_name",
+                "pr_instructions", "default", "branch", "description"),
+    "REVIEW": ("key", "priority", "url", "title", "branch", "description"),
+}
+
+_VAR = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def render_playbook(template: str, values: dict) -> str:
+    """Substitute {var} for vars present in `values`; every other brace is
+    literal (never raw str.format over operator text — the playbooks are full
+    of literal JSON). Replacement values are inserted verbatim (a function
+    repl disables re.sub escape processing) and never re-scanned."""
+    return _VAR.sub(
+        lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0),
+        template)
+
+
+def _undouble(s: str) -> str:
+    # the module constants escape literal braces for str.format; stored
+    # templates (and render_playbook) treat braces literally
+    return s.replace("{{", "{").replace("}}", "}")
 
 ONBOARD_PLAYBOOK = """
 ## Your current mission type: ONBOARD (triage)
@@ -94,13 +137,16 @@ decompose it into standalone child issues covering the full extent of the work.
 """
 
 
-def onboard_prompt(identifying_prompt: str, mission: Mission) -> str:
-    return identifying_prompt + "\n" + ONBOARD_PLAYBOOK.format(
-        key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, branch=mission_branch(mission.instance, mission.key),
-        description=mission.description or "(no description)",
-        project_note=PROJECT_NOTE if mission.pmo_kind == "project" else "") \
-        + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+def onboard_prompt(identifying_prompt: str, mission: Mission,
+                   playbook: str | None = None) -> str:
+    text = render_playbook(
+        playbook if playbook is not None else DEFAULT_PLAYBOOKS["ONBOARD"],
+        {"key": mission.key, "priority": mission.priority, "url": mission.url,
+         "title": mission.title,
+         "branch": mission_branch(mission.instance, mission.key),
+         "description": mission.description or "(no description)",
+         "project_note": PROJECT_NOTE if mission.pmo_kind == "project" else ""})
+    return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 
 PLAN_PLAYBOOK = """
@@ -122,11 +168,14 @@ in /workspace/activity/ (reference material — read what you need).
 """
 
 
-def plan_prompt(identifying_prompt: str, mission: Mission) -> str:
-    return identifying_prompt + "\n" + PLAN_PLAYBOOK.format(
-        key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, description=mission.description or "(no description)") \
-        + HUMAN_COMMENTS_NOTE
+def plan_prompt(identifying_prompt: str, mission: Mission,
+                playbook: str | None = None) -> str:
+    text = render_playbook(
+        playbook if playbook is not None else DEFAULT_PLAYBOOKS["PLAN"],
+        {"key": mission.key, "priority": mission.priority, "url": mission.url,
+         "title": mission.title,
+         "description": mission.description or "(no description)"})
+    return identifying_prompt + "\n" + text + HUMAN_COMMENTS_NOTE
 
 
 EXECUTE_PLAYBOOK = """
@@ -168,18 +217,22 @@ conflicts, and push — do NOT redo or extend the mission's implementation.
 
 
 def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
-                   pr_instructions: str, default_branch: str = "main") -> str:
+                   pr_instructions: str, default_branch: str = "main",
+                   playbook: str | None = None) -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
-    (docs/06) — placeholders: {key} {title} {default} {branch}."""
+    (docs/06) — placeholders: {key} {title} {default} {branch}. It is
+    code-owned, so it keeps str.format; its rendered result becomes the
+    {pr_instructions} variable of the (possibly operator-edited) playbook."""
     branch = mission_branch(mission.instance, mission.key)
     pr = pr_instructions.format(key=mission.key, title=mission.title,
                                 default=default_branch, branch=branch)
-    return identifying_prompt + "\n" + EXECUTE_PLAYBOOK.format(
-        key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, repo_name=repo_name, pr_instructions=pr,
-        default=default_branch, branch=branch,
-        description=mission.description or "(no description)") \
-        + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+    text = render_playbook(
+        playbook if playbook is not None else DEFAULT_PLAYBOOKS["EXECUTE"],
+        {"key": mission.key, "priority": mission.priority, "url": mission.url,
+         "title": mission.title, "repo_name": repo_name,
+         "pr_instructions": pr, "default": default_branch, "branch": branch,
+         "description": mission.description or "(no description)"})
+    return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 
 REVIEW_PLAYBOOK = """
@@ -214,12 +267,15 @@ approval must be EARNED by the evidence you gather.
 """
 
 
-def review_prompt(identifying_prompt: str, mission: Mission) -> str:
-    return identifying_prompt + "\n" + REVIEW_PLAYBOOK.format(
-        key=mission.key, priority=mission.priority, url=mission.url,
-        title=mission.title, branch=mission_branch(mission.instance, mission.key),
-        description=mission.description or "(no description)") \
-        + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+def review_prompt(identifying_prompt: str, mission: Mission,
+                  playbook: str | None = None) -> str:
+    text = render_playbook(
+        playbook if playbook is not None else DEFAULT_PLAYBOOKS["REVIEW"],
+        {"key": mission.key, "priority": mission.priority, "url": mission.url,
+         "title": mission.title,
+         "branch": mission_branch(mission.instance, mission.key),
+         "description": mission.description or "(no description)"})
+    return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 
 MAPPER_PLAYBOOK = """
@@ -248,6 +304,15 @@ An empty "edges" list is a valid and common result.
 
 MAPPER_MISSION_CAP = 200          # prompt-size bound; truncation is logged
 MAPPER_DESC_HEAD_CHARS = 300
+
+# the canonical (un-doubled) playbook texts — seed source for the stored
+# "default" templates and the fallback when a stored template is broken
+DEFAULT_PLAYBOOKS: dict[str, str] = {
+    "ONBOARD": _undouble(ONBOARD_PLAYBOOK),
+    "PLAN": _undouble(PLAN_PLAYBOOK),
+    "EXECUTE": _undouble(EXECUTE_PLAYBOOK),
+    "REVIEW": _undouble(REVIEW_PLAYBOOK),
+}
 
 
 def mapper_prompt(identifying_prompt: str, missions: list[Mission]) -> str:

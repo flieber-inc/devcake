@@ -70,6 +70,18 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // an ACTIVE prompt template that no longer resolves — dispatch silently
+  // falls back to the built-in default until fixed (v0.1.1)
+  for (const w of health.prompt_template_warnings || []) {
+    alerts.push({
+      id: `prompt-template:${w.split(":")[0]}`,
+      severity: "warning",
+      dismissable: true,
+      title: "Prompt template missing",
+      body: w,
+    });
+  }
+
   if (Object.keys(health.anomalies || {}).length > 0) {
     alerts.push({
       id: "anomalies",

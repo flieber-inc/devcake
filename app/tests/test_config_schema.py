@@ -1,4 +1,4 @@
-"""Config schema v3 (instances-with-identities): name-keyed pmos:/repos:
+"""Config schema v4 (instances-with-identities, GUI-stored secrets): name-keyed pmos:/repos:
 lists, N-pmo validators, the generic stale-schema refusal (v1 singular keys,
 v2 id-keyed entries, old schema_version) — auto-migrations were removed at v0
 crystallization; there are no deployments to migrate."""
@@ -134,6 +134,13 @@ def test_stale_put_bodies_rejected_not_dropped():
         reject_stale_patch({"pmos": [{"id": "main", "team_key": "OPS"}]})
     with pytest.raises(ValueError, match="stale"):
         reject_stale_patch({"schema_version": 2})
+    # v3 shape: *_env indirection fields (secrets are GUI-stored at v4)
+    with pytest.raises(ValueError, match=r"v3 \*_env"):
+        reject_stale_patch({"pmos": [{"name": "linear", "api_key_env": "LINEAR_API_KEY"}]})
+    with pytest.raises(ValueError, match=r"v3 \*_env"):
+        reject_stale_patch({"repos": [{"name": "main", "token_env": "GITHUB_TOKEN"}]})
+    with pytest.raises(ValueError, match=r"v3 \*_env"):
+        reject_stale_patch({"repos": [{"name": "main", "reviewer_token_env": None}]})
     # current bodies pass through untouched
     reject_stale_patch({"auto_merge": False})
     reject_stale_patch({"pmos": [{"team_key": "OPS"}]})
@@ -168,6 +175,17 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
 
     path.write_text("schema_version: 2\npmos:\n- name: linear\nrepos:\n- name: main\n")
     with pytest.raises(RuntimeError, match="schema_version 2"):
+        config_mod.load_config()
+
+    # v3 file: *_env fields present — pydantic would silently drop them and
+    # leave every secret reading empty, so the shape is refused loudly
+    path.write_text("schema_version: 3\npmos:\n- name: linear\n  team_key: DEV\n"
+                    "  api_key_env: LINEAR_API_KEY\nrepos:\n- name: main\n")
+    with pytest.raises(RuntimeError, match=r"v3 \*_env"):
+        config_mod.load_config()
+    path.write_text("pmos:\n- name: linear\nrepos:\n- name: main\n"
+                    "  token_env: GITHUB_TOKEN\n  token_ro_env: RO\n")
+    with pytest.raises(RuntimeError, match=r"v3 \*_env"):
         config_mod.load_config()
 
     path.write_text("")  # empty file → defaults, same as first boot

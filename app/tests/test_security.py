@@ -147,3 +147,34 @@ def test_stored_forge_token_registered_at_construction(tmp_path, monkeypatch):
         for key in ("forge_token:main", "forge_token_ro:main",
                     "forge_reviewer:main"):
             unregister_runtime_secret(key)
+
+
+def test_register_all_boot_coverage_and_key_scheme(tmp_path, monkeypatch):
+    """register_all is the boot path that guarantees exact-match redaction
+    even BELOW security's 16-char scan floor, and it must register under the
+    same keys as write_/delete_ or unregister strands the boot-registered
+    copy (stale over-redaction)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    import json
+    from devcake import secrets as secrets_store
+
+    conn_dir = tmp_path / "secrets" / "connections"
+    conn_dir.mkdir(parents=True)
+    # written directly (simulating a prior boot) — 11 chars, under the floor
+    (conn_dir / "pmo-linear.json").write_text(json.dumps({"api_key": "short-key-1"}))
+    harness_dir = tmp_path / "secrets" / "harness"
+    harness_dir.mkdir(parents=True)
+    (harness_dir / "XAI_API_KEY.json").write_text(json.dumps({"value": "tiny-value9"}))
+
+    secrets_store.register_all()
+    try:
+        out = redact("boot leak short-key-1 and tiny-value9 end")
+        assert "short-key-1" not in out and "tiny-value9" not in out
+    finally:
+        # unregister must remove the boot-registered copies — this is the
+        # key-scheme contract (conn:{scope}:{instance}:{field} / harness:{var})
+        secrets_store.delete_connection_instance("pmo", "linear")
+        from devcake.security import unregister_runtime_secret
+        unregister_runtime_secret("harness:XAI_API_KEY")
+    out = redact("short-key-1 tiny-value9")
+    assert "short-key-1" in out and "tiny-value9" in out

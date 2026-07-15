@@ -130,14 +130,22 @@ def _iso(mtime: float) -> str:
 def register_all() -> None:
     """Register every stored secret with the redaction layer at boot (the
     glob scan already covers them, but explicit registration means immediate
-    coverage for exact-match replacement even below the 16-char scan floor)."""
+    coverage for exact-match replacement even below the 16-char scan floor).
+    Keys MUST match write_/delete_'s scheme or unregister leaves the
+    boot-registered copy behind."""
     root = _root()
-    for scope_dir, kind in ((root / "connections", "conn"),
-                            (root / "harness", "harness")):
-        if not scope_dir.exists():
-            continue
-        for p in scope_dir.glob("*.json"):
+    conn_dir = root / "connections"
+    if conn_dir.exists():
+        for p in conn_dir.glob("*.json"):
+            # {scope}-{instance}.json; instance names can't contain hyphens
+            scope, _, instance = p.stem.partition("-")
             for field, value in _read(p).items():
                 if isinstance(value, str) and value:
                     security.register_runtime_secret(
-                        f"{kind}:{p.stem}:{field}", value)
+                        f"conn:{scope}:{instance}:{field}", value)
+    harness_dir = root / "harness"
+    if harness_dir.exists():
+        for p in harness_dir.glob("*.json"):
+            value = _read(p).get("value")
+            if isinstance(value, str) and value:
+                security.register_runtime_secret(f"harness:{p.stem}", value)

@@ -384,6 +384,11 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
+  // stored secrets are keyed by instance name — renaming a saved instance
+  // would orphan them, so the name locks once saved (remove + re-add to
+  // rename; removal also deletes the instance's stored secrets)
+  const savedPmoNames = new Set((dr.server.cfg.pmos || []).map((p) => p.name));
+  const savedRepoNames = new Set((dr.server.cfg.repos || []).map((r) => r.name));
 
   // flip-time danger confirms (founder decision): the scary dialog interrupts
   // at flip time, but confirming only writes the DRAFT — nothing persists
@@ -586,8 +591,8 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids — choose once, renaming strands in-flight missions.">
-                  <Input value={inst.name}
+                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
+                  <Input value={inst.name} disabled={savedPmoNames.has(inst.name)}
                   onChange={(e) => setField(`cfg.pmos.${idx}.name`, e.target.value)} /></Field>
                 <Field label="Team key"
                   help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.">
@@ -595,7 +600,8 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
                   onChange={(e) => setField(`cfg.pmos.${idx}.team_key`, e.target.value)} /></Field>
                 <SecretField label="API key"
                   help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
-                  refKey={`pmo:${inst.name}:api_key`} paste />
+                  refKey={`pmo:${inst.name}:api_key`} paste
+                  locked={!savedPmoNames.has(inst.name)} />
                 <Field label="Default repo"
                   help="Where this instance's missions land when they carry no `devcake-repo:` marker. '(none)' = unrouted missions wait (the internal fallback forge arrives in v0.1 M11).">
                   <Select value={inst.default_repo || ""}
@@ -670,8 +676,8 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
-                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings.">
-                  <Input value={repo.name}
+                  help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Locked once saved — stored tokens key on it; remove and re-add to rename.">
+                  <Input value={repo.name} disabled={savedRepoNames.has(repo.name)}
                   onChange={(e) => setField(`cfg.repos.${idx}.name`, e.target.value)} /></Field>
                 <Field label="Forge"
                   help="Where the repository lives. Selects the API DevCake uses for pull/merge requests, approvals and merges.">
@@ -688,13 +694,16 @@ export default function ConfigPage({ section, onSectionInView, registerNavGuard 
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
                 <SecretField label="Access token"
                   help="This repo's forge token (repo read/write + PR scopes). Stored securely — never echoed, never in .env."
-                  refKey={`repo:${repo.name}:token`} paste />
+                  refKey={`repo:${repo.name}:token`} paste
+                  locked={!savedRepoNames.has(repo.name)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
-                  refKey={`repo:${repo.name}:token_ro`} paste />
+                  refKey={`repo:${repo.name}:token_ro`} paste
+                  locked={!savedRepoNames.has(repo.name)} />
                 <SecretField label="Reviewer token" hint="Optional 2nd account → formal PR approvals"
                   help="Optional second account's token. When set, REVIEW posts a formal approval from that account before merging."
-                  refKey={`repo:${repo.name}:reviewer_token`} paste />
+                  refKey={`repo:${repo.name}:reviewer_token`} paste
+                  locked={!savedRepoNames.has(repo.name)} />
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testForge(repo.name)}>Test connection</Button>

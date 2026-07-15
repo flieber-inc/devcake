@@ -673,6 +673,12 @@ async def put_config(body: dict):
     except Exception as e:
         raise HTTPException(422, f"adapter construction failed: {e}") from e
     previous = config.model_dump()
+    # a removed instance's stored secrets go with it — otherwise a later
+    # instance reusing the name silently inherits the dead credential
+    removed = [("pmo", p["name"]) for p in previous["pmos"]
+               if p["name"] not in {i.name for i in merged.pmos}]
+    removed += [("repo", r["name"]) for r in previous["repos"]
+                if r["name"] not in {i.name for i in merged.repos}]
     for field in merged.model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
@@ -689,6 +695,8 @@ async def put_config(body: dict):
         except Exception:
             log.exception("restore reload also failed")
         raise HTTPException(500, f"config reload failed; previous config restored: {e}")
+    for scope, name in removed:                  # only once the new config took
+        secrets_store.delete_connection_instance(scope, name)
     return config.model_dump()
 
 
@@ -784,13 +792,6 @@ async def put_assignments(body: dict):
             "warnings": warnings}
 
 
-@app.get("/api/v1/env-check")
-async def env_check(names: str = ""):
-    """Set/unset status (never values) for comma-separated env var names —
-    powers the admin Config page's inline ✓/✗ next to *_env fields."""
-    return {n: bool(os.environ.get(n, "").strip()) for n in names.split(",") if n}
-
-
 # ── GUI-stored secrets (M12, F5): write-only VALUES, never echoed back ───────
 
 _SECRET_SCOPES = {"pmo", "repo"}
@@ -810,6 +811,9 @@ async def put_secret(scope: str, instance: str, field: str, body: dict):
     if scope == "repo":
         forge_runtime.breakers.pop(instance, None)
         _protection_cache["ts"] = 0.0
+    # adapters capture credentials by VALUE at construction — a rotated
+    # secret takes effect only through a rebuild, same as a config PUT
+    reload_connections()
     return secrets_store.connection_status(scope, instance, field)
 
 
@@ -818,6 +822,10 @@ async def delete_secret(scope: str, instance: str, field: str):
     if scope not in _SECRET_SCOPES:
         raise HTTPException(404, f"unknown secret scope {scope!r}")
     secrets_store.write_connection_secret(scope, instance, field, "")
+    if scope == "repo":
+        forge_runtime.breakers.pop(instance, None)
+        _protection_cache["ts"] = 0.0
+    reload_connections()
     return {"present": False}
 
 
@@ -828,6 +836,11 @@ async def put_harness_secret(var: str, body: dict):
     if not isinstance(value, str) or not value:
         raise HTTPException(422, "value must be a non-empty string")
     secrets_store.write_harness_secret(var, value)
+    # fresh key clears the DEV_AUTH breaker of every dev type running a
+    # harness that consumes this var (mirrors the credential-file path)
+    for dt_name, dt in dev_types.items():
+        if var in HARNESSES[dt.harness_template].credential_env:
+            shared_breakers.pop(dt_name, None)
     return secrets_store.harness_status(var)
 
 
@@ -914,7 +927,10 @@ async def test_forge(name: str):
         health = await forge_runtime.refresh_health(name)
         if not health["ok"]:
             return health
-        pr = await f.get_pr_by_branch(mission_branch(config.pmos[0].name, "__connection_test__"))
+        # v4 allows a repo-only (0-pmo) config — probe with the SYS
+        # pseudo-instance then (HELLO/OAUTH precedent, never a real branch)
+        probe = config.pmos[0].name if config.pmos else "sys"
+        pr = await f.get_pr_by_branch(mission_branch(probe, "__connection_test__"))
         reviewer = bool(getattr(f, "reviewer_token", None))
         protection = await f.default_branch_protection(inst.default_branch)
         return {"ok": True, "repo_name": name, "forge": inst.forge,

@@ -1,6 +1,8 @@
-"""AppConfig: /data/config/config.yaml (docs/10 §3), seeded from env on first
-boot. The full operator surface: PMO/repo connections (plural, schema v2),
-adoption, polling, assignments, concurrency, merge policy, relations mapper.
+"""AppConfig: /data/config/config.yaml (docs/10 §3); first boot is EMPTY —
+everything is configured through the admin GUI (schema v4, no env seeding).
+The full operator surface: PMO/repo connections (0..N instances, secrets
+GUI-stored under /data/secrets/ — ADR-0011), adoption, polling, assignments,
+concurrency, merge policy, relations mapper.
 """
 
 import logging
@@ -17,7 +19,7 @@ log = logging.getLogger("devcake.config")
 CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "config.yaml"
 
 
-# Operator-chosen instance identity (schema v3, docs/16 M9). Lowercase
+# Operator-chosen instance identity (schema v3+, docs/16 M9). Lowercase
 # alnum, ≤12 chars, NO hyphens: the name is embedded uppercased in branch
 # names and run ids ({INSTANCE}-{key}), where a hyphen would make the
 # compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
@@ -25,7 +27,7 @@ _INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
 
 
 class PMOInstance(BaseModel):
-    """One configured PMO connection (schema v3: instances-with-identities).
+    """One configured PMO connection (instances-with-identities; secrets GUI-stored).
     An instance with an empty team_key is VALID BUT IDLE — the poll loop and
     label bootstrap skip it and /health shows it as unconfigured — so an
     empty first boot (and M12's GUI-only setup) is a defined state."""
@@ -68,7 +70,7 @@ def _default_forge() -> str:
 
 
 class RepoInstance(BaseModel):
-    """One configured forge repository (schema v3: instances-with-identities).
+    """One configured forge repository (instances-with-identities; secrets GUI-stored).
     An instance with an empty url is valid but unconfigured (first boot)."""
     name: str = Field("main", pattern=_INSTANCE_NAME_RE)
     forge: str = Field(default_factory=_default_forge)  # registry-validated

@@ -196,9 +196,6 @@ if __name__ == "__main__":
                  "stored secrets.")
     if FORGE != "gitea" and not REPO_URL:
         sys.exit(f"--forge {FORGE} needs --repo-url or DEVCAKE_REPO_URL")
-    if not TEAM or not REPO_URL:
-        sys.exit("need a team and repo: set DEVCAKE_TEAM_KEY/DEVCAKE_REPO_URL "
-                 "in .env or pass --team/--repo-url")
     for i in range(args.runs):
         run_once(i)
     print(f"ACCEPTANCE GREEN: {args.runs}/{args.runs} unattended golden paths "

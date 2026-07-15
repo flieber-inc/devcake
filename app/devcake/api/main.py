@@ -369,8 +369,9 @@ async def lifespan(app: FastAPI):
     _refuse_insecure_passwords()
     secrets_store.register_all()   # redaction coverage for GUI-stored secrets (M12)
     log.info("boot: schema_version=%s dagu pull_policy=missing image tags "
-             "devcake/dev-*:latest — re-run `docker buildx bake all` lockstep "
-             "with app upgrades", config.schema_version)
+             "devcake/dev-*:%s — re-run `docker buildx bake all` lockstep "
+             "with app upgrades", config.schema_version,
+             os.environ.get("DEVCAKE_TAG", "latest"))
     for warn in _security_warnings():   # loud at boot; dismissable in the SPA
         log.warning("%s — %s", warn["title"], warn["body"])
     # corrupt run records must never wedge boot; a quarantined record is

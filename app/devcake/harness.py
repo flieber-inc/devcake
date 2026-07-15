@@ -36,15 +36,22 @@ class Harness(BaseModel):
     oauth: OAuthFlow | None = None
 
 
+# Dispatch must use the same tag the operator baked (AGENTS.md pin workflow:
+# export DEVCAKE_TAG=<sha> + bake + compose up). Hardcoding :latest silently
+# ran stale harnesses under a pinned control plane — or, with no local
+# :latest, pulled from the public devcake/* Docker Hub namespace (audit A7).
+# Compose passes DEVCAKE_TAG through to the app container.
+_TAG = os.environ.get("DEVCAKE_TAG", "latest")
+
 HARNESSES: dict[str, Harness] = {
     "claude-code": Harness(
-        image="devcake/dev-claude-code:latest",
+        image=f"devcake/dev-claude-code:{_TAG}",
         # paste-token mode (claude setup-token → CLAUDE_CODE_OAUTH_TOKEN) or
         # plain API key; no device-code flow (docs/08 §4)
         credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     ),
     "grok-build": Harness(
-        image="devcake/dev-grok-build:latest",
+        image=f"devcake/dev-grok-build:{_TAG}",
         credential_env=["XAI_API_KEY"],  # API-key mode; OAuth file preferred
         credential_files=[CredentialFile(secret_file="grok-auth.json",
                                          path_hint="~/.grok/auth.json")],
@@ -53,7 +60,7 @@ HARNESSES: dict[str, Harness] = {
                         secret_file="grok-auth.json"),
     ),
     "codex": Harness(
-        image="devcake/dev-codex:latest",
+        image=f"devcake/dev-codex:{_TAG}",
         # OPENAI_API_KEY needs `codex login --with-api-key` piping — not a
         # plain passthrough (docs/08 §4), so only CODEX_API_KEY is listed
         credential_env=["CODEX_API_KEY"],

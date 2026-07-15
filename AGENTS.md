@@ -149,6 +149,11 @@ docker buildx bake all
 docker compose up -d
 ```
 
+`docker compose up -d` must run with `DEVCAKE_TAG` still exported — compose
+passes it into the app container, and **dispatch derives the harness image
+tags from it** (`app/devcake/harness.py`). An app container recreated without
+the export falls back to `:latest` for app, admin, *and* dispatched harnesses.
+
 ### Third-party images
 
 Redis, Dagu, OpenObserve, Fluent Bit still come from registries via compose (`docker compose pull`). Only **DevCake-built** images go through bake.

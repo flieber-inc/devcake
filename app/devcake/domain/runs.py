@@ -29,7 +29,9 @@ from .run_bootstrap import RunBootstrap
 log = logging.getLogger("devcake.runs")
 tracer = trace.get_tracer("devcake")
 
-HELLO_IMAGE = os.environ.get("DEVCAKE_HELLO_IMAGE", "devcake/dev-hello:latest")
+HELLO_IMAGE = os.environ.get(
+    "DEVCAKE_HELLO_IMAGE",
+    f"devcake/dev-hello:{os.environ.get('DEVCAKE_TAG', 'latest')}")
 DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("DEVCAKE_DEV_TIMEOUT_MINUTES", "120")) * 60
 
 

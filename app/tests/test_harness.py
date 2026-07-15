@@ -22,6 +22,38 @@ def test_registry_covers_every_harness_literal():
     assert set(HARNESSES) == set(literals)
 
 
+def test_harness_images_honor_devcake_tag(monkeypatch):
+    """Audit A7: the documented pin workflow (export DEVCAKE_TAG=<sha> +
+    bake + compose up) tags every image, but dispatch hardcoded :latest —
+    a pinned install silently ran stale harnesses, or (no local :latest)
+    pulled from the unclaimed public devcake/* Docker Hub namespace."""
+    import importlib
+    import devcake.harness as harness_mod
+    monkeypatch.setenv("DEVCAKE_TAG", "abc1234")
+    try:
+        importlib.reload(harness_mod)
+        assert all(h.image.endswith(":abc1234")
+                   for h in harness_mod.HARNESSES.values())
+        assert harness_mod.HARNESSES["claude-code"].image == \
+            "devcake/dev-claude-code:abc1234"
+    finally:
+        monkeypatch.delenv("DEVCAKE_TAG")
+        importlib.reload(harness_mod)
+
+
+def test_hello_image_honors_devcake_tag(monkeypatch):
+    import importlib
+    import devcake.domain.runs as runs_mod
+    monkeypatch.setenv("DEVCAKE_TAG", "abc1234")
+    monkeypatch.delenv("DEVCAKE_HELLO_IMAGE", raising=False)
+    try:
+        importlib.reload(runs_mod)
+        assert runs_mod.HELLO_IMAGE == "devcake/dev-hello:abc1234"
+    finally:
+        monkeypatch.delenv("DEVCAKE_TAG")
+        importlib.reload(runs_mod)
+
+
 def test_oauth_flow_coherent_with_credential_files():
     for name, h in HARNESSES.items():
         if h.oauth is None:

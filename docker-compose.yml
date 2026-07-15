@@ -19,6 +19,10 @@ services:
     image: devcake/app:${DEVCAKE_TAG:-latest}
     pull_policy: never                  # local bake only — never pull from a registry
     env_file: .env
+    environment:
+      # dispatch derives harness image tags from this (audit A7) — it must
+      # match the bake tag, or a pinned install runs stale :latest harnesses
+      DEVCAKE_TAG: ${DEVCAKE_TAG:-latest}
     restart: unless-stopped
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API

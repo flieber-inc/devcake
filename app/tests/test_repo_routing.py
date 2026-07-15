@@ -453,3 +453,53 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
     uploaded.clear()
     run_coro(mgr.deliver_internal_zip(run, pr))
     assert not uploaded
+
+
+def test_onboard_runspec_carries_extra_repo_read_tokens(tmp_path, monkeypatch):
+    """Item 2 full scope: an ONBOARD run of a multi-repo instance gets every
+    OTHER set repo as {name, url, clone_user, token} with the READ token
+    preferred — EXECUTE (and every non-ONBOARD stage) never gets extras."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from test_transitions import make_mgr, mission
+    from devcake import secrets as s
+    from devcake.adapters.registry import make_forge
+    from devcake.config import PMOInstance, RepoInstance
+    from devcake.domain.forge_runtime import ForgeRuntime
+
+    s.write_connection_secret("repo", "alpha", "token", "alpha-write-token")
+    s.write_connection_secret("repo", "beta", "token", "beta-write-token")
+    s.write_connection_secret("repo", "beta", "token_ro", "beta-ro-token")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="alpha", url="https://github.com/o/a"),
+                RepoInstance(name="beta", forge="gitlab",
+                             url="https://gitlab.com/o/b")], make_forge)
+
+    m = mission()
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    mgr.forges = rt
+    mgr.internal_forge = None
+    mgr.instance = PMOInstance(name="linear", team_key="DEV",
+                               repos=["alpha", "beta"])
+
+    onboard = Run(run_id="LINEAR-T-1-1-ONBOARD-AAAAAA", mission_key="T-1",
+                  mission_type="ONBOARD", dev_type="senior-dev", seq=1,
+                  repo_ref="alpha", pmo_ref="linear", state="dispatched")
+    payload = mgr.runspec_secret_payload(onboard)
+    assert payload["env"]["DEVCAKE_FORGE_TOKEN"] == "alpha-write-token"
+    assert payload["extra_repos"] == [
+        {"name": "beta", "url": "https://gitlab.com/o/b",
+         "clone_user": "oauth2", "token": "beta-ro-token"}]
+
+    execute = Run(run_id="LINEAR-T-1-2-EXECUTE-BBBBBB", mission_key="T-1",
+                  mission_type="EXECUTE", dev_type="senior-dev", seq=2,
+                  repo_ref="alpha", pmo_ref="linear", state="dispatched")
+    assert "extra_repos" not in mgr.runspec_secret_payload(execute)
+
+    # the prompt-side counterpart: multi-repo instances get the section
+    # (primary listed first), single-repo instances get nothing
+    txt = mgr._onboard_repo_options("beta")
+    assert "`beta`" in txt and "`alpha`" in txt
+    assert txt.index("`beta`") < txt.index("`alpha`")
+    assert "devcake-repo:" in txt and "blocked_by" in txt
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
+    assert mgr._onboard_repo_options("alpha") == ""

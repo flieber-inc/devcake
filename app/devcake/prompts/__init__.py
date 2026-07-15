@@ -23,7 +23,7 @@ from ..ports.forge import mission_branch
 # + one DEFAULT_PLAYBOOKS entry.
 PLAYBOOK_VARS: dict[str, tuple[str, ...]] = {
     "ONBOARD": ("key", "priority", "url", "title", "branch", "description",
-                "project_note"),
+                "project_note", "repo_options"),
     "PLAN": ("key", "priority", "url", "title", "description"),
     "EXECUTE": ("key", "priority", "url", "title", "repo_name",
                 "pr_instructions", "default", "branch", "description"),
@@ -69,7 +69,7 @@ path is the only exception, and you must be certain).
 
 {description}
 
-{project_note}### Classify (docs rubric)
+{project_note}{repo_options}### Classify (docs rubric)
 - `trivial` — you are CERTAIN you can complete it now: localized (≤ ~2 files), zero
   design ambiguity, obvious verification. Rare.
 - `normal` — a definable piece of work that needs a plan first. **Most missions.**
@@ -138,14 +138,19 @@ decompose it into standalone child issues covering the full extent of the work.
 
 
 def onboard_prompt(identifying_prompt: str, mission: Mission,
-                   playbook: str | None = None) -> str:
+                   playbook: str | None = None,
+                   repo_options: str = "") -> str:
+    """repo_options: the multi-repo triage section (item 2 full scope) —
+    dispatch builds it from the instance's repo set; empty for single-repo
+    and zero-repo instances (renders to nothing, like project_note)."""
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["ONBOARD"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
          "title": mission.title,
          "branch": mission_branch(mission.instance, mission.key),
          "description": mission.description or "(no description)",
-         "project_note": PROJECT_NOTE if mission.pmo_kind == "project" else ""})
+         "project_note": PROJECT_NOTE if mission.pmo_kind == "project" else "",
+         "repo_options": repo_options})
     return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 

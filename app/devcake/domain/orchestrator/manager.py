@@ -90,6 +90,7 @@ MissionManager.gate_map = schedule.gate_map
 MissionManager.schedule = schedule.schedule
 MissionManager._open_blockers = schedule._open_blockers
 MissionManager.dispatch = dispatch.dispatch
+MissionManager._onboard_repo_options = dispatch._onboard_repo_options
 MissionManager._protocol_spec_env = dispatch._protocol_spec_env
 MissionManager.runspec_secret_payload = dispatch.runspec_secret_payload
 MissionManager._credential_spec = dispatch._credential_spec

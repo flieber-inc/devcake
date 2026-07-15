@@ -142,6 +142,7 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     cfg = AppConfig()
     cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
     mgr.config = cfg
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
     mgr.forges = FakeForgeRuntime(object(), inst=cfg.repos[0])
     mgr.dev_types = {"main-dev": DevType(name="main-dev",
                                          harness_template="grok-build"),

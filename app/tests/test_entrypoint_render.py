@@ -275,3 +275,35 @@ def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     assert len({p["chunk_id"] for _, p in sent}) == 1
     digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
     assert all(p["sha256"] == digest and p["of"] == len(sent) for _, p in sent)
+
+
+def test_clone_extra_repos_per_repo_token_and_nonfatal():
+    """Multi-repo ONBOARD triage (item 2 full scope): each sibling clone
+    rides its OWN read token via the askpass env; failures are non-fatal
+    and reported, successes land at repo/<slug>."""
+    calls = []
+
+    class R:
+        def __init__(self, rc, stderr=""):
+            self.returncode, self.stderr = rc, stderr
+
+    def runner(cmd, capture_output, text, env):
+        calls.append((cmd, env["DEVCAKE_FORGE_TOKEN"]))
+        return R(1, "auth failed") if "bad" in cmd[-2] else R(0)
+
+    extras = [
+        {"name": "beta", "url": "https://github.com/o/beta.git",
+         "clone_user": "x-access-token", "token": "ro-beta-token"},
+        {"name": "gamma", "url": "http://gitea:3000/devcake-repos/bad.git",
+         "clone_user": "svc", "token": "ro-bad-token"},
+    ]
+    notes = ep.clone_extra_repos(extras, Path("/tmp/ws/repo"), runner=runner)
+    assert len(calls) == 2
+    (cmd1, tok1), (cmd2, tok2) = calls
+    assert cmd1[:4] == ["git", "clone", "--depth", "1"]
+    assert cmd1[4] == "https://x-access-token@github.com/o/beta.git"
+    assert cmd1[5].endswith("/repo/beta") and tok1 == "ro-beta-token"
+    assert cmd2[4] == "http://svc@gitea:3000/devcake-repos/bad.git"
+    assert tok2 == "ro-bad-token"
+    assert any("beta: cloned read-only" in n for n in notes)
+    assert any("gamma: clone failed" in n for n in notes)

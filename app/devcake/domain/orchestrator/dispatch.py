@@ -58,6 +58,39 @@ def _mapper_repo(self) -> str | None:
     return external[0] if external else None
 
 
+def _onboard_repo_options(self, primary: str) -> str:
+    """The multi-repo triage section for ONBOARD prompts (item 2 full scope,
+    founder decision 2026-07-15): empty unless the instance's repo SET has
+    more than one member. Lists every set repo (primary first) — all of them
+    are cloned into the triage workspace — and states the split-by-repo
+    decomposition rule."""
+    names = [n for n in (self.instance.repos or [])
+             if n in self.forges.instances]
+    if len(names) < 2:
+        return ""
+    ordered = [primary] + [n for n in names if n != primary]
+    lines = []
+    for i, n in enumerate(ordered):
+        inst_x = self.forges.instance(n)
+        slug = inst_x.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        suffix = ("  ← this mission's repository" if i == 0 else "")
+        lines.append(f"- `{n}` → /workspace/repo/{slug}/ ({inst_x.url}){suffix}")
+    default = self.instance.repos[0]
+    return (
+        "### This team works across several repositories\n"
+        "All of them are cloned READ-ONLY in your workspace for assessment "
+        "(only this mission's repository may be written, and only on the "
+        "trivial path):\n" + "\n".join(lines) + "\n\n"
+        "**Cross-repo work must never be one mission.** If completing this "
+        "mission requires changes in more than one repository, take the "
+        "high-complexity path: decompose into ONE child per repository, put "
+        "a `devcake-repo:<name>` line (backticked, exactly as written here) "
+        "in each child's description naming its repository, and order them "
+        "with blocked_by where one repository's change depends on another's. "
+        f"A child without a marker lands on the default repository "
+        f"(`{default}`).\n\n")
+
+
 async def dispatch(self, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
     try:
@@ -143,7 +176,8 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(
-                dev_type.identifying_prompt, live, playbook=_pb("ONBOARD")),
+                dev_type.identifying_prompt, live, playbook=_pb("ONBOARD"),
+                repo_options=self._onboard_repo_options(repo_name)),
             MissionType.PLAN: lambda: plan_prompt(
                 dev_type.identifying_prompt, live, playbook=_pb("PLAN")),
             MissionType.EXECUTE: lambda: execute_prompt(
@@ -250,7 +284,26 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
         env["DEVCAKE_FORGE_TOKEN"] = write
     else:
         env["DEVCAKE_FORGE_TOKEN"] = ro or write
-    return {"env": env, "credential_files": spec_files}
+    payload = {"env": env, "credential_files": spec_files}
+    # multi-repo triage (item 2 full scope): ONBOARD runs of a multi-repo
+    # instance get every OTHER set repo as a read-only sibling clone. Built
+    # at request time like everything else here (nothing secret at rest);
+    # read tokens preferred, write fallback (same rule as the primary).
+    if run.mission_type == "ONBOARD":
+        extras = []
+        for name in (self.instance.repos or []):
+            if name == run.repo_ref:
+                continue
+            inst_x = self.forges.instance(name)
+            forge_x = self.forges.get(name)
+            if inst_x is None or forge_x is None:
+                continue     # removed mid-flight — triage on what remains
+            extras.append({"name": name, "url": inst_x.url,
+                           "clone_user": forge_x.descriptor.clone_user,
+                           "token": inst_x.token_ro or inst_x.token})
+        if extras:
+            payload["extra_repos"] = extras
+    return payload
 
 
 def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:

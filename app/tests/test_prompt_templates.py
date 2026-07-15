@@ -192,3 +192,14 @@ class _ForgeWithDescriptor:
         "pr_instructions": GH_PR, "pr_noun": "pull request", "id": "github",
         "clone_user": "x-access-token", "git_user_name": "DevCake",
         "git_email": "d@x", "cli_token_envs": ["GITHUB_TOKEN"]})()
+
+
+def test_onboard_repo_options_placement():
+    """{repo_options} renders between the mission block and the rubric;
+    empty (the default) leaves the playbook unchanged."""
+    m = _mission()
+    assert "several repositories" not in onboard_prompt("ID", m)
+    out = onboard_prompt("ID", m,
+                         repo_options="### This team works across several "
+                                      "repositories\n- `alpha`\n\n")
+    assert out.index("several repositories") < out.index("### Classify")

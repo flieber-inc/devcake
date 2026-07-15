@@ -149,6 +149,11 @@ missions_cache: list[dict] = []
 # OWNER successfully polls and no longer sees the mission, or leaves config.
 _mission_owner: dict[str, str] = {}
 
+# instance → last poll-segment error (audit A1): a PERMANENT PMO failure
+# (revoked key, deleted team) skips only that instance's segment; this map
+# surfaces it in /health as `poll_degraded`. Cleared on a green segment.
+_poll_degraded: dict[str, str] = {}
+
 
 def _claim_missions(mgr: MissionManager, fetched: list,
                     owner: dict[str, str]) -> list:
@@ -249,55 +254,70 @@ async def _poll_instance(mgr: MissionManager,
             dispatched, fetched_ids)
 
 
+async def run_poll_cycle(cycle: int) -> None:
+    """One poll cycle (docs/04 §1): per configured instance — fetch + dedupe
+    + derive + gate + dispatch + sweeps — then the merged cache. A failing
+    instance (PMOTransient or a PERMANENT error like a revoked key — audit
+    A1) skips only ITS segment, never the whole cycle; permanent failures
+    surface in /health `poll_degraded` until a green segment clears them."""
+    with tracer.start_as_current_span("poll.cycle") as span:
+        span.set_attribute("devcake.poll.cycle", cycle)
+        try:
+            # a latched repo re-probes every cycle so a transient failure
+            # (or a rotated-back token) self-heals without an operator
+            if forge_runtime.breakers:
+                await refresh_forge_health()
+            cache_rows: list[dict] = []
+            seen, cand, disp = 0, 0, 0
+            polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids
+            for mgr in _managers_in_config_order():
+                with tracer.start_as_current_span("poll.instance") as ispan:
+                    ispan.set_attribute("devcake.instance", mgr.instance_name)
+                    try:
+                        s, c, d, ids = await _poll_instance(mgr, cache_rows)
+                        polled_ok[mgr.instance_name] = ids
+                        seen, cand, disp = seen + s, cand + c, disp + d
+                        _poll_degraded.pop(mgr.instance_name, None)
+                    except PMOTransient as e:
+                        # transient PMO trouble skips only THIS instance's
+                        # segment — the others still poll this cycle. Not
+                        # marked degraded: transient is expected weather.
+                        ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
+                        log.warning("poll.cycle %d: instance %s skipped: %s",
+                                    cycle, mgr.instance_name, e)
+                    except Exception as e:
+                        # a PERMANENT per-instance failure (revoked key,
+                        # deleted team → RuntimeError) must not starve the
+                        # remaining instances (audit A1)
+                        ispan.set_attribute("devcake.outcome", "INSTANCE_ERROR")
+                        _poll_degraded[mgr.instance_name] = (
+                            f"{type(e).__name__}: {str(e)[:200]}")
+                        log.exception("poll.cycle %d: instance %s FAILED — "
+                                      "segment skipped", cycle, mgr.instance_name)
+            _release_stale_ownership(polled_ok)
+            # a skipped instance keeps its LAST snapshot in the cache
+            # (v0 behavior: PMO trouble never blanks the view)
+            cache_rows.extend(
+                row for row in missions_cache
+                if row["instance"] in managers
+                and row["instance"] not in polled_ok)
+            missions_cache[:] = cache_rows
+            span.set_attribute("devcake.missions.seen", seen)
+            span.set_attribute("devcake.missions.candidates", cand)
+            span.set_attribute("devcake.missions.dispatched", disp)
+            log.info("poll.cycle %d: %d missions, %d candidates, %d dispatched "
+                     "(%d instances)", cycle, seen, cand, disp, len(managers))
+        except Exception:
+            # a poll cycle must NEVER kill the loop — log and try again next tick
+            span.set_attribute("devcake.outcome", "cycle_error")
+            log.exception("poll.cycle %d failed", cycle)
+
+
 async def poll_loop() -> None:
-    """Poll cycle (docs/04 §1): per configured instance — fetch + dedupe +
-    derive + gate + dispatch + sweeps — then the merged cache. A PMOTransient
-    skips only that instance's segment, never the whole cycle."""
     cycle = 0
     while True:
         cycle += 1
-        with tracer.start_as_current_span("poll.cycle") as span:
-            span.set_attribute("devcake.poll.cycle", cycle)
-            try:
-                # a latched forge breaker re-probes every cycle so a transient
-                # failure (or a rotated-back token) self-heals without an operator
-                if forge_runtime.breakers:
-                    # a latched repo re-probes every cycle so a transient
-                    # failure (or rotated-back token) self-heals unattended
-                    await refresh_forge_health()
-                cache_rows: list[dict] = []
-                seen, cand, disp = 0, 0, 0
-                polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids
-                for mgr in _managers_in_config_order():
-                    with tracer.start_as_current_span("poll.instance") as ispan:
-                        ispan.set_attribute("devcake.instance", mgr.instance_name)
-                        try:
-                            s, c, d, ids = await _poll_instance(mgr, cache_rows)
-                            polled_ok[mgr.instance_name] = ids
-                            seen, cand, disp = seen + s, cand + c, disp + d
-                        except PMOTransient as e:
-                            # transient PMO trouble skips only THIS instance's
-                            # segment — the others still poll this cycle
-                            ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
-                            log.warning("poll.cycle %d: instance %s skipped: %s",
-                                        cycle, mgr.instance_name, e)
-                _release_stale_ownership(polled_ok)
-                # a skipped instance keeps its LAST snapshot in the cache
-                # (v0 behavior: transient PMO trouble never blanks the view)
-                cache_rows.extend(
-                    row for row in missions_cache
-                    if row["instance"] in managers
-                    and row["instance"] not in polled_ok)
-                missions_cache[:] = cache_rows
-                span.set_attribute("devcake.missions.seen", seen)
-                span.set_attribute("devcake.missions.candidates", cand)
-                span.set_attribute("devcake.missions.dispatched", disp)
-                log.info("poll.cycle %d: %d missions, %d candidates, %d dispatched "
-                         "(%d instances)", cycle, seen, cand, disp, len(managers))
-            except Exception:
-                # a poll cycle must NEVER kill the loop — log and try again next tick
-                span.set_attribute("devcake.outcome", "cycle_error")
-                log.exception("poll.cycle %d failed", cycle)
+        await run_poll_cycle(cycle)
         await asyncio.sleep(config.poll_interval_seconds)
 
 
@@ -532,6 +552,9 @@ async def health():
             ([f"{name}:{k}" for k in cyc] if prefixed else cyc)
             for name, mgr in managers.items() for cyc in mgr.cycles],
         "blocked_reasons": _merged("blocked_reasons"),
+        # instances whose poll segment failed with a PERMANENT error (audit
+        # A1) — the other instances keep polling; this names the sick one
+        "poll_degraded": dict(_poll_degraded),
         "internal_forge": (await internal_forge.health()
                            if internal_forge is not None else None),
         "mapper_degraded": " · ".join(

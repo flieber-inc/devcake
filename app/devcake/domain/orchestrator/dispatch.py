@@ -59,7 +59,15 @@ def _mapper_repo(self) -> str | None:
 
 async def dispatch(self, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
-    live = await self.pmo.get(mission.ref)                     # live re-read
+    try:
+        live = await self.pmo.get(mission.ref)                 # live re-read
+    except Exception as e:
+        # a PMO failure here (transient or permanent) gates the ONE mission —
+        # letting it escape would abort the whole poll segment (audit A1)
+        self.blocked_reasons[mission.pmo_id] = (
+            f"PMO read failed at dispatch: {type(e).__name__}: {str(e)[:150]}")
+        log.warning("dispatch of %s refused — PMO read failed: %s", mission.key, e)
+        return None
     d = derive(live, self.config.adoption_mode)
     if d.mission_type != mtype:
         return None                                            # world moved on
@@ -94,8 +102,18 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         return None
 
     assignment = self.config.assignments[mtype.value]
-    from ..ids import make_run_id
-    run_id = make_run_id(self.instance_name, mission.key, seq, mtype.value)
+    from ..ids import RunIdOverflow, make_run_id
+    try:
+        run_id = make_run_id(self.instance_name, mission.key, seq, mtype.value)
+    except RunIdOverflow as e:
+        # an inflated seq (forged/overflowed `N_TYPE.md` feed marker) must
+        # gate this mission, never wedge the poll segment (audit A15)
+        self.blocked_reasons[live.pmo_id] = (
+            f"run id would exceed the 64-char budget (step marker seq {seq}) "
+            f"— remove or fix the oversized `N_{mtype.value}.md` marker in "
+            f"the activity feed")
+        log.warning("dispatch of %s refused — %s", live.key, e)
+        return None
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)

@@ -1,7 +1,9 @@
 """Human-readable run ids (docs/02 §7): Dagu charset ^[-a-zA-Z0-9_]+$, ≤64."""
 import re
 
-from devcake.domain.ids import make_run_id
+import pytest
+
+from devcake.domain.ids import RunIdOverflow, make_run_id
 
 
 def test_format_and_charset():
@@ -17,6 +19,15 @@ def test_hostile_key_sanitized():
 
 def test_uniqueness():
     assert len({make_run_id("linear", "A", 1, "PLAN") for _ in range(50)}) == 50
+
+
+def test_overflow_raises_domain_error_not_assert():
+    """A forged/overflowed feed marker can inflate seq without bound; the
+    64-char Dagu budget must fail as a catchable domain error (dispatch gates
+    the ONE mission), never a bare assert — which `python -O` would silently
+    disable, shipping an over-long id into Dagu/Docker/Redis."""
+    with pytest.raises(RunIdOverflow):
+        make_run_id("linear", "DEV-1", int("9" * 39), "EXECUTE")
 
 
 def test_instance_prefix_separates_colliding_missions():

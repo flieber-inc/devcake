@@ -165,6 +165,87 @@ def test_ownership_survives_a_transient_cycle(tmp_path, monkeypatch):
     assert "proj-1" not in owner
 
 
+def test_permanent_pmo_error_starves_no_other_instance(tmp_path, monkeypatch):
+    """Audit A1: a NON-transient PMO failure (revoked key → RuntimeError, not
+    PMOTransient) on instance A must skip only A's segment — B still polls,
+    A's cache rows are retained, and /health surfaces the degradation. A
+    green segment clears the degraded flag."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import main as app_main
+    a, b = _mgr("linteama"), _mgr("linteamb")
+    monkeypatch.setattr(app_main, "managers", {"linteama": a, "linteamb": b})
+    monkeypatch.setattr(app_main, "_managers_in_config_order", lambda: [a, b])
+    stale_row = {"instance": "linteama", "key": "T-9"}
+    monkeypatch.setattr(app_main, "missions_cache", [stale_row])
+    app_main._poll_degraded.clear()
+
+    polled: list[str] = []
+
+    async def broken_poll(mgr, cache_rows):
+        if mgr.instance_name == "linteama":
+            raise RuntimeError("linear graphql: authentication failed")
+        polled.append(mgr.instance_name)
+        cache_rows.append({"instance": mgr.instance_name, "key": "T-1"})
+        return (1, 0, 0, set())
+
+    monkeypatch.setattr(app_main, "_poll_instance", broken_poll)
+    run_coro(app_main.run_poll_cycle(1))
+    assert polled == ["linteamb"]                     # B was never starved
+    assert "RuntimeError" in app_main._poll_degraded["linteama"]
+    # A keeps its last snapshot (v0 behavior extended to permanent errors)
+    assert stale_row in app_main.missions_cache
+
+    async def ok_poll(mgr, cache_rows):
+        polled.append(mgr.instance_name)
+        return (0, 0, 0, set())
+
+    monkeypatch.setattr(app_main, "_poll_instance", ok_poll)
+    run_coro(app_main.run_poll_cycle(2))
+    assert app_main._poll_degraded == {}              # green cycle clears it
+
+
+def test_dispatch_gates_on_pmo_read_failure(tmp_path):
+    """Audit A1 (dispatch half): pmo.get raising at the live re-read must
+    gate the mission with a visible reason, never escape into the segment."""
+    from test_transitions import FakePMO, make_mgr, mission
+    from devcake.domain.model import MissionType
+
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+
+    async def broken_get(ref):
+        raise RuntimeError("linear graphql: team not found")
+
+    fake.get = broken_get
+    dev = mgr.dev_types["senior-dev"]
+    out = run_coro(mgr.dispatch(m, MissionType.EXECUTE, dev))
+    assert out is None
+    assert "PMO read failed" in mgr.blocked_reasons[m.pmo_id]
+
+
+def test_dispatch_gates_on_run_id_overflow(tmp_path):
+    """Audit A15c: a forged `9…9_EXECUTE.md` feed marker inflates seq past
+    the 64-char run-id budget — the mission gates with a fix-the-marker
+    reason instead of wedging the poll segment."""
+    from test_transitions import make_mgr, mission
+    from devcake.domain.model import ActivityEntry, MissionType
+    from datetime import datetime, timezone
+
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=object())
+    mgr.internal_forge = None
+    mgr.instance = PMOInstance(name="linear", team_key="DEV",
+                               default_repo="main")
+    fake.activity_entries = [ActivityEntry(
+        ts=datetime.now(timezone.utc), author="troll", kind="comment",
+        body="see `" + "9" * 39 + "_EXECUTE.md` for details")]
+    dev = mgr.dev_types["senior-dev"]
+    out = run_coro(mgr.dispatch(m, MissionType.EXECUTE, dev))
+    assert out is None
+    reason = mgr.blocked_reasons[m.pmo_id]
+    assert "64" in reason and "marker" in reason
+
+
 def test_run_branch_legacy_fallback():
     """Pre-v3 records (pmo_ref ''/'main', no stored branch) must resolve to
     the UNPREFIXED branch their Devs actually pushed."""

@@ -171,6 +171,10 @@ services:
     environment:
       - GITEA__security__INSTALL_LOCK=true
       - GITEA__database__DB_TYPE=sqlite3
+      # web sessions in the DB, not memory: a container restart must not log
+      # the operator out — a private repo 404s for an anonymous visitor,
+      # which reads as "my repo got wiped" (founder report 2026-07-15)
+      - GITEA__session__PROVIDER=db
       - GITEA__service__DISABLE_REGISTRATION=true
       - GITEA__server__DISABLE_SSH=true
       - GITEA__actions__ENABLED=false

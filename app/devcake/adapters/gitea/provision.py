@@ -140,6 +140,37 @@ class GiteaProvisioner:
                               json={"name": name, "scopes": scopes})
         return out["sha1"]
 
+    async def _ensure_protection(self, owner_repo: str) -> None:
+        """Main-branch protection with the reviewer approvals whitelist.
+        MUST run AFTER devcake-reviewer is a collaborator: Gitea silently
+        drops non-collaborator names from approvals_whitelist_username
+        (live-verified 2026-07-15 — every repo shipped with an EMPTY enabled
+        whitelist, so required_approvals could never be satisfied, reviews
+        were stamped official=false at creation, and merges 405'd forever).
+        An existing protection whose whitelist lost the reviewer is PATCHed
+        back (the repair path for adopted/legacy repos); reviews stamped
+        unofficial before the repair stay unofficial — a fresh approval is
+        needed for pre-existing PRs."""
+        desired = {"branch_name": "main", "required_approvals": 1,
+                   "enable_approvals_whitelist": True,
+                   "approvals_whitelist_username": [REVIEWER_USER]}
+        existing = await self._req(
+            "GET", f"/repos/{owner_repo}/branch_protections/main",
+            tolerate=(404,))
+        if existing is None:
+            await self._req("POST", f"/repos/{owner_repo}/branch_protections",
+                            tolerate=(403, 409, 422), json=desired)
+            existing = await self._req(
+                "GET", f"/repos/{owner_repo}/branch_protections/main",
+                tolerate=(404,))
+        if existing is not None and REVIEWER_USER not in (
+                existing.get("approvals_whitelist_username") or []):
+            await self._req(
+                "PATCH", f"/repos/{owner_repo}/branch_protections/main",
+                tolerate=(403, 404, 422),
+                json={"enable_approvals_whitelist": True,
+                      "approvals_whitelist_username": [REVIEWER_USER]})
+
     # ── per-mission lifecycle ────────────────────────────────────────────────
 
     async def ensure_mission_repo(self, instance: str, mission_key: str
@@ -168,14 +199,6 @@ class GiteaProvisioner:
         await self._req("POST", f"/orgs/{ORG}/repos", tolerate=(409,),
                         json={"name": repo, "private": True, "auto_init": True,
                               "default_branch": "main"})
-        # main protection: the mission Dev can never self-merge; the reviewer
-        # must be WHITELISTED for its approvals to count (live-verified —
-        # write access or whitelist makes a review official)
-        await self._req("POST", f"/repos/{ORG}/{repo}/branch_protections",
-                        tolerate=(403, 409, 422),
-                        json={"branch_name": "main", "required_approvals": 1,
-                              "enable_approvals_whitelist": True,
-                              "approvals_whitelist_username": [REVIEWER_USER]})
         await self._req("POST", "/admin/users", tolerate=(409, 422),
                         json={"username": svc_user,
                               "email": f"{svc_user}@devcake.example",
@@ -185,6 +208,11 @@ class GiteaProvisioner:
                         json={"permission": "write"})
         await self._req("PUT", f"/repos/{ORG}/{repo}/collaborators/{REVIEWER_USER}",
                         json={"permission": "read"})
+        # main protection AFTER the collaborators: the mission Dev can never
+        # self-merge; the reviewer must be whitelisted for approvals to count,
+        # and the whitelist only sticks once the reviewer is a collaborator
+        # (see _ensure_protection)
+        await self._ensure_protection(f"{ORG}/{repo}")
         creds = MissionRepoCredentials(
             repo_name=repo,
             clone_url=f"{self.url}/{ORG}/{repo}.git",
@@ -225,11 +253,6 @@ class GiteaProvisioner:
             await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos",
                             json={"name": name, "private": True,
                                   "auto_init": True, "default_branch": "main"})
-        await self._req("POST", f"/repos/{OPERATOR_ORG}/{name}/branch_protections",
-                        tolerate=(403, 409, 422),
-                        json={"branch_name": "main", "required_approvals": 1,
-                              "enable_approvals_whitelist": True,
-                              "approvals_whitelist_username": [REVIEWER_USER]})
         svc_user = _svc_user(f"op-{name}")
         await self._req("POST", "/admin/users", tolerate=(409, 422),
                         json={"username": svc_user,
@@ -240,6 +263,10 @@ class GiteaProvisioner:
                         json={"permission": "write"})
         await self._req("PUT", f"/repos/{OPERATOR_ORG}/{name}/collaborators/{REVIEWER_USER}",
                         json={"permission": "read"})
+        # protection AFTER the collaborators — the whitelist only sticks once
+        # the reviewer is a collaborator; also repairs adopted/legacy repos
+        # whose whitelist Gitea stripped (see _ensure_protection)
+        await self._ensure_protection(f"{OPERATOR_ORG}/{name}")
         fields = {
             "token": await self._mint(svc_user, f"op-{name}-w",
                                       ["write:repository", "write:issue"]),

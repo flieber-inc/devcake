@@ -151,3 +151,86 @@ def test_create_operator_repo_adopts_existing(tmp_path, monkeypatch):
     stored = _json.loads(
         (tmp_path / "secrets" / "connections" / "repo-taken.json").read_text())
     assert set(stored) == {"token", "token_ro", "reviewer_token"}
+
+
+# ── approvals whitelist must survive Gitea's silent drop (2026-07-15) ─────────
+# Gitea silently REMOVES non-collaborator names from
+# approvals_whitelist_username at protection-create time. Both provisioning
+# flows posted the protection BEFORE adding devcake-reviewer as collaborator,
+# so every repo shipped with an EMPTY enabled whitelist — required_approvals
+# could never be satisfied and merges 405'd forever (live-verified on all
+# three existing repos). The fix: collaborators first, protection after, and
+# the protection helper PATCHes an existing protection whose whitelist lost
+# the reviewer (repair path for adopted/legacy repos).
+
+def _order(calls, needle):
+    return next(i for i, (m, p) in enumerate(calls) if needle in p)
+
+
+def test_operator_repo_collaborators_precede_protection(tmp_path, monkeypatch):
+    calls = []
+
+    def handler(request):
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and path.endswith("branch_protections/main"):
+            return httpx.Response(404, json={})
+        if request.method == "GET" and "/repos/devcake-repos/newrepo" in path:
+            return httpx.Response(404, json={})
+        if request.method == "POST" and path.endswith("/tokens"):
+            return httpx.Response(201, json={"sha1": "tok-1234"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    run_coro(prov.create_operator_repo("newrepo"))
+    reviewer_collab = _order(
+        calls, "/repos/devcake-repos/newrepo/collaborators/devcake-reviewer")
+    protection = _order(calls, "/repos/devcake-repos/newrepo/branch_protections")
+    assert reviewer_collab < protection
+
+
+def test_mission_repo_collaborators_precede_protection(tmp_path, monkeypatch):
+    calls = []
+
+    def handler(request):
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and path.endswith("branch_protections/main"):
+            return httpx.Response(404, json={})
+        if request.method == "POST" and path.endswith("/tokens"):
+            return httpx.Response(201, json={"sha1": "tok-1234"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    run_coro(prov.ensure_mission_repo("linear", "T-9"))
+    repo = "devcake-internal/linear-t-9"
+    reviewer_collab = _order(calls, f"/repos/{repo}/collaborators/devcake-reviewer")
+    protection = _order(calls, f"/repos/{repo}/branch_protections")
+    assert reviewer_collab < protection
+
+
+def test_adopt_repairs_stripped_whitelist(tmp_path, monkeypatch):
+    """An adopted (or legacy) repo whose protection exists with an empty
+    whitelist gets PATCHed back to [devcake-reviewer]."""
+    patched = []
+
+    def handler(request):
+        path = request.url.path
+        if request.method == "GET" and "/repos/devcake-repos/taken" in path \
+                and "branch_protections" not in path:
+            return httpx.Response(200, json={"name": "taken"})
+        if path.endswith("branch_protections/main"):
+            if request.method == "PATCH":
+                patched.append(json.loads(request.content))
+                return httpx.Response(200, json={})
+            return httpx.Response(200, json={
+                "branch_name": "main", "required_approvals": 1,
+                "enable_approvals_whitelist": True,
+                "approvals_whitelist_username": []})     # the stripped state
+        if request.method == "POST" and path.endswith("/tokens"):
+            return httpx.Response(201, json={"sha1": "tok-1234"})
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    run_coro(prov.create_operator_repo("taken"))
+    assert patched and patched[0]["approvals_whitelist_username"] == ["devcake-reviewer"]

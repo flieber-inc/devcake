@@ -3,7 +3,6 @@
 export const CONFIG_SECTIONS = [
   { id: "traffic", label: "Traffic control" },
   { id: "pmo", label: "PMO" },
-  { id: "repository", label: "Repository" },
   { id: "dev-types", label: "Dev Types" },
   { id: "assignments", label: "Assignments" },
   { id: "prompts", label: "Prompts" },

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  CakeSlice, LayoutDashboard, SquareTerminal, Settings2, ScrollText,
+  CakeSlice, LayoutDashboard, SquareTerminal, Settings2, FolderGit2, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import StatusDot from "./StatusDot.jsx";
@@ -13,6 +13,7 @@ const NAV = [
   { page: "overview", href: "#/overview", label: "Overview", icon: LayoutDashboard },
   { page: "runs", href: "#/runs", label: "Runs", icon: SquareTerminal },
   { page: "config", href: "#/config", label: "Configuration", icon: Settings2 },
+  { page: "repos", href: "#/repos", label: "Repositories", icon: FolderGit2 },
   { page: "logs", href: "#/logs", label: "Logs", icon: ScrollText },
 ];
 

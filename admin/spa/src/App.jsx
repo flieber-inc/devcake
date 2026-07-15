@@ -3,16 +3,25 @@ import { TriangleAlert, OctagonAlert } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import OverviewPage from "./pages/OverviewPage.jsx";
 import ConfigPage from "./pages/ConfigPage.jsx";
+import ReposPage from "./pages/ReposPage.jsx";
 import RunsPage from "./pages/RunsPage.jsx";
+import DraftChrome from "./components/DraftChrome.jsx";
+import { ConfigDraftProvider } from "./lib/ConfigDraftContext.jsx";
 import LogsPage from "./pages/LogsPage.jsx";
 import deriveAlerts, { alertKey } from "./lib/alerts.js";
 import usePoll from "./lib/usePoll.js";
 import { get, send } from "./api.js";
 
-const PAGES = ["overview", "runs", "config", "logs"];
+const PAGES = ["overview", "runs", "config", "repos", "logs"];
 
-// tiny hash router: #/overview · #/runs · #/config · #/config/<section> · #/logs
+// tiny hash router: #/overview · #/runs · #/config · #/config/<section> ·
+// #/repos · #/logs. The old #/config/repository deep link redirects to
+// #/repos (the section moved to its own page — v0.1.1 B4).
 function parseHash() {
+  if (/^#\/config\/repository$/.test(window.location.hash)) {
+    window.location.replace("#/repos");
+    return { page: "repos", section: null };
+  }
   const m = window.location.hash.match(/^#\/([^/]+)(?:\/(.+))?/);
   const page = m && PAGES.includes(m[1]) ? m[1] : "overview";
   return { page, section: page === "config" ? m?.[2] || null : null };
@@ -65,8 +74,9 @@ export default function App() {
         return;
       }
       const next = parseHash();
-      const leavingConfig = /^#\/config/.test(lastHash.current) && next.page !== "config";
-      if (navGuard.current && leavingConfig) {
+      const leavingDraft = /^#\/(config|repos)/.test(lastHash.current)
+        && !["config", "repos"].includes(next.page);
+      if (navGuard.current && leavingDraft) {
         suppress.current = true;
         window.location.hash = lastHash.current; // revert before asking
         const proceed = await navGuard.current();
@@ -122,6 +132,7 @@ export default function App() {
   const { page, section } = route;
 
   return (
+    <ConfigDraftProvider>
     <div className="flex h-screen bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
       <Sidebar
         page={page}
@@ -178,14 +189,18 @@ export default function App() {
               <ConfigPage
                 section={section}
                 onSectionInView={setSpySection}
-                registerNavGuard={registerNavGuard}
               />
             )}
+            {page === "repos" && <ReposPage />}
             {page === "runs" && <RunsPage />}
             {page === "logs" && <LogsPage />}
+            {["config", "repos"].includes(page) && (
+              <DraftChrome registerNavGuard={registerNavGuard} health={health} />
+            )}
           </div>
         </main>
       </div>
     </div>
+    </ConfigDraftProvider>
   );
 }

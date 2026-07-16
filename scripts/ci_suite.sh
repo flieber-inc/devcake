@@ -38,6 +38,10 @@ docker run --rm \
   "devcake/app-test:${DEVCAKE_TAG:-latest}" \
   python -m pytest tests/ -q
 
+echo "── devcake-logs-mcp selftest (baked into the claude-code image)"
+docker run --rm --entrypoint devcake-logs-mcp \
+  "devcake/dev-claude-code:${DEVCAKE_TAG:-latest}" --selftest
+
 echo "── forge contract battery (gitea lane — bundled instance, no external tokens)"
 docker compose exec -T app python - < scripts/contract_tests_forge.py
 

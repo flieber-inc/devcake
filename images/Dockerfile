@@ -53,10 +53,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f /tmp/glab.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Python runtime deps for the shared entrypoint (Redis Streams + OTEL).
+# Python runtime deps for the shared entrypoint (Redis Streams + OTEL) and
+# the devcake-logs MCP server (mcp SDK + httpx — pinned like the harness
+# CLIs above; httpx matches the app repo's pin).
 # Cache mount speeds rebuilds; mount is never committed into the image layer.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
+        httpx==0.28.1 \
+        mcp==1.28.1 \
         redis==5.2.1 \
         opentelemetry-api==1.29.0 \
         opentelemetry-sdk==1.29.0 \
@@ -71,6 +75,13 @@ RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
 ENV HOME=/home/dev
 
 COPY common/dev_entrypoint.py /dev_entrypoint.py
+
+# devcake-logs MCP server: baked into every Dev image (docs/07 §6), but only
+# registered when a Dev Type's mcp_setup_commands says so (docs/08 §7).
+COPY common/logs_mcp /opt/devcake/logs_mcp
+RUN printf '#!/bin/sh\nexport PYTHONPATH="/opt/devcake${PYTHONPATH:+:$PYTHONPATH}"\nexec python -m logs_mcp.server "$@"\n' \
+        > /usr/local/bin/devcake-logs-mcp \
+    && chmod 0755 /usr/local/bin/devcake-logs-mcp
 
 WORKDIR /workspace
 ENTRYPOINT ["python", "/dev_entrypoint.py"]

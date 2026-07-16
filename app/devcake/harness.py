@@ -100,5 +100,11 @@ def dev_type_status(dt) -> dict:
             "oauth_available": h.oauth is not None,
         },
         "secrets_present": present,
+        # ✓/✗ per declared secret env var (DevType.secret_env) — presence
+        # only, never the value; deliberately NOT folded into
+        # credentials_ready (mission tooling, not harness credentials)
+        "secret_env_present": {
+            var: secrets_store.harness_status(var)["present"]
+            for var in dt.secret_env},
         "credentials_ready": ready,
     }

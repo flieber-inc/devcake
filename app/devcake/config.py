@@ -7,6 +7,7 @@ concurrency, merge policy, relations mapper.
 
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -186,8 +187,36 @@ class DevType(BaseModel):
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
+    # Named secret env vars delivered to this Dev Type's runs: NAMES only —
+    # values are GUI-stored under /data/secrets/harness/ (ADR-0011) and read
+    # at runspec time, so mcp_setup_commands can reference e.g. $DD_API_KEY
+    # without a secret value ever touching config.yaml.
+    secret_env: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
+
+    @field_validator("secret_env")
+    @classmethod
+    def _secret_env_names(cls, v: list[str]) -> list[str]:
+        """The runspec reply merges the secret half OVER spec_env (runs.py
+        runspec.result), so an unguarded name could shadow the Dev protocol
+        contract. Shape mirrors api.main._HARNESS_VAR_RE — the store these
+        names read from."""
+        seen: set[str] = set()
+        for name in v:
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", name):
+                raise ValueError(
+                    f"secret env var {name!r} must be UPPER_SNAKE_CASE "
+                    "([A-Z][A-Z0-9_]*, max 64 chars)")
+            if name in seen:
+                raise ValueError(f"duplicate secret env var {name!r}")
+            seen.add(name)
+            if name in ("PATH", "HOME") or name.startswith(
+                    ("DEVCAKE_", "OTEL_", "GIT_")):
+                raise ValueError(
+                    f"secret env var {name!r} would shadow the Dev "
+                    "protocol/tooling env — pick a different name")
+        return v
 
 
 DEFAULT_ASSIGNMENTS = {

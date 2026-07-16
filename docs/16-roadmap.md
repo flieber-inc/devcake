@@ -245,6 +245,7 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 - **N repos per mission** — cross-repo missions (one PR per repo, set-approval semantics, merge ordering) are a distributed-atomicity project of their own; v0.1 caps per-mission resolution at 0-or-1.
 - **Per-run scoped forge tokens** & the rest of `14` §7 — natural companion to F4's per-mission repo tokens; revisit once that machinery exists.
 - **Network egress allowlists / reduced sandbox-bypass** for non-EXECUTE stages (ISSUES #16).
+- **Additional `devcake-logs-mcp` backends** (Loki; others on demand) behind the existing `logs_mcp/core.py: LogBackend` seam — the Datadog + CloudWatch Logs backends, the `DevType.secret_env` delivery, and the (previously dead) `mcp_setup_commands` runspec wire shipped 2026-07-16; new platforms are one backend module + a `make_backend` entry, zero tool-surface change.
 - **Priority-conditional Dev Type assignment** (e.g. Urgent missions route EXECUTE to Senior Dev — relaxes the strict 1 Mission Type → 1 Dev Type rule).
 - Admin panel **OIDC/SSO** (v0 has basic auth).
 - **First-class OTel metrics layer** — conditional: earns its keep when dashboards need pre-aggregation or long retention (v0 aggregates via SQL over span attributes — `12` §4).

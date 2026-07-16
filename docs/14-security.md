@@ -138,6 +138,15 @@ a capable agent from pushing bad code to a feature branch or exfiltrating tokens
    Config; stored `0600` under `/data/secrets/connections/` and
    `/data/secrets/harness/`. Never echoed (`GET /config` has no secret material;
    `secrets-check` = presence + timestamp only). `.env` = **bootstrap only**.
+7. **Dev-Type secret env (`DevType.secret_env`):** mission-tooling credentials
+   (e.g. a Datadog key for `devcake-logs-mcp`) are the same harness-namespace
+   secret class — GUI-stored, `0600`, redaction-registered on write and at boot.
+   Config holds only the **names**; runspec delivery is the same authenticated
+   rebuild-on-request path as harness credentials. Accepted risk: a
+   `claude mcp add -e VAR=$VAR` line persists the **expanded** value in the
+   ephemeral container's local claude config — a subset of the existing Zone B
+   posture (Devs already hold their credentials in env; the container is
+   destroyed at run end).
 
 **Simplicity vs security:** GUI secrets behind HTTP basic auth on a dedicated
 host with loopback binds is an intentional trade. Residual risk is the operator

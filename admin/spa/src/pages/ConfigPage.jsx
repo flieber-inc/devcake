@@ -209,6 +209,26 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
             set("mcp_setup_commands", e.target.value.split("\n").filter(Boolean))}
         />
       </Field>
+      <Field
+        label="Secret env vars (one per line)"
+        hint="Names only (UPPER_SNAKE_CASE) — values are pasted below and stored in the secret store, never in config. Delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY)."
+      >
+        <Textarea
+          rows={2}
+          value={(d.secret_env || []).join("\n")}
+          onChange={(e) =>
+            set("secret_env", e.target.value.split("\n").filter(Boolean))}
+        />
+      </Field>
+      {(d.secret_env || []).length > 0 && (
+        <div className="space-y-2">
+          {(d.secret_env || []).map((v) => (
+            <SecretField key={v} label={v}
+              help={`Delivered to ${name} runs as $${v}. Stored securely — never echoed, never in .env.`}
+              refKey={v} checkKind="harness" paste />
+          ))}
+        </div>
+      )}
       <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
         <div className="flex items-center justify-between">
           <span>

@@ -324,6 +324,8 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
         extras = self._extra_repos_for(run)   # references reach zero-repo
         if extras:                            # missions too
             payload["extra_repos"] = extras
+        if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
+            payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
         return payload
     write = repo.token
     ro = repo.token_ro
@@ -335,6 +337,8 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     extras = self._extra_repos_for(run)
     if extras:
         payload["extra_repos"] = extras
+    if dt.mcp_setup_commands:                 # docs/07 §5 step 5 (exit 14)
+        payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
     return payload
 
 
@@ -376,6 +380,17 @@ def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict
     from ... import secrets as _secrets
     env = {var: v for var in harness.credential_env
            if (v := _secrets.read_harness_secret(var))}
+    # Dev-Type-declared secret env: named refs into the same GUI store, so
+    # mcp_setup_commands can reference e.g. $DD_API_KEY without a value ever
+    # touching config.yaml (ADR-0011). Missing value = warn-and-proceed — a
+    # mission must not hard-fail over a log credential; the Config page
+    # shows the gap (secret_env_present).
+    for var in dev_type.secret_env:
+        if (v := _secrets.read_harness_secret(var)):
+            env[var] = v
+        else:
+            log.warning("secret env %s for dev type %s not stored — add it "
+                        "on the admin Config page", var, dev_type.name)
     files = []
     secrets_dir = (Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
                    / "secrets" / dev_type.name)

@@ -80,6 +80,7 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OTLP endpoint = the stack's `otel-collector` on `devcake_runtime`. **Unauthenticated**: Devs hold no OO credentials at all; the collector alone authenticates upstream (`12-observability.md` §1, ISSUES #13). |
 | *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `OPENAI_API_KEY` / `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
 | *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active repo's token; optionally the other forge's token for cross-forge reads). |
+| *Dev-Type secret env* | 2 | Named vars from `DevType.secret_env` (`02-domain-model.md` §6), values GUI-stored under `/data/secrets/harness/` — mission tooling credentials (e.g. `DD_API_KEY` for `devcake-logs-mcp`, §6a), referenced as `$VAR` from `mcp_setup_commands`. Missing value ⇒ warn-and-proceed, never a failed run. |
 
 Real secrets (harness and forge credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §3, `09-messaging.md` §1a).
 
@@ -130,6 +131,12 @@ devcake-relay activity get        # re-fetch the current ACTIVITY.md content
 ```
 
 There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint able to update/communicate with the PMO System" from the mission doc *is* this relay: writes travel as end-of-run artifacts that the app applies.
+
+## 6a. Mid-run log access: `devcake-logs-mcp`
+
+Every Dev image also ships `devcake-logs-mcp` (`images/common/logs_mcp/`), a stdio MCP server exposing the operator's log platform to the Dev — read-only, four tools (`search_logs`, `get_log_context`, `aggregate_logs`, `list_services`), responses trimmed server-side for token economy. Backends behind the `logs_mcp/core.py: LogBackend` seam, selected by `DEVCAKE_LOGS_BACKEND`: **Datadog** (default — `DD_API_KEY`/`DD_APP_KEY`/`DD_SITE`) and **CloudWatch Logs** (Logs Insights via a local stdlib SigV4 signer, no boto3 — `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION`, optional `AWS_SESSION_TOKEN` + `DEVCAKE_LOGS_GROUPS`); Loki is a later seam entry.
+
+It is baked but **inert until registered**: a Dev Type opts in via one `mcp_setup_commands` line plus the matching `secret_env` names (`08-harness-templates.md` §7). An unconfigured or failing backend answers tool calls with an actionable error message — never a dead server mid-run.
 
 ## 7. Network and resources
 

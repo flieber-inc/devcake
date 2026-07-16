@@ -7,7 +7,8 @@ import yaml
 import pytest
 
 import devcake.config as config_mod
-from devcake.config import AppConfig, PMOInstance, RepoInstance, reject_stale_patch
+from devcake.config import (AppConfig, DevType, PMOInstance, RepoInstance,
+                            reject_stale_patch)
 
 V1_YAML = """
 schema_version: 1
@@ -215,6 +216,29 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
 
     path.write_text("")  # empty file → defaults, same as first boot
     assert config_mod.load_config().schema_version == 4
+
+
+def test_dev_type_secret_env_names_validated():
+    """secret_env delivers named GUI-stored secrets into the Dev's runspec
+    env, where the secret half OVERRIDES spec_env (runs.py runspec.result) —
+    names must be harness-secret-shaped (api.main._HARNESS_VAR_RE) and must
+    not shadow the Dev protocol/tooling contract."""
+    dt = DevType(name="senior-dev", harness_template="claude-code",
+                 secret_env=["DD_API_KEY", "DD_APP_KEY"])
+    assert dt.secret_env == ["DD_API_KEY", "DD_APP_KEY"]
+    # pre-existing Dev Type YAML without the field loads with []
+    assert DevType(name="x", harness_template="claude-code").secret_env == []
+    for bad in ("dd_api_key", "9DD_KEY", "", "X" * 65, "DD API KEY"):
+        with pytest.raises(Exception, match="secret env"):
+            DevType(name="x", harness_template="claude-code", secret_env=[bad])
+    with pytest.raises(Exception, match="duplicate"):
+        DevType(name="x", harness_template="claude-code",
+                secret_env=["DD_API_KEY", "DD_API_KEY"])
+    for shadow in ("DEVCAKE_MISSION_ID", "OTEL_EXPORTER_OTLP_ENDPOINT",
+                   "GIT_ASKPASS", "PATH", "HOME"):
+        with pytest.raises(Exception, match="shadow"):
+            DevType(name="x", harness_template="claude-code",
+                    secret_env=[shadow])
 
 
 def test_reference_repos_validated_and_disjoint():

@@ -149,6 +149,24 @@ def test_stored_forge_token_registered_at_construction(tmp_path, monkeypatch):
             unregister_runtime_secret(key)
 
 
+def test_dev_type_secret_env_values_redacted(tmp_path, monkeypatch):
+    """DevType.secret_env values (e.g. a Datadog API key) are ordinary
+    harness-namespace secrets — registered on write and re-registered at
+    boot (register_all) — so one leaking into PMO-bound text must mask like
+    any platform credential. Tripwire for the secret-env delivery path."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_store
+    from devcake.security import unregister_runtime_secret
+
+    key = "dd-app-key-0123456789abcdef0123456789"
+    secrets_store.write_harness_secret("DD_APP_KEY", key)
+    try:
+        out = redact(f"transcript: DD_APP_KEY={key} end")
+        assert key not in out and MASK in out
+    finally:
+        unregister_runtime_secret("harness:DD_APP_KEY")
+
+
 def test_known_values_cache_invalidates_on_change(tmp_path, monkeypatch):
     """Audit A28: redact() re-globbed and re-parsed every /data/secrets JSON
     on every call (the hot path grows with mission count — M11 adds one file

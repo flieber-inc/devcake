@@ -137,6 +137,33 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 | `grok-build` | **Verified (CLI v0.2.93):** `grok mcp add [-t stdio\|http\|sse] [-s user\|project] [-e K=V] [-H "Name: value"] <name> [--] <command…>` (or a URL for http/sse) — writes `~/.grok/config.toml` (user scope) or `./.grok/config.toml` (project). Also `grok mcp list\|remove\|doctor`. |
 | `codex` | **Verified (CLI 0.144.1):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
 
+Scope caveat: `claude mcp add`'s default (local) scope is **cwd-keyed**, and the entrypoint runs both the MCP commands and the harness with `cwd=/workspace/repo` — they must stay in the same directory or the registration silently disappears.
+
+### `devcake-logs-mcp` (baked into every Dev image)
+
+The bundled log-platform server (`07-dev-runtime.md` §6a). Canonical registration (claude-code, **verified**; store the `DD_*` values as the Dev Type's secret env vars first — `11-admin-panel.md` §3):
+
+```
+claude mcp add devcake-logs -e DD_API_KEY=$DD_API_KEY -e DD_APP_KEY=$DD_APP_KEY -e DD_SITE=datadoghq.com -- devcake-logs-mcp
+```
+
+`$VAR` references expand in the entrypoint shell (ADR-0011: values never enter config); `DD_SITE` is a non-secret literal (`datadoghq.eu` for EU orgs). The binary ships in all three images, but grok/codex registration lines are **unverified in v0**.
+
+CloudWatch Logs variant (store `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` — plus `AWS_SESSION_TOKEN` for STS — as secret env vars; `AWS_REGION` and `DEVCAKE_LOGS_GROUPS` are non-secret literals; omit `DEVCAKE_LOGS_GROUPS` to auto-discover up to 50 groups):
+
+```
+claude mcp add devcake-logs -e DEVCAKE_LOGS_BACKEND=cloudwatch -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY -e AWS_REGION=us-east-1 -e DEVCAKE_LOGS_GROUPS=/app/payment,/app/checkout -- devcake-logs-mcp
+```
+
+Backend dialect differences the playbooks don't need to know (the tool docstrings teach the agent): CloudWatch `search_logs` treats plain text as a message filter (a pipe = raw Logs Insights query); `get_log_context` trace mode is a message-substring match there (no trace facet — prefer timestamp mode); pagination cursors are Datadog-only.
+
+| Tool | Purpose |
+|---|---|
+| `search_logs(query, from_time, to_time, limit, cursor)` | Datadog-syntax search, newest first, compact one-line rows, cursor pagination |
+| `get_log_context(trace_id \| timestamp, query, window_seconds, limit)` | Trace-correlated logs, or a time window around one event, ascending |
+| `aggregate_logs(query, from_time, to_time, group_by, limit)` | Facet counts (`service`/`status`/`host`/any `@attribute`), desc |
+| `list_services(from_time)` | Services emitting logs in the window — the discovery entry point |
+
 ## 8. Adding or changing a template (checklist)
 
 1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow) and the new value to `DevType.harness_template`'s Literal (`config.py`).

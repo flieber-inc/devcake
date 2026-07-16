@@ -101,6 +101,25 @@ def test_dev_type_status_derives_and_reports_secrets(tmp_path, monkeypatch):
     assert claude["secrets_present"] == []
 
 
+def test_dev_type_status_reports_secret_env_presence(tmp_path, monkeypatch):
+    """The Config page renders ✓/✗ per declared secret env var — presence is
+    server-computed (never the value) and kept OUT of credentials_ready:
+    secret_env vars are mission tooling (e.g. a Datadog key), not harness
+    credentials, so they must not flip Dev readiness either way."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    dt = DevType(name="senior-dev", harness_template="claude-code",
+                 secret_env=["DD_API_KEY", "DD_APP_KEY"])
+    st = dev_type_status(dt)
+    assert st["secret_env_present"] == {"DD_API_KEY": False,
+                                        "DD_APP_KEY": False}
+    s.write_harness_secret("DD_API_KEY", "dd-api-key-0123456789abcdef")
+    st2 = dev_type_status(dt)
+    assert st2["secret_env_present"] == {"DD_API_KEY": True,
+                                         "DD_APP_KEY": False}
+    assert st2["credentials_ready"] is False   # tooling never implies ready
+
+
 def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     from devcake import secrets as secrets_store
@@ -123,6 +142,28 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
                                               harness_template="claude-code"))
     assert "CLAUDE_CODE_OAUTH_TOKEN" in env and "XAI_API_KEY" not in env
     assert files == []  # claude-code requires no credential files
+
+
+def test_credential_spec_includes_dev_type_secret_env(tmp_path, monkeypatch):
+    """DevType.secret_env — named refs into the GUI harness store, delivered
+    alongside the harness credentials so mcp_setup_commands can reference
+    e.g. $DD_API_KEY (ADR-0011: the value never touches config.yaml).
+    Missing value = warn-and-proceed: a mission must not hard-fail over a
+    log credential; the Config page shows the gap (secret_env_present)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_store
+    secrets_store.write_harness_secret("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    secrets_store.write_harness_secret("DD_API_KEY", "dd-api-key-0123456789abcdef")
+
+    from fakes import make_mission_manager
+    mgr = make_mission_manager(noop_audit=False)
+    dt = DevType(name="senior-dev", harness_template="claude-code",
+                 secret_env=["DD_API_KEY", "DD_MISSING"])
+    env, files = mgr._credential_spec(dt)
+    assert env["DD_API_KEY"] == "dd-api-key-0123456789abcdef"
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok"   # harness creds untouched
+    assert "DD_MISSING" not in env                   # warn, never crash
+    assert files == []
 
 
 def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
@@ -183,6 +224,65 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     assert mgr.runspec_secret_payload(run) is None
 
 
+def test_runspec_payload_carries_mcp_setup_commands(tmp_path, monkeypatch):
+    """The Dev entrypoint has consumed spec["mcp_setup_commands"] since M3
+    (exit 14 on failure) — this is the missing producer half: the Dev Type's
+    commands ride the runspec on BOTH forge branches (external and internal
+    fallback), live-read like secrets so an operator's fix applies to the
+    next runspec.get without redispatch."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as secrets_store
+    secrets_store.write_connection_secret(
+        "repo", "main", "token", "ghp_write_token_for_tests_0001")
+    secrets_store.write_harness_secret(
+        "DD_API_KEY", "dd-api-key-0123456789abcdef")
+
+    from types import SimpleNamespace
+    from fakes import make_mission_manager
+    from devcake.domain.run import Run
+    from devcake.config import RepoInstance
+    cmds = ["claude mcp add devcake-logs -e DD_API_KEY=$DD_API_KEY "
+            "-- devcake-logs-mcp"]
+    cfg = AppConfig()
+    cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
+    inst = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    dts = {"senior-dev": DevType(name="senior-dev",
+                                 harness_template="claude-code",
+                                 mcp_setup_commands=cmds,
+                                 secret_env=["DD_API_KEY"])}
+    run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
+              mission_type="EXECUTE", dev_type="senior-dev", seq=1)
+
+    mgr = make_mission_manager(
+        config=cfg, instance=inst, dev_types=dts,
+        forge_runtime=FakeForgeRuntime(object(), inst=cfg.repos[0]))
+    payload = mgr.runspec_secret_payload(run)
+    assert payload["mcp_setup_commands"] == cmds
+    assert payload["env"]["DD_API_KEY"] == "dd-api-key-0123456789abcdef"
+
+    # internal-fallback branch delivers them too
+    fr = FakeForgeRuntime(object(), inst=cfg.repos[0])
+    fr.internal = {"main"}
+
+    class FakeInternalForge:
+        def mission_credentials(self, repo_ref):
+            return SimpleNamespace(token_write="w", token_read="r")
+
+    mgr2 = make_mission_manager(
+        config=cfg, instance=inst, dev_types=dts,
+        forge_runtime=fr, internal_forge=FakeInternalForge())
+    assert mgr2.runspec_secret_payload(run)["mcp_setup_commands"] == cmds
+
+    # no commands configured → key absent (deploy-skew-safe: the entrypoint
+    # spec.get()s it with a default)
+    plain = {"senior-dev": DevType(name="senior-dev",
+                                   harness_template="claude-code")}
+    mgr3 = make_mission_manager(
+        config=cfg, instance=inst, dev_types=plain,
+        forge_runtime=FakeForgeRuntime(object(), inst=cfg.repos[0]))
+    assert "mcp_setup_commands" not in mgr3.runspec_secret_payload(run)
+
+
 def test_runspec_get_served_while_active_and_refused_after(tmp_path):
     from devcake.domain.run import Run
     from devcake.domain.runs import RunManager
@@ -210,11 +310,49 @@ def test_runspec_get_served_while_active_and_refused_after(tmp_path):
     assert payload["env"]["PUBLIC"] == "yes"
     assert payload["env"]["FAKE_SECRET"] == f"devcake-fake-secret-{run.run_id}"
     assert payload["credential_files"][0]["path_hint"] == "~/.hello/creds.json"
+    assert payload["mcp_setup_commands"] == []   # HELLO stub: no-op loop
 
     run.state = "finished"
     store.save(run)
     run_coro(manager.handle(run.run_id, "runspec.get", {}))
     assert replies[-1][0] == "runspec.error"
+
+
+def test_runspec_result_delivers_mcp_setup_commands(tmp_path):
+    """Protocol seam: the finalizer payload's mcp_setup_commands reach the
+    Dev verbatim as a top-level runspec.result key (the entrypoint consumes
+    spec["mcp_setup_commands"]); payloads without the key yield []."""
+    from devcake.domain.run import Run
+    from devcake.domain.runs import RunManager
+
+    replies = []
+
+    class FakeMessaging:
+        async def reply(self, run_id, kind, payload):
+            replies.append((kind, payload))
+
+        async def delete_runspec_result(self, rid):
+            pass
+
+    class FakeFinalizer:
+        def runspec_secret_payload(self, run):
+            return {"env": {"DD_API_KEY": "v"}, "credential_files": [],
+                    "mcp_setup_commands": ["claude mcp add x -- y"]}
+
+    store = RunStore(tmp_path / "runs")
+    manager = RunManager(store, FakeMessaging(), executor=None,
+                         finalizer=FakeFinalizer())
+    run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
+              mission_type="EXECUTE", dev_type="senior-dev", seq=1,
+              spec_env={"PUBLIC": "yes"})
+    run.state = "dispatched"
+    store.save(run)
+
+    run_coro(manager.handle(run.run_id, "runspec.get", {}))
+    kind, payload = replies[-1]
+    assert kind == "runspec.result"
+    assert payload["mcp_setup_commands"] == ["claude mcp add x -- y"]
+    assert payload["env"] == {"PUBLIC": "yes", "DD_API_KEY": "v"}
 
 
 def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeypatch):

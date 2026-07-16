@@ -112,15 +112,9 @@ def test_malformed_marker_gates_instead_of_silent_default():
 def test_vanished_repo_contract_in_sweeps_and_review(tmp_path):
     """A DEVCAKE-MERGE-parked mission whose repo vanished must surface a
     visible reason (sweeps) / fail the run cleanly (review) — never crash."""
-    from fakes import FakeForgeRuntime
-    from devcake.domain.orchestrator import MissionManager
+    from fakes import FakeForgeRuntime, make_mission_manager
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = "linear"
-    mgr.blocked_reasons = {}
-    mgr.merge_handoffs = {}
-    mgr._merge_window_closed = set()
-    mgr.forges = FakeForgeRuntime(None)          # nothing resolves
+    mgr = make_mission_manager(forge_runtime=FakeForgeRuntime(None))
     m = _m()
     m.repo, m.repo_reason = None, "repo 'beta' no longer configured"
     run_coro(mgr._merge_sweep(m))                # must not raise
@@ -135,26 +129,17 @@ def test_vanished_repo_contract_in_sweeps_and_review(tmp_path):
 def test_zero_repo_mission_visible_but_gated(tmp_path):
     """Zero-repo missions derive fully but never dispatch; the reason is
     surfaced through blocked_reasons for /health and the missions API."""
-    from fakes import FakeForgeRuntime
+    from fakes import FakeForgeRuntime, make_mission_manager
     from devcake.adapters.files.run_store import RunStore
     from devcake.config import AppConfig, DevType
-    from devcake.domain.orchestrator import MissionManager
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = "linear"
-    mgr.instance = INST
-    mgr.config = AppConfig()
-    mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
-                                           harness_template="claude-code")}
-    mgr.pmo = None
-    mgr.forges = FakeForgeRuntime(None)
-    mgr.breakers, mgr.blocked_reasons, mgr.cycles = {}, {}, []
-    mgr._grace, mgr._grace_next = set(), set()
-
-    class Runs:
-        pass
-    mgr.runs = Runs()
-    mgr.runs.store = RunStore(tmp_path / "runs")
+    mgr = make_mission_manager(
+        tmp_path, pmo=None, forge_runtime=FakeForgeRuntime(None),
+        config=AppConfig(), instance=INST,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
 
     m = _m()
     m.labels = {"DEVCAKE"}
@@ -183,13 +168,15 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
     rt.rebuild([gh, gl], make_forge)
     assert set(rt.forges) == {"ghrepo", "glrepo"}
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.config = AppConfig()
-    mgr.forges = rt
-    mgr.instance = PMOInstance(name="linear", team_key="DEV",
-                               repos=["ghrepo", "glrepo"])
-    mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
-                                           harness_template="claude-code")}
+    from fakes import make_mission_manager
+    mgr = make_mission_manager(
+        config=AppConfig(),
+        forge_runtime=rt,
+        instance=PMOInstance(name="linear", team_key="DEV",
+                             repos=["ghrepo", "glrepo"]),
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+    )
     dt = mgr.dev_types["senior-dev"]
 
     env_gh = mgr._protocol_spec_env(
@@ -236,16 +223,14 @@ def test_resolve_repo_history_assembly(tmp_path):
     for r in (mine_old, mine_new, mapper, other_mission, other_instance):
         store.save(r)
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = "linear"
-    mgr.instance = INST
-
-    class Runs:
-        pass
-    mgr.runs = Runs()
-    mgr.runs.store = store
-    mgr.forges = FakeForgeRuntime(object())   # instances: {"main"} — irrelevant
-    mgr.forges._inst.name = "main"
+    from fakes import make_mission_manager
+    fr = FakeForgeRuntime(object())   # instances: {"main"} — irrelevant
+    fr._inst.name = "main"
+    mgr = make_mission_manager(
+        instance=INST,
+        forge_runtime=fr,
+        runs=type("Runs", (), {"store": store})(),
+    )
     # repo names must include beta for sticky to resolve
     from devcake.config import RepoInstance
     import devcake.domain.repo_routing as rr
@@ -311,18 +296,15 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
         def instances(self, v):
             self._insts = v
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = "linear"
-    mgr.instance = INST                                    # no default_repo
+    from fakes import make_mission_manager
     rt = RT(None)
     rt._insts = {}
-    mgr.forges = rt
-    mgr.internal_forge = FakeInternal()
-
-    class Runs:
-        pass
-    mgr.runs = Runs()
-    mgr.runs.store = RunStore(tmp_path / "runs")
+    mgr = make_mission_manager(
+        instance=INST,                                    # no default_repo
+        forge_runtime=rt,
+        internal_forge=FakeInternal(),
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
 
     # zero-repo mission → internal
     name, reason = run_coro(mgr.resolve_repo_live(_m()))
@@ -424,19 +406,17 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
         internal = {"linear-t-1"}
         def get(self, name): return FakeForge()
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.forges = RT()
-    mgr.pmo = FakePMO()
+    from fakes import make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+    mgr = make_mission_manager(
+        pmo=FakePMO(),
+        forge_runtime=RT(),
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
 
     async def _feed(pmo_id, kind, md): feed.append(md)
     mgr._feed = _feed
-    from devcake.domain.orchestrator import deliver
     mgr._attachment_cap = lambda: 10*1024*1024
-
-    class Runs: pass
-    mgr.runs = Runs()
-    from devcake.adapters.files.run_store import RunStore
-    mgr.runs.store = RunStore(tmp_path / "runs")
 
     run = _run("linear-t-1"); run.mission_pmo_id = "p1"; run.mission_key = "T-1"
     run.finalized_steps = []

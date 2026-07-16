@@ -7,9 +7,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from devcake.config import PMOInstance
-from fakes import FakeForgeRuntime
-
 from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
@@ -147,37 +144,17 @@ class FakeForge:
 
 
 def make_mgr(tmp_path, m, forge=None):
+    from fakes import make_mission_manager
     cfg = AppConfig()
     fake = FakePMO(m)
-    store = RunStore(tmp_path / "runs")
-
-    class Runs:
-        pass
-    runs = Runs()
-    runs.store = store
-    runs.finalizer = None
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.config = cfg
-    mgr.dev_types = {"senior-dev": DevType(name="senior-dev",
-                                           harness_template="claude-code")}
-    mgr.pmo = fake
-    mgr.runs = runs
-    mgr.messaging = NullMessaging()
-    mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
-    mgr.blocked_reasons = {}
-    mgr.merge_handoffs, mgr._merge_window_closed = {}, set()
-    mgr.rearm_merge_windows = False
-    mgr.needs_human = {}
-    mgr._audit = lambda *a, **k: None
-    if forge is not None:
-        mgr.forges = FakeForgeRuntime(forge)
-    else:
-        # no forge: any resolution returns None — the clean-fail paths
-        # (rather than an AttributeError) are the trust boundary under test
-        mgr.forges = FakeForgeRuntime(None)
-    return mgr, fake, store
+    mgr = make_mission_manager(
+        tmp_path, pmo=fake, forge=forge, config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(),
+        noop_audit=True,  # transition tests assert labels/feed, not audit
+    )
+    return mgr, fake, mgr.runs.store
 
 
 def run_coro(c):

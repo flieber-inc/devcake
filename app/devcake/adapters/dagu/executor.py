@@ -35,11 +35,23 @@ def extract_node_errors(status: Optional[dict]) -> list[dict[str, str]]:
 
 
 class DaguExecutor:
-    def __init__(self, base_url: str = DAGU_URL):
+    def __init__(
+        self,
+        base_url: str = DAGU_URL,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        auth: tuple[str, str] | None = None,
+    ):
         self.base = base_url
+        self._transport = transport        # tests inject MockTransport
+        self._auth = _AUTH if auth is None else auth
+
+    def _client(self, timeout: float = 10) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=timeout, auth=self._auth, transport=self._transport)
 
     async def start(self, params: dict[str, str], dag_run_id: str) -> None:
-        async with httpx.AsyncClient(timeout=10, auth=_AUTH) as client:
+        async with self._client(10) as client:
             resp = await client.post(
                 f"{self.base}/api/v1/dags/{DAG_NAME}/start",
                 json={"params": json.dumps(params), "dagRunId": dag_run_id},
@@ -49,14 +61,14 @@ class DaguExecutor:
             resp.raise_for_status()
 
     async def stop(self, dag_run_id: str) -> bool:
-        async with httpx.AsyncClient(timeout=10, auth=_AUTH) as client:
+        async with self._client(10) as client:
             resp = await client.post(
                 f"{self.base}/api/v1/dag-runs/{DAG_NAME}/{dag_run_id}/stop"
             )
             return resp.status_code < 300
 
     async def status(self, dag_run_id: str) -> Optional[dict[str, Any]]:
-        async with httpx.AsyncClient(timeout=10, auth=_AUTH) as client:
+        async with self._client(10) as client:
             resp = await client.get(f"{self.base}/api/v1/dag-runs/{DAG_NAME}/{dag_run_id}")
             if resp.status_code == 404:
                 return None
@@ -69,7 +81,7 @@ class DaguExecutor:
 
     async def stop_all(self) -> list[str]:
         """Stop every in-flight run of the dev-run DAG. Returns any error strings."""
-        async with httpx.AsyncClient(timeout=30, auth=_AUTH) as client:
+        async with self._client(30) as client:
             resp = await client.post(f"{self.base}/api/v1/dags/{DAG_NAME}/stop-all")
             if resp.status_code == 404:
                 return []
@@ -80,7 +92,7 @@ class DaguExecutor:
         """Paginate through every historical dagRunId for the dev-run DAG."""
         ids: list[str] = []
         cursor: Optional[str] = None
-        async with httpx.AsyncClient(timeout=30, auth=_AUTH) as client:
+        async with self._client(30) as client:
             while True:
                 params: dict[str, Any] = {"limit": 500}
                 if cursor:
@@ -101,7 +113,7 @@ class DaguExecutor:
 
     async def delete(self, dag_run_id: str) -> bool:
         """Permanently remove one DAG-run record. True if deleted (or already gone)."""
-        async with httpx.AsyncClient(timeout=15, auth=_AUTH) as client:
+        async with self._client(15) as client:
             resp = await client.delete(
                 f"{self.base}/api/v1/dag-runs/{DAG_NAME}/{dag_run_id}"
             )

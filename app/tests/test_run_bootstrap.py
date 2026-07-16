@@ -11,9 +11,6 @@ import asyncio
 
 import pytest
 
-from devcake.config import PMOInstance
-from fakes import FakeForgeRuntime
-
 from devcake.domain.run import Run, auth_digest
 from devcake.domain.run_bootstrap import RunBootstrap
 
@@ -176,21 +173,18 @@ def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
     from devcake.adapters.github import GitHubForge
     from devcake.config import AppConfig, DevType
     from devcake.domain.model import Mission
-    from devcake.domain.orchestrator import MissionManager
     from devcake.domain.runs import RunManager
     from devcake.harness import HARNESSES
-
+    from fakes import make_mission_manager
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     store = InMemoryStore()
     executor = FakeExecutor(store)
     runs = RunManager(store, FakeMessaging(), executor)
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.config = AppConfig()
-    mgr.runs = runs
-    mgr.messaging = FakeMessaging()
-    mgr.forges = FakeForgeRuntime(GitHubForge("https://github.com/o/r", "tok"))
+    mgr = make_mission_manager(
+        runs=runs, messaging=FakeMessaging(),
+        forge=GitHubForge("https://github.com/o/r", "tok"),
+        config=AppConfig(),
+    )
 
     dt = DevType(name="senior-dev", harness_template="grok-build", model="grok-4.5")
     m = Mission(pmo_id="p1", pmo_kind="issue", key="T-1", title="t",

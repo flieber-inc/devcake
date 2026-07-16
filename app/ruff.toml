@@ -1,0 +1,12 @@
+# Lightweight hygiene gate — expand select set as the tree is cleaned.
+# Broader rules (F401 unused imports, style, complexity) are intentionally
+# deferred; do not treat this file as a full lint program yet.
+target-version = "py312"
+line-length = 100
+
+[lint]
+# Narrow: syntax / undefined names only (caught the review.py merge_err capture).
+select = ["E9", "F63", "F7", "F82"]
+
+[lint.per-file-ignores]
+"tests/*" = []

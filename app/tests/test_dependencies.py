@@ -4,11 +4,8 @@ import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from devcake.config import PMOInstance, AppConfig, DevType
-from fakes import FakeForgeRuntime
-from devcake.domain.orchestrator import MissionManager
+from devcake.config import AppConfig, DevType
 from devcake.domain.model import Mission
-from devcake.adapters.files.run_store import RunStore
 
 NOW = datetime.now(timezone.utc)
 
@@ -33,21 +30,16 @@ class DepPMO:
 
 
 def make_mgr(tmp_path, pmo):
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.forges = FakeForgeRuntime(SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')))
-    mgr.internal_forge = None
-    mgr.config = AppConfig()
-    mgr.dev_types = {
-        "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
-        "main-dev": DevType(name="main-dev", harness_template="grok-build"),
-    }
-    mgr.pmo = pmo
-    mgr.runs = SimpleNamespace(store=RunStore(tmp_path / "runs"))
-    mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
-    mgr.blocked_reasons = {}
-    mgr._audit = lambda *a, **k: None
+    from fakes import make_mission_manager
+    mgr = make_mission_manager(
+        tmp_path, pmo=pmo,
+        forge=SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')),
+        dev_types={
+            "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
+            "main-dev": DevType(name="main-dev", harness_template="grok-build"),
+        },
+        noop_audit=True,
+    )
     dispatched = []
 
     async def fake_dispatch(mission, mtype, dev_type):

@@ -166,6 +166,9 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                     await self._checkpoint(run, "review:done", _done)
                     await self.deliver_internal_zip(run, pr)
                 except Exception as e:
+                    # Capture for nested async defs (static F821 + safe if
+                    # await order changes later); not a known production 500.
+                    merge_err = e
                     # Already-merged treated as success by forge.merge; if we
                     # still fail, re-probe before posting merge-failed (ISSUES #6).
                     try:
@@ -230,14 +233,14 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                                 await self._feed(
                                     pmo_id, "issue",
                                     f"⏳ REVIEW approved but the merge is not "
-                                    f"possible yet ({e}) — DevCake keeps "
+                                    f"possible yet ({merge_err}) — DevCake keeps "
                                     f"retrying for up to "
                                     f"{self.config.merge_retry_window_minutes} "
                                     f"minutes (mergeability computing / CI "
                                     f"pipeline running). You can merge {pr_url} "
                                     f"manually at any time. {MERGE_RETRY_MARKER}")
                                 self._audit(pmo_id, "merge_deferred",
-                                            str(e)[:120])
+                                            str(merge_err)[:120])
                                 self._merge_window_closed.discard(pmo_id)
                                 run.finalized_steps.append(
                                     "review:merge_deferred")
@@ -245,11 +248,12 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                                 await self._feed(
                                     pmo_id, "issue",
                                     f"⚠️ REVIEW approved but auto-merge failed "
-                                    f"({e}); awaiting human merge of {pr_url} "
-                                    f"(`DEVCAKE-MERGE`). {MERGE_HANDOFF_MARKER}")
+                                    f"({merge_err}); awaiting human merge of "
+                                    f"{pr_url} (`DEVCAKE-MERGE`). "
+                                    f"{MERGE_HANDOFF_MARKER}")
                                 self._audit(pmo_id,
                                             "review_approve_merge_failed",
-                                            str(e)[:120])
+                                            str(merge_err)[:120])
                                 run.finalized_steps.append(
                                     "review:merge_failed")
                             self.runs.store.save(run)

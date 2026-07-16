@@ -95,10 +95,14 @@ jobs:
             "devcake/app-test:${DEVCAKE_TAG}" \
             python -m pytest tests/ -q --tb=short
 
-      # Free the control network before compose claims it.
+      # Free the control network before compose claims it. Unit-test Redis creates
+      # a bare `devcake_control` network (no compose labels); compose refuses to
+      # adopt it unless we remove both the container and the network.
       - name: Cleanup unit-test Redis
         if: always()
-        run: docker rm -f devcake-ci-redis 2>/dev/null || true
+        run: |
+          docker rm -f devcake-ci-redis 2>/dev/null || true
+          docker network rm devcake_control 2>/dev/null || true
 
       # Minimal compose (no Gitea) + hard readiness — scripts/ci_compose_for_dispatch.sh
       # then real Dagu → hello → Redis → finalize (scripts/ci_dispatch_hello.sh).
@@ -106,6 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           docker rm -f devcake-ci-redis 2>/dev/null || true
+          docker network rm devcake_control 2>/dev/null || true
           export DEVCAKE_TAG="${DEVCAKE_TAG}"
           export DOCKER_GID
           DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
@@ -127,3 +132,4 @@ jobs:
         run: |
           docker compose down -v --remove-orphans 2>/dev/null || true
           docker rm -f devcake-ci-redis 2>/dev/null || true
+          docker network rm devcake_control 2>/dev/null || true

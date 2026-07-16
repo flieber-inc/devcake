@@ -97,3 +97,21 @@ def test_correct_credentials_still_200(monkeypatch):
     client = _auth_app(monkeypatch, "operator", "correct-horse")
     auth = {"Authorization": _basic("operator", "correct-horse")}
     assert client.get("/api/v1/config", headers=auth).status_code == 200
+
+
+def test_non_ascii_admin_password_accepts_and_rejects(monkeypatch):
+    """Configured ADMIN_PASSWORD may be non-ASCII — must not 500 (bricking)."""
+    client = _auth_app(monkeypatch, "operator", "sëcret-🔐-pass")
+    good = {"Authorization": _basic("operator", "sëcret-🔐-pass")}
+    bad = {"Authorization": _basic("operator", "wrong")}
+    assert client.get("/api/v1/config", headers=good).status_code == 200
+    assert client.get("/api/v1/config", headers=bad).status_code == 401
+
+
+def test_non_ascii_admin_username_accepts_and_rejects(monkeypatch):
+    """Configured ADMIN_USER may be non-ASCII — same compare_digest trap."""
+    client = _auth_app(monkeypatch, "оператор", "correct-horse")
+    good = {"Authorization": _basic("оператор", "correct-horse")}
+    bad = {"Authorization": _basic("operator", "correct-horse")}
+    assert client.get("/api/v1/config", headers=good).status_code == 200
+    assert client.get("/api/v1/config", headers=bad).status_code == 401

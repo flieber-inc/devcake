@@ -150,7 +150,9 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 
 ## 8. Adapter contract tests
 
-What `app/tests/test_forge.py` covers (no network — `_req` is stubbed):
+Two layers:
+
+**Domain / port tables** (`app/tests/test_forge.py`) — no network; `_req` is stubbed so mergeable maps, merge retries, and DTO parity stay fast and independent of HTTP:
 
 | # | Scenario |
 |---|---|
@@ -164,6 +166,8 @@ What `app/tests/test_forge.py` covers (no network — `_req` is stubbed):
 | 8 | Registry: `forges()` covers exactly `{github, gitlab}` with real descriptors; `make_forge` constructs each (passing `api_base`); an unknown forge is rejected by `RepoInstance` validation |
 | 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile |
 | 10 | `mission_branch()` single definition: `devcake/` prefix |
+
+**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape and full URL assembly for GitHub, GitLab, and Gitea so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` (vendor drift).
 
 ## 9. Adding a forge (checklist)
 

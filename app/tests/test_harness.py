@@ -109,7 +109,8 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
     secrets.mkdir(parents=True)
     (secrets / "grok-auth.json").write_text('{"grok": true}')
 
-    mgr = MissionManager.__new__(MissionManager)
+    from fakes import make_mission_manager
+    mgr = make_mission_manager(noop_audit=False)
     env, files = mgr._credential_spec(DevType(name="main-dev",
                                               harness_template="grok-build"))
     assert env == {"XAI_API_KEY": "xai-test-000000000000000000000"}
@@ -136,18 +137,20 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     secrets.mkdir(parents=True)
     (secrets / "grok-auth.json").write_text('{"grok": true}')
 
+    from fakes import make_mission_manager
     from devcake.domain.run import Run
     from devcake.config import RepoInstance
-    mgr = MissionManager.__new__(MissionManager)
     cfg = AppConfig()
     cfg.repos = [RepoInstance(name="main", url="https://github.com/o/r")]
-    mgr.config = cfg
-    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
-    mgr.forges = FakeForgeRuntime(object(), inst=cfg.repos[0])
-    mgr.dev_types = {"main-dev": DevType(name="main-dev",
-                                         harness_template="grok-build"),
-                     "senior-dev": DevType(name="senior-dev",
-                                           harness_template="claude-code")}
+    mgr = make_mission_manager(
+        config=cfg,
+        instance=PMOInstance(name="linear", team_key="DEV", repos=["main"]),
+        forge_runtime=FakeForgeRuntime(object(), inst=cfg.repos[0]),
+        dev_types={
+            "main-dev": DevType(name="main-dev", harness_template="grok-build"),
+            "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
+        },
+    )
     run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
               mission_type="EXECUTE", dev_type="main-dev", seq=1)
     payload = mgr.runspec_secret_payload(run)
@@ -231,15 +234,13 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     store = RunStore(tmp_path / "runs")
     runs = RunManager(store, NullMessaging(), FakeExecutor())
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.config = AppConfig()
-    mgr.runs = runs
-    mgr.messaging = NullMessaging()
-    # dispatch reads the forge descriptor for the dev-side dialect spec_env
+    from fakes import make_mission_manager
     from devcake.adapters.github import GitHubForge
-    mgr.forges = FakeForgeRuntime(GitHubForge("https://github.com/o/r", "tok"))
+    mgr = make_mission_manager(
+        runs=runs, messaging=NullMessaging(),
+        forge=GitHubForge("https://github.com/o/r", "tok"),
+        config=AppConfig(),
+    )
 
     dt = DevType(name="senior-dev", harness_template="grok-build",
                  model="grok-4.5")   # the user's exact scenario
@@ -263,12 +264,10 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
 def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     """ISSUES #13: Dev OTLP export targets the collector on devcake_runtime —
     never OpenObserve directly (which would need credentials in the runspec)."""
+    from fakes import make_mission_manager
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.config = AppConfig()
+    mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
     repo = RepoInstance(url="https://github.com/o/r")
     env = mgr._protocol_spec_env(
         mission_id="p1", mission_key="T-1", mission_type="EXECUTE",

@@ -1,5 +1,5 @@
-# DevCake CI — Bake control-plane images (GHA BuildKit cache) + pytest.
-# Compose never builds; see docker-bake.hcl + docker-bake.ci.hcl.
+# DevCake CI — Bake control-plane images (GHA BuildKit cache) + pytest +
+# minimal compose hello-dispatch smoke. Compose never builds; see docker-bake.hcl.
 name: CI
 
 on:
@@ -19,9 +19,9 @@ env:
 
 jobs:
   bake-and-test:
-    name: Bake (ci) + pytest
+    name: Bake (ci) + pytest + dispatch smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -39,12 +39,9 @@ jobs:
             ./docker-bake.hcl
             ./docker-bake.ci.hcl
           targets: ci
-          # Load into the local docker store for pytest / smoke steps.
           load: true
-          # Provenance attestations break multi-target load on some runners.
           provenance: false
           sbom: false
-          # Force GHA cache only (override local .buildx-cache from docker-bake.hcl).
           set: |
             *.cache-from=type=gha,scope=devcake-ci
             *.cache-to=type=gha,mode=max,scope=devcake-ci
@@ -79,6 +76,13 @@ jobs:
           docker logs devcake-ci-redis || true
           exit 1
 
+      - name: Ruff (syntax / undefined names)
+        run: |
+          set -euo pipefail
+          docker run --rm -e RUFF_CACHE_DIR=/tmp/ruff-cache -w /srv \
+            "devcake/app-test:${DEVCAKE_TAG}" \
+            ruff check devcake tests
+
       - name: Pytest via app-test on compose network
         run: |
           set -euo pipefail
@@ -91,34 +95,41 @@ jobs:
             "devcake/app-test:${DEVCAKE_TAG}" \
             python -m pytest tests/ -q --tb=short
 
-      - name: Admin nginx health smoke
-        run: |
-          set -euo pipefail
-          docker rm -f devcake-ci-admin 2>/dev/null || true
-          docker run -d --name devcake-ci-admin -p 18080:80 \
-            -e ADMIN_USER=admin \
-            -e ADMIN_PASSWORD=Admin-test1! \
-            -e DAGU_UI_URL=http://localhost:8525 \
-            -e OO_UI_URL=http://localhost:5080 \
-            "devcake/admin:${DEVCAKE_TAG}"
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:18080/nginx-health | grep -q ok; then
-              echo "admin health OK"
-              docker rm -f devcake-ci-admin
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs devcake-ci-admin || true
-          docker rm -f devcake-ci-admin || true
-          exit 1
-
-      - name: Hello image entrypoint smoke
-        run: |
-          set -euo pipefail
-          docker run --rm --entrypoint python "devcake/dev-hello:${DEVCAKE_TAG}" \
-            -c 'import redis; print("hello image ok")'
-
-      - name: Cleanup Redis
+      # Free the control network before compose claims it. Unit-test Redis creates
+      # a bare `devcake_control` network (no compose labels); compose refuses to
+      # adopt it unless we remove both the container and the network.
+      - name: Cleanup unit-test Redis
         if: always()
-        run: docker rm -f devcake-ci-redis 2>/dev/null || true
+        run: |
+          docker rm -f devcake-ci-redis 2>/dev/null || true
+          docker network rm devcake_control 2>/dev/null || true
+
+      # Minimal compose (no Gitea) + hard readiness — scripts/ci_compose_for_dispatch.sh
+      # then real Dagu → hello → Redis → finalize (scripts/ci_dispatch_hello.sh).
+      - name: Compose stack for dispatch smoke
+        run: |
+          set -euo pipefail
+          docker rm -f devcake-ci-redis 2>/dev/null || true
+          docker network rm devcake_control 2>/dev/null || true
+          export DEVCAKE_TAG="${DEVCAKE_TAG}"
+          export DOCKER_GID
+          DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+          chmod +x scripts/ci_compose_for_dispatch.sh scripts/ci_dispatch_hello.sh
+          ./scripts/ci_compose_for_dispatch.sh
+
+      - name: Hello dispatch pipeline smoke
+        run: |
+          set -euo pipefail
+          export ADMIN_USER=admin
+          export ADMIN_PASSWORD=Ci-admin-Pass1!
+          export DEVCAKE_BASE_URL=http://127.0.0.1:8080
+          # Cold CI: allow more polls (30 × 3s default may be tight under load)
+          export DEVCAKE_HELLO_POLLS=40
+          ./scripts/ci_dispatch_hello.sh
+
+      - name: Teardown compose stack
+        if: always()
+        run: |
+          docker compose down -v --remove-orphans 2>/dev/null || true
+          docker rm -f devcake-ci-redis 2>/dev/null || true
+          docker network rm devcake_control 2>/dev/null || true

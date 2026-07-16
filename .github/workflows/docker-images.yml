@@ -73,6 +73,7 @@ jobs:
             "id | grep -q uid=1000 && codex --version | grep -F \"$CODEX_PIN\" && test -f /dev_entrypoint.py"
           docker run --rm --entrypoint sh "devcake/dev-grok-build:${DEVCAKE_TAG}" -ec \
             'id | grep -q uid=1000 && grok --version && test -f /dev_entrypoint.py'
+          # Layer presence only — full Dagu→hello→finalize smoke is ci.yml.
           docker run --rm --entrypoint python "devcake/dev-hello:${DEVCAKE_TAG}" -c \
-            'import redis; print("hello ok")'
+            'import redis; print("hello redis import ok")'
           echo "harness smoke OK"

@@ -19,12 +19,12 @@ def run_coro(c):
 
 
 def _mgr(name: str, breakers=None) -> MissionManager:
-    m = MissionManager.__new__(MissionManager)
-    m.instance = PMOInstance(name=name, team_key=name.upper())
-    m.instance_name = name
-    m.anomalies = {}
-    m.breakers = breakers if breakers is not None else {}
-    return m
+    from fakes import make_mission_manager
+    return make_mission_manager(
+        instance=PMOInstance(name=name, team_key=name.upper()),
+        breakers=breakers if breakers is not None else {},
+        noop_audit=False,
+    )
 
 
 def _mission(pmo_id: str, key: str, instance: str) -> Mission:

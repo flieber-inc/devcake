@@ -743,7 +743,7 @@ async def put_config(body: dict):
                if p["name"] not in {i.name for i in merged.pmos}]
     removed += [("repo", r["name"]) for r in previous["repos"]
                 if r["name"] not in {i.name for i in merged.repos}]
-    for field in merged.model_fields:
+    for field in type(merged).model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
     try:
@@ -751,7 +751,7 @@ async def put_config(body: dict):
     except Exception as e:
         log.exception("reload_connections failed — restoring previous config")
         restored = AppConfig.model_validate(previous)
-        for field in restored.model_fields:
+        for field in type(restored).model_fields:
             setattr(config, field, getattr(restored, field))
         save_config(config)
         try:

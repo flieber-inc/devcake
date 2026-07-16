@@ -22,6 +22,18 @@ def credentials_configured() -> bool:
     return bool(user and password)
 
 
+def _const_eq(a: str, b: str) -> bool:
+    """Constant-time string equality that never raises (auth must stay 401).
+
+    secrets.compare_digest on str rejects non-ASCII (TypeError → 500).
+    Compare UTF-8 bytes instead; length mismatch returns False, not an exception.
+    """
+    try:
+        return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    except (TypeError, ValueError):
+        return False
+
+
 def _valid_basic_auth(value: str) -> bool:
     if not value.startswith("Basic "):
         return False
@@ -33,8 +45,8 @@ def _valid_basic_auth(value: str) -> bool:
     expected_user, expected_password = admin_credentials()
     return (
         bool(expected_user and expected_password)
-        and secrets.compare_digest(supplied_user, expected_user)
-        and secrets.compare_digest(supplied_password, expected_password)
+        and _const_eq(supplied_user, expected_user)
+        and _const_eq(supplied_password, expected_password)
     )
 
 

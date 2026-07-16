@@ -397,8 +397,11 @@ def test_checkpoint_skips_without_unawaited_coro(tmp_path):
     run.finalized_steps = ["already"]
     store.save(run)
 
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.runs = type("R", (), {"store": store})()
+    from fakes import make_mission_manager
+    mgr = make_mission_manager(
+        runs=type("R", (), {"store": store})(),
+        noop_audit=False,
+    )
     calls = []
 
     async def side():
@@ -436,29 +439,18 @@ def test_human_needed_baton_posted_once(tmp_path):
             m.status = status
 
     store = RunStore(tmp_path / "runs")
+    runs = type("Runs", (), {"store": store})()
 
-    class Runs:
-        pass
-    runs = Runs()
-    runs.store = store
-
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.config = AppConfig()
-    mgr.dev_types = {}
-    mgr.pmo = FakePMO()
+    from fakes import make_mission_manager
     from types import SimpleNamespace
-    mgr.forges = FakeForgeRuntime(SimpleNamespace(descriptor=SimpleNamespace(pr_noun="pull request")))
-    mgr.runs = runs
-    mgr.messaging = FakeMessaging()
-    mgr._grace = set()
-    mgr._grace_next = set()
-    mgr.breakers = {}
-    mgr.merge_handoffs = {}
-    mgr._merge_window_closed = set()
-    mgr.needs_human = {}
-    mgr._audit = lambda *a, **k: None
+    mgr = make_mission_manager(
+        pmo=FakePMO(),
+        forge=SimpleNamespace(descriptor=SimpleNamespace(pr_noun="pull request")),
+        config=AppConfig(),
+        dev_types={},
+        runs=runs,
+        messaging=FakeMessaging(),
+    )
 
     run = Run(
         run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1", mission_pmo_id="p1",
@@ -509,29 +501,18 @@ def test_redelivery_own_label_swap_is_not_external_transition(tmp_path):
             m.status = status
 
     store = RunStore(tmp_path / "runs")
+    runs = type("Runs", (), {"store": store})()
 
-    class Runs:
-        pass
-    runs = Runs()
-    runs.store = store
-
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.config = AppConfig()
-    mgr.dev_types = {}
-    mgr.pmo = FakePMO()
+    from fakes import make_mission_manager
     from types import SimpleNamespace
-    mgr.forges = FakeForgeRuntime(SimpleNamespace(descriptor=SimpleNamespace(pr_noun="pull request")))
-    mgr.runs = runs
-    mgr.messaging = FakeMessaging()
-    mgr._grace = set()
-    mgr._grace_next = set()
-    mgr.breakers = {}
-    mgr.merge_handoffs = {}
-    mgr._merge_window_closed = set()
-    mgr.needs_human = {}
-    mgr._audit = lambda *a, **k: None
+    mgr = make_mission_manager(
+        pmo=FakePMO(),
+        forge=SimpleNamespace(descriptor=SimpleNamespace(pr_noun="pull request")),
+        config=AppConfig(),
+        dev_types={},
+        runs=runs,
+        messaging=FakeMessaging(),
+    )
     mgr._flag_out_of_pipeline_merge = AsyncMock()
 
     run = Run(

@@ -9,9 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from devcake.config import PMOInstance
-from fakes import FakeForgeRuntime
-
 from devcake.config import AppConfig, DevType
 from devcake.domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
                               MissionManager)
@@ -49,17 +46,12 @@ class MapPMO:
 
 
 def make_mgr(tmp_path, pmo):
-    mgr = MissionManager.__new__(MissionManager)
-    mgr.instance_name = 'linear'
-    mgr.instance = PMOInstance(name='linear', team_key='DEV')
-    mgr.forges = FakeForgeRuntime(SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')))
-    mgr.config = AppConfig()
-    mgr.pmo = pmo
-    mgr.runs = SimpleNamespace(store=RunStore(tmp_path / "runs"))
-    mgr._grace, mgr._grace_next, mgr.breakers = set(), set(), {}
-    mgr.merge_handoffs, mgr._merge_window_closed = {}, set()
-    mgr._audit = lambda *a, **k: None
-    return mgr
+    from fakes import make_mission_manager
+    return make_mission_manager(
+        tmp_path, pmo=pmo,
+        forge=SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')),
+        noop_audit=True,
+    )
 
 
 def run_coro(c):

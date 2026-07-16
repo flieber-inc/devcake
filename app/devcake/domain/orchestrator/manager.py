@@ -1,8 +1,13 @@
 """MissionManager façade: deps, advisory state, and public method surface.
 
 Implementation lives in sibling modules (ISSUES #36). Methods are bound from
-those modules so `MissionManager.__new__` test patterns and attribute
-monkeypatches keep working.
+those modules onto the class (transitional façade bindings — free functions
+with ``self`` as first arg).
+
+Tests construct via the real ``__init__`` (``tests/fakes.make_mission_manager``
+with a real RunManager when a tmp path is given). Private-seam tests
+(``_transition``, ``_merge_sweep``, …) remain until a follow-up retargets them
+to public APIs — construction path is fixed; structure is not fully untangled.
 """
 
 from __future__ import annotations

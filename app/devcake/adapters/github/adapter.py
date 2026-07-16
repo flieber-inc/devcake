@@ -41,7 +41,8 @@ class GitHubForge:
         branch_protection_read="admin", pr_list_head_filter=True)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
-                 api_base: str | None = None):
+                 api_base: str | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None):
         # https://github.com/{owner}/{repo}
         parts = [p for p in repo_url.rstrip("/").removesuffix(".git").split("/") if p]
         if len(parts) < 2 or not parts[-1] or not parts[-2]:
@@ -52,15 +53,21 @@ class GitHubForge:
         self.api = api_base or API          # override unlocks GitHub Enterprise
         self.token = token
         self.reviewer_token = reviewer_token or None
+        self._transport = transport        # tests inject MockTransport
 
     def _headers(self, reviewer: bool = False) -> dict[str, str]:
         token = self.reviewer_token if reviewer else self.token
+        if not (token or "").strip():
+            # Avoid illegal empty Authorization values (ADR-0011 class)
+            raise ForgeError(
+                "GitHub token missing; configure a write token for this repo",
+                status=401)
         return {"Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json"}
 
     async def _req(self, method: str, path: str, *, reviewer: bool = False,
                    **kwargs) -> Any:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, transport=self._transport) as client:
             resp = await client.request(
                 method, f"{self.api}/repos/{self.owner}/{self.repo}{path}",
                 headers=self._headers(reviewer), **kwargs)

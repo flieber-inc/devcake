@@ -41,16 +41,6 @@ docker run --rm \
 echo "── forge contract battery (gitea lane — bundled instance, no external tokens)"
 docker compose exec -T app python - < scripts/contract_tests_forge.py
 
-echo "── stub-harness smoke: full dispatch pipeline (Dagu → container → Redis → finalize)"
-RUN=$(curl -sf -u "$ADMIN_USER:$ADMIN_PASSWORD" -H 'X-DevCake-Request: 1' -X POST \
-  "http://localhost:8080/api/v1/debug/dispatch-hello?sleep=2" | python3 -c "import json,sys; print(json.load(sys.stdin)['run_id'])")
-for i in $(seq 1 30); do
-  STATE=$(curl -sf -u "$ADMIN_USER:$ADMIN_PASSWORD" \
-    "http://localhost:8080/api/v1/runs/$RUN" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
-  [ "$STATE" = "finished" ] && break
-  [ "$STATE" = "failed" ] || [ "$STATE" = "timed_out" ] && { echo "hello run $STATE"; exit 1; }
-  sleep 3
-done
-[ "$STATE" = "finished" ] || { echo "hello run stuck in $STATE"; exit 1; }
-echo "hello run finished ✓"
+# Full Dagu → hello container → Redis → finalize (also wired into GHA ci.yml)
+./scripts/ci_dispatch_hello.sh
 echo "── CI suite green"

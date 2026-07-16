@@ -69,6 +69,7 @@ LABEL org.opencontainers.image.title="devcake-app-test" \
 USER root
 COPY --from=deps-dev /opt/venv /opt/venv
 COPY --chown=app:app tests/ ./tests/
+COPY --chown=app:app ruff.toml ./ruff.toml
 USER app
 
 # Default for `docker run devcake/app-test` — override as needed.

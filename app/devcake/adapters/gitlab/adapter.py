@@ -44,7 +44,8 @@ class GitLabForge:
         branch_protection_read="maintainer", pr_list_head_filter=True)
 
     def __init__(self, repo_url: str, token: str, reviewer_token: str | None = None,
-                 api_base: str | None = None):
+                 api_base: str | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None):
         # api_base overrides; otherwise the instance is the repo URL's origin
         # (identical to the old https://gitlab.com default for gitlab.com repos,
         # and makes self-hosted instances work without extra config)
@@ -63,13 +64,19 @@ class GitLabForge:
         self.project = quote(path, safe="")
         self.token = token
         self.reviewer_token = reviewer_token or None
+        self._transport = transport        # tests inject MockTransport
 
     def _headers(self, reviewer: bool = False) -> dict[str, str]:
-        return {"PRIVATE-TOKEN": self.reviewer_token if reviewer else self.token}
+        token = self.reviewer_token if reviewer else self.token
+        if not (token or "").strip():
+            raise ForgeError(
+                "GitLab token missing; configure a write token for this repo",
+                status=401)
+        return {"PRIVATE-TOKEN": token}
 
     async def _req(self, method: str, path: str, *, reviewer: bool = False,
                    raw: bool = False, **kwargs) -> Any:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=20, transport=self._transport) as client:
             resp = await client.request(
                 method, f"{self.base}/api/v4/projects/{self.project}{path}",
                 headers=self._headers(reviewer), **kwargs)

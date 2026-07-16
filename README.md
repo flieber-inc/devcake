@@ -158,10 +158,13 @@ and [`docs/13-deployment.md`](docs/13-deployment.md).
 ## Verify
 
 ```bash
-# CI-shaped checks (Docker): see .github/workflows/ci.yml
+# Unit suite only (always rebakes app-test so the image matches the tree):
+./scripts/pytest_app.sh
+
+# CI-shaped bake (Docker): see .github/workflows/ci.yml
 docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl ci
 
-# Full local suite (stack up; includes harness smoke):
+# Full local suite (stack up; forge battery + dispatch-hello smoke):
 ./scripts/ci_suite.sh
 ```
 

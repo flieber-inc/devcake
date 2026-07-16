@@ -19,16 +19,18 @@ class DatadogBackend:
                 "DD_API_KEY/DD_APP_KEY not set — configure them as secret "
                 "env vars on the Dev Type (admin Config page) and reference "
                 "them from the MCP setup command")
-        self._client = httpx.Client(
-            base_url=f"https://api.{site}",
-            headers={"DD-API-KEY": api_key, "DD-APPLICATION-KEY": app_key},
-            timeout=30,
-            transport=transport,
-        )
+        self._base_url = f"https://api.{site}"
+        self._headers = {"DD-API-KEY": api_key,
+                         "DD-APPLICATION-KEY": app_key}
+        self._transport = transport
 
     def _post(self, path: str, body: dict) -> dict:
+        # Per-call client: server.py builds a backend per tool invocation,
+        # so a client held on self would leak one pool per tool call.
         try:
-            resp = self._client.post(path, json=body)
+            with httpx.Client(base_url=self._base_url, headers=self._headers,
+                              timeout=30, transport=self._transport) as client:
+                resp = client.post(path, json=body)
         except httpx.HTTPError as e:      # never leak httpx types upward
             raise BackendError(f"datadog request failed: {e}") from e
         if resp.status_code >= 300:

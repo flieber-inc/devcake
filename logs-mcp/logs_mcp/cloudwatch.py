@@ -51,7 +51,9 @@ def _insights_query(query: str, sort: str, limit: int) -> str:
     tail = f" | sort @timestamp {order} | limit {limit}"
     q = query.strip()
     if "|" in q:
-        return q                       # raw Insights query, caller owns it
+        # Deliberate escape hatch, not an oversight: the raw query goes to a
+        # read-only API under the caller's own credentials — nothing to harden.
+        return q
     if q in ("", "*"):
         return _FIELDS + tail
     escaped = q.replace('"', '\\"')
@@ -74,9 +76,9 @@ class CloudWatchBackend:
         self._poll_interval = poll_interval
         self._poll_timeout = poll_timeout
         self._url = f"https://logs.{region}.amazonaws.com/"
-        self._client = httpx.Client(timeout=30, transport=transport)
+        self._transport = transport
 
-    def _call(self, action: str, body: dict) -> dict:
+    def _call(self, client: httpx.Client, action: str, body: dict) -> dict:
         payload = json.dumps(body).encode()
         access, secret, token = self._creds
         headers = sign_headers(
@@ -86,8 +88,7 @@ class CloudWatchBackend:
             body=payload, access_key=access, secret_key=secret,
             session_token=token)
         try:
-            resp = self._client.post(self._url, content=payload,
-                                     headers=headers)
+            resp = client.post(self._url, content=payload, headers=headers)
         except httpx.HTTPError as e:  # never leak httpx types upward
             raise BackendError(f"cloudwatch request failed: {e}") from e
         if resp.status_code >= 300:
@@ -95,10 +96,10 @@ class CloudWatchBackend:
                 f"cloudwatch {resp.status_code}: {resp.text[:300]}")
         return resp.json()
 
-    def _log_groups(self) -> list[str]:
+    def _log_groups(self, client: httpx.Client) -> list[str]:
         if self._groups:
             return list(self._groups)
-        data = self._call("DescribeLogGroups", {"limit": 50})
+        data = self._call(client, "DescribeLogGroups", {"limit": 50})
         groups = [g.get("logGroupName", "")
                   for g in data.get("logGroups") or []]
         groups = [g for g in groups if g]
@@ -110,27 +111,32 @@ class CloudWatchBackend:
 
     def _query(self, query_string: str, from_time: str, to_time: str,
                limit: int) -> list[list[dict]]:
-        start = self._call("StartQuery", {
-            "queryString": query_string,
-            "logGroupNames": self._log_groups(),
-            "startTime": _epoch(from_time),
-            "endTime": _epoch(to_time),
-            "limit": limit,
-        })
-        query_id = start.get("queryId", "")
-        deadline = time.monotonic() + self._poll_timeout
-        while True:
-            data = self._call("GetQueryResults", {"queryId": query_id})
-            status = data.get("status", "Unknown")
-            if status == "Complete":
-                return data.get("results") or []
-            if status in ("Failed", "Cancelled", "Timeout"):
-                raise BackendError(f"cloudwatch query {status.lower()}")
-            if time.monotonic() >= deadline:
-                raise BackendError(
-                    "cloudwatch query still running after "
-                    f"{self._poll_timeout:.0f}s — narrow the time range")
-            time.sleep(self._poll_interval)
+        # One client per public call (discovery + StartQuery + polls share
+        # the pool), closed on return: server.py builds a backend per tool
+        # invocation, so a client held on self would leak one pool per call.
+        with httpx.Client(timeout=30, transport=self._transport) as client:
+            start = self._call(client, "StartQuery", {
+                "queryString": query_string,
+                "logGroupNames": self._log_groups(client),
+                "startTime": _epoch(from_time),
+                "endTime": _epoch(to_time),
+                "limit": limit,
+            })
+            query_id = start.get("queryId", "")
+            deadline = time.monotonic() + self._poll_timeout
+            while True:
+                data = self._call(client, "GetQueryResults",
+                                  {"queryId": query_id})
+                status = data.get("status", "Unknown")
+                if status == "Complete":
+                    return data.get("results") or []
+                if status in ("Failed", "Cancelled", "Timeout"):
+                    raise BackendError(f"cloudwatch query {status.lower()}")
+                if time.monotonic() >= deadline:
+                    raise BackendError(
+                        "cloudwatch query still running after "
+                        f"{self._poll_timeout:.0f}s — narrow the time range")
+                time.sleep(self._poll_interval)
 
     def search(self, query: str, from_time: str, to_time: str, limit: int,
                cursor: str | None = None, sort: str = "-timestamp",

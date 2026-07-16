@@ -146,7 +146,10 @@ a capable agent from pushing bad code to a feature branch or exfiltrating tokens
    `claude mcp add -e VAR=$VAR` line persists the **expanded** value in the
    ephemeral container's local claude config — a subset of the existing Zone B
    posture (Devs already hold their credentials in env; the container is
-   destroyed at run end).
+   destroyed at run end). Same class: a *failing* MCP setup command's stderr
+   tail goes to the container's raw stdout/stderr (`docker logs`) unredacted —
+   anything reaching devcake's own failure records passes `redact()`, but the
+   host log driver sees what the registration CLI chose to print.
 
 **Simplicity vs security:** GUI secrets behind HTTP basic auth on a dedicated
 host with loopback binds is an intentional trade. Residual risk is the operator

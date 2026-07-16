@@ -366,6 +366,40 @@ def test_trace_filter_is_backend_specific():
     assert cw.trace_filter("1-6789-abc") == "1-6789-abc"
 
 
+def test_http_clients_do_not_outlive_the_call():
+    """server.py builds a fresh backend per tool invocation, so an HTTP
+    client that survives the call leaks one connection pool per tool call
+    for the life of the stdio server (PR review finding). By the time a
+    public method returns, its transport must be closed —
+    httpx.Client.close() closes the transport it used, so a close-recording
+    transport observes this through the public interface alone."""
+    from logs_mcp.cloudwatch import CloudWatchBackend
+
+    class ClosingTransport(httpx.MockTransport):
+        closed = False
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    dd_t = ClosingTransport(lambda r: httpx.Response(200, json={"data": []}))
+    DatadogBackend(api_key="k", app_key="a", transport=dd_t).search(
+        "*", "now-15m", "now", 5)
+    assert dd_t.closed, "datadog HTTP client must not outlive the call"
+
+    def cw_handler(request):
+        if request.headers["X-Amz-Target"].endswith("StartQuery"):
+            return httpx.Response(200, json={"queryId": "q"})
+        return httpx.Response(200, json={"status": "Complete", "results": []})
+
+    cw_t = ClosingTransport(cw_handler)
+    CloudWatchBackend(access_key="AKIAEXAMPLE", secret_key="s",
+                      region="us-east-1", log_groups=("/g",),
+                      transport=cw_t, poll_interval=0).search(
+        "*", "now-15m", "now", 5)
+    assert cw_t.closed, "cloudwatch HTTP client must not outlive the call"
+
+
 def test_make_backend_env_seam(monkeypatch):
     """The backend factory: server.py builds per tool call from env —
     DEVCAKE_LOGS_BACKEND selects the platform (default datadog), DD_* carry

@@ -38,6 +38,14 @@ docker run --rm \
   "devcake/app-test:${DEVCAKE_TAG:-latest}" \
   python -m pytest tests/ -q
 
+echo "── devcake-logs-mcp package tests (standalone; app-test provides pytest+httpx, no mcp SDK)"
+docker run --rm \
+  -v "$(pwd)/logs-mcp:/srv/logs-mcp:ro" \
+  -w /srv/logs-mcp \
+  -e "PYTHONPATH=/srv/logs-mcp" \
+  "devcake/app-test:${DEVCAKE_TAG:-latest}" \
+  python -m pytest tests/ -q -p no:cacheprovider
+
 echo "── devcake-logs-mcp selftest (baked into the claude-code image)"
 docker run --rm --entrypoint devcake-logs-mcp \
   "devcake/dev-claude-code:${DEVCAKE_TAG:-latest}" --selftest

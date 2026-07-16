@@ -1,26 +1,16 @@
-"""devcake-logs-mcp backend contract (images/common/logs_mcp/): the Datadog
-Logs API wire shape, row normalization/trimming, and the compact agent-facing
-formatting. server.py (the only module importing the `mcp` SDK) is NOT
-imported here — app-test has no `mcp`; the binary is smoke-tested at image
-level (`devcake-logs-mcp --selftest`)."""
+"""devcake-logs-mcp backend contract: the Datadog Logs API wire shape, row
+normalization/trimming, and the compact agent-facing formatting. server.py
+(the only module importing the `mcp` SDK) is NOT imported here — the suite
+must run with pytest+httpx alone; the binary is smoke-tested at image level
+(`devcake-logs-mcp --selftest`)."""
 
 import json
-import sys
-from pathlib import Path
 
 import httpx
 import pytest
 
-# host checkout: repo/app/tests → repo/images/common; app container: /srv/tests
-# → /srv/images/common (read-only mount) — same trick as test_entrypoint_render
-_CANDIDATES = [Path(__file__).parents[2] / "images" / "common",
-               Path(__file__).parents[1] / "images" / "common"]
-COMMON = next((str(p) for p in _CANDIDATES if p.exists()), str(_CANDIDATES[0]))
-if COMMON not in sys.path:
-    sys.path.insert(0, COMMON)
-
-from logs_mcp.core import BackendError, LogRow, format_rows  # noqa: E402
-from logs_mcp.datadog import DatadogBackend  # noqa: E402
+from logs_mcp.core import BackendError, LogRow, format_rows
+from logs_mcp.datadog import DatadogBackend
 
 
 # Shape per the Datadog Logs Search API v2 (POST /api/v2/logs/events/search):

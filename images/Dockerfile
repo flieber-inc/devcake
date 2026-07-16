@@ -7,7 +7,9 @@
 #
 #   docker buildx bake images
 #
-# Context must be ./images (needs common/dev_entrypoint.py).
+# Context must be ./images (needs common/dev_entrypoint.py) plus the
+# `logs-mcp` named context (repo /logs-mcp) — docker-bake.hcl provides it;
+# a raw `docker build` needs --build-context logs-mcp=./logs-mcp.
 # Pin harness CLIs below — bump intentionally, never float on :latest npm.
 
 # Digest-pinned (ISSUES #29). Bump: docker buildx imagetools inspect <image:tag>
@@ -76,12 +78,20 @@ ENV HOME=/home/dev
 
 COPY common/dev_entrypoint.py /dev_entrypoint.py
 
-# devcake-logs MCP server: baked into every Dev image (docs/07 §6), but only
-# registered when a Dev Type's mcp_setup_commands says so (docs/08 §7).
-COPY common/logs_mcp /opt/devcake/logs_mcp
-RUN printf '#!/bin/sh\nexport PYTHONPATH="/opt/devcake${PYTHONPATH:+:$PYTHONPATH}"\nexec python -m logs_mcp.server "$@"\n' \
-        > /usr/local/bin/devcake-logs-mcp \
-    && chmod 0755 /usr/local/bin/devcake-logs-mcp
+# devcake-logs MCP server: standalone package (repo /logs-mcp, provided as
+# the `logs-mcp` named build context — docker-bake.hcl `dev-common`), baked
+# into every Dev image (docs/07 §6a) but only registered when a Dev Type's
+# mcp_setup_commands says so (docs/08 §7). --no-deps: the pins above stay
+# authoritative; the console script provides /usr/local/bin/devcake-logs-mcp.
+# (cp to a writable dir: setuptools writes egg-info into the source tree,
+# and the context bind mount is read-only; PIP_CACHE_DIR because this layer
+# runs after ENV HOME above, so pip would otherwise look in /home/dev.)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,from=logs-mcp,target=/tmp/logs-mcp-src \
+    cp -r /tmp/logs-mcp-src /tmp/logs-mcp \
+    && PIP_CACHE_DIR=/root/.cache/pip pip install --no-deps /tmp/logs-mcp \
+    && rm -rf /tmp/logs-mcp \
+    && devcake-logs-mcp --selftest
 
 WORKDIR /workspace
 ENTRYPOINT ["python", "/dev_entrypoint.py"]

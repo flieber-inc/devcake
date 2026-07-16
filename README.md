@@ -144,7 +144,7 @@ read-only forge token for non-EXECUTE and a different Dev Type for REVIEW.
 2. [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)
 3. Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
 
-Rebuild after upgrades or changes under `app/`, `admin/`, or `images/`:
+Rebuild after upgrades or changes under `app/`, `admin/`, `images/`, or `logs-mcp/`:
 
 ```bash
 docker buildx bake all && docker compose up -d

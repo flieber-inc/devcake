@@ -95,6 +95,11 @@ target "dev-common" {
   inherits   = ["_common"]
   context    = "./images"
   dockerfile = "Dockerfile"
+  # Standalone devcake-logs-mcp package, pip-installed into the shared base
+  # stage (images/Dockerfile) without widening the ./images context.
+  contexts = {
+    "logs-mcp" = "./logs-mcp"
+  }
 }
 
 target "hello" {

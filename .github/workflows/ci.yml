@@ -95,6 +95,19 @@ jobs:
             "devcake/app-test:${DEVCAKE_TAG}" \
             python -m pytest tests/ -q --tb=short
 
+      # Standalone package — its suite needs pytest+httpx only (server.py,
+      # the sole mcp-SDK import, is covered by the image-level --selftest in
+      # docker-images.yml), so the app-test image runs it as-is.
+      - name: devcake-logs-mcp package tests
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}/logs-mcp:/srv/logs-mcp:ro" \
+            -w /srv/logs-mcp \
+            -e PYTHONPATH=/srv/logs-mcp \
+            "devcake/app-test:${DEVCAKE_TAG}" \
+            python -m pytest tests/ -q --tb=short -p no:cacheprovider
+
       # Free the control network before compose claims it. Unit-test Redis creates
       # a bare `devcake_control` network (no compose labels); compose refuses to
       # adopt it unless we remove both the container and the network.

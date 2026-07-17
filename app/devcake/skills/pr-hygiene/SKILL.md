@@ -1,7 +1,6 @@
 ---
 name: pr-hygiene
 description: Commit and pull-request discipline — scoped commits, honest messages, reviewable PRs. Use when committing work, opening or updating a pull request, or writing a PR description.
-license: Apache-2.0
 metadata:
   source: original (devcake)
   author: devcake

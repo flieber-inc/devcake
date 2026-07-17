@@ -20,12 +20,14 @@ One directory per skill; the directory name is the skill name:
 name: <skill-name>            # must equal the directory name
 description: >                # what it does AND when to use it —
   ...                         # this is the model's activation trigger
-license: MIT | Apache-2.0     # this skill's license
 metadata:
   source: <upstream URL or "original (devcake)">
   author: <author/org>
 ---
 ```
+
+Vendored skills additionally carry the upstream project's `license`
+frontmatter and attribution footer — keep those intact (see below).
 
 Skill names: lowercase alphanumerics plus `-`/`_`, max 64 chars
 (`^[a-z0-9][a-z0-9_-]{0,63}$`). Keep bodies focused (< ~500 lines); the
@@ -49,8 +51,9 @@ files are never overwritten, but a deleted built-in file returns on the
 next boot. To retire a built-in skill, simply don't select it on any Dev
 Type.
 
-## Licensing
+## Attribution
 
-Each skill carries its own `license` frontmatter and attribution in
-`metadata`/its footer. Vendored skills keep their upstream license (MIT /
-Apache-2.0); check the footer before redistributing modified copies.
+Skills vendored or adapted from other projects keep their upstream
+`license` frontmatter and attribution footer — do not strip these; they
+are the terms under which the content may be redistributed. DevCake's own
+skills carry no license (the project has none yet).

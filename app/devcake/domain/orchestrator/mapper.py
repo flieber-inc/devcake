@@ -67,6 +67,7 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
         )
         run.spec_prompt = mapper_prompt(self._identifying_prompt(dev_type), eligible)
         run.spec_skills = await self._skill_payload(dev_type)
+        run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
         await self.runs.bootstrap.launch(
             run, image=HARNESSES[dev_type.harness_template].image)
         log.info("dispatched mapper %s (dev=%s, %d missions in prompt)",

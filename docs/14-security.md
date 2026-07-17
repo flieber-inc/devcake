@@ -59,7 +59,7 @@ Compromise of Dagu auth, the admin password, or the host is total for that machi
 | Mission text + repo content in prompts | **Trusted by design** (adult-operator / OpenClaw-class). Prompt injection is not a product defect (§3). |
 | Forge + model credentials in the Dev | Required for clone/push and harnesses. Open **egress** by design (forge, package registries, model APIs). |
 | MCP setup commands / `extra_cli_args` | **Admin-equivalent code execution** inside the disposable container (`11-admin-panel.md`). |
-| Skill-store skills (`DevType.skills`) | **Operator-controlled agent instructions** injected into the session (same trust class as the MCP command area); the store repo is writable by anyone with Gitea access. The entrypoint refuses absolute/`..` paths and confines writes to `~/.claude/skills/` — that guards file placement, not content. |
+| Skill-store skills (`DevType.skills`) | **Operator-controlled agent instructions** injected into the session (same trust class as the MCP command area); the store repo is writable by anyone with Gitea access. The entrypoint refuses absolute/`..` paths and confines writes to the registry-declared skills dir under `$HOME` (the runspec `skills_dir` is itself validated home-relative — absolute/`..` values fall back to the default) — that guards file placement, not content. |
 | Harness flags (`--dangerously-skip-permissions`, etc.) | Autonomous coding requires them; Devs are not a secure sandbox product (§6). |
 | Unauthenticated OTLP to `otel-collector` | Residual on the dedicated host (self-noise / volume fill). Ops signal, not a tenancy boundary (§10). |
 

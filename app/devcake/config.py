@@ -212,8 +212,9 @@ class DevType(BaseModel):
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
-    # Skill-store skills installed to ~/.claude/skills before the harness
-    # starts — claude-code harness only in v1 (other harnesses skip + warn)
+    # Skill-store skills installed to the harness's registry-declared skills
+    # dir before the harness starts (harness.py skills_dir; a harness
+    # without one skips them with a warning)
     skills: list[str] = Field(default_factory=list)
     # Named secret env vars delivered to this Dev Type's runs: NAMES only —
     # values are GUI-stored under /data/secrets/harness/ (ADR-0011) and read

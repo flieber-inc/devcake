@@ -229,13 +229,13 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         </div>
       )}
       <SelectionChips label="Skills"
-        help="Skill-store skills installed to ~/.claude/skills inside the Dev container before the agent starts. The catalog lives in the Skills section below."
+        help={`Skill-store skills installed to ~/${h.skills_dir || ".claude/skills"} inside the Dev container before the agent starts. The catalog lives in the Skills section below.`}
         options={(skillsCatalog?.skills || []).map((s) => ({
           name: s.name, title: s.description || undefined }))}
         selected={d.skills || []}
-        disabled={d.harness_template !== "claude-code"}
-        disabledNote={`Skills run on the claude-code harness only in this version${
-          d.harness_template !== "claude-code" && (d.skills || []).length
+        disabled={!h.skills_dir}
+        disabledNote={`The ${d.harness_template} harness does not support skill-store skills${
+          !h.skills_dir && (d.skills || []).length
             ? ` — ${d.skills.length} selected skill(s) will be skipped`
             : ""}.`}
         emptyNote="no skills in the catalog yet — see the Skills section below"

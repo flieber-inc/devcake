@@ -1,5 +1,6 @@
 """DevCake Dev entrypoint — shared across harness images (docs/07, docs/08).
-Harness selected by the image-baked DEVCAKE_HARNESS env (claude-code | grok-build).
+Harness selected by the image-baked DEVCAKE_HARNESS env
+(claude-code | grok-build | codex).
 
 Exit codes per docs/07 §4: 0 ok · 10 harness crash · 11 bad result.json ·
 12 auth · 13 clone/forge · 14 MCP setup · 20 entrypoint error.
@@ -118,14 +119,22 @@ def clone_extra_repos(extras, repo_dir, runner=None):
     return notes
 
 
-def install_skills(skills, home=None):
-    """Skill-store files from the runspec → ~/.claude/skills/<path> before
-    the harness starts (claude-code reads personal skills there; docs/07).
-    Path-traversal-safe: store content is operator-editable, so absolute
-    paths and `..` parts are refused. Per-file failures are NON-fatal —
-    skills are additive; the notes land in the run log."""
-    base = pathlib.Path(home or pathlib.Path.home()) / ".claude" / "skills"
+def install_skills(skills, home=None, skills_dir=".claude/skills"):
+    """Skill-store files from the runspec → $HOME/<skills_dir>/<path> before
+    the harness starts. The dir is the harness registry's skills_dir
+    (harness.py), delivered as the runspec `skills_dir` key; the default is
+    claude-code's dir so an older app that sends no key keeps today's
+    behavior. Path-traversal-safe on BOTH the dir and every file path:
+    store content is operator-editable, so absolute paths and `..` parts
+    are refused. Per-file failures are NON-fatal — skills are additive; the
+    notes land in the run log."""
     notes = []
+    sd = pathlib.PurePosixPath(skills_dir or ".claude/skills")
+    if not sd.parts or sd.is_absolute() or ".." in sd.parts:
+        notes.append(f"skills: refused unsafe skills_dir {skills_dir!r} "
+                     "— using default")
+        sd = pathlib.PurePosixPath(".claude/skills")
+    base = pathlib.Path(home or pathlib.Path.home()) / sd
     for sk in skills or []:
         name, wrote = sk.get("name", "?"), 0
         for f in sk.get("files") or []:
@@ -569,9 +578,12 @@ def main() -> None:
     for note in clone_extra_repos(spec.get("extra_repos") or [], repo_dir):
         print(note)
 
-    # skill store (v1): materialize selected skills for the harness — NOT
-    # into the repo clone (the Dev would commit them)
-    for note in install_skills(spec.get("skills") or []):
+    # skill store: materialize selected skills into the harness's registry-
+    # declared skills dir — NOT into the repo clone (the Dev would commit
+    # them, and codex scans repo .agents/skills)
+    for note in install_skills(spec.get("skills") or [],
+                               skills_dir=spec.get("skills_dir")
+                               or ".claude/skills"):
         print(note)
 
     failed = run_mcp_setup(spec.get("mcp_setup_commands", []), workdir)  # docs/07 §5 step 5

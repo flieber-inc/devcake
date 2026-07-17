@@ -150,20 +150,31 @@ claude mcp add <name> -e SOME_KEY=$SOME_KEY -- python -m <package_module>
 
 Mechanics: commands run before harness launch as uid 1000 with stdin closed, a 300 s cap each, and full outbound network (`07-dev-runtime.md` §5/§7). `$VAR` expands from the Dev Type's secret env vars (`11-admin-panel.md` §3) — a private-repo install token is just another secret env var (fine-grained PAT, Contents read-only; drop the `${PLUGIN_GIT_TOKEN}@` part when the repo goes public). Register via `python -m <module>` or an absolute path: `pip install --user` puts console scripts in `~/.local/bin`, which is **not** on `PATH` in the claude/codex images. Always pin a release tag — a run must not float with a moving branch.
 
-## 7a. Skills (skill store v1)
+## 7a. Skills (all harnesses; registry-driven skills dir)
 
-Skill-store skills (`02-domain-model.md` DevType.skills) are materialized to
-`~/.claude/skills/` by the entrypoint before harness launch — a **claude-code
-capability only**: Claude Code loads personal skills from that directory
-(verified in `-p` print mode on the pinned CLI line); grok-build and codex
-have no equivalent, so dispatch skips skills for them with a warning and the
-admin UI disables the selector. A prompt-append fallback for other harnesses
-was deliberately rejected for v1 (it would change prompt-composition
-semantics and playbook token budgets).
+Skill-store skills (`02-domain-model.md` DevType.skills) are materialized by
+the entrypoint before harness launch into the harness's **registry-declared
+skills directory** (`harness.py` `skills_dir`, snapshotted onto the Run at
+dispatch and delivered as the runspec `skills_dir` key). All three CLIs read
+the same `SKILL.md` format; the verified read-set per pinned CLI:
+
+| Harness | skills_dir | Verified read locations |
+|---|---|---|
+| `claude-code` (2.1.210) | `.claude/skills` | `~/.claude/skills` only (cli.js-verified; `-p` print-mode load live-verified) |
+| `grok-build` (0.2.103) | `.agents/skills` | `~/.agents/skills`, `~/.grok/skills`, and `~/.claude/skills` claude-compat (`grok inspect`-verified) |
+| `codex` (0.144.4) | `.agents/skills` | `~/.agents/skills` (user), repo `.agents/skills`, `/etc/codex/skills` ([official docs](https://developers.openai.com/codex/skills) + binary strings) |
+
+One canonical dir per harness, deliberately: grok reads BOTH `.agents` and
+`.claude` dirs, so writing skills to two locations would double-list every
+skill in the agent's own discovery — do not add a compat double-write. A
+harness whose registry entry declares no `skills_dir` skips skills at
+dispatch with a warning (and the admin UI disables the selector); skill
+*invocation* is model-driven (description matching), so how eagerly each
+harness reaches for a skill varies — the delivery contract is identical.
 
 ## 8. Adding or changing a template (checklist)
 
-1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow) and the new value to `DevType.harness_template`'s Literal (`config.py`).
+1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow, optional `skills_dir` — the home-relative dir the CLI reads personal skills from; leave unset if unsupported) and the new value to `DevType.harness_template`'s Literal (`config.py`).
 2. Add a target to `images/Dockerfile` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and a matching target in `docker-bake.hcl` (group `images` / `all`).
 3. Add the invocation + renderer + token-extraction branches in `images/common/dev_entrypoint.py` (§1, §1a, §5).
 4. Run the M1 hello-world DAG with the new image, then the M3 ONBOARD end-to-end demo.

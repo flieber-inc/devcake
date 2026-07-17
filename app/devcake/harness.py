@@ -1,6 +1,6 @@
 """The harness registry — single source of truth for what each harness_template
-means at runtime: Docker image, credential requirements, and OAuth device-code
-flow (docs/08 §2, §4).
+means at runtime: Docker image, credential requirements, OAuth device-code
+flow, and the skills directory the harness CLI reads (docs/08 §2, §4, §7a).
 
 The admin panel's harness combobox is authoritative BECAUSE dispatch derives
 everything from this table: changing a Dev Type's harness changes its image and
@@ -38,6 +38,11 @@ class Harness(BaseModel):
     credential_env: list[str] = Field(default_factory=list)   # any-of passthrough
     credential_files: list[CredentialFile] = Field(default_factory=list)
     oauth: OAuthFlow | None = None
+    # HOME-relative dir the harness CLI loads personal skills from; None =
+    # no skills support (dispatch skips with a warning, the SPA disables the
+    # selector). Snapshotted onto the Run at dispatch (run.spec_skills_dir)
+    # so dir, skill content, and image all come from the same registry read.
+    skills_dir: str | None = None
 
 
 # Dispatch must use the same tag the operator baked (AGENTS.md pin workflow:
@@ -53,6 +58,8 @@ HARNESSES: dict[str, Harness] = {
         # paste-token mode (claude setup-token → CLAUDE_CODE_OAUTH_TOKEN) or
         # plain API key; no device-code flow (docs/08 §4)
         credential_env=["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        # CLI 2.1.210 reads ONLY ~/.claude/skills (cli.js-verified)
+        skills_dir=".claude/skills",
     ),
     "grok-build": Harness(
         image=f"devcake/dev-grok-build:{_TAG}",
@@ -63,6 +70,10 @@ HARNESSES: dict[str, Harness] = {
         oauth=OAuthFlow(login_cmd="grok login --device-auth",
                         auth_path="~/.grok/auth.json",
                         secret_file="grok-auth.json"),
+        # CLI 0.2.103 reads ~/.agents/skills, ~/.grok/skills AND
+        # ~/.claude/skills (claude-compat; `grok inspect`-verified) —
+        # .agents is canonical; writing two dirs would double-list skills
+        skills_dir=".agents/skills",
     ),
     "codex": Harness(
         image=f"devcake/dev-codex:{_TAG}",
@@ -74,6 +85,10 @@ HARNESSES: dict[str, Harness] = {
         oauth=OAuthFlow(login_cmd="codex login --device-auth",
                         auth_path="~/.codex/auth.json",
                         secret_file="codex-auth.json"),
+        # CLI 0.144.4 reads ~/.agents/skills (user) + repo .agents/skills +
+        # /etc/codex/skills (developers.openai.com/codex/skills + binary
+        # strings); repo-level is unused here — never write into the clone
+        skills_dir=".agents/skills",
     ),
 }
 
@@ -116,6 +131,7 @@ def dev_type_status(dt) -> dict:
             "credential_env": h.credential_env,
             "credential_files": [cf.model_dump() for cf in h.credential_files],
             "oauth_available": h.oauth is not None,
+            "skills_dir": h.skills_dir,
         },
         "secrets_present": present,
         # ✓/✗ per declared secret env var (DevType.secret_env) — presence

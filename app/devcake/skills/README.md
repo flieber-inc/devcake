@@ -1,8 +1,10 @@
 # DevCake skill store
 
-Claude Code skills for DevCake Devs. Skills selected on a Dev Type (admin
-panel → Config → Dev Types) are installed to `~/.claude/skills/` inside the
-Dev container before the agent starts — claude-code harness only.
+Agent skills for DevCake Devs. Skills selected on a Dev Type (admin panel →
+Config → Dev Types) are installed inside the Dev container before the agent
+starts, into the harness's skills directory (`harness.py` `skills_dir`:
+claude-code → `~/.claude/skills/`; grok-build and codex → `~/.agents/skills/`).
+All three harness CLIs consume the same `SKILL.md` format.
 
 ## Layout
 

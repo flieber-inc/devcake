@@ -307,7 +307,8 @@ class SkillService:
         """([{name, files: [{path, content_b64}]}], warnings) for the runspec.
         Store-first per skill; bundled fallback; a skill missing from both is
         skipped with a warning — never a refused run. Paths are repo-relative
-        POSIX including the skill dir (entrypoint writes ~/.claude/skills/<path>).
+        POSIX including the skill dir (entrypoint writes them under
+        $HOME/<skills_dir>/<path>, per the harness registry).
 
         Caps run against sizes from the tree/stat BEFORE any content read;
         once MAX_TOTAL_BYTES is exhausted the remaining skills are dropped

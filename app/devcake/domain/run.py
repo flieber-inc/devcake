@@ -47,6 +47,10 @@ class Run(BaseModel):
     # mid-run Gitea outage can't change what a runspec re-request serves):
     # [{name, files: [{path, content_b64}]}]
     spec_skills: list[dict[str, Any]] = Field(default_factory=list)
+    # HOME-relative dir the entrypoint writes spec_skills under — snapshotted
+    # at dispatch from the harness registry so dir, skill content, and launch
+    # image come from the same read; "" on legacy records → entrypoint default
+    spec_skills_dir: str = ""
     state: RunState = "dispatched"
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None

@@ -3,7 +3,8 @@ import { ExternalLink, MoreHorizontal } from "lucide-react";
 
 // Overflow menu (⋯) — the settings-panel idiom: one primary action stays
 // visible, secondary/rare actions live here. items: [{ label, desc?,
-// external?, onClick }] — `external` renders the ↗ marker.
+// external?, danger?, onClick }] — `external` renders the ↗ marker,
+// `danger` renders the label red (destructive actions still confirm).
 export default function MoreMenu({ label = "More actions", items }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -44,7 +45,8 @@ export default function MoreMenu({ label = "More actions", items }) {
               onClick={() => { setOpen(false); it.onClick(); }}
               className="block w-full px-3 py-2 text-left text-sm transition hover:bg-stone-50 focus-visible:bg-stone-50 focus-visible:outline-none dark:hover:bg-neutral-800 dark:focus-visible:bg-neutral-800"
             >
-              <span className="flex items-center gap-1.5 font-medium">
+              <span className={`flex items-center gap-1.5 font-medium ${
+                it.danger ? "text-red-600 dark:text-red-400" : ""}`}>
                 {it.label}
                 {it.external && <ExternalLink size={11} className="text-neutral-500 dark:text-neutral-400" aria-hidden />}
               </span>

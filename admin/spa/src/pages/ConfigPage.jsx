@@ -159,8 +159,14 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               Connect via OAuth…{pending ? " (save first)" : ""}
             </Button>
           )}
-          <Button kind="ghost" onClick={() => onRename(name)}>Rename</Button>
-          <Button kind="danger-ghost" icon={Trash2} onClick={() => onDelete(name)}>Delete</Button>
+          <MoreMenu label={`More actions for ${name}`} items={[
+            { label: "Rename",
+              desc: "Config, credentials and prompt templates follow the new name.",
+              onClick: () => onRename(name) },
+            { label: "Delete Dev Type", danger: true,
+              desc: "Removes its config; stored credentials stay on disk.",
+              onClick: () => onDelete(name) },
+          ]} />
         </div>
       </div>
       {/* one line: harness · model · a much smaller max-concurrency box */}

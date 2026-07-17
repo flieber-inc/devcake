@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, SquareTerminal } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Card } from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
+import MoreMenu from "../components/MoreMenu.jsx";
 import StatusPill from "../components/StatusPill.jsx";
 import RunTerminal from "../components/RunTerminal.jsx";
 import StageGlyph from "../components/StageGlyph.jsx";
@@ -83,14 +84,15 @@ export default function RunsPage() {
       <PageHeader title="Runs" subtitle="Dev runs executed by Dagu — click a row for its terminal"
         actions={
           <>
-            <Button kind="danger-ghost" icon={Trash2}
-              onClick={() => { setConfirmOpen(true); setClearErr(""); }}>
-              Clear runs
-            </Button>
             <a href={cfg.daguUrl || "http://localhost:8525"} target="_blank" rel="noopener"
               className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:bg-accent-700">
               Open Dagu <ExternalLink size={13} aria-hidden />
             </a>
+            <MoreMenu label="More run actions" items={[
+              { label: "Clear run history", danger: true,
+                desc: "Wipes local records, Dagu history and OpenObserve data. Cannot be undone.",
+                onClick: () => { setConfirmOpen(true); setClearErr(""); } },
+            ]} />
           </>
         } />
       {clearMsg && (

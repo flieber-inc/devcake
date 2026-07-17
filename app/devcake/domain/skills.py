@@ -370,6 +370,12 @@ class SkillService:
         entry: list[dict] = []
         used = 0
         warns: list[str] = []
+        # SKILL.md first: when the total cap lands mid-skill, the manifest
+        # must ship and supporting files drop — plain sorted() order could
+        # ship an uppercase-named helper file while dropping SKILL.md,
+        # leaving a dead skill dir the harness ignores
+        anchor = f"{name}/SKILL.md"
+        sized = sorted(sized, key=lambda ps: (ps[0] != anchor, ps[0]))
         for path, size in sized:
             if size > MAX_FILE_BYTES:
                 warns.append(f"skill {name!r}: {path} exceeds "

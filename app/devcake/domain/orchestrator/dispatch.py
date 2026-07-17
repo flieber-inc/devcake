@@ -283,7 +283,14 @@ async def _skill_payload(self, dev_type: DevType) -> list[dict]:
                     "not support them — skipped", dev_type.name,
                     dev_type.skills, dev_type.harness_template)
         return []
-    payload, warnings = await self.skills.payload_for(dev_type.skills)
+    try:
+        payload, warnings = await self.skills.payload_for(dev_type.skills)
+    except Exception as e:
+        # payload_for swallows STORE errors, but a bundled-copy read can
+        # still raise — skills are additive and must never refuse a run
+        log.warning("skills for %s unavailable — dispatching without them "
+                    "(%s)", dev_type.name, e)
+        return []
     for w in warnings:
         log.warning("skills for %s: %s", dev_type.name, w)
     return payload

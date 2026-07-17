@@ -487,3 +487,41 @@ def test_payload_and_listing_reuse_cached_store_reads(tmp_path):
     _run(svc.list_skills())
     assert forge.tree_calls == 1
     assert forge.file_calls == ["tdd/SKILL.md"]
+
+
+def test_skill_payload_never_raises_out_of_dispatch():
+    """Skills are additive: even a service that blows up (e.g. a bundled
+    copy unreadable in a broken image — store errors are already swallowed
+    inside payload_for) must not refuse the run; dispatch gets [] and a
+    warning instead."""
+    from fakes import make_mission_manager
+
+    class _ExplodingService:
+        async def payload_for(self, names):
+            raise OSError("bundled skill unreadable")
+
+    mgr = make_mission_manager(skills=_ExplodingService())
+    dt = DevType(name="senior-dev", harness_template="claude-code",
+                 skills=["tdd"])
+    assert _run(mgr._skill_payload(dt)) == []
+
+
+def test_payload_ships_skill_md_first_under_mid_skill_cap(tmp_path):
+    """When the total cap lands inside a skill, SKILL.md must ship and the
+    supporting files drop — plain sorted() path order could ship an
+    uppercase-named helper while dropping the manifest, leaving a dead
+    skill dir the harness ignores."""
+    from devcake.domain import skills as skills_mod
+    chunk = skills_mod.MAX_FILE_BYTES - 1024
+    files = {f"a/{i:02d}.md": b"y" * chunk for i in range(5)}    # ~995 KiB
+    files["a/SKILL.md"] = b"---\nname: a\n---\n"
+    files["b/AAA-REFERENCE.md"] = b"r" * chunk   # sorts before SKILL.md
+    files["b/SKILL.md"] = b"---\nname: b\n---\n"
+    forge = _FakeForge(files)
+    svc = skills_mod.SkillService(internal_forge=forge,
+                                  builtin_dir=tmp_path / "none")
+    payload, warnings = _run(svc.payload_for(["a", "b"]))
+    b_entry = next((s for s in payload if s["name"] == "b"), None)
+    assert b_entry is not None, "skill b lost its manifest to the cap"
+    assert [f["path"] for f in b_entry["files"]] == ["b/SKILL.md"]
+    assert any("cap" in w for w in warnings)

@@ -10,6 +10,7 @@ const IGNORED = [
   /^cfg\.dismissed_alerts$/,
   /^cfg\.schema_version$/,
   /^devTypes\.[^.]+\.secrets_present$/,
+  /^devTypes\.[^.]+\.secret_env_present$/,
 ];
 const ignored = (path) => IGNORED.some((re) => re.test(path));
 
@@ -80,6 +81,20 @@ export default function useConfigDraft() {
       if (!Number.isFinite(dt.max_concurrency) || dt.max_concurrency < 1)
         errs[`devTypes.${name}.max_concurrency`] =
           `${name}: max concurrency must be ≥ 1`;
+      // shape + duplicates mirror the server validator so a bad name blocks
+      // Save inline instead of surfacing as the config PUT's raw 422 (the
+      // reserved-name blocklist stays server-side only — no JS copy to
+      // drift)
+      const seenVars = new Set();
+      for (const v of dt.secret_env || []) {
+        if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(v))
+          errs[`devTypes.${name}.secret_env`] =
+            `${name}: secret env var "${v}" must be UPPER_SNAKE_CASE`;
+        else if (seenVars.has(v))
+          errs[`devTypes.${name}.secret_env`] =
+            `${name}: duplicate secret env var "${v}"`;
+        seenVars.add(v);
+      }
     }
     // instance names are validated in the draft so a bad one blocks Save with
     // an inline message instead of surfacing as the config PUT's raw 422

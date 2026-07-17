@@ -34,7 +34,7 @@ function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSa
     }
   };
   return (
-    <Modal className="max-w-3xl">
+    <Modal className="max-w-3xl" onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">
         {editing ? `Edit template "${initial.name}"` : "Create prompt template"} · {mt}
       </h4>
@@ -80,7 +80,12 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
   const [viewing, setViewing] = useState(null); // {mt, entry}
   const [workflow, setWorkflow] = useState("");
   const [switchNote, setSwitchNote] = useState("");
-  const refresh = () => get("/prompt-templates").then(setData).catch(() => setData(null));
+  const [err, setErr] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const refresh = () =>
+    get("/prompt-templates")
+      .then((d) => { setData(d); setLoadFailed(false); })
+      .catch(() => { setData(null); setLoadFailed(true); });
   // re-fetch when the live Dev Type set changes — groups are API-driven,
   // never hardcoded, so a freshly created Dev appears immediately
   useEffect(() => { refresh(); }, [devTypeNames.sort().join(",")]);
@@ -124,8 +129,10 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
         const base = kind === "dev" ? "/devtype-prompts" : "/prompt-templates";
         try {
           await send("DELETE", `${base}/${mt}/${encodeURIComponent(name)}`);
+          setErr("");
         } catch (e) {
-          window.alert(String(e.message || e));   // 409 when active
+          // 409 when the template is still active somewhere
+          setErr(`Could not delete "${name}": ${String(e.message || e).replace(/^\d+ /, "")}`);
         }
         setConfirm(null);
         refresh();
@@ -136,7 +143,22 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
     <Section id="prompts" title="Prompts"
       description="The playbook DevCake sends a Dev for each Mission Type. The built-in default is read-only and refreshed on upgrade — create a template (copy the default) to customize, then select it as active."
       actions={<ImmediateBadge text="templates apply immediately; the active selection saves with the page" />}>
-      {!data && <p className="text-sm text-neutral-400">Loading templates…</p>}
+      {err && (
+        <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          ✗ {err}
+        </p>
+      )}
+      {!data && (loadFailed ? (
+        <p className="text-sm text-red-700 dark:text-red-300">
+          Couldn&apos;t load the prompt templates.{" "}
+          <button type="button" onClick={refresh}
+            className="font-medium underline underline-offset-2">
+            Retry
+          </button>
+        </p>
+      ) : (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading templates…</p>
+      ))}
       {data && (
         <div className="space-y-2 rounded-card border border-accent-200 bg-accent-50/40 p-4 dark:border-accent-900 dark:bg-accent-950/20">
           <span className="text-sm font-semibold">Workflow switcher</span>
@@ -190,7 +212,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
               {entries.map((t) => (
                 <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
                   <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
-                  {t.builtin && <span className="text-xs text-neutral-400">read-only, refreshed on upgrade</span>}
+                  {t.builtin && <span className="text-xs text-neutral-500 dark:text-neutral-400">read-only, refreshed on upgrade</span>}
                   {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
                   <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
                     onClick={() => setViewing({ mt, entry: t })}>View</button>
@@ -219,7 +241,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
         return (
           <div key={`dev-${n}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-sm font-semibold">{n} <span className="font-sans text-xs text-neutral-400">(Dev Type identifying prompt)</span></span>
+              <span className="font-mono text-sm font-semibold">{n} <span className="font-sans text-xs text-neutral-500 dark:text-neutral-400">(Dev Type identifying prompt)</span></span>
               <Button kind="ghost" onClick={() => setModal({ mt: n, kind: "dev" })}>
                 + Create prompt template
               </Button>
@@ -261,7 +283,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
           onSaved={() => { setModal(null); refresh(); }} />
       )}
       {viewing && (
-        <Modal className="max-w-3xl">
+        <Modal className="max-w-3xl" onClose={() => setViewing(null)}>
           <h4 className="mb-2 text-base font-semibold tracking-tight">
             {viewing.mt} · {viewing.entry.name}
           </h4>

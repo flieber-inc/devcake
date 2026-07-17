@@ -24,6 +24,37 @@
   --color-surface-dark: #141110;
   --color-surface-raised-dark: #1d1917;
 
+  /* warm greys: neutral-* retuned toward stone, ink lands on espresso —
+     every existing neutral-* class inherits the warmth token-side */
+  --color-neutral-50: #fafaf9;
+  --color-neutral-100: #f5f4f2;
+  --color-neutral-200: #e8e4e0;
+  --color-neutral-300: #d6d1cb;
+  --color-neutral-400: #a49b91;
+  --color-neutral-500: #746b61;
+  --color-neutral-600: #575047;
+  --color-neutral-700: #443e37;
+  --color-neutral-800: #3a332b;
+  --color-neutral-900: #2a2018;
+  --color-neutral-950: #1c1610;
+
+  /* warnings pushed toward true amber so they stop reading as the brand
+     orange (accent) — alarms get their own register */
+  --color-amber-50: #fcf9ec;
+  --color-amber-100: #f8f0d3;
+  --color-amber-200: #efdfa4;
+  --color-amber-300: #e4c86d;
+  --color-amber-400: #d9ad41;
+  --color-amber-500: #c08f1d;
+  --color-amber-600: #a1720d;
+  --color-amber-700: #82590b;
+  --color-amber-800: #6b4a10;
+  --color-amber-900: #593e13;
+  --color-amber-950: #332208;
+
+  /* display face: wordmark, page titles, big numerals — nowhere else */
+  --font-display: "Bricolage Grotesque Variable", system-ui, sans-serif;
+
   --radius-card: 0.75rem;
   --shadow-card: 0 1px 2px rgb(28 20 12 / 0.05), 0 1px 3px rgb(28 20 12 / 0.07);
 }

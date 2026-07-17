@@ -37,7 +37,7 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
         </Button>
       )}>
       {data.repos.length === 0 && (
-        <p className="text-sm text-neutral-400">
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
           No internal repos right now — a mission that resolves to no
           configured repository creates one automatically.
         </p>
@@ -102,7 +102,7 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
     }
   };
   return (
-    <Modal>
+    <Modal onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">
         Create repository on the internal Gitea
       </h4>
@@ -170,7 +170,7 @@ export default function ReposPage() {
   const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos);
 
   if (!dr.loaded) {
-    return <p className="text-sm text-neutral-400">Loading…{loadErr}</p>;
+    return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
   }
 
   const cfg = dr.draft.cfg;

@@ -4,9 +4,10 @@ import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, Help, ListTextarea, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
+import InstantZone from "../components/InstantZone.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
-import { ConfirmDialog, Modal } from "../components/Modal.jsx";
+import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SelectionChips from "../components/SelectionChips.jsx";
@@ -43,8 +44,7 @@ function OAuthWizard({ devType, onClose }) {
     return () => clearInterval(timer);
   }, [devType]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]">
-      <div className="w-full max-w-lg rounded-card border border-neutral-200 bg-white p-6 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+    <Modal onClose={onClose}>
         <h4 className="mb-3 text-base font-semibold tracking-tight">Connect {devType} (OAuth)</h4>
         {error && <p className="text-sm text-red-600">{error}</p>}
         {!error && status.state === "starting" && (
@@ -62,7 +62,7 @@ function OAuthWizard({ devType, onClose }) {
               {status.url}
             </a>
             <p className="text-center text-2xl font-bold tracking-widest">{status.code}</p>
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Waiting for approval… this dialog completes automatically.
             </p>
           </div>
@@ -80,8 +80,7 @@ function OAuthWizard({ devType, onClose }) {
             {status.state === "completed" ? "Done" : "Close"}
           </Button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -123,7 +122,7 @@ function UploadButton({ devType, secretFile, onDone }) {
 
 // Fully controlled: the card renders and edits the shared draft. Save is the
 // page-level Save; only Delete / OAuth / upload act immediately.
-function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onCredChange, skillsCatalog }) {
+function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onRename, onCredChange, skillsCatalog }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
@@ -158,13 +157,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               Connect via OAuth…{pending ? " (save first)" : ""}
             </Button>
           )}
-          <Button kind="ghost" onClick={async () => {
-            const nn = window.prompt(`Rename Dev Type "${name}" to:`, name);
-            if (!nn || nn === name) return;
-            try { await send("POST", `/dev-types/${name}/rename`, { new_name: nn }); }
-            catch (e) { window.alert(String(e.message || e)); }
-            onCredChange && onCredChange();   // reload the draft
-          }}>Rename</Button>
+          <Button kind="ghost" onClick={() => onRename(name)}>Rename</Button>
           <Button kind="danger-ghost" icon={Trash2} onClick={() => onDelete(name)}>Delete</Button>
         </div>
       </div>
@@ -194,7 +187,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           />
         </Field>
       </div>
-      <p className="text-xs text-neutral-400">
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">
         Identifying prompt is template-managed — edit it (or switch workflow)
         in the <a className="underline" href="#/config/prompts">Prompts
         section</a> below.
@@ -220,13 +213,13 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         />
       </Field>
       {(d.secret_env || []).length > 0 && (
-        <div className="space-y-2">
+        <InstantZone note="secret values store immediately">
           {[...new Set(d.secret_env || [])].map((v) => (
             <SecretField key={v} label={v}
               help={`Delivered to ${name} runs as $${v}. Stored securely — never echoed, never in .env.`}
               refKey={v} checkKind="harness" paste />
           ))}
-        </div>
+        </InstantZone>
       )}
       <SelectionChips label="Skills"
         help={`Skill-store skills installed to ~/${h.skills_dir || ".claude/skills"} inside the Dev container before the agent starts. The catalog lives in the Skills section below.`}
@@ -248,7 +241,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           set("skills", [...cat.filter((n) => next.includes(n)),
                          ...next.filter((n) => !cat.includes(n))]);
         }} />
-      <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
+      <InstantZone className="text-xs" note="credentials store immediately">
         <div className="flex items-center justify-between">
           <span>
             Image <span className="font-mono">{h.docker_image || "?"}</span>
@@ -268,7 +261,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           </p>
         )}
         {!h.oauth_available && (
-          <p className="text-neutral-400">
+          <p className="text-neutral-500 dark:text-neutral-400">
             {d.harness_template} has no device-code OAuth flow — it
             authenticates via a pasted key/token below
             {d.harness_template === "claude-code"
@@ -289,18 +282,62 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               <span>
                 {filePresent(cf.secret_file) ? "✓" : "✗"} file{" "}
                 <span className="font-mono">{cf.secret_file}</span>
-                <span className="text-neutral-400"> → {cf.path_hint}</span>
+                <span className="text-neutral-500 dark:text-neutral-400"> → {cf.path_hint}</span>
               </span>
               <UploadButton devType={name} secretFile={cf.secret_file} onDone={onCredChange} />
             </li>
           ))}
         </ul>
-        <p className="text-neutral-400">
-          Any one ✓ is enough — env keys pass through at dispatch; files are delivered
-          per-run over the runspec channel (stored 0600 under /data/secrets/{name}/).
+        <p className="text-neutral-500 dark:text-neutral-400">
+          Any one ✓ is enough — env keys pass through at dispatch; files are
+          delivered securely to each run (stored 0600 under /data/secrets/{name}/).
         </p>
-      </div>
+      </InstantZone>
     </div>
+  );
+}
+
+// "New Dev Type" dialog: name + harness picked up front — the old flow
+// created "new-dev-###" instantly and made the operator rename it after.
+function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [harness, setHarness] = useState(Object.keys(harnesses)[0] || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const create = async () => {
+    setBusy(true); setErr("");
+    try {
+      await send("POST", "/dev-types", {
+        name: name.trim(), harness_template: harness,
+        identifying_prompt: "", max_concurrency: 1,
+      });
+      onCreated(); onClose();
+    } catch (e) { setErr(String(e.message || e).replace(/^\d+ /, "")); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={busy ? undefined : onClose}>
+      <h4 className="mb-3 text-base font-semibold tracking-tight">New Dev Type</h4>
+      <div className="space-y-3">
+        <Field label="Name" hint="lowercase letters/digits/dashes — e.g. senior-dev">
+          <Input value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && name.trim() && !busy && create()} />
+        </Field>
+        <Field label="Harness template"
+          help="Which coding agent this Dev runs. The Docker image and credential requirements follow it — both can be changed later.">
+          <Select value={harness} onChange={(e) => setHarness(e.target.value)}>
+            {Object.keys(harnesses).map((t) => <option key={t}>{t}</option>)}
+          </Select>
+        </Field>
+        {err && <p className="text-sm text-red-600 dark:text-red-400">✗ {err}</p>}
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button disabled={busy || !name.trim() || !harness} onClick={create}>
+            {busy ? "Creating…" : "Create Dev Type"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -354,7 +391,7 @@ function AddSkillDialog({ onClose, onSaved }) {
   };
 
   return (
-    <Modal className="max-w-2xl">
+    <Modal className="max-w-2xl" onClose={busy ? undefined : onClose}>
       <div className="mb-4 flex items-center justify-between">
         <h4 className="text-base font-semibold tracking-tight">Add skill</h4>
         <div className="flex gap-1 rounded-md bg-stone-100 p-0.5 text-xs dark:bg-neutral-800">
@@ -413,7 +450,7 @@ function AddSkillDialog({ onClose, onSaved }) {
               }} />
           </Field>
           {files.length > 0 && (
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
               {files.length} file(s): {files.map((f) => f.path).join(", ")}
             </p>
           )}
@@ -489,10 +526,17 @@ export default function ConfigPage({ section, onSectionInView }) {
   // skill store catalog (v1): store-listed when Gitea is up, bundled
   // fallback otherwise — `store` says which (and where to edit)
   const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
+  const [skillsErr, setSkillsErr] = useState(false);
   const loadSkills = () =>
-    get("/skills").then(setSkillsCatalog).catch(() => {});
+    get("/skills")
+      .then((r) => { setSkillsCatalog(r); setSkillsErr(false); })
+      .catch(() => setSkillsErr(true));
   useEffect(() => { loadSkills(); }, []);
   const [addSkill, setAddSkill] = useState(false);
+  const [addDev, setAddDev] = useState(false);
+  const [renameFor, setRenameFor] = useState(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameErr, setRenameErr] = useState("");
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
   const [pageErr, setPageErr] = useState("");
@@ -544,7 +588,7 @@ export default function ConfigPage({ section, onSectionInView }) {
     return () => main.removeEventListener("scroll", onScroll);
   }, [loaded]);
 
-  if (!loaded) return <p className="text-sm text-neutral-400">Loading…{loadErr}</p>;
+  if (!loaded) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
@@ -719,7 +763,7 @@ export default function ConfigPage({ section, onSectionInView }) {
         <Field label="Adoption mode"
           help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">
           <div className="flex items-center gap-3 text-sm">
-            <span className={cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-400"}>
+            <span className={cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}>
               opt-in (label required)
             </span>
             <Toggle on={cfg.adoption_mode === "opt_out"} label="Adoption mode"
@@ -728,7 +772,7 @@ export default function ConfigPage({ section, onSectionInView }) {
                   ? guardedFlip("cfg.adoption_mode", "opt_out", "Adopt the ENTIRE team?",
                       ADOPTION_COPY + "\n\n(Drafted now; applies when you Save.)")
                   : setField("cfg.adoption_mode", "opt_in")} />
-            <span className={cfg.adoption_mode === "opt_out" ? "font-semibold" : "text-neutral-400"}>
+            <span className={cfg.adoption_mode === "opt_out" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}>
               opt-out (whole team)
             </span>
           </div>
@@ -740,15 +784,7 @@ export default function ConfigPage({ section, onSectionInView }) {
         actions={
           <>
             <ImmediateBadge text="create/delete apply immediately" />
-            <Button kind="ghost" icon={Plus}
-              onClick={async () => {
-                const name = `new-dev-${Date.now() % 1000}`;
-                await send("POST", "/dev-types", {
-                  name, harness_template: "codex", identifying_prompt: "",
-                  max_concurrency: 1,
-                });
-                reload();
-              }}>
+            <Button kind="ghost" icon={Plus} onClick={() => setAddDev(true)}>
               New Dev Type
             </Button>
           </>
@@ -776,6 +812,7 @@ export default function ConfigPage({ section, onSectionInView }) {
                 });
               }}
               onOAuth={setOauthFor}
+              onRename={(nm) => { setRenameErr(""); setRenameFor(nm); }}
               skillsCatalog={skillsCatalog} />
           ))}
         </div>
@@ -807,7 +844,7 @@ export default function ConfigPage({ section, onSectionInView }) {
           </>
         }>
         {skillsCatalog.store && !skillsCatalog.store.enabled && (
-          <p className="mb-3 text-sm text-neutral-400">
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
             Served from the bundled copies — set GITEA_ADMIN_PASSWORD (bundled
             Gitea) to get the editable skill-store repo.
           </p>
@@ -818,8 +855,16 @@ export default function ConfigPage({ section, onSectionInView }) {
             bundled copies. Runs keep working; store edits are unavailable.
           </p>
         )}
-        {skillsCatalog.skills.length === 0 ? (
-          <p className="text-sm text-neutral-400">No skills found.</p>
+        {skillsErr ? (
+          <p className="text-sm text-red-700 dark:text-red-300">
+            Couldn&apos;t load the skill catalog.{" "}
+            <button type="button" onClick={loadSkills}
+              className="font-medium underline underline-offset-2">
+              Retry
+            </button>
+          </p>
+        ) : skillsCatalog.skills.length === 0 ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">No skills found.</p>
         ) : (
           <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {skillsCatalog.skills.map((s) => (
@@ -838,7 +883,7 @@ export default function ConfigPage({ section, onSectionInView }) {
                 {skillsCatalog.store?.enabled && !s.builtin && (
                   <button type="button"
                     title={`Delete skill ${s.name}`}
-                    className="shrink-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                    className="shrink-0 text-neutral-500 dark:text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
                     onClick={() => setConfirm({
                       title: `Delete skill ${s.name}?`,
                       body: "Removed from the skill store. Dev Types that "
@@ -877,7 +922,7 @@ export default function ConfigPage({ section, onSectionInView }) {
         )}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[32rem] text-sm">
-            <thead className="text-left text-xs uppercase tracking-wide text-neutral-400">
+            <thead className="text-left text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr><th className="py-1">Mission type</th><th>Dev type</th>
                 <th>Extra CLI args (harness-specific)
                   <Help text="Appended to the harness CLI for this mission type, e.g. --max-turns 15. Flags are harness-specific — they rarely survive a dev type change." /></th></tr>
@@ -941,11 +986,9 @@ export default function ConfigPage({ section, onSectionInView }) {
         </div>
         <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
           <strong className="font-medium text-neutral-800 dark:text-neutral-100">Dev container limits:</strong>{" "}
-          Dagu 2.10.5 cannot apply Docker HostConfig CPU/memory/PID limits to Dev
-          containers; <code className="font-mono text-xs">dagu/dags/dev-run.yaml</code>{" "}
-          carries a best-effort <code className="font-mono text-xs">resources.limits</code>{" "}
-          block, and concurrency caps above are the real throttle (docs/07 §7,
-          hard limits are v0.1 backlog).
+          Dagu 2.10.5 cannot apply Docker CPU/memory/PID limits to Dev
+          containers — the concurrency caps above are the effective throttle.
+          Hard per-container limits are planned.
         </div>
         <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
           <strong className="font-medium text-neutral-800 dark:text-neutral-100">Compose restart:</strong>{" "}
@@ -1029,6 +1072,24 @@ export default function ConfigPage({ section, onSectionInView }) {
         onClose={() => { setOauthFor(null); reload(); }} />}
       {addSkill && <AddSkillDialog
         onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
+      {addDev && <NewDevTypeDialog harnesses={harnesses}
+        onClose={() => setAddDev(false)} onCreated={reload} />}
+      <PromptDialog open={!!renameFor}
+        title={`Rename Dev Type "${renameFor}"`}
+        label="New name" initial={renameFor || ""}
+        hint="Renames immediately — config, credentials and prompt templates follow."
+        confirmLabel="Rename" busy={renameBusy} error={renameErr}
+        onConfirm={async (nn) => {
+          if (nn === renameFor) { setRenameFor(null); return; }
+          setRenameBusy(true); setRenameErr("");
+          try {
+            await send("POST", `/dev-types/${renameFor}/rename`, { new_name: nn });
+            setRenameFor(null);
+            await reload();
+          } catch (e) { setRenameErr(String(e.message || e).replace(/^\d+ /, "")); }
+          finally { setRenameBusy(false); }
+        }}
+        onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
     </div>
   );
 }

@@ -1,11 +1,12 @@
-import React, { useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Trash2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { ChevronLeft, ChevronRight, ExternalLink, SquareTerminal, Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Card } from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
 import StatusPill from "../components/StatusPill.jsx";
 import RunTerminal from "../components/RunTerminal.jsx";
+import StageGlyph from "../components/StageGlyph.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
 import { Input } from "../components/Field.jsx";
 import usePoll from "../lib/usePoll.js";
@@ -23,6 +24,11 @@ export default function RunsPage() {
   const [data, setData] = useState({ total: 0, runs: [] });
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState("");
+  const [query, setQuery] = useState("");   // debounced filter — one fetch per pause, not per keystroke
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(filter), 300);
+    return () => clearTimeout(t);
+  }, [filter]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [openRun, setOpenRun] = useState(null);
   const [clearing, setClearing] = useState(false);
@@ -31,11 +37,11 @@ export default function RunsPage() {
 
   const load = () => {
     const q = `/runs?limit=${PAGE}&offset=${offset}` +
-      (filter ? `&mission_key=${encodeURIComponent(filter)}` : "");
+      (query ? `&mission_key=${encodeURIComponent(query)}` : "");
     return get(q).then(setData).catch(() => {});
   };
 
-  usePoll(load, 10000, [offset, filter]);
+  usePoll(load, 10000, [offset, query]);
 
   const doClear = async () => {
     setClearing(true);
@@ -99,16 +105,26 @@ export default function RunsPage() {
       )}
       <Card className="p-4">
         <div className="mb-3 flex items-center gap-3">
-          <Input className="w-64"
-            placeholder="Filter by mission (e.g. DEV-17)"
-            value={filter}
-            onChange={(e) => { setFilter(e.target.value); setOffset(0); }}
-          />
-          <span className="text-xs text-neutral-400">{data.total} runs</span>
+          <span className="relative">
+            <Input className="w-64 pr-7"
+              placeholder="Filter by mission (e.g. DEV-17)"
+              aria-label="Filter runs by mission key"
+              value={filter}
+              onChange={(e) => { setFilter(e.target.value); setOffset(0); }}
+            />
+            {filter && (
+              <button type="button" aria-label="Clear filter"
+                onClick={() => { setFilter(""); setOffset(0); }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                ✕
+              </button>
+            )}
+          </span>
+          <span className="text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
           <span className="grow" />
           <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
             onClick={() => setOffset(Math.max(0, offset - PAGE))}>newer</Button>
-          <span className="text-xs tabular-nums text-neutral-400">
+          <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
             {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}
           </span>
           <Button kind="ghost" size="sm" disabled={offset + PAGE >= data.total}
@@ -118,7 +134,7 @@ export default function RunsPage() {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[42rem] text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-neutral-400">
+            <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr>
                 <th className="py-1.5 pr-3">run</th>
                 <th className="pr-3">mission</th>
@@ -130,7 +146,7 @@ export default function RunsPage() {
             </thead>
             <tbody>
               {data.runs.length === 0 && (
-                <tr><td colSpan={6} className="py-6 text-center text-sm text-neutral-400">
+                <tr><td colSpan={6} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
                   No runs{filter ? " match this filter" : " yet"}.
                 </td></tr>
               )}
@@ -139,7 +155,16 @@ export default function RunsPage() {
                   title="Click to open the run terminal"
                   className="cursor-pointer border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
                   <td className="max-w-[18rem] py-2 pr-3">
-                    <span className="font-mono text-xs">{r.run_id}</span>
+                    <span className="flex items-center gap-2">
+                      {r.mission_type && <StageGlyph stage={r.mission_type} />}
+                      <button type="button"
+                        onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
+                        title="Open the run terminal"
+                        className="inline-flex items-center gap-1.5 rounded font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
+                        <SquareTerminal size={12} className="shrink-0 text-neutral-500 dark:text-neutral-400" aria-hidden />
+                        {r.run_id}
+                      </button>
+                    </span>
                     {(r.error || r.verdict) && (
                       <span
                         title={r.error || r.verdict}
@@ -163,7 +188,7 @@ export default function RunsPage() {
                           </span>
                         )}
                       </span>
-                    ) : <span className="text-xs text-neutral-400">—</span>}
+                    ) : <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>}
                   </td>
                   <td className="pr-3"><StatusPill state={r.state} verdict={r.verdict} /></td>
                   <td className="whitespace-nowrap pr-3 text-xs text-neutral-500 dark:text-neutral-400"
@@ -195,7 +220,7 @@ export default function RunsPage() {
           "This wipes local run records, stops any in-flight Devs, deletes Dagu " +
           "execution history, and empties OpenObserve logs and traces.\n\n" +
           "Config, credentials, and everything in your PMO and forge are " +
-          "untouched. Attempt counters reset (INV-1).\n\n" +
+          "untouched. Every mission's retry count starts fresh.\n\n" +
           "This cannot be undone."
         }
         confirmLabel="Clear everything"

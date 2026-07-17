@@ -63,7 +63,8 @@ export default function RunTerminal({ run, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
       onClick={onClose}>
-      <div className="flex h-[75vh] w-full max-w-5xl flex-col overflow-hidden rounded-card border border-neutral-700 bg-neutral-950 shadow-2xl"
+      <div role="dialog" aria-modal="true" aria-label={`Run terminal ${run.run_id}`}
+        className="flex h-[75vh] w-full max-w-5xl flex-col overflow-hidden rounded-card border border-neutral-700 bg-neutral-950 shadow-2xl"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
           <span className="h-3 w-3 rounded-full bg-red-500" />

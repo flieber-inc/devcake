@@ -1,6 +1,7 @@
 import React from "react";
 import { TriangleAlert, CircleCheck, CircleX } from "lucide-react";
 import Button from "./Button.jsx";
+import { Overlay } from "./Modal.jsx";
 import { GROUP_ORDER } from "../lib/configLabels.js";
 
 function Row({ row }) {
@@ -34,8 +35,8 @@ export default function SaveReviewDialog({ open, rows, busy, results, onConfirm,
   const failed = results && Object.entries(results).filter(([, r]) => !r.ok);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]">
-      <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-card border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+    <Overlay className="flex max-h-[85vh] max-w-2xl flex-col"
+      onDismiss={busy ? undefined : onCancel}>
         <div className="border-b border-neutral-100 px-6 py-4 dark:border-neutral-800">
           <h4 className="text-base font-semibold tracking-tight">
             {results ? "Save results" : `Review ${rows.length} change${rows.length > 1 ? "s" : ""}`}
@@ -61,7 +62,7 @@ export default function SaveReviewDialog({ open, rows, busy, results, onConfirm,
               ))}
               {groups.map((g) => (
                 <div key={g} className="mb-2">
-                  <p className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">{g}</p>
+                  <p className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{g}</p>
                   <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
                     {plain.filter((r) => r.group === g).map((r) => <Row key={r.path} row={r} />)}
                   </div>
@@ -108,7 +109,6 @@ export default function SaveReviewDialog({ open, rows, busy, results, onConfirm,
             </>
           )}
         </div>
-      </div>
-    </div>
+    </Overlay>
   );
 }

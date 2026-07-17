@@ -19,7 +19,7 @@ export default function DirtyBar({ count, errors, saved, onDiscard, onSave }) {
     <div className="sticky bottom-4 z-30 mx-auto flex w-full max-w-2xl flex-col gap-1.5 rounded-card border border-neutral-300 bg-white/95 px-4 py-3 shadow-xl backdrop-blur dark:border-neutral-700 dark:bg-neutral-900/95">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm font-semibold">
-          Unsaved changes <span className="tabular-nums text-neutral-400">({count})</span>
+          Unsaved changes <span className="tabular-nums text-neutral-500 dark:text-neutral-400">({count})</span>
         </span>
         <span className="grow" />
         <Button kind="ghost" onClick={onDiscard}>Discard changes</Button>

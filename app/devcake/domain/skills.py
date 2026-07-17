@@ -18,7 +18,7 @@ from __future__ import annotations
 import base64
 import logging
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import yaml
@@ -33,6 +33,18 @@ MAX_TOTAL_BYTES = 1024 * 1024  # per-run payload cap → later files dropped
 # of re-fetching per mission. Operator edits reach new runs within ~TTL.
 CACHE_TTL_SECONDS = 30.0
 _CACHE_BYTES_MAX = 4 * MAX_TOTAL_BYTES   # bound on cached file bytes
+# same shape as the DevType.skills validator in config.py (kept in sync by
+# test_skills — a name that saves here must be selectable there)
+SKILL_NAME_RE = r"[a-z0-9][a-z0-9_-]{0,63}"
+
+
+class SkillStoreError(Exception):
+    """Authoring-surface refusal, carrying the HTTP status the API maps it
+    to: 404 unknown, 409 exists, 422 invalid, 503 store disabled."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
 
 
 def parse_frontmatter(text: str) -> dict:
@@ -54,6 +66,9 @@ class SkillInfo(BaseModel):
     description: str = ""
     source: Literal["store", "builtin"]
     files: int = 1
+    # shipped in the app image: re-seeds at boot, so it can be edited but
+    # never deleted — the UI offers delete only when this is False
+    builtin: bool = False
 
 
 class SkillService:
@@ -122,6 +137,7 @@ class SkillService:
                 "html_url": ""}
         try:
             paths = {t["path"] for t in await self._store_tree()}
+            builtin_names = set(self._builtin_skills())
             skills = []
             for name in sorted({p.split("/", 1)[0] for p in paths if "/" in p}):
                 if f"{name}/SKILL.md" not in paths:
@@ -132,7 +148,8 @@ class SkillService:
                     name=name,
                     description=str(parse_frontmatter(text).get("description", "")),
                     source="store",
-                    files=sum(1 for p in paths if p.startswith(f"{name}/"))))
+                    files=sum(1 for p in paths if p.startswith(f"{name}/")),
+                    builtin=name in builtin_names))
             return skills, {"enabled": True, "ok": True, "detail": "",
                             "html_url": self.forge.skill_store_url()}
         except Exception as e:
@@ -149,8 +166,121 @@ class SkillService:
             out.append(SkillInfo(
                 name=name,
                 description=str(parse_frontmatter(text).get("description", "")),
-                source="builtin", files=len(files)))
+                source="builtin", files=len(files), builtin=True))
         return out
+
+    # ── authoring (admin UI: create / import / delete — docs/11) ────────────
+
+    def compose_skill(self, name: str, description: str, body: str) -> list[dict]:
+        """The single-file skill the 'Add skill' form produces: frontmatter
+        is GENERATED (yaml.safe_dump — a colon in the description must not
+        break parsing), so the operator never touches YAML."""
+        fm = yaml.safe_dump(
+            {"name": name, "description": description,
+             "metadata": {"source": "operator (admin panel)"}},
+            sort_keys=False, allow_unicode=True).strip()
+        text = f"---\n{fm}\n---\n\n{body.strip()}\n"
+        return [{"path": "SKILL.md",
+                 "content_b64": base64.b64encode(text.encode()).decode()}]
+
+    def validate_import(self, files: list[dict]) -> str:
+        """Import pre-flight: the uploaded files must contain a root
+        SKILL.md whose frontmatter carries a valid name + description.
+        Returns the skill name; raises SkillStoreError(422) otherwise."""
+        import re
+        skill_md = next((f for f in files or []
+                         if f.get("path") == "SKILL.md"), None)
+        if skill_md is None:
+            raise SkillStoreError(422, "the upload needs a SKILL.md at the "
+                                       "top level of the skill")
+        try:
+            text = base64.b64decode(skill_md.get("content_b64") or "",
+                                    validate=True).decode("utf-8")
+        except Exception:
+            raise SkillStoreError(422, "SKILL.md is not valid base64/UTF-8")
+        fm = parse_frontmatter(text)
+        name = str(fm.get("name") or "")
+        if not re.fullmatch(SKILL_NAME_RE, name):
+            raise SkillStoreError(
+                422, f"SKILL.md frontmatter name {name!r} is missing or "
+                     "invalid — lowercase alnum with - or _, ≤64 chars")
+        if not str(fm.get("description") or "").strip():
+            raise SkillStoreError(
+                422, "SKILL.md frontmatter needs a description — it is what "
+                     "tells the agent when to use the skill")
+        return name
+
+    async def save_skill(self, name: str, files: list[dict],
+                         overwrite: bool = False) -> None:
+        """Write one skill into the store (paths arrive relative to the
+        skill dir, are re-validated, and land under {name}/). Collisions —
+        with a store skill OR a built-in name — need explicit overwrite."""
+        import re
+        if self.forge is None:
+            raise SkillStoreError(503, "the skill store needs the bundled "
+                                       "Gitea (GITEA_ADMIN_PASSWORD unset)")
+        if not re.fullmatch(SKILL_NAME_RE, name):
+            raise SkillStoreError(422, f"invalid skill name {name!r}")
+        if not any(f.get("path") == "SKILL.md" for f in files or []):
+            raise SkillStoreError(422, "a skill needs a SKILL.md")
+        total = 0
+        prefixed = []
+        for f in files:
+            rel = PurePosixPath(f.get("path") or "")
+            if not rel.parts or rel.is_absolute() or ".." in rel.parts:
+                raise SkillStoreError(422, f"unsafe path {f.get('path')!r}")
+            try:
+                data = base64.b64decode(f.get("content_b64") or "",
+                                        validate=True)
+            except Exception:
+                raise SkillStoreError(422, f"{rel}: not valid base64")
+            if len(data) > MAX_FILE_BYTES:
+                raise SkillStoreError(422, f"{rel} exceeds the "
+                                           f"{MAX_FILE_BYTES}-byte file cap")
+            total += len(data)
+            prefixed.append({"path": f"{name}/{rel.as_posix()}",
+                             "content_b64": f["content_b64"]})
+        if total > MAX_TOTAL_BYTES:
+            raise SkillStoreError(422, f"skill exceeds the "
+                                       f"{MAX_TOTAL_BYTES}-byte total cap")
+        if not overwrite:
+            try:
+                existing = {t["path"] for t in await self._store_tree()}
+            except Exception as e:
+                raise SkillStoreError(503, f"skill store unreachable: {e}")
+            if (f"{name}/SKILL.md" in existing
+                    or name in self._builtin_skills()):
+                raise SkillStoreError(
+                    409, f"skill {name!r} already exists — confirm overwrite "
+                         "to replace it")
+        await self.forge.write_skill_files(
+            prefixed, f"devcake admin: save skill {name}")
+        self._invalidate()
+
+    async def delete_skill(self, name: str) -> None:
+        """Remove an operator skill from the store. Built-ins are refused —
+        they re-seed at boot; deselecting them is the retirement path."""
+        if self.forge is None:
+            raise SkillStoreError(503, "the skill store needs the bundled "
+                                       "Gitea (GITEA_ADMIN_PASSWORD unset)")
+        if name in self._builtin_skills():
+            raise SkillStoreError(
+                422, f"{name!r} is a built-in skill — it re-seeds at boot; "
+                     "deselect it on Dev Types instead")
+        try:
+            paths = [t["path"] for t in await self._store_tree()
+                     if t["path"].startswith(f"{name}/")]
+        except Exception as e:
+            raise SkillStoreError(503, f"skill store unreachable: {e}")
+        if not paths:
+            raise SkillStoreError(404, f"skill {name!r} is not in the store")
+        await self.forge.delete_skill_paths(
+            paths, f"devcake admin: delete skill {name}")
+        self._invalidate()
+
+    def _invalidate(self) -> None:
+        self._tree = None
+        self._file_bytes.clear()
 
     # ── dispatch attach ──────────────────────────────────────────────────────
 

@@ -33,9 +33,13 @@ name + description load into every session, the body only on activation.
 
 ## Adding / editing skills
 
-Push straight to `main` of this repo (the Gitea UI works). Changes take
-effect on the next dispatched run — no restart needed. The admin panel's
-Skills section lists what the store currently serves.
+Easiest: the DevCake admin panel → Config → **Skills** → **Add skill**
+(write a name + description + instructions, or upload skill files) — no
+Gitea login and no YAML required.
+
+Or push straight to `main` of this repo (the Gitea UI works). Either way
+changes take effect on the next dispatched run — no restart needed. The
+admin panel's Skills section lists what the store currently serves.
 
 ## Re-seeding
 

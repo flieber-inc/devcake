@@ -337,12 +337,39 @@ class GiteaProvisioner:
                         "cap) — skills past the boundary will read as "
                         "missing; prune the %s/%s repo",
                         OPERATOR_ORG, SKILL_REPO)
-        return [{"path": t["path"], "size": int(t.get("size") or 0)}
+        return [{"path": t["path"], "size": int(t.get("size") or 0),
+                 "sha": t.get("sha") or ""}
                 for t in data.get("tree") or [] if t.get("type") == "blob"]
 
     async def skill_store_paths(self) -> list[str]:
         """Blob paths on main (seed-diff input) — the tree read above."""
         return [t["path"] for t in await self.skill_store_tree()]
+
+    async def write_skill_files(self, files: list[dict], message: str) -> None:
+        """Upsert store files in ONE commit (admin-panel authoring). The
+        batch contents API needs the blob sha on updates and refuses one on
+        creates, so the current tree decides per path."""
+        shas = {t["path"]: t["sha"] for t in await self.skill_store_tree()}
+        batch = []
+        for f in files:
+            entry = {"path": f["path"], "content": f["content_b64"]}
+            if f["path"] in shas:
+                entry.update(operation="update", sha=shas[f["path"]])
+            else:
+                entry["operation"] = "create"
+            batch.append(entry)
+        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
+                        json={"message": message, "files": batch})
+
+    async def delete_skill_paths(self, paths: list[str], message: str) -> None:
+        """Delete store files in ONE commit (admin-panel skill removal)."""
+        shas = {t["path"]: t["sha"] for t in await self.skill_store_tree()}
+        batch = [{"operation": "delete", "path": p, "sha": shas[p]}
+                 for p in paths if p in shas]
+        if not batch:
+            return
+        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
+                        json={"message": message, "files": batch})
 
     async def skill_store_file(self, path: str) -> bytes:
         """Raw bytes of one store file at main (GiteaForge.file_content's

@@ -34,7 +34,7 @@ from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
 from ..domain.forge_runtime import ForgeRuntime
 from ..domain.reconcile import reconcile_runs
 from ..domain.runs import RunManager
-from ..domain.skills import SkillService
+from ..domain.skills import SkillService, SkillStoreError
 from ..domain.watchdog import watchdog_loop
 from ..harness import HARNESSES, dev_type_status
 from ..ports.forge import mission_branch
@@ -1240,6 +1240,51 @@ async def list_skills():
     to edit)."""
     skills, store_status = await skill_service.list_skills()
     return {"skills": [s.model_dump() for s in skills], "store": store_status}
+
+
+@app.post("/api/v1/skills")
+async def create_skill(body: dict):
+    """'Add skill' form (docs/11): name + trigger description + markdown
+    body. Frontmatter is generated app-side — the operator never touches
+    YAML. 409 on collision unless overwrite is set."""
+    name = str(body.get("name") or "").strip()
+    description = str(body.get("description") or "").strip()
+    md = str(body.get("body") or "").strip()
+    if not (name and description and md):
+        raise HTTPException(422, "name, description and instructions are "
+                                 "all required")
+    try:
+        await skill_service.save_skill(
+            name, skill_service.compose_skill(name, description, md),
+            overwrite=bool(body.get("overwrite")))
+    except SkillStoreError as e:
+        raise HTTPException(e.status, str(e))
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/v1/skills/import")
+async def import_skill(body: dict):
+    """Import an uploaded skill: files = [{path, content_b64}] relative to
+    the skill dir, one of them SKILL.md — the name comes from its
+    frontmatter. 409 on collision unless overwrite is set."""
+    files = body.get("files") or []
+    try:
+        name = skill_service.validate_import(files)
+        await skill_service.save_skill(name, files,
+                                       overwrite=bool(body.get("overwrite")))
+    except SkillStoreError as e:
+        raise HTTPException(e.status, str(e))
+    return {"ok": True, "name": name}
+
+
+@app.delete("/api/v1/skills/{name}")
+async def delete_skill_endpoint(name: str):
+    """Remove an operator skill (built-ins refuse — they re-seed at boot)."""
+    try:
+        await skill_service.delete_skill(name)
+    except SkillStoreError as e:
+        raise HTTPException(e.status, str(e))
+    return {"ok": True}
 
 
 @app.post("/api/v1/skills/sync")

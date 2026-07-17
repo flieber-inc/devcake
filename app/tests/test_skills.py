@@ -90,6 +90,7 @@ def test_list_skills_builtin_fallback_without_forge(tmp_path):
     assert [(s.name, s.source, s.files) for s in skills] == [
         ("pr-hygiene", "builtin", 1), ("tdd", "builtin", 2)]
     assert skills[1].description == "Test-first discipline"
+    assert all(s.builtin for s in skills)
     assert store["enabled"] is False and store["ok"] is False
 
 
@@ -132,6 +133,10 @@ def test_list_skills_from_store(tmp_path):
     assert [(s.name, s.source, s.files) for s in skills] == [
         ("custom", "store", 1), ("tdd", "store", 2)]
     assert skills[1].description == "Store copy"
+    # builtin marks skills shipped in the image (they re-seed at boot, so
+    # the UI must offer delete only for the others)
+    assert [(s.name, s.builtin) for s in skills] == [
+        ("custom", False), ("tdd", True)]
     assert store == {"enabled": True, "ok": True, "detail": "",
                      "html_url": forge.skill_store_url()}
 
@@ -197,6 +202,130 @@ def test_payload_oversized_file_skipped_without_fetching(tmp_path):
     # the cap must be enforced from the tree's size field BEFORE download —
     # an oversized store file must never be pulled into app memory
     assert forge.file_calls == ["big/SKILL.md"]
+
+
+# ── authoring: compose / import-validate / save / delete (admin UI flow) ─────
+
+def _fake_writable_forge(files=None):
+    """_FakeForge + the write/delete surface save_skill/delete_skill use."""
+    forge = _FakeForge(files)
+    forge.writes, forge.deletes = [], []
+
+    async def write_skill_files(fs, message):
+        import base64 as b
+        forge.writes.append((fs, message))
+        for f in fs:
+            forge.files[f["path"]] = b.b64decode(f["content_b64"])
+
+    async def delete_skill_paths(paths, message):
+        forge.deletes.append((paths, message))
+        for p in paths:
+            forge.files.pop(p, None)
+
+    forge.write_skill_files = write_skill_files
+    forge.delete_skill_paths = delete_skill_paths
+    return forge
+
+
+def test_compose_skill_builds_parseable_frontmatter(tmp_path):
+    from devcake.domain.skills import SkillService, parse_frontmatter
+    import base64
+    svc = SkillService(builtin_dir=tmp_path / "none")
+    files = svc.compose_skill("my-skill", "Reviews SQL migrations: use when editing schema files.",
+                              "# SQL reviews\n\nAlways check for locks.")
+    assert [f["path"] for f in files] == ["SKILL.md"]
+    text = base64.b64decode(files[0]["content_b64"]).decode()
+    fm = parse_frontmatter(text)
+    assert fm["name"] == "my-skill"
+    assert fm["description"].startswith("Reviews SQL migrations")
+    assert "Always check for locks." in text
+
+
+def test_validate_import_extracts_name_and_checks(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    import base64
+    import pytest as _pytest
+    svc = SkillService(builtin_dir=tmp_path / "none")
+    good = [{"path": "SKILL.md", "content_b64": base64.b64encode(
+        b"---\nname: imported\ndescription: An imported skill\n---\nbody").decode()},
+        {"path": "refs/extra.md", "content_b64": base64.b64encode(b"x").decode()}]
+    assert svc.validate_import(good) == "imported"
+
+    def _err(files, fragment):
+        with _pytest.raises(SkillStoreError) as e:
+            svc.validate_import(files)
+        assert fragment in str(e.value)
+
+    _err([{"path": "notes.md", "content_b64": "eA=="}], "SKILL.md")
+    _err([{"path": "SKILL.md", "content_b64": base64.b64encode(
+        b"---\nname: BAD NAME\ndescription: d\n---\n").decode()}], "name")
+    _err([{"path": "SKILL.md", "content_b64": base64.b64encode(
+        b"---\nname: ok-name\n---\n").decode()}], "description")
+    _err([{"path": "SKILL.md", "content_b64": "!!!"}], "base64")
+
+
+def test_save_skill_writes_prefixed_and_guards_collisions(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    import pytest as _pytest
+    forge = _fake_writable_forge({"existing/SKILL.md": b"---\nname: existing\n---\n"})
+    svc = SkillService(internal_forge=forge, builtin_dir=_builtin_tree(tmp_path))
+    files = svc.compose_skill("fresh", "A new skill", "body")
+    _run(svc.save_skill("fresh", files))
+    written, message = forge.writes[-1]
+    assert [f["path"] for f in written] == ["fresh/SKILL.md"]
+    assert "fresh" in message
+    # collision guards: existing store skill AND builtin names need overwrite
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.save_skill("existing", files))
+    assert e.value.status == 409
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.save_skill("tdd", files))          # tdd is builtin
+    assert e.value.status == 409
+    _run(svc.save_skill("existing", svc.compose_skill("existing", "d", "b"),
+                        overwrite=True))            # explicit overwrite is fine
+    # unsafe paths refused
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.save_skill("fresh2", [{"path": "../evil.md", "content_b64": "eA=="}]))
+    assert e.value.status == 422
+    # a skill payload must contain SKILL.md
+    with _pytest.raises(SkillStoreError):
+        _run(svc.save_skill("fresh3", [{"path": "notes.md", "content_b64": "eA=="}]))
+
+
+def test_save_skill_requires_store_and_invalidates_cache(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    import pytest as _pytest
+    svc = SkillService(builtin_dir=tmp_path / "none")   # no forge
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.save_skill("x", svc.compose_skill("x", "d", "b")))
+    assert e.value.status == 503
+
+    forge = _fake_writable_forge()
+    svc2 = SkillService(internal_forge=forge, builtin_dir=tmp_path / "none")
+    assert _run(svc2.list_skills())[0] == []            # warms the cache
+    _run(svc2.save_skill("x", svc2.compose_skill("x", "described", "b")))
+    names = [s.name for s in _run(svc2.list_skills())[0]]
+    assert names == ["x"]                               # cache was invalidated
+
+
+def test_delete_skill_guards_and_deletes(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    import pytest as _pytest
+    forge = _fake_writable_forge({
+        "custom/SKILL.md": b"---\nname: custom\ndescription: d\n---\n",
+        "custom/refs/x.md": b"x",
+        "tdd/SKILL.md": b"store copy of a builtin"})
+    svc = SkillService(internal_forge=forge, builtin_dir=_builtin_tree(tmp_path))
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.delete_skill("tdd"))                   # builtin: re-seeds at boot
+    assert e.value.status == 422
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.delete_skill("nope"))
+    assert e.value.status == 404
+    _run(svc.delete_skill("custom"))
+    paths, _msg = forge.deletes[-1]
+    assert sorted(paths) == ["custom/SKILL.md", "custom/refs/x.md"]
+    assert [s.name for s in _run(svc.list_skills())[0] if s.name == "custom"] == []
 
 
 # ── dispatch attach (_skill_payload; claude-code only in v1) ─────────────────

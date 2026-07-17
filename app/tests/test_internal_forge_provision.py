@@ -84,7 +84,8 @@ def _seed_files():
 
 def _tree_response(paths, truncated=False):
     return httpx.Response(200, json={
-        "tree": [{"path": p, "type": "blob", "size": 42} for p in paths],
+        "tree": [{"path": p, "type": "blob", "size": 42, "sha": f"sha-{p}"}
+                 for p in paths],
         "truncated": truncated})
 
 
@@ -177,9 +178,40 @@ def test_skill_store_tree_sizes_and_truncation_warning(tmp_path, monkeypatch, ca
     prov = _prov(handler, tmp_path, monkeypatch)
     with caplog.at_level(logging.WARNING, logger="devcake.internal_forge"):
         tree = run_coro(prov.skill_store_tree())
-    assert tree == [{"path": "README.md", "size": 42},
-                    {"path": "tdd/SKILL.md", "size": 42}]
+    assert tree == [
+        {"path": "README.md", "size": 42, "sha": "sha-README.md"},
+        {"path": "tdd/SKILL.md", "size": 42, "sha": "sha-tdd/SKILL.md"}]
     assert any("TRUNCATED" in r.message for r in caplog.records)
+
+
+def test_write_skill_files_create_vs_update(tmp_path, monkeypatch):
+    """The batch contents API needs the blob sha for updates but must NOT
+    send one for creates — Gitea 422s on either mismatch."""
+    rec = _StoreRecorder(existing_paths=["custom/SKILL.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.write_skill_files([
+        {"path": "custom/SKILL.md", "content_b64": "QQ=="},
+        {"path": "custom/new.md", "content_b64": "Qg=="},
+    ], "devcake admin: save skill custom"))
+    body = rec.contents_batches[0]
+    ops = {f["path"]: f for f in body["files"]}
+    assert ops["custom/SKILL.md"]["operation"] == "update"
+    assert ops["custom/SKILL.md"]["sha"] == "sha-custom/SKILL.md"
+    assert ops["custom/new.md"]["operation"] == "create"
+    assert "sha" not in ops["custom/new.md"]
+    assert body["message"] == "devcake admin: save skill custom"
+
+
+def test_delete_skill_paths_sends_shas(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=["custom/SKILL.md", "custom/x.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.delete_skill_paths(
+        ["custom/SKILL.md", "custom/x.md"], "devcake admin: delete skill custom"))
+    body = rec.contents_batches[0]
+    assert all(f["operation"] == "delete" for f in body["files"])
+    assert {f["sha"] for f in body["files"]} == {
+        "sha-custom/SKILL.md", "sha-custom/x.md"}
+    assert "content" not in body["files"][0]
 
 
 def test_skill_store_paths_empty_repo_returns_empty(tmp_path, monkeypatch):

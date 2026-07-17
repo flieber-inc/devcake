@@ -71,9 +71,18 @@ class InternalForgePort(Protocol):
         ...
 
     async def skill_store_tree(self) -> list[dict]:
-        """[{path, size}] blobs on the store's main branch ([] when
+        """[{path, size, sha}] blobs on the store's main branch ([] when
         absent/empty) — sizes let the SkillService enforce its payload
-        caps before downloading any content."""
+        caps before downloading any content; shas drive batch upserts."""
+        ...
+
+    async def write_skill_files(self, files: list[dict], message: str) -> None:
+        """Upsert [{path, content_b64}] into the store in one commit
+        (admin-panel authoring: create + import + overwrite)."""
+        ...
+
+    async def delete_skill_paths(self, paths: list[str], message: str) -> None:
+        """Delete store paths in one commit (admin-panel skill removal)."""
         ...
 
     async def skill_store_file(self, path: str) -> bytes:

@@ -6,7 +6,7 @@ import { Section } from "../components/Card.jsx";
 import { Field, Help, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
-import { ConfirmDialog } from "../components/Modal.jsx";
+import { ConfirmDialog, Modal } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SelectionChips from "../components/SelectionChips.jsx";
@@ -286,6 +286,129 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
   );
 }
 
+// ── skill authoring (docs/11 Skills section) ─────────────────────────────────
+
+// browser-safe base64 for uploaded files (chunked — a spread over a large
+// Uint8Array overflows the call stack)
+async function fileToB64(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let s = "";
+  for (let i = 0; i < buf.length; i += 0x8000)
+    s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+// "Add skill" dialog: Write (name + trigger + markdown; the app generates
+// the frontmatter — the operator never sees YAML) or Import (upload a
+// SKILL.md + optional supporting files). 409 flips into an explicit
+// overwrite confirmation instead of silently replacing.
+function AddSkillDialog({ onClose, onSaved }) {
+  const [mode, setMode] = useState("write");
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [body, setBody] = useState("");
+  const [files, setFiles] = useState([]);      // [{path, content_b64}]
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [askOverwrite, setAskOverwrite] = useState(false);
+
+  const canSubmit = mode === "write"
+    ? name.trim() && desc.trim() && body.trim()
+    : files.length > 0;
+
+  const submit = async (overwrite) => {
+    setBusy(true); setErr("");
+    try {
+      if (mode === "write")
+        await send("POST", "/skills",
+          { name: name.trim(), description: desc.trim(), body, overwrite });
+      else
+        await send("POST", "/skills/import", { files, overwrite });
+      onSaved(); onClose();
+    } catch (e) {
+      const msg = String(e.message || e);
+      setAskOverwrite(msg.startsWith("409"));
+      setErr(msg.replace(/^\d+ /, ""));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal className="max-w-2xl">
+      <div className="mb-4 flex items-center justify-between">
+        <h4 className="text-base font-semibold tracking-tight">Add skill</h4>
+        <div className="flex gap-1 rounded-md bg-stone-100 p-0.5 text-xs dark:bg-neutral-800">
+          {[["write", "Write"], ["import", "Import files"]].map(([m, l]) => (
+            <button key={m} type="button"
+              onClick={() => { setMode(m); setErr(""); setAskOverwrite(false); }}
+              className={`rounded px-2.5 py-1 font-medium transition ${
+                mode === m ? "bg-white shadow-sm dark:bg-neutral-700"
+                           : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === "write" ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Name" hint="lowercase, - or _ (e.g. release-notes)">
+              <Input value={name} onChange={(e) => setName(e.target.value)}
+                placeholder="my-skill" />
+            </Field>
+            <Field label="When should the agent use it?"
+              hint="this description is the trigger — be specific">
+              <Input value={desc} onChange={(e) => setDesc(e.target.value)}
+                placeholder="Writes release notes: use when a release is being prepared." />
+            </Field>
+          </div>
+          <Field label="Instructions (markdown)">
+            <Textarea rows={10} value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder={"# Release notes\n\nStep-by-step guidance the agent should follow…"} />
+          </Field>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Skill files"
+            hint="select the skill's SKILL.md (plus any supporting files) — the name comes from its frontmatter">
+            <input type="file" multiple
+              className="block w-full text-sm text-neutral-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:file:bg-neutral-800"
+              onChange={async (e) => {
+                setErr(""); setAskOverwrite(false);
+                const fs = [];
+                for (const f of e.target.files)
+                  fs.push({ path: f.name, content_b64: await fileToB64(f) });
+                setFiles(fs);
+              }} />
+          </Field>
+          {files.length > 0 && (
+            <p className="text-xs text-neutral-400">
+              {files.length} file(s): {files.map((f) => f.path).join(", ")}
+            </p>
+          )}
+        </div>
+      )}
+      {err && (
+        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          {err}
+        </p>
+      )}
+      <div className="mt-5 flex justify-end gap-2">
+        <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+        {askOverwrite ? (
+          <Button kind="danger" disabled={busy} onClick={() => submit(true)}>
+            {busy ? "Working…" : "Overwrite existing skill"}
+          </Button>
+        ) : (
+          <Button disabled={busy || !canSubmit} onClick={() => submit(false)}>
+            {busy ? "Working…" : "Save to store"}
+          </Button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ── the page ─────────────────────────────────────────────────────────────────
 
 // Repo-flavored SelectionChips (PMO repo set + reference repos, v0.1.2):
@@ -338,6 +461,7 @@ export default function ConfigPage({ section, onSectionInView }) {
   const loadSkills = () =>
     get("/skills").then(setSkillsCatalog).catch(() => {});
   useEffect(() => { loadSkills(); }, []);
+  const [addSkill, setAddSkill] = useState(false);
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
   const [pageErr, setPageErr] = useState("");
@@ -630,6 +754,11 @@ export default function ConfigPage({ section, onSectionInView }) {
         description="Claude Code skills Devs can use — reusable expertise installed into the agent session. Select them per Dev Type above."
         actions={
           <>
+            {skillsCatalog.store?.enabled && (
+              <Button kind="ghost" icon={Plus} onClick={() => setAddSkill(true)}>
+                Add skill
+              </Button>
+            )}
             {skillsCatalog.store?.enabled && skillsCatalog.store?.html_url && (
               <a className="text-sm underline" target="_blank" rel="noreferrer"
                 href={skillsCatalog.store.html_url}>
@@ -674,6 +803,30 @@ export default function ConfigPage({ section, onSectionInView }) {
                     : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
                   {s.source === "store" ? "store" : "bundled"}
                 </span>
+                {/* built-ins re-seed at boot — only operator skills delete */}
+                {skillsCatalog.store?.enabled && !s.builtin && (
+                  <button type="button"
+                    title={`Delete skill ${s.name}`}
+                    className="shrink-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                    onClick={() => setConfirm({
+                      title: `Delete skill ${s.name}?`,
+                      body: "Removed from the skill store. Dev Types that "
+                        + "selected it keep the name (⚠) but the skill is "
+                        + "skipped at dispatch until re-added.",
+                      confirmLabel: "Delete",
+                      action: async () => {
+                        try {
+                          await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
+                          await loadSkills();
+                        } catch (e) {
+                          setPageErr(`skill delete failed: ${String(e.message || e)}`);
+                        }
+                        setConfirm(null);
+                      },
+                    })}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -843,6 +996,8 @@ export default function ConfigPage({ section, onSectionInView }) {
         onCancel={() => setConfirm(null)} />
       {oauthFor && <OAuthWizard devType={oauthFor}
         onClose={() => { setOauthFor(null); reload(); }} />}
+      {addSkill && <AddSkillDialog
+        onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
     </div>
   );
 }

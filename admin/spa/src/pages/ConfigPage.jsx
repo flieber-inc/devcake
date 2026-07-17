@@ -9,6 +9,7 @@ import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
+import SelectionChips from "../components/SelectionChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
@@ -209,55 +210,26 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
             set("mcp_setup_commands", e.target.value.split("\n").filter(Boolean))}
         />
       </Field>
-      <Field label="Skills"
+      <SelectionChips label="Skills"
         help="Skill-store skills installed to ~/.claude/skills inside the Dev container before the agent starts. The catalog lives in the Skills section below."
-        hint={d.harness_template !== "claude-code"
-          ? "Skills run on the claude-code harness only in this version."
-          : undefined}>
-        {d.harness_template === "claude-code" ? (
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {(skillsCatalog?.skills || []).map((s) => (
-              <label key={s.name} className="flex items-center gap-1.5 text-sm"
-                title={s.description || undefined}>
-                <input type="checkbox"
-                  checked={(d.skills || []).includes(s.name)}
-                  onChange={(e) => {
-                    // write back in CATALOG order (unknown names last):
-                    // uncheck-then-recheck must not surface a reorder-only
-                    // dirty diff (diffLeaves compares arrays order-sensitively)
-                    const next = e.target.checked
-                      ? [...(d.skills || []), s.name]
-                      : (d.skills || []).filter((n) => n !== s.name);
-                    const cat = (skillsCatalog?.skills || []).map((c) => c.name);
-                    set("skills", [...cat.filter((n) => next.includes(n)),
-                                   ...next.filter((n) => !cat.includes(n))]);
-                  }} />
-                <span className="font-mono">{s.name}</span>
-              </label>
-            ))}
-            {(d.skills || [])
-              .filter((n) => !(skillsCatalog?.skills || []).some((s) => s.name === n))
-              .map((n) => (
-                <label key={n} title="not in the skill store — will be skipped at dispatch"
-                  className="flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
-                  <input type="checkbox" checked
-                    onChange={() =>
-                      set("skills", (d.skills || []).filter((x) => x !== n))} />
-                  <span className="font-mono">⚠ {n}</span>
-                </label>
-              ))}
-            {!(skillsCatalog?.skills || []).length && !(d.skills || []).length && (
-              <span className="text-xs text-neutral-400">No skills in the catalog yet.</span>
-            )}
-          </div>
-        ) : (
-          <p className="text-xs text-neutral-400">
-            {(d.skills || []).length
-              ? `${d.skills.length} selected skill(s) will be skipped on this harness.`
-              : "—"}
-          </p>
-        )}
-      </Field>
+        options={(skillsCatalog?.skills || []).map((s) => ({
+          name: s.name, title: s.description || undefined }))}
+        selected={d.skills || []}
+        disabled={d.harness_template !== "claude-code"}
+        disabledNote={`Skills run on the claude-code harness only in this version${
+          d.harness_template !== "claude-code" && (d.skills || []).length
+            ? ` — ${d.skills.length} selected skill(s) will be skipped`
+            : ""}.`}
+        emptyNote="no skills in the catalog yet — see the Skills section below"
+        staleNote="not in the skill store — skipped at dispatch; click to remove"
+        onChange={(next) => {
+          // write back in CATALOG order (unknown names last): uncheck-then-
+          // recheck must not surface a reorder-only dirty diff (diffLeaves
+          // compares arrays order-sensitively); skill order has no meaning
+          const cat = (skillsCatalog?.skills || []).map((c) => c.name);
+          set("skills", [...cat.filter((n) => next.includes(n)),
+                         ...next.filter((n) => !cat.includes(n))]);
+        }} />
       <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
         <div className="flex items-center justify-between">
           <span>
@@ -316,55 +288,24 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
 
 // ── the page ─────────────────────────────────────────────────────────────────
 
-// Ordered toggle chips over the configured repo cards (PMO repo set +
-// reference repos, v0.1.2): selection order is the list order; entries
-// selected in the SIBLING list render disabled (the two sets are disjoint
-// by config validation).
+// Repo-flavored SelectionChips (PMO repo set + reference repos, v0.1.2):
+// selection order is the list order; entries selected in the SIBLING list
+// render disabled (the two sets are disjoint by config validation).
 function RepoChips({ label, help, all, selected, excluded, excludedNote,
                      unavailable = [], unavailableNote = "",
                      firstBadge = "", onChange }) {
   return (
-    <Field label={label} help={help}>
-      <div className="flex flex-wrap items-center gap-1.5 pt-1">
-        {all.length === 0 && (
-          <span className="text-xs text-neutral-400">
-            no repositories configured — add them on the Repositories page
-          </span>
-        )}
-        {all.map((r) => {
-          const sel = selected.includes(r.name);
-          const pos = selected.indexOf(r.name);
-          const noCreds = !sel && unavailable.includes(r.name);
-          const blocked = !sel && (excluded.includes(r.name) || noCreds);
-          return (
-            <button key={r.name} type="button" disabled={blocked}
-              title={noCreds ? unavailableNote
-                     : blocked ? `already selected as a ${excludedNote}` : undefined}
-              onClick={() => onChange(
-                sel ? selected.filter((n) => n !== r.name)
-                    : [...selected, r.name])}
-              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
-                blocked ? "cursor-not-allowed border-neutral-200 text-neutral-300 dark:border-neutral-800 dark:text-neutral-600"
-                : sel
-                  ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
-                  : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-              }`}>
-              {r.name}{sel && pos === 0 ? firstBadge : ""}
-            </button>
-          );
-        })}
-        {/* selected names whose repo card no longer exists: without this
-            they'd be invisible AND undeselectable — the config PUT then 422s */}
-        {selected.filter((n) => !all.some((r) => r.name === n)).map((n) => (
-          <button key={n} type="button"
-            title="this repo card no longer exists — click to remove the stale entry"
-            onClick={() => onChange(selected.filter((x) => x !== n))}
-            className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
-            {n} ✕
-          </button>
-        ))}
-      </div>
-    </Field>
+    <SelectionChips label={label} help={help}
+      options={all.map((r) => ({
+        name: r.name,
+        disabled: excluded.includes(r.name) || unavailable.includes(r.name),
+        disabledNote: unavailable.includes(r.name)
+          ? unavailableNote
+          : `already selected as a ${excludedNote}`,
+      }))}
+      selected={selected} onChange={onChange} firstBadge={firstBadge}
+      emptyNote="no repositories configured — add them on the Repositories page"
+      staleNote="this repo card no longer exists — click to remove the stale entry" />
   );
 }
 

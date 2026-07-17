@@ -80,6 +80,7 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OTLP endpoint = the stack's `otel-collector` on `devcake_runtime`. **Unauthenticated**: Devs hold no OO credentials at all; the collector alone authenticates upstream (`12-observability.md` §1, ISSUES #13). |
 | *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `OPENAI_API_KEY` / `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
 | *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active repo's token; optionally the other forge's token for cross-forge reads). |
+| *Dev-Type secret env* | 2 | Named vars from `DevType.secret_env` (`02-domain-model.md` §6), values GUI-stored under `/data/secrets/harness/` — mission-tooling credentials (e.g. a log-platform key) referenced as `$VAR` from `mcp_setup_commands` (`08-harness-templates.md` §7). Missing value: **referenced** by a setup command ⇒ dispatch refuses (`14-security.md` §8); unreferenced ⇒ warn-and-proceed. |
 
 Real secrets (harness and forge credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §3, `09-messaging.md` §1a).
 
@@ -94,7 +95,7 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 | 11 | `result.json` missing or schema-invalid | `DEV_BAD_OUTPUT` |
 | 12 | Credential/auth failure (harness or forge) | `DEV_AUTH` |
 | 13 | Clone or forge operation failed | `FORGE_*` |
-| 14 | MCP setup command failed | `DEV_CRASH` (counted) |
+| 14 | MCP setup command failed or timed out (300 s per command) | `DEV_MCP_SETUP` (counted) |
 | 20 | Entrypoint internal error | `DEV_CRASH` |
 | 124 | Killed by timeout (watchdog / Dagu) | `DEV_TIMEOUT` |
 
@@ -111,7 +112,9 @@ entrypoint start
   │ 4b. install skill-store skills from the runspec `skills` field →
   │      ~/.claude/skills/ (never into the repo clone — the Dev would commit
   │      them); path-traversal-safe, per-file failures non-fatal (notes → run log)
-  │ 5. run mcp_setup_commands (any failure → exit 14)
+  │ 5. run mcp_setup_commands — stdin closed, own process group, 300 s cap per
+  │      command; first failure/timeout → run.artifacts {exit_code: 14,
+  │      DEV_MCP_SETUP, command + stderr tail} then exit 14
   │ 6. launch harness: identifying prompt + mission-type playbook prompt (03-mission-lifecycle.md §7)
   │      • heartbeat sidecar emits `run.heartbeat` every 30 s throughout
   │      • the live log announces harness start and, while user-visible output is
@@ -133,6 +136,8 @@ devcake-relay activity get        # re-fetch the current ACTIVITY.md content
 ```
 
 There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint able to update/communicate with the PMO System" from the mission doc *is* this relay: writes travel as end-of-run artifacts that the app applies.
+
+Other tooling (log-platform access and the like) arrives as **MCP plugins** — standalone servers living outside this repo, installed per Dev Type at run time via `mcp_setup_commands` (`08-harness-templates.md` §7, `tutorials/03-mcp-plugins.md`). The official log connector is <https://github.com/fidecastro/devcake-logs-mcp>.
 
 ## 7. Network and resources
 

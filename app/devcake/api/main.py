@@ -24,9 +24,10 @@ from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import secrets as secrets_store
 from .. import security
-from ..config import (AppConfig, Assignment, DevType, _INSTANCE_NAME_RE,
-                      deep_merge, delete_dev_type, load_config, load_dev_types,
-                      reject_stale_patch, save_config, save_dev_type)
+from ..config import (HARNESS_VAR_PATTERN, AppConfig, Assignment, DevType,
+                      _INSTANCE_NAME_RE, deep_merge, delete_dev_type,
+                      load_config, load_dev_types, reject_stale_patch,
+                      save_config, save_dev_type)
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
@@ -1007,7 +1008,7 @@ _SECRET_SCOPES = {"pmo", "repo"}
 # as path components, so every entry point validates against these (audit A5/A9)
 _SECRET_FIELDS = {"pmo": {"api_key"},
                   "repo": {"token", "token_ro", "reviewer_token"}}
-_HARNESS_VAR_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_HARNESS_VAR_RE = re.compile(f"^{HARNESS_VAR_PATTERN}$")   # one definition: config.py
 
 
 def _valid_secret_ref(scope: str, instance: str, field: str) -> bool:

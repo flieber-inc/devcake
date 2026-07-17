@@ -284,6 +284,46 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
     assert saved.error == "DEV_FORGE: clone failed"      # exit-13 enrichment
 
 
+def test_recon_enriches_exit14_mcp_setup(tmp_path):
+    """Same enrichment for the other classified pre-harness exit: a dead run
+    whose step errors carry exit status 14 (MCP setup failed while the app
+    was down) gets the DEV_MCP_SETUP error instead of the generic orphan
+    reason."""
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {"status": "failed",
+                                      "statusLabel": "failed"}}
+
+        async def node_errors(self, rid):
+            return [{"step": "run_dev", "status": "failed",
+                     "error": "exit status 14: mcp setup failed"}]
+
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+
+    class MM:
+        def dev_failure_error(self, run, payload):
+            assert payload["exit_code"] == 14
+            return "DEV_MCP_SETUP: claude mcp add …: exit 1"
+
+    dead = _make_run(store, state="running", run_id="DEAD-14")
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr.set_finalizer(MM())
+    run_coro(reconcile_runs(mgr))
+    saved = store.get(dead.run_id)
+    assert saved.state == "orphaned"
+    assert saved.error == "DEV_MCP_SETUP: claude mcp add …: exit 1"
+
+
 def test_recon_reclaims_even_when_a_kill_blows_up(tmp_path):
     """A raising executor.status/kill must not stop reconciliation — the other
     runs are still processed and reclaim still happens."""

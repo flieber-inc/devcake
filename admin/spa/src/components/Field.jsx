@@ -19,6 +19,31 @@ export function Textarea({ className = "", ...props }) {
   return <textarea className={`${inputCls} ${className}`} {...props} />;
 }
 
+// List-editing textarea: the draft holds the CLEAN parsed list (save/diff
+// machinery untouched) while the textarea renders local raw text. The old
+// value={list.join("\n")} + onChange split().filter(Boolean) round-trip
+// erased the trailing newline on every re-render, so Enter did nothing and
+// two typed lines silently concatenated into one entry.
+export function ListTextarea({ value, onChange, ...props }) {
+  const parse = (t) => t.split("\n").map((s) => s.trim()).filter(Boolean);
+  const [raw, setRaw] = useState((value || []).join("\n"));
+  useEffect(() => {
+    // external draft change (Discard, rebase) → resync the local text
+    if (JSON.stringify(parse(raw)) !== JSON.stringify(value || []))
+      setRaw((value || []).join("\n"));
+  }, [value]);
+  return (
+    <Textarea
+      {...props}
+      value={raw}
+      onChange={(e) => {
+        setRaw(e.target.value);
+        onChange(parse(e.target.value));
+      }}
+    />
+  );
+}
+
 export function Help({ text }) {
   return (
     <span className="group relative ml-1 inline-block align-middle">

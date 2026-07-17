@@ -26,6 +26,31 @@ CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "co
 # compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
 _INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
 
+# Shared shape for GUI-stored harness/secret-env var names — api.main
+# compiles _HARNESS_VAR_RE from this (one definition; docs/02 §6).
+HARNESS_VAR_PATTERN = r"[A-Z][A-Z0-9_]{0,63}"
+
+# Env names the Dev protocol/runtime owns. The runspec reply layers the
+# secret half OVER spec_env (runs.py runspec.result) and the entrypoint
+# os.environ.update()s the merge, so a secret_env entry with one of these
+# names would corrupt the run instead of configuring a plugin:
+# - REDIS_URL/REDIS_USER/REDIS_PASSWORD/TRACEPARENT: the entrypoint's
+#   messaging transport — send() re-reads REDIS_PASSWORD per message, so a
+#   shadowed value makes every artifact fail auth and the run die
+#   timed_out with nothing streamed
+# - GH_TOKEN/GITLAB_TOKEN/GITEA_SERVER_TOKEN: the entrypoint overwrites the
+#   forge CLI token envs from DEVCAKE_FORGE_TOKEN — an operator value would
+#   be silently ignored, so refuse it up front
+# test_config_schema.py derives the must-cover set from the live forge
+# registry and _protocol_spec_env, so drift fails CI without config
+# importing adapters (config stays import-light).
+RESERVED_SECRET_ENV = frozenset({
+    "PATH", "HOME",
+    "REDIS_URL", "REDIS_USER", "REDIS_PASSWORD", "TRACEPARENT",
+    "GH_TOKEN", "GITLAB_TOKEN", "GITEA_SERVER_TOKEN",
+})
+RESERVED_SECRET_ENV_PREFIXES = ("DEVCAKE_", "OTEL_", "GIT_")
+
 
 class PMOInstance(BaseModel):
     """One configured PMO connection (instances-with-identities; secrets GUI-stored).
@@ -190,6 +215,11 @@ class DevType(BaseModel):
     # Skill-store skills installed to ~/.claude/skills before the harness
     # starts — claude-code harness only in v1 (other harnesses skip + warn)
     skills: list[str] = Field(default_factory=list)
+    # Named secret env vars delivered to this Dev Type's runs: NAMES only —
+    # values are GUI-stored under /data/secrets/harness/ (ADR-0011) and read
+    # at runspec time, so mcp_setup_commands can reference e.g. $DD_API_KEY
+    # without a secret value ever touching config.yaml.
+    secret_env: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
 
@@ -205,6 +235,29 @@ class DevType(BaseModel):
             if name not in out:
                 out.append(name)
         return out
+
+    @field_validator("secret_env")
+    @classmethod
+    def _secret_env_names(cls, v: list[str]) -> list[str]:
+        """The runspec reply merges the secret half OVER spec_env (runs.py
+        runspec.result), so an unguarded name could shadow the Dev protocol
+        contract. Shape mirrors api.main._HARNESS_VAR_RE — the store these
+        names read from."""
+        seen: set[str] = set()
+        for name in v:
+            if not re.fullmatch(HARNESS_VAR_PATTERN, name):
+                raise ValueError(
+                    f"secret env var {name!r} must be UPPER_SNAKE_CASE "
+                    "([A-Z][A-Z0-9_]*, max 64 chars)")
+            if name in seen:
+                raise ValueError(f"duplicate secret env var {name!r}")
+            seen.add(name)
+            if (name in RESERVED_SECRET_ENV
+                    or name.startswith(RESERVED_SECRET_ENV_PREFIXES)):
+                raise ValueError(
+                    f"secret env var {name!r} would shadow the Dev "
+                    "protocol/tooling env — pick a different name")
+        return v
 
 
 DEFAULT_ASSIGNMENTS = {

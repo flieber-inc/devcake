@@ -137,6 +137,19 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 | `grok-build` | **Verified (CLI v0.2.93):** `grok mcp add [-t stdio\|http\|sse] [-s user\|project] [-e K=V] [-H "Name: value"] <name> [--] <command…>` (or a URL for http/sse) — writes `~/.grok/config.toml` (user scope) or `./.grok/config.toml` (project). Also `grok mcp list\|remove\|doctor`. |
 | `codex` | **Verified (CLI 0.144.1):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
 
+Scope caveat: `claude mcp add`'s default (local) scope is **cwd-keyed**, and the entrypoint runs both the MCP commands and the harness in the **same** directory — the cloned repo root `/workspace/repo/<repo-name>` — so local-scope registrations survive into the harness. Anything that re-registers from a different cwd silently disappears.
+
+### Installing MCP plugins at run time
+
+Plugins are standalone MCP servers living OUTSIDE this repo (hexagonal rule: core ships no vendor/connector code). A Dev Type opts in with two `mcp_setup_commands` lines — install, then register (worked example: `tutorials/03-mcp-plugins.md`; the official log connector is <https://github.com/fidecastro/devcake-logs-mcp>):
+
+```
+pip install --user --quiet "git+https://${PLUGIN_GIT_TOKEN}@github.com/OWNER/REPO@vX.Y.Z"
+claude mcp add <name> -e SOME_KEY=$SOME_KEY -- python -m <package_module>
+```
+
+Mechanics: commands run before harness launch as uid 1000 with stdin closed, a 300 s cap each, and full outbound network (`07-dev-runtime.md` §5/§7). `$VAR` expands from the Dev Type's secret env vars (`11-admin-panel.md` §3) — a private-repo install token is just another secret env var (fine-grained PAT, Contents read-only; drop the `${PLUGIN_GIT_TOKEN}@` part when the repo goes public). Register via `python -m <module>` or an absolute path: `pip install --user` puts console scripts in `~/.local/bin`, which is **not** on `PATH` in the claude/codex images. Always pin a release tag — a run must not float with a moving branch.
+
 ## 7a. Skills (skill store v1)
 
 Skill-store skills (`02-domain-model.md` DevType.skills) are materialized to

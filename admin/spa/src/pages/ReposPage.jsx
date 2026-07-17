@@ -4,6 +4,7 @@ import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, SecretField, Input, Select } from "../components/Field.jsx";
+import SettingRow from "../components/SettingRow.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog, Modal } from "../components/Modal.jsx";
@@ -334,40 +335,41 @@ export default function ReposPage() {
         }}>
           + Add repository
         </Button>
-        <Field label="Auto-merge"
-          help="ON: after DevCake's REVIEW step approves a PR, it merges itself (squash). OFF: DevCake stops at DEVCAKE-MERGE and waits for you to merge.">
-          <div className="flex items-center gap-3 text-sm">
+        <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+          <SettingRow label="Auto-merge"
+            desc={cfg.auto_merge
+              ? "ON — approved PRs merge themselves (squash)."
+              : "OFF — every merge is yours (DEVCAKE-MERGE handoff)."}
+            help="ON: after DevCake's REVIEW step approves a PR, it merges itself (squash). OFF: DevCake stops at DEVCAKE-MERGE and waits for you to merge.">
             <Toggle on={cfg.auto_merge} label="Auto-merge"
               onClick={() =>
                 cfg.auto_merge
                   ? setField("cfg.auto_merge", false)
                   : guardedFlip("cfg.auto_merge", true, "Merge without human review?",
                       AUTO_MERGE_COPY + "\n\n(Drafted now; applies when you Save.)")} />
-            <span>{cfg.auto_merge ? "ON — approved PRs merge themselves" : "OFF — every merge is yours (DEVCAKE-MERGE handoff)"}</span>
-          </div>
-        </Field>
-        {/* dependent controls: only meaningful while auto-merge is ON (drafted value) */}
-        <div className={cfg.auto_merge ? "" : "opacity-50 pointer-events-none"}
-          aria-disabled={!cfg.auto_merge}>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Auto-resolve merge conflicts"
+          </SettingRow>
+          {/* dependent rows: only meaningful while auto-merge is ON (drafted value) */}
+          <div className={cfg.auto_merge ? "" : "opacity-50"} aria-disabled={!cfg.auto_merge}>
+            <SettingRow label="Auto-resolve merge conflicts"
+              desc={cfg.auto_resolve_merge_conflicts
+                ? "ON — conflicts go back to EXECUTE (max 2 tries)."
+                : "OFF — conflicts wait for you at DEVCAKE-MERGE."}
               help="Only applies when auto-merge is ON. When a merge fails on conflicts, DevCake sends the mission back to EXECUTE to sync the branch and resolve them (max 2 attempts) instead of waiting for you at DEVCAKE-MERGE.">
-              <div className="flex items-center gap-3 text-sm">
-                <Toggle on={cfg.auto_resolve_merge_conflicts} label="Auto-resolve merge conflicts"
-                  disabled={!cfg.auto_merge}
-                  onClick={() => cfg.auto_merge &&
-                    setField("cfg.auto_resolve_merge_conflicts", !cfg.auto_resolve_merge_conflicts)} />
-                <span>{cfg.auto_resolve_merge_conflicts ? "ON — conflicts go back to EXECUTE (max 2 tries)" : "OFF — conflicts wait for you (DEVCAKE-MERGE)"}</span>
-              </div>
-            </Field>
-            <Field label="Merge retry window (min)"
-              help="When a merge isn't possible yet (CI running, mergeability computing), DevCake keeps retrying via the merge sweep for this long before handing off with DEVCAKE-MERGE. Lower it on CI-light repos to surface unmergeable PRs faster; raise it on CI-heavy repos. 0 = hand off immediately.">
-              <Input type="number" min="0"
+              <Toggle on={cfg.auto_resolve_merge_conflicts} label="Auto-resolve merge conflicts"
                 disabled={!cfg.auto_merge}
+                onClick={() => cfg.auto_merge &&
+                  setField("cfg.auto_resolve_merge_conflicts", !cfg.auto_resolve_merge_conflicts)} />
+            </SettingRow>
+            <SettingRow label="Merge retry window"
+              desc="Minutes to keep retrying a not-yet-mergeable PR before handing off."
+              help="When a merge isn't possible yet (CI running, mergeability computing), DevCake keeps retrying via the merge sweep for this long before handing off with DEVCAKE-MERGE. Lower it on CI-light repos; raise it on CI-heavy repos. 0 = hand off immediately.">
+              <Input type="number" className="w-24" min="0"
+                disabled={!cfg.auto_merge}
+                aria-label="Merge retry window (minutes)"
                 value={cfg.merge_retry_window_minutes}
                 onChange={(e) => setField("cfg.merge_retry_window_minutes",
                   Math.max(0, Number(e.target.value)))} />
-            </Field>
+            </SettingRow>
           </div>
         </div>
       </Section>

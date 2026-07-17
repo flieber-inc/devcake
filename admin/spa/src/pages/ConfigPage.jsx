@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Play, Plus, Trash2, KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, Help, ListTextarea, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
 import InstantZone from "../components/InstantZone.jsx";
+import SettingRow from "../components/SettingRow.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
@@ -188,13 +189,13 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         </Field>
       </div>
       <p className="text-xs text-neutral-500 dark:text-neutral-400">
-        Identifying prompt is template-managed — edit it (or switch workflow)
-        in the <a className="underline" href="#/config/prompts">Prompts
-        section</a> below.
+        Identifying prompt is managed in the{" "}
+        <a className="underline" href="#/config/prompts">Prompts section</a>.
       </p>
       <Field
         label="MCP setup commands (one per line)"
-        hint="⚠ Run inside the Dev container before the agent starts — arbitrary code execution by design. A failing or hung command fails the run (exit 14, 300s cap per command) with the command + stderr in the run error."
+        hint="⚠ Runs arbitrary code in the Dev container before the agent starts."
+        help="A failing or hung command fails the run (exit 14, 300 s cap per command) with the command and stderr in the run error."
       >
         <ListTextarea
           rows={2}
@@ -204,7 +205,8 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
       </Field>
       <Field
         label="Secret env vars (one per line)"
-        hint="Names only (UPPER_SNAKE_CASE) — values are pasted below and stored in the secret store, never in config. Delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY). A name referenced by a setup command must have a stored value or the mission won't dispatch."
+        hint="Names only (UPPER_SNAKE_CASE) — paste each value below."
+        help="Values live in the secret store, never in config, and are delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY). A name referenced by a setup command must have a stored value or the mission won't dispatch."
       >
         <ListTextarea
           rows={2}
@@ -500,7 +502,7 @@ function RepoChips({ label, help, all, selected, excluded, excludedNote,
   );
 }
 
-export default function ConfigPage({ section, onSectionInView }) {
+export default function ConfigPage({ section }) {
   // the draft, reload, harnesses and health snapshot come from the shared
   // provider (v0.1.1 B4) — the Repositories page edits the SAME draft, and
   // DraftChrome (App-level) owns Save/DirtyBar/NavGuard
@@ -546,47 +548,11 @@ export default function ConfigPage({ section, onSectionInView }) {
 
   const loaded = dr.loaded;
 
-  // deep-link scroll: #/config/<section> — instant on first render, smooth
-  // after. Section clicks are authoritative for the sidebar highlight during
-  // the programmatic scroll (quiet period), then the scrollspy resumes.
-  const scrolledOnce = useRef(false);
-  const spyQuietUntil = useRef(0);
+  // settings-style navigation: one section per view — switching sections
+  // starts at the top of the pane
   useEffect(() => {
-    if (!loaded || !section) return;
-    spyQuietUntil.current = Date.now() + 1000;
-    onSectionInView && onSectionInView(section);
-    document.getElementById(section)?.scrollIntoView({
-      behavior: scrolledOnce.current ? "smooth" : "auto",
-    });
-    scrolledOnce.current = true;
-  }, [loaded, section]);
-
-  // scrollspy → sidebar sub-nav highlight. Scroll-position math instead of an
-  // IntersectionObserver: active = last section whose top crossed the
-  // activation line, clamped to the last section at the bottom of the scroll
-  // (bottom sections can never reach the top of the viewport otherwise).
-  useEffect(() => {
-    if (!loaded || !onSectionInView) return;
-    const main = document.querySelector("main");
-    if (!main) return;
-    const onScroll = () => {
-      if (Date.now() < spyQuietUntil.current) return;
-      const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 8;
-      if (atBottom) {
-        onSectionInView(CONFIG_SECTIONS[CONFIG_SECTIONS.length - 1].id);
-        return;
-      }
-      const line = main.getBoundingClientRect().top + 96; // activation line
-      let active = CONFIG_SECTIONS[0].id;
-      for (const s of CONFIG_SECTIONS) {
-        const el = document.getElementById(s.id);
-        if (el && el.getBoundingClientRect().top <= line) active = s.id;
-      }
-      onSectionInView(active);
-    };
-    main.addEventListener("scroll", onScroll, { passive: true });
-    return () => main.removeEventListener("scroll", onScroll);
-  }, [loaded]);
+    document.querySelector("main")?.scrollTo({ top: 0 });
+  }, [section]);
 
   if (!loaded) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
 
@@ -649,22 +615,27 @@ export default function ConfigPage({ section, onSectionInView }) {
   return (
     <div className="space-y-5">
       <PageHeader title="Configuration"
-        subtitle="Connections, Dev Types, assignments and limits — edits apply on Save" />
+        subtitle="One section at a time — drafted edits apply on Save, wherever you made them" />
       {pageErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {pageErr}</p>}
 
-      {/* mobile section chips (sidebar sub-nav is expanded-drawer-only) */}
+      {/* mobile section switcher (sidebar sub-nav is expanded-drawer-only) */}
       <div className="sticky top-0 z-20 -mx-4 flex gap-1.5 overflow-x-auto bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90 lg:hidden">
         {CONFIG_SECTIONS.map((s) => (
           <a key={s.id} href={`#/config/${s.id}`}
-            onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth" })}
-            className="shrink-0 rounded-full border border-neutral-200 bg-surface-raised px-3 py-1 text-xs font-medium text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300">
+            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
+              section === s.id
+                ? "border-accent-300 bg-accent-50 font-semibold text-accent-800 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
+                : "border-neutral-200 bg-surface-raised text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300"
+            }`}>
             {s.label}
           </a>
         ))}
       </div>
 
+      {section === "pmo" && (
       <Section id="pmo" title="PMO connections"
-        description={`The PMO teams DevCake watches (one instance each), and how it adopts missions. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
+        description="The PMO teams DevCake watches, and how missions are adopted."
+        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
         {cfg.pmos.map((inst, idx) => {
           const tr = testResult[`pmo:${inst.name}`];
           return (
@@ -743,28 +714,31 @@ export default function ConfigPage({ section, onSectionInView }) {
             </div>
           );
         })}
-        <div className="flex flex-wrap items-center gap-3">
-          <Button kind="ghost" onClick={() => {
-            const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
-            newPmoNames.track(name);
-            setField("cfg.pmos", [...cfg.pmos,
-              { name, system: "linear",
-                team_key: "", api_base: null, repos: [],
-                reference_repos: [] }]);
-          }}>
-            + Add PMO instance
-          </Button>
-          <Field label="Poll interval (s)"
-            help="How often DevCake polls each PMO instance for new or changed missions. Lower = faster pickup, more API calls.">
-            <Input type="number"
-            value={cfg.poll_interval_seconds}
-            onChange={(e) => setField("cfg.poll_interval_seconds", Number(e.target.value))} /></Field>
-        </div>
-        <Field label="Adoption mode"
-          help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">
-          <div className="flex items-center gap-3 text-sm">
-            <span className={cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}>
-              opt-in (label required)
+        <Button kind="ghost" onClick={() => {
+          const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
+          newPmoNames.track(name);
+          setField("cfg.pmos", [...cfg.pmos,
+            { name, system: "linear",
+              team_key: "", api_base: null, repos: [],
+              reference_repos: [] }]);
+        }}>
+          + Add PMO instance
+        </Button>
+        <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+          <SettingRow label="Poll interval"
+            desc="Seconds between polls of each PMO for new or changed missions."
+            help="Lower = faster pickup, more API calls.">
+            <Input type="number" className="w-24" value={cfg.poll_interval_seconds}
+              aria-label="Poll interval (seconds)"
+              onChange={(e) => setField("cfg.poll_interval_seconds", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Adoption mode"
+            desc={cfg.adoption_mode === "opt_in"
+              ? "opt-in — only items you label DEVCAKE are adopted."
+              : "opt-out — every non-completed item in the team, backlog included."}
+            help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">
+            <span className={`text-xs ${cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}`}>
+              opt-in
             </span>
             <Toggle on={cfg.adoption_mode === "opt_out"} label="Adoption mode"
               onClick={() =>
@@ -772,13 +746,15 @@ export default function ConfigPage({ section, onSectionInView }) {
                   ? guardedFlip("cfg.adoption_mode", "opt_out", "Adopt the ENTIRE team?",
                       ADOPTION_COPY + "\n\n(Drafted now; applies when you Save.)")
                   : setField("cfg.adoption_mode", "opt_in")} />
-            <span className={cfg.adoption_mode === "opt_out" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}>
-              opt-out (whole team)
+            <span className={`text-xs ${cfg.adoption_mode === "opt_out" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}`}>
+              opt-out
             </span>
-          </div>
-        </Field>
+          </SettingRow>
+        </div>
       </Section>
+      )}
 
+      {section === "dev-types" && (
       <Section id="dev-types" title="Dev Types"
         description="Agent configurations — harness, model, concurrency and credentials."
         actions={
@@ -817,9 +793,12 @@ export default function ConfigPage({ section, onSectionInView }) {
           ))}
         </div>
       </Section>
+      )}
 
+      {section === "skills" && (
       <Section id="skills" title="Skills"
-        description="Claude Code skills Devs can use — reusable expertise installed into the agent session. Select them per Dev Type above."
+        description="Reusable expertise installed into the agent session."
+        help="Skill-store skills Devs can use. Select them per Dev Type in the Dev Types section."
         actions={
           <>
             {skillsCatalog.store?.enabled && (
@@ -908,7 +887,9 @@ export default function ConfigPage({ section, onSectionInView }) {
           </div>
         )}
       </Section>
+      )}
 
+      {section === "assignments" && (
       <Section id="assignments" title="Assignments"
         description="Which Dev Type handles each mission type.">
         {dr.draft.assignments?.EXECUTE?.dev_type
@@ -962,42 +943,48 @@ export default function ConfigPage({ section, onSectionInView }) {
           </table>
         </div>
       </Section>
+      )}
 
+      {section === "prompts" && (
       <PromptsSection cfg={cfg} setField={setField}
         devTypeNames={Object.keys(dr.draft.devTypes || {})} />
+      )}
 
+      {section === "limits" && (
       <Section id="limits" title="Limits"
-        description="Global concurrency and safety ceilings. Dev container Docker HostConfig CPU/memory is not available in Dagu 2.10.5 — concurrency caps are the real throttle.">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field label="Global max Devs" hint="Effective ceiling = min(global, Σ per-type caps). Primary host-protection control.">
-            <Input type="number" value={cfg.concurrency.global_max}
+        description="Global concurrency and safety ceilings.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Global max Devs"
+            desc="Effective ceiling = min(global, Σ per-type caps)."
+            help="Primary host-protection control. Dagu 2.10.5 cannot apply Docker CPU/memory/PID limits to Dev containers — this cap is the effective throttle; hard per-container limits are planned.">
+            <Input type="number" className="w-24" value={cfg.concurrency.global_max}
+              aria-label="Global max Devs"
               onChange={(e) => setField("cfg.concurrency.global_max", Number(e.target.value))} />
-          </Field>
-          <Field label="Dev run timeout (min)"
-            help="Wall-clock limit per Dev run (dispatched/running only — finalizing is never timeout-killed). The mission is retried up to its attempt limit.">
-            <Input type="number" value={cfg.dev_timeout_minutes}
+          </SettingRow>
+          <SettingRow label="Dev run timeout"
+            desc="Wall-clock limit per Dev run, in minutes."
+            help="Applies while dispatched/running only — finalizing is never timeout-killed. A timed-out mission is retried up to its attempt limit.">
+            <Input type="number" className="w-24" value={cfg.dev_timeout_minutes}
+              aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
-          </Field>
-          <Field label="Loop warning every N rejections"
+          </SettingRow>
+          <SettingRow label="Review-loop warning"
+            desc="Warn after every N rejections of EXECUTE's work."
             help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene. Must be ≥ 1.">
-            <Input type="number" min={1} value={cfg.review_loop_warning_every}
+            <Input type="number" className="w-24" min={1} value={cfg.review_loop_warning_every}
+              aria-label="Review-loop warning every N rejections"
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
-          </Field>
-        </div>
-        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-          <strong className="font-medium text-neutral-800 dark:text-neutral-100">Dev container limits:</strong>{" "}
-          Dagu 2.10.5 cannot apply Docker CPU/memory/PID limits to Dev
-          containers — the concurrency caps above are the effective throttle.
-          Hard per-container limits are planned.
-        </div>
-        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-          <strong className="font-medium text-neutral-800 dark:text-neutral-100">Compose restart:</strong>{" "}
-          long-lived services use <code className="font-mono text-xs">restart: unless-stopped</code> in
-          docker-compose.yml (default on). The SPA cannot rewrite compose — set{" "}
-          <code className="font-mono text-xs">restart: &quot;no&quot;</code> in the file to disable.
+          </SettingRow>
+          <SettingRow label="Service auto-restart"
+            desc="Long-lived services restart unless stopped (compose-managed)."
+            help='Services use restart: unless-stopped in docker-compose.yml. This panel cannot rewrite compose — set restart: "no" in the file to disable.'>
+            <span className="text-sm text-neutral-500 dark:text-neutral-400">managed in compose</span>
+          </SettingRow>
         </div>
       </Section>
+      )}
 
+      {section === "traffic" && (
       <Section id="traffic" title="Traffic control"
         description="The Relations Mapper. (Mission intake is the master switch in the sidebar — it applies immediately.)">
         <div className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
@@ -1017,10 +1004,12 @@ export default function ConfigPage({ section, onSectionInView }) {
               </Button>
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Field label="Dev Type"
-              help="Which Dev Type runs the mapper. The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
-              <Select value={rm.dev_type || ""}
+          <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            <SettingRow label="Dev Type"
+              desc="Which Dev Type runs the mapper."
+              help="The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
+              <Select className="w-44" value={rm.dev_type || ""}
+                aria-label="Relations Mapper Dev Type"
                 onChange={(e) => {
                   setField("cfg.relations_mapper.dev_type", e.target.value || null);
                   if (!e.target.value) setField("cfg.relations_mapper.enabled", false);
@@ -1028,27 +1017,27 @@ export default function ConfigPage({ section, onSectionInView }) {
                 <option value="">(none)</option>
                 {dr.order.map((n) => <option key={n} value={n}>{n}</option>)}
               </Select>
-            </Field>
-            <Field label="Interval (minutes)"
+            </SettingRow>
+            <SettingRow label="Interval"
+              desc="Minutes between automatic passes."
               help="Cadence of the periodic service when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
-              <Input type="number" min="1" value={rm.interval_minutes}
+              <Input type="number" className="w-24" min="1" value={rm.interval_minutes}
+                aria-label="Relations Mapper interval (minutes)"
                 onChange={(e) => setField("cfg.relations_mapper.interval_minutes", Number(e.target.value))}
                 onBlur={(e) => setField("cfg.relations_mapper.interval_minutes",
                   Math.max(1, Number(e.target.value) || 60))} />
-            </Field>
-            <Field label="Periodic service" hint="Default OFF — use Run now for one-shot passes">
-              <div className="flex h-9 items-center gap-3 text-sm">
-                <Toggle on={rm.enabled} label="Periodic service"
-                  onClick={() => {
-                    if (!rm.enabled && !rm.dev_type) {
-                      setMapperMsg("✗ pick a Dev Type first");
-                      return;
-                    }
-                    setField("cfg.relations_mapper.enabled", !rm.enabled);
-                  }} />
-                <span>{rm.enabled ? "ON — runs on the interval" : "OFF — manual only"}</span>
-              </div>
-            </Field>
+            </SettingRow>
+            <SettingRow label="Periodic service"
+              desc={rm.enabled ? "ON — runs on the interval." : "OFF — manual only (default)."}>
+              <Toggle on={rm.enabled} label="Periodic service"
+                onClick={() => {
+                  if (!rm.enabled && !rm.dev_type) {
+                    setMapperMsg("✗ pick a Dev Type first");
+                    return;
+                  }
+                  setField("cfg.relations_mapper.enabled", !rm.enabled);
+                }} />
+            </SettingRow>
           </div>
           {healthInfo?.mapper_degraded && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
@@ -1064,6 +1053,7 @@ export default function ConfigPage({ section, onSectionInView }) {
           )}
         </div>
       </Section>
+      )}
 
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}

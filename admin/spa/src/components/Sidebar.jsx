@@ -216,10 +216,6 @@ export default function Sidebar({
                   <a
                     key={s.id}
                     href={`#/config/${s.id}`}
-                    onClick={() => {
-                      // same-hash clicks don't fire hashchange — scroll directly
-                      document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth" });
-                    }}
                     className={`rounded-md px-2 py-1 text-xs transition ${
                       configSection === s.id
                         ? "font-semibold text-accent-700 dark:text-accent-300"

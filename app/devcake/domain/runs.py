@@ -196,6 +196,9 @@ class RunManager:
                  # multi-repo ONBOARD triage (item 2): read-only sibling
                  # clones, each with its own read token
                  "extra_repos": secret.get("extra_repos") or [],
+                 # skill store (v1): non-secret, snapshotted on the Run at
+                 # dispatch — entrypoint writes them to ~/.claude/skills
+                 "skills": run.spec_skills or [],
                  # per-Dev-Type MCP registration, run by the entrypoint
                  # before harness launch (docs/07 §5 step 5, exit 14)
                  "mcp_setup_commands": secret.get("mcp_setup_commands") or [],

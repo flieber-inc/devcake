@@ -35,7 +35,7 @@ class MissionManager:
                  pmo: PMOPort, forges: "ForgeRuntime", runs: RunManager,
                  messaging: MessagingPort, *,
                  instance=None, breakers: dict[str, str] | None = None,
-                 internal_forge=None):
+                 internal_forge=None, skills=None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
@@ -46,6 +46,9 @@ class MissionManager:
         # the bundled internal fallback forge (M11): None until Gitea is up.
         # Zero-repo missions provision a per-mission repo here at intake.
         self.internal_forge = internal_forge
+        # skill store (v1): the SkillService dispatch attaches skills from;
+        # None = feature off (runs dispatch skill-less)
+        self.skills = skills
         self.runs = runs
         self.messaging = messaging
         # this manager's PMO-instance identity (schema v3): one manager per
@@ -105,6 +108,7 @@ MissionManager._identifying_prompt = dispatch._identifying_prompt
 MissionManager._onboard_repo_options = dispatch._onboard_repo_options
 MissionManager._reference_repos_note = dispatch._reference_repos_note
 MissionManager._protocol_spec_env = dispatch._protocol_spec_env
+MissionManager._skill_payload = dispatch._skill_payload
 MissionManager.runspec_secret_payload = dispatch.runspec_secret_payload
 MissionManager._extra_repos_for = dispatch._extra_repos_for
 MissionManager._credential_spec = dispatch._credential_spec

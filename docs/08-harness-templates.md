@@ -150,6 +150,17 @@ claude mcp add <name> -e SOME_KEY=$SOME_KEY -- python -m <package_module>
 
 Mechanics: commands run before harness launch as uid 1000 with stdin closed, a 300 s cap each, and full outbound network (`07-dev-runtime.md` §5/§7). `$VAR` expands from the Dev Type's secret env vars (`11-admin-panel.md` §3) — a private-repo install token is just another secret env var (fine-grained PAT, Contents read-only; drop the `${PLUGIN_GIT_TOKEN}@` part when the repo goes public). Register via `python -m <module>` or an absolute path: `pip install --user` puts console scripts in `~/.local/bin`, which is **not** on `PATH` in the claude/codex images. Always pin a release tag — a run must not float with a moving branch.
 
+## 7a. Skills (skill store v1)
+
+Skill-store skills (`02-domain-model.md` DevType.skills) are materialized to
+`~/.claude/skills/` by the entrypoint before harness launch — a **claude-code
+capability only**: Claude Code loads personal skills from that directory
+(verified in `-p` print mode on the pinned CLI line); grok-build and codex
+have no equivalent, so dispatch skips skills for them with a warning and the
+admin UI disables the selector. A prompt-append fallback for other harnesses
+was deliberately rejected for v1 (it would change prompt-composition
+semantics and playbook token budgets).
+
 ## 8. Adding or changing a template (checklist)
 
 1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow) and the new value to `DevType.harness_template`'s Literal (`config.py`).

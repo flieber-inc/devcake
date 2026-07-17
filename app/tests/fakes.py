@@ -93,6 +93,7 @@ def make_mission_manager(
     instance: PMOInstance | None = None,
     breakers: dict[str, str] | None = None,
     internal_forge: Any = None,
+    skills: Any = None,
     noop_audit: bool = False,
 ) -> MissionManager:
     """Construct MissionManager via the real ``__init__`` (DI constructor).
@@ -124,6 +125,7 @@ def make_mission_manager(
     mgr = MissionManager(
         cfg, dts, pmo, fr, runs, msg,
         instance=inst, breakers=breakers, internal_forge=internal_forge,
+        skills=skills,
     )
     if noop_audit:
         mgr._audit = lambda *a, **k: None  # type: ignore[method-assign]

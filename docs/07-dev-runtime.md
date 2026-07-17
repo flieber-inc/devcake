@@ -109,6 +109,9 @@ entrypoint start
   │ 2. fetch activity via `activity.get` (req/reply); render ACTIVITY.md; download attachments
   │ 3. git clone → /workspace/repo (credential helper from run-spec token; token never in URL on disk)
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
+  │ 4b. install skill-store skills from the runspec `skills` field →
+  │      ~/.claude/skills/ (never into the repo clone — the Dev would commit
+  │      them); path-traversal-safe, per-file failures non-fatal (notes → run log)
   │ 5. run mcp_setup_commands — stdin closed, own process group, 300 s cap per
   │      command; first failure/timeout → run.artifacts {exit_code: 14,
   │      DEV_MCP_SETUP, command + stderr tail} then exit 14

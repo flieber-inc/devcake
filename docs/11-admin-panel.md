@@ -73,6 +73,19 @@ The landing dashboard, fed by the health poll:
 
 **Unified draft (founder decision, 2026-07-13):** every edit on this page lands in a client-side draft — *nothing* persists until the operator reviews and saves. A **DirtyBar** appears while the draft differs from the server state; **Save** opens a **SaveReviewDialog** listing every pending change (per section) for confirmation, then issues the PUTs (`/config`, `/dev-types/{name}`, `/assignments`) and reports per-section results inline. A **nav guard** intercepts hash navigation away from a dirty draft (revert-and-ask, then replay). Danger confirms (adoption mode, auto-merge) still appear at flip time but only write the draft — the real write happens at Save. The one exception is the sidebar's mission-intake switch, which is deliberately immediate (§0); `dismissed_alerts` writes also bypass the draft (they're UI state, not operator config).
 
+**Multi-select convention (mandatory for new fields):** every field that
+selects multiple entries from a catalog/list — the PMO **repo set**,
+**reference repos**, Dev Type **skills**, and any future such field — uses
+the shared toggle-chip control
+(`admin/spa/src/components/SelectionChips.jsx`): ordered rounded chips
+(click to toggle; selection order = click order where order carries meaning,
+e.g. the repo set's `· default` first-badge — normalize order in `onChange`
+where it doesn't, the draft diff is order-sensitive), a selected entry whose
+option no longer exists renders **red/strikethrough with ✕** (visible and
+removable — a stale name must never wedge the Save PUT), and an explicit
+empty-state note. Do not introduce checkbox lists or multi-select dropdowns
+for these.
+
 Sections (scrollspy anchors `#/config/<id>`): **Traffic control · PMO · Repository · Dev Types · Assignments · Limits**.
 
 ### Traffic control
@@ -110,6 +123,16 @@ Card list + editor (the harness combobox is **authoritative**, `08-harness-templ
 - **Connect via OAuth…** — per **Dev Type** (`POST /oauth/dev-types/{name}/start`), shown when the saved harness has a device-code flow; the credential lands in that Dev Type's `/data/secrets/{name}/` dir (two Dev Types on one harness = two accounts).
 - **MCP servers**: free-text area, one CLI command per line (syntax hint per selected template, `08-harness-templates.md` §7), with the warning: *"These commands run inside the Dev container before the agent starts and are arbitrary code execution by design."* Execution semantics per `07-dev-runtime.md` §5 (failure or 300 s per-command timeout ⇒ run fails with `DEV_MCP_SETUP` + the command and stderr in the run error).
 - **Secret env vars**: free-text area, one NAME per line (UPPER_SNAKE_CASE; the draft validates shape and duplicates inline), plus one paste field per listed name (values via `harness-secrets/{VAR}`; the paste widget's ✓/✗ from `secrets-check`). `GET /api/v1/dev-types` additionally exposes `secret_env_present` per declared name — the headless provisioning check. Delivered into the run's env so MCP setup commands can reference `$VAR` without a value ever entering config (ADR-0011). Presence never affects `credentials_ready`, but a missing value **referenced** by an MCP setup command gates dispatch (`14-security.md` §8).
+- **Skills**: toggle-chip multi-select from the skill-store catalog (skill store v1; the shared `SelectionChips` control — see the multi-select convention above). Enabled on the claude-code harness only (other harnesses render the chips disabled with a hint and skip at dispatch); a selected-but-missing skill renders as the standard red ✕ stale chip and is skipped at dispatch with a warning.
+
+### Skills (anchor `#/config/skills`)
+The skill-store catalog: name / description / source badge (`store` = served from the `devcake-repos/skill-store` repo on the bundled Gitea; `bundled` = fallback copies shipped in the app image, used when the internal forge is disabled or unreachable). Actions: **Add skill**, **Edit in Gitea →** (store repo, operators push skills straight to `main`) and **Re-seed built-ins** (`POST /api/v1/skills/sync` — restores missing built-in files, never overwrites edits). Skill content is operator-controlled instructions injected into the agent session — same trust class as the MCP command area.
+
+**Add skill** (no Gitea, no YAML — the non-technical path) opens a dialog with two modes:
+- **Write** — name + "when should the agent use it?" (the trigger description) + a markdown instructions box. The app *generates* the frontmatter and commits `<name>/SKILL.md` to the store (`POST /api/v1/skills`).
+- **Import files** — pick the skill's *folder* (containing `SKILL.md` plus any supporting files); the browser's directory picker preserves the nested layout (a plain file picker would flatten `refs/x.md` to `x.md`), OS/VCS cruft like `.DS_Store` is dropped, the name is read from the frontmatter, and the tree is committed under `<name>/` (`POST /api/v1/skills/import`).
+
+Both validate server-side (name shape, required description, per-file 200 KB / total 1 MB caps, path-safety) and **refuse a name collision** with an existing store skill or a built-in unless the operator confirms **Overwrite** (409 → explicit confirm). Operator-created skills show a **delete** (trash) affordance; **built-ins have none** — they re-seed at boot, so the retirement path is to deselect them on Dev Types (`DELETE /api/v1/skills/{name}` refuses a built-in with 422). Skills created here carry `metadata.source: operator (admin panel)`.
 
 ### Assignments
 Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).

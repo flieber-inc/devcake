@@ -212,6 +212,9 @@ class DevType(BaseModel):
     harness_template: Literal["claude-code", "grok-build", "codex"]
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
+    # Skill-store skills installed to ~/.claude/skills before the harness
+    # starts — claude-code harness only in v1 (other harnesses skip + warn)
+    skills: list[str] = Field(default_factory=list)
     # Named secret env vars delivered to this Dev Type's runs: NAMES only —
     # values are GUI-stored under /data/secrets/harness/ (ADR-0011) and read
     # at runspec time, so mcp_setup_commands can reference e.g. $DD_API_KEY
@@ -219,6 +222,19 @@ class DevType(BaseModel):
     secret_env: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
+
+    @field_validator("skills")
+    @classmethod
+    def _skill_names_valid(cls, v):
+        out: list[str] = []
+        for name in v:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
+                raise ValueError(
+                    f"skill name {name!r}: lowercase alnum with - or _ "
+                    "(≤64 chars), starting alphanumeric")
+            if name not in out:
+                out.append(name)
+        return out
 
     @field_validator("secret_env")
     @classmethod

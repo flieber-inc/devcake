@@ -66,6 +66,173 @@ def test_live_pair_reused_without_admin_calls(tmp_path, monkeypatch):
     assert len(calls) == 2                       # one probe per token
 
 
+# ── skill store (docs/16 skill store v1) ─────────────────────────────────────
+
+import base64
+
+
+def _seed_files():
+    return [
+        {"path": "README.md",
+         "content_b64": base64.b64encode(b"store readme").decode()},
+        {"path": "tdd/SKILL.md",
+         "content_b64": base64.b64encode(b"---\nname: tdd\n---\n").decode()},
+        {"path": "tdd/reference.md",
+         "content_b64": base64.b64encode(b"ref").decode()},
+    ]
+
+
+def _tree_response(paths, truncated=False):
+    return httpx.Response(200, json={
+        "tree": [{"path": p, "type": "blob", "size": 42, "sha": f"sha-{p}"}
+                 for p in paths],
+        "truncated": truncated})
+
+
+class _StoreRecorder:
+    """Route the Gitea calls ensure_skill_store makes; record contents writes.
+
+    empty_status: what GET git/trees/main returns before the first commit —
+    Gitea 1.24 answers 400 "sha not found [main]" (live-verified 2026-07-17),
+    while a missing repo/branch is 404. Both must read as "empty"."""
+
+    def __init__(self, existing_paths=None, repo_exists=True, empty_status=404):
+        self.existing_paths = existing_paths
+        self.repo_exists = repo_exists
+        self.empty_status = empty_status
+        self.contents_batches = []
+        self.calls = []
+
+    def __call__(self, request):
+        path, method = request.url.path, request.method
+        self.calls.append((method, path))
+        if method == "POST" and path == "/api/v1/orgs":
+            return httpx.Response(409, json={})
+        if method == "POST" and path == "/api/v1/orgs/devcake-repos/repos":
+            return httpx.Response(409 if self.repo_exists else 201, json={})
+        if "/git/trees/" in path:
+            if self.existing_paths is None:
+                return httpx.Response(self.empty_status,
+                                      json={"message": "sha not found [main]"
+                                            if self.empty_status == 400
+                                            else "no tree"})
+            return _tree_response(self.existing_paths)
+        if method == "POST" and path.endswith("/skill-store/contents"):
+            self.contents_batches.append(json.loads(request.content))
+            return httpx.Response(201, json={})
+        if method == "GET" and "/contents/" in path:
+            return httpx.Response(200, json={
+                "encoding": "base64",
+                "content": base64.b64encode(b"file body").decode()})
+        return httpx.Response(200, json={})
+
+
+def test_skill_store_fresh_repo_seeds_everything(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=None, repo_exists=False)
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_skill_store(_seed_files()))
+    assert len(rec.contents_batches) == 1
+    body = rec.contents_batches[0]
+    assert {f["path"] for f in body["files"]} == {
+        "README.md", "tdd/SKILL.md", "tdd/reference.md"}
+    assert all(f["operation"] == "create" for f in body["files"])
+    # the store repo is operator-pushable: no protection, no users, no tokens
+    assert not any("branch_protections" in p for _, p in rec.calls)
+    assert not any("collaborators" in p for _, p in rec.calls)
+    assert not any(p.endswith("/tokens") for _, p in rec.calls)
+
+
+def test_skill_store_fully_seeded_writes_nothing(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=[
+        "README.md", "tdd/SKILL.md", "tdd/reference.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_skill_store(_seed_files()))
+    assert rec.contents_batches == []
+
+
+def test_skill_store_partial_tree_seeds_only_missing(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=["README.md", "tdd/SKILL.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_skill_store(_seed_files()))
+    assert len(rec.contents_batches) == 1
+    assert {f["path"] for f in rec.contents_batches[0]["files"]} == {
+        "tdd/reference.md"}
+
+
+def test_skill_store_paths_and_file_reads(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=["README.md", "tdd/SKILL.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    assert run_coro(prov.skill_store_paths()) == ["README.md", "tdd/SKILL.md"]
+    assert run_coro(prov.skill_store_file("tdd/SKILL.md")) == b"file body"
+    assert prov.skill_store_url().endswith("/devcake-repos/skill-store")
+
+
+def test_skill_store_tree_sizes_and_truncation_warning(tmp_path, monkeypatch, caplog):
+    """Sizes ride the tree listing (SkillService pre-fetch cap checks); a
+    truncated tree (~1000-entry Gitea cap) must be loud, not silent."""
+    import logging
+
+    def handler(request):
+        return _tree_response(["README.md", "tdd/SKILL.md"], truncated=True)
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="devcake.internal_forge"):
+        tree = run_coro(prov.skill_store_tree())
+    assert tree == [
+        {"path": "README.md", "size": 42, "sha": "sha-README.md"},
+        {"path": "tdd/SKILL.md", "size": 42, "sha": "sha-tdd/SKILL.md"}]
+    assert any("TRUNCATED" in r.message for r in caplog.records)
+
+
+def test_write_skill_files_create_vs_update(tmp_path, monkeypatch):
+    """The batch contents API needs the blob sha for updates but must NOT
+    send one for creates — Gitea 422s on either mismatch."""
+    rec = _StoreRecorder(existing_paths=["custom/SKILL.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.write_skill_files([
+        {"path": "custom/SKILL.md", "content_b64": "QQ=="},
+        {"path": "custom/new.md", "content_b64": "Qg=="},
+    ], "devcake admin: save skill custom"))
+    body = rec.contents_batches[0]
+    ops = {f["path"]: f for f in body["files"]}
+    assert ops["custom/SKILL.md"]["operation"] == "update"
+    assert ops["custom/SKILL.md"]["sha"] == "sha-custom/SKILL.md"
+    assert ops["custom/new.md"]["operation"] == "create"
+    assert "sha" not in ops["custom/new.md"]
+    assert body["message"] == "devcake admin: save skill custom"
+
+
+def test_delete_skill_paths_sends_shas(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=["custom/SKILL.md", "custom/x.md"])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.delete_skill_paths(
+        ["custom/SKILL.md", "custom/x.md"], "devcake admin: delete skill custom"))
+    body = rec.contents_batches[0]
+    assert all(f["operation"] == "delete" for f in body["files"])
+    assert {f["sha"] for f in body["files"]} == {
+        "sha-custom/SKILL.md", "sha-custom/x.md"}
+    assert "content" not in body["files"][0]
+
+
+def test_skill_store_paths_empty_repo_returns_empty(tmp_path, monkeypatch):
+    rec = _StoreRecorder(existing_paths=None)     # trees → 404 (no commits yet)
+    prov = _prov(rec, tmp_path, monkeypatch)
+    assert run_coro(prov.skill_store_paths()) == []
+
+
+def test_skill_store_seeds_no_commit_repo_gitea_400(tmp_path, monkeypatch):
+    """Live Gitea 1.24 answers 400 'sha not found [main]' (not 404) for the
+    tree of a freshly created no-auto_init repo — the pre-fix code raised and
+    aborted the very first seed."""
+    rec = _StoreRecorder(existing_paths=None, repo_exists=False,
+                         empty_status=400)
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_skill_store(_seed_files()))
+    assert len(rec.contents_batches) == 1
+    assert {f["path"] for f in rec.contents_batches[0]["files"]} == {
+        "README.md", "tdd/SKILL.md", "tdd/reference.md"}
+
+
 def test_revoked_write_token_forces_remint(tmp_path, monkeypatch):
     """Pre-fix only token_read was probed — a dead write token was reused
     silently and EXECUTE failed at push time."""

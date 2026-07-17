@@ -38,6 +38,14 @@ ORG = "devcake-internal"
 OPERATOR_ORG = "devcake-repos"
 APP_USER = "devcake-app"            # org owner: app-side PR ops + merges
 REVIEWER_USER = "devcake-reviewer"  # formal approvals (whitelisted per repo)
+# The skill store (docs/16 skill store v1): one operator-editable repo in
+# OPERATOR_ORG holding Claude Code skills. Deliberately NO branch protection,
+# NO machine user, NO tokens — operators push skills straight to main via the
+# Gitea UI; the app reads it with the admin credential. `skill-store` cannot
+# collide with a repo card: card names must match ^[a-z][a-z0-9]{0,11}$
+# (no hyphen — config._INSTANCE_NAME_RE).
+SKILL_REPO = "skill-store"
+
 
 def _secrets_dir() -> Path:
     return Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / "internal_forge"
@@ -284,6 +292,100 @@ class GiteaProvisioner:
                 "clone_url": f"{self.url}/{OPERATOR_ORG}/{name}.git",
                 "html_url": f"{self.public_url}/{OPERATOR_ORG}/{name}",
                 "adopted": adopted}
+
+    # ── skill store (docs/16 skill store v1) ─────────────────────────────────
+
+    async def ensure_skill_store(self, seed_files: list[dict]) -> None:
+        """Create-or-adopt {OPERATOR_ORG}/{SKILL_REPO} and seed the bundled
+        skills — MISSING paths only, one commit, never clobbering operator
+        edits (a deleted built-in file returns on next boot; DEFAULT_DEV_TYPES
+        precedent). No auto_init: the seed commit itself initializes main, so
+        the bundled README is not blocked by Gitea's auto-init stub."""
+        await self._req("POST", "/orgs", tolerate=(409, 422),
+                        json={"username": OPERATOR_ORG, "visibility": "private"})
+        await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos", tolerate=(409,),
+                        json={"name": SKILL_REPO, "private": True,
+                              "auto_init": False, "default_branch": "main"})
+        existing = set(await self.skill_store_paths())
+        missing = [f for f in seed_files if f["path"] not in existing]
+        if not missing:
+            return
+        await self._req(
+            "POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
+            json={"message": "devcake: seed built-in skills",
+                  "files": [{"operation": "create", "path": f["path"],
+                             "content": f["content_b64"]} for f in missing]})
+        log.info("skill store seeded: %d file(s) added", len(missing))
+
+    async def skill_store_tree(self) -> list[dict]:
+        """[{path, size}] for every blob on main → [] when there is nothing
+        yet: 404 (repo or branch absent) AND 400 — live Gitea 1.24 answers
+        400 "sha not found [main]" for the tree of a freshly created
+        no-auto_init repo (live-verified 2026-07-17; the ref here is a
+        constant, so a 400 can only mean that). Sizes let SkillService
+        enforce its caps BEFORE downloading content. Gitea truncates trees
+        at ~1000 entries — files past the boundary would read as missing,
+        so an oversized store is surfaced loudly."""
+        data = await self._req(
+            "GET",
+            f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/git/trees/main?recursive=true",
+            tolerate=(400, 404))
+        if not data:
+            return []
+        if data.get("truncated"):
+            log.warning("skill store tree is TRUNCATED (~1000-entry Gitea "
+                        "cap) — skills past the boundary will read as "
+                        "missing; prune the %s/%s repo",
+                        OPERATOR_ORG, SKILL_REPO)
+        return [{"path": t["path"], "size": int(t.get("size") or 0),
+                 "sha": t.get("sha") or ""}
+                for t in data.get("tree") or [] if t.get("type") == "blob"]
+
+    async def skill_store_paths(self) -> list[str]:
+        """Blob paths on main (seed-diff input) — the tree read above."""
+        return [t["path"] for t in await self.skill_store_tree()]
+
+    async def write_skill_files(self, files: list[dict], message: str) -> None:
+        """Upsert store files in ONE commit (admin-panel authoring). The
+        batch contents API needs the blob sha on updates and refuses one on
+        creates, so the current tree decides per path."""
+        shas = {t["path"]: t["sha"] for t in await self.skill_store_tree()}
+        batch = []
+        for f in files:
+            entry = {"path": f["path"], "content": f["content_b64"]}
+            if f["path"] in shas:
+                entry.update(operation="update", sha=shas[f["path"]])
+            else:
+                entry["operation"] = "create"
+            batch.append(entry)
+        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
+                        json={"message": message, "files": batch})
+
+    async def delete_skill_paths(self, paths: list[str], message: str) -> None:
+        """Delete store files in ONE commit (admin-panel skill removal)."""
+        shas = {t["path"]: t["sha"] for t in await self.skill_store_tree()}
+        batch = [{"operation": "delete", "path": p, "sha": shas[p]}
+                 for p in paths if p in shas]
+        if not batch:
+            return
+        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
+                        json={"message": message, "files": batch})
+
+    async def skill_store_file(self, path: str) -> bytes:
+        """Raw bytes of one store file at main (GiteaForge.file_content's
+        contents-API idiom, admin-credentialed)."""
+        import base64
+        from urllib.parse import quote
+        data = await self._req(
+            "GET", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents/"
+                   f"{quote(path)}?ref=main")
+        if isinstance(data, dict) and data.get("encoding") == "base64":
+            return base64.b64decode(data["content"])
+        raise RuntimeError(f"skill store: unexpected contents payload for {path}")
+
+    def skill_store_url(self) -> str:
+        """Operator-clickable store URL (ROOT_URL-based, loopback :3300)."""
+        return f"{self.public_url}/{OPERATOR_ORG}/{SKILL_REPO}"
 
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission credential pair (runspec token source) —

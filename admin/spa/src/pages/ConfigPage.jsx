@@ -6,9 +6,10 @@ import { Section } from "../components/Card.jsx";
 import { Field, Help, ListTextarea, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
-import { ConfirmDialog } from "../components/Modal.jsx";
+import { ConfirmDialog, Modal } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
+import SelectionChips from "../components/SelectionChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
@@ -122,7 +123,7 @@ function UploadButton({ devType, secretFile, onDone }) {
 
 // Fully controlled: the card renders and edits the shared draft. Save is the
 // page-level Save; only Delete / OAuth / upload act immediately.
-function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onCredChange }) {
+function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onCredChange, skillsCatalog }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
@@ -227,6 +228,26 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           ))}
         </div>
       )}
+      <SelectionChips label="Skills"
+        help="Skill-store skills installed to ~/.claude/skills inside the Dev container before the agent starts. The catalog lives in the Skills section below."
+        options={(skillsCatalog?.skills || []).map((s) => ({
+          name: s.name, title: s.description || undefined }))}
+        selected={d.skills || []}
+        disabled={d.harness_template !== "claude-code"}
+        disabledNote={`Skills run on the claude-code harness only in this version${
+          d.harness_template !== "claude-code" && (d.skills || []).length
+            ? ` — ${d.skills.length} selected skill(s) will be skipped`
+            : ""}.`}
+        emptyNote="no skills in the catalog yet — see the Skills section below"
+        staleNote="not in the skill store — skipped at dispatch; click to remove"
+        onChange={(next) => {
+          // write back in CATALOG order (unknown names last): uncheck-then-
+          // recheck must not surface a reorder-only dirty diff (diffLeaves
+          // compares arrays order-sensitively); skill order has no meaning
+          const cat = (skillsCatalog?.skills || []).map((c) => c.name);
+          set("skills", [...cat.filter((n) => next.includes(n)),
+                         ...next.filter((n) => !cat.includes(n))]);
+        }} />
       <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
         <div className="flex items-center justify-between">
           <span>
@@ -283,57 +304,162 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
   );
 }
 
+// ── skill authoring (docs/11 Skills section) ─────────────────────────────────
+
+// browser-safe base64 for uploaded files (chunked — a spread over a large
+// Uint8Array overflows the call stack)
+async function fileToB64(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let s = "";
+  for (let i = 0; i < buf.length; i += 0x8000)
+    s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+// "Add skill" dialog: Write (name + trigger + markdown; the app generates
+// the frontmatter — the operator never sees YAML) or Import (upload a
+// SKILL.md + optional supporting files). 409 flips into an explicit
+// overwrite confirmation instead of silently replacing.
+function AddSkillDialog({ onClose, onSaved }) {
+  const [mode, setMode] = useState("write");
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [body, setBody] = useState("");
+  const [files, setFiles] = useState([]);      // [{path, content_b64}]
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [askOverwrite, setAskOverwrite] = useState(false);
+
+  const canSubmit = mode === "write"
+    ? name.trim() && desc.trim() && body.trim()
+    : files.length > 0;
+
+  // any content edit invalidates a pending 409/overwrite decision — the
+  // collision was for the OLD name/payload, so re-check from scratch
+  const edited = (setter) => (v) => { setter(v); setAskOverwrite(false); setErr(""); };
+
+  const submit = async (overwrite) => {
+    setBusy(true); setErr("");
+    try {
+      if (mode === "write")
+        await send("POST", "/skills",
+          { name: name.trim(), description: desc.trim(), body, overwrite });
+      else
+        await send("POST", "/skills/import", { files, overwrite });
+      onSaved(); onClose();
+    } catch (e) {
+      setAskOverwrite(e.status === 409);
+      setErr(String(e.message || e).replace(/^\d+ /, ""));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal className="max-w-2xl">
+      <div className="mb-4 flex items-center justify-between">
+        <h4 className="text-base font-semibold tracking-tight">Add skill</h4>
+        <div className="flex gap-1 rounded-md bg-stone-100 p-0.5 text-xs dark:bg-neutral-800">
+          {[["write", "Write"], ["import", "Import files"]].map(([m, l]) => (
+            <button key={m} type="button"
+              onClick={() => { setMode(m); setErr(""); setAskOverwrite(false); }}
+              className={`rounded px-2.5 py-1 font-medium transition ${
+                mode === m ? "bg-white shadow-sm dark:bg-neutral-700"
+                           : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === "write" ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Name" hint="lowercase, - or _ (e.g. release-notes)">
+              <Input value={name} onChange={(e) => edited(setName)(e.target.value)}
+                placeholder="my-skill" />
+            </Field>
+            <Field label="When should the agent use it?"
+              hint="this description is the trigger — be specific">
+              <Input value={desc} onChange={(e) => edited(setDesc)(e.target.value)}
+                placeholder="Writes release notes: use when a release is being prepared." />
+            </Field>
+          </div>
+          <Field label="Instructions (markdown)">
+            <Textarea rows={10} value={body}
+              onChange={(e) => edited(setBody)(e.target.value)}
+              placeholder={"# Release notes\n\nStep-by-step guidance the agent should follow…"} />
+          </Field>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Skill folder"
+            hint="pick the skill's folder (containing SKILL.md) — nested files keep their layout; the name comes from the frontmatter">
+            {/* webkitdirectory: a plain multi-file picker only exposes
+                basenames, which silently flattens refs/x.md → x.md and
+                collides same-named files. A folder pick carries
+                webkitRelativePath, so the layout under the skill dir survives. */}
+            <input type="file" webkitdirectory="" directory=""
+              className="block w-full text-sm text-neutral-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:file:bg-neutral-800"
+              onChange={async (e) => {
+                setErr(""); setAskOverwrite(false);
+                const fs = [];
+                for (const f of e.target.files) {
+                  // "<folder>/<rel>" → drop the chosen folder's own name
+                  const rel = (f.webkitRelativePath || f.name)
+                    .split("/").slice(1).join("/") || f.name;
+                  // skip OS/VCS cruft a folder pick sweeps in (.DS_Store, .git/…)
+                  if (rel.split("/").some((seg) => seg.startsWith("."))) continue;
+                  fs.push({ path: rel, content_b64: await fileToB64(f) });
+                }
+                setFiles(fs);
+              }} />
+          </Field>
+          {files.length > 0 && (
+            <p className="text-xs text-neutral-400">
+              {files.length} file(s): {files.map((f) => f.path).join(", ")}
+            </p>
+          )}
+        </div>
+      )}
+      {err && (
+        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          {err}
+        </p>
+      )}
+      <div className="mt-5 flex justify-end gap-2">
+        <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+        {askOverwrite ? (
+          <Button kind="danger" disabled={busy || !canSubmit} onClick={() => submit(true)}>
+            {busy ? "Working…" : "Overwrite existing skill"}
+          </Button>
+        ) : (
+          <Button disabled={busy || !canSubmit} onClick={() => submit(false)}>
+            {busy ? "Working…" : "Save to store"}
+          </Button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ── the page ─────────────────────────────────────────────────────────────────
 
-// Ordered toggle chips over the configured repo cards (PMO repo set +
-// reference repos, v0.1.2): selection order is the list order; entries
-// selected in the SIBLING list render disabled (the two sets are disjoint
-// by config validation).
+// Repo-flavored SelectionChips (PMO repo set + reference repos, v0.1.2):
+// selection order is the list order; entries selected in the SIBLING list
+// render disabled (the two sets are disjoint by config validation).
 function RepoChips({ label, help, all, selected, excluded, excludedNote,
                      unavailable = [], unavailableNote = "",
                      firstBadge = "", onChange }) {
   return (
-    <Field label={label} help={help}>
-      <div className="flex flex-wrap items-center gap-1.5 pt-1">
-        {all.length === 0 && (
-          <span className="text-xs text-neutral-400">
-            no repositories configured — add them on the Repositories page
-          </span>
-        )}
-        {all.map((r) => {
-          const sel = selected.includes(r.name);
-          const pos = selected.indexOf(r.name);
-          const noCreds = !sel && unavailable.includes(r.name);
-          const blocked = !sel && (excluded.includes(r.name) || noCreds);
-          return (
-            <button key={r.name} type="button" disabled={blocked}
-              title={noCreds ? unavailableNote
-                     : blocked ? `already selected as a ${excludedNote}` : undefined}
-              onClick={() => onChange(
-                sel ? selected.filter((n) => n !== r.name)
-                    : [...selected, r.name])}
-              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${
-                blocked ? "cursor-not-allowed border-neutral-200 text-neutral-300 dark:border-neutral-800 dark:text-neutral-600"
-                : sel
-                  ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
-                  : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
-              }`}>
-              {r.name}{sel && pos === 0 ? firstBadge : ""}
-            </button>
-          );
-        })}
-        {/* selected names whose repo card no longer exists: without this
-            they'd be invisible AND undeselectable — the config PUT then 422s */}
-        {selected.filter((n) => !all.some((r) => r.name === n)).map((n) => (
-          <button key={n} type="button"
-            title="this repo card no longer exists — click to remove the stale entry"
-            onClick={() => onChange(selected.filter((x) => x !== n))}
-            className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
-            {n} ✕
-          </button>
-        ))}
-      </div>
-    </Field>
+    <SelectionChips label={label} help={help}
+      options={all.map((r) => ({
+        name: r.name,
+        disabled: excluded.includes(r.name) || unavailable.includes(r.name),
+        disabledNote: unavailable.includes(r.name)
+          ? unavailableNote
+          : `already selected as a ${excludedNote}`,
+      }))}
+      selected={selected} onChange={onChange} firstBadge={firstBadge}
+      emptyNote="no repositories configured — add them on the Repositories page"
+      staleNote="this repo card no longer exists — click to remove the stale entry" />
   );
 }
 
@@ -360,6 +486,13 @@ export default function ConfigPage({ section, onSectionInView }) {
       .catch(() => setRepoHasToken({}));
   }, [repoNamesKey]);
   const [oauthFor, setOauthFor] = useState(null);
+  // skill store catalog (v1): store-listed when Gitea is up, bundled
+  // fallback otherwise — `store` says which (and where to edit)
+  const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
+  const loadSkills = () =>
+    get("/skills").then(setSkillsCatalog).catch(() => {});
+  useEffect(() => { loadSkills(); }, []);
+  const [addSkill, setAddSkill] = useState(false);
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
   const [pageErr, setPageErr] = useState("");
@@ -642,9 +775,93 @@ export default function ConfigPage({ section, onSectionInView }) {
                   },
                 });
               }}
-              onOAuth={setOauthFor} />
+              onOAuth={setOauthFor}
+              skillsCatalog={skillsCatalog} />
           ))}
         </div>
+      </Section>
+
+      <Section id="skills" title="Skills"
+        description="Claude Code skills Devs can use — reusable expertise installed into the agent session. Select them per Dev Type above."
+        actions={
+          <>
+            {skillsCatalog.store?.enabled && (
+              <Button kind="ghost" icon={Plus} onClick={() => setAddSkill(true)}>
+                Add skill
+              </Button>
+            )}
+            {skillsCatalog.store?.enabled && skillsCatalog.store?.html_url && (
+              <a className="text-sm underline" target="_blank" rel="noreferrer"
+                href={skillsCatalog.store.html_url}>
+                Edit in Gitea →
+              </a>
+            )}
+            {skillsCatalog.store?.enabled && (
+              <Button kind="ghost" onClick={async () => {
+                try { await send("POST", "/skills/sync"); await loadSkills(); }
+                catch (e) { setPageErr(`skill re-seed failed: ${String(e.message || e)}`); }
+              }}>
+                Re-seed built-ins
+              </Button>
+            )}
+          </>
+        }>
+        {skillsCatalog.store && !skillsCatalog.store.enabled && (
+          <p className="mb-3 text-sm text-neutral-400">
+            Served from the bundled copies — set GITEA_ADMIN_PASSWORD (bundled
+            Gitea) to get the editable skill-store repo.
+          </p>
+        )}
+        {skillsCatalog.store?.enabled && !skillsCatalog.store.ok && (
+          <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+            Skill store unreachable ({skillsCatalog.store.detail}) — serving the
+            bundled copies. Runs keep working; store edits are unavailable.
+          </p>
+        )}
+        {skillsCatalog.skills.length === 0 ? (
+          <p className="text-sm text-neutral-400">No skills found.</p>
+        ) : (
+          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {skillsCatalog.skills.map((s) => (
+              <div key={s.name} className="flex items-baseline gap-3 py-2 text-sm">
+                <span className="shrink-0 font-mono font-semibold">{s.name}</span>
+                <span className="grow text-neutral-500 dark:text-neutral-400">
+                  {s.description || "(no description)"}
+                </span>
+                <span className={"shrink-0 rounded px-1.5 py-0.5 text-xs "
+                  + (s.source === "store"
+                    ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+                    : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+                  {s.source === "store" ? "store" : "bundled"}
+                </span>
+                {/* built-ins re-seed at boot — only operator skills delete */}
+                {skillsCatalog.store?.enabled && !s.builtin && (
+                  <button type="button"
+                    title={`Delete skill ${s.name}`}
+                    className="shrink-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                    onClick={() => setConfirm({
+                      title: `Delete skill ${s.name}?`,
+                      body: "Removed from the skill store. Dev Types that "
+                        + "selected it keep the name (⚠) but the skill is "
+                        + "skipped at dispatch until re-added.",
+                      confirmLabel: "Delete",
+                      action: async () => {
+                        try {
+                          await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
+                          await loadSkills();
+                        } catch (e) {
+                          setPageErr(`skill delete failed: ${String(e.message || e)}`);
+                        }
+                        setConfirm(null);
+                      },
+                    })}>
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Section>
 
       <Section id="assignments" title="Assignments"
@@ -810,6 +1027,8 @@ export default function ConfigPage({ section, onSectionInView }) {
         onCancel={() => setConfirm(null)} />
       {oauthFor && <OAuthWizard devType={oauthFor}
         onClose={() => { setOauthFor(null); reload(); }} />}
+      {addSkill && <AddSkillDialog
+        onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
     </div>
   );
 }

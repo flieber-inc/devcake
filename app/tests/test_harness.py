@@ -178,7 +178,7 @@ def test_missing_referenced_secret_env_rule(tmp_path, monkeypatch):
                  mcp_setup_commands=[
                      "pip install --user devcake-logs-mcp",
                      "claude mcp add logs -e A=$DD_API_KEY "
-                     "-e B=${DD_APP_KEY} -- python -m logs_mcp.server"])
+                     "-e B=${DD_APP_KEY} -- python -m some_plugin.server"])
     assert missing_referenced_secret_env(dt) == ["DD_API_KEY", "DD_APP_KEY"]
     s.write_harness_secret("DD_API_KEY", "k1")
     assert missing_referenced_secret_env(dt) == ["DD_APP_KEY"]

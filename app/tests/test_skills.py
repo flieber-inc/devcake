@@ -292,6 +292,66 @@ def test_save_skill_writes_prefixed_and_guards_collisions(tmp_path):
         _run(svc.save_skill("fresh3", [{"path": "notes.md", "content_b64": "eA=="}]))
 
 
+def test_overwrite_removes_dropped_files(tmp_path):
+    """A shrinking overwrite must delete files the new version dropped —
+    otherwise the orphan keeps being installed into every future run."""
+    from devcake.domain.skills import SkillService
+    forge = _fake_writable_forge({
+        "foo/SKILL.md": b"---\nname: foo\ndescription: v1\n---\n",
+        "foo/refs/help.md": b"old help",
+        "foo/scripts/run.py": b"old script"})
+    svc = SkillService(internal_forge=forge, builtin_dir=tmp_path / "none")
+    # v2 keeps SKILL.md + run.py, drops refs/help.md
+    v2 = svc.compose_skill("foo", "v2", "body") + [
+        {"path": "scripts/run.py", "content_b64": "eA=="}]
+    _run(svc.save_skill("foo", v2, overwrite=True))
+    remaining = {p for p in forge.files if p.startswith("foo/")}
+    assert remaining == {"foo/SKILL.md", "foo/scripts/run.py"}
+    assert forge.deletes and "foo/refs/help.md" in forge.deletes[-1][0]
+    # a fresh install (SKILL.md-only) leaves no orphans either
+    _run(svc.save_skill("foo", svc.compose_skill("foo", "v3", "b"), overwrite=True))
+    assert {p for p in forge.files if p.startswith("foo/")} == {"foo/SKILL.md"}
+
+
+def test_save_skill_wraps_forge_errors_as_502(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    import pytest as _pytest
+    forge = _fake_writable_forge()
+
+    async def boom(fs, message):
+        raise RuntimeError("gitea 5xx")
+    forge.write_skill_files = boom
+    svc = SkillService(internal_forge=forge, builtin_dir=tmp_path / "none")
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.save_skill("x", svc.compose_skill("x", "d", "b")))
+    assert e.value.status == 502 and "gitea 5xx" in str(e.value)
+
+
+def test_delete_skill_wraps_forge_errors_as_502(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    import pytest as _pytest
+    forge = _fake_writable_forge({"c/SKILL.md": b"---\nname: c\n---\n"})
+
+    async def boom(paths, message):
+        raise RuntimeError("gitea 5xx")
+    forge.delete_skill_paths = boom
+    svc = SkillService(internal_forge=forge, builtin_dir=tmp_path / "none")
+    with _pytest.raises(SkillStoreError) as e:
+        _run(svc.delete_skill("c"))
+    assert e.value.status == 502
+
+
+def test_save_skill_dedupes_files_by_path(tmp_path):
+    from devcake.domain.skills import SkillService
+    forge = _fake_writable_forge()
+    svc = SkillService(internal_forge=forge, builtin_dir=tmp_path / "none")
+    dupes = [{"path": "SKILL.md", "content_b64": "QQ=="},
+             {"path": "SKILL.md", "content_b64": "Qg=="}]
+    _run(svc.save_skill("d", dupes))
+    written = [f["path"] for f in forge.writes[-1][0]]
+    assert written == ["d/SKILL.md"]           # last wins, no duplicate op
+
+
 def test_save_skill_requires_store_and_invalidates_cache(tmp_path):
     from devcake.domain.skills import SkillService, SkillStoreError
     import pytest as _pytest

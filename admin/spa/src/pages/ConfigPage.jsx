@@ -316,6 +316,10 @@ function AddSkillDialog({ onClose, onSaved }) {
     ? name.trim() && desc.trim() && body.trim()
     : files.length > 0;
 
+  // any content edit invalidates a pending 409/overwrite decision — the
+  // collision was for the OLD name/payload, so re-check from scratch
+  const edited = (setter) => (v) => { setter(v); setAskOverwrite(false); setErr(""); };
+
   const submit = async (overwrite) => {
     setBusy(true); setErr("");
     try {
@@ -326,9 +330,8 @@ function AddSkillDialog({ onClose, onSaved }) {
         await send("POST", "/skills/import", { files, overwrite });
       onSaved(); onClose();
     } catch (e) {
-      const msg = String(e.message || e);
-      setAskOverwrite(msg.startsWith("409"));
-      setErr(msg.replace(/^\d+ /, ""));
+      setAskOverwrite(e.status === 409);
+      setErr(String(e.message || e).replace(/^\d+ /, ""));
     } finally { setBusy(false); }
   };
 
@@ -352,32 +355,42 @@ function AddSkillDialog({ onClose, onSaved }) {
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Name" hint="lowercase, - or _ (e.g. release-notes)">
-              <Input value={name} onChange={(e) => setName(e.target.value)}
+              <Input value={name} onChange={(e) => edited(setName)(e.target.value)}
                 placeholder="my-skill" />
             </Field>
             <Field label="When should the agent use it?"
               hint="this description is the trigger — be specific">
-              <Input value={desc} onChange={(e) => setDesc(e.target.value)}
+              <Input value={desc} onChange={(e) => edited(setDesc)(e.target.value)}
                 placeholder="Writes release notes: use when a release is being prepared." />
             </Field>
           </div>
           <Field label="Instructions (markdown)">
             <Textarea rows={10} value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={(e) => edited(setBody)(e.target.value)}
               placeholder={"# Release notes\n\nStep-by-step guidance the agent should follow…"} />
           </Field>
         </div>
       ) : (
         <div className="space-y-3">
-          <Field label="Skill files"
-            hint="select the skill's SKILL.md (plus any supporting files) — the name comes from its frontmatter">
-            <input type="file" multiple
+          <Field label="Skill folder"
+            hint="pick the skill's folder (containing SKILL.md) — nested files keep their layout; the name comes from the frontmatter">
+            {/* webkitdirectory: a plain multi-file picker only exposes
+                basenames, which silently flattens refs/x.md → x.md and
+                collides same-named files. A folder pick carries
+                webkitRelativePath, so the layout under the skill dir survives. */}
+            <input type="file" webkitdirectory="" directory=""
               className="block w-full text-sm text-neutral-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:file:bg-neutral-800"
               onChange={async (e) => {
                 setErr(""); setAskOverwrite(false);
                 const fs = [];
-                for (const f of e.target.files)
-                  fs.push({ path: f.name, content_b64: await fileToB64(f) });
+                for (const f of e.target.files) {
+                  // "<folder>/<rel>" → drop the chosen folder's own name
+                  const rel = (f.webkitRelativePath || f.name)
+                    .split("/").slice(1).join("/") || f.name;
+                  // skip OS/VCS cruft a folder pick sweeps in (.DS_Store, .git/…)
+                  if (rel.split("/").some((seg) => seg.startsWith("."))) continue;
+                  fs.push({ path: rel, content_b64: await fileToB64(f) });
+                }
                 setFiles(fs);
               }} />
           </Field>
@@ -396,7 +409,7 @@ function AddSkillDialog({ onClose, onSaved }) {
       <div className="mt-5 flex justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
         {askOverwrite ? (
-          <Button kind="danger" disabled={busy} onClick={() => submit(true)}>
+          <Button kind="danger" disabled={busy || !canSubmit} onClick={() => submit(true)}>
             {busy ? "Working…" : "Overwrite existing skill"}
           </Button>
         ) : (

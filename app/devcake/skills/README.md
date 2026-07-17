@@ -36,7 +36,7 @@ name + description load into every session, the body only on activation.
 ## Adding / editing skills
 
 Easiest: the DevCake admin panel → Config → **Skills** → **Add skill**
-(write a name + description + instructions, or upload skill files) — no
+(write a name + description + instructions, or import a skill folder) — no
 Gitea login and no YAML required.
 
 Or push straight to `main` of this repo (the Gitea UI works). Either way

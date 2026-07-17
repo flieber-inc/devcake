@@ -129,7 +129,7 @@ The skill-store catalog: name / description / source badge (`store` = served fro
 
 **Add skill** (no Gitea, no YAML — the non-technical path) opens a dialog with two modes:
 - **Write** — name + "when should the agent use it?" (the trigger description) + a markdown instructions box. The app *generates* the frontmatter and commits `<name>/SKILL.md` to the store (`POST /api/v1/skills`).
-- **Import files** — upload a `SKILL.md` (plus any supporting files); the name is read from its frontmatter and the folder is committed under `<name>/` (`POST /api/v1/skills/import`).
+- **Import files** — pick the skill's *folder* (containing `SKILL.md` plus any supporting files); the browser's directory picker preserves the nested layout (a plain file picker would flatten `refs/x.md` to `x.md`), OS/VCS cruft like `.DS_Store` is dropped, the name is read from the frontmatter, and the tree is committed under `<name>/` (`POST /api/v1/skills/import`).
 
 Both validate server-side (name shape, required description, per-file 200 KB / total 1 MB caps, path-safety) and **refuse a name collision** with an existing store skill or a built-in unless the operator confirms **Overwrite** (409 → explicit confirm). Operator-created skills show a **delete** (trash) affordance; **built-ins have none** — they re-seed at boot, so the retirement path is to deselect them on Dev Types (`DELETE /api/v1/skills/{name}` refuses a built-in with 422). Skills created here carry `metadata.source: operator (admin panel)`.
 

@@ -16,7 +16,9 @@ async function fail(r) {
         })
         .join(" · ");
   } catch { /* not JSON — keep the raw body */ }
-  throw new Error(`${r.status} ${msg}`);
+  // `.status` lets callers branch on the code (e.g. 409 → overwrite prompt)
+  // without sniffing the formatted message string
+  throw Object.assign(new Error(`${r.status} ${msg}`), { status: r.status });
 }
 
 export async function get(path) {

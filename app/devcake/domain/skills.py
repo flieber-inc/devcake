@@ -214,14 +214,22 @@ class SkillService:
                          overwrite: bool = False) -> None:
         """Write one skill into the store (paths arrive relative to the
         skill dir, are re-validated, and land under {name}/). Collisions —
-        with a store skill OR a built-in name — need explicit overwrite."""
+        with a store skill OR a built-in name — need explicit overwrite. An
+        overwrite is a full REPLACE: files the new version dropped are
+        deleted, never left as orphans that keep shipping to every run."""
         import re
         if self.forge is None:
             raise SkillStoreError(503, "the skill store needs the bundled "
                                        "Gitea (GITEA_ADMIN_PASSWORD unset)")
         if not re.fullmatch(SKILL_NAME_RE, name):
             raise SkillStoreError(422, f"invalid skill name {name!r}")
-        if not any(f.get("path") == "SKILL.md" for f in files or []):
+        # dedupe by path, last wins — a crafted duplicate would batch two
+        # create ops for one path and Gitea 422s
+        deduped = {}
+        for f in files or []:
+            deduped[f.get("path")] = f
+        files = list(deduped.values())
+        if "SKILL.md" not in deduped:
             raise SkillStoreError(422, "a skill needs a SKILL.md")
         total = 0
         prefixed = []
@@ -243,18 +251,26 @@ class SkillService:
         if total > MAX_TOTAL_BYTES:
             raise SkillStoreError(422, f"skill exceeds the "
                                        f"{MAX_TOTAL_BYTES}-byte total cap")
-        if not overwrite:
-            try:
-                existing = {t["path"] for t in await self._store_tree()}
-            except Exception as e:
-                raise SkillStoreError(503, f"skill store unreachable: {e}")
-            if (f"{name}/SKILL.md" in existing
-                    or name in self._builtin_skills()):
-                raise SkillStoreError(
-                    409, f"skill {name!r} already exists — confirm overwrite "
-                         "to replace it")
-        await self.forge.write_skill_files(
-            prefixed, f"devcake admin: save skill {name}")
+        try:
+            existing = {t["path"] for t in await self._store_tree()}
+        except Exception as e:
+            raise SkillStoreError(503, f"skill store unreachable: {e}")
+        if not overwrite and (f"{name}/SKILL.md" in existing
+                              or name in self._builtin_skills()):
+            raise SkillStoreError(
+                409, f"skill {name!r} already exists — confirm overwrite "
+                     "to replace it")
+        # full-replace: drop files the prior version had but this one doesn't
+        orphans = ({p for p in existing if p.startswith(f"{name}/")}
+                   - {f["path"] for f in prefixed})
+        try:
+            await self.forge.write_skill_files(
+                prefixed, f"devcake admin: save skill {name}")
+            if orphans:
+                await self.forge.delete_skill_paths(
+                    sorted(orphans), f"devcake admin: prune skill {name}")
+        except Exception as e:
+            raise SkillStoreError(502, f"skill store write failed: {e}")
         self._invalidate()
 
     async def delete_skill(self, name: str) -> None:
@@ -274,8 +290,11 @@ class SkillService:
             raise SkillStoreError(503, f"skill store unreachable: {e}")
         if not paths:
             raise SkillStoreError(404, f"skill {name!r} is not in the store")
-        await self.forge.delete_skill_paths(
-            paths, f"devcake admin: delete skill {name}")
+        try:
+            await self.forge.delete_skill_paths(
+                paths, f"devcake admin: delete skill {name}")
+        except Exception as e:
+            raise SkillStoreError(502, f"skill store delete failed: {e}")
         self._invalidate()
 
     def _invalidate(self) -> None:

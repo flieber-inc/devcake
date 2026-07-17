@@ -138,6 +138,18 @@ a capable agent from pushing bad code to a feature branch or exfiltrating tokens
    Config; stored `0600` under `/data/secrets/connections/` and
    `/data/secrets/harness/`. Never echoed (`GET /config` has no secret material;
    `secrets-check` = presence + timestamp only). `.env` = **bootstrap only**.
+7. **Dev-Type secret env (`DevType.secret_env`):** mission-tooling credentials
+   (e.g. a log-platform key for an MCP plugin) are the same harness-namespace
+   secret class — GUI-stored, `0600`, redaction-registered on write and at boot.
+   Config holds only the **names**; runspec delivery is the same authenticated
+   rebuild-on-request path as harness credentials. Accepted risk: a
+   `claude mcp add -e VAR=$VAR` line persists the **expanded** value in the
+   ephemeral container's local claude config — a subset of the existing Zone B
+   posture (Devs already hold their credentials in env; the container is
+   destroyed at run end). Same class: a *failing* MCP setup command's stderr
+   tail goes to the container's raw stdout/stderr (`docker logs`) unredacted —
+   anything reaching devcake's own failure records passes `redact()`, but the
+   host log driver sees what the registration CLI chose to print.
 
 **Simplicity vs security:** GUI secrets behind HTTP basic auth on a dedicated
 host with loopback binds is an intentional trade. Residual risk is the operator
@@ -223,6 +235,7 @@ for **app-mediated** posts to Linear/forges, not a substitute for zone C.
 | Unprotected default branch | **Warning** | Operator must fix forge-side |
 | EXECUTE and REVIEW share Dev Type | **Warning** | Independent review recommended, not enforced |
 | `gui-secrets-basic-auth` | **Info** | Reminder of control-plane posture |
+| `secret_env` value missing **and** referenced by an mcp_setup_command | **Gate** (dispatch refused) | `blocked_reasons`/health names the var; self-heals the poll cycle after the value is pasted. Declared-but-unreferenced = warning only (log + ✗ on the Config card) |
 | `auto_merge` enable | Confirm dialog | Operator accepts merge without human PR click |
 | `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |
 | Out-of-pipeline merge | **Hard detection** | Comment + audit + health |

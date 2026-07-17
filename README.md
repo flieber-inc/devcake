@@ -142,7 +142,8 @@ read-only forge token for non-EXECUTE and a different Dev Type for REVIEW.
 
 1. [Tutorial 1 — first mission](docs/tutorials/01-first-mission.md)
 2. [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)
-3. Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
+3. [Tutorial 3 — MCP plugins](docs/tutorials/03-mcp-plugins.md)
+4. Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
 
 Rebuild after upgrades or changes under `app/`, `admin/`, or `images/`:
 

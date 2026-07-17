@@ -189,6 +189,25 @@ def test_run_now_errors(tmp_path):
         run_coro(svc.run_now())
 
 
+def test_run_now_gates_on_missing_referenced_secret_env(tmp_path, monkeypatch):
+    """Mapper runs use the same gate as mission dispatch: a referenced-but-
+    unstored secret env var refuses run_now with a 422-bound
+    MapperUnconfigured naming the var; storing the value lifts it."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    svc, mgr, dispatched = make_service(tmp_path)
+    svc.dev_types["junior-dev"] = DevType(
+        name="junior-dev", harness_template="claude-code",
+        secret_env=["DD_API_KEY"],
+        mcp_setup_commands=["claude mcp add logs -e K=$DD_API_KEY -- x"])
+    with pytest.raises(MapperUnconfigured, match="DD_API_KEY"):
+        run_coro(svc.run_now())
+    assert dispatched == []
+    from devcake import secrets as s
+    s.write_harness_secret("DD_API_KEY", "k")
+    run_coro(svc.run_now())
+    assert dispatched == ["junior-dev"]
+
+
 def test_activity_payload_marks_provenance(tmp_path):
     mission = m("i1", "T-1")
     entries = [

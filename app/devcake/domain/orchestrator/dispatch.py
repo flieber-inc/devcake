@@ -13,7 +13,7 @@ from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from ...harness import HARNESSES
+from ...harness import HARNESSES, missing_referenced_secret_env
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType
@@ -129,6 +129,19 @@ def _reference_repos_note(self, primary: str) -> str:
 
 async def dispatch(self, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
+    missing = missing_referenced_secret_env(dev_type)
+    if missing:
+        # founder decision 2026-07-16: a referenced-but-unstored secret env
+        # var would exit 14 in-container with the cause buried in a warning
+        # — refuse deterministically, burn no attempt, launch no container;
+        # pasting the value un-gates on the next poll cycle
+        self.blocked_reasons[mission.pmo_id] = (
+            f"dev type {dev_type.name}: secret env {', '.join(missing)} is "
+            "referenced by mcp_setup_commands but has no stored value — "
+            "paste it on the admin Config page")
+        log.warning("dispatch of %s refused — %s", mission.key,
+                    self.blocked_reasons[mission.pmo_id])
+        return None
     try:
         live = await self.pmo.get(mission.ref)                 # live re-read
     except Exception as e:
@@ -320,21 +333,18 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
         env["DEVCAKE_FORGE_TOKEN"] = (creds.token_write
                                       if run.mission_type == "EXECUTE"
                                       else creds.token_read)
-        payload = {"env": env, "credential_files": spec_files}
-        extras = self._extra_repos_for(run)   # references reach zero-repo
-        if extras:                            # missions too
-            payload["extra_repos"] = extras
-        return payload
-    write = repo.token
-    ro = repo.token_ro
-    if run.mission_type == "EXECUTE":
-        env["DEVCAKE_FORGE_TOKEN"] = write
     else:
-        env["DEVCAKE_FORGE_TOKEN"] = ro or write
+        write = repo.token
+        ro = repo.token_ro
+        env["DEVCAKE_FORGE_TOKEN"] = (write if run.mission_type == "EXECUTE"
+                                      else ro or write)
+    # one shared tail — the forge branches differ ONLY in token choice
     payload = {"env": env, "credential_files": spec_files}
-    extras = self._extra_repos_for(run)
-    if extras:
+    extras = self._extra_repos_for(run)   # references reach zero-repo
+    if extras:                            # missions too
         payload["extra_repos"] = extras
+    if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
+        payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
     return payload
 
 
@@ -376,6 +386,17 @@ def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict
     from ... import secrets as _secrets
     env = {var: v for var in harness.credential_env
            if (v := _secrets.read_harness_secret(var))}
+    # Dev-Type-declared secret env: named refs into the same GUI store, so
+    # mcp_setup_commands can reference e.g. $DD_API_KEY without a value ever
+    # touching config.yaml (ADR-0011). Missing value = warn-and-proceed —
+    # unless an mcp_setup_command references it, which gates dispatch before
+    # a container ever launches (missing_referenced_secret_env).
+    for var in dev_type.secret_env:
+        if (v := _secrets.read_harness_secret(var)):
+            env[var] = v
+        else:
+            log.warning("secret env %s for dev type %s not stored — add it "
+                        "on the admin Config page", var, dev_type.name)
     files = []
     secrets_dir = (Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
                    / "secrets" / dev_type.name)

@@ -3,7 +3,7 @@ import { Play, Plus, Trash2, KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Section } from "../components/Card.jsx";
-import { Field, Help, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
+import { Field, Help, ListTextarea, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
@@ -200,15 +200,33 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
       </p>
       <Field
         label="MCP setup commands (one per line)"
-        hint="⚠ Run inside the Dev container before the agent starts — arbitrary code execution by design. A failing command fails the run."
+        hint="⚠ Run inside the Dev container before the agent starts — arbitrary code execution by design. A failing or hung command fails the run (exit 14, 300s cap per command) with the command + stderr in the run error."
       >
-        <Textarea
+        <ListTextarea
           rows={2}
-          value={(d.mcp_setup_commands || []).join("\n")}
-          onChange={(e) =>
-            set("mcp_setup_commands", e.target.value.split("\n").filter(Boolean))}
+          value={d.mcp_setup_commands || []}
+          onChange={(v) => set("mcp_setup_commands", v)}
         />
       </Field>
+      <Field
+        label="Secret env vars (one per line)"
+        hint="Names only (UPPER_SNAKE_CASE) — values are pasted below and stored in the secret store, never in config. Delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY). A name referenced by a setup command must have a stored value or the mission won't dispatch."
+      >
+        <ListTextarea
+          rows={2}
+          value={d.secret_env || []}
+          onChange={(v) => set("secret_env", v)}
+        />
+      </Field>
+      {(d.secret_env || []).length > 0 && (
+        <div className="space-y-2">
+          {[...new Set(d.secret_env || [])].map((v) => (
+            <SecretField key={v} label={v}
+              help={`Delivered to ${name} runs as $${v}. Stored securely — never echoed, never in .env.`}
+              refKey={v} checkKind="harness" paste />
+          ))}
+        </div>
+      )}
       <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
         <div className="flex items-center justify-between">
           <span>

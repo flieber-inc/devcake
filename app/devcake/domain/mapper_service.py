@@ -13,6 +13,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ..config import AppConfig, DevType
+from ..harness import missing_referenced_secret_env
 from .model import Mission
 from .run import Run
 
@@ -86,6 +87,13 @@ class MapperService:
         if degraded:
             outcome, error = "degraded_skip", degraded
             log.warning("mapper degraded — periodic run skipped (%s)", degraded)
+        elif (missing := missing_referenced_secret_env(dt)):
+            # same gate as mission dispatch: a referenced-but-unstored
+            # secret env var would exit 14 in-container (docs/14 §8)
+            outcome = "secret_env_gate"
+            error = (f"secret env {', '.join(missing)} referenced by "
+                     "mcp_setup_commands but not stored")
+            log.warning("mapper periodic run skipped — %s", error)
         else:
             async with self._lock:
                 if self.active():
@@ -111,6 +119,11 @@ class MapperService:
             raise MapperUnconfigured(
                 "relations_mapper.dev_type must name an existing Dev Type — "
                 "set it on the Config page")
+        if (missing := missing_referenced_secret_env(dt)):
+            raise MapperUnconfigured(
+                f"dev type {dt.name}: secret env {', '.join(missing)} is "
+                "referenced by mcp_setup_commands but has no stored value — "
+                "paste it on the admin Config page")
         repo = self.mgr._mapper_repo()
         if repo is None:
             raise MapperUnconfigured(

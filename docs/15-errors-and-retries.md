@@ -12,7 +12,8 @@
 | `PMO_GONE` | Mission deleted mid-run | external, informational |
 | `FORGE_TRANSIENT` | forge 429/5xx/network | retryable |
 | `FORGE_PERMANENT` | auth failure, branch protection blocks merge | config problem |
-| `DEV_CRASH` | exit 10 (harness crash), 14 (MCP setup), 20 (entrypoint); vanished container | counted attempt |
+| `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint); vanished container | counted attempt |
+| `DEV_MCP_SETUP` | exit 14: an `mcp_setup_commands` entry failed or hit the 300 s per-command cap; `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | exit 124 / watchdog kill | counted attempt |
 | `DEV_AUTH` | exit 12 | circuit breaker (§4) — **not** a counted attempt |
 | `DEV_FORGE_AUTH` | exit 13 with GitHub/GitLab auth/permission evidence | global forge circuit breaker; no run dispatch until the configured token can push |
@@ -32,6 +33,7 @@
 | `FORGE_TRANSIENT` | yes — same backoff | no | app (finalization side effects) / Dev (clone/push, 3 in-run tries) | health strip if persistent |
 | `FORGE_PERMANENT` | no | no | — | PMO comment + health strip (e.g. merge blocked, `06-forge-adapter.md` §5) |
 | `DEV_CRASH` | yes — by natural rescheduling (INV-3) | **yes** | scheduler (next cycle) | after cap: `DEVCAKE-FAILED` (§3) |
+| `DEV_MCP_SETUP` | yes — same (a transient install/network failure deserves retries; the deterministic missing-secret case never dispatches at all, `14` §8) | **yes** | scheduler | same |
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
 | `DEV_AUTH` | no — pointless until creds fixed | **no** | — | circuit breaker (§4) + health strip |

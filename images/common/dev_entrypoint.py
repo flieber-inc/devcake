@@ -118,6 +118,38 @@ def clone_extra_repos(extras, repo_dir, runner=None):
     return notes
 
 
+MCP_SETUP_TIMEOUT_SECS = 300   # per command (docs/07 §5 step 5)
+
+
+def run_mcp_setup(commands, workdir, timeout=MCP_SETUP_TIMEOUT_SECS):
+    """Run the Dev Type's admin-configured MCP setup commands in order.
+    Returns (failed_cmd, detail) for the exit-14 artifact, or None when all
+    pass. Each command gets a closed stdin, its own process group and a hard
+    per-command cap: the heartbeat daemon is already beating when these run,
+    so a hung install/interactive prompt would otherwise idle the run to the
+    full wall-clock timeout without the watchdog ever firing."""
+    import signal
+    for cmd in commands:
+        proc = subprocess.Popen(cmd, shell=True, cwd=workdir,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)  # pgid == pid (new session)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            return cmd, f"timed out after {timeout}s"
+        if proc.returncode != 0:
+            tail = (err or out or "")[-2000:]
+            return cmd, f"exit {proc.returncode}: {tail}"
+    return None
+
+
 def clone_error_class(stderr: str) -> str:
     """DEV_FORGE_AUTH only on git's credential wording — a bare "403"/"401"
     can be a rate limit or an incidental URL fragment, and DEV_FORGE_AUTH
@@ -509,11 +541,20 @@ def main() -> None:
     for note in clone_extra_repos(spec.get("extra_repos") or [], repo_dir):
         print(note)
 
-    for cmd in spec.get("mcp_setup_commands", []):                  # docs/07 §5 step 5
-        res = subprocess.run(cmd, shell=True, cwd=workdir, capture_output=True, text=True)
-        if res.returncode != 0:
-            print("mcp setup failed:", cmd, res.stderr[-300:], file=sys.stderr)
-            sys.exit(14)
+    failed = run_mcp_setup(spec.get("mcp_setup_commands", []), workdir)  # docs/07 §5 step 5
+    if failed:
+        cmd, detail = failed
+        # `cmd` is the raw config string ($VAR unexpanded — no secret can
+        # appear); artifacts mirror the exit-13 clone block so the app maps
+        # the failure to a visible DEV_MCP_SETUP run error
+        print("mcp setup failed:", cmd, detail[-300:], file=sys.stderr)
+        send_artifacts({"result": None, "exit_code": 14,
+                        "error_class": "DEV_MCP_SETUP",
+                        "error_detail": f"{cmd}: {detail}",
+                        "transcript_md": (f"MCP setup command failed:\n`{cmd}`"
+                                          f"\n\n```\n{detail}\n```"),
+                        "token_report": {"extraction_method": "unavailable", "model": None}})
+        sys.exit(14)
 
     # ── telemetry (stage-2 creds — docs/07 §3) ───────────────────────────────
     from opentelemetry import trace

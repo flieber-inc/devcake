@@ -845,45 +845,64 @@ export default function ConfigPage({ section }) {
         ) : skillsCatalog.skills.length === 0 ? (
           <p className="text-sm text-neutral-500 dark:text-neutral-400">No skills found.</p>
         ) : (
-          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {skillsCatalog.skills.map((s) => (
-              <div key={s.name} className="flex items-baseline gap-3 py-2 text-sm">
-                <span className="shrink-0 font-mono font-semibold">{s.name}</span>
-                <span className="grow text-neutral-500 dark:text-neutral-400">
-                  {s.description || "(no description)"}
-                </span>
-                <span className={"shrink-0 rounded px-1.5 py-0.5 text-xs "
-                  + (s.source === "store"
-                    ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
-                    : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
-                  {s.source === "store" ? "store" : "bundled"}
-                </span>
-                {/* built-ins re-seed at boot — only operator skills delete */}
-                {skillsCatalog.store?.enabled && !s.builtin && (
-                  <button type="button"
-                    title={`Delete skill ${s.name}`}
-                    className="shrink-0 text-neutral-500 dark:text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
-                    onClick={() => setConfirm({
-                      title: `Delete skill ${s.name}?`,
-                      body: "Removed from the skill store. Dev Types that "
-                        + "selected it keep the name (⚠) but the skill is "
-                        + "skipped at dispatch until re-added.",
-                      confirmLabel: "Delete",
-                      action: async () => {
-                        try {
-                          await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
-                          await loadSkills();
-                        } catch (e) {
-                          setPageErr(`skill delete failed: ${String(e.message || e)}`);
-                        }
-                        setConfirm(null);
-                      },
-                    })}>
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[36rem] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                <tr>
+                  <th className="py-1.5 pr-4 font-semibold">Skill</th>
+                  <th className="pr-4 font-semibold">Description</th>
+                  <th className="pr-2 font-semibold">Source</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {skillsCatalog.skills.map((s) => (
+                  <tr key={s.name} className="border-t border-neutral-100 align-top dark:border-neutral-800">
+                    <td className="whitespace-nowrap py-2.5 pr-4 font-mono text-xs font-semibold">
+                      {s.name}
+                    </td>
+                    <td className="py-2.5 pr-4 text-neutral-500 dark:text-neutral-400">
+                      {s.description || "(no description)"}
+                    </td>
+                    <td className="py-2.5 pr-2">
+                      <span className={"inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs "
+                        + (s.source === "store"
+                          ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+                          : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+                        {s.source === "store" ? "store" : "bundled"}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-right">
+                      {/* built-ins re-seed at boot — only operator skills delete */}
+                      {skillsCatalog.store?.enabled && !s.builtin && (
+                        <button type="button"
+                          title={`Delete skill ${s.name}`}
+                          aria-label={`Delete skill ${s.name}`}
+                          className="rounded text-neutral-500 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-red-400"
+                          onClick={() => setConfirm({
+                            title: `Delete skill ${s.name}?`,
+                            body: "Removed from the skill store. Dev Types that "
+                              + "selected it keep the name (⚠) but the skill is "
+                              + "skipped at dispatch until re-added.",
+                            confirmLabel: "Delete",
+                            action: async () => {
+                              try {
+                                await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
+                                await loadSkills();
+                              } catch (e) {
+                                setPageErr(`skill delete failed: ${String(e.message || e)}`);
+                              }
+                              setConfirm(null);
+                            },
+                          })}>
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </Section>

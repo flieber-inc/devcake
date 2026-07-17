@@ -23,6 +23,11 @@ services:
       # dispatch derives harness image tags from this (audit A7) — it must
       # match the bake tag, or a pinned install runs stale :latest harnesses
       DEVCAKE_TAG: ${DEVCAKE_TAG:-latest}
+      # internal-forge admin credential: .env carries only the PASSWORD, so
+      # without this the provisioner authenticated as an EMPTY user and every
+      # boot's org/service-account/skill-store provisioning 401'd
+      # (live-verified 2026-07-17) — same default as the gitea service below
+      GITEA_ADMIN_USER: ${GITEA_ADMIN_USER:-devcakeadmin}
     restart: unless-stopped
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API

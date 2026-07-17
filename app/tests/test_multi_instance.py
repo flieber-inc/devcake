@@ -309,6 +309,54 @@ def test_dispatch_gates_on_pmo_read_failure(tmp_path):
     assert "PMO read failed" in mgr.blocked_reasons[m.pmo_id]
 
 
+def test_dispatch_gates_on_missing_referenced_secret_env(tmp_path, monkeypatch):
+    """Founder decision 2026-07-16: a declared secret_env var with NO stored
+    value that IS referenced ($VAR/${VAR}) by an mcp_setup_command refuses
+    dispatch deterministically — the command would run with an empty
+    expansion and die as exit 14 inside the container, burning an attempt
+    with the root cause buried in one warning line."""
+    from test_transitions import make_mgr, mission
+    from devcake import secrets as secrets_store
+    from devcake.config import DevType
+    from devcake.domain.model import MissionType
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    gated = DevType(name="senior-dev", harness_template="claude-code",
+                    secret_env=["DD_API_KEY"],
+                    mcp_setup_commands=["claude mcp add logs "
+                                        "-e K=$DD_API_KEY -- x"])
+    out = run_coro(mgr.dispatch(m, MissionType.EXECUTE, gated))
+    assert out is None
+    reason = mgr.blocked_reasons[m.pmo_id]
+    assert "DD_API_KEY" in reason and "mcp_setup_commands" in reason
+
+    # pasting the value un-gates on the next poll cycle: the secret-env
+    # gate no longer fires (any later refusal is a different reason)
+    secrets_store.write_harness_secret("DD_API_KEY", "dd-key-0123456789ab")
+    mgr.blocked_reasons.pop(m.pmo_id, None)
+    run_coro(mgr.dispatch(m, MissionType.EXECUTE, gated))
+    assert "DD_API_KEY" not in mgr.blocked_reasons.get(m.pmo_id, "")
+
+
+def test_dispatch_proceeds_when_missing_secret_unreferenced(tmp_path, monkeypatch):
+    """Declared-but-unreferenced missing values keep warn-and-proceed — a
+    log credential must not block missions when no setup command needs it."""
+    from test_transitions import make_mgr, mission
+    from devcake.config import DevType
+    from devcake.domain.model import MissionType
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    dt = DevType(name="senior-dev", harness_template="claude-code",
+                 secret_env=["DD_API_KEY"],
+                 mcp_setup_commands=["claude mcp add probe -- x"])
+    run_coro(mgr.dispatch(m, MissionType.EXECUTE, dt))
+    assert "secret env" not in mgr.blocked_reasons.get(m.pmo_id, "")
+
+
 def test_dispatch_gates_on_run_id_overflow(tmp_path):
     """Audit A15c: a forged `9…9_EXECUTE.md` feed marker inflates seq past
     the 64-char run-id budget — the mission gates with a fix-the-marker

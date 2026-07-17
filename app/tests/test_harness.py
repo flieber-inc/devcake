@@ -166,6 +166,30 @@ def test_credential_spec_includes_dev_type_secret_env(tmp_path, monkeypatch):
     assert files == []
 
 
+def test_missing_referenced_secret_env_rule(tmp_path, monkeypatch):
+    """The v1 reference rule: $VAR and ${VAR} count, word-bounded — so
+    $DD_KEY_STAGING is NOT a reference to DD_KEY; a stored value or an
+    unreferenced name never gates."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    from devcake.harness import missing_referenced_secret_env
+    dt = DevType(name="x", harness_template="claude-code",
+                 secret_env=["DD_API_KEY", "DD_APP_KEY", "UNUSED"],
+                 mcp_setup_commands=[
+                     "pip install --user devcake-logs-mcp",
+                     "claude mcp add logs -e A=$DD_API_KEY "
+                     "-e B=${DD_APP_KEY} -- python -m logs_mcp.server"])
+    assert missing_referenced_secret_env(dt) == ["DD_API_KEY", "DD_APP_KEY"]
+    s.write_harness_secret("DD_API_KEY", "k1")
+    assert missing_referenced_secret_env(dt) == ["DD_APP_KEY"]
+    s.write_harness_secret("DD_APP_KEY", "k2")
+    assert missing_referenced_secret_env(dt) == []
+    dt2 = DevType(name="x", harness_template="claude-code",
+                  secret_env=["DD_KEY"],
+                  mcp_setup_commands=["echo $DD_KEY_STAGING"])
+    assert missing_referenced_secret_env(dt2) == []
+
+
 def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
     """docs/09 §5: the secret half of a run spec is derived from current config
     whenever an authenticated active run asks — never stored, never expiring."""

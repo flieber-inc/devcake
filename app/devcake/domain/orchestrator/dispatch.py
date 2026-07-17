@@ -13,7 +13,7 @@ from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from ...harness import HARNESSES
+from ...harness import HARNESSES, missing_referenced_secret_env
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType
@@ -129,6 +129,19 @@ def _reference_repos_note(self, primary: str) -> str:
 
 async def dispatch(self, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
+    missing = missing_referenced_secret_env(dev_type)
+    if missing:
+        # founder decision 2026-07-16: a referenced-but-unstored secret env
+        # var would exit 14 in-container with the cause buried in a warning
+        # — refuse deterministically, burn no attempt, launch no container;
+        # pasting the value un-gates on the next poll cycle
+        self.blocked_reasons[mission.pmo_id] = (
+            f"dev type {dev_type.name}: secret env {', '.join(missing)} is "
+            "referenced by mcp_setup_commands but has no stored value — "
+            "paste it on the admin Config page")
+        log.warning("dispatch of %s refused — %s", mission.key,
+                    self.blocked_reasons[mission.pmo_id])
+        return None
     try:
         live = await self.pmo.get(mission.ref)                 # live re-read
     except Exception as e:

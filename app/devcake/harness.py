@@ -10,6 +10,7 @@ accounts); only the *requirements* live here.
 """
 
 import os
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -75,6 +76,23 @@ HARNESSES: dict[str, Harness] = {
                         secret_file="codex-auth.json"),
     ),
 }
+
+
+def missing_referenced_secret_env(dt) -> list[str]:
+    """Declared secret_env names with NO stored value that ARE referenced
+    ($VAR or ${VAR}) by an mcp_setup_command. Such a command would run with
+    an empty expansion and hard-fail as exit 14 inside the container,
+    burning an attempt with the root cause buried — the caller must refuse
+    deterministically instead (founder decision 2026-07-16). Declared-but-
+    unreferenced missing names stay warn-and-proceed (_credential_spec).
+    v1 reference rule: a literal $NAME/${NAME} in the command text,
+    word-bounded (mirrors shell longest-identifier expansion); indirection
+    like `printenv NAME` is not detected."""
+    from . import secrets as secrets_store
+    cmds = "\n".join(dt.mcp_setup_commands)
+    return [var for var in dt.secret_env
+            if not secrets_store.read_harness_secret(var)
+            and re.search(rf"\$(?:{var}\b|\{{{var}\}})", cmds)]
 
 
 def dev_type_status(dt) -> dict:

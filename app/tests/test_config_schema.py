@@ -7,7 +7,8 @@ import yaml
 import pytest
 
 import devcake.config as config_mod
-from devcake.config import AppConfig, PMOInstance, RepoInstance, reject_stale_patch
+from devcake.config import (AppConfig, DevType, PMOInstance, RepoInstance,
+                            reject_stale_patch)
 
 V1_YAML = """
 schema_version: 1
@@ -215,6 +216,82 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
 
     path.write_text("")  # empty file → defaults, same as first boot
     assert config_mod.load_config().schema_version == 4
+
+
+def test_dev_type_secret_env_names_validated():
+    """secret_env delivers named GUI-stored secrets into the Dev's runspec
+    env, where the secret half OVERRIDES spec_env (runs.py runspec.result) —
+    names must be harness-secret-shaped (api.main._HARNESS_VAR_RE) and must
+    not shadow the Dev protocol/tooling contract."""
+    dt = DevType(name="senior-dev", harness_template="claude-code",
+                 secret_env=["DD_API_KEY", "DD_APP_KEY"])
+    assert dt.secret_env == ["DD_API_KEY", "DD_APP_KEY"]
+    # pre-existing Dev Type YAML without the field loads with []
+    assert DevType(name="x", harness_template="claude-code").secret_env == []
+    for bad in ("dd_api_key", "9DD_KEY", "", "X" * 65, "DD API KEY"):
+        with pytest.raises(Exception, match="secret env"):
+            DevType(name="x", harness_template="claude-code", secret_env=[bad])
+    with pytest.raises(Exception, match="duplicate"):
+        DevType(name="x", harness_template="claude-code",
+                secret_env=["DD_API_KEY", "DD_API_KEY"])
+    for shadow in ("DEVCAKE_MISSION_ID", "OTEL_EXPORTER_OTLP_ENDPOINT",
+                   "GIT_ASKPASS", "PATH", "HOME",
+                   # transport auth: send() re-reads it per message — a
+                   # shadowed value kills every artifact undiagnosed
+                   "REDIS_PASSWORD",
+                   # forge CLI tokens: no GIT_ prefix ("GITLAB"/"GITEA"
+                   # have no underscore) and clobbered by the entrypoint
+                   "GH_TOKEN", "GITLAB_TOKEN", "GITEA_SERVER_TOKEN"):
+        with pytest.raises(Exception, match="shadow"):
+            DevType(name="x", harness_template="claude-code",
+                    secret_env=[shadow])
+
+
+def test_secret_env_blocklist_covers_registry_and_protocol():
+    """The reserved-name set is hand-typed in config.py (config stays
+    import-light — no adapters import). This test derives the must-cover
+    set from the live forge registry and the Dev-protocol env builder, so
+    drift — a new forge's CLI token env, a new protocol var — fails CI
+    instead of shipping a shadowable name."""
+    from types import SimpleNamespace
+
+    from devcake.adapters.registry import forges
+    from devcake.domain.orchestrator import dispatch as dispatch_mod
+
+    def refused(name):
+        with pytest.raises(Exception, match="shadow"):
+            DevType(name="x", harness_template="claude-code",
+                    secret_env=[name])
+
+    # every forge adapter's CLI token env (the entrypoint overwrites these
+    # from DEVCAKE_FORGE_TOKEN — an operator value would be silently lost)
+    for desc in forges().values():
+        for var in desc.cli_token_envs:
+            refused(var)
+    # every app-authoritative protocol var (_protocol_spec_env ignores self)
+    forge = SimpleNamespace(descriptor=SimpleNamespace(
+        clone_user="x", git_user_name="x", git_email="x@x",
+        cli_token_envs=["GH_TOKEN"]))
+    repo = SimpleNamespace(url="https://x/r.git", default_branch="main")
+    spec = dispatch_mod._protocol_spec_env(
+        None, mission_id="m", mission_key="K-1", mission_type="EXECUTE",
+        dev_type=DevType(name="x", harness_template="claude-code"), seq=1,
+        extra_args="", repo=repo, forge=forge)
+    for var in spec:
+        refused(var)
+    # the entrypoint's stage-1 transport env (docs/07 §3, read before the
+    # runspec merge but shadowable through os.environ.update)
+    for var in ("REDIS_URL", "REDIS_USER", "REDIS_PASSWORD", "TRACEPARENT"):
+        refused(var)
+
+
+def test_harness_var_regex_shared():
+    """One shape definition: api.main._HARNESS_VAR_RE compiles from
+    config.HARNESS_VAR_PATTERN — the validator and the store gate can't
+    drift apart."""
+    from devcake.api.main import _HARNESS_VAR_RE
+    from devcake.config import HARNESS_VAR_PATTERN
+    assert _HARNESS_VAR_RE.pattern == f"^{HARNESS_VAR_PATTERN}$"
 
 
 def test_reference_repos_validated_and_disjoint():

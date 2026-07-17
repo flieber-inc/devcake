@@ -10,6 +10,7 @@ import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
+import MoreMenu from "../components/MoreMenu.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SelectionChips from "../components/SelectionChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
@@ -529,6 +530,7 @@ export default function ConfigPage({ section }) {
   // fallback otherwise — `store` says which (and where to edit)
   const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
   const [skillsErr, setSkillsErr] = useState(false);
+  const [skillsMsg, setSkillsMsg] = useState("");
   const loadSkills = () =>
     get("/skills")
       .then((r) => { setSkillsCatalog(r); setSkillsErr(false); })
@@ -799,34 +801,43 @@ export default function ConfigPage({ section }) {
       <Section id="skills" title="Skills"
         description="Reusable expertise installed into the agent session."
         help="Skill-store skills Devs can use. Select them per Dev Type in the Dev Types section."
-        actions={
+        actions={skillsCatalog.store?.enabled && (
           <>
-            {skillsCatalog.store?.enabled && (
-              <Button kind="ghost" icon={Plus} onClick={() => setAddSkill(true)}>
-                Add skill
-              </Button>
-            )}
-            {skillsCatalog.store?.enabled && skillsCatalog.store?.html_url && (
-              <a className="text-sm underline" target="_blank" rel="noreferrer"
-                href={skillsCatalog.store.html_url}>
-                Edit in Gitea →
-              </a>
-            )}
-            {skillsCatalog.store?.enabled && (
-              <Button kind="ghost" onClick={async () => {
-                try { await send("POST", "/skills/sync"); await loadSkills(); }
-                catch (e) { setPageErr(`skill re-seed failed: ${String(e.message || e)}`); }
-              }}>
-                Re-seed built-ins
-              </Button>
-            )}
+            <Button icon={Plus} onClick={() => setAddSkill(true)}>
+              Add skill
+            </Button>
+            <MoreMenu label="More skill-store actions" items={[
+              ...(skillsCatalog.store?.html_url ? [{
+                label: "Open the store in Gitea",
+                desc: "Skills live in a Git repo — edit them there directly.",
+                external: true,
+                onClick: () => window.open(skillsCatalog.store.html_url, "_blank", "noopener"),
+              }] : []),
+              {
+                label: "Restore built-in skills",
+                desc: "Re-adds any missing bundled skills. Never overwrites your edits.",
+                onClick: async () => {
+                  try {
+                    await send("POST", "/skills/sync");
+                    await loadSkills();
+                    setSkillsMsg("✓ built-in skills restored");
+                    setTimeout(() => setSkillsMsg(""), 4000);
+                  } catch (e) {
+                    setPageErr(`restoring built-ins failed: ${String(e.message || e)}`);
+                  }
+                },
+              },
+            ]} />
           </>
-        }>
+        )}>
         {skillsCatalog.store && !skillsCatalog.store.enabled && (
           <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
             Served from the bundled copies — set GITEA_ADMIN_PASSWORD (bundled
             Gitea) to get the editable skill-store repo.
           </p>
+        )}
+        {skillsMsg && (
+          <p className="mb-3 text-sm text-green-700 dark:text-green-400">{skillsMsg}</p>
         )}
         {skillsCatalog.store?.enabled && !skillsCatalog.store.ok && (
           <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">

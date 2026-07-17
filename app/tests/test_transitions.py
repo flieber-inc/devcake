@@ -436,6 +436,30 @@ def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
     assert "forge" not in mgr.breakers
 
 
+def test_mcp_setup_artifact_maps_to_dev_mcp_setup(tmp_path):
+    """Exit-14 artifacts (newly reachable: the runspec now delivers
+    mcp_setup_commands and the entrypoint sends artifacts before exiting)
+    map to a visible DEV_MCP_SETUP error naming the failed command; they
+    trip NO breaker and DO count toward attempts (a transient install
+    failure deserves counted retries, unlike auth)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {
+        "exit_code": 14,
+        "error_class": "DEV_MCP_SETUP",
+        "error_detail": "claude mcp add logs -e K=$DD_API_KEY -- x: "
+                        "exit 1: unknown flag",
+    })
+    assert error.startswith("DEV_MCP_SETUP:")
+    assert "claude mcp add logs" in error
+    assert not mgr.breakers and not mgr.forges.breakers
+    run.state = "failed"
+    run.error = error
+    store.save(run)
+    assert mgr._attempt_number("p1", "EXECUTE", None) == 2   # counted
+
+
 def test_trivial_feed_uses_descriptor_pr_noun(tmp_path):
     """Audit A29: the trivial-path feed said 'PR opened' regardless of the
     forge — _executed_feed already used the descriptor noun; the trivial

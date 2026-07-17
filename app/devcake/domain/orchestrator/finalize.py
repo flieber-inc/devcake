@@ -151,6 +151,11 @@ def dev_failure_error(self, run: Run, payload: dict) -> str:
         return "DEV_FORGE_AUTH: " + (detail or "repository credential rejected")
     if exit_code == 13:
         return "DEV_FORGE: " + (detail or "clone/push setup failed")
+    if exit_code == 14:
+        # operator-configured MCP setup failed in-container (docs/15 §1,
+        # counted attempt): the detail names the command + stderr tail so
+        # the fix is obvious from the Runs page
+        return "DEV_MCP_SETUP: " + (detail or "MCP setup command failed")
     return f"dev failure artifact (exit {exit_code})"
 
 

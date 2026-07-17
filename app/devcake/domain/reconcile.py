@@ -2,6 +2,7 @@
 lifespan so the ordering contract is unit-testable (ISSUES #26)."""
 
 import logging
+import re
 
 log = logging.getLogger("devcake.reconcile")
 
@@ -36,9 +37,13 @@ async def reconcile_runs(manager) -> None:
                     node_errors = []
                 await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
                 detail = " ".join(str(item.get("error") or "") for item in node_errors)
-                if finalizer and "exit status 13" in detail.lower():
+                # enrich the classified pre-harness exits (13 clone/forge,
+                # 14 MCP setup) when the app was down at container death
+                exit_m = re.search(r"exit status (13|14)", detail.lower())
+                if finalizer and exit_m:
                     r.error = finalizer.dev_failure_error(
-                        r, {"exit_code": 13, "error_detail": detail})
+                        r, {"exit_code": int(exit_m.group(1)),
+                            "error_detail": detail})
                     store.save(r)
             else:
                 log.info("reconciliation: adopted in-flight run %s (dagu: %s)",

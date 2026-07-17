@@ -122,7 +122,7 @@ function UploadButton({ devType, secretFile, onDone }) {
 
 // Fully controlled: the card renders and edits the shared draft. Save is the
 // page-level Save; only Delete / OAuth / upload act immediately.
-function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onCredChange }) {
+function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onCredChange, skillsCatalog }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
@@ -208,6 +208,55 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           onChange={(e) =>
             set("mcp_setup_commands", e.target.value.split("\n").filter(Boolean))}
         />
+      </Field>
+      <Field label="Skills"
+        help="Skill-store skills installed to ~/.claude/skills inside the Dev container before the agent starts. The catalog lives in the Skills section below."
+        hint={d.harness_template !== "claude-code"
+          ? "Skills run on the claude-code harness only in this version."
+          : undefined}>
+        {d.harness_template === "claude-code" ? (
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {(skillsCatalog?.skills || []).map((s) => (
+              <label key={s.name} className="flex items-center gap-1.5 text-sm"
+                title={s.description || undefined}>
+                <input type="checkbox"
+                  checked={(d.skills || []).includes(s.name)}
+                  onChange={(e) => {
+                    // write back in CATALOG order (unknown names last):
+                    // uncheck-then-recheck must not surface a reorder-only
+                    // dirty diff (diffLeaves compares arrays order-sensitively)
+                    const next = e.target.checked
+                      ? [...(d.skills || []), s.name]
+                      : (d.skills || []).filter((n) => n !== s.name);
+                    const cat = (skillsCatalog?.skills || []).map((c) => c.name);
+                    set("skills", [...cat.filter((n) => next.includes(n)),
+                                   ...next.filter((n) => !cat.includes(n))]);
+                  }} />
+                <span className="font-mono">{s.name}</span>
+              </label>
+            ))}
+            {(d.skills || [])
+              .filter((n) => !(skillsCatalog?.skills || []).some((s) => s.name === n))
+              .map((n) => (
+                <label key={n} title="not in the skill store — will be skipped at dispatch"
+                  className="flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+                  <input type="checkbox" checked
+                    onChange={() =>
+                      set("skills", (d.skills || []).filter((x) => x !== n))} />
+                  <span className="font-mono">⚠ {n}</span>
+                </label>
+              ))}
+            {!(skillsCatalog?.skills || []).length && !(d.skills || []).length && (
+              <span className="text-xs text-neutral-400">No skills in the catalog yet.</span>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-400">
+            {(d.skills || []).length
+              ? `${d.skills.length} selected skill(s) will be skipped on this harness.`
+              : "—"}
+          </p>
+        )}
       </Field>
       <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
         <div className="flex items-center justify-between">
@@ -342,6 +391,12 @@ export default function ConfigPage({ section, onSectionInView }) {
       .catch(() => setRepoHasToken({}));
   }, [repoNamesKey]);
   const [oauthFor, setOauthFor] = useState(null);
+  // skill store catalog (v1): store-listed when Gitea is up, bundled
+  // fallback otherwise — `store` says which (and where to edit)
+  const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
+  const loadSkills = () =>
+    get("/skills").then(setSkillsCatalog).catch(() => {});
+  useEffect(() => { loadSkills(); }, []);
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
   const [pageErr, setPageErr] = useState("");
@@ -624,9 +679,64 @@ export default function ConfigPage({ section, onSectionInView }) {
                   },
                 });
               }}
-              onOAuth={setOauthFor} />
+              onOAuth={setOauthFor}
+              skillsCatalog={skillsCatalog} />
           ))}
         </div>
+      </Section>
+
+      <Section id="skills" title="Skills"
+        description="Claude Code skills Devs can use — reusable expertise installed into the agent session. Select them per Dev Type above."
+        actions={
+          <>
+            {skillsCatalog.store?.enabled && skillsCatalog.store?.html_url && (
+              <a className="text-sm underline" target="_blank" rel="noreferrer"
+                href={skillsCatalog.store.html_url}>
+                Edit in Gitea →
+              </a>
+            )}
+            {skillsCatalog.store?.enabled && (
+              <Button kind="ghost" onClick={async () => {
+                try { await send("POST", "/skills/sync"); await loadSkills(); }
+                catch (e) { setPageErr(`skill re-seed failed: ${String(e.message || e)}`); }
+              }}>
+                Re-seed built-ins
+              </Button>
+            )}
+          </>
+        }>
+        {skillsCatalog.store && !skillsCatalog.store.enabled && (
+          <p className="mb-3 text-sm text-neutral-400">
+            Served from the bundled copies — set GITEA_ADMIN_PASSWORD (bundled
+            Gitea) to get the editable skill-store repo.
+          </p>
+        )}
+        {skillsCatalog.store?.enabled && !skillsCatalog.store.ok && (
+          <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+            Skill store unreachable ({skillsCatalog.store.detail}) — serving the
+            bundled copies. Runs keep working; store edits are unavailable.
+          </p>
+        )}
+        {skillsCatalog.skills.length === 0 ? (
+          <p className="text-sm text-neutral-400">No skills found.</p>
+        ) : (
+          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+            {skillsCatalog.skills.map((s) => (
+              <div key={s.name} className="flex items-baseline gap-3 py-2 text-sm">
+                <span className="shrink-0 font-mono font-semibold">{s.name}</span>
+                <span className="grow text-neutral-500 dark:text-neutral-400">
+                  {s.description || "(no description)"}
+                </span>
+                <span className={"shrink-0 rounded px-1.5 py-0.5 text-xs "
+                  + (s.source === "store"
+                    ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+                    : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+                  {s.source === "store" ? "store" : "bundled"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </Section>
 
       <Section id="assignments" title="Assignments"

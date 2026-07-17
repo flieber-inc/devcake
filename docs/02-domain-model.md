@@ -151,6 +151,7 @@ Persisted as one YAML file per Dev Type at `/data/config/dev_types/{name}.yaml` 
 | `harness_template` | `"claude-code" \| "grok-build" \| "codex"` | **Authoritative** (2026-07-12 rework): the Docker image, credential requirements, and OAuth flow all derive from it via the harness registry (`app/devcake/harness.py`, `08-harness-templates.md` §2/§4). Changing it in the admin panel changes what actually runs. |
 | `identifying_prompt` | `str` | Always delivered to the harness at the start of every run, before the playbook prompt. |
 | `mcp_setup_commands` | `list[str]` | Shell commands run by the Dev entrypoint before harness launch (e.g. `claude mcp add …`). Failure ⇒ exit code 14. |
+| `skills` | `list[str]` | Skill-store skills (skill store v1) installed to `~/.claude/skills` in the Dev container before harness launch. **claude-code harness only** — other harnesses skip them with a warning. Names validated (`^[a-z0-9][a-z0-9_-]{0,63}$`), deduped preserving order. A selected-but-missing skill is skipped with a warning, never a refused run. |
 | `max_concurrency` | `int` | Per-type cap (see `04-orchestrator.md` §3). |
 | `model` | `str` | Pins the harness model (added 2026-07-12 after Claude Code silently defaulted to Sonnet). Delivered via runspec as `DEVCAKE_MODEL`; the entrypoint maps it to the harness flag (`claude --model` / `codex -m` / `grok --model`). Empty = harness default. Seed: `senior-dev` = `claude-fable-5`. Per-assignment `extra_cli_args` can still override (appended after the pin). |
 

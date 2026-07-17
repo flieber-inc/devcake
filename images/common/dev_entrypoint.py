@@ -118,6 +118,34 @@ def clone_extra_repos(extras, repo_dir, runner=None):
     return notes
 
 
+def install_skills(skills, home=None):
+    """Skill-store files from the runspec → ~/.claude/skills/<path> before
+    the harness starts (claude-code reads personal skills there; docs/07).
+    Path-traversal-safe: store content is operator-editable, so absolute
+    paths and `..` parts are refused. Per-file failures are NON-fatal —
+    skills are additive; the notes land in the run log."""
+    base = pathlib.Path(home or pathlib.Path.home()) / ".claude" / "skills"
+    notes = []
+    for sk in skills or []:
+        name, wrote = sk.get("name", "?"), 0
+        for f in sk.get("files") or []:
+            rel = pathlib.PurePosixPath(f.get("path") or "")
+            if not rel.parts or rel.is_absolute() or ".." in rel.parts:
+                notes.append(f"skill {name}: refused unsafe path "
+                             f"{f.get('path')!r}")
+                continue
+            try:
+                target = base / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(base64.b64decode(f.get("content_b64") or "",
+                                                    validate=True))
+                wrote += 1
+            except Exception as e:
+                notes.append(f"skill {name}: {rel} failed ({e})")
+        notes.append(f"skill {name}: installed {wrote} file(s)")
+    return notes
+
+
 def clone_error_class(stderr: str) -> str:
     """DEV_FORGE_AUTH only on git's credential wording — a bare "403"/"401"
     can be a rate limit or an incidental URL fragment, and DEV_FORGE_AUTH
@@ -507,6 +535,11 @@ def main() -> None:
     # multi-repo ONBOARD triage (item 2): sibling read-only clones — the
     # playbook's repo_options section names them; failures are non-fatal
     for note in clone_extra_repos(spec.get("extra_repos") or [], repo_dir):
+        print(note)
+
+    # skill store (v1): materialize selected skills for the harness — NOT
+    # into the repo clone (the Dev would commit them)
+    for note in install_skills(spec.get("skills") or []):
         print(note)
 
     for cmd in spec.get("mcp_setup_commands", []):                  # docs/07 §5 step 5

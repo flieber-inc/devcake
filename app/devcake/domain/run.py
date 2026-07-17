@@ -43,6 +43,10 @@ class Run(BaseModel):
     # legacy/mapper/hello records (ports.forge.run_branch derives those)
     branch: str = ""
     spec_prompt: str = ""
+    # skill-store files for the Dev (non-secret, fetched at dispatch so a
+    # mid-run Gitea outage can't change what a runspec re-request serves):
+    # [{name, files: [{path, content_b64}]}]
+    spec_skills: list[dict[str, Any]] = Field(default_factory=list)
     state: RunState = "dispatched"
     created_at: datetime = Field(default_factory=utcnow)
     started_at: Optional[datetime] = None

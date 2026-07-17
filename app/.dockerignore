@@ -15,3 +15,6 @@
 **/Dockerfile*
 **/.dockerignore
 **/*.md
+# the bundled skill store (devcake/skills/) IS runtime content — its
+# SKILL.md files must reach the image despite the *.md exclusion above
+!devcake/skills/**

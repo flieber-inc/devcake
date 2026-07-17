@@ -108,6 +108,9 @@ entrypoint start
   │ 2. fetch activity via `activity.get` (req/reply); render ACTIVITY.md; download attachments
   │ 3. git clone → /workspace/repo (credential helper from run-spec token; token never in URL on disk)
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
+  │ 4b. install skill-store skills from the runspec `skills` field →
+  │      ~/.claude/skills/ (never into the repo clone — the Dev would commit
+  │      them); path-traversal-safe, per-file failures non-fatal (notes → run log)
   │ 5. run mcp_setup_commands (any failure → exit 14)
   │ 6. launch harness: identifying prompt + mission-type playbook prompt (03-mission-lifecycle.md §7)
   │      • heartbeat sidecar emits `run.heartbeat` every 30 s throughout

@@ -64,6 +64,26 @@ class InternalForgePort(Protocol):
         """The stored per-mission token pair (runspec source; sync read)."""
         ...
 
+    async def ensure_skill_store(self, seed_files: list[dict]) -> None:
+        """Idempotent boot/sync step: create-or-adopt the operator-editable
+        skill-store repo and seed the bundled skills — missing paths only,
+        never clobbering operator edits. seed_files: [{path, content_b64}]."""
+        ...
+
+    async def skill_store_tree(self) -> list[dict]:
+        """[{path, size}] blobs on the store's main branch ([] when
+        absent/empty) — sizes let the SkillService enforce its payload
+        caps before downloading any content."""
+        ...
+
+    async def skill_store_file(self, path: str) -> bytes:
+        """Raw bytes of one store file at main."""
+        ...
+
+    def skill_store_url(self) -> str:
+        """Operator-clickable store URL (sync; ROOT_URL-based)."""
+        ...
+
     async def list_repos(self) -> list[InternalRepo]: ...
 
     async def delete_repo(self, repo_name: str) -> None:

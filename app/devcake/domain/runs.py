@@ -196,6 +196,9 @@ class RunManager:
                  # multi-repo ONBOARD triage (item 2): read-only sibling
                  # clones, each with its own read token
                  "extra_repos": secret.get("extra_repos") or [],
+                 # skill store (v1): non-secret, snapshotted on the Run at
+                 # dispatch — entrypoint writes them to ~/.claude/skills
+                 "skills": run.spec_skills or [],
                  "prompt": run.spec_prompt},
             )
         elif kind == "runspec.ack":

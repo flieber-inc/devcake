@@ -245,6 +245,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             spec_env=spec_env,
         )
         run.spec_prompt = prompt
+        run.spec_skills = await self._skill_payload(dev_type)
         run.branch = mission_branch(self.instance_name, mission.key)
         run.stage_label_at_dispatch = self._stage_of(live)
         run.mission_pmo_id = mission.pmo_id
@@ -256,6 +257,23 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             self._audit(mission.pmo_id, "set_status", "in_progress")
         log.info("dispatched %s (attempt %d, dev=%s)", run_id, attempt, dev_type.name)
         return run
+
+
+async def _skill_payload(self, dev_type: DevType) -> list[dict]:
+    """Skill-store files for this Dev Type's runs (skill store v1) —
+    claude-code harness only: other harnesses don't read ~/.claude/skills,
+    so a selection there is skipped with a warning, never a refused run."""
+    if not dev_type.skills or getattr(self, "skills", None) is None:
+        return []
+    if dev_type.harness_template != "claude-code":
+        log.warning("dev type %s: skills %s configured but harness %s does "
+                    "not support them — skipped", dev_type.name,
+                    dev_type.skills, dev_type.harness_template)
+        return []
+    payload, warnings = await self.skills.payload_for(dev_type.skills)
+    for w in warnings:
+        log.warning("skills for %s: %s", dev_type.name, w)
+    return payload
 
 
 def _protocol_spec_env(self, *, mission_id: str, mission_key: str,

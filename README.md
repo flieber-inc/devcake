@@ -43,6 +43,7 @@ scope of “ticket writers are trusted,” not a product defect to be papered ov
 | One or more **repos** | Clone, branch, PR; optional read-only and reviewer tokens |
 | **Work** vs **reference** repos per PMO | Routing targets vs read-only consultation clones |
 | **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional mapper) |
+| **Skills** per Dev Type (skill store) | Curated Claude Code skills seeded into an editable Gitea repo, installed into agent sessions |
 | Auto-merge, intake pause, limits | Operator knobs — defaults favor a human merge |
 
 ### Three ways to use it

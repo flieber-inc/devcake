@@ -34,6 +34,7 @@ from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
 from ..domain.forge_runtime import ForgeRuntime
 from ..domain.reconcile import reconcile_runs
 from ..domain.runs import RunManager
+from ..domain.skills import SkillService
 from ..domain.watchdog import watchdog_loop
 from ..harness import HARNESSES, dev_type_status
 from ..ports.forge import mission_branch
@@ -71,6 +72,9 @@ forge_runtime = ForgeRuntime()
 # the bundled internal fallback forge (M11): provisioner is admin-credentialed
 # (GITEA_ADMIN_*); None disables the zero-repo un-gating when Gitea is absent
 internal_forge = make_internal_forge() if os.environ.get("GITEA_ADMIN_PASSWORD") else None
+# skill store (docs/16 skill store v1): store-first reads via the internal
+# forge; bundled copies keep built-in skills working forge-less
+skill_service = SkillService(internal_forge)
 
 
 def build_managers() -> None:
@@ -88,11 +92,12 @@ def build_managers() -> None:
             mgr.pmo, mgr.forges, mgr.config = p, forge_runtime, config
             mgr.instance, mgr.instance_name = inst, name
             mgr.internal_forge = internal_forge
+            mgr.skills = skill_service
         else:
             managers[name] = MissionManager(
                 config, dev_types, p, forge_runtime, manager, messaging,
                 instance=inst, breakers=shared_breakers,
-                internal_forge=internal_forge)
+                internal_forge=internal_forge, skills=skill_service)
             mappers[name] = MapperService(config, dev_types, managers[name])
 
 
@@ -411,6 +416,12 @@ async def lifespan(app: FastAPI):
         except Exception:
             log.exception("internal forge provisioning failed — zero-repo "
                           "missions will retry once Gitea is reachable")
+        try:
+            await internal_forge.ensure_skill_store(skill_service.builtin_seed())
+            log.info("internal forge: skill store ensured")
+        except Exception:
+            log.exception("skill store seeding failed — skills fall back to "
+                          "bundled copies (POST /api/v1/skills/sync re-seeds)")
     # startup reconciliation (docs/04 §6) — labels per configured instance
     for mgr in list(managers.values()):
         try:
@@ -1220,6 +1231,30 @@ async def create_internal_repo(body: dict):
         raise HTTPException(409, str(e))
     except Exception as e:
         raise HTTPException(502, f"internal forge: {str(e)[:200]}")
+
+
+@app.get("/api/v1/skills")
+async def list_skills():
+    """Skill store catalog (v1): store-listed when the internal forge is up,
+    bundled fallback otherwise — `store` tells the UI which it is (and where
+    to edit)."""
+    skills, store_status = await skill_service.list_skills()
+    return {"skills": [s.model_dump() for s in skills], "store": store_status}
+
+
+@app.post("/api/v1/skills/sync")
+async def sync_skills():
+    """Re-seed missing built-in skills without a restart — heals a first
+    boot where Gitea came up after the app, and re-seeds after upgrades.
+    Never overwrites operator edits (missing paths only)."""
+    if internal_forge is None:
+        raise HTTPException(503, "internal forge is disabled "
+                                 "(GITEA_ADMIN_PASSWORD unset)")
+    try:
+        await internal_forge.ensure_skill_store(skill_service.builtin_seed())
+    except Exception as e:
+        raise HTTPException(502, f"internal forge: {str(e)[:200]}")
+    return {"ok": True}
 
 
 @app.delete("/api/v1/internal-repos/{name}")

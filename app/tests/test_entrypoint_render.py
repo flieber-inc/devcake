@@ -307,3 +307,52 @@ def test_clone_extra_repos_per_repo_token_and_nonfatal():
     assert tok2 == "ro-bad-token"
     assert any("beta: cloned read-only" in n for n in notes)
     assert any("gamma: clone failed" in n for n in notes)
+
+
+# ── skill install (skill store v1: runspec skills → ~/.claude/skills) ────────
+
+def _b64(data: bytes) -> str:
+    import base64
+    return base64.b64encode(data).decode()
+
+
+def test_install_skills_writes_files_under_home(tmp_path):
+    notes = ep.install_skills(
+        [{"name": "tdd", "files": [
+            {"path": "tdd/SKILL.md", "content_b64": _b64(b"body")},
+            {"path": "tdd/ref/extra.md", "content_b64": _b64(b"x")}]}],
+        home=tmp_path)
+    assert (tmp_path / ".claude/skills/tdd/SKILL.md").read_bytes() == b"body"
+    assert (tmp_path / ".claude/skills/tdd/ref/extra.md").read_bytes() == b"x"
+    assert any("tdd: installed 2 file(s)" in n for n in notes)
+
+
+def test_install_skills_refuses_traversal_and_absolute(tmp_path):
+    notes = ep.install_skills(
+        [{"name": "bad", "files": [
+            {"path": "../evil.md", "content_b64": _b64(b"evil")},
+            {"path": "/abs/evil.md", "content_b64": _b64(b"evil")},
+            {"path": "", "content_b64": _b64(b"evil")},
+            {"path": "ok/fine.md", "content_b64": _b64(b"fine")}]}],
+        home=tmp_path)
+    assert not (tmp_path / "evil.md").exists()
+    assert not Path("/abs/evil.md").exists()
+    assert (tmp_path / ".claude/skills/ok/fine.md").read_bytes() == b"fine"
+    assert sum("refused unsafe path" in n for n in notes) == 3
+
+
+def test_install_skills_bad_base64_nonfatal(tmp_path):
+    notes = ep.install_skills(
+        [{"name": "x", "files": [
+            {"path": "x/SKILL.md", "content_b64": "!!!"},
+            {"path": "x/good.md", "content_b64": _b64(b"ok")}]}],
+        home=tmp_path)
+    assert not (tmp_path / ".claude/skills/x/SKILL.md").exists()
+    assert (tmp_path / ".claude/skills/x/good.md").exists()
+    assert any("installed 1 file(s)" in n for n in notes)
+
+
+def test_install_skills_empty_spec_is_noop(tmp_path):
+    assert ep.install_skills([], home=tmp_path) == []
+    assert ep.install_skills(None, home=tmp_path) == []
+    assert not (tmp_path / ".claude").exists()

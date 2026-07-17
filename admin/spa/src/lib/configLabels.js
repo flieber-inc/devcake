@@ -47,6 +47,7 @@ const DEV_TYPE_FIELDS = {
   model: { label: "Model", format: orEmpty },
   identifying_prompt: { label: "Identifying prompt", format: orEmpty, multiline: true },
   mcp_setup_commands: { label: "MCP setup commands", format: lines, multiline: true },
+  skills: { label: "Skills", format: lines, multiline: true },
 };
 
 const ASSIGNMENT_FIELDS = {

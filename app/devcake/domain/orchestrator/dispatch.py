@@ -259,6 +259,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         )
         run.spec_prompt = prompt
         run.spec_skills = await self._skill_payload(dev_type)
+        run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
         run.branch = mission_branch(self.instance_name, mission.key)
         run.stage_label_at_dispatch = self._stage_of(live)
         run.mission_pmo_id = mission.pmo_id
@@ -273,12 +274,13 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
 
 async def _skill_payload(self, dev_type: DevType) -> list[dict]:
-    """Skill-store files for this Dev Type's runs (skill store v1) —
-    claude-code harness only: other harnesses don't read ~/.claude/skills,
-    so a selection there is skipped with a warning, never a refused run."""
+    """Skill-store files for this Dev Type's runs. Delivery is registry-
+    driven: a harness with no skills_dir (harness.py) doesn't read personal
+    skills anywhere, so a selection there is skipped with a warning — never
+    a refused run."""
     if not dev_type.skills or getattr(self, "skills", None) is None:
         return []
-    if dev_type.harness_template != "claude-code":
+    if HARNESSES[dev_type.harness_template].skills_dir is None:
         log.warning("dev type %s: skills %s configured but harness %s does "
                     "not support them — skipped", dev_type.name,
                     dev_type.skills, dev_type.harness_template)

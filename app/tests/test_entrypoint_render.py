@@ -309,7 +309,7 @@ def test_clone_extra_repos_per_repo_token_and_nonfatal():
     assert any("gamma: clone failed" in n for n in notes)
 
 
-# ── skill install (skill store v1: runspec skills → ~/.claude/skills) ────────
+# ── skill install (runspec skills → the harness's registry skills_dir) ───────
 
 def _b64(data: bytes) -> str:
     import base64
@@ -356,3 +356,30 @@ def test_install_skills_empty_spec_is_noop(tmp_path):
     assert ep.install_skills([], home=tmp_path) == []
     assert ep.install_skills(None, home=tmp_path) == []
     assert not (tmp_path / ".claude").exists()
+
+
+def test_install_skills_honors_skills_dir(tmp_path):
+    """grok/codex runs deliver skills_dir='.agents/skills' via the runspec —
+    files must land there and nowhere near .claude."""
+    ep.install_skills(
+        [{"name": "tdd", "files": [
+            {"path": "tdd/SKILL.md", "content_b64": _b64(b"body")}]}],
+        home=tmp_path, skills_dir=".agents/skills")
+    assert (tmp_path / ".agents/skills/tdd/SKILL.md").read_bytes() == b"body"
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_install_skills_rejects_unsafe_skills_dir(tmp_path):
+    """skills_dir crosses the protocol, so it gets the same home-relative
+    guard as file paths: absolute/../empty values fall back to the default
+    with a note — never a write outside $HOME, never a refused run."""
+    for bad in ("/abs/skills", "../up", ""):
+        notes = ep.install_skills(
+            [{"name": "x", "files": [
+                {"path": "x/SKILL.md", "content_b64": _b64(b"y")}]}],
+            home=tmp_path, skills_dir=bad)
+        if bad:      # "" silently maps to the default, no refusal note
+            assert any("refused unsafe skills_dir" in n for n in notes), bad
+        assert (tmp_path / ".claude/skills/x/SKILL.md").exists(), bad
+        (tmp_path / ".claude/skills/x/SKILL.md").unlink()
+    assert not (tmp_path.parent / "up").exists()

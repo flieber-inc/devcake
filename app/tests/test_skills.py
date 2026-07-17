@@ -388,7 +388,7 @@ def test_delete_skill_guards_and_deletes(tmp_path):
     assert [s.name for s in _run(svc.list_skills())[0] if s.name == "custom"] == []
 
 
-# ── dispatch attach (_skill_payload; claude-code only in v1) ─────────────────
+# ── dispatch attach (_skill_payload; registry-driven skills_dir) ─────────────
 
 class _FakeSkillService:
     def __init__(self):
@@ -412,8 +412,30 @@ def test_skill_payload_attaches_for_claude_harness():
     assert mgr.skills.calls == [["tdd", "pr-hygiene"]]
 
 
-def test_skill_payload_skipped_for_non_claude_harness():
+@pytest.mark.parametrize("harness", ["grok-build", "codex"])
+def test_skill_payload_attaches_for_grok_and_codex(harness):
+    """grok 0.2.103 and codex 0.144.4 read ~/.agents/skills natively — the
+    registry declares a skills_dir for them, so delivery is no longer
+    claude-code-only."""
     from fakes import make_mission_manager
+    mgr = make_mission_manager(skills=_FakeSkillService())
+    dt = DevType(name="main-dev", harness_template=harness, skills=["tdd"])
+    payload = _run(mgr._skill_payload(dt))
+    assert [s["name"] for s in payload] == ["tdd"]
+    assert mgr.skills.calls == [["tdd"]]
+
+
+def test_skill_payload_skipped_when_harness_has_no_skills_dir(monkeypatch):
+    """The warn+skip gate is registry-driven: a harness whose entry declares
+    no skills_dir never asks the service — never a refused run.
+
+    Patch the HARNESSES reference the gate actually reads (dispatch's module
+    global): test_harness.py reloads devcake.harness, after which
+    devcake.harness.HARNESSES is a different object from dispatch's."""
+    from devcake.domain.orchestrator import dispatch as dispatch_mod
+    from fakes import make_mission_manager
+    monkeypatch.setattr(dispatch_mod.HARNESSES["grok-build"],
+                        "skills_dir", None)
     mgr = make_mission_manager(skills=_FakeSkillService())
     dt = DevType(name="main-dev", harness_template="grok-build", skills=["tdd"])
     assert _run(mgr._skill_payload(dt)) == []
@@ -451,12 +473,23 @@ def test_runspec_reply_carries_skills(tmp_path):
               mission_type="HELLO", dev_type="hello-stub", seq=1)
     run.spec_skills = [{"name": "tdd", "files": [
         {"path": "tdd/SKILL.md", "content_b64": "eA=="}]}]
+    run.spec_skills_dir = ".agents/skills"
     run.state = "dispatched"
     store.save(run)
     _run(manager.handle(run.run_id, "runspec.get", {}))
     kind, payload = replies[-1]
     assert kind == "runspec.result"
     assert payload["skills"] == run.spec_skills
+    assert payload["skills_dir"] == ".agents/skills"
+
+    # legacy Run persisted before the field existed → "" → the entrypoint
+    # falls back to its .claude/skills default (old-behavior compat)
+    run2 = Run(run_id="HELLO-1-2-HELLO-AAAAAA", mission_key="HELLO",
+               mission_type="HELLO", dev_type="hello-stub", seq=2)
+    run2.state = "dispatched"
+    store.save(run2)
+    _run(manager.handle(run2.run_id, "runspec.get", {}))
+    assert replies[-1][1]["skills_dir"] == ""
 
 
 def test_payload_total_cap_drops_later_files(tmp_path):

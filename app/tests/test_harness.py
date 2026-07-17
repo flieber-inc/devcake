@@ -99,6 +99,25 @@ def test_dev_type_status_derives_and_reports_secrets(tmp_path, monkeypatch):
     claude = dev_type_status(DevType(name="senior-dev", harness_template="claude-code"))
     assert claude["harness"]["oauth_available"] is False
     assert claude["secrets_present"] == []
+    # the SPA gates the Skills selector on this (falsy = disabled)
+    assert grok["harness"]["skills_dir"] == ".agents/skills"
+    assert claude["harness"]["skills_dir"] == ".claude/skills"
+
+
+def test_registry_skills_dirs():
+    """The verified per-CLI read-set (this pin set): claude-code 2.1.210
+    reads only ~/.claude/skills; grok 0.2.103 and codex 0.144.4 read
+    ~/.agents/skills. Every declared dir must be a home-relative POSIX
+    subpath — the entrypoint refuses anything else and falls back."""
+    from pathlib import PurePosixPath
+    assert HARNESSES["claude-code"].skills_dir == ".claude/skills"
+    assert HARNESSES["grok-build"].skills_dir == ".agents/skills"
+    assert HARNESSES["codex"].skills_dir == ".agents/skills"
+    for name, h in HARNESSES.items():
+        if h.skills_dir is None:
+            continue
+        p = PurePosixPath(h.skills_dir)
+        assert p.parts and not p.is_absolute() and ".." not in p.parts, name
 
 
 def test_dev_type_status_reports_secret_env_presence(tmp_path, monkeypatch):
@@ -412,6 +431,8 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     run = run_coro(mgr.dispatch_mapper(dt, [m]))
 
     assert captured["IMAGE"] == HARNESSES["grok-build"].image
+    # skills dir snapshotted from the same registry read as the image
+    assert run.spec_skills_dir == HARNESSES["grok-build"].skills_dir
     assert run.spec_env["DEVCAKE_HARNESS"] == "grok-build"
     assert run.spec_env["DEVCAKE_MODEL"] == "grok-4.5"
     # dev-side forge dialect flows via spec_env from the descriptor (docs/06/07)

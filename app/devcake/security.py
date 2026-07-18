@@ -200,9 +200,11 @@ def security_warnings(config) -> list[dict]:
         "title": "GUI-stored secrets behind basic auth",
         "body": "Operator secrets (PMO/forge tokens, model keys) are stored "
                 "0600 on the app volume and the admin panel is protected only "
-                "by HTTP basic auth. This is fine on localhost/a dedicated "
-                "host; revisit (OIDC/SSO, secret-manager) before exposing "
-                "DevCake beyond localhost (docs/14 §7).",
+                "by HTTP basic auth — which, since settings export exists "
+                "(ADR-0013), includes the ability to export stored secret "
+                "values. This is fine on localhost/a dedicated host; revisit "
+                "(OIDC/SSO, secret-manager) before exposing DevCake beyond "
+                "localhost (docs/14 §7).",
     }]
     for repo in config.repos:
         if repo.configured and repo.token and not repo.token_ro:

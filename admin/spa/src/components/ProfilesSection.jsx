@@ -8,6 +8,8 @@ import { Section } from "./Card.jsx";
 import { Select } from "./Field.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import InstantZone from "./InstantZone.jsx";
+import ExportDialog from "./ExportDialog.jsx";
+import ImportDialog from "./ImportDialog.jsx";
 import { ConfirmDialog, PromptDialog } from "./Modal.jsx";
 import MoreMenu from "./MoreMenu.jsx";
 import SettingRow from "./SettingRow.jsx";
@@ -102,6 +104,8 @@ export default function ProfilesSection() {
   const [applying, setApplying] = useState(null);  // {name, diff, busy, error}
   const [renaming, setRenaming] = useState(null);  // {name, busy, error}
   const [deleting, setDeleting] = useState(null);  // {name, busy, error}
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const load = () =>
     get("/profiles")
@@ -184,8 +188,8 @@ export default function ProfilesSection() {
   const rows = profiles || [];
 
   return (
-    <Section id="profiles" title="Profiles"
-      description="Named snapshots of your settings and secrets — save the current setup, switch between saved ones."
+    <Section id="profiles" title="Profiles & Export"
+      description="Named snapshots of your settings and secrets — save the current setup, switch between saved ones, move them between installs."
       help="A profile captures the saved runtime settings (connections, repos, Dev Types, prompt templates, limits) and every stored secret value. Applying replaces the current settings with the snapshot; later edits never update a profile. Secret values are stored on the server and never shown here."
       actions={
         <>
@@ -312,6 +316,30 @@ export default function ProfilesSection() {
             </tbody>
           </table>
         </div>
+      )}
+
+      <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+        Transfer
+      </h4>
+      <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+        <SettingRow label="Export settings"
+          desc="Download configs — optionally secrets and setup values — as one bundle file."
+          help="Bundles containing secrets are passphrase-encrypted by default; plaintext export exists behind an explicit warning and should be treated like a password-manager export.">
+          <Button kind="ghost" onClick={() => setExporting(true)}>Export…</Button>
+        </SettingRow>
+        <SettingRow label="Import settings"
+          desc="Upload a bundle, review the differences, save it as a profile."
+          help="Importing never applies anything — the bundle lands as a saved profile, and you apply it from the list above with the usual preview and confirm.">
+          <Button kind="ghost" onClick={() => setImporting(true)}>Import…</Button>
+        </SettingRow>
+      </div>
+
+      {exporting && (
+        <ExportDialog profiles={rows.filter((r) => !r.broken)}
+          onClose={() => setExporting(false)} />
+      )}
+      {importing && (
+        <ImportDialog onClose={() => setImporting(false)} onImported={load} />
       )}
 
       <PromptDialog open={!!saveAs}

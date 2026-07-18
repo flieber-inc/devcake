@@ -85,6 +85,18 @@ than the snapshot; run history, the skill store, internal repos, and `.env`
 are never touched by a profile. Profile snapshots live on `/data` and hold
 secret values — they are part of why backups are a password export.
 
+**Moving a setup to another install:** the same section's **Export…** writes
+one bundle file — configs stay readable YAML; secrets and `.env` setup
+values ride encrypted under a passphrase you choose (plaintext exists behind
+a red warning; treat such a file like a password-manager export and delete
+it after use). Tick "Embed skill contents" to carry custom skills along. On
+the target: **Import…** → passphrase → review the preview → it lands as a
+profile → apply it when ready. If the bundle carried setup values, download
+the generated `.env`, review its HOST-SPECIFIC lines, place it at the repo
+root, and `docker compose up -d`. Internal work repos (with their git
+history and PRs) move separately via `scripts/backup_gitea.sh` /
+`restore_gitea.sh`.
+
 ## Security warnings and daily hygiene
 
 - Read **security_warnings** on Overview/health (write token on all stages,

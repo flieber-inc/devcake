@@ -240,7 +240,8 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 
 ### Shipped post-v0.1
 
-- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section. **Remaining in the ADR-0013 line:** single-file export/import (encrypted-by-default, import-lands-as-profile), setup-env (`.env`) export + generated-file import, `backup_gitea.sh`/`restore_gitea.sh`, and the `profiles.mjs` UI suite (after the check:ui branch merges).
+- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section.
+- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013 part 2): single-file export (source = current or a profile; sections A/B/C; scrypt+AESGCM encrypted by default, plaintext behind explicit acknowledgment; optional skill embedding; audited), stateless import that **lands as a profile** (apply remains the one world-swap path), section C as a generated ready-to-place `.env` download, `scripts/backup_gitea.sh`/`restore_gitea.sh` for full-fidelity internal-forge backups, and the Export…/Import… transfer UI. **Remaining in the ADR-0013 line:** the `profiles.mjs` UI suite (after the check:ui branch merges).
 
 ### Deferred (v0.2+)
 

@@ -35,7 +35,9 @@ If that contract is wrong for your environment, do not run DevCake there.
 | `docker.sock` (via Dagu) | **Root-equivalent on the host** |
 | `ADMIN_PASSWORD` / GUI secret store | All operator secrets on the volume |
 | Config profile snapshots (`/data/secrets/profiles/`) | A saved profile's full secret set — same class as the live store; dormant copies survive live rotation/deletion until the profile is deleted (ADR-0013) |
+| Exported settings bundle (with secrets/setup values) | Password-manager-grade when it contains B or C; encrypted by default, plaintext only behind an explicit acknowledgment (ADR-0013) |
 | `/data` volume (or its backups) | Full secret dump — treat backups like a password-manager export |
+| `gitea_data` volume (or its backups) | Internal repo content + Gitea's credential DB — same handling as `/data` backups (`scripts/backup_gitea.sh`) |
 | Mission content + repo content | Feeds agent prompts (trust zone B, §2) |
 
 ---
@@ -47,7 +49,7 @@ If that contract is wrong for your environment, do not run DevCake there.
 | Surface | Stance |
 |---|---|
 | Host `docker.sock` on **Dagu only** | **Design choice.** Required so Dagu can spawn sibling Dev containers. Dedicated host only (§5). |
-| Admin panel HTTP basic auth + GUI secrets | **Design choice** (simplicity). Fine on loopback / dedicated host; publishing past localhost publishes every PAT (§4). |
+| Admin panel HTTP basic auth + GUI secrets | **Design choice** (simplicity). Fine on loopback / dedicated host; publishing past localhost publishes every PAT (§4). **Since ADR-0013, admin auth includes one-request secret READ-OUT** via settings export — it was always host-root-equivalent in blast radius; export makes the equivalence direct. |
 | Bootstrap secrets in `.env` | Stack only (Dagu/Redis/OO/admin/Gitea/DOCKER_GID). Operator PMO/forge/model secrets are GUI-stored (ADR-0011). |
 | Control-plane ports | Bind **loopback by default** (`13-deployment.md`). Remote access = SSH tunnel or host firewall — never “open to the LAN for convenience” without reading this file. |
 
@@ -149,6 +151,16 @@ a capable agent from pushing bad code to a feature branch or exfiltrating tokens
    rotation caveat: a profile holds the values **as of its save** — rotating
    a live secret does not touch snapshots, and applying an old profile
    restores the old value (the apply preview warns).
+6b. **Settings export (ADR-0013) — the ONE sanctioned value egress:** an
+   explicit operator POST may serialize stored secret values (and `.env`
+   setup values) into a downloadable bundle. Encrypted by default (scrypt +
+   AESGCM passphrase envelope); plaintext only behind
+   `acknowledge_plaintext: true` with red UI warnings. POST-only (no values
+   in URLs/access logs); every export appends an audit event recording
+   sections + encryption mode; previews, profile reads, and the export
+   summary stay presence-and-counts only. Imports are hardened
+   operator-input: `yaml.safe_load` only, 20 MB cap, and validation errors
+   scrubbed of input values.
 7. **Dev-Type secret env (`DevType.secret_env`):** mission-tooling credentials
    (e.g. a log-platform key for an MCP plugin) are the same harness-namespace
    secret class — GUI-stored, `0600`, redaction-registered on write and at boot.
@@ -275,6 +287,10 @@ dismiss.
 9. Treat **`/data` backups** as secret material — including the config
    profile snapshots under `/data/secrets/profiles/`, which hold every
    secret value as of each save.
+10. Store **settings export bundles** like credential dumps: prefer
+    encrypted, never plaintext off the box, delete plaintext exports after
+    use. Same handling for `gitea_data` backups (repo content + Gitea's
+    credential DB).
 
 Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 

@@ -212,7 +212,7 @@ match.
 
 1. Keep published ports on **127.0.0.1** (default compose). Use SSH tunnels for remote access.
 2. Do not run on a shared multi-tenant Docker host.
-3. Treat `/data` volume backups as **secret dumps**.
+3. Treat `/data` volume backups as **secret dumps** — likewise `gitea_data` backups (repo content + Gitea's credential DB) and any settings-export bundle containing secrets or setup values (ADR-0013).
 4. Before first real EXECUTE: branch protection + team membership + checklist in `14` §9.
 5. Prefer mounting `./dagu/dags` **read-only** into Dagu when compose allows.
 
@@ -280,3 +280,5 @@ Forge connection test and `/health` surface protection state; amber warning when
 - **Kill a stuck Dev:** admin → Runs page → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Logs page (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).
+- **Backups (the full story):** back up the **`/data` volume** (settings + secrets + run state) AND the **`gitea_data` volume** (internal repos with history/PRs + skill store) — `scripts/backup_gitea.sh` / `scripts/restore_gitea.sh` handle the latter (restore refuses while gitea runs). Both backups are secret dumps. **Settings bundles** (Config → Profiles & Export) are the portable, selective layer on top: configs diffable-plaintext, secrets/setup values encrypted by default; import lands as a profile on the target. They do not replace volume backups (no run state, no repo content).
+- **Moving `.env` (setup values) between hosts:** export with "Setup values" checked → on the target, Import → "Download generated .env" → review the HOST-SPECIFIC lines (`DOCKER_GID`, `DEVCAKE_TAG`) → place at the repo root as `.env` → `docker compose up -d`. The app never writes the host's `.env` — exported values reflect the source stack at container start.

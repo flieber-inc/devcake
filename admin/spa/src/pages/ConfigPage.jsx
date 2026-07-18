@@ -16,6 +16,7 @@ import PromptsSection from "../components/PromptsSection.jsx";
 import SelectionChips from "../components/SelectionChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
+import { fileToB64 } from "../lib/files.js";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
@@ -352,16 +353,6 @@ function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
 }
 
 // ── skill authoring (docs/11 Skills section) ─────────────────────────────────
-
-// browser-safe base64 for uploaded files (chunked — a spread over a large
-// Uint8Array overflows the call stack)
-async function fileToB64(file) {
-  const buf = new Uint8Array(await file.arrayBuffer());
-  let s = "";
-  for (let i = 0; i < buf.length; i += 0x8000)
-    s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-  return btoa(s);
-}
 
 // "Add skill" dialog: Write (name + trigger + markdown; the app generates
 // the frontmatter — the operator never sees YAML) or Import (upload a

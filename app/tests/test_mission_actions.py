@@ -293,6 +293,35 @@ def test_create_mission_explicit_unknown_instance_returns_409():
     assert exc.value.status_code == 409
 
 
+class _RaisingPMO(FakePMO):
+    async def create_mission(self, *args, **kwargs):
+        raise RuntimeError("linear graphql: authentication error")
+
+
+def test_create_mission_pmo_runtime_error_returns_502():
+    mgr = FakeMgr(pmo=_RaisingPMO())
+    with pytest.raises(HTTPException) as exc:
+        run(ma.create_mission(title="ok", description="", priority="medium",
+                              instance_name=None,
+                              managers={"linear": mgr},
+                              team_keys={"linear": "DEV"}))
+    assert exc.value.status_code == 502
+
+
+class _FeedRaisingPMO(FakePMO):
+    async def post_feed(self, ref, markdown):
+        raise RuntimeError("linear graphql: authentication error")
+
+
+def test_post_steering_pmo_runtime_error_returns_502():
+    cache, _ = _fresh_env(row_labels={"DEVCAKE"})
+    managers = {"linear": FakeMgr(pmo=_FeedRaisingPMO())}
+    with pytest.raises(HTTPException) as exc:
+        run(ma.post_steering("pmo-1", "hello",
+                             missions_cache=cache, managers=managers))
+    assert exc.value.status_code == 502
+
+
 # ── 4) stop-run endpoint ────────────────────────────────────────────────────
 
 def _run_record(state="running"):

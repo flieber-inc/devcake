@@ -184,6 +184,13 @@ async def post_steering(
         raise HTTPException(
             status_code=502,
             detail=f"pmo transient error while posting feed: {e}") from e
+    except RuntimeError as e:
+        # The adapter raises RuntimeError for GraphQL-level errors that are
+        # not transient (revoked token, deleted mission, etc.). 502 keeps
+        # the "PMO refused us" family together — never leak as 500.
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo rejected feed post: {e}") from e
 
     _try_audit(mgr, pmo_id, "ui_steer", redacted[:120])
     return {"ok": True}
@@ -231,6 +238,12 @@ async def create_mission(
         raise HTTPException(
             status_code=502,
             detail=f"pmo transient error while creating mission: {e}") from e
+    except RuntimeError as e:
+        # Non-transient adapter errors (revoked token, unknown team) surface
+        # as 502 — never let a bare RuntimeError leak as 500 to the SPA.
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo rejected mission creation: {e}") from e
 
     _try_audit(mgr, pmo_id, "ui_create", clean_title[:120])
     return {"key": key, "pmo_id": pmo_id, "instance": instance_name}

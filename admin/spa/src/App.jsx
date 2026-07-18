@@ -5,6 +5,7 @@ import OverviewPage from "./pages/OverviewPage.jsx";
 import ConfigPage from "./pages/ConfigPage.jsx";
 import ReposPage from "./pages/ReposPage.jsx";
 import RunsPage from "./pages/RunsPage.jsx";
+import MissionsPage from "./pages/MissionsPage.jsx";
 import DraftChrome from "./components/DraftChrome.jsx";
 import { ConfigDraftProvider } from "./lib/ConfigDraftContext.jsx";
 import LogsPage from "./pages/LogsPage.jsx";
@@ -13,7 +14,7 @@ import { CONFIG_SECTIONS } from "./lib/nav.js";
 import usePoll from "./lib/usePoll.js";
 import { get, send } from "./api.js";
 
-const PAGES = ["overview", "runs", "config", "repos", "logs"];
+const PAGES = ["overview", "missions", "runs", "config", "repos", "logs"];
 const SECTION_IDS = CONFIG_SECTIONS.map((s) => s.id);
 
 // tiny hash router: #/overview · #/runs · #/config/<section> · #/repos ·
@@ -198,6 +199,7 @@ export default function App() {
             {page === "config" && <ConfigPage section={section} />}
             {page === "repos" && <ReposPage />}
             {page === "runs" && <RunsPage />}
+            {page === "missions" && <MissionsPage />}
             {page === "logs" && <LogsPage />}
             {["config", "repos"].includes(page) && (
               <DraftChrome registerNavGuard={registerNavGuard} health={health} />

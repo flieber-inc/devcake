@@ -47,10 +47,13 @@ def _trip_breaker(self, name: str, reason: str) -> None:
         span.set_status(Status(StatusCode.ERROR, f"breaker {name} tripped"))
 
 
-async def _feed(self, pmo_id: str, kind: str, markdown: str) -> None:
+async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
+                externalize: bool = True) -> None:
     """The single choke-point for PMO comments: redaction + the provenance
     sentinel. Bodies over FEED_INLINE_MAX are uploaded as .md attachments
-    and replaced by a short referencing comment (docs/05 §4); the sentinel
+    and replaced by a short referencing comment (docs/05 §4) unless the
+    caller opts out (externalize=False — the ADR-0014 finalize post, whose
+    long text already lives in its own attachment); the sentinel
     goes on the comment, never inside the attachment, so provenance
     classification keeps working. Upload failures fall back to posting
     inline — an upload outage must never lose feed content. Projects have
@@ -61,7 +64,7 @@ async def _feed(self, pmo_id: str, kind: str, markdown: str) -> None:
     if kind == "project":
         self._audit(pmo_id, "project_feed_suppressed", markdown[:120])
         return
-    if len(markdown) > FEED_INLINE_MAX:
+    if externalize and len(markdown) > FEED_INLINE_MAX:
         try:
             name = f"comment-{utcnow():%Y%m%dT%H%M%S}.md"
             url = await self.pmo.upload_attachment(pmo_id, name,

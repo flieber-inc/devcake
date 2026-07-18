@@ -950,6 +950,18 @@ def test_feed_externalizes_over_2048(tmp_path):
     assert "y" * 2048 in fake.comments[-1]
 
 
+def test_feed_externalize_opt_out_posts_long_body_inline(tmp_path):
+    # ADR-0014 D1: the finalize post opts out of the 2048 externalization;
+    # redaction and the sentinel are untouched by the opt-out
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._feed("p1", "issue", "x" * 3000, externalize=False))
+    assert not fake.uploads
+    posted = fake.comments[-1]
+    assert "x" * 3000 in posted
+    assert posted.count("`devcake:v1`") == 1
+
+
 def test_reject_report_attached_feed_short_pr_full(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
     forge = FakeForge()

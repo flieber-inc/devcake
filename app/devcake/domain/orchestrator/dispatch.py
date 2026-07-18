@@ -215,6 +215,10 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         log.warning("dispatch of %s refused — %s", live.key, e)
         return None
 
+    # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
+    # repo records what this Dev actually receives. NEVER gates dispatch.
+    await self._push_activity_repo(live, mtype, seq)
+
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)
         span.set_attribute("devcake.mission.key", mission.key)
@@ -544,6 +548,41 @@ async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) ->
             f"(Traces: search run ids `{mission.key}-*` in OpenObserve.)")
         self._audit(mission.pmo_id, "devcake_failed", mtype.value)
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
+
+
+def _activity_snapshot_files(payload: dict) -> list[dict]:
+    """Activity payload → the flat file list a snapshot commit mirrors
+    (identical layout to the Dev's /workspace/activity)."""
+    files = []
+    if payload.get("mission_md"):
+        files.append({"path": "MISSION.md", "content_b64": base64.b64encode(
+            payload["mission_md"].encode()).decode()})
+    files.append({"path": "ACTIVITY.md", "content_b64": base64.b64encode(
+        payload.get("activity_md", "").encode()).decode()})
+    for a in payload.get("attachments", []):
+        files.append({"path": Path(a["filename"]).name,
+                      "content_b64": a["content_b64"]})
+    return files
+
+
+async def _push_activity_repo(self, mission, mtype, seq: int) -> None:
+    """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
+    audited loudly and swallowed — the run proceeds on the Redis fallback;
+    Gitea down degrades to pre-ADR behavior, never to a halt."""
+    if self.internal_forge is None:
+        return
+    try:
+        payload = await self.activity_payload(mission.pmo_id, mission.pmo_kind)
+        name = await self.internal_forge.ensure_activity_repo(
+            self.instance_name, mission.key)
+        await self.internal_forge.push_activity_snapshot(
+            name, _activity_snapshot_files(payload),
+            f"step {seq} {mtype.value} dispatch")
+        log.info("activity repo %s: snapshot for step %d", name, seq)
+    except Exception as e:
+        log.exception("activity repo push failed for %s", mission.key)
+        self._audit(mission.pmo_id, "activity_repo_push_failed",
+                    f"{mission.key}: {type(e).__name__}: {str(e)[:180]}")
 
 
 def _mission_md(m, attachment_lines=()) -> str:

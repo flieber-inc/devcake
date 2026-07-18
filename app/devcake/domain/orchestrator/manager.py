@@ -120,6 +120,7 @@ MissionManager._last_giveup_at = classmethod(dispatch._last_giveup_at)
 MissionManager._attempt_number = dispatch._attempt_number
 MissionManager._give_up = dispatch._give_up
 MissionManager.activity_payload = dispatch.activity_payload
+MissionManager._push_activity_repo = dispatch._push_activity_repo
 MissionManager._checkpoint = finalize._checkpoint
 MissionManager.finalize = finalize.finalize
 MissionManager.dev_failure_error = finalize.dev_failure_error

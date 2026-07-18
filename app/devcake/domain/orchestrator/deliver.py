@@ -43,13 +43,14 @@ async def deliver_internal_zip_for_mission(self, m, pr) -> None:
     future sweep candidates, so it fires once — but a crash between the swap
     and this call, or a redelivery, could re-enter. Guard durably against a
     double-attach by checking the feed for the deliverable's own filename
-    (review finding #9)."""
+    (review finding #9). Scans _unquoted bodies only (ADR-0014 D2): a quoted
+    mention of the zip name must never suppress a real delivery."""
     if m.repo not in self.forges.internal:
         return
     marker = f"{m.key}-deliverable.zip"
     try:
         act = await self.pmo.get_activity(m.ref)
-        if any(marker in e.body for e in act.entries):
+        if any(marker in self._unquoted(e.body) for e in act.entries):
             return                               # already delivered
     except Exception:
         log.warning("deliverable idempotency check failed for %s — proceeding",

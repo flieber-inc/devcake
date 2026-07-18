@@ -27,6 +27,10 @@ LEGAL_OUTCOMES: dict[str, frozenset[str]] = {
     "REVIEW": frozenset({"reviewed", "human_needed"}),
 }
 
+# IRON RULE (ADR-0014 D2): every scan over feed bodies runs on
+# feed._unquoted(body) — `>`-quoted lines never count, for humans quoting
+# DevCake comments and for blockquoted model text alike. Quoting is the ONE
+# quarantine convention; a new feed scan that reads raw bodies is a bug.
 STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 
 # Stage label each checkpointed swap leaves on the mission (None = stage label

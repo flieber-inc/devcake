@@ -207,6 +207,8 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 
 `seq` = (number of prior DevCake step artifacts — comments or attachments named `N_TYPE.md` — present in the Mission's activity feed) + 1, computed at workspace-preparation time from the live feed. This makes transcript numbering robust to local-state loss and is the same counter used to name `{seq}_{TYPE}.md` (e.g. `5_EXECUTE.md`). A retried attempt of the same step reuses the same `seq` only if the prior attempt posted no transcript; otherwise it naturally increments.
 
+**Quoting quarantine (ADR-0014):** every feed scan — this one, the deliverable-redelivery guard, the merge/conflict markers, the provenance sentinel — runs on the body with `>`-quoted lines stripped. A quoted marker mention (a human citing a transcript name, or the blockquoted last-message text DevCake posts at step end) never counts. This is the invariant that lets model-authored prose live inline in the feed without feeding the state machine.
+
 ## 9. AppConfig
 
 Persisted at `/data/config/config.yaml` (full annotated example in `10-persistence.md` §3). **Schema v4** (GUI secret store — ADR-0011; see `10-persistence.md` for hand-migration). Config holds **identities and non-secret fields**; secret VALUES live under `/data/secrets/` and are never written into `config.yaml`. Shape (see also multi-instance notes in `10`):

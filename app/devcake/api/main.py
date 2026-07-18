@@ -18,6 +18,7 @@ import yaml
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
@@ -281,6 +282,9 @@ async def _poll_instance(mgr: MissionManager,
         "reason": gate.get(m.pmo_id, m.repo_reason or d.reason),
         "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
         "pmo_id": m.pmo_id,
+        # surfaced for the Missions board card (Linear link + Done-column sort)
+        "url": m.url,
+        "updated_at": m.updated_at,
     } for m, d in derived)
     return (len(missions), sum(1 for _, d in derived if d.schedulable),
             dispatched, fetched_ids)
@@ -630,6 +634,16 @@ async def list_missions():
             "missions": missions_cache}
 
 
+def _pr_url_of(run) -> str | None:
+    """Extract the PR link from run.result without exposing the full blob.
+
+    `run.result` is not redacted at save time (only run.error is) — never
+    surface it wholesale through the API. `pr_url` is a scalar the Missions
+    drawer needs; anything else lives in the audit log.
+    """
+    return (run.result or {}).get("pr_url") if run.result else None
+
+
 @app.get("/api/v1/runs")
 async def list_runs(limit: int = 25, offset: int = 0, mission_key: str | None = None):
     runs = sorted(store.all(), key=lambda r: r.created_at, reverse=True)
@@ -638,10 +652,13 @@ async def list_runs(limit: int = 25, offset: int = 0, mission_key: str | None = 
         runs = [r for r in runs if needle in r.mission_key.upper()
                 or needle in r.run_id.upper()]
     total = len(runs)
-    page = [r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
-                                  "seq", "state", "created_at", "started_at",
-                                  "ended_at", "error", "verdict"})
-            for r in runs[offset:offset + limit]]
+    page = []
+    for r in runs[offset:offset + limit]:
+        row = r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
+                                    "seq", "state", "created_at", "started_at",
+                                    "ended_at", "error", "verdict"})
+        row["pr_url"] = _pr_url_of(r)
+        page.append(row)
     return {"total": total, "offset": offset, "limit": limit, "runs": page}
 
 
@@ -650,7 +667,7 @@ async def get_run(run_id: str):
     run = store.get(run_id)
     if run is None:
         raise HTTPException(404)
-    return run.model_dump(include={
+    body = run.model_dump(include={
         "schema_version", "run_id", "mission_key", "mission_pmo_id", "pmo_kind",
         "pmo_ref", "repo_ref", "mission_type", "dev_type", "seq",
         "attempt_of_step", "stage_label_at_dispatch", "state", "created_at",
@@ -658,9 +675,66 @@ async def get_run(run_id: str):
         "finalized_steps", "artifact_bytes", "error",
         "verdict",
     })
+    body["pr_url"] = _pr_url_of(run)
+    return body
 
 
 TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
+
+
+# ── Missions actions (docs/05 §1): the admin UI writes through here so
+# every action lands in the PMO — INV-1 preserved. Handlers stay thin;
+# the application service in `mission_actions.py` owns validation, label
+# math (OCP), and HTTPException status codes.
+
+class _MissionActionBody(BaseModel):
+    action: str
+
+
+class _SteeringBody(BaseModel):
+    body: str
+
+
+class _CreateMissionBody(BaseModel):
+    title: str
+    description: str = ""
+    priority: str = "medium"
+    instance: str | None = Field(default=None)
+
+
+@app.post("/api/v1/missions/{pmo_id}/actions")
+async def mission_action(pmo_id: str, body: _MissionActionBody):
+    """Retry / park / unpark / resume via label swap. Returns projected labels."""
+    from .mission_actions import label_action
+    return await label_action(pmo_id, body.action,
+                              missions_cache=missions_cache, managers=managers)
+
+
+@app.post("/api/v1/missions/{pmo_id}/comment")
+async def mission_comment(pmo_id: str, body: _SteeringBody):
+    """Post an operator steering comment. NOT signed with the DevCake sentinel —
+    the next poll classifies it as HUMAN and resets the attempt counter."""
+    from .mission_actions import post_steering
+    return await post_steering(pmo_id, body.body,
+                               missions_cache=missions_cache, managers=managers)
+
+
+@app.post("/api/v1/missions")
+async def create_mission_route(body: _CreateMissionBody):
+    """Create a new backlog mission with the DEVCAKE opt-in label."""
+    from .mission_actions import create_mission
+    team_keys = {i.name: i.team_key for i in config.pmos if i.configured}
+    return await create_mission(
+        title=body.title, description=body.description,
+        priority=body.priority, instance_name=body.instance,
+        managers=managers, team_keys=team_keys)
+
+
+@app.post("/api/v1/runs/{run_id}/stop")
+async def stop_run_route(run_id: str):
+    """Kill an in-flight run (counts as a failed attempt — UI copy says so)."""
+    from .mission_actions import stop_run
+    return await stop_run(run_id, run_manager=manager, run_store=store)
 
 
 @app.get("/api/v1/runs/{run_id}/log")

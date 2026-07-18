@@ -507,6 +507,14 @@ class LinearAdapter:
         team = await self._team(team_ref)
         by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
         prio = {"urgent": 1, "high": 2, "medium": 3, "low": 4}[priority]
+        missing = [n for n in label_names if n.upper() not in by_name]
+        if missing:
+            # a bare KeyError would surface as a 500; RuntimeError keeps it in
+            # the "PMO refused us" family the API layer maps to 502 (a team
+            # whose label bootstrap failed can lack managed labels)
+            raise RuntimeError(
+                f"label(s) {sorted(missing)} not present on team {team_ref!r} "
+                "— label bootstrap incomplete?")
         inp: dict = {"teamId": team["id"], "title": title, "description": description,
                      "priority": prio,
                      "labelIds": [by_name[n.upper()] for n in label_names]}

@@ -200,8 +200,13 @@ A UI change is done when you have personally seen:
    and actually look at them. Note: the app scrolls inside `<main>` (fullPage
    screenshots won't capture it) and hash-only `page.goto` does **not** remount
    the app — reload for fresh-mount behavior.
-3. Behavioral assertions for new interactions (menu opens, dialog reached,
-   draft counts edits), not just screenshots.
+3. `npm --prefix admin/spa run check:ui` green — the committed behavioral
+   suite (`admin/spa/tests/`: settings model, action hierarchy, redesign
+   invariants; it boots vite itself and needs the live backend on :8080).
+   It never confirms a Save and cancels every destructive dialog, so it is
+   safe against live config. New interactions get assertions added here
+   (menu opens, dialog reached, draft counts edits), not just screenshots.
+   Local-only for now — CI has no live stack to run it against.
 4. For prod: `docker buildx bake admin && docker compose up -d admin` + load.
 
 Name anything left unproven (OAuth wizard, real save-PUT, etc.) instead of

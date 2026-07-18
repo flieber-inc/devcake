@@ -56,6 +56,11 @@ MAX_LABEL_PAGES = 5  # 5 × 50 = 250 labels fail-loud ceiling
 # rate), not a design limit. Newest pages are fetched first, so the newest
 # comments always survive if it trips.
 MAX_COMMENT_PAGES = 10
+# full-history mode (ADR-0014 D3, activity-folder builder): 100 pages =
+# 10,000 comments — a runaway-feed backstop; tripping it sets
+# Activity.truncated so the builder renders a loud banner (never raises:
+# a raise would starve the Dev's activity.get reply)
+MAX_COMMENT_PAGES_FULL = 100
 
 
 class LinearAdapter:
@@ -309,9 +314,16 @@ class LinearAdapter:
                         pmo_id, LABELS_PAGE * MAX_LABEL_PAGES)
         project["labels"] = {"nodes": nodes, "pageInfo": page_info}
 
-    async def get_activity(self, ref: MissionRef) -> Activity:
-        """Issue: the full comment feed. Project: mission + entries=[] —
-        Linear projects have no issue-style comments API (verified live)."""
+    async def get_activity(self, ref: MissionRef, full: bool = False) -> Activity:
+        """Issue: the comment feed. Project: mission + entries=[] — Linear
+        projects have no issue-style comments API (verified live).
+
+        Shallow (default): the cheap recent-window query the marker-scan call
+        paths ride — byte-stable, MAX_COMMENT_PAGES valve. Full (ADR-0014 D3,
+        activity-folder builder only): entire history, reply ids, description
+        assets + the native attachments connection; the hard stop sets
+        Activity.truncated instead of raising (a raise would starve the Dev's
+        activity.get reply)."""
         if ref.kind == "project":
             return Activity(mission=await self._get_project(ref.pmo_id), entries=[])
         pmo_id = ref.pmo_id
@@ -321,6 +333,10 @@ class LinearAdapter:
         # NEWEST-first — so if the safety ceiling ever trips, the newest
         # comments win: the merge-state and conflict-resolve markers
         # (docs/03 §4.1) live there, and losing them fails quiet.
+        comment_fields = ("id parent { id } body createdAt user { name }"
+                          if full else "body createdAt user { name }")
+        attachments_part = ("attachments(first: 50) { nodes { url title } }"
+                            if full else "")
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
                  id identifier title description url updatedAt priority
@@ -328,31 +344,41 @@ class LinearAdapter:
                  labels(first: 50) { pageInfo { hasNextPage endCursor }
                                     nodes { name } }
                  project { id }
+                 %s
                  comments(first: 100, orderBy: createdAt) {
                    pageInfo { hasNextPage endCursor }
-                   nodes { body createdAt user { name } }
+                   nodes { %s }
                  }
-            } }""", {"id": pmo_id})
+            } }""" % (attachments_part, comment_fields), {"id": pmo_id})
         issue = data["issue"]
         await self._paginate_issue_labels(pmo_id, issue)
         conn = issue["comments"]
         nodes = list(conn["nodes"])
-        for _ in range(MAX_COMMENT_PAGES - 1):
+        max_pages = MAX_COMMENT_PAGES_FULL if full else MAX_COMMENT_PAGES
+        for _ in range(max_pages - 1):
             if not conn["pageInfo"]["hasNextPage"]:
                 break
             page = await self._gql(
                 """query($id: String!, $after: String!) { issue(id: $id) {
                      comments(first: 100, orderBy: createdAt, after: $after) {
                        pageInfo { hasNextPage endCursor }
-                       nodes { body createdAt user { name } }
+                       nodes { %s }
                      }
-                } }""", {"id": pmo_id, "after": conn["pageInfo"]["endCursor"]})
+                } }""" % comment_fields,
+                {"id": pmo_id, "after": conn["pageInfo"]["endCursor"]})
             conn = page["issue"]["comments"]
             nodes.extend(conn["nodes"])
+        truncated = False
         if conn["pageInfo"]["hasNextPage"]:   # ceiling hit — never silent
-            log.warning("get_activity(%s): comment ceiling (%d) hit — oldest "
-                        "comments truncated from ACTIVITY.md and marker counts",
-                        pmo_id, 100 * MAX_COMMENT_PAGES)
+            if full:
+                truncated = True              # builder renders the loud banner
+                log.error("get_activity(%s): full-history hard stop (%d "
+                          "comments) — the activity folder is INCOMPLETE",
+                          pmo_id, 100 * max_pages)
+            else:
+                log.warning("get_activity(%s): comment ceiling (%d) hit — "
+                            "oldest comments truncated from marker counts",
+                            pmo_id, 100 * max_pages)
         mission = self._issue_to_mission(issue)
         entries = []
         for c in nodes:
@@ -363,9 +389,38 @@ class LinearAdapter:
                 kind="comment", body=c["body"],
                 attachments=[AttachmentRef(url=u, name=names.get(u))
                              for u in _ASSET_RE.findall(body)],
+                entry_id=c.get("id"),
+                parent_id=(c.get("parent") or {}).get("id"),
             ))
         entries.sort(key=lambda e: e.ts)
-        return Activity(mission=mission, entries=entries)
+        return Activity(mission=mission, entries=entries,
+                        mission_attachments=self._mission_attachments(issue)
+                        if full else [],
+                        truncated=truncated)
+
+    @staticmethod
+    def _mission_attachments(issue: dict) -> list[AttachmentRef]:
+        """ADR-0014 D3: assets the mission itself references — description-
+        embedded uploads (named via markdown links) + the native attachments
+        connection, url-deduped. uploads.linear.app = downloadable file;
+        anything else in the native list is an external link."""
+        seen: set[str] = set()
+        refs: list[AttachmentRef] = []
+        desc = issue.get("description") or ""
+        names = {url: name for name, url in _NAMED_ASSET_RE.findall(desc)}
+        for u in _ASSET_RE.findall(desc):
+            if u not in seen:
+                seen.add(u)
+                refs.append(AttachmentRef(url=u, name=names.get(u), kind="file"))
+        for node in ((issue.get("attachments") or {}).get("nodes") or []):
+            u = (node or {}).get("url") or ""
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            refs.append(AttachmentRef(
+                url=u, name=node.get("title"),
+                kind="file" if _ASSET_RE.match(u) else "link"))
+        return refs
 
     # ── writes ───────────────────────────────────────────────────────────────
 

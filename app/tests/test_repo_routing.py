@@ -450,7 +450,7 @@ def _mission_delivery_setup(tmp_path, feed_body):
     m.repo = "linear-t-1"
 
     class FakePMO:
-        async def get_activity(self, ref):
+        async def get_activity(self, ref, full=False):
             return Activity(mission=m, entries=[
                 ActivityEntry(ts=datetime.now(timezone.utc), author="a",
                               kind="comment", body=feed_body)])

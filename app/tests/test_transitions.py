@@ -70,7 +70,7 @@ class FakePMO:
         self.uploads.append((filename, data))
         return f"https://fake/{filename}"
 
-    async def get_activity(self, ref):
+    async def get_activity(self, ref, full=False):
         self._check_ref(ref)
         self.get_activity_calls = getattr(self, "get_activity_calls", 0) + 1
         return Activity(mission=self.mission, entries=list(self.activity_entries))

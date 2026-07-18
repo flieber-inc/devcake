@@ -41,7 +41,7 @@ class MapPMO:
     async def post_feed(self, ref, markdown):
         self.comments.append((ref.pmo_id, markdown))
 
-    async def get_activity(self, ref):
+    async def get_activity(self, ref, full=False):
         return self.activity
 
 

@@ -158,9 +158,12 @@ def find_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
 class AttachmentRef(BaseModel):
     """An asset referenced from a feed entry. `name` is the markdown link text
     when the feed carried one — the adapter resolves it so the domain never
-    parses vendor asset URLs."""
+    parses vendor asset URLs. `kind` (ADR-0014 D3): "file" = downloadable
+    bytes; "link" = external reference (PR, Slack thread) the builder renders
+    as a markdown link instead of downloading."""
     url: str
     name: Optional[str] = None
+    kind: Literal["file", "link"] = "file"
 
 
 class ActivityEntry(BaseModel):
@@ -169,8 +172,18 @@ class ActivityEntry(BaseModel):
     kind: Literal["comment", "status_change", "attachment"]
     body: str = ""
     attachments: list[AttachmentRef] = Field(default_factory=list)
+    # ADR-0014 D3: reply structure — populated only by full-mode get_activity;
+    # None on the shallow marker-scan path (and for vendors without threads)
+    entry_id: Optional[str] = None
+    parent_id: Optional[str] = None
 
 
 class Activity(BaseModel):
     mission: Mission
     entries: list[ActivityEntry]
+    # ADR-0014 D3 (full mode only): assets referenced by the mission itself —
+    # description-embedded uploads + the vendor's native attachment list —
+    # resolved by the ADAPTER; the domain never parses vendor asset URLs
+    mission_attachments: list[AttachmentRef] = Field(default_factory=list)
+    # full-mode hard stop tripped: the builder must render a loud banner
+    truncated: bool = False

@@ -418,6 +418,66 @@ def _validate_setup_env(env, warnings: list[str]) -> dict:
             "host_specific": [n for n, host in SETUP_ENV_VARS if host]}
 
 
+# ── transfer helpers (export/import; ADR-0013 decisions 1/2/5) ───────────────
+
+def protect_bundle(bundle: dict, passphrase: str) -> dict:
+    """Move the secret-bearing sections (B and C together) into ONE encrypted
+    `protected` envelope; section A stays plaintext/diffable."""
+    from . import settings_crypto   # lazy: keep the module import-light
+    secretish = {k: bundle[k] for k in ("secrets", "setup_env") if k in bundle}
+    if not secretish:
+        return bundle
+    out = {k: v for k, v in bundle.items()
+           if k not in ("secrets", "setup_env", "plaintext_secrets")}
+    out["protected"] = settings_crypto.encrypt_blob(
+        passphrase, json.dumps(secretish).encode())
+    return out
+
+
+def unprotect_bundle(bundle: dict, passphrase: str) -> dict:
+    """Inverse of protect_bundle. Raises settings_crypto.DecryptError on a
+    wrong passphrase or tampering (one indistinguishable message)."""
+    from . import settings_crypto
+    plaintext = settings_crypto.decrypt_blob(passphrase, bundle["protected"])
+    try:
+        sections = json.loads(plaintext)
+        assert isinstance(sections, dict)
+    except Exception:
+        raise BundleError(422, "decrypted payload is not a bundle section map")
+    out = {k: v for k, v in bundle.items() if k != "protected"}
+    out.update(sections)
+    return out
+
+
+def generate_env_file(setup_env: dict) -> str:
+    """The C-import artifact: a ready-to-place .env. The app cannot write the
+    host's .env — the operator downloads this, reviews the host-specific
+    lines, and restarts the stack."""
+    values = setup_env.get("values") or {}
+    lines = [
+        "# DevCake .env — generated from a settings bundle (ADR-0013).",
+        "# 1. Review the HOST-SPECIFIC lines below for THIS host.",
+        "# 2. Place this file at the repo root as `.env`.",
+        "# 3. `docker compose up -d` to restart the stack with these values.",
+        "# Values reflect the source stack at container start — .env edits",
+        "# made there after boot are not included. Handle like a password",
+        "# export; delete this file once placed.",
+        "",
+    ]
+    hints = {
+        "DOCKER_GID": "# HOST-SPECIFIC — verify: stat -c %g /var/run/docker.sock",
+        "DEVCAKE_TAG": "# HOST-SPECIFIC — must match your docker buildx bake tag",
+    }
+    for name, host in SETUP_ENV_VARS:
+        if host:
+            lines.append(hints.get(name, "# HOST-SPECIFIC — verify for this host"))
+        if name in values:
+            lines.append(f"{name}={values[name]}")
+        else:
+            lines.append(f"# {name}=    # not set on the source stack")
+    return "\n".join(lines) + "\n"
+
+
 # ── choke points shared with PUT /config (extracted from api.main) ───────────
 
 def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],

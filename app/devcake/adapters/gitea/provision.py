@@ -452,6 +452,54 @@ class GiteaProvisioner:
             return
         await self._commit_files(OPERATOR_ORG, repo_name, batch, message)
 
+    def activity_credentials(self, repo_name: str) -> ActivityRepoCredentials | None:
+        """Shared RO clone credentials for one activity repo (sync — runspec
+        source, mirrors mission_credentials). None until the boot mint ran."""
+        svc = self._load("service.json") or {}
+        token = svc.get("activity_ro_token")
+        if not token:
+            return None
+        return ActivityRepoCredentials(
+            repo_name=repo_name,
+            clone_url=f"{self.url}/{OPERATOR_ORG}/{repo_name}.git",
+            username=ACTIVITY_RO_USER, token=token)
+
+    async def list_activity_repos(self) -> list[InternalRepo]:
+        """Every activity-* repo in OPERATOR_ORG — PAGINATED (unlike the
+        legacy list_repos limit=50 read; activity repos will exceed a page),
+        prefix-filtered so operator repos and the skill-store never appear."""
+        repos, page = [], 1
+        while True:
+            batch = await self._req(
+                "GET", f"/orgs/{OPERATOR_ORG}/repos?limit=50&page={page}",
+                tolerate=(404,)) or []
+            for r in batch:
+                name = r.get("name") or ""
+                if not name.startswith(ACTIVITY_PREFIX):
+                    continue
+                # activity-{instance}-{key}: mission key = after the first
+                # hyphen past the instance (the admin-surface idiom)
+                stem = name[len(ACTIVITY_PREFIX):]
+                repos.append(InternalRepo(
+                    name=name, mission_key=stem.split("-", 1)[-1],
+                    html_url=f"{self.public_url}/{OPERATOR_ORG}/{name}",
+                    clone_url=f"{self.url}/{OPERATOR_ORG}/{name}.git",
+                    size_kb=int(r.get("size") or 0),
+                    updated_at=r.get("updated_at") or ""))
+            if len(batch) < 50:
+                return repos
+            page += 1
+
+    async def delete_activity_repo(self, repo_name: str) -> None:
+        """Clear-sweep delete. Belt-and-braces: refuses non-activity names
+        with ZERO HTTP — no caller bug can ever sweep an operator repo or
+        the skill-store. No svc-user purge, no secret unlink: activity repos
+        have neither."""
+        if not repo_name.startswith(ACTIVITY_PREFIX):
+            raise ValueError(f"not an activity repo: {repo_name!r}")
+        await self._req("DELETE", f"/repos/{OPERATOR_ORG}/{repo_name}",
+                        tolerate=(404,))
+
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission credential pair (runspec token source) —
         read from disk, never at rest between requests (docs/09 §5)."""

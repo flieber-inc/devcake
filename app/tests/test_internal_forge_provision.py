@@ -550,3 +550,45 @@ def test_push_activity_snapshot_identical_is_a_noop(tmp_path, monkeypatch):
         [{"path": "ACTIVITY.md",
           "content_b64": base64.b64encode(same).decode()}], "step 3"))
     assert rec.contents_batches == []         # nothing changed → no commit
+
+
+def test_activity_credentials_from_service_json(tmp_path, monkeypatch):
+    d = tmp_path / "secrets" / "internal_forge"
+    d.mkdir(parents=True)
+    (d / "service.json").write_text(json.dumps({"activity_ro_token": "ro-tok"}))
+    prov = _prov(lambda r: httpx.Response(500), tmp_path, monkeypatch)
+    creds = prov.activity_credentials("activity-linear-t-1")
+    assert creds.username == "devcake-activity-ro"
+    assert creds.token == "ro-tok"
+    assert creds.clone_url == \
+        "http://gitea:3000/devcake-repos/activity-linear-t-1.git"
+    (d / "service.json").write_text(json.dumps({}))
+    assert prov.activity_credentials("activity-x") is None
+
+
+def test_list_activity_repos_prefix_filter_paginated(tmp_path, monkeypatch):
+    page1 = ([{"name": "myapp"}, {"name": "skill-store"},
+              {"name": "activity-linear-t-1", "size": 12,
+               "updated_at": "2026-07-18"}]
+             + [{"name": f"op{i}"} for i in range(47)])     # full page of 50
+    page2 = [{"name": "activity-linear-t-2"}]
+    rec = _ActivityRecorder(org_pages=[page1, page2])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    repos = run_coro(prov.list_activity_repos())
+    assert [r.name for r in repos] == ["activity-linear-t-1",
+                                      "activity-linear-t-2"]
+    assert repos[0].mission_key == "t-1"
+
+
+def test_delete_activity_repo_guarded(tmp_path, monkeypatch):
+    rec = _ActivityRecorder()
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.delete_activity_repo("activity-linear-t-1"))
+    assert ("DELETE",
+            "/api/v1/repos/devcake-repos/activity-linear-t-1") in rec.calls
+    assert not any(p.startswith("/api/v1/admin/users")
+                   for m, p in rec.calls if m == "DELETE")   # no user purge
+    before = len(rec.calls)
+    with pytest.raises(ValueError):
+        run_coro(prov.delete_activity_repo("skill-store"))
+    assert len(rec.calls) == before           # refused with ZERO HTTP

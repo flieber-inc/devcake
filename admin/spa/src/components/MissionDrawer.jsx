@@ -241,9 +241,10 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
                   </thead>
                   <tbody>
                     {orderedRuns.map((r) => {
-                      const stopped = ["finished", "failed", "timed_out", "orphaned"].includes(
-                        r.state
-                      );
+                      // finalizing hides Stop too: the Dev has already
+                      // exited — the backend 409s a stop there by design
+                      const stopped = ["finished", "failed", "timed_out",
+                        "orphaned", "finalizing"].includes(r.state);
                       return (
                         <tr
                           key={r.run_id}

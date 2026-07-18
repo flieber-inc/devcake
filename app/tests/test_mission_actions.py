@@ -343,7 +343,33 @@ def test_stop_run_terminal_returns_409(state):
     assert exc.value.status_code == 409
 
 
-@pytest.mark.parametrize("state", ["dispatched", "running", "finalizing"])
+def test_stop_run_finalizing_returns_409_never_kills():
+    """The Dev has already exited in `finalizing` — killing would race the
+    in-flight finalize coroutine (the watchdog never kills finalizing either;
+    its stall deadline owns the pathological case)."""
+    rec = _run_record("finalizing")
+    rm = FakeRunManager()
+    with pytest.raises(HTTPException) as exc:
+        run(ma.stop_run("r-1", run_manager=rm,
+                        run_store=FakeStore({"r-1": rec})))
+    assert exc.value.status_code == 409
+    assert "finalizing" in exc.value.detail
+    assert not rm.kills
+
+
+def test_create_mission_unknown_priority_returns_422():
+    """An unvalidated priority would KeyError into a 500 inside the Linear
+    adapter's vendor-code lookup — refuse it at the service boundary."""
+    with pytest.raises(HTTPException) as exc:
+        run(ma.create_mission(title="ok", description="", priority="banana",
+                              instance_name=None,
+                              managers={"linear": FakeMgr()},
+                              team_keys={"linear": "ENG"}))
+    assert exc.value.status_code == 422
+    assert "priority" in exc.value.detail
+
+
+@pytest.mark.parametrize("state", ["dispatched", "running"])
 def test_stop_run_live_calls_kill_with_failed_and_operator_reason(state):
     rec = _run_record(state)
     store = FakeStore({"r-1": rec})

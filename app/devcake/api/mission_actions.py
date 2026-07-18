@@ -37,6 +37,10 @@ from ..security import redact
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"finished", "failed", "timed_out", "orphaned"})
 
+# The PMOPort priority vocabulary (adapters map it to vendor codes by dict
+# lookup — validate here so a bad value 422s instead of 500ing in the adapter).
+PRIORITIES: frozenset[str] = frozenset({"urgent", "high", "medium", "low"})
+
 
 # ── SOLID/OCP: label actions as data, not a switch statement ────────────────
 
@@ -214,6 +218,13 @@ async def create_mission(
     """
     if not (title and title.strip()):
         raise HTTPException(status_code=422, detail="title must not be blank")
+    if priority not in PRIORITIES:
+        # the Linear adapter maps priority via dict lookup — an unknown value
+        # would KeyError into a 500 there; refuse it at the boundary instead
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown priority {priority!r}; "
+                   f"expected one of {sorted(PRIORITIES)}")
 
     if instance_name is None:
         first = next(iter(managers), None)
@@ -265,6 +276,18 @@ async def stop_run(
         raise HTTPException(
             status_code=409,
             detail=f"run is already terminal (state={run.state!r})")
+    if getattr(run, "state", None) == "finalizing":
+        # The Dev container has already exited — there is nothing to stop,
+        # only app-side finalize bookkeeping to corrupt. Killing here races
+        # the in-flight finalize coroutine (conflicting PMO writes, burned
+        # attempt for completed Dev work); the watchdog deliberately never
+        # kills finalizing either, and its stall deadline already handles the
+        # pathological dead-letter case (domain/watchdog.py).
+        raise HTTPException(
+            status_code=409,
+            detail="run is finalizing — the Dev has already exited and "
+                   "DevCake is finishing bookkeeping; it completes or fails "
+                   "on its own")
 
     await run_manager.kill(run, "failed", "stopped by operator from the admin UI")
     return {"ok": True, "run_id": run_id, "state": "failed"}

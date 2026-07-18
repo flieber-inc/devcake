@@ -6,8 +6,11 @@ const FOCUSABLE =
 
 // Shared overlay: dialog semantics, focus trap, scroll lock on <main>.
 // `onDismiss` enables Esc + backdrop close — omit it for confirms, which
-// must be resolved by their explicit buttons only.
-export function Overlay({ children, className = "", onDismiss }) {
+// must be resolved by their explicit buttons only. `surfaceClass` swaps the
+// default white-card surface wholesale (border + background) — pass it
+// instead of stacking conflicting utilities in `className` (Tailwind
+// resolves duplicate properties by stylesheet order, not class order).
+export function Overlay({ children, className = "", surfaceClass, onDismiss, ariaLabel }) {
   const ref = useRef(null);
   useEffect(() => {
     const node = ref.current;
@@ -48,8 +51,11 @@ export function Overlay({ children, className = "", onDismiss }) {
         ref={ref}
         role="dialog"
         aria-modal="true"
+        aria-label={ariaLabel}
         tabIndex={-1}
-        className={`w-full rounded-card border border-neutral-200 bg-white shadow-2xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900 ${className}`}
+        className={`w-full rounded-card shadow-2xl focus:outline-none ${
+          surfaceClass || "border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
+        } ${className}`}
       >
         {children}
       </div>

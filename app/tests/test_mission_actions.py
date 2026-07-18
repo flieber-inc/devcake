@@ -1,9 +1,9 @@
 """Mission-action application service (docs/05 §1; TDD-first).
 
-Exercises the new driving-adapter-facing seam that the admin UI writes through:
-label actions, steering, create-mission, stop-run. No FastAPI TestClient —
-tests call the module directly with per-file fakes, mirroring `test_pmo_contract`
-and the `clear.py`-style DI.
+Exercises the driving-adapter-facing seam that the admin UI writes through:
+label actions, steering, stop-run, and the force-poll trigger. No FastAPI
+TestClient — tests call the module directly with per-file fakes, mirroring
+`test_pmo_contract` and the `clear.py`-style DI.
 
 Rules under test:
 - INV-1 preserved: Linear is the source of truth (labels + comment).
@@ -11,6 +11,8 @@ Rules under test:
   our own record (`_is_devcake_comment`) and the attempt-counter reset misses.
 - 409 preconditions decided by the CACHED labels; the port swap raising
   RuntimeError is a 502, not a 409.
+- force_poll_now serialises against the shared poll lock and releases it even
+  when the underlying `run_cycle` raises (would-be permanent-409 hazard).
 """
 
 from __future__ import annotations
@@ -37,17 +39,14 @@ def run(coro):
 # ── minimal fakes (ISP: implement only the port surface exercised) ──────────
 
 class FakePMO:
-    """Records swap_labels / post_feed / create_mission calls; raises on demand."""
+    """Records swap_labels / post_feed calls; raises on demand."""
 
     def __init__(self, *, swap_raises: Exception | None = None,
                  post_feed_raises: Exception | None = None):
         self.swaps: list[tuple[MissionRef, set, set]] = []
         self.feeds: list[tuple[MissionRef, str]] = []
-        self.creates: list[tuple] = []
         self._swap_raises = swap_raises
         self._post_feed_raises = post_feed_raises
-        self.next_key = "T-1"
-        self.next_pmo_id = "pmo-created-1"
 
     async def swap_labels(self, ref: MissionRef, remove: set[str], add: set[str]) -> None:
         assert isinstance(ref, MissionRef)
@@ -60,13 +59,6 @@ class FakePMO:
         if self._post_feed_raises is not None:
             raise self._post_feed_raises
         self.feeds.append((ref, markdown))
-
-    async def create_mission(self, team_ref: str, title: str, description: str,
-                             priority: str, label_names: set[str],
-                             parent_ref: str | None = None) -> tuple[str, str]:
-        self.creates.append((team_ref, title, description, priority,
-                             set(label_names), parent_ref))
-        return self.next_key, self.next_pmo_id
 
 
 class FakeMgr:
@@ -245,69 +237,6 @@ def test_comment_unknown_pmo_id_returns_404():
     assert exc.value.status_code == 404
 
 
-# ── 3) create-mission endpoint ──────────────────────────────────────────────
-
-def test_create_mission_blank_title_returns_422():
-    mgr = FakeMgr()
-    with pytest.raises(HTTPException) as exc:
-        run(ma.create_mission(title="  ", description="", priority="medium",
-                              instance_name=None,
-                              managers={"linear": mgr},
-                              team_keys={"linear": "DEV"}))
-    assert exc.value.status_code == 422
-
-
-def test_create_mission_defaults_to_first_instance_and_passes_devcake_label():
-    mgr = FakeMgr()
-    result = run(ma.create_mission(
-        title="Ship the thing", description="details",
-        priority="high", instance_name=None,
-        managers={"linear": mgr},
-        team_keys={"linear": "DEV"}))
-    assert result == {"key": "T-1", "pmo_id": "pmo-created-1", "instance": "linear"}
-    calls = mgr.pmo.creates
-    assert len(calls) == 1
-    team_ref, title, description, priority, labels, parent = calls[0]
-    assert team_ref == "DEV"                          # passed positionally
-    assert title == "Ship the thing"
-    assert description == "details"
-    assert priority == "high"
-    assert labels == {"DEVCAKE"}                      # ONBOARD triage entry
-    assert parent is None
-
-
-def test_create_mission_no_instance_configured_returns_409():
-    with pytest.raises(HTTPException) as exc:
-        run(ma.create_mission(title="ok", description="", priority="medium",
-                              instance_name=None, managers={}, team_keys={}))
-    assert exc.value.status_code == 409
-
-
-def test_create_mission_explicit_unknown_instance_returns_409():
-    mgr = FakeMgr()
-    with pytest.raises(HTTPException) as exc:
-        run(ma.create_mission(title="ok", description="", priority="medium",
-                              instance_name="nope",
-                              managers={"linear": mgr},
-                              team_keys={"linear": "DEV"}))
-    assert exc.value.status_code == 409
-
-
-class _RaisingPMO(FakePMO):
-    async def create_mission(self, *args, **kwargs):
-        raise RuntimeError("linear graphql: authentication error")
-
-
-def test_create_mission_pmo_runtime_error_returns_502():
-    mgr = FakeMgr(pmo=_RaisingPMO())
-    with pytest.raises(HTTPException) as exc:
-        run(ma.create_mission(title="ok", description="", priority="medium",
-                              instance_name=None,
-                              managers={"linear": mgr},
-                              team_keys={"linear": "DEV"}))
-    assert exc.value.status_code == 502
-
-
 class _FeedRaisingPMO(FakePMO):
     async def post_feed(self, ref, markdown):
         raise RuntimeError("linear graphql: authentication error")
@@ -357,18 +286,6 @@ def test_stop_run_finalizing_returns_409_never_kills():
     assert not rm.kills
 
 
-def test_create_mission_unknown_priority_returns_422():
-    """An unvalidated priority would KeyError into a 500 inside the Linear
-    adapter's vendor-code lookup — refuse it at the service boundary."""
-    with pytest.raises(HTTPException) as exc:
-        run(ma.create_mission(title="ok", description="", priority="banana",
-                              instance_name=None,
-                              managers={"linear": FakeMgr()},
-                              team_keys={"linear": "ENG"}))
-    assert exc.value.status_code == 422
-    assert "priority" in exc.value.detail
-
-
 @pytest.mark.parametrize("state", ["dispatched", "running"])
 def test_stop_run_live_calls_kill_with_failed_and_operator_reason(state):
     rec = _run_record(state)
@@ -381,3 +298,76 @@ def test_stop_run_live_calls_kill_with_failed_and_operator_reason(state):
     assert new_state == "failed"
     assert "operator" in reason.lower()  # honest audit trail per plan
     assert result["state"] == "failed"
+
+
+# ── 5) force-poll endpoint ──────────────────────────────────────────────────
+# INV-1 (docs/00 §4): PMO is the source of truth. Forcing a poll cycle from
+# the admin panel is the most on-philosophy write we ship — it *increases*
+# the operator's coupling to the PMO, never sidesteps it. Semantics: 409 if
+# a poll is already in flight (periodic OR another manual trigger), else run
+# one cycle and return its metadata.
+
+def test_force_poll_now_runs_cycle_and_returns_metadata():
+    called: list[int] = []
+
+    async def fake_cycle(n):
+        called.append(n)
+
+    lock = asyncio.Lock()
+    counter = iter([42])
+    result = run(ma.force_poll_now(
+        lock=lock, next_cycle_id=lambda: next(counter), run_cycle=fake_cycle))
+    assert called == [42]
+    assert result["ok"] is True
+    assert result["cycle"] == 42
+    assert isinstance(result["started_at"], str) and "T" in result["started_at"]
+    assert isinstance(result["duration_ms"], int) and result["duration_ms"] >= 0
+    assert not lock.locked(), "lock leaked after a successful cycle"
+
+
+def test_force_poll_now_returns_409_when_lock_already_held():
+    """Concurrent poll — the periodic loop is running, or an earlier manual
+    trigger hasn't returned. Don't queue; 409 and tell the operator to retry."""
+
+    async def unused_cycle(n):
+        raise AssertionError("run_cycle must not be called when lock is held")
+
+    lock = asyncio.Lock()
+
+    async def scenario():
+        async with lock:
+            with pytest.raises(HTTPException) as exc:
+                await ma.force_poll_now(
+                    lock=lock, next_cycle_id=lambda: 1, run_cycle=unused_cycle)
+            return exc.value
+
+    exc = run(scenario())
+    assert exc.status_code == 409
+    assert "progress" in exc.detail.lower()
+
+
+def test_force_poll_now_releases_lock_when_cycle_raises():
+    """`run_poll_cycle` swallows its own errors (docs/04 §1) but be defensive —
+    if the callable raises for any reason, the lock must NOT stay held or
+    every subsequent trigger is permanently 409."""
+    calls: list = []
+
+    async def raising_cycle(n):
+        calls.append(("bad", n))
+        raise RuntimeError("boom")
+
+    async def ok_cycle(n):
+        calls.append(("ok", n))
+
+    lock = asyncio.Lock()
+    with pytest.raises(HTTPException) as exc:
+        run(ma.force_poll_now(
+            lock=lock, next_cycle_id=lambda: 1, run_cycle=raising_cycle))
+    assert exc.value.status_code == 502
+    assert not lock.locked(), "lock leaked after cycle exception"
+
+    # second call must succeed — proves the lock actually released
+    result = run(ma.force_poll_now(
+        lock=lock, next_cycle_id=lambda: 2, run_cycle=ok_cycle))
+    assert result["cycle"] == 2
+    assert calls == [("bad", 1), ("ok", 2)]

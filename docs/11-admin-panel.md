@@ -49,6 +49,7 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `POST /api/v1/settings/import` | **Lands as a profile, never applies** — apply stays `POST /profiles/{name}/apply`, the single world-swap path. Optionally writes embedded skills to the store (additive). No runs guard needed |
 | `POST /api/v1/settings/import/env` | Section C → a generated ready-to-place `.env` download (`devcake.env`); no server state change — the operator places it and restarts the stack |
 | `GET /api/v1/missions` | Current derived Missions + types (poll-cycle snapshot, advisory — INV-1); includes `blocked_by` keys, and the reason string names open blockers |
+| `POST /api/v1/poll/run` | Force a poll cycle now (the Missions board's "Poll now" primary action). Mirrors the relations-mapper "Run now" shape (§1.6): 409 while a cycle is in flight (periodic or another manual trigger); 200 with `{ok, cycle, started_at, duration_ms}` on completion. Missions are born in the PMO — this closes the ~30s feedback loop after a Linear edit without waiting for the next automatic tick |
 | `POST /api/v1/debug/dispatch-hello` | Dispatches the hello stub Dev through the full pipeline (Dagu → container → Redis → finalize). Permanent debug/CI fixture — `scripts/ci_suite.sh` |
 
 All writes go through the app (single validation point, `10-persistence.md` §4).
@@ -61,6 +62,8 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `forge` | the latest `ForgeHealth` dict (`ok`, `can_push`, `transient`, `detail`, …) |
 | `circuit_breakers` | per-Dev-Type auth breakers + the global `forge` breaker (`15-errors-and-retries.md` §4) |
 | `intake_paused` | the master switch state |
+| `last_poll_at` | ISO-8601 UTC of the last poll cycle that finished (periodic OR manual); `null` before the first cycle. Powers the Missions board's "Last polled Ns ago · next in ~Ns" honesty line |
+| `poll_interval_seconds` | current `config.poll_interval_seconds`, echoed here so the SPA doesn't need a separate `/config` read to compute the cadence line |
 | `active_runs` | count of dispatched/running/finalizing runs |
 | `forge_protection` | default-branch protection probe (cached ~5 min; `null` when unknown) |
 | `anomalies` | per-mission advisory strings (out-of-pipeline merges etc.; pruned when terminal) |

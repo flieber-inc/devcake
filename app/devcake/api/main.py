@@ -12,13 +12,14 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import httpx
 import yaml
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
@@ -180,6 +181,25 @@ _mission_owner: dict[str, str] = _owner_store.load()
 # (revoked key, deleted team) skips only that instance's segment; this map
 # surfaces it in /health as `poll_degraded`. Cleared on a green segment.
 _poll_degraded: dict[str, str] = {}
+
+# Wall-clock UTC of the last poll cycle that finished (periodic OR manual).
+# Surfaced in /health as `last_poll_at` so the SPA can render "Last polled Ns
+# ago" honestly — a stale timestamp is a signal, not something to hide.
+_last_poll_at: datetime | None = None
+
+# Shared lock + cycle counter for both the periodic poll_loop and the manual
+# POST /api/v1/poll/run trigger. Semantics: at most one poll cycle in flight
+# at a time (concurrent list_all + missions_cache mutation would race).
+# asyncio.Lock() at module scope defers loop binding to first await (Py3.10+).
+_poll_lock: asyncio.Lock = asyncio.Lock()
+_poll_cycle_counter: int = 0
+
+
+def _next_poll_cycle_id() -> int:
+    """Advance the shared cycle counter and return the new id."""
+    global _poll_cycle_counter
+    _poll_cycle_counter += 1
+    return _poll_cycle_counter
 
 
 def _claim_missions(mgr: MissionManager, fetched: list,
@@ -350,13 +370,20 @@ async def run_poll_cycle(cycle: int) -> None:
             # a poll cycle must NEVER kill the loop — log and try again next tick
             span.set_attribute("devcake.outcome", "cycle_error")
             log.exception("poll.cycle %d failed", cycle)
+        finally:
+            # stamped even on cycle_error — a partial cycle IS a poll attempt;
+            # /health surfaces this as `last_poll_at` for the SPA's Missions
+            # "Last polled Ns ago" honesty (docs/11 §0)
+            global _last_poll_at
+            _last_poll_at = datetime.now(timezone.utc)
 
 
 async def poll_loop() -> None:
-    cycle = 0
+    """Periodic poll driver. Shares `_poll_lock` and `_poll_cycle_counter`
+    with `POST /api/v1/poll/run` — at most one cycle in flight."""
     while True:
-        cycle += 1
-        await run_poll_cycle(cycle)
+        async with _poll_lock:
+            await run_poll_cycle(_next_poll_cycle_id())
         await asyncio.sleep(config.poll_interval_seconds)
 
 
@@ -593,6 +620,10 @@ async def health():
                              **{f"repo:{k}": v
                                 for k, v in forge_runtime.breakers.items()}},
         "intake_paused": config.intake_paused,
+        # poll cadence surface for the Missions "Last polled Ns ago · next in
+        # ~Ns" indicator — INV-1 made visible, not hidden behind a spinner
+        "last_poll_at": (_last_poll_at.isoformat() if _last_poll_at else None),
+        "poll_interval_seconds": config.poll_interval_seconds,
         "active_runs": len(store.active()),
         "forge_protection": await _branch_protection(),
         "anomalies": _merged("anomalies"),
@@ -695,13 +726,6 @@ class _SteeringBody(BaseModel):
     body: str
 
 
-class _CreateMissionBody(BaseModel):
-    title: str
-    description: str = ""
-    priority: str = "medium"
-    instance: str | None = Field(default=None)
-
-
 @app.post("/api/v1/missions/{pmo_id}/actions")
 async def mission_action(pmo_id: str, body: _MissionActionBody):
     """Retry / park / unpark / resume via label swap. Returns projected labels."""
@@ -719,15 +743,23 @@ async def mission_comment(pmo_id: str, body: _SteeringBody):
                                missions_cache=missions_cache, managers=managers)
 
 
-@app.post("/api/v1/missions")
-async def create_mission_route(body: _CreateMissionBody):
-    """Create a new backlog mission with the DEVCAKE opt-in label."""
-    from .mission_actions import create_mission
-    team_keys = {i.name: i.team_key for i in config.pmos if i.configured}
-    return await create_mission(
-        title=body.title, description=body.description,
-        priority=body.priority, instance_name=body.instance,
-        managers=managers, team_keys=team_keys)
+@app.post("/api/v1/poll/run")
+async def force_poll_route():
+    """Force a poll cycle now (docs/00 §4, INV-1).
+
+    Missions are born in the PMO — DevCake observes. This endpoint lets the
+    operator close the 30-second feedback loop after a label edit in Linear
+    (or a retry/park issued from the board) without waiting for the next tick.
+
+    409 when a poll cycle is already in flight (periodic OR another manual
+    trigger) — the operator retries; the next automatic cycle is imminent
+    anyway. Mirrors `POST /api/v1/relations-mapper/run` (docs/11 §1).
+    """
+    from .mission_actions import force_poll_now
+    return await force_poll_now(
+        lock=_poll_lock,
+        next_cycle_id=_next_poll_cycle_id,
+        run_cycle=run_poll_cycle)
 
 
 @app.post("/api/v1/runs/{run_id}/stop")

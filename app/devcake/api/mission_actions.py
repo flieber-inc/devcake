@@ -22,8 +22,11 @@ Precondition discipline:
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Protocol
 
 from fastapi import HTTPException
 
@@ -36,10 +39,6 @@ from ..security import redact
 # would cycle) — kept in lockstep with the `RunState` literal in domain/run.py.
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"finished", "failed", "timed_out", "orphaned"})
-
-# The PMOPort priority vocabulary (adapters map it to vendor codes by dict
-# lookup — validate here so a bad value 422s instead of 500ing in the adapter).
-PRIORITIES: frozenset[str] = frozenset({"urgent", "high", "medium", "low"})
 
 
 # ── SOLID/OCP: label actions as data, not a switch statement ────────────────
@@ -200,67 +199,7 @@ async def post_steering(
     return {"ok": True}
 
 
-# ── 3) create-mission endpoint ──────────────────────────────────────────────
-
-async def create_mission(
-    *,
-    title: str,
-    description: str = "",
-    priority: str = "medium",
-    instance_name: str | None,
-    managers: dict[str, Any],
-    team_keys: dict[str, str],
-) -> dict:
-    """Create a new backlog mission with only the `DEVCAKE` opt-in label.
-
-    ONBOARD triage happens next cycle via the native flow. `team_key` is passed
-    as `team_ref` (positional) into `PMOPort.create_mission`.
-    """
-    if not (title and title.strip()):
-        raise HTTPException(status_code=422, detail="title must not be blank")
-    if priority not in PRIORITIES:
-        # the Linear adapter maps priority via dict lookup — an unknown value
-        # would KeyError into a 500 there; refuse it at the boundary instead
-        raise HTTPException(
-            status_code=422,
-            detail=f"unknown priority {priority!r}; "
-                   f"expected one of {sorted(PRIORITIES)}")
-
-    if instance_name is None:
-        first = next(iter(managers), None)
-        if first is None:
-            raise HTTPException(
-                status_code=409,
-                detail="no PMO instance is configured; add one in Configuration")
-        instance_name = first
-
-    mgr = _resolve_mgr(managers, instance_name)
-    team_key = team_keys.get(instance_name, "")
-    if not team_key:
-        raise HTTPException(
-            status_code=409,
-            detail=f"instance {instance_name!r} has no team_key configured")
-
-    clean_title = title.strip()
-    try:
-        key, pmo_id = await mgr.pmo.create_mission(
-            team_key, clean_title, description, priority, {"DEVCAKE"})
-    except PMOTransient as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"pmo transient error while creating mission: {e}") from e
-    except RuntimeError as e:
-        # Non-transient adapter errors (revoked token, unknown team) surface
-        # as 502 — never let a bare RuntimeError leak as 500 to the SPA.
-        raise HTTPException(
-            status_code=502,
-            detail=f"pmo rejected mission creation: {e}") from e
-
-    _try_audit(mgr, pmo_id, "ui_create", clean_title[:120])
-    return {"key": key, "pmo_id": pmo_id, "instance": instance_name}
-
-
-# ── 4) stop-run endpoint ────────────────────────────────────────────────────
+# ── 3) stop-run endpoint ────────────────────────────────────────────────────
 
 async def stop_run(
     run_id: str,
@@ -293,13 +232,64 @@ async def stop_run(
     return {"ok": True, "run_id": run_id, "state": "failed"}
 
 
+# ── 5) force-poll endpoint ──────────────────────────────────────────────────
+# The most on-philosophy write we ship: forcing a poll cycle is asking the PMO
+# "what's true right now?" — INV-1 amplified, not sidestepped (docs/00 §4).
+# Precedent: `POST /api/v1/relations-mapper/run` (docs/11 §1, docs/04 §1.6),
+# the same "manual-dispatch mirrors a periodic cadence" shape.
+
+async def force_poll_now(
+    *,
+    lock: asyncio.Lock,
+    next_cycle_id: Callable[[], int],
+    run_cycle: Callable[[int], Awaitable[None]],
+) -> dict:
+    """Run one poll cycle on demand. Returns cycle metadata.
+
+    409 if a poll is already in flight — periodic or another manual trigger.
+    The caller retries on the next tick; we deliberately do NOT queue behind
+    the running cycle because the operator's intent is "do it now" and the
+    next automatic cycle is at most `poll_interval_seconds` away anyway.
+
+    The lock is released even if `run_cycle` raises — a leaked lock would
+    permanently 409 every subsequent trigger. `run_poll_cycle` already swallows
+    its own errors, so this is defence-in-depth: any escaped exception surfaces
+    as 502 so the SPA can show honest failure copy.
+    """
+    if lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="a poll cycle is already in progress; try again shortly")
+    async with lock:
+        cycle_num = next_cycle_id()
+        # `started` is wall-clock for the response (operator-facing timestamp);
+        # `t0` is monotonic for duration so an NTP step / container resume
+        # mid-cycle can't produce a negative or garbage `duration_ms`.
+        started = datetime.now(timezone.utc)
+        t0 = time.monotonic()
+        try:
+            await run_cycle(cycle_num)
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"poll cycle raised: {type(e).__name__}: "
+                       f"{str(e)[:150]}") from e
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        return {
+            "ok": True,
+            "cycle": cycle_num,
+            "started_at": started.isoformat(),
+            "duration_ms": elapsed_ms,
+        }
+
+
 # ── explicit re-exports (nice for `from ... import ...` in main.py) ─────────
 
 __all__ = [
     "ACTION_SPECS",
     "ActionSpec",
     "TERMINAL_STATES",
-    "create_mission",
+    "force_poll_now",
     "label_action",
     "post_steering",
     "stop_run",

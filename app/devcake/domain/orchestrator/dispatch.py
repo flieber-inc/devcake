@@ -457,7 +457,8 @@ def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict
 
 
 def _derive_seq(activity) -> int:
-    """docs/02 §8 — count prior step artifacts in the feed + 1. Scans
+    """docs/02 §8 — max step number among prior feed artifacts + 1 (max, not
+    count: collision-proof when a human deletes a transcript comment). Scans
     _unquoted bodies only (ADR-0014 D2): quoted marker mentions never count."""
     steps = [int(m.group(1)) for e in activity.entries
              for m in STEP_MARKER.finditer(_unquoted(e.body))]

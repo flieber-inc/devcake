@@ -502,6 +502,45 @@ def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
         (dest / name).write_bytes(base64.b64decode(a["content_b64"]))
 
 
+def clone_activity_repo(activity, dest, runner=None):
+    """ADR-0014 D4: clone the mission's activity repo — FULL history (the
+    step-by-step evolution IS the payload: `git log -p ACTIVITY.md` works
+    in-container) with the shared RO token via the askpass env override.
+    Non-fatal on every failure; (ok, note)."""
+    import re as _re
+    if not activity or not activity.get("url"):
+        return False, "activity repo: no clone spec (Redis fallback)"
+    runner = runner or subprocess.run
+    url = activity["url"]
+    user = activity.get("clone_user") or ""
+    clone_url = (_re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
+                 if user else url)
+    env = {**os.environ, "DEVCAKE_FORGE_TOKEN": activity.get("token") or ""}
+    r = runner(["git", "clone", clone_url, str(dest)],
+               capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        return False, ("activity repo: clone failed "
+                       f"({(r.stderr or '')[-200:]}) — Redis fallback")
+    return True, "activity repo: cloned with history"
+
+
+def materialize_activity(spec, dest, request_reply, runner=None):
+    """Clone-first activity materialization (ADR-0014 D4), Redis fallback:
+    activity.get + payload write when the clone failed OR left no
+    ACTIVITY.md (empty repo — the first push failed; cloning an empty repo
+    succeeds). Never fatal, never exit 13 (that's the primary repo's)."""
+    notes = []
+    ok, note = clone_activity_repo(spec.get("activity_repo"), dest,
+                                   runner=runner)
+    notes.append(note)
+    if not ok or not (dest / "ACTIVITY.md").exists():
+        if ok:
+            notes.append("activity repo: empty clone — Redis fallback")
+        act = request_reply("activity.get", "activity.result")
+        write_activity_payload(act, dest)
+    return notes
+
+
 def with_session(text: str, dump: str) -> str:
     """Failure-path transcripts: append the session dump when one exists."""
     return text + (f"\n\n## Session transcript\n\n{dump}" if dump else "")
@@ -620,20 +659,25 @@ def main() -> None:
     (WORKSPACE / "activity").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / ".devcake").mkdir(parents=True, exist_ok=True)
 
-    act = request_reply("activity.get", "activity.result")
-    write_activity_payload(act, WORKSPACE / "activity")
-
     repo_url = env["DEVCAKE_REPO_URL"]
     askpass = WORKSPACE / ".devcake" / "askpass.sh"
     askpass.write_text("#!/bin/sh\necho \"$DEVCAKE_FORGE_TOKEN\"\n")
     askpass.chmod(0o700)
+    # git auth set up BEFORE the activity clone (ADR-0014 D4) — its per-clone
+    # token env override rides the same askpass
+    os.environ["GIT_ASKPASS"] = str(askpass)
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+
+    for note in materialize_activity(spec, WORKSPACE / "activity",
+                                     request_reply):
+        print(note)
+
     clone_user, git_name, git_email, cli_envs = forge_dialect(env)
     clone_url = repo_url.replace("https://", f"https://{clone_user}@")
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
-    # git auth for clone AND the harness's own push (docs/03 §3); CLI auth for PRs
-    os.environ["GIT_ASKPASS"] = str(askpass)
-    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+    # git auth for clone AND the harness's own push (docs/03 §3, askpass set
+    # above); CLI auth for PRs
     if env.get("DEVCAKE_FORGE_TOKEN"):
         for var in cli_envs:
             os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]

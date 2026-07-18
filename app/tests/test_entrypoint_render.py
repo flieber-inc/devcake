@@ -510,3 +510,79 @@ def test_install_skills_rejects_unsafe_skills_dir(tmp_path):
         assert (tmp_path / ".claude/skills/x/SKILL.md").exists(), bad
         (tmp_path / ".claude/skills/x/SKILL.md").unlink()
     assert not (tmp_path.parent / "up").exists()
+
+
+def test_clone_activity_repo_full_history_own_token(tmp_path):
+    calls = []
+
+    def runner(cmd, capture_output, text, env):
+        calls.append((cmd, env["DEVCAKE_FORGE_TOKEN"]))
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    ok, _ = ep.clone_activity_repo(
+        {"url": "http://gitea:3000/devcake-repos/activity-l-t-1.git",
+         "clone_user": "devcake-activity-ro", "token": "act-ro"},
+        tmp_path / "activity", runner=runner)
+    assert ok
+    cmd, tok = calls[0]
+    assert tok == "act-ro"
+    assert "--depth" not in cmd                     # FULL history (ADR-0014)
+    assert cmd[-1] == str(tmp_path / "activity")
+    assert cmd[-2].startswith("http://devcake-activity-ro@")
+
+    def bad(cmd, capture_output, text, env):
+        return type("R", (), {"returncode": 1, "stderr": "403"})()
+    ok2, note = ep.clone_activity_repo({"url": "http://x/r.git",
+                                        "clone_user": "u", "token": "t"},
+                                       tmp_path / "a2", runner=bad)
+    assert not ok2 and "403" in note                # non-fatal, honest note
+    ok3, _ = ep.clone_activity_repo(None, tmp_path / "a3")
+    assert not ok3                                  # no spec → fallback path
+
+
+def test_materialize_activity_prefers_clone(tmp_path):
+    dest = tmp_path / "activity"
+
+    def runner(cmd, capture_output, text, env):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "ACTIVITY.md").write_text("# from clone")
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    fetched = []
+
+    def rr(kind, want):
+        fetched.append(kind)
+        return {}
+    ep.materialize_activity(
+        {"activity_repo": {"url": "http://g/a.git", "clone_user": "u",
+                           "token": "t"}}, dest, rr, runner=runner)
+    assert (dest / "ACTIVITY.md").read_text() == "# from clone"
+    assert fetched == []                            # Redis never asked
+
+
+def test_materialize_activity_falls_back_on_failure_or_empty_repo(tmp_path):
+    def rr(kind, want):
+        assert kind == "activity.get"
+        return {"mission_md": "# brief", "activity_md": "# feed",
+                "attachments": []}
+
+    def empty_clone(cmd, capture_output, text, env):
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+    dest = tmp_path / "a1"                          # clone "ok" but empty
+    ep.materialize_activity(
+        {"activity_repo": {"url": "http://g/a.git", "clone_user": "u",
+                           "token": "t"}}, dest, rr, runner=empty_clone)
+    assert (dest / "ACTIVITY.md").read_text() == "# feed"
+    assert (dest / "MISSION.md").read_text() == "# brief"
+
+    def failing(cmd, capture_output, text, env):
+        return type("R", (), {"returncode": 1, "stderr": "x"})()
+    dest2 = tmp_path / "a2"
+    ep.materialize_activity(
+        {"activity_repo": {"url": "http://g/a.git", "clone_user": "u",
+                           "token": "t"}}, dest2, rr, runner=failing)
+    assert (dest2 / "ACTIVITY.md").read_text() == "# feed"
+
+    dest3 = tmp_path / "a3"                         # old app: no spec key
+    ep.materialize_activity({}, dest3, rr)
+    assert (dest3 / "ACTIVITY.md").read_text() == "# feed"

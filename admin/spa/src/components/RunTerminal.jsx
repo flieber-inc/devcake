@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Copy, Check } from "lucide-react";
+import { Overlay } from "./Modal.jsx";
 import { getText } from "../api.js";
 
 export const TERMINAL_STATES = ["finished", "failed", "timed_out", "orphaned"];
@@ -14,12 +15,6 @@ export default function RunTerminal({ run, onClose }) {
   const [copied, setCopied] = useState(false);
   const preRef = useRef(null);
   const stickRef = useRef(true);
-
-  useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   useEffect(() => {
     let es;
@@ -61,11 +56,12 @@ export default function RunTerminal({ run, onClose }) {
   const note = run.error || run.verdict; // app-level judgment, when present
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
-      onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-label={`Run terminal ${run.run_id}`}
-        className="flex h-[75vh] w-full max-w-5xl flex-col overflow-hidden rounded-card border border-neutral-700 bg-neutral-950 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}>
+    // Overlay supplies the focus trap, Esc/backdrop close, <main> scroll
+    // lock and focus restore; the terminal keeps its always-dark chrome.
+    <Overlay onDismiss={onClose}
+      ariaLabel={`Run terminal ${run.run_id}`}
+      surfaceClass="border border-neutral-700 bg-neutral-950"
+      className="flex h-[75vh] max-w-5xl flex-col overflow-hidden">
         <div className="flex items-center gap-2 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
           <span className="h-3 w-3 rounded-full bg-red-500" />
           <span className="h-3 w-3 rounded-full bg-yellow-500" />
@@ -103,7 +99,6 @@ export default function RunTerminal({ run, onClose }) {
               : lines.join("\n")}
           {live && <span className="animate-pulse text-neutral-400">{lines.length ? "\n" : ""}▊</span>}
         </pre>
-      </div>
-    </div>
+    </Overlay>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Play, Plus, Trash2, KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -231,7 +231,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         </InstantZone>
       )}
       <SelectionChips label="Skills"
-        help={`Skill-store skills installed to ~/${h.skills_dir || ".claude/skills"} inside the Dev container before the agent starts. The catalog lives in the Skills section below.`}
+        help={`Skill-store skills installed to ~/${h.skills_dir || ".claude/skills"} inside the Dev container before the agent starts. The catalog lives in the Skills section.`}
         options={(skillsCatalog?.skills || []).map((s) => ({
           name: s.name, title: s.description || undefined }))}
         selected={d.skills || []}
@@ -240,7 +240,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           !h.skills_dir && (d.skills || []).length
             ? ` — ${d.skills.length} selected skill(s) will be skipped`
             : ""}.`}
-        emptyNote="no skills in the catalog yet — see the Skills section below"
+        emptyNote="no skills in the catalog yet — see the Skills section"
         staleNote="not in the skill store — skipped at dispatch; click to remove"
         onChange={(next) => {
           // write back in CATALOG order (unknown names last): uncheck-then-
@@ -537,11 +537,24 @@ export default function ConfigPage({ section }) {
   const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
   const [skillsErr, setSkillsErr] = useState(false);
   const [skillsMsg, setSkillsMsg] = useState("");
+  const skillsMsgTimer = useRef(null);
+  useEffect(() => () => clearTimeout(skillsMsgTimer.current), []);
   const loadSkills = () =>
     get("/skills")
       .then((r) => { setSkillsCatalog(r); setSkillsErr(false); })
       .catch(() => setSkillsErr(true));
   useEffect(() => { loadSkills(); }, []);
+  const restoreBuiltins = async () => {
+    try {
+      await send("POST", "/skills/sync");
+      await loadSkills();
+      setSkillsMsg("✓ built-in skills restored");
+      clearTimeout(skillsMsgTimer.current);
+      skillsMsgTimer.current = setTimeout(() => setSkillsMsg(""), 4000);
+    } catch (e) {
+      setPageErr(`restoring built-ins failed: ${String(e.message || e)}`);
+    }
+  };
   const [addSkill, setAddSkill] = useState(false);
   const [addDev, setAddDev] = useState(false);
   const [renameFor, setRenameFor] = useState(null);
@@ -812,28 +825,27 @@ export default function ConfigPage({ section }) {
             <Button icon={Plus} onClick={() => setAddSkill(true)}>
               Add skill
             </Button>
-            <MoreMenu label="More skill-store actions" items={[
-              ...(skillsCatalog.store?.html_url ? [{
-                label: "Open the store in Gitea",
-                desc: "Skills live in a Git repo — edit them there directly.",
-                external: true,
-                onClick: () => window.open(skillsCatalog.store.html_url, "_blank", "noopener"),
-              }] : []),
-              {
-                label: "Restore built-in skills",
-                desc: "Re-adds any missing bundled skills. Never overwrites your edits.",
-                onClick: async () => {
-                  try {
-                    await send("POST", "/skills/sync");
-                    await loadSkills();
-                    setSkillsMsg("✓ built-in skills restored");
-                    setTimeout(() => setSkillsMsg(""), 4000);
-                  } catch (e) {
-                    setPageErr(`restoring built-ins failed: ${String(e.message || e)}`);
-                  }
+            {/* no html_url → the menu would hold a single item; DESIGN §3
+                says a lone action stays a visible ghost button instead */}
+            {skillsCatalog.store?.html_url ? (
+              <MoreMenu label="More skill-store actions" items={[
+                {
+                  label: "Open the store in Gitea",
+                  desc: "Skills live in a Git repo — edit them there directly.",
+                  external: true,
+                  onClick: () => window.open(skillsCatalog.store.html_url, "_blank", "noopener"),
                 },
-              },
-            ]} />
+                {
+                  label: "Restore built-in skills",
+                  desc: "Re-adds any missing bundled skills. Never overwrites your edits.",
+                  onClick: restoreBuiltins,
+                },
+              ]} />
+            ) : (
+              <Button kind="ghost" onClick={restoreBuiltins}>
+                Restore built-in skills
+              </Button>
+            )}
           </>
         )}>
         {skillsCatalog.store && !skillsCatalog.store.enabled && (

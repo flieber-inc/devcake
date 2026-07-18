@@ -86,15 +86,31 @@ def test_claude_text_dump_collects_text_blocks_untruncated():
     long_text = ("deep analysis " * 40).strip()            # ≫ 200-char relay cap
     second = json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": long_text}]}})
+    subagent = json.dumps({"type": "assistant", "parent_tool_use_id": "tu_1",
+                           "message": {"content": [
+                               {"type": "text", "text": "subagent chatter"}]}})
+    indented = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "    indented\n    code"}]}})
+    malformed = [json.dumps({"type": "assistant", "message": "oops"}),
+                 json.dumps({"type": "assistant", "message": {"content": "s"}}),
+                 json.dumps({"type": "assistant",
+                             "message": {"content": ["notdict"]}}),
+                 json.dumps({"type": "assistant", "message": {"content": [
+                     {"type": "text", "text": None}]}})]
     out = "\n".join([CLAUDE_INIT, CLAUDE_TOOL, CLAUDE_TEXT, CLAUDE_THINKING,
-                     second, "not json", CLAUDE_RESULT])
+                     subagent, *malformed, second, indented, "not json",
+                     CLAUDE_RESULT])
     dump = ep.claude_text_dump(out)
     first = dump.find("missing fixture")
     assert first != -1
     assert dump.find(long_text) > first                    # order preserved
-    assert long_text in dump                               # untruncated
+    assert dump.count("missing fixture") == 1              # no duplication
+    assert dump.count(long_text) == 1
     assert "private reasoning" not in dump                 # thinking excluded
     assert "file_path" not in dump                         # tool_use excluded
+    assert "done" not in dump              # result-event text never ingested
+    assert "subagent chatter" not in dump  # tool-internal (parent_tool_use_id)
+    assert "    indented\n    code" in dump                # indentation kept
 
 
 # ── codex --json ─────────────────────────────────────────────────────────────
@@ -121,12 +137,20 @@ def test_codex_text_dump_collects_agent_messages():
     long_msg = ("regression detail " * 30).strip()
     second = json.dumps({"type": "item.completed", "item": {
         "id": "item_2", "type": "agent_message", "text": long_msg}})
-    out = "\n".join([CODEX_CMD, CODEX_MSG, "garbage line", second, CODEX_TURN])
+    via_item_type = json.dumps({"type": "item.completed", "item": {
+        "id": "item_3", "item_type": "agent_message", "text": "via item_type"}})
+    malformed = [json.dumps({"type": "item.completed", "item": "oops"}),
+                 json.dumps({"type": "item.completed",
+                             "item": {"type": "agent_message", "text": None}})]
+    out = "\n".join([CODEX_CMD, CODEX_MSG, "garbage line", *malformed,
+                     second, via_item_type, CODEX_TURN])
     dump = ep.codex_text_dump(out)
     assert dump.startswith("Output:")                      # first message first
-    assert long_msg in dump                                # untruncated
+    assert dump.count(long_msg) == 1                       # once, untruncated
+    assert "via item_type" in dump                         # item_type key arm
     assert "/bin/bash" not in dump                         # command excluded
     assert "25247" not in dump                             # usage excluded
+    assert "None" not in dump                              # no repr injection
 
 
 # ── grok streaming-json ──────────────────────────────────────────────────────

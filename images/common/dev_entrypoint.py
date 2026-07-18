@@ -443,19 +443,27 @@ def grok_stream_parse(out: str):
 
 def claude_text_dump(out: str) -> str:
     """ADR-0014 D1: every assistant-visible text block, in order, UNTRUNCATED.
-    Thinking blocks and tool calls are excluded — the dump is what the model
-    said, not what it did or privately considered."""
+    Thinking blocks, tool calls, and subagent messages (parent_tool_use_id —
+    tool-internal chatter) are excluded: the dump is what the Dev said, not
+    what it did or privately considered. Defensive on inner shapes — one odd
+    line must never abort the artifact path."""
     blocks = []
     for line in out.splitlines():
         try:
             ev = json.loads(line)
         except Exception:
             continue
-        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+        if not isinstance(ev, dict) or ev.get("type") != "assistant" \
+                or ev.get("parent_tool_use_id"):
             continue
-        for block in (ev.get("message") or {}).get("content") or []:
-            if block.get("type") == "text" and block.get("text", "").strip():
-                blocks.append(block["text"].strip())
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                blocks.append(text.strip("\n"))    # keep indentation intact
     return "\n\n".join(blocks)
 
 
@@ -469,11 +477,13 @@ def codex_text_dump(out: str) -> str:
             continue
         if not isinstance(ev, dict) or ev.get("type") != "item.completed":
             continue
-        item = ev.get("item") or {}
+        item = ev.get("item")
+        if not isinstance(item, dict):
+            continue
         if (item.get("item_type") or item.get("type")) == "agent_message":
-            text = str(item.get("text", "")).strip()
-            if text:
-                blocks.append(text)
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                blocks.append(text.strip("\n"))
     return "\n\n".join(blocks)
 
 

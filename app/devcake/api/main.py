@@ -773,7 +773,8 @@ async def clear_runs():
     """
     from .clear import clear_all
     with tracer.start_as_current_span("system.clear_runs") as span:
-        result = await clear_all(store, executor, messaging, runlog)
+        result = await clear_all(store, executor, messaging, runlog,
+                                 internal_forge=internal_forge)
         missions_cache.clear()
         for mgr in managers.values():
             mgr._grace.clear()

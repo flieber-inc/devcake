@@ -41,6 +41,13 @@ class PMOPort(Protocol):
 
     - `get_activity` on a ref without a comment feed (Linear projects) returns
       the mission with `entries=[]` — never raises.
+    - `get_activity(full=True)` (ADR-0014 D3, the activity-folder builder's
+      mode) walks the ENTIRE feed history, carries reply structure
+      (`entry_id`/`parent_id`) and mission-level attachments (description
+      assets + the vendor's native attachment list), and sets
+      `Activity.truncated` on its hard stop instead of raising. Default
+      (shallow) mode keeps the cheap recent-window query — the marker-scan
+      call paths must never pay full-history cost.
     - `post_feed` targets the kind-appropriate channel (issue comment /
       project update). Feed POLICY (redaction, sentinel, suppression) is the
       orchestrator's job; transport is the adapter's.
@@ -57,7 +64,8 @@ class PMOPort(Protocol):
     async def list_missions(self, team_ref: str) -> list[Mission]: ...
     async def list_all(self, team_ref: str) -> list[Mission]: ...
     async def get(self, ref: MissionRef) -> Mission: ...
-    async def get_activity(self, ref: MissionRef) -> Activity: ...
+    async def get_activity(self, ref: MissionRef,
+                           full: bool = False) -> Activity: ...
     async def children_of(self, ref: MissionRef) -> list[Mission]: ...
 
     # ── writes ───────────────────────────────────────────────────────────────

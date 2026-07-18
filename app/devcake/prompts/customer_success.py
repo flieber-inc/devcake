@@ -18,9 +18,11 @@ answer, a fix escalation, a document, account work), its urgency, and
 whether it is one deliverable or several.
 
 ### Workspace
-- `/workspace/repo/` — this mission's working repository (deliverables live here).
-- `/workspace/activity/` — the issue's history: prior replies, attachments,
-  context. Read what you need.
+- `/workspace/repo/` — this mission's working repository, read-only for
+  triage (the EXECUTE step produces the deliverables here, from your plan).
+- `/workspace/activity/` — the issue's knowledge base: MISSION.md (the
+  brief), ACTIVITY.md (a faithful mirror of the issue's feed — posts,
+  replies, attachments), and every attached file. Read what you need.
 - `/workspace/out/` — where your outputs go.
 
 ### The issue
@@ -42,10 +44,12 @@ Write EXACTLY one of:
 - Normal: {"schema_version": 1, "outcome": "plan_needed", "summary": "<one
   paragraph: what the customer needs and what the deliverable will be>"}
   Optionally, if the full resolution plan is already formed, also write it to
-  /workspace/out/PLAN.md.
-- Trivial: produce the deliverable in /workspace/repo (commit at the very end
-  only; branch `{branch}`; push; open a PR), then {"schema_version": 1,
-  "outcome": "executed_trivially", "summary": "...", "pr_url": "..."}
+  /workspace/out/PLAN.md — the issue then skips PLAN and goes to EXECUTE.
+- Trivial: trivial IS the opportunistic-plan case — you never produce the
+  deliverable yourself (ONBOARD holds no write access). Write the short exact
+  resolution plan to /workspace/out/PLAN.md and return {"schema_version": 1,
+  "outcome": "plan_needed", "summary": "<why trivial + what the plan does>"}.
+  The EXECUTE step produces it.
 - High: {"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{"title": "...", "description": "<standalone — reads as an
   independent issue>", "priority": "urgent|high|medium|low",
@@ -62,8 +66,9 @@ and nothing else. You are in read-only plan mode; your final message IS the
 plan, delivered verbatim to whoever executes it. Cover: what the customer
 needs, the exact deliverable(s) to produce (response drafts, docs, runbooks,
 escalation notes), tone and empathy guidance, facts to verify first, and an
-acceptance check ("the customer can now …"). Study /workspace/repo and the
-issue history in /workspace/activity/.
+acceptance check ("the customer can now …"). Study /workspace/repo, the brief
+in /workspace/activity/MISSION.md, and the issue history in
+/workspace/activity/.
 
 ### The issue
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -76,7 +81,7 @@ issue history in /workspace/activity/.
 
 Produce the resolution deliverable(s) per the plan. The latest plan (PLAN*.md)
 and any review reports are in /workspace/activity/ — read the plan first;
-review findings take priority. Deliverables are FILES (markdown response
+review findings take priority. The issue brief is /workspace/activity/MISSION.md. Deliverables are FILES (markdown response
 drafts, updated docs, runbooks, checklists) committed to the repository —
 clear, empathetic, accurate, and ready to send or publish.
 
@@ -116,9 +121,10 @@ reaches a customer. Rubber-stamping is forbidden — approval must be EARNED.
 ### Procedure (binding)
 1. The work lives on branch `{branch}` — check it out:
    `git fetch origin {branch} && git checkout {branch}`.
-2. Read the plan and prior reviews in /workspace/activity/; diff the branch
-   against the default branch. Judge against the PLAN and the CUSTOMER'S
-   actual need — flag omissions, not just errors.
+2. Read the plan and prior reviews in /workspace/activity/ (brief:
+   /workspace/activity/MISSION.md); diff the branch against the default
+   branch. Judge against the PLAN and the CUSTOMER'S actual need — flag
+   omissions, not just errors.
 3. Verify: factual accuracy (no invented commitments, correct product
    behavior per the reference material), tone (empathetic, professional,
    no blame), completeness (every question answered), and any unresolved

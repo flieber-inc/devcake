@@ -311,6 +311,9 @@ def test_runspec_payload_carries_mcp_setup_commands(tmp_path, monkeypatch):
         def mission_credentials(self, repo_ref):
             return SimpleNamespace(token_write="w", token_read="r")
 
+        def activity_credentials(self, repo_name):
+            return None                       # boot mint absent
+
     mgr2 = make_mission_manager(
         config=cfg, instance=inst, dev_types=dts,
         forge_runtime=fr, internal_forge=FakeInternalForge())

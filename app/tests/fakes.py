@@ -80,6 +80,45 @@ class FakeExecutor:
 DEFAULT_INSTANCE = PMOInstance(name="linear", team_key="DEV")
 
 
+class FakeInternalForge:
+    """InternalForgePort activity surface (ADR-0014 D4) — recording fake.
+    Extend per-test for the mission-repo methods when needed."""
+
+    def __init__(self, ro_token: str = "act-ro-tok", push_exc=None):
+        self.ensured: list[tuple[str, str]] = []
+        self.pushes: list[tuple[str, list, str]] = []
+        self.deleted: list[str] = []
+        self.ro_token = ro_token
+        self.push_exc = push_exc
+
+    async def ensure_activity_repo(self, instance, mission_key):
+        from devcake.ports.internal_forge import activity_repo_name
+        self.ensured.append((instance, mission_key))
+        return activity_repo_name(instance, mission_key)
+
+    async def push_activity_snapshot(self, repo_name, files, message):
+        if self.push_exc:
+            raise self.push_exc
+        self.pushes.append((repo_name, files, message))
+
+    def activity_credentials(self, repo_name):
+        from devcake.ports.internal_forge import ActivityRepoCredentials
+        if not self.ro_token:
+            return None
+        return ActivityRepoCredentials(
+            repo_name=repo_name,
+            clone_url=f"http://gitea:3000/devcake-repos/{repo_name}.git",
+            username="devcake-activity-ro", token=self.ro_token)
+
+    async def list_activity_repos(self):
+        return []
+
+    async def delete_activity_repo(self, repo_name):
+        if not repo_name.startswith("activity-"):   # honor the Protocol guard
+            raise ValueError(f"not an activity repo: {repo_name!r}")
+        self.deleted.append(repo_name)
+
+
 def make_mission_manager(
     tmp_path: Path | None = None,
     *,

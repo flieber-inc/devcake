@@ -437,6 +437,75 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
     assert not uploaded
 
 
+def _mission_delivery_setup(tmp_path, feed_body):
+    """deliver_internal_zip_for_mission scaffolding: internal repo, one feed
+    entry with the given body, capture of uploads."""
+    from devcake.domain.model import Activity, ActivityEntry
+    from devcake.ports.forge import PRFile, PullRequest
+    from fakes import make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+
+    uploaded = {}
+    m = _m(key="T-1")
+    m.repo = "linear-t-1"
+
+    class FakePMO:
+        async def get_activity(self, ref, full=False):
+            return Activity(mission=m, entries=[
+                ActivityEntry(ts=datetime.now(timezone.utc), author="a",
+                              kind="comment", body=feed_body)])
+        async def upload_attachment(self, pmo_id, name, data):
+            uploaded[name] = data
+            return f"https://pmo/{name}"
+
+    class FakeForge:
+        async def pr_state(self, n):
+            return PullRequest(number=n, url="http://gitea/pr/1",
+                               state="closed", merged=True)
+        async def pr_files(self, n):
+            return [PRFile(path="a.txt", status="added")]
+        async def file_content(self, path, ref):
+            return b"data"
+        async def _req(self, method, path):
+            return {"merge_commit_sha": "abc123"}
+
+    class RT:
+        internal = {"linear-t-1"}
+        def get(self, name): return FakeForge()
+
+    mgr = make_mission_manager(
+        pmo=FakePMO(), forge_runtime=RT(),
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
+    feed = []
+    async def _feed(pmo_id, kind, md): feed.append(md)
+    mgr._feed = _feed
+    mgr._attachment_cap = lambda: 10 * 1024 * 1024
+    pr = PullRequest(number=1, url="http://gitea/pr/1", state="closed",
+                     merged=True)
+    return mgr, uploaded, feed, m, pr
+
+
+def test_mission_zip_delivery_ignores_quoted_deliverable_marker(tmp_path):
+    # ADR-0014 D2: a `>`-quoted mention of the zip name (a human quoting the
+    # delivery comment, or a blockquoted last message) must not suppress a
+    # real delivery
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
+        tmp_path, "> attaching `T-1-deliverable.zip` next\n`devcake:v1`")
+    run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
+    assert "T-1-deliverable.zip" in uploaded
+    assert any("Deliverable attached" in f for f in feed)
+
+
+def test_mission_zip_delivery_skips_on_unquoted_marker(tmp_path):
+    # the guard itself (review finding #9), previously untested: an unquoted
+    # mention of the deliverable in the feed = already delivered, do nothing
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
+        tmp_path, "📦 Deliverable attached: [T-1-deliverable.zip](https://x)")
+    run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
+    assert not uploaded
+
+
 def test_onboard_runspec_carries_extra_repo_read_tokens(tmp_path, monkeypatch):
     """Item 2 full scope: an ONBOARD run of a multi-repo instance gets every
     OTHER set repo as {name, url, clone_user, token} with the READ token

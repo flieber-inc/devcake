@@ -68,7 +68,8 @@ def test_router_unknown_instance_fails_run_cleanly(tmp_path):
     assert messaging.deleted_streams == [run.run_id]
     # runspec + activity degrade instead of raising
     assert router.runspec_secret_payload(run) is None
-    assert run_coro(router.activity_payload(run)) == {"activity_md": "",
+    assert run_coro(router.activity_payload(run)) == {"mission_md": "",
+                                                      "activity_md": "",
                                                       "attachments": []}
     assert "no longer configured" in router.dev_failure_error(run, {})
 

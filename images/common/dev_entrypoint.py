@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -48,7 +49,7 @@ def send(kind: str, payload: dict) -> None:
 
 
 MAX_ARTIFACT_BYTES = 50 * 1024 * 1024 - 256 * 1024  # headroom under ingress caps
-SHRINKABLE_FIELDS = ("transcript_md", "plan_md")     # never result/exit_code/token_report
+SHRINKABLE_FIELDS = ("transcript_md", "plan_md", "last_message_md")  # never result/exit_code/token_report
 TRUNCATE_FLOOR = 10_000
 
 
@@ -441,6 +442,133 @@ def grok_stream_parse(out: str):
     return ("".join(texts), sid) if saw else None
 
 
+def claude_text_dump(out: str) -> str:
+    """ADR-0014 D1: every assistant-visible text block, in order, UNTRUNCATED.
+    Thinking blocks, tool calls, and subagent messages (parent_tool_use_id —
+    tool-internal chatter) are excluded: the dump is what the Dev said, not
+    what it did or privately considered. Defensive on inner shapes — one odd
+    line must never abort the artifact path."""
+    blocks = []
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant" \
+                or ev.get("parent_tool_use_id"):
+            continue
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                blocks.append(text.strip("\n"))    # keep indentation intact
+    return "\n\n".join(blocks)
+
+
+def codex_text_dump(out: str) -> str:
+    """ADR-0014 D1: every agent_message text, in order, untruncated."""
+    blocks = []
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "item.completed":
+            continue
+        item = ev.get("item")
+        if not isinstance(item, dict):
+            continue
+        if (item.get("item_type") or item.get("type")) == "agent_message":
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                blocks.append(text.strip("\n"))
+    return "\n\n".join(blocks)
+
+
+def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
+    """ADR-0014 D3: materialize the activity payload into the folder —
+    MISSION.md (when the app sent one; old apps don't), ACTIVITY.md, and
+    every attachment under its basename (path components stripped)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    if act.get("mission_md"):
+        (dest / "MISSION.md").write_text(act["mission_md"])
+    (dest / "ACTIVITY.md").write_text(act.get("activity_md", ""))
+    for a in act.get("attachments", []):
+        name = pathlib.Path(a["filename"]).name
+        if not name or name in (".", ".."):   # feed-controllable input —
+            name = "attachment.bin"           # never resolve to a directory
+        (dest / name).write_bytes(base64.b64decode(a["content_b64"]))
+
+
+def clone_activity_repo(activity, dest, runner=None):
+    """ADR-0014 D4: clone the mission's activity repo — FULL history (the
+    step-by-step evolution IS the payload: `git log -p ACTIVITY.md` works
+    in-container) with the shared RO token via the askpass env override.
+    Non-fatal on every failure; (ok, note)."""
+    import re as _re
+    if not activity or not activity.get("url"):
+        return False, "activity repo: no clone spec (Redis fallback)"
+    runner = runner or subprocess.run
+    url = activity["url"]
+    user = activity.get("clone_user") or ""
+    clone_url = (_re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
+                 if user else url)
+    env = {**os.environ, "DEVCAKE_FORGE_TOKEN": activity.get("token") or ""}
+    r = runner(["git", "clone", clone_url, str(dest)],
+               capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        return False, ("activity repo: clone failed "
+                       f"({(r.stderr or '')[-200:]}) — Redis fallback")
+    return True, "activity repo: cloned with history"
+
+
+def materialize_activity(spec, dest, request_reply, runner=None):
+    """Clone-first activity materialization (ADR-0014 D4), Redis fallback:
+    activity.get + payload write when the clone failed OR left no
+    ACTIVITY.md (empty repo — the first push failed; cloning an empty repo
+    succeeds). Never fatal, never exit 13 (that's the primary repo's)."""
+    notes = []
+    ok, note = clone_activity_repo(spec.get("activity_repo"), dest,
+                                   runner=runner)
+    notes.append(note)
+    if not ok or not (dest / "ACTIVITY.md").exists():
+        if ok:
+            notes.append("activity repo: empty clone — Redis fallback")
+        # drop any zero-commit .git so `git log` inside the folder fails
+        # honestly instead of confusingly ("no commits yet" over real files)
+        shutil.rmtree(dest / ".git", ignore_errors=True)
+        act = request_reply("activity.get", "activity.result")
+        write_activity_payload(act, dest)
+    return notes
+
+
+def with_session(text: str, dump: str) -> str:
+    """Failure-path transcripts: append the session dump when one exists."""
+    return text + (f"\n\n## Session transcript\n\n{dump}" if dump else "")
+
+
+def assemble_transcript(seq, mtype, run_id, dev_type, harness, token_report,
+                        dump, result_text, result) -> str:
+    """ADR-0014 D1: the attachment doc — header, the FULL session dump (all
+    assistant-visible text), the outcome JSON. `## Agent report` (last message
+    alone) appears only when no dump exists; the feed comment carries the last
+    message, so the attachment need not repeat it. result=None (failure paths)
+    drops the Outcome section."""
+    body = (f"## Session transcript\n\n{dump}\n\n" if dump
+            else f"## Agent report\n\n{result_text}\n\n")
+    return (
+        f"# {seq}_{mtype} — run {run_id}\n\n"
+        f"**Dev:** {dev_type} ({harness}) · "
+        f"**turns:** {token_report.get('num_turns', '—')} · "
+        f"**duration:** {token_report.get('duration_ms', '—')} ms\n\n"
+        + body
+        + (f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n"
+           if result is not None else ""))
+
+
 def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
     send(kind, {})
     last_id, deadline = "0", time.time() + timeout
@@ -535,23 +663,25 @@ def main() -> None:
     (WORKSPACE / "activity").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / ".devcake").mkdir(parents=True, exist_ok=True)
 
-    act = request_reply("activity.get", "activity.result")
-    (WORKSPACE / "activity" / "ACTIVITY.md").write_text(act.get("activity_md", ""))
-    for a in act.get("attachments", []):
-        target = WORKSPACE / "activity" / pathlib.Path(a["filename"]).name
-        target.write_bytes(base64.b64decode(a["content_b64"]))
-
     repo_url = env["DEVCAKE_REPO_URL"]
     askpass = WORKSPACE / ".devcake" / "askpass.sh"
     askpass.write_text("#!/bin/sh\necho \"$DEVCAKE_FORGE_TOKEN\"\n")
     askpass.chmod(0o700)
+    # git auth set up BEFORE the activity clone (ADR-0014 D4) — its per-clone
+    # token env override rides the same askpass
+    os.environ["GIT_ASKPASS"] = str(askpass)
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+
+    for note in materialize_activity(spec, WORKSPACE / "activity",
+                                     request_reply):
+        print(note)
+
     clone_user, git_name, git_email, cli_envs = forge_dialect(env)
     clone_url = repo_url.replace("https://", f"https://{clone_user}@")
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
-    # git auth for clone AND the harness's own push (docs/03 §3); CLI auth for PRs
-    os.environ["GIT_ASKPASS"] = str(askpass)
-    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+    # git auth for clone AND the harness's own push (docs/03 §3, askpass set
+    # above); CLI auth for PRs
     if env.get("DEVCAKE_FORGE_TOKEN"):
         for var in cli_envs:
             os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]
@@ -751,13 +881,28 @@ def main() -> None:
         except Exception:
             result_text = out[-4000:]
 
+    # ADR-0014 D1: the full dump of assistant-visible text, per harness
+    # (grok: the `grok export` session already includes every message).
+    # Guarded like every other parse of `out` — a dump failure must never
+    # abort the artifact path (the no-dump fallback handles "").
+    try:
+        if harness == "codex":
+            dump = codex_text_dump(out)
+        elif harness == "grok-build":
+            dump = transcript_body
+        else:
+            dump = claude_text_dump(out)
+    except Exception:
+        dump = ""
+
     if harness_exit != 0:
         err = err_text[-1500:]
         auth_fail = "authentication" in err.lower() or "unauthorized" in err.lower() \
             or "log in" in err.lower()
         code = 12 if auth_fail else 10
         send_artifacts({"result": None, "exit_code": code,
-                        "transcript_md": f"harness exited {harness_exit}\n\n```\n{err}\n```",
+                        "transcript_md": with_session(
+                            f"harness exited {harness_exit}\n\n```\n{err}\n```", dump),
                         "token_report": token_report})
         stop.set()
         sys.exit(code)
@@ -768,8 +913,9 @@ def main() -> None:
     if plan_mode:
         if len((result_text or "").strip()) < 200:  # a real plan is never this short
             send_artifacts({"result": None, "exit_code": 11,
-                            "transcript_md": f"plan mode returned no usable plan "
-                                             f"({len(result_text or '')} chars):\n\n{result_text}",
+                            "transcript_md": with_session(
+                                f"plan mode returned no usable plan "
+                                f"({len(result_text or '')} chars):\n\n{result_text}", dump),
                             "token_report": token_report})
             stop.set()
             sys.exit(11)  # DEV_BAD_OUTPUT — fail the attempt, never advance an empty plan
@@ -781,7 +927,7 @@ def main() -> None:
     # per-type legality (docs/03 §6). First-line defense only — the app enforces
     # the same table authoritatively at finalization (missions.LEGAL_OUTCOMES).
     legal_outcomes = {
-        "ONBOARD": {"plan_needed", "executed_trivially", "decomposed", "human_needed"},
+        "ONBOARD": {"plan_needed", "decomposed", "human_needed"},
         "PLAN": {"planned"},
         "EXECUTE": {"executed", "human_needed"},
         "REVIEW": {"reviewed", "human_needed"},
@@ -796,21 +942,22 @@ def main() -> None:
         assert isinstance(result.get("summary"), str)
     except Exception as e:
         send_artifacts({"result": None, "exit_code": 11,
-                        "transcript_md": f"result.json missing/invalid: {e}\n\n---\n\n{result_text}",
+                        "transcript_md": with_session(
+                            f"result.json missing/invalid: {e}\n\n---\n\n{result_text}", dump),
                         "token_report": token_report})
         stop.set()
         sys.exit(11)
 
     plan_path = WORKSPACE / "out" / "PLAN.md"
-    transcript = (
-        f"# {env.get('DEVCAKE_SEQ')}_{env.get('DEVCAKE_MISSION_TYPE')} — run {RUN_ID}\n\n"
-        f"**Dev:** {env.get('DEVCAKE_DEV_TYPE')} ({harness}) · "
-        f"**turns:** {token_report.get('num_turns', '—')} · "
-        f"**duration:** {token_report.get('duration_ms', '—')} ms\n\n"
-        f"## Agent report\n\n{result_text}\n\n"
-        + (f"## Session transcript\n\n{transcript_body}\n\n" if transcript_body else "")
-        + f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n")
-    payload = {"result": result, "transcript_md": transcript, "token_report": token_report}
+    transcript = assemble_transcript(
+        seq=env.get("DEVCAKE_SEQ"), mtype=env.get("DEVCAKE_MISSION_TYPE"),
+        run_id=RUN_ID, dev_type=env.get("DEVCAKE_DEV_TYPE"), harness=harness,
+        token_report=token_report, dump=dump, result_text=result_text,
+        result=result)
+    # ADR-0014 D1: the last message rides separately for the inline feed
+    # comment; the app treats a missing/empty key as "post the pointer only"
+    payload = {"result": result, "transcript_md": transcript,
+               "last_message_md": result_text, "token_report": token_report}
     if plan_path.exists():
         payload["plan_md"] = plan_path.read_text()
     send_artifacts(payload)

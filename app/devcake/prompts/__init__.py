@@ -1,6 +1,7 @@
 """Playbook prompts (docs/03 §7). The playbook restates the binding rules from
 docs/03 — workspace boundaries, result.json contract, bounded effort. Prompts
-inline only the mission title/description; activity/ is reference material.
+inline only the mission title/description; activity/ (MISSION.md brief +
+ACTIVITY.md feed mirror + attached files, ADR-0014) is reference material.
 
 Operator-editable templates (v0.1.1): each Mission Type's playbook can be
 replaced by a stored template (prompts/templates.py; /data/config/
@@ -57,14 +58,18 @@ ONBOARD_PLAYBOOK = """
 
 Assess the complexity of the mission below against the actual codebase, then
 route it. **Assess, don't deep-dive** — this is a bounded triage pass, not an
-exploration. Do not modify any code in this mission type (the rare trivial
-path is the only exception, and you must be certain).
+exploration. NEVER modify any code in this mission type: ONBOARD is pure
+assessment and holds no write access; even trivial work is implemented by
+the EXECUTE step, from the plan you attach.
 
 ### Workspace
-- `/workspace/repo/` — a fresh clone of the repository. The ONLY place work may happen.
-- `/workspace/activity/` — the mission's history and artifacts (ACTIVITY.md index +
-  files). Reference material: grep or read what you need; do not assume you must
-  read all of it.
+- `/workspace/repo/` — a fresh clone of the repository, for ASSESSMENT only
+  (ONBOARD never writes to it; the EXECUTE step does the work, from your plan).
+- `/workspace/activity/` — the mission's knowledge base: MISSION.md (the
+  brief), ACTIVITY.md (a faithful mirror of the mission's feed — full posts,
+  replies, `[attachment: …]` markers), and every attached file — including
+  prior steps' full session transcripts (`N_TYPE.md`). Reference material:
+  grep or read what you need; do not assume you must read all of it.
 - `/workspace/out/` — where your outputs go.
 
 ### The mission
@@ -86,10 +91,13 @@ Write EXACTLY one of:
   what the mission needs and why it is normal complexity>"}}
   Optionally, if while triaging you have ALREADY fully formed the implementation plan
   (never force this), also write it to /workspace/out/PLAN.md — a complete, standalone
-  markdown plan an implementer can execute without further context.
-- Trivial: implement it in /workspace/repo (commit at the very end only; branch
-  `{branch}`; push; open a PR), then {{"schema_version": 1, "outcome":
-  "executed_trivially", "summary": "...", "pr_url": "..."}}
+  markdown plan an implementer can execute without further context. The mission then
+  skips its PLAN step and goes straight to EXECUTE.
+- Trivial: trivial IS the opportunistic-plan case, fully formed by definition — you
+  never implement anything (ONBOARD holds no write access). Write the short exact
+  plan to /workspace/out/PLAN.md (files to touch, the precise change, how to verify)
+  and return {{"schema_version": 1, "outcome": "plan_needed", "summary": "<why this
+  is trivial and what the plan does>"}}. The EXECUTE step implements it.
 - High: {{"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{{"title": "...", "description": "<standalone — reads as an
   independent mission, no references to siblings or 'this mission'>",
@@ -191,8 +199,9 @@ nothing else. You are running in the harness's read-only plan mode; your final
 message IS the plan and will be delivered verbatim to the implementer, who has
 no other context. Structure it so a competent engineer (or agent) can execute
 it without asking questions: goals, file-by-file changes, new files, testing
-strategy, and acceptance checks. Study /workspace/repo and the mission history
-in /workspace/activity/ (reference material — read what you need).
+strategy, and acceptance checks. Study /workspace/repo, the brief in
+/workspace/activity/MISSION.md, and the mission history in
+/workspace/activity/ (reference material — read what you need).
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -219,8 +228,9 @@ EXECUTE_PLAYBOOK = """
 
 Implement the mission's plan. The latest plan (PLAN*.md) and any review reports
 are in /workspace/activity/ — read the plan first; if a review report exists,
-its findings take priority. Where reality contradicts the plan, implement the
-smallest sound deviation and document it in your summary.
+its findings take priority. The mission brief is /workspace/activity/MISSION.md.
+Where reality contradicts the plan, implement the smallest sound deviation and
+document it in your summary.
 
 SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 /workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
@@ -285,7 +295,8 @@ approval must be EARNED by the evidence you gather.
    `git fetch origin {branch} && git checkout {branch}`.
 2. Read the plan and any prior review reports in /workspace/activity/ and diff
    the branch against the default branch. Judge the work against the PLAN and
-   the MISSION — flag omissions, not just bugs.
+   the MISSION (brief: /workspace/activity/MISSION.md) — flag omissions, not
+   just bugs.
 3. Run the tests / build if present. A red test suite is an automatic reject.
 4. Hunt for real defects: correctness, edge cases, error handling, security,
    silent failure modes. Cosmetic nitpicks alone do not justify a reject.

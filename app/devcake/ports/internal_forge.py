@@ -24,6 +24,20 @@ def internal_repo_name(instance: str, mission_key: str) -> str:
     return _SAFE.sub("-", f"{instance}-{mission_key}".lower()).strip("-")[:60]
 
 
+# ADR-0014 D4: the sweeper discriminator — includes the trailing hyphen, so
+# no operator card name (^[a-z][a-z0-9]{0,11}$, hyphen-free) can ever match
+ACTIVITY_PREFIX = "activity-"
+
+
+def activity_repo_name(instance: str, mission_key: str) -> str:
+    """The deterministic name of a mission's ACTIVITY repo (ADR-0014 D4) —
+    prefix applied AFTER the 60-char cap (max 69 < Gitea's 100-char limit;
+    re-truncating after prefixing could collide two long mission keys). A
+    cap landing mid-hyphen can yield a trailing '-': live-verified accepted
+    by Gitea 1.24 (2026-07-18), and exact parity with work-repo names."""
+    return ACTIVITY_PREFIX + internal_repo_name(instance, mission_key)
+
+
 class InternalRepo(BaseModel):
     """Admin-surface row for one auto-created internal repo."""
     name: str                  # {instance}-{mission-key}, lowercased
@@ -33,6 +47,16 @@ class InternalRepo(BaseModel):
     size_kb: int = 0
     open_prs: int = 0
     updated_at: str = ""
+
+
+class ActivityRepoCredentials(BaseModel):
+    """Shared read-only clone credentials for one activity repo (ADR-0014
+    D4): no per-mission machine user — the app is the only writer, so every
+    Dev clones with the single ACTIVITY_RO_USER token."""
+    repo_name: str
+    clone_url: str             # runtime-network origin (Dev-side)
+    username: str
+    token: str
 
 
 class MissionRepoCredentials(BaseModel):
@@ -91,6 +115,36 @@ class InternalForgePort(Protocol):
 
     def skill_store_url(self) -> str:
         """Operator-clickable store URL (sync; ROOT_URL-based)."""
+        ...
+
+    # ── per-mission activity repos (ADR-0014 D4) ─────────────────────────────
+
+    async def ensure_activity_repo(self, instance: str, mission_key: str
+                                   ) -> str:
+        """Create-or-adopt the mission's activity repo (unprotected, no
+        machine user, shared-RO collaborator). Returns the repo name."""
+        ...
+
+    async def push_activity_snapshot(self, repo_name: str, files: list[dict],
+                                     message: str) -> None:
+        """ONE commit making main exactly match files [{path, content_b64}]:
+        create/update by tree sha, stale paths deleted, unchanged blobs
+        skipped (identical snapshot ⇒ no commit)."""
+        ...
+
+    def activity_credentials(self, repo_name: str
+                             ) -> "ActivityRepoCredentials | None":
+        """Shared RO clone credentials (runspec source; sync read)."""
+        ...
+
+    async def list_activity_repos(self) -> list[InternalRepo]:
+        """Every activity-* repo — paginated, prefix-filtered (operator
+        repos and the skill-store never appear)."""
+        ...
+
+    async def delete_activity_repo(self, repo_name: str) -> None:
+        """Clear-sweep delete; refuses non-activity-prefixed names with
+        ValueError before any HTTP."""
         ...
 
     async def list_repos(self) -> list[InternalRepo]: ...

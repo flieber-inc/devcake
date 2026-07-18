@@ -79,6 +79,40 @@ def test_claude_result_event_extraction():
     assert json.loads(blob)["result"] == "x"
 
 
+def test_claude_text_dump_collects_text_blocks_untruncated():
+    # ADR-0014 D1: the full dump keeps every assistant-visible text block in
+    # order, UNTRUNCATED (the live relay's 200-char cap must not apply), and
+    # excludes thinking + tool_use
+    long_text = ("deep analysis " * 40).strip()            # ≫ 200-char relay cap
+    second = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": long_text}]}})
+    subagent = json.dumps({"type": "assistant", "parent_tool_use_id": "tu_1",
+                           "message": {"content": [
+                               {"type": "text", "text": "subagent chatter"}]}})
+    indented = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": "    indented\n    code"}]}})
+    malformed = [json.dumps({"type": "assistant", "message": "oops"}),
+                 json.dumps({"type": "assistant", "message": {"content": "s"}}),
+                 json.dumps({"type": "assistant",
+                             "message": {"content": ["notdict"]}}),
+                 json.dumps({"type": "assistant", "message": {"content": [
+                     {"type": "text", "text": None}]}})]
+    out = "\n".join([CLAUDE_INIT, CLAUDE_TOOL, CLAUDE_TEXT, CLAUDE_THINKING,
+                     subagent, *malformed, second, indented, "not json",
+                     CLAUDE_RESULT])
+    dump = ep.claude_text_dump(out)
+    first = dump.find("missing fixture")
+    assert first != -1
+    assert dump.find(long_text) > first                    # order preserved
+    assert dump.count("missing fixture") == 1              # no duplication
+    assert dump.count(long_text) == 1
+    assert "private reasoning" not in dump                 # thinking excluded
+    assert "file_path" not in dump                         # tool_use excluded
+    assert "done" not in dump              # result-event text never ingested
+    assert "subagent chatter" not in dump  # tool-internal (parent_tool_use_id)
+    assert "    indented\n    code" in dump                # indentation kept
+
+
 # ── codex --json ─────────────────────────────────────────────────────────────
 
 CODEX_CMD = json.dumps({"type": "item.completed", "item": {
@@ -95,6 +129,28 @@ def test_render_codex_events():
     assert ep.render_codex(CODEX_MSG).startswith("Output:")
     assert ep.render_codex(CODEX_TURN) == "[codex] turn done · in=25247 out=88"
     assert ep.render_codex(json.dumps({"type": "turn.started"})) is None
+
+
+def test_codex_text_dump_collects_agent_messages():
+    # ADR-0014 D1: agent_message texts in order, untruncated; command
+    # executions and usage events excluded; non-JSON lines tolerated
+    long_msg = ("regression detail " * 30).strip()
+    second = json.dumps({"type": "item.completed", "item": {
+        "id": "item_2", "type": "agent_message", "text": long_msg}})
+    via_item_type = json.dumps({"type": "item.completed", "item": {
+        "id": "item_3", "item_type": "agent_message", "text": "via item_type"}})
+    malformed = [json.dumps({"type": "item.completed", "item": "oops"}),
+                 json.dumps({"type": "item.completed",
+                             "item": {"type": "agent_message", "text": None}})]
+    out = "\n".join([CODEX_CMD, CODEX_MSG, "garbage line", *malformed,
+                     second, via_item_type, CODEX_TURN])
+    dump = ep.codex_text_dump(out)
+    assert dump.startswith("Output:")                      # first message first
+    assert dump.count(long_msg) == 1                       # once, untruncated
+    assert "via item_type" in dump                         # item_type key arm
+    assert "/bin/bash" not in dump                         # command excluded
+    assert "25247" not in dump                             # usage excluded
+    assert "None" not in dump                              # no repr injection
 
 
 # ── grok streaming-json ──────────────────────────────────────────────────────
@@ -251,6 +307,77 @@ def test_fit_payload_truncates_oversized_transcript(monkeypatch):
     assert len(payload["transcript_md"]) == 3 * 1024 * 1024   # input untouched
 
 
+def test_assemble_transcript_full_dump_shape():
+    # ADR-0014 D1: attachment doc = header + full dump + outcome; the Agent
+    # report section survives only as the no-dump fallback
+    tr = {"num_turns": 3, "duration_ms": 42}
+    result = {"schema_version": 1, "outcome": "executed", "summary": "s"}
+    doc = ep.assemble_transcript(seq="2", mtype="EXECUTE", run_id="R-1",
+                                 dev_type="senior", harness="claude-code",
+                                 token_report=tr, dump="FULL DUMP TEXT",
+                                 result_text="last msg", result=result)
+    assert doc.startswith("# 2_EXECUTE — run R-1")
+    assert "**turns:** 3" in doc and "**duration:** 42 ms" in doc
+    assert "## Session transcript\n\nFULL DUMP TEXT" in doc
+    assert "## Agent report" not in doc                    # dump supersedes it
+    assert '"outcome": "executed"' in doc                  # Outcome JSON rides
+    doc2 = ep.assemble_transcript(seq="1", mtype="PLAN", run_id="R",
+                                  dev_type="d", harness="h", token_report={},
+                                  dump="", result_text="only the last message",
+                                  result=result)
+    assert "## Agent report\n\nonly the last message" in doc2
+    doc3 = ep.assemble_transcript(seq="1", mtype="PLAN", run_id="R",
+                                  dev_type="d", harness="h", token_report={},
+                                  dump="D", result_text="x", result=None)
+    assert "## Outcome" not in doc3                        # failure use
+
+
+def test_write_activity_payload_writes_folder(tmp_path):
+    # ADR-0014 D3: MISSION.md written when the app sent one; an OLD app's
+    # payload (no mission_md) writes no MISSION.md; filenames basename-
+    # sanitized as before
+    import base64
+    act = {"mission_md": "# T-1: brief", "activity_md": "# feed",
+           "attachments": [{"filename": "../evil/report.md",
+                            "content_b64": base64.b64encode(b"data").decode()}]}
+    ep.write_activity_payload(act, tmp_path / "activity")
+    assert (tmp_path / "activity" / "MISSION.md").read_text() == "# T-1: brief"
+    assert (tmp_path / "activity" / "ACTIVITY.md").read_text() == "# feed"
+    assert (tmp_path / "activity" / "report.md").read_bytes() == b"data"
+    assert not (tmp_path / "evil").exists()
+
+    old = {"activity_md": "old shape", "attachments": []}
+    ep.write_activity_payload(old, tmp_path / "old")
+    assert (tmp_path / "old" / "ACTIVITY.md").read_text() == "old shape"
+    assert not (tmp_path / "old" / "MISSION.md").exists()
+
+    # degenerate names ("", ".", "..") must never resolve to a directory
+    weird = {"activity_md": "", "attachments": [
+        {"filename": "..", "content_b64": base64.b64encode(b"w").decode()}]}
+    ep.write_activity_payload(weird, tmp_path / "weird")
+    assert (tmp_path / "weird" / "attachment.bin").read_bytes() == b"w"
+
+
+def test_with_session_appends_dump_only_when_present():
+    assert ep.with_session("err", "DUMP") == \
+        "err\n\n## Session transcript\n\nDUMP"
+    assert ep.with_session("err", "") == "err"
+
+
+def test_fit_payload_shrinks_transcript_before_last_message(monkeypatch):
+    # last_message_md is shrinkable, but the (larger) dump always halves first
+    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 64 * 1024)
+    payload = {"result": {"outcome": "x"}, "token_report": {},
+               "transcript_md": "t" * (200 * 1024),
+               "last_message_md": "m" * (20 * 1024)}
+    fitted = ep._fit_payload(payload)
+    assert fitted["last_message_md"] == "m" * (20 * 1024)   # untouched
+    assert "[devcake] transcript_md truncated" in fitted["transcript_md"]
+    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 32 * 1024)
+    fitted2 = ep._fit_payload({"result": {}, "last_message_md": "z" * (100 * 1024)})
+    assert "[devcake] last_message_md truncated" in fitted2["last_message_md"]
+
+
 def test_fit_payload_small_payload_untouched():
     payload = {"result": {"outcome": "hello"}, "transcript_md": "short"}
     assert ep._fit_payload(payload) is payload
@@ -383,3 +510,79 @@ def test_install_skills_rejects_unsafe_skills_dir(tmp_path):
         assert (tmp_path / ".claude/skills/x/SKILL.md").exists(), bad
         (tmp_path / ".claude/skills/x/SKILL.md").unlink()
     assert not (tmp_path.parent / "up").exists()
+
+
+def test_clone_activity_repo_full_history_own_token(tmp_path):
+    calls = []
+
+    def runner(cmd, capture_output, text, env):
+        calls.append((cmd, env["DEVCAKE_FORGE_TOKEN"]))
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    ok, _ = ep.clone_activity_repo(
+        {"url": "http://gitea:3000/devcake-repos/activity-l-t-1.git",
+         "clone_user": "devcake-activity-ro", "token": "act-ro"},
+        tmp_path / "activity", runner=runner)
+    assert ok
+    cmd, tok = calls[0]
+    assert tok == "act-ro"
+    assert "--depth" not in cmd                     # FULL history (ADR-0014)
+    assert cmd[-1] == str(tmp_path / "activity")
+    assert cmd[-2].startswith("http://devcake-activity-ro@")
+
+    def bad(cmd, capture_output, text, env):
+        return type("R", (), {"returncode": 1, "stderr": "403"})()
+    ok2, note = ep.clone_activity_repo({"url": "http://x/r.git",
+                                        "clone_user": "u", "token": "t"},
+                                       tmp_path / "a2", runner=bad)
+    assert not ok2 and "403" in note                # non-fatal, honest note
+    ok3, _ = ep.clone_activity_repo(None, tmp_path / "a3")
+    assert not ok3                                  # no spec → fallback path
+
+
+def test_materialize_activity_prefers_clone(tmp_path):
+    dest = tmp_path / "activity"
+
+    def runner(cmd, capture_output, text, env):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "ACTIVITY.md").write_text("# from clone")
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    fetched = []
+
+    def rr(kind, want):
+        fetched.append(kind)
+        return {}
+    ep.materialize_activity(
+        {"activity_repo": {"url": "http://g/a.git", "clone_user": "u",
+                           "token": "t"}}, dest, rr, runner=runner)
+    assert (dest / "ACTIVITY.md").read_text() == "# from clone"
+    assert fetched == []                            # Redis never asked
+
+
+def test_materialize_activity_falls_back_on_failure_or_empty_repo(tmp_path):
+    def rr(kind, want):
+        assert kind == "activity.get"
+        return {"mission_md": "# brief", "activity_md": "# feed",
+                "attachments": []}
+
+    def empty_clone(cmd, capture_output, text, env):
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+    dest = tmp_path / "a1"                          # clone "ok" but empty
+    ep.materialize_activity(
+        {"activity_repo": {"url": "http://g/a.git", "clone_user": "u",
+                           "token": "t"}}, dest, rr, runner=empty_clone)
+    assert (dest / "ACTIVITY.md").read_text() == "# feed"
+    assert (dest / "MISSION.md").read_text() == "# brief"
+
+    def failing(cmd, capture_output, text, env):
+        return type("R", (), {"returncode": 1, "stderr": "x"})()
+    dest2 = tmp_path / "a2"
+    ep.materialize_activity(
+        {"activity_repo": {"url": "http://g/a.git", "clone_user": "u",
+                           "token": "t"}}, dest2, rr, runner=failing)
+    assert (dest2 / "ACTIVITY.md").read_text() == "# feed"
+
+    dest3 = tmp_path / "a3"                         # old app: no spec key
+    ep.materialize_activity({}, dest3, rr)
+    assert (dest3 / "ACTIVITY.md").read_text() == "# feed"

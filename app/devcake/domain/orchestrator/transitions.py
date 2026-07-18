@@ -77,7 +77,7 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
         log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
         return
 
-    if outcome in ("executed", "executed_trivially", "reviewed"):
+    if outcome in ("executed", "reviewed"):
         await self._flag_out_of_pipeline_merge(run)
 
     if outcome == "planned":
@@ -125,27 +125,6 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
         await self._checkpoint(run, "transition:executed:feed", _executed_feed)
         if "transition:executed" not in run.finalized_steps:
             run.finalized_steps.append("transition:executed")
-            self.runs.store.save(run)
-    elif outcome == "executed_trivially":
-        async def _trivial_labels():
-            await self.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                       remove=set(), add={LABEL_REVIEW})
-            self._audit(pmo_id, "label_add", LABEL_REVIEW)
-
-        async def _trivial_feed():
-            _f = self.forges.get(run.repo_ref)
-            noun = _f.descriptor.pr_noun if _f else "pull request"
-            await self._feed(
-                pmo_id, run.pmo_kind,
-                f"🔀 Trivial path: {noun} opened ({result.get('pr_url', '?')}) "
-                f"— the trivial path never skips REVIEW (docs/03 §1.1).")
-
-        await self._checkpoint(run, "transition:executed_trivially:labels",
-                               _trivial_labels)
-        await self._checkpoint(run, "transition:executed_trivially:feed",
-                               _trivial_feed)
-        if "transition:executed_trivially" not in run.finalized_steps:
-            run.finalized_steps.append("transition:executed_trivially")
             self.runs.store.save(run)
     elif outcome == "reviewed":
         await self._finalize_review(run, result)

@@ -53,10 +53,12 @@ export default function RunsPage() {
       const local = result.local?.runs_deleted ?? 0;
       const dagu = result.dagu?.deleted ?? 0;
       const oo = (result.openobserve?.deleted || []).length;
+      const act = result.activity_repos?.deleted ?? 0;
       setClearMsg(
         `Cleared ${local} local run${local === 1 ? "" : "s"}, ` +
         `${dagu} Dagu run${dagu === 1 ? "" : "s"}, ` +
-        `${oo} OpenObserve stream${oo === 1 ? "" : "s"}. ` +
+        `${oo} OpenObserve stream${oo === 1 ? "" : "s"}, ` +
+        `${act} activity repo${act === 1 ? "" : "s"}. ` +
         `Config and credentials preserved.`
       );
       if (!result.ok) {
@@ -66,6 +68,7 @@ export default function RunsPage() {
         if (result.dagu?.error) bits.push(result.dagu.error);
         if (result.openobserve?.error) bits.push(result.openobserve.error);
         if (result.redis?.error) bits.push(result.redis.error);
+        if (result.activity_repos?.errors?.length) bits.push(result.activity_repos.errors.join("; "));
         if (bits.length) setClearErr(bits.join(" · "));
       }
       setOffset(0);
@@ -220,9 +223,13 @@ export default function RunsPage() {
         title="Clear all run history?"
         body={
           "This wipes local run records, stops any in-flight Devs, deletes Dagu " +
-          "execution history, and empties OpenObserve logs and traces.\n\n" +
-          "Config, credentials, and everything in your PMO and forge are " +
-          "untouched. Every mission's retry count starts fresh.\n\n" +
+          "execution history, and empties OpenObserve logs and traces. " +
+          "Per-mission activity repos on the internal Gitea are deleted too — " +
+          "their git history includes pre-edit feed states your PMO no longer " +
+          "shows.\n\n" +
+          "Config, credentials, operator repos, the skill-store, work repos, " +
+          "and everything in your PMO are untouched. Every mission's retry " +
+          "count starts fresh.\n\n" +
           "This cannot be undone."
         }
         confirmLabel="Clear everything"

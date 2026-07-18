@@ -39,6 +39,7 @@ If that contract is wrong for your environment, do not run DevCake there.
 | `/data` volume (or its backups) | Full secret dump — treat backups like a password-manager export |
 | `gitea_data` volume (or its backups) | Internal repo content + Gitea's credential DB — same handling as `/data` backups (`scripts/backup_gitea.sh`) |
 | Mission content + repo content | Feeds agent prompts (trust zone B, §2) |
+| `activity-*` repos on the internal Gitea (ADR-0014) | Full feed mirrors + complete Dev session transcripts, durably greppable by every future Dev until Clear; redaction at the feed/finalize choke-points is the only scrubbing — a human pasting a secret into the PMO feed lands it here. Single-operator posture; swept by Clear-runs. |
 
 ---
 

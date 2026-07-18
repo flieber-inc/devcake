@@ -401,3 +401,203 @@ def test_adopt_repairs_stripped_whitelist(tmp_path, monkeypatch):
     prov = _prov(handler, tmp_path, monkeypatch)
     run_coro(prov.create_operator_repo("taken"))
     assert patched and patched[0]["approvals_whitelist_username"] == ["devcake-reviewer"]
+
+
+# ── activity repos (ADR-0014 D4) ─────────────────────────────────────────────
+
+import hashlib
+
+import pytest
+
+
+class _ActivityRecorder:
+    """Route the Gitea calls the activity-repo surface makes; record writes."""
+
+    def __init__(self, tree_entries=(), org_pages=None, tokens=None,
+                 repo_create_status=201):
+        self.calls = []
+        self.contents_batches = []
+        self.repo_creates = []
+        self.token_posts = []
+        self.collab_puts = []
+        self.tree_entries = list(tree_entries)
+        self.org_pages = org_pages or []
+        self.tokens = tokens if tokens is not None else []
+        self.repo_create_status = repo_create_status
+
+    def __call__(self, request):
+        path, method = request.url.path, request.method
+        self.calls.append((method, path))
+        if method == "POST" and path == "/api/v1/orgs":
+            return httpx.Response(409, json={})
+        if method == "POST" and path == "/api/v1/orgs/devcake-repos/repos":
+            self.repo_creates.append(json.loads(request.content))
+            return httpx.Response(self.repo_create_status, json={})
+        if method == "PUT" and "/collaborators/" in path:
+            self.collab_puts.append((path, json.loads(request.content)))
+            return httpx.Response(204)
+        if method == "GET" and "/git/trees/" in path:
+            return httpx.Response(200, json={
+                "tree": [{"path": t["path"], "type": "blob", "size": 1,
+                          "sha": t["sha"]} for t in self.tree_entries],
+                "truncated": False})
+        if method == "POST" and "/contents" in path:
+            self.contents_batches.append((path, json.loads(request.content)))
+            return httpx.Response(201, json={})
+        if method == "GET" and path == "/api/v1/orgs/devcake-repos/repos":
+            page = int(request.url.params.get("page", "1"))
+            repos = (self.org_pages[page - 1]
+                     if page <= len(self.org_pages) else [])
+            return httpx.Response(200, json=repos)
+        if method == "DELETE" and path.startswith("/api/v1/repos/devcake-repos/"):
+            return httpx.Response(204)
+        if method == "GET" and path.endswith("/tokens"):
+            return httpx.Response(200, json=self.tokens)
+        if method == "POST" and path.endswith("/tokens"):
+            self.token_posts.append((path, json.loads(request.content)))
+            return httpx.Response(201, json={"sha1": "minted-tok"})
+        if method == "DELETE" and "/tokens/" in path:
+            return httpx.Response(404, json={})
+        if method == "POST" and path == "/api/v1/admin/users":
+            return httpx.Response(201, json={})
+        if method == "GET" and path == "/api/v1/orgs/devcake-internal/teams":
+            return httpx.Response(200, json=[{"id": 1, "name": "Owners"}])
+        if method == "PUT" and "/members/" in path:
+            return httpx.Response(204)
+        return httpx.Response(200, json={})
+
+
+def test_ensure_service_accounts_mints_activity_ro(tmp_path, monkeypatch):
+    rec = _ActivityRecorder()
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_service_accounts())
+    users = [c for c in rec.calls if c == ("POST", "/api/v1/admin/users")]
+    assert len(users) == 3                    # app, reviewer, activity-ro
+    # the shared Dev-held account must NEVER join Owners — that would grant
+    # its token read on every devcake-internal work repo (review 3.x pin)
+    assert not any("/members/devcake-activity-ro" in p for _, p in rec.calls)
+    ro_mints = [(p, b) for p, b in rec.token_posts
+                if p == "/api/v1/users/devcake-activity-ro/tokens"]
+    assert len(ro_mints) == 1
+    assert ro_mints[0][1]["scopes"] == ["read:repository"]
+    svc = json.loads(
+        (tmp_path / "secrets" / "internal_forge" / "service.json").read_text())
+    assert svc["activity_ro_token"] == "minted-tok"
+
+
+def test_ensure_service_accounts_reuses_live_activity_token(tmp_path,
+                                                            monkeypatch):
+    d = tmp_path / "secrets" / "internal_forge"
+    d.mkdir(parents=True)
+    (d / "service.json").write_text(json.dumps({
+        "app_token": "app-tok-aaaaaaaa", "reviewer_token": "rev-tok-bbbbbbbb",
+        "activity_ro_token": "act-tok-cccccccc"}))
+    rec = _ActivityRecorder(tokens=[
+        {"name": "devcake-app", "token_last_eight": "aaaaaaaa"},
+        {"name": "devcake-reviewer", "token_last_eight": "bbbbbbbb"},
+        {"name": "devcake-activity-ro", "token_last_eight": "cccccccc"}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_service_accounts())
+    assert rec.token_posts == []              # everything live — nothing minted
+
+
+def test_ensure_activity_repo_unprotected_with_ro_collaborator(tmp_path,
+                                                               monkeypatch):
+    for status in (201, 409):                 # fresh create AND adopt paths
+        rec = _ActivityRecorder(repo_create_status=status)
+        prov = _prov(rec, tmp_path, monkeypatch)
+        name = run_coro(prov.ensure_activity_repo("linear", "T-1"))
+        assert name == "activity-linear-t-1"
+        assert ("POST", "/api/v1/orgs") in rec.calls    # org ensured first
+        assert rec.repo_creates[0]["auto_init"] is False
+        assert rec.repo_creates[0]["private"] is True
+        assert ("PUT", "/api/v1/repos/devcake-repos/activity-linear-t-1"
+                       "/collaborators/devcake-activity-ro") in rec.calls
+        # READ, never write — the shared token must stay a pure reader
+        assert rec.collab_puts[-1][1] == {"permission": "read"}
+        assert not any("branch_protections" in p for _, p in rec.calls)
+        assert ("POST", "/api/v1/admin/users") not in rec.calls  # no svc user
+
+
+def test_push_activity_snapshot_upserts_prunes_and_skips_unchanged(
+        tmp_path, monkeypatch):
+    same = b"unchanged bytes"
+    same_sha = hashlib.sha1(b"blob %d\x00" % len(same) + same).hexdigest()
+    rec = _ActivityRecorder(tree_entries=[
+        {"path": "ACTIVITY.md", "sha": "a1"},
+        {"path": "old-entry.md", "sha": "b2"},
+        {"path": "same.md", "sha": same_sha}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    files = [{"path": "ACTIVITY.md",
+              "content_b64": base64.b64encode(b"new feed").decode()},
+             {"path": "photo.png",
+              "content_b64": base64.b64encode(b"\x89PNG").decode()},
+             {"path": "same.md",
+              "content_b64": base64.b64encode(same).decode()}]
+    run_coro(prov.push_activity_snapshot("activity-linear-t-1", files,
+                                         "step 2 EXECUTE dispatch"))
+    assert len(rec.contents_batches) == 1     # ONE commit
+    path, body = rec.contents_batches[0]
+    assert path == "/api/v1/repos/devcake-repos/activity-linear-t-1/contents"
+    assert body["message"] == "step 2 EXECUTE dispatch"
+    ops = {e["path"]: e for e in body["files"]}
+    assert ops["ACTIVITY.md"]["operation"] == "update"
+    assert ops["ACTIVITY.md"]["sha"] == "a1"
+    assert ops["photo.png"]["operation"] == "create"
+    assert ops["old-entry.md"]["operation"] == "delete"      # stale = pruned
+    assert "same.md" not in ops               # blob-sha no-op = omitted
+
+
+def test_push_activity_snapshot_identical_is_a_noop(tmp_path, monkeypatch):
+    same = b"steady"
+    same_sha = hashlib.sha1(b"blob %d\x00" % len(same) + same).hexdigest()
+    rec = _ActivityRecorder(tree_entries=[{"path": "ACTIVITY.md",
+                                           "sha": same_sha}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.push_activity_snapshot(
+        "activity-linear-t-1",
+        [{"path": "ACTIVITY.md",
+          "content_b64": base64.b64encode(same).decode()}], "step 3"))
+    assert rec.contents_batches == []         # nothing changed → no commit
+
+
+def test_activity_credentials_from_service_json(tmp_path, monkeypatch):
+    d = tmp_path / "secrets" / "internal_forge"
+    d.mkdir(parents=True)
+    (d / "service.json").write_text(json.dumps({"activity_ro_token": "ro-tok"}))
+    prov = _prov(lambda r: httpx.Response(500), tmp_path, monkeypatch)
+    creds = prov.activity_credentials("activity-linear-t-1")
+    assert creds.username == "devcake-activity-ro"
+    assert creds.token == "ro-tok"
+    assert creds.clone_url == \
+        "http://gitea:3000/devcake-repos/activity-linear-t-1.git"
+    (d / "service.json").write_text(json.dumps({}))
+    assert prov.activity_credentials("activity-x") is None
+
+
+def test_list_activity_repos_prefix_filter_paginated(tmp_path, monkeypatch):
+    page1 = ([{"name": "myapp"}, {"name": "skill-store"},
+              {"name": "activity-linear-t-1", "size": 12,
+               "updated_at": "2026-07-18"}]
+             + [{"name": f"op{i}"} for i in range(47)])     # full page of 50
+    page2 = [{"name": "activity-linear-t-2"}]
+    rec = _ActivityRecorder(org_pages=[page1, page2])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    repos = run_coro(prov.list_activity_repos())
+    assert [r.name for r in repos] == ["activity-linear-t-1",
+                                      "activity-linear-t-2"]
+    assert repos[0].mission_key == "t-1"
+
+
+def test_delete_activity_repo_guarded(tmp_path, monkeypatch):
+    rec = _ActivityRecorder()
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.delete_activity_repo("activity-linear-t-1"))
+    assert ("DELETE",
+            "/api/v1/repos/devcake-repos/activity-linear-t-1") in rec.calls
+    assert not any(p.startswith("/api/v1/admin/users")
+                   for m, p in rec.calls if m == "DELETE")   # no user purge
+    before = len(rec.calls)
+    with pytest.raises(ValueError):
+        run_coro(prov.delete_activity_repo("skill-store"))
+    assert len(rec.calls) == before           # refused with ZERO HTTP

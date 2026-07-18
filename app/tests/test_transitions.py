@@ -70,7 +70,7 @@ class FakePMO:
         self.uploads.append((filename, data))
         return f"https://fake/{filename}"
 
-    async def get_activity(self, ref):
+    async def get_activity(self, ref, full=False):
         self._check_ref(ref)
         self.get_activity_calls = getattr(self, "get_activity_calls", 0) + 1
         return Activity(mission=self.mission, entries=list(self.activity_entries))
@@ -473,20 +473,33 @@ def test_mcp_setup_artifact_maps_to_dev_mcp_setup(tmp_path):
     assert mgr._attempt_number("p1", "EXECUTE", None) == 2   # counted
 
 
-def test_trivial_feed_uses_descriptor_pr_noun(tmp_path):
-    """Audit A29: the trivial-path feed said 'PR opened' regardless of the
-    forge — _executed_feed already used the descriptor noun; the trivial
-    twin did not."""
+def test_executed_trivially_is_illegal_and_parks(tmp_path):
+    """Founder decision 2026-07-18 (rode ADR-0014's PR): ONBOARD never
+    implements — trivial work rides the opportunistic-plan path to EXECUTE
+    (the only stage holding a write token). `executed_trivially` is gone
+    outright (preproduction, no deprecation window); a stray one parks."""
     m = mission("in_progress", {"DEVCAKE"})
-    forge = FakeForge()
-    forge.descriptor = type("D", (), {"pr_noun": "merge request"})()
-    mgr, fake, _store = make_mgr(tmp_path, m, forge=forge)
+    mgr, fake, _store = make_mgr(tmp_path, m)
     run_coro(mgr._transition(_run("ONBOARD", None),
                              {"outcome": "executed_trivially",
                               "pr_url": "https://forge/mr/1", "summary": "s"},
                              None))
-    assert any("merge request" in c for c in fake.comments)
-    assert not any("PR opened" in c for c in fake.comments)
+    assert ({"DEVCAKE-SKIP"} in [add for _, add in fake.swaps])  # parked
+    assert "DEVCAKE-REVIEW" not in m.labels
+    assert any("not a legal outcome" in c for c in fake.comments)
+
+
+def test_onboard_opportunistic_plan_skips_plan_stage(tmp_path):
+    """The trivial path's replacement: ONBOARD attaches the plan it already
+    formed and the mission jumps straight to EXECUTE."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(mgr._transition(_run("ONBOARD", None),
+                             {"outcome": "plan_needed", "summary": "s"},
+                             "## Plan\nappend the line to README.md"))
+    assert any(n == "PLAN_1.md" for n, _ in fake.uploads)
+    assert any("opportunistic plan" in c for c in fake.comments)
+    assert ({"DEVCAKE-EXECUTE"} in [add for _, add in fake.swaps])
 
 
 def test_apply_health_and_latch_noop_for_unregistered_repo():
@@ -932,6 +945,92 @@ def test_finalize_always_posts_report_inv5(tmp_path):
     assert ({"DEVCAKE-PLAN"} in [add for _, add in fake.swaps]) # transition applied
 
 
+def _finalize_payload(**over):
+    base = {"result": {"outcome": "plan_needed", "summary": "s"},
+            "transcript_md": "FULL DUMP",
+            "token_report": {"extraction_method": "unavailable", "model": "m"}}
+    base.update(over)
+    return base
+
+
+def _saved_run(store):
+    run = Run(run_id="T-1-1-ONBOARD-ZZZZZZ", mission_key="T-1",
+              mission_pmo_id="p1", mission_type="ONBOARD",
+              dev_type="senior-dev", seq=1, stage_label_at_dispatch=None,
+              state="finalizing")
+    store.save(run)
+    return run
+
+
+def test_finalize_posts_last_message_blockquoted(tmp_path):
+    # ADR-0014 D1 flip: attachment = full dump; comment = step line + the
+    # last message, EVERY line `>`-prefixed (blank lines as bare `>`)
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="Done.\n\nDetails here.")))
+    assert ("1_ONBOARD.md", b"FULL DUMP") in fake.uploads
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "https://fake/1_ONBOARD.md" in comment
+    assert "> Done." in comment and "> Details here." in comment
+    lines = comment.splitlines()
+    blank_between = lines[lines.index("> Done.") + 1]
+    assert blank_between == ">"                    # blank lines quoted too
+    assert comment.count("`devcake:v1`") == 1
+    assert "Details here." not in "\n".join(       # no unquoted model text
+        l for l in lines if not l.lstrip().startswith(">"))
+    assert MissionManager._is_devcake_comment(comment)   # provenance holds
+
+
+def test_finalize_without_last_message_keeps_pointer_comment(tmp_path):
+    # rolling-deploy pin: an old-image payload (no last_message_md) — and an
+    # empty one — posts exactly today's pointer-only comment, never derived
+    # from the dump
+    for payload in (_finalize_payload(), _finalize_payload(last_message_md="")):
+        m = mission("in_progress", {"DEVCAKE"})
+        mgr, fake, store = make_mgr(tmp_path, m)
+        run = _saved_run(store)
+        run_coro(mgr.finalize(run, payload))
+        comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+        assert "https://fake/1_ONBOARD.md" in comment
+        assert not any(l.lstrip().startswith(">")
+                       for l in comment.splitlines())
+        assert "FULL DUMP" not in comment
+
+
+def test_finalize_truncates_pathological_last_message(tmp_path):
+    # a giant last message stays inline-bounded: truncated with a pointer,
+    # no comment-*.md externalization (the full text is the attachment)
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="z" * 10_000)))
+    assert [n for n, _ in fake.uploads] == ["1_ONBOARD.md"]   # only the dump
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    # the notice itself is INSIDE the quoted block (quarantine holds)
+    assert "> … (truncated — full text in the attachment)" in comment
+    assert len(comment) < 4096
+
+
+def test_finalize_last_message_markers_are_quarantined(tmp_path):
+    # ADR-0014's core safety claim, at public seams: a last message that
+    # mentions marker-shaped strings changes NOTHING in the state machine
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="see `9_EXECUTE.md` — ships as `T-1-deliverable.zip`")))
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
+                          kind="comment", body=comment)
+    assert MissionManager._derive_seq(
+        Activity(mission=m, entries=[entry])) == 2      # only the real step
+    from devcake.domain.orchestrator.feed import _unquoted
+    assert "T-1-deliverable.zip" not in _unquoted(comment)
+
+
 # ── docs/05 §4 attachment policy ─────────────────────────────────────────────
 
 def test_feed_externalizes_over_2048(tmp_path):
@@ -948,6 +1047,52 @@ def test_feed_externalizes_over_2048(tmp_path):
     run_coro(mgr._feed("p1", "issue", "y" * 2048))
     assert len(fake.uploads) == 1
     assert "y" * 2048 in fake.comments[-1]
+
+
+def test_finalize_upload_failure_posts_quoted_inline(tmp_path):
+    # INV-5 fallback under ADR-0014: the inline transcript is model text and
+    # must ride QUARANTINED — only the step-marker header stays unquoted
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+
+    async def _boom(*a, **k):
+        raise RuntimeError("upload down")
+    fake.upload_attachment = _boom
+    run_coro(mgr.finalize(run, _finalize_payload(
+        transcript_md="dump mentions `9_EXECUTE.md`", last_message_md="Done.")))
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "> dump mentions" in comment                  # transcript quoted
+    entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
+                          kind="comment", body=comment)
+    assert MissionManager._derive_seq(
+        Activity(mission=m, entries=[entry])) == 2       # 9 never counts
+
+
+def test_feed_externalized_preview_strips_quoted_lines(tmp_path):
+    # the 300-char preview of an externalized comment flattens newlines —
+    # quoted content must be dropped from it, or "> " prefixes land mid-line
+    # and markers leak back into scan scope
+    from devcake.domain.orchestrator.feed import _blockquote
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    body = "header line\n" + _blockquote("see `7_EXECUTE.md`\n" + "x" * 3000)
+    run_coro(mgr._feed("p1", "issue", body))
+    posted = fake.comments[-1]
+    assert "full text attached:" in posted
+    assert "7_EXECUTE.md" not in posted        # quoted text never previews
+
+
+def test_feed_externalize_opt_out_posts_long_body_inline(tmp_path):
+    # ADR-0014 D1: the finalize post opts out of the 2048 externalization;
+    # redaction and the sentinel are untouched by the opt-out
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run_coro(mgr._feed("p1", "issue", "x" * 3000, externalize=False))
+    assert not fake.uploads
+    posted = fake.comments[-1]
+    assert "x" * 3000 in posted
+    assert posted.count("`devcake:v1`") == 1
 
 
 def test_reject_report_attached_feed_short_pr_full(tmp_path):
@@ -1272,3 +1417,18 @@ def test_rearm_noop_when_window_zero(tmp_path):
     run_coro(mgr.sweeps([m]))
     assert not any("`devcake:merge-retry`" in c for c in fake.comments)
     assert forge.merges == []
+
+
+def test_executed_feed_uses_descriptor_pr_noun(tmp_path):
+    """Audit A29 heir: the executed-path feed uses the forge's own noun (the
+    old trivial-twin pin died with the removed outcome — re-pin here)."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+    forge.descriptor = type("D", (), {"pr_noun": "merge request"})()
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=forge)
+    run_coro(mgr._transition(_run("EXECUTE", "DEVCAKE-EXECUTE"),
+                             {"outcome": "executed",
+                              "pr_url": "https://forge/mr/1", "summary": "s"},
+                             None))
+    assert any("merge request" in c for c in fake.comments)
+    assert not any("pull request" in c for c in fake.comments)

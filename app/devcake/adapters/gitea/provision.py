@@ -25,8 +25,9 @@ from pathlib import Path
 import httpx
 
 from ... import security
-from ...ports.internal_forge import (InternalRepo, MissionRepoCredentials,
-                                     internal_repo_name)
+from ...ports.internal_forge import (ACTIVITY_PREFIX, ActivityRepoCredentials,
+                                     InternalRepo, MissionRepoCredentials,
+                                     activity_repo_name, internal_repo_name)
 
 log = logging.getLogger("devcake.internal_forge")
 
@@ -38,6 +39,8 @@ ORG = "devcake-internal"
 OPERATOR_ORG = "devcake-repos"
 APP_USER = "devcake-app"            # org owner: app-side PR ops + merges
 REVIEWER_USER = "devcake-reviewer"  # formal approvals (whitelisted per repo)
+ACTIVITY_RO_USER = "devcake-activity-ro"  # shared RO clone account for
+                                          # activity-* repos (ADR-0014 D4)
 # The skill store (docs/16 skill store v1): one operator-editable repo in
 # OPERATOR_ORG holding Claude Code skills. Deliberately NO branch protection,
 # NO machine user, NO tokens — operators push skills straight to main via the
@@ -96,7 +99,7 @@ class GiteaProvisioner:
         await self._req("POST", "/orgs",
                         json={"username": ORG, "visibility": "private"},
                         tolerate=(409, 422))
-        for user in (APP_USER, REVIEWER_USER):
+        for user in (APP_USER, REVIEWER_USER, ACTIVITY_RO_USER):
             await self._req("POST", "/admin/users", tolerate=(409, 422),
                             json={"username": user,
                                   "email": f"{user}@devcake.example",
@@ -122,6 +125,13 @@ class GiteaProvisioner:
             svc["reviewer_token"] = await self._mint(
                 REVIEWER_USER, "devcake-reviewer",
                 ["write:repository", "write:issue"])
+        # ADR-0014 D4: ONE read-only token clones every activity-* repo
+        # (per-repo collaborator grants happen at ensure_activity_repo)
+        if not await self._service_token_live(ACTIVITY_RO_USER,
+                                              "devcake-activity-ro",
+                                              svc.get("activity_ro_token")):
+            svc["activity_ro_token"] = await self._mint(
+                ACTIVITY_RO_USER, "devcake-activity-ro", ["read:repository"])
         self._store("service.json", svc)
         self._register(svc)
 
@@ -317,29 +327,35 @@ class GiteaProvisioner:
                              "content": f["content_b64"]} for f in missing]})
         log.info("skill store seeded: %d file(s) added", len(missing))
 
-    async def skill_store_tree(self) -> list[dict]:
-        """[{path, size}] for every blob on main → [] when there is nothing
-        yet: 404 (repo or branch absent) AND 400 — live Gitea 1.24 answers
-        400 "sha not found [main]" for the tree of a freshly created
-        no-auto_init repo (live-verified 2026-07-17; the ref here is a
-        constant, so a 400 can only mean that). Sizes let SkillService
-        enforce its caps BEFORE downloading content. Gitea truncates trees
-        at ~1000 entries — files past the boundary would read as missing,
-        so an oversized store is surfaced loudly."""
+    async def _repo_tree(self, org: str, repo: str) -> list[dict]:
+        """[{path, size, sha}] for every blob on a repo's main → [] when
+        there is nothing yet: 404 (repo or branch absent) AND 400 — live
+        Gitea 1.24 answers 400 "sha not found [main]" for the tree of a
+        freshly created no-auto_init repo (live-verified 2026-07-17; the ref
+        here is a constant, so a 400 can only mean that). Gitea truncates
+        trees at ~1000 entries — surfaced loudly, never silent."""
         data = await self._req(
-            "GET",
-            f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/git/trees/main?recursive=true",
+            "GET", f"/repos/{org}/{repo}/git/trees/main?recursive=true",
             tolerate=(400, 404))
         if not data:
             return []
         if data.get("truncated"):
-            log.warning("skill store tree is TRUNCATED (~1000-entry Gitea "
-                        "cap) — skills past the boundary will read as "
-                        "missing; prune the %s/%s repo",
-                        OPERATOR_ORG, SKILL_REPO)
+            log.warning("%s/%s tree is TRUNCATED (~1000-entry Gitea cap) — "
+                        "files past the boundary read as missing", org, repo)
         return [{"path": t["path"], "size": int(t.get("size") or 0),
                  "sha": t.get("sha") or ""}
                 for t in data.get("tree") or [] if t.get("type") == "blob"]
+
+    async def _commit_files(self, org: str, repo: str, batch: list[dict],
+                            message: str) -> None:
+        """ONE batch Contents-API commit."""
+        await self._req("POST", f"/repos/{org}/{repo}/contents",
+                        json={"message": message, "files": batch})
+
+    async def skill_store_tree(self) -> list[dict]:
+        """Skill-store blobs — sizes let SkillService enforce its caps
+        BEFORE downloading content; shas drive batch upserts."""
+        return await self._repo_tree(OPERATOR_ORG, SKILL_REPO)
 
     async def skill_store_paths(self) -> list[str]:
         """Blob paths on main (seed-diff input) — the tree read above."""
@@ -358,8 +374,7 @@ class GiteaProvisioner:
             else:
                 entry["operation"] = "create"
             batch.append(entry)
-        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
-                        json={"message": message, "files": batch})
+        await self._commit_files(OPERATOR_ORG, SKILL_REPO, batch, message)
 
     async def delete_skill_paths(self, paths: list[str], message: str) -> None:
         """Delete store files in ONE commit (admin-panel skill removal)."""
@@ -368,8 +383,7 @@ class GiteaProvisioner:
                  for p in paths if p in shas]
         if not batch:
             return
-        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
-                        json={"message": message, "files": batch})
+        await self._commit_files(OPERATOR_ORG, SKILL_REPO, batch, message)
 
     async def skill_store_file(self, path: str) -> bytes:
         """Raw bytes of one store file at main (GiteaForge.file_content's
@@ -386,6 +400,107 @@ class GiteaProvisioner:
     def skill_store_url(self) -> str:
         """Operator-clickable store URL (ROOT_URL-based, loopback :3300)."""
         return f"{self.public_url}/{OPERATOR_ORG}/{SKILL_REPO}"
+
+    # ── per-mission activity repos (ADR-0014 D4) ─────────────────────────────
+
+    async def ensure_activity_repo(self, instance: str, mission_key: str) -> str:
+        """Create-or-adopt the mission's activity repo in OPERATOR_ORG:
+        private, no auto_init (the first snapshot commit initializes main),
+        NO branch protection, NO machine user — app-written only. The shared
+        ACTIVITY_RO_USER is (re-)ensured as read collaborator so the one RO
+        token can clone it (Gitea tokens are user-scoped)."""
+        repo = activity_repo_name(instance, mission_key)
+        await self._req("POST", "/orgs", tolerate=(409, 422),
+                        json={"username": OPERATOR_ORG, "visibility": "private"})
+        await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos", tolerate=(409,),
+                        json={"name": repo, "private": True,
+                              "auto_init": False, "default_branch": "main"})
+        await self._req(
+            "PUT", f"/repos/{OPERATOR_ORG}/{repo}/collaborators/{ACTIVITY_RO_USER}",
+            json={"permission": "read"})
+        return repo
+
+    async def push_activity_snapshot(self, repo_name: str, files: list[dict],
+                                     message: str) -> None:
+        """ONE Contents-API commit making main exactly match `files`
+        [{path, content_b64}]: the tree decides create vs update (sha),
+        stale paths are DELETED (a renamed feed attachment must not linger),
+        and unchanged blobs (git blob-sha match) are omitted — an identical
+        snapshot commits nothing."""
+        import base64
+        import hashlib
+        shas = {t["path"]: t["sha"]
+                for t in await self._repo_tree(OPERATOR_ORG, repo_name)}
+        wanted, batch = {}, []
+        for f in files:
+            wanted[f["path"]] = f["content_b64"]
+        if len(wanted) != len(files):   # a builder dedupe bug must fail loud,
+            raise ValueError("duplicate paths in activity snapshot")  # not mask
+        for path, content_b64 in wanted.items():
+            data = base64.b64decode(content_b64)
+            blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+            if shas.get(path) == blob:
+                continue                        # unchanged — no-op
+            entry = {"path": path, "content": content_b64}
+            if path in shas:
+                entry.update(operation="update", sha=shas[path])
+            else:
+                entry["operation"] = "create"
+            batch.append(entry)
+        for path, sha in shas.items():
+            if path not in wanted:
+                batch.append({"operation": "delete", "path": path, "sha": sha})
+        if not batch:
+            return
+        await self._commit_files(OPERATOR_ORG, repo_name, batch, message)
+
+    def activity_credentials(self, repo_name: str) -> ActivityRepoCredentials | None:
+        """Shared RO clone credentials for one activity repo (sync — runspec
+        source, mirrors mission_credentials). None until the boot mint ran."""
+        svc = self._load("service.json") or {}
+        token = svc.get("activity_ro_token")
+        if not token:
+            return None
+        return ActivityRepoCredentials(
+            repo_name=repo_name,
+            clone_url=f"{self.url}/{OPERATOR_ORG}/{repo_name}.git",
+            username=ACTIVITY_RO_USER, token=token)
+
+    async def list_activity_repos(self) -> list[InternalRepo]:
+        """Every activity-* repo in OPERATOR_ORG — PAGINATED (unlike the
+        legacy list_repos limit=50 read; activity repos will exceed a page),
+        prefix-filtered so operator repos and the skill-store never appear."""
+        repos, page = [], 1
+        while True:
+            batch = await self._req(
+                "GET", f"/orgs/{OPERATOR_ORG}/repos?limit=50&page={page}",
+                tolerate=(404,)) or []
+            for r in batch:
+                name = r.get("name") or ""
+                if not name.startswith(ACTIVITY_PREFIX):
+                    continue
+                # activity-{instance}-{key}: mission key = after the first
+                # hyphen past the instance (the admin-surface idiom)
+                stem = name[len(ACTIVITY_PREFIX):]
+                repos.append(InternalRepo(
+                    name=name, mission_key=stem.split("-", 1)[-1],
+                    html_url=f"{self.public_url}/{OPERATOR_ORG}/{name}",
+                    clone_url=f"{self.url}/{OPERATOR_ORG}/{name}.git",
+                    size_kb=int(r.get("size") or 0),
+                    updated_at=r.get("updated_at") or ""))
+            if len(batch) < 50:
+                return repos
+            page += 1
+
+    async def delete_activity_repo(self, repo_name: str) -> None:
+        """Clear-sweep delete. Belt-and-braces: refuses non-activity names
+        with ZERO HTTP — no caller bug can ever sweep an operator repo or
+        the skill-store. No svc-user purge, no secret unlink: activity repos
+        have neither."""
+        if not repo_name.startswith(ACTIVITY_PREFIX):
+            raise ValueError(f"not an activity repo: {repo_name!r}")
+        await self._req("DELETE", f"/repos/{OPERATOR_ORG}/{repo_name}",
+                        tolerate=(404,))
 
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission credential pair (runspec token source) —
@@ -485,6 +600,8 @@ class GiteaProvisioner:
         security.register_runtime_secret("internal:app", svc.get("app_token", ""))
         security.register_runtime_secret("internal:reviewer",
                                          svc.get("reviewer_token", ""))
+        security.register_runtime_secret("internal:activity-ro",
+                                         svc.get("activity_ro_token", ""))
 
     def _register_mission(self, creds: MissionRepoCredentials) -> None:
         security.register_runtime_secret(f"internal:{creds.repo_name}:w",

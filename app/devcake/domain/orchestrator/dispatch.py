@@ -21,7 +21,8 @@ from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
 from . import markers
-from .markers import FEED_INLINE_MAX, STEP_MARKER
+from .feed import _unquoted
+from .markers import STEP_MARKER
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -109,8 +110,8 @@ def _onboard_repo_options(self, primary: str) -> str:
     return (
         "### This team works across several repositories\n"
         "All of them are cloned READ-ONLY in your workspace for assessment "
-        "(only this mission's repository may be written, and only on the "
-        "trivial path):\n" + "\n".join(lines) + "\n\n"
+        "(ONBOARD writes nothing anywhere — route the work instead):\n"
+        + "\n".join(lines) + "\n\n"
         "**Cross-repo work must never be one mission.** If completing this "
         "mission requires changes in more than one repository, take the "
         "high-complexity path: decompose into ONE child per repository, put "
@@ -213,6 +214,10 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             f"the activity feed")
         log.warning("dispatch of %s refused — %s", live.key, e)
         return None
+
+    # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
+    # repo records what this Dev actually receives. NEVER gates dispatch.
+    await self._push_activity_repo(live, mtype, seq)
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)
@@ -389,6 +394,18 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
         payload["extra_repos"] = extras
     if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
         payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
+    # ADR-0014 D4: the activity-repo RO clone spec (secret half — the token
+    # never rests on the Run). Absent for MAPPER (no mission, no repo), when
+    # the forge is off, or before the boot mint — the entrypoint then falls
+    # back to the Redis materialization.
+    if self.internal_forge is not None and run.mission_type != "MAPPER":
+        from ...ports.internal_forge import activity_repo_name
+        creds = self.internal_forge.activity_credentials(
+            activity_repo_name(self.instance_name, run.mission_key))
+        if creds is not None:
+            payload["activity_repo"] = {"url": creds.clone_url,
+                                        "clone_user": creds.username,
+                                        "token": creds.token}
     return payload
 
 
@@ -456,9 +473,11 @@ def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict
 
 
 def _derive_seq(activity) -> int:
-    """docs/02 §8 — count prior step artifacts in the feed + 1."""
+    """docs/02 §8 — max step number among prior feed artifacts + 1 (max, not
+    count: collision-proof when a human deletes a transcript comment). Scans
+    _unquoted bodies only (ADR-0014 D2): quoted marker mentions never count."""
     steps = [int(m.group(1)) for e in activity.entries
-             for m in STEP_MARKER.finditer(e.body or "")]
+             for m in STEP_MARKER.finditer(_unquoted(e.body))]
     return (max(steps) + 1) if steps else 1
 
 
@@ -543,55 +562,127 @@ async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) ->
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 
 
-async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
-    if kind == "project":
-        # projects have no comments/attachments: ACTIVITY.md = the brief itself
-        m = await self.pmo.get(MissionRef(pmo_id, "project"))
-        md = "\n".join([
-            f"# {m.key}: {m.title}",
-            f"> Kind: project · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
-            f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
-            "## Description", m.description or "(none)", "",
-            "## Activity", "(projects carry no comment feed — see child issues)"])
-        return {"activity_md": md, "attachments": []}
-    act = await self.pmo.get_activity(MissionRef(pmo_id, "issue"))
-    m = act.mission
+def _activity_snapshot_files(payload: dict) -> list[dict]:
+    """Activity payload → the flat file list a snapshot commit mirrors
+    (identical layout to the Dev's /workspace/activity)."""
+    files = []
+    if payload.get("mission_md"):
+        files.append({"path": "MISSION.md", "content_b64": base64.b64encode(
+            payload["mission_md"].encode()).decode()})
+    files.append({"path": "ACTIVITY.md", "content_b64": base64.b64encode(
+        payload.get("activity_md", "").encode()).decode()})
+    for a in payload.get("attachments", []):
+        files.append({"path": Path(a["filename"]).name,
+                      "content_b64": a["content_b64"]})
+    return files
+
+
+async def _push_activity_repo(self, mission, mtype, seq: int) -> None:
+    """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
+    audited loudly and swallowed — the run proceeds on the Redis fallback;
+    Gitea down degrades to pre-ADR behavior, never to a halt."""
+    if self.internal_forge is None:
+        return
+    try:
+        payload = await self.activity_payload(mission.pmo_id, mission.pmo_kind)
+        name = await self.internal_forge.ensure_activity_repo(
+            self.instance_name, mission.key)
+        await self.internal_forge.push_activity_snapshot(
+            name, _activity_snapshot_files(payload),
+            f"step {seq} {mtype.value} dispatch")
+        log.info("activity repo %s: snapshot for step %d", name, seq)
+    except Exception as e:
+        log.exception("activity repo push failed for %s", mission.key)
+        self._audit(mission.pmo_id, "activity_repo_push_failed",
+                    f"{mission.key}: {type(e).__name__}: {str(e)[:180]}")
+
+
+def _mission_md(m, attachment_lines=()) -> str:
+    """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;
+    every step playbook points here."""
     lines = [
         f"# {m.key}: {m.title}",
         f"> Kind: {m.pmo_kind} · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
         f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
-        "## Description", m.description or "(none)", "",
-        "## Activity (chronological index — long bodies live as files in this folder)",
+        "## Description", m.description or "(none)"]
+    if attachment_lines:
+        lines += ["", "## Mission attachments", *attachment_lines]
+    return "\n".join(lines)
+
+
+async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
+    """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
+    of the feed — full bodies inline (never externalized), attachments by
+    name in feed order, reply nesting; every attachment's bytes ride as
+    sibling files."""
+    if kind == "project":
+        # projects have no comments/attachments: the brief IS the payload
+        m = await self.pmo.get(MissionRef(pmo_id, "project"))
+        md = "\n".join([
+            f"# {m.key}: {m.title}",
+            "> The mission brief lives in MISSION.md (same folder).", "",
+            "## Activity", "(projects carry no comment feed — see child issues)"])
+        return {"mission_md": _mission_md(m), "activity_md": md,
+                "attachments": []}
+    act = await self.pmo.get_activity(MissionRef(pmo_id, "issue"), full=True)
+    m = act.mission
+    attachments = []
+    used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed
+
+    async def _materialize(att):
+        """Download one file attachment into the folder; return its index
+        line. The adapter resolves names (AttachmentRef.name) — the domain
+        never parses vendor asset URLs."""
+        try:
+            data = await self.pmo.download_asset(att.url)
+        except Exception:
+            return f"[attachment unavailable: {att.url}]"
+        # basename BEFORE dedupe: a slash-bearing link text ([v1/r.md](…))
+        # must yield the same name in the index, the snapshot commit, and
+        # the folder — a path-y name would desync them and trip the
+        # snapshot dup-path guard forever (full-diff review finding)
+        raw = (Path(att.name).name if att.name
+               else att.url.rsplit("/", 1)[-1][:80])
+        fname = self._unique_name(raw or "attachment.bin", used)
+        attachments.append({"filename": fname,
+                            "content_b64": base64.b64encode(data).decode()})
+        return f"[attachment: {fname}]"
+
+    mission_lines = []
+    for att in act.mission_attachments:
+        if att.kind == "link":
+            mission_lines.append(f"[link: {att.name or att.url}]({att.url})")
+        else:
+            mission_lines.append(await _materialize(att))
+
+    lines = []
+    if act.truncated:   # the adapter's hard stop — never silent (ADR-0014)
+        lines += ["⚠ FEED TRUNCATED — the feed exceeded the full-history "
+                  "hard stop; the OLDEST entries are missing from this "
+                  "mirror.", ""]
+    lines += [
+        f"# {m.key}: {m.title}",
+        "> Brief: MISSION.md (same folder) — description, labels, mission attachments.", "",
+        "## Activity (chronological mirror of the PMO feed)",
         "Entries marked 🧑 HUMAN are instructions/steering from a person — they",
         "are authoritative. Entries marked 🤖 DevCake are DevCake's own records.",
     ]
-    attachments = []
-    used: set[str] = {"ACTIVITY.md"}     # docs/07 §2: suffix-dedupe filenames
+    by_id = {e.entry_id: e for e in act.entries if e.entry_id}
     for e in act.entries:
         body = e.body or ""
         # provenance is sentinel-based, never author-based (docs/03 §8a):
         # DevCake may post with the operator's own PMO credentials
         provenance = "🤖 DevCake" if self._is_devcake_comment(body) else "🧑 HUMAN"
-        if len(body) > FEED_INLINE_MAX:                 # externalize long bodies
-            fname = self._unique_name(f"entry-{e.ts:%Y%m%dT%H%M%S}.md", used)
-            attachments.append({"filename": fname,
-                                "content_b64": base64.b64encode(body.encode()).decode()})
-            body = body[:300].replace("\n", " ") + f"… — see: {fname}"
         lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} — {provenance} ({e.kind})")
-        lines.append(body)
-        # the adapter resolves human-readable names (AttachmentRef.name) —
-        # the domain never parses vendor asset URLs
+        parent = by_id.get(e.parent_id) if e.parent_id else None
+        if parent is not None:
+            lines.append(f"↳ reply to {parent.author} @ {parent.ts:%Y-%m-%d %H:%M}")
+        elif e.parent_id:
+            lines.append("↳ reply to (deleted comment)")
+        lines.append(body)                # full body — the mirror never trims
         for att in e.attachments:
-            try:
-                data = await self.pmo.download_asset(att.url)
-                fname = self._unique_name(
-                    att.name or att.url.rsplit("/", 1)[-1][:80] or "attachment.bin",
-                    used)
-                attachments.append({"filename": fname,
-                                    "content_b64": base64.b64encode(data).decode()})
-                lines.append(f"[attachment: {fname}]")
-            except Exception:
-                lines.append(f"[attachment unavailable: {att.url}]")
+            lines.append(await _materialize(att))
         lines.append("")
-    return {"activity_md": "\n".join(lines), "attachments": attachments}
+    return {"mission_md": _mission_md(m, mission_lines),
+            "activity_md": "\n".join(lines), "attachments": attachments}
 

@@ -370,3 +370,47 @@ def test_mapper_seq_scoped_to_own_instance():
     import inspect
     from devcake.domain.orchestrator import mapper as mapper_mod
     assert "_run_is_ours" in inspect.getsource(mapper_mod.dispatch_mapper)
+
+
+def test_activity_payload_marks_unavailable_attachment(tmp_path):
+    # review 2.2 pin: a failed download leaves the honest placeholder line
+    mission = m("i1", "T-1")
+    url = "https://uploads.linear.app/gone"
+    entries = [ActivityEntry(ts=NOW, author="a", kind="comment", body="x",
+                             attachments=[AttachmentRef(url=url, name="g.md")])]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+
+    async def _boom(u):
+        raise RuntimeError("410 gone")
+    pmo.download_asset = _boom
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    assert f"[attachment unavailable: {url}]" in payload["activity_md"]
+    assert payload["attachments"] == []
+
+
+def test_activity_payload_reserved_name_attachment_suffixed(tmp_path):
+    # review 2.2 pin: an attachment literally named MISSION.md never clobbers
+    # the brief (docs/07 §2 dedupe seed)
+    mission = m("i1", "T-1")
+    entries = [ActivityEntry(ts=NOW, author="a", kind="comment", body="x",
+                             attachments=[AttachmentRef(
+                                 url="https://uploads.linear.app/m",
+                                 name="MISSION.md")])]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    pmo.download_asset = _returns(b"d")
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    assert [a["filename"] for a in payload["attachments"]] == ["MISSION-2.md"]
+
+
+def test_activity_payload_orphan_reply_marked(tmp_path):
+    # review 2.2: a reply whose parent was deleted keeps an honest marker
+    mission = m("i1", "T-1")
+    entries = [ActivityEntry(ts=NOW, author="a", kind="comment",
+                             body="reply body", entry_id="c9",
+                             parent_id="gone")]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    mgr = make_mgr(tmp_path, pmo)
+    md = run_coro(mgr.activity_payload("i1"))["activity_md"]
+    assert "↳ reply to (deleted comment)" in md

@@ -622,6 +622,8 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
         parent = by_id.get(e.parent_id) if e.parent_id else None
         if parent is not None:
             lines.append(f"↳ reply to {parent.author} @ {parent.ts:%Y-%m-%d %H:%M}")
+        elif e.parent_id:
+            lines.append("↳ reply to (deleted comment)")
         lines.append(body)                # full body — the mirror never trims
         for att in e.attachments:
             lines.append(await _materialize(att))

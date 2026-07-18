@@ -54,9 +54,9 @@ _SWAP_MARKER_STAGE: dict[str, str | None] = {
 }
 
 # docs/05 §4: feed comments longer than this are uploaded as .md attachments
-# and referenced from a short comment. docs/07 §2 externalizes long bodies
-# into the Dev's activity folder at the same threshold, so Devs always see
-# full content either way.
+# and referenced from a short comment (POST-time only — the Dev-side mirror
+# inlines full bodies verbatim, ADR-0014 D3). Also the finalize post's
+# inline-last-message truncation bound.
 FEED_INLINE_MAX = 2048
 
 # docs/03 §4.1 — merge-failure state markers, counted/located from the feed

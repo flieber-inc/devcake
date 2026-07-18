@@ -82,6 +82,29 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // A per-instance poll segment failed with a PERMANENT error (revoked key,
+  // deleted team — main.py `_poll_degraded`). The other instances keep
+  // polling; this names the sick one. Not dismissable: while this is set,
+  // /health `last_poll_at` will update but ZERO missions from this instance
+  // are being processed — the operator needs to know before the "Last polled
+  // just now" cadence line misleads them (docs/11 §0 honest-by-design).
+  const degraded = Object.entries(health.poll_degraded || {});
+  if (degraded.length > 0) {
+    alerts.push({
+      id: "poll-degraded",
+      severity: "critical",
+      title:
+        degraded.length === 1
+          ? `PMO instance '${degraded[0][0]}' is not polling`
+          : `${degraded.length} PMO instances are not polling`,
+      body:
+        degraded.map(([name, msg]) => `${name}: ${msg}`).join(" · ") +
+        " — no new missions from this instance until it recovers. " +
+        "Check the API key in Configuration → PMO; DevCake auto-heals when the " +
+        "next segment succeeds.",
+    });
+  }
+
   if (Object.keys(health.anomalies || {}).length > 0) {
     alerts.push({
       id: "anomalies",

@@ -23,6 +23,7 @@ Precondition discipline:
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Protocol
@@ -261,7 +262,11 @@ async def force_poll_now(
             detail="a poll cycle is already in progress; try again shortly")
     async with lock:
         cycle_num = next_cycle_id()
+        # `started` is wall-clock for the response (operator-facing timestamp);
+        # `t0` is monotonic for duration so an NTP step / container resume
+        # mid-cycle can't produce a negative or garbage `duration_ms`.
         started = datetime.now(timezone.utc)
+        t0 = time.monotonic()
         try:
             await run_cycle(cycle_num)
         except Exception as e:
@@ -269,7 +274,7 @@ async def force_poll_now(
                 status_code=502,
                 detail=f"poll cycle raised: {type(e).__name__}: "
                        f"{str(e)[:150]}") from e
-        elapsed_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         return {
             "ok": True,
             "cycle": cycle_num,

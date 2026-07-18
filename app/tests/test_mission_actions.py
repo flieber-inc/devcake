@@ -1,9 +1,9 @@
 """Mission-action application service (docs/05 §1; TDD-first).
 
-Exercises the new driving-adapter-facing seam that the admin UI writes through:
-label actions, steering, create-mission, stop-run. No FastAPI TestClient —
-tests call the module directly with per-file fakes, mirroring `test_pmo_contract`
-and the `clear.py`-style DI.
+Exercises the driving-adapter-facing seam that the admin UI writes through:
+label actions, steering, stop-run, and the force-poll trigger. No FastAPI
+TestClient — tests call the module directly with per-file fakes, mirroring
+`test_pmo_contract` and the `clear.py`-style DI.
 
 Rules under test:
 - INV-1 preserved: Linear is the source of truth (labels + comment).
@@ -11,6 +11,8 @@ Rules under test:
   our own record (`_is_devcake_comment`) and the attempt-counter reset misses.
 - 409 preconditions decided by the CACHED labels; the port swap raising
   RuntimeError is a 502, not a 409.
+- force_poll_now serialises against the shared poll lock and releases it even
+  when the underlying `run_cycle` raises (would-be permanent-409 hazard).
 """
 
 from __future__ import annotations

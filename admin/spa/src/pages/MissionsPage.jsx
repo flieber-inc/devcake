@@ -45,7 +45,11 @@ function formatAgo(sec) {
 
 export default function MissionsPage() {
   const [data, setData] = useState({ missions: [], adoption_mode: "auto", teams: {} });
-  const [pollState, setPollState] = useState({ last_poll_at: null, poll_interval_seconds: 30 });
+  const [pollState, setPollState] = useState({
+    last_poll_at: null,
+    poll_interval_seconds: 30,
+    poll_degraded: {},
+  });
   const [error, setError] = useState("");
   // per-mission optimistic overrides (pmo_id → { labels, syncing:true }).
   // Cleared once the next /missions poll confirms the change.
@@ -73,6 +77,7 @@ export default function MissionsPage() {
         setPollState({
           last_poll_at: healthBody.last_poll_at || null,
           poll_interval_seconds: healthBody.poll_interval_seconds || 30,
+          poll_degraded: healthBody.poll_degraded || {},
         });
       }
       setPending((prev) => {
@@ -154,13 +159,14 @@ export default function MissionsPage() {
       setTimeout(() => setFlash(""), 4000);
       await load();
     } catch (e) {
-      // 409 = another cycle in flight (periodic or manual); honest banner
-      const msg = String(e.message || e);
-      if (/409/.test(msg) || /in progress/i.test(msg)) {
+      // 409 = another cycle in flight (periodic or manual); honest banner.
+      // Key off e.status (api.js attaches it deliberately) so this doesn't
+      // silently stop matching if the backend detail copy is reworded.
+      if (e.status === 409) {
         setFlash("A poll cycle is already running — try again in a moment.");
         setTimeout(() => setFlash(""), 4000);
       } else {
-        setError(`Poll now failed: ${msg}`);
+        setError(`Poll now failed: ${e.message || e}`);
       }
     } finally {
       setPollBusy(false);
@@ -174,10 +180,21 @@ export default function MissionsPage() {
     secondsSincePoll == null
       ? null
       : Math.max(0, (pollState.poll_interval_seconds || 30) - secondsSincePoll);
+  const degradedEntries = Object.entries(pollState.poll_degraded || {});
+  // Degraded overrides the honest cadence: /health.last_poll_at ticks up even
+  // when every instance segment is failing (main.py finally-block stamps it),
+  // so "Last polled just now" without this override would be a lie. See
+  // review finding #1.
   const cadenceLine =
-    pollState.last_poll_at == null
-      ? `Waiting for the first PMO poll — the server polls every ~${pollState.poll_interval_seconds}s.`
-      : `Last polled ${formatAgo(secondsSincePoll)} · next in ~${nextInSeconds}s`;
+    degradedEntries.length > 0
+      ? `${degradedEntries.length === 1 ? "1 PMO instance is not polling" : `${degradedEntries.length} PMO instances are not polling`}: ${degradedEntries.map(([n]) => n).join(", ")} — no new missions from ${degradedEntries.length === 1 ? "it" : "them"} until it recovers.`
+      : pollState.last_poll_at == null
+        ? `Waiting for the first PMO poll — the server polls every ~${pollState.poll_interval_seconds}s.`
+        : `Last polled ${formatAgo(secondsSincePoll)} · next in ~${nextInSeconds}s`;
+  const cadenceClass =
+    degradedEntries.length > 0
+      ? "text-xs text-red-700 dark:text-red-300"
+      : "text-xs text-neutral-500 dark:text-neutral-400";
 
   return (
     <div className="space-y-4">
@@ -195,7 +212,7 @@ export default function MissionsPage() {
           </Button>
         }
       />
-      <p className="text-xs text-neutral-500 dark:text-neutral-400" aria-live="polite">
+      <p className={cadenceClass} aria-live="polite">
         {cadenceLine}
       </p>
       {flash && (

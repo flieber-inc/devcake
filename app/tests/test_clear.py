@@ -109,3 +109,79 @@ def test_clear_removes_quarantined_files(tmp_path: Path):
     assert (store.root / "quarantine" / "T-9-1-ONBOARD-CORRUPT.json").exists()
     assert store.clear() == 1
     assert not (store.root / "quarantine" / "T-9-1-ONBOARD-CORRUPT.json").exists()
+
+
+# ── activity-repo sweep (ADR-0014 D4) ────────────────────────────────────────
+
+import asyncio
+
+from devcake.ports.internal_forge import InternalRepo
+
+
+def run_coro(c):
+    return asyncio.new_event_loop().run_until_complete(c)
+
+
+def _forge_with(names, fail=()):
+    from fakes import FakeInternalForge
+    forge = FakeInternalForge()
+
+    async def _list():
+        return [InternalRepo(name=n, mission_key=n.rsplit("-", 1)[-1],
+                             html_url="", clone_url="") for n in names]
+    forge.list_activity_repos = _list
+    orig = forge.delete_activity_repo
+
+    async def _delete(name):
+        if name in fail:
+            raise RuntimeError("gitea 500")
+        await orig(name)
+    forge.delete_activity_repo = _delete
+    return forge
+
+
+def test_clear_activity_repos_deletes_by_prefix_and_reports():
+    from devcake.api.clear import clear_activity_repos
+    forge = _forge_with(["activity-linear-t-1", "activity-linear-t-2"],
+                        fail={"activity-linear-t-1"})
+    out = run_coro(clear_activity_repos(forge))
+    assert out["deleted"] == 1 and len(out["errors"]) == 1
+    assert forge.deleted == ["activity-linear-t-2"]   # failure ≠ abort
+    assert run_coro(clear_activity_repos(None)) == {
+        "deleted": 0, "errors": [], "skipped": "internal forge disabled"}
+
+
+def test_clear_all_threads_internal_forge(tmp_path: Path, monkeypatch):
+    import devcake.api.clear as clear_mod
+
+    async def _dagu(executor):
+        return {"deleted": 0, "listed": 0, "failed": []}
+
+    async def _oo():
+        return {"deleted": [], "errors": []}
+
+    async def _redis(messaging):
+        return {"trimmed": 0}
+    monkeypatch.setattr(clear_mod, "clear_dagu", _dagu)
+    monkeypatch.setattr(clear_mod, "clear_openobserve", _oo)
+    monkeypatch.setattr(clear_mod, "clear_redis", _redis)
+    monkeypatch.setattr(clear_mod, "AUDIT_PATH", tmp_path / "events.jsonl")
+    store = RunStore(root=tmp_path / "runs")
+
+    forge = _forge_with(["activity-a-b"])
+    out = run_coro(clear_mod.clear_all(store, None, None,
+                                       internal_forge=forge))
+    assert out["activity_repos"]["deleted"] == 1
+    assert forge.deleted == ["activity-a-b"]
+    assert out["ok"] is True
+    assert "work repos (devcake-internal)" in out["preserved"]
+
+    out2 = run_coro(clear_mod.clear_all(store, None, None,
+                                        internal_forge=None))
+    assert out2["activity_repos"]["skipped"]
+    assert out2["ok"] is True                        # absence never fails ok
+
+    failing = _forge_with(["activity-a-b"], fail={"activity-a-b"})
+    out3 = run_coro(clear_mod.clear_all(store, None, None,
+                                        internal_forge=failing))
+    assert out3["ok"] is False                       # sweep errors surface

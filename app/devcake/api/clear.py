@@ -152,11 +152,36 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
     }
 
 
+async def clear_activity_repos(internal_forge) -> dict[str, Any]:
+    """ADR-0014 D4 sweep: delete every activity-* repo. Runs after
+    clear_dagu (Devs already stopped — nobody is mid-clone; an already-
+    cloned workspace is unaffected by server-side deletion, and the next
+    step's ensure_activity_repo re-creates create-or-adopt, so no live-run
+    guard is needed). Per-repo failures are collected, never aborting."""
+    if internal_forge is None:
+        return {"deleted": 0, "errors": [], "skipped": "internal forge disabled"}
+    deleted, errors = 0, []
+    try:
+        repos = await internal_forge.list_activity_repos()
+    except Exception as e:
+        log.exception("activity-repo listing failed")
+        return {"deleted": 0, "errors": [f"list: {str(e)[:200]}"]}
+    for r in repos:
+        try:
+            await internal_forge.delete_activity_repo(r.name)
+            deleted += 1
+        except Exception as e:
+            log.exception("activity-repo delete failed: %s", r.name)
+            errors.append(f"{r.name}: {str(e)[:200]}")
+    return {"deleted": deleted, "errors": errors}
+
+
 async def clear_all(
     store: RunStore,
     executor: DaguExecutor,
     messaging: Messaging,
     runlog: RunLogStore | None = None,
+    internal_forge=None,
 ) -> dict[str, Any]:
     """Full operator wipe. Best-effort per subsystem; partial failures are reported."""
     local = clear_local_state(store, runlog)
@@ -178,16 +203,22 @@ async def clear_all(
     except Exception as e:
         log.exception("redis clear failed")
         redis_info = {"error": str(e)[:300]}
+    activity = await clear_activity_repos(internal_forge)
     log.warning(
-        "operator clear-runs: local_runs=%s dagu_deleted=%s oo=%s",
+        "operator clear-runs: local_runs=%s dagu_deleted=%s oo=%s "
+        "activity_repos=%s",
         local.get("runs_deleted"), dagu.get("deleted"), oo.get("deleted"),
+        activity.get("deleted"),
     )
     return {
         "ok": not dagu.get("failed") and not oo.get("errors") and "error" not in dagu
-              and "error" not in oo and "error" not in redis_info,
+              and "error" not in oo and "error" not in redis_info
+              and not activity.get("errors"),
         "local": local,
         "dagu": dagu,
         "openobserve": oo,
         "redis": redis_info,
-        "preserved": ["config", "secrets", "pmo", "forge"],
+        "activity_repos": activity,
+        "preserved": ["config", "secrets", "pmo", "operator repos",
+                      "skill-store", "work repos (devcake-internal)"],
     }

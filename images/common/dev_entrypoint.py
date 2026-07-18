@@ -496,8 +496,10 @@ def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
         (dest / "MISSION.md").write_text(act["mission_md"])
     (dest / "ACTIVITY.md").write_text(act.get("activity_md", ""))
     for a in act.get("attachments", []):
-        target = dest / pathlib.Path(a["filename"]).name
-        target.write_bytes(base64.b64decode(a["content_b64"]))
+        name = pathlib.Path(a["filename"]).name
+        if not name or name in (".", ".."):   # feed-controllable input —
+            name = "attachment.bin"           # never resolve to a directory
+        (dest / name).write_bytes(base64.b64decode(a["content_b64"]))
 
 
 def with_session(text: str, dump: str) -> str:

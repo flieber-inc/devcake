@@ -223,8 +223,9 @@ EXECUTE_PLAYBOOK = """
 
 Implement the mission's plan. The latest plan (PLAN*.md) and any review reports
 are in /workspace/activity/ — read the plan first; if a review report exists,
-its findings take priority. Where reality contradicts the plan, implement the
-smallest sound deviation and document it in your summary.
+its findings take priority. The mission brief is /workspace/activity/MISSION.md.
+Where reality contradicts the plan, implement the smallest sound deviation and
+document it in your summary.
 
 SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 /workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
@@ -289,7 +290,8 @@ approval must be EARNED by the evidence you gather.
    `git fetch origin {branch} && git checkout {branch}`.
 2. Read the plan and any prior review reports in /workspace/activity/ and diff
    the branch against the default branch. Judge the work against the PLAN and
-   the MISSION — flag omissions, not just bugs.
+   the MISSION (brief: /workspace/activity/MISSION.md) — flag omissions, not
+   just bugs.
 3. Run the tests / build if present. A red test suite is an automatic reject.
 4. Hunt for real defects: correctness, edge cases, error handling, security,
    silent failure modes. Cosmetic nitpicks alone do not justify a reject.

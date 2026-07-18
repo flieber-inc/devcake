@@ -107,7 +107,7 @@ entrypoint start
   │ 0. fetch run spec via `runspec.get` (req/reply; retries with backoff; failure → exit 20);
   │      export stage-2 env, write credential material (0600)
   │ 1. emit `run.started` on Redis  ──────────────►  app marks Run "running"
-  │ 2. fetch activity via `activity.get` (req/reply); render ACTIVITY.md; download attachments
+  │ 2. fetch activity via `activity.get` (req/reply); materialize MISSION.md + ACTIVITY.md; download attachments
   │ 3. git clone → /workspace/repo (credential helper from run-spec token; token never in URL on disk)
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
   │ 4b. install skill-store skills from the runspec `skills` field → the
@@ -134,7 +134,7 @@ Git pushes and PR interactions (EXECUTE trivial-ONBOARD, REVIEW approval checkou
 Every Dev image ships a small CLI, `devcake-relay`, that speaks the Redis protocol of `09-messaging.md`. v0 exposes exactly one read-only command, usable by the harness as a shell command (and registrable as an MCP tool):
 
 ```
-devcake-relay activity get        # re-fetch the current ACTIVITY.md content
+devcake-relay activity get        # re-fetch the current activity payload
 ```
 
 There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint able to update/communicate with the PMO System" from the mission doc *is* this relay: writes travel as end-of-run artifacts that the app applies.

@@ -78,7 +78,7 @@ in /workspace/activity/MISSION.md, and the issue history in
 
 Produce the resolution deliverable(s) per the plan. The latest plan (PLAN*.md)
 and any review reports are in /workspace/activity/ — read the plan first;
-review findings take priority. Deliverables are FILES (markdown response
+review findings take priority. The issue brief is /workspace/activity/MISSION.md. Deliverables are FILES (markdown response
 drafts, updated docs, runbooks, checklists) committed to the repository —
 clear, empathetic, accurate, and ready to send or publish.
 
@@ -118,9 +118,10 @@ reaches a customer. Rubber-stamping is forbidden — approval must be EARNED.
 ### Procedure (binding)
 1. The work lives on branch `{branch}` — check it out:
    `git fetch origin {branch} && git checkout {branch}`.
-2. Read the plan and prior reviews in /workspace/activity/; diff the branch
-   against the default branch. Judge against the PLAN and the CUSTOMER'S
-   actual need — flag omissions, not just errors.
+2. Read the plan and prior reviews in /workspace/activity/ (brief:
+   /workspace/activity/MISSION.md); diff the branch against the default
+   branch. Judge against the PLAN and the CUSTOMER'S actual need — flag
+   omissions, not just errors.
 3. Verify: factual accuracy (no invented commitments, correct product
    behavior per the reference material), tone (empathetic, professional,
    no blame), completeness (every question answered), and any unresolved

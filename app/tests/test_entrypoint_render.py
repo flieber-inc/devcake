@@ -351,6 +351,12 @@ def test_write_activity_payload_writes_folder(tmp_path):
     assert (tmp_path / "old" / "ACTIVITY.md").read_text() == "old shape"
     assert not (tmp_path / "old" / "MISSION.md").exists()
 
+    # degenerate names ("", ".", "..") must never resolve to a directory
+    weird = {"activity_md": "", "attachments": [
+        {"filename": "..", "content_b64": base64.b64encode(b"w").decode()}]}
+    ep.write_activity_payload(weird, tmp_path / "weird")
+    assert (tmp_path / "weird" / "attachment.bin").read_bytes() == b"w"
+
 
 def test_with_session_appends_dump_only_when_present():
     assert ep.with_session("err", "DUMP") == \

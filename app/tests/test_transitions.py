@@ -996,6 +996,23 @@ def test_finalize_truncates_pathological_last_message(tmp_path):
     assert len(comment) < 4096
 
 
+def test_finalize_last_message_markers_are_quarantined(tmp_path):
+    # ADR-0014's core safety claim, at public seams: a last message that
+    # mentions marker-shaped strings changes NOTHING in the state machine
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="see `9_EXECUTE.md` — ships as `T-1-deliverable.zip`")))
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
+                          kind="comment", body=comment)
+    assert MissionManager._derive_seq(
+        Activity(mission=m, entries=[entry])) == 2      # only the real step
+    from devcake.domain.orchestrator.feed import _unquoted
+    assert "T-1-deliverable.zip" not in _unquoted(comment)
+
+
 # ── docs/05 §4 attachment policy ─────────────────────────────────────────────
 
 def test_feed_externalizes_over_2048(tmp_path):

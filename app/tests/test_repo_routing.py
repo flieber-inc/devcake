@@ -477,28 +477,30 @@ def _mission_delivery_setup(tmp_path, feed_body):
         pmo=FakePMO(), forge_runtime=RT(),
         runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
     )
-    async def _feed(pmo_id, kind, md): pass
+    feed = []
+    async def _feed(pmo_id, kind, md): feed.append(md)
     mgr._feed = _feed
     mgr._attachment_cap = lambda: 10 * 1024 * 1024
     pr = PullRequest(number=1, url="http://gitea/pr/1", state="closed",
                      merged=True)
-    return mgr, uploaded, m, pr
+    return mgr, uploaded, feed, m, pr
 
 
 def test_mission_zip_delivery_ignores_quoted_deliverable_marker(tmp_path):
     # ADR-0014 D2: a `>`-quoted mention of the zip name (a human quoting the
     # delivery comment, or a blockquoted last message) must not suppress a
     # real delivery
-    mgr, uploaded, m, pr = _mission_delivery_setup(
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
         tmp_path, "> attaching `T-1-deliverable.zip` next\n`devcake:v1`")
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert "T-1-deliverable.zip" in uploaded
+    assert any("Deliverable attached" in f for f in feed)
 
 
 def test_mission_zip_delivery_skips_on_unquoted_marker(tmp_path):
     # the guard itself (review finding #9), previously untested: an unquoted
     # mention of the deliverable in the feed = already delivered, do nothing
-    mgr, uploaded, m, pr = _mission_delivery_setup(
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
         tmp_path, "📦 Deliverable attached: [T-1-deliverable.zip](https://x)")
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert not uploaded

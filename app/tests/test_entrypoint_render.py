@@ -332,6 +332,26 @@ def test_assemble_transcript_full_dump_shape():
     assert "## Outcome" not in doc3                        # failure use
 
 
+def test_write_activity_payload_writes_folder(tmp_path):
+    # ADR-0014 D3: MISSION.md written when the app sent one; an OLD app's
+    # payload (no mission_md) writes no MISSION.md; filenames basename-
+    # sanitized as before
+    import base64
+    act = {"mission_md": "# T-1: brief", "activity_md": "# feed",
+           "attachments": [{"filename": "../evil/report.md",
+                            "content_b64": base64.b64encode(b"data").decode()}]}
+    ep.write_activity_payload(act, tmp_path / "activity")
+    assert (tmp_path / "activity" / "MISSION.md").read_text() == "# T-1: brief"
+    assert (tmp_path / "activity" / "ACTIVITY.md").read_text() == "# feed"
+    assert (tmp_path / "activity" / "report.md").read_bytes() == b"data"
+    assert not (tmp_path / "evil").exists()
+
+    old = {"activity_md": "old shape", "attachments": []}
+    ep.write_activity_payload(old, tmp_path / "old")
+    assert (tmp_path / "old" / "ACTIVITY.md").read_text() == "old shape"
+    assert not (tmp_path / "old" / "MISSION.md").exists()
+
+
 def test_with_session_appends_dump_only_when_present():
     assert ep.with_session("err", "DUMP") == \
         "err\n\n## Session transcript\n\nDUMP"

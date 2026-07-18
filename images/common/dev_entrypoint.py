@@ -487,6 +487,19 @@ def codex_text_dump(out: str) -> str:
     return "\n\n".join(blocks)
 
 
+def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
+    """ADR-0014 D3: materialize the activity payload into the folder —
+    MISSION.md (when the app sent one; old apps don't), ACTIVITY.md, and
+    every attachment under its basename (path components stripped)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    if act.get("mission_md"):
+        (dest / "MISSION.md").write_text(act["mission_md"])
+    (dest / "ACTIVITY.md").write_text(act.get("activity_md", ""))
+    for a in act.get("attachments", []):
+        target = dest / pathlib.Path(a["filename"]).name
+        target.write_bytes(base64.b64decode(a["content_b64"]))
+
+
 def with_session(text: str, dump: str) -> str:
     """Failure-path transcripts: append the session dump when one exists."""
     return text + (f"\n\n## Session transcript\n\n{dump}" if dump else "")
@@ -606,10 +619,7 @@ def main() -> None:
     (WORKSPACE / ".devcake").mkdir(parents=True, exist_ok=True)
 
     act = request_reply("activity.get", "activity.result")
-    (WORKSPACE / "activity" / "ACTIVITY.md").write_text(act.get("activity_md", ""))
-    for a in act.get("attachments", []):
-        target = WORKSPACE / "activity" / pathlib.Path(a["filename"]).name
-        target.write_bytes(base64.b64decode(a["content_b64"]))
+    write_activity_payload(act, WORKSPACE / "activity")
 
     repo_url = env["DEVCAKE_REPO_URL"]
     askpass = WORKSPACE / ".devcake" / "askpass.sh"

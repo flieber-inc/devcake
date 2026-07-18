@@ -487,6 +487,11 @@ def codex_text_dump(out: str) -> str:
     return "\n\n".join(blocks)
 
 
+def with_session(text: str, dump: str) -> str:
+    """Failure-path transcripts: append the session dump when one exists."""
+    return text + (f"\n\n## Session transcript\n\n{dump}" if dump else "")
+
+
 def assemble_transcript(seq, mtype, run_id, dev_type, harness, token_report,
                         dump, result_text, result) -> str:
     """ADR-0014 D1: the attachment doc — header, the FULL session dump (all
@@ -817,13 +822,18 @@ def main() -> None:
             result_text = out[-4000:]
 
     # ADR-0014 D1: the full dump of assistant-visible text, per harness
-    # (grok: the `grok export` session already includes every message)
-    if harness == "codex":
-        dump = codex_text_dump(out)
-    elif harness == "grok-build":
-        dump = transcript_body
-    else:
-        dump = claude_text_dump(out)
+    # (grok: the `grok export` session already includes every message).
+    # Guarded like every other parse of `out` — a dump failure must never
+    # abort the artifact path (the no-dump fallback handles "").
+    try:
+        if harness == "codex":
+            dump = codex_text_dump(out)
+        elif harness == "grok-build":
+            dump = transcript_body
+        else:
+            dump = claude_text_dump(out)
+    except Exception:
+        dump = ""
 
     if harness_exit != 0:
         err = err_text[-1500:]
@@ -831,8 +841,8 @@ def main() -> None:
             or "log in" in err.lower()
         code = 12 if auth_fail else 10
         send_artifacts({"result": None, "exit_code": code,
-                        "transcript_md": f"harness exited {harness_exit}\n\n```\n{err}\n```"
-                        + (f"\n\n## Session transcript\n\n{dump}" if dump else ""),
+                        "transcript_md": with_session(
+                            f"harness exited {harness_exit}\n\n```\n{err}\n```", dump),
                         "token_report": token_report})
         stop.set()
         sys.exit(code)
@@ -843,9 +853,9 @@ def main() -> None:
     if plan_mode:
         if len((result_text or "").strip()) < 200:  # a real plan is never this short
             send_artifacts({"result": None, "exit_code": 11,
-                            "transcript_md": f"plan mode returned no usable plan "
-                                             f"({len(result_text or '')} chars):\n\n{result_text}"
-                            + (f"\n\n## Session transcript\n\n{dump}" if dump else ""),
+                            "transcript_md": with_session(
+                                f"plan mode returned no usable plan "
+                                f"({len(result_text or '')} chars):\n\n{result_text}", dump),
                             "token_report": token_report})
             stop.set()
             sys.exit(11)  # DEV_BAD_OUTPUT — fail the attempt, never advance an empty plan
@@ -872,8 +882,8 @@ def main() -> None:
         assert isinstance(result.get("summary"), str)
     except Exception as e:
         send_artifacts({"result": None, "exit_code": 11,
-                        "transcript_md": f"result.json missing/invalid: {e}\n\n---\n\n{result_text}"
-                        + (f"\n\n## Session transcript\n\n{dump}" if dump else ""),
+                        "transcript_md": with_session(
+                            f"result.json missing/invalid: {e}\n\n---\n\n{result_text}", dump),
                         "token_report": token_report})
         stop.set()
         sys.exit(11)

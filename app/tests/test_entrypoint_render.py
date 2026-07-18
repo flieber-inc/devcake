@@ -332,6 +332,12 @@ def test_assemble_transcript_full_dump_shape():
     assert "## Outcome" not in doc3                        # failure use
 
 
+def test_with_session_appends_dump_only_when_present():
+    assert ep.with_session("err", "DUMP") == \
+        "err\n\n## Session transcript\n\nDUMP"
+    assert ep.with_session("err", "") == "err"
+
+
 def test_fit_payload_shrinks_transcript_before_last_message(monkeypatch):
     # last_message_md is shrinkable, but the (larger) dump always halves first
     monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 64 * 1024)

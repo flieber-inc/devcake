@@ -115,6 +115,36 @@ class InternalForgePort(Protocol):
         """Operator-clickable store URL (sync; ROOT_URL-based)."""
         ...
 
+    # ── per-mission activity repos (ADR-0014 D4) ─────────────────────────────
+
+    async def ensure_activity_repo(self, instance: str, mission_key: str
+                                   ) -> str:
+        """Create-or-adopt the mission's activity repo (unprotected, no
+        machine user, shared-RO collaborator). Returns the repo name."""
+        ...
+
+    async def push_activity_snapshot(self, repo_name: str, files: list[dict],
+                                     message: str) -> None:
+        """ONE commit making main exactly match files [{path, content_b64}]:
+        create/update by tree sha, stale paths deleted, unchanged blobs
+        skipped (identical snapshot ⇒ no commit)."""
+        ...
+
+    def activity_credentials(self, repo_name: str
+                             ) -> "ActivityRepoCredentials | None":
+        """Shared RO clone credentials (runspec source; sync read)."""
+        ...
+
+    async def list_activity_repos(self) -> list[InternalRepo]:
+        """Every activity-* repo — paginated, prefix-filtered (operator
+        repos and the skill-store never appear)."""
+        ...
+
+    async def delete_activity_repo(self, repo_name: str) -> None:
+        """Clear-sweep delete; refuses non-activity-prefixed names with
+        ValueError before any HTTP."""
+        ...
+
     async def list_repos(self) -> list[InternalRepo]: ...
 
     async def delete_repo(self, repo_name: str) -> None:

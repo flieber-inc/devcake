@@ -24,6 +24,18 @@ def internal_repo_name(instance: str, mission_key: str) -> str:
     return _SAFE.sub("-", f"{instance}-{mission_key}".lower()).strip("-")[:60]
 
 
+# ADR-0014 D4: the sweeper discriminator — includes the trailing hyphen, so
+# no operator card name (^[a-z][a-z0-9]{0,11}$, hyphen-free) can ever match
+ACTIVITY_PREFIX = "activity-"
+
+
+def activity_repo_name(instance: str, mission_key: str) -> str:
+    """The deterministic name of a mission's ACTIVITY repo (ADR-0014 D4) —
+    prefix applied AFTER the 60-char cap (max 69 < Gitea's 100-char limit;
+    re-truncating after prefixing could collide two long mission keys)."""
+    return ACTIVITY_PREFIX + internal_repo_name(instance, mission_key)
+
+
 class InternalRepo(BaseModel):
     """Admin-surface row for one auto-created internal repo."""
     name: str                  # {instance}-{mission-key}, lowercased

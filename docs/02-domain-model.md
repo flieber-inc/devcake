@@ -75,22 +75,23 @@ Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything exc
                         │  (backlog, no stage label; opt-in gate passed)        │
                         └───────┬────────────────┬─────────────────┬────────────┘
                         trivial │         normal │            high │ complexity
-                                ▼                ▼                 ▼
-                     PR opened +          + DEVCAKE-PLAN    decompose: create child
-                     + DEVCAKE-REVIEW           │           Missions (DEVCAKE-CREATED);
-                     (skips PLAN+EXECUTE,       │           Issue → Canceled,
-                      never skips REVIEW)       │           Project → + DEVCAKE-TRACKING
-                                │               ▼
+                       (= plan  │                │                 │
+                        attach) ▼                ▼                 ▼
+                     + DEVCAKE-EXECUTE    + DEVCAKE-PLAN    decompose: create child
+                     (PLAN.md attached          │           Missions (DEVCAKE-CREATED);
+                      from triage — PLAN        │           Issue → Canceled,
+                      step skipped; ONBOARD     │           Project → + DEVCAKE-TRACKING
+                      never implements)         ▼
                                 │  ┌───────────────────────────────┐
                                 │  │             PLAN              │ → upload PLAN.md
                                 │  └───────────────┬───────────────┘
                                 │                  │ swap DEVCAKE-PLAN → DEVCAKE-EXECUTE
                                 │                  ▼
-                                │  ┌───────────────────────────────┐
-                                │  │            EXECUTE            │◄────────────┐
-                                │  └───────────────┬───────────────┘             │
-                                │                  │ swap → DEVCAKE-REVIEW       │
-                                ▼                  ▼                             │
+                                └─►┌───────────────────────────────┐
+                                   │            EXECUTE            │◄────────────┐
+                                   └───────────────┬───────────────┘             │
+                                                   │ swap → DEVCAKE-REVIEW       │
+                                                   ▼                             │
                         ┌───────────────────────────────┐  reject: swap → EXECUTE│
                         │            REVIEW             │────(+ warning every ───┘
                         └───────────────┬───────────────┘      3rd loop)
@@ -224,7 +225,7 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `concurrency` | `{global_max: int}` | Per-type caps live on each DevType. Effective ceiling = min(global_max, Σ per-type) — this is a property of the dispatch check, not a separate rule. |
 | `dev_timeout_minutes` | `int` (default 120) | Enforced by the app watchdog (`04-orchestrator.md` §5), not by Dagu. |
 | `poll_interval_seconds` | `int` (default 30) | |
-| `auto_merge` | `bool` (default `false`) | When true, DevCake merges its own PRs with no human intervention at the two Done-producing transitions (trivial ONBOARD, REVIEW approval). See `03-mission-lifecycle.md`, `06-forge-adapter.md`, `14-security.md`. |
+| `auto_merge` | `bool` (default `false`) | When true, DevCake merges its own PRs with no human intervention at the Done-producing transition (REVIEW approval). See `03-mission-lifecycle.md`, `06-forge-adapter.md`, `14-security.md`. |
 | `auto_resolve_merge_conflicts` | `bool` (default `true`) | Inert while `auto_merge` is off. On a merge conflict (or stale branch), route the Mission back to EXECUTE with a sync-and-resolve directive instead of parking on `DEVCAKE-MERGE`; max 2 attempts per Mission, counted from feed markers (`03-mission-lifecycle.md` §4.1). |
 | `merge_retry_window_minutes` | `int ≥ 0` (default 30) | Inert while `auto_merge` is off. When a merge is not possible *yet* (CI running, mergeability computing), the merge sweep keeps retrying for this long before the human hand-off; 0 = hand off immediately. Lower on CI-light repos, raise on CI-heavy ones. |
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |

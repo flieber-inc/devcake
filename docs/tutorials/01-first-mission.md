@@ -103,8 +103,8 @@ Within ~30 seconds (poll interval), on the issue feed:
 
 1. Status → **In Progress**; a Dev appears on Runs.
 2. Transcript `1_ONBOARD.md` + **token report** (every step posts one).
-3. Label: `DEVCAKE-PLAN`, or `DEVCAKE-EXECUTE` (plan attached), or trivial path
-   opens a PR sooner.
+3. Label: `DEVCAKE-PLAN`, or `DEVCAKE-EXECUTE` (plan attached — trivial or
+   opportunistic; ONBOARD never implements).
 4. Cycle continues: plan → branch `devcake/<KEY>` → PR → `DEVCAKE-REVIEW`.
 5. On approval (with auto-merge **off**): **`DEVCAKE-MERGE`** — you merge:
    ```

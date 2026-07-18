@@ -177,6 +177,16 @@ def template_warnings(config) -> list[str]:
             _, warn = resolve_playbook(mt, active)
             if warn:
                 warns.append(warn)
+    # a custom ONBOARD template saved before 2026-07-18 may still instruct
+    # the removed executed_trivially outcome — every such run parks as an
+    # illegal outcome, so surface it instead of failing silently
+    active = _canon((config.active_prompt_templates or {}).get("ONBOARD"))
+    text, _ = resolve_playbook("ONBOARD", active)
+    if "executed_trivially" in text:
+        warns.append(
+            f"ONBOARD template '{active}' still instructs the removed "
+            "executed_trivially outcome — its runs will park with "
+            "DEVCAKE-SKIP; re-save it from the current default")
     if getattr(config, "max_decomposition_depth", 1) != 1:
         active = _canon((config.active_prompt_templates or {}).get("ONBOARD"))
         text, _ = resolve_playbook("ONBOARD", active)

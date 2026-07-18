@@ -63,7 +63,7 @@ Restated from `03-mission-lifecycle.md`:
 
 ## 3. Division of labor: Dev vs. app
 
-- The **Dev** (inside its container, during EXECUTE/trivial-ONBOARD/REVIEW) clones, branches, commits at end, pushes, and opens/updates the PR using injected forge credentials and the forge CLI (`gh`/`glab`, shipped in the Dev images). This is unavoidable — the code lives in the Dev's workspace. The dev side is **descriptor-driven, not string-templated**: everything forge-specific the Dev needs (clone auth user, git identity, CLI token envs, PR/MR CLI instructions) comes from the adapter's `ForgeDescriptor` (§3a) — the orchestrator injects it via `spec_env` (`07-dev-runtime.md` §3) and via the EXECUTE playbook's `pr_instructions` slot; the app carries no per-forge tables outside the adapters.
+- The **Dev** (inside its container, during EXECUTE/REVIEW) clones, branches, commits at end, pushes, and opens/updates the PR using injected forge credentials and the forge CLI (`gh`/`glab`, shipped in the Dev images). This is unavoidable — the code lives in the Dev's workspace. The dev side is **descriptor-driven, not string-templated**: everything forge-specific the Dev needs (clone auth user, git identity, CLI token envs, PR/MR CLI instructions) comes from the adapter's `ForgeDescriptor` (§3a) — the orchestrator injects it via `spec_env` (`07-dev-runtime.md` §3) and via the EXECUTE playbook's `pr_instructions` slot; the app carries no per-forge tables outside the adapters.
 - The **app** performs the *decision-bearing* forge effects at finalization through `ForgePort` (§1): PR lookup and state, PR comments with the approval footer, formal approval, and merge (`auto_merge`). This keeps the auditable actions in one instrumented place, driven by `result.json` (INV-4 analog for the forge).
 
 The idempotency rule binds both sides: the descriptor's `pr_instructions` template instructs create-or-update by head branch (`gh pr view` before `gh pr create`, `glab mr list` before `glab mr create`); the app side uses `get_pr_by_branch` and keyed comments.
@@ -112,7 +112,7 @@ GitHub and GitLab forbid approving a PR with the account that opened it. Resolut
 
 ## 5. `auto_merge` and the merge-before-Done rule
 
-**Merge always precedes Done, in every path** (confirmed decision — `03-mission-lifecycle.md` §4.1). All DevCake-written code (including the trivial-ONBOARD path, which now always passes REVIEW) reaches Done only through REVIEW approval followed by a real merge:
+**Merge always precedes Done, in every path** (confirmed decision — `03-mission-lifecycle.md` §4.1). All DevCake-written code reaches Done only through REVIEW approval followed by a real merge:
 
 - `auto_merge` **ON**: after approval, the app merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §3).
 - `auto_merge` **OFF**: after approval the Mission carries `DEVCAKE-MERGE` and stays In Progress; the poll-cycle merge sweep (`04-orchestrator.md` §1) marks it Done when a human merges the PR, or Canceled if the PR is closed unmerged.

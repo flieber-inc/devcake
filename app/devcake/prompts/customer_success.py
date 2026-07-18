@@ -18,7 +18,8 @@ answer, a fix escalation, a document, account work), its urgency, and
 whether it is one deliverable or several.
 
 ### Workspace
-- `/workspace/repo/` — this mission's working repository (deliverables live here).
+- `/workspace/repo/` — this mission's working repository, read-only for
+  triage (the EXECUTE step produces the deliverables here, from your plan).
 - `/workspace/activity/` — the issue's knowledge base: MISSION.md (the
   brief), ACTIVITY.md (a faithful mirror of the issue's feed — posts,
   replies, attachments), and every attached file. Read what you need.

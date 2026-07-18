@@ -1417,3 +1417,18 @@ def test_rearm_noop_when_window_zero(tmp_path):
     run_coro(mgr.sweeps([m]))
     assert not any("`devcake:merge-retry`" in c for c in fake.comments)
     assert forge.merges == []
+
+
+def test_executed_feed_uses_descriptor_pr_noun(tmp_path):
+    """Audit A29 heir: the executed-path feed uses the forge's own noun (the
+    old trivial-twin pin died with the removed outcome — re-pin here)."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
+    forge = FakeForge()
+    forge.descriptor = type("D", (), {"pr_noun": "merge request"})()
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=forge)
+    run_coro(mgr._transition(_run("EXECUTE", "DEVCAKE-EXECUTE"),
+                             {"outcome": "executed",
+                              "pr_url": "https://forge/mr/1", "summary": "s"},
+                             None))
+    assert any("merge request" in c for c in fake.comments)
+    assert not any("pull request" in c for c in fake.comments)

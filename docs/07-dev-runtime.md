@@ -128,7 +128,7 @@ entrypoint start
   └ 10. exit with code per §4  ──────────────────►  app finalizes (04-orchestrator.md §4)
 ```
 
-Git pushes and PR interactions (EXECUTE trivial-ONBOARD, REVIEW approval checkout) happen inside step 6, driven by the playbook prompt, but **commits only at the very end of the work** (INV-6) — the playbook prompts state this explicitly and the transcript is evidence of compliance.
+Git pushes and PR interactions (EXECUTE, REVIEW approval checkout) happen inside step 6, driven by the playbook prompt, but **commits only at the very end of the work** (INV-6) — the playbook prompts state this explicitly and the transcript is evidence of compliance.
 
 ## 6. Mid-run PMO access: the `devcake-relay`
 

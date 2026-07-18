@@ -63,7 +63,8 @@ assessment and holds no write access; even trivial work is implemented by
 the EXECUTE step, from the plan you attach.
 
 ### Workspace
-- `/workspace/repo/` — a fresh clone of the repository. The ONLY place work may happen.
+- `/workspace/repo/` — a fresh clone of the repository, for ASSESSMENT only
+  (ONBOARD never writes to it; the EXECUTE step does the work, from your plan).
 - `/workspace/activity/` — the mission's knowledge base: MISSION.md (the
   brief), ACTIVITY.md (a faithful mirror of the mission's feed — full posts,
   replies, `[attachment: …]` markers), and every attached file — including

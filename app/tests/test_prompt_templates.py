@@ -302,3 +302,18 @@ def test_rename_dev_type_moves_templates_and_refs(monkeypatch, tmp_path):
         app_main.dev_types.pop("newdev", None)
         app_main.config.assignments["EXECUTE"].dev_type = "main-dev"
         app_main.config.active_devtype_prompts.pop("newdev", None)
+
+
+def test_template_warning_for_stale_executed_trivially(monkeypatch, tmp_path):
+    # founder decision 2026-07-18: outcome removed outright — a pre-removal
+    # custom ONBOARD template must warn in /health, not fail silently
+    from devcake.config import AppConfig
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    t.save_template("ONBOARD", "old",
+                    'stale: return "executed_trivially" {decomposition_rule}')
+    cfg = AppConfig()
+    cfg.active_prompt_templates = {"ONBOARD": "old"}
+    assert any("executed_trivially" in w for w in t.template_warnings(cfg))
+    cfg.active_prompt_templates = {"ONBOARD": "default"}
+    assert not any("executed_trivially" in w for w in t.template_warnings(cfg))

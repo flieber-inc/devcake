@@ -6,6 +6,7 @@ export const CONFIG_SECTIONS = [
   { id: "skills", label: "Skills" },
   { id: "assignments", label: "Assignments" },
   { id: "prompts", label: "Prompts" },
+  { id: "profiles", label: "Profiles" },
   { id: "limits", label: "Limits" },
   { id: "traffic", label: "Traffic control" },
 ];

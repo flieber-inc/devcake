@@ -26,6 +26,15 @@ from . import security
 
 log = logging.getLogger("devcake.secrets")
 
+# ONE definition of the per-scope connection-secret field allowlist —
+# api.main validates endpoint input against it and settings_bundle validates
+# bundle shapes. scope/instance/field become path components everywhere, so
+# every entry point re-validates against this (audit A5/A9).
+CONNECTION_FIELDS: dict[str, set[str]] = {
+    "pmo": {"api_key"},
+    "repo": {"token", "token_ro", "reviewer_token"},
+}
+
 
 def _root() -> Path:
     return Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
@@ -174,25 +183,81 @@ def _iso(mtime: float) -> str:
     return datetime.fromtimestamp(mtime, timezone.utc).isoformat()
 
 
+def list_connection_secrets() -> dict[str, dict[str, str]]:
+    """{"{scope}-{instance}": {field: value}} for every stored connection
+    secret. VALUE-BEARING — the settings-bundle serializer and boot
+    registration are the only consumers (ADR-0013); the API never echoes
+    these."""
+    out: dict[str, dict[str, str]] = {}
+    conn_dir = _root() / "connections"
+    if conn_dir.exists():
+        for p in sorted(conn_dir.glob("*.json")):
+            fields = {k: v for k, v in _read(p).items()
+                      if isinstance(v, str) and v}
+            if fields:
+                out[p.stem] = fields
+    return out
+
+
+def list_harness_secrets() -> dict[str, str]:
+    """{VAR: value} for every stored harness/model key. Value-bearing — same
+    consumers and same caveat as list_connection_secrets."""
+    out: dict[str, str] = {}
+    harness_dir = _root() / "harness"
+    if harness_dir.exists():
+        for p in sorted(harness_dir.glob("*.json")):
+            value = _read(p).get("value")
+            if isinstance(value, str) and value:
+                out[p.stem] = value
+    return out
+
+
 def register_all() -> None:
     """Register every stored secret with the redaction layer at boot (the
     glob scan already covers them, but explicit registration means immediate
     coverage for exact-match replacement even below the 16-char scan floor).
     Keys MUST match write_/delete_'s scheme or unregister leaves the
     boot-registered copy behind."""
-    root = _root()
-    conn_dir = root / "connections"
-    if conn_dir.exists():
-        for p in conn_dir.glob("*.json"):
-            # {scope}-{instance}.json; instance names can't contain hyphens
-            scope, _, instance = p.stem.partition("-")
-            for field, value in _read(p).items():
-                if isinstance(value, str) and value:
-                    security.register_runtime_secret(
-                        f"conn:{scope}:{instance}:{field}", value)
-    harness_dir = root / "harness"
-    if harness_dir.exists():
-        for p in harness_dir.glob("*.json"):
-            value = _read(p).get("value")
-            if isinstance(value, str) and value:
-                security.register_runtime_secret(f"harness:{p.stem}", value)
+    for key, fields in list_connection_secrets().items():
+        # {scope}-{instance}; instance names can't contain hyphens
+        scope, _, instance = key.partition("-")
+        for field, value in fields.items():
+            security.register_runtime_secret(
+                f"conn:{scope}:{instance}:{field}", value)
+    for var, value in list_harness_secrets().items():
+        security.register_runtime_secret(f"harness:{var}", value)
+
+
+# ── profile secret snapshots (ADR-0013) ─────────────────────────────────────
+# /data/secrets/profiles/{name}.json — ONE json per profile, 0600. The file
+# sits at glob level two, so security._known_values()'s glob("*/*") covers a
+# dormant snapshot with zero redaction changes (values <16 chars stay below
+# the scan floor until applied — the documented residual). Shape mirrors the
+# bundle secrets section: {"connections": {...}, "harness": {...}}.
+
+def _profile_path(name: str) -> Path:
+    return _root() / "profiles" / f"{name}.json"
+
+
+def write_profile_secrets(name: str, data: dict) -> None:
+    _atomic_write(_profile_path(name), data)
+
+
+def read_profile_secrets(name: str) -> dict | None:
+    """None when the profile stores no secrets. Corrupt files REFUSE (strict
+    read): silently applying half a snapshot would delete every live secret
+    the missing half once named."""
+    p = _profile_path(name)
+    if not p.exists():
+        return None
+    return _read_strict(p)
+
+
+def delete_profile_secrets(name: str) -> None:
+    _profile_path(name).unlink(missing_ok=True)
+
+
+def rename_profile_secrets(name: str, new_name: str) -> None:
+    p = _profile_path(name)
+    if p.exists():
+        os.replace(p, _profile_path(new_name))

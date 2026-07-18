@@ -238,3 +238,21 @@ def test_read_only_repo_in_work_set_warns(tmp_path, monkeypatch):
                                        reference_repos=["docs"])])
     ids2 = {w["id"] for w in security.security_warnings(cfg2)}
     assert "repo-read-only:docs" not in ids2
+
+
+def test_profile_secret_snapshots_are_covered_by_the_redaction_glob(tmp_path, monkeypatch):
+    """ADR-0013 glob tripwire: /data/secrets/profiles/{name}.json sits at
+    scan level two, so a DORMANT profile's values must mask with ZERO
+    changes to security.py. If the profiles store ever moves deeper than
+    glob("*/*") reaches, this fails."""
+    import json as _json
+    from devcake import security
+    monkeypatch.setattr(security, "_SECRETS_DIR", tmp_path / "secrets")
+    d = tmp_path / "secrets" / "profiles"
+    d.mkdir(parents=True)
+    value = "profile-dormant-secret-abcdef123456"
+    (d / "staging.json").write_text(_json.dumps(
+        {"connections": {"repo-main": {"token": value}},
+         "harness": {"ANTHROPIC_API_KEY": value + "-h"}}))
+    out = security.redact(f"transcript {value} and {value}-h end")
+    assert value not in out and MASK in out

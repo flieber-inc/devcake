@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -536,6 +537,9 @@ def materialize_activity(spec, dest, request_reply, runner=None):
     if not ok or not (dest / "ACTIVITY.md").exists():
         if ok:
             notes.append("activity repo: empty clone — Redis fallback")
+        # drop any zero-commit .git so `git log` inside the folder fails
+        # honestly instead of confusingly ("no commits yet" over real files)
+        shutil.rmtree(dest / ".git", ignore_errors=True)
         act = request_reply("activity.get", "activity.result")
         write_activity_payload(act, dest)
     return notes

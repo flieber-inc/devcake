@@ -434,6 +434,8 @@ class GiteaProvisioner:
         wanted, batch = {}, []
         for f in files:
             wanted[f["path"]] = f["content_b64"]
+        if len(wanted) != len(files):   # a builder dedupe bug must fail loud,
+            raise ValueError("duplicate paths in activity snapshot")  # not mask
         for path, content_b64 in wanted.items():
             data = base64.b64decode(content_b64)
             blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()

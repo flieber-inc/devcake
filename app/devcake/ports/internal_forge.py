@@ -32,7 +32,9 @@ ACTIVITY_PREFIX = "activity-"
 def activity_repo_name(instance: str, mission_key: str) -> str:
     """The deterministic name of a mission's ACTIVITY repo (ADR-0014 D4) —
     prefix applied AFTER the 60-char cap (max 69 < Gitea's 100-char limit;
-    re-truncating after prefixing could collide two long mission keys)."""
+    re-truncating after prefixing could collide two long mission keys). A
+    cap landing mid-hyphen can yield a trailing '-': live-verified accepted
+    by Gitea 1.24 (2026-07-18), and exact parity with work-repo names."""
     return ACTIVITY_PREFIX + internal_repo_name(instance, mission_key)
 
 

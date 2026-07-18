@@ -32,12 +32,12 @@ from devcake.domain.model import MissionType
 from fakes import FakeInternalForge
 
 
-def _dispatch_setup(tmp_path, forge_fake):
+def _dispatch_setup(tmp_path, forge_fake, m=None):
     from test_transitions import make_mgr, mission
     from test_prompt_templates import _ForgeWithDescriptor
     from devcake.config import PMOInstance
 
-    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    m = m if m is not None else mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, _store = make_mgr(tmp_path, m, forge=_ForgeWithDescriptor())
     mgr.internal_forge = forge_fake
     mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
@@ -106,3 +106,23 @@ def test_runspec_no_activity_repo_for_mapper(tmp_path):
     payload = mgr.runspec_secret_payload(mapper)
     assert payload is not None
     assert "activity_repo" not in payload
+
+
+def test_dispatch_pushes_for_project_missions(tmp_path):
+    # ADR-0014: EVERY mission gets a repo — projects included (their payload
+    # is MISSION.md = the brief + the no-feed ACTIVITY.md stub)
+    from datetime import datetime, timezone
+    from devcake.domain.model import Mission
+    proj = Mission(instance="linear", pmo_id="p9", pmo_kind="project",
+                   key="P-1", title="proj", status="backlog",
+                   labels={"DEVCAKE"}, description="the brief",
+                   updated_at=datetime.now(timezone.utc), repo="main")
+    forge = FakeInternalForge()
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, forge, m=proj)
+    run = run_coro(mgr.dispatch(proj, MissionType.ONBOARD,
+                                mgr.dev_types["senior-dev"]))
+    assert run is not None and launched
+    assert forge.ensured == [("linear", "P-1")]
+    _, files, message = forge.pushes[0]
+    assert message == "step 1 ONBOARD dispatch"
+    assert {f["path"] for f in files} == {"MISSION.md", "ACTIVITY.md"}

@@ -114,6 +114,8 @@ class FakeInternalForge:
         return []
 
     async def delete_activity_repo(self, repo_name):
+        if not repo_name.startswith("activity-"):   # honor the Protocol guard
+            raise ValueError(f"not an activity repo: {repo_name!r}")
         self.deleted.append(repo_name)
 
 

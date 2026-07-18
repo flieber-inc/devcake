@@ -68,6 +68,7 @@ export default function RunsPage() {
         if (result.dagu?.error) bits.push(result.dagu.error);
         if (result.openobserve?.error) bits.push(result.openobserve.error);
         if (result.redis?.error) bits.push(result.redis.error);
+        if (result.activity_repos?.errors?.length) bits.push(result.activity_repos.errors.join("; "));
         if (bits.length) setClearErr(bits.join(" · "));
       }
       setOffset(0);

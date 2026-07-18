@@ -30,7 +30,7 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
                          #   Excluded from transcripts and never uploaded.
 ```
 
-The workspace is prepared entirely by the container **entrypoint** (not the app): the entrypoint receives its run spec via environment variables (§3), fetches the activity feed over the Redis request/reply channel (`activity.get`, `09-messaging.md` §4), clones the repo using injected credentials, runs the Dev Type's MCP setup commands, and only then launches the harness.
+The workspace is prepared entirely by the container **entrypoint** (not the app): the entrypoint receives its run spec via environment variables (§3), materializes the activity folder **clone-first** — a full-history `git clone` of the mission's `activity-*` repo (ADR-0014 D4; `git log -p ACTIVITY.md` works in-container) with the Redis request/reply channel (`activity.get`, `09-messaging.md` §4) as the degraded fallback — clones the repo using injected credentials, runs the Dev Type's MCP setup commands, and only then launches the harness.
 
 ## 2. `ACTIVITY.md` format
 
@@ -107,7 +107,8 @@ entrypoint start
   │ 0. fetch run spec via `runspec.get` (req/reply; retries with backoff; failure → exit 20);
   │      export stage-2 env, write credential material (0600)
   │ 1. emit `run.started` on Redis  ──────────────►  app marks Run "running"
-  │ 2. fetch activity via `activity.get` (req/reply); materialize MISSION.md + ACTIVITY.md; download attachments
+  │ 2. clone the mission's activity-* repo into /workspace/activity (full history);
+  │      fallback: `activity.get` (req/reply) → materialize MISSION.md + ACTIVITY.md + attachments
   │ 3. git clone → /workspace/repo (credential helper from run-spec token; token never in URL on disk)
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
   │ 4b. install skill-store skills from the runspec `skills` field → the

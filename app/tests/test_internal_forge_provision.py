@@ -419,6 +419,7 @@ class _ActivityRecorder:
         self.contents_batches = []
         self.repo_creates = []
         self.token_posts = []
+        self.collab_puts = []
         self.tree_entries = list(tree_entries)
         self.org_pages = org_pages or []
         self.tokens = tokens if tokens is not None else []
@@ -433,6 +434,7 @@ class _ActivityRecorder:
             self.repo_creates.append(json.loads(request.content))
             return httpx.Response(self.repo_create_status, json={})
         if method == "PUT" and "/collaborators/" in path:
+            self.collab_puts.append((path, json.loads(request.content)))
             return httpx.Response(204)
         if method == "GET" and "/git/trees/" in path:
             return httpx.Response(200, json={
@@ -471,6 +473,9 @@ def test_ensure_service_accounts_mints_activity_ro(tmp_path, monkeypatch):
     run_coro(prov.ensure_service_accounts())
     users = [c for c in rec.calls if c == ("POST", "/api/v1/admin/users")]
     assert len(users) == 3                    # app, reviewer, activity-ro
+    # the shared Dev-held account must NEVER join Owners — that would grant
+    # its token read on every devcake-internal work repo (review 3.x pin)
+    assert not any("/members/devcake-activity-ro" in p for _, p in rec.calls)
     ro_mints = [(p, b) for p, b in rec.token_posts
                 if p == "/api/v1/users/devcake-activity-ro/tokens"]
     assert len(ro_mints) == 1
@@ -503,9 +508,13 @@ def test_ensure_activity_repo_unprotected_with_ro_collaborator(tmp_path,
         prov = _prov(rec, tmp_path, monkeypatch)
         name = run_coro(prov.ensure_activity_repo("linear", "T-1"))
         assert name == "activity-linear-t-1"
+        assert ("POST", "/api/v1/orgs") in rec.calls    # org ensured first
         assert rec.repo_creates[0]["auto_init"] is False
+        assert rec.repo_creates[0]["private"] is True
         assert ("PUT", "/api/v1/repos/devcake-repos/activity-linear-t-1"
                        "/collaborators/devcake-activity-ro") in rec.calls
+        # READ, never write — the shared token must stay a pure reader
+        assert rec.collab_puts[-1][1] == {"permission": "read"}
         assert not any("branch_protections" in p for _, p in rec.calls)
         assert ("POST", "/api/v1/admin/users") not in rec.calls  # no svc user
 

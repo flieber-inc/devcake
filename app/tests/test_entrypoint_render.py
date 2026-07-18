@@ -79,6 +79,24 @@ def test_claude_result_event_extraction():
     assert json.loads(blob)["result"] == "x"
 
 
+def test_claude_text_dump_collects_text_blocks_untruncated():
+    # ADR-0014 D1: the full dump keeps every assistant-visible text block in
+    # order, UNTRUNCATED (the live relay's 200-char cap must not apply), and
+    # excludes thinking + tool_use
+    long_text = ("deep analysis " * 40).strip()            # ≫ 200-char relay cap
+    second = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": long_text}]}})
+    out = "\n".join([CLAUDE_INIT, CLAUDE_TOOL, CLAUDE_TEXT, CLAUDE_THINKING,
+                     second, "not json", CLAUDE_RESULT])
+    dump = ep.claude_text_dump(out)
+    first = dump.find("missing fixture")
+    assert first != -1
+    assert dump.find(long_text) > first                    # order preserved
+    assert long_text in dump                               # untruncated
+    assert "private reasoning" not in dump                 # thinking excluded
+    assert "file_path" not in dump                         # tool_use excluded
+
+
 # ── codex --json ─────────────────────────────────────────────────────────────
 
 CODEX_CMD = json.dumps({"type": "item.completed", "item": {
@@ -95,6 +113,20 @@ def test_render_codex_events():
     assert ep.render_codex(CODEX_MSG).startswith("Output:")
     assert ep.render_codex(CODEX_TURN) == "[codex] turn done · in=25247 out=88"
     assert ep.render_codex(json.dumps({"type": "turn.started"})) is None
+
+
+def test_codex_text_dump_collects_agent_messages():
+    # ADR-0014 D1: agent_message texts in order, untruncated; command
+    # executions and usage events excluded; non-JSON lines tolerated
+    long_msg = ("regression detail " * 30).strip()
+    second = json.dumps({"type": "item.completed", "item": {
+        "id": "item_2", "type": "agent_message", "text": long_msg}})
+    out = "\n".join([CODEX_CMD, CODEX_MSG, "garbage line", second, CODEX_TURN])
+    dump = ep.codex_text_dump(out)
+    assert dump.startswith("Output:")                      # first message first
+    assert long_msg in dump                                # untruncated
+    assert "/bin/bash" not in dump                         # command excluded
+    assert "25247" not in dump                             # usage excluded
 
 
 # ── grok streaming-json ──────────────────────────────────────────────────────

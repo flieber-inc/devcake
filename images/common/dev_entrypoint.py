@@ -441,6 +441,42 @@ def grok_stream_parse(out: str):
     return ("".join(texts), sid) if saw else None
 
 
+def claude_text_dump(out: str) -> str:
+    """ADR-0014 D1: every assistant-visible text block, in order, UNTRUNCATED.
+    Thinking blocks and tool calls are excluded — the dump is what the model
+    said, not what it did or privately considered."""
+    blocks = []
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+            continue
+        for block in (ev.get("message") or {}).get("content") or []:
+            if block.get("type") == "text" and block.get("text", "").strip():
+                blocks.append(block["text"].strip())
+    return "\n\n".join(blocks)
+
+
+def codex_text_dump(out: str) -> str:
+    """ADR-0014 D1: every agent_message text, in order, untruncated."""
+    blocks = []
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "item.completed":
+            continue
+        item = ev.get("item") or {}
+        if (item.get("item_type") or item.get("type")) == "agent_message":
+            text = str(item.get("text", "")).strip()
+            if text:
+                blocks.append(text)
+    return "\n\n".join(blocks)
+
+
 def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
     send(kind, {})
     last_id, deadline = "0", time.time() + timeout

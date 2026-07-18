@@ -10,6 +10,8 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from ...security import redact, redact_value
 from ..model import MissionRef
 from ..run import Run, utcnow
+from .feed import _blockquote
+from .markers import FEED_INLINE_MAX
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -54,7 +56,8 @@ async def finalize(self, run: Run, payload: dict) -> None:
 
         # 1 — transcript (idempotent via finalized_steps)
         if "transcript" not in run.finalized_steps:
-            await self._post_transcript(run, transcript)
+            await self._post_transcript(run, transcript,
+                                        payload.get("last_message_md"))
             run.finalized_steps.append("transcript")
             self.runs.store.save(run)
 
@@ -175,7 +178,11 @@ async def restore_after_failure(self, run: Run) -> None:
         log.exception("status restore failed for %s", run.run_id)
 
 
-async def _post_transcript(self, run: Run, transcript: str) -> None:
+async def _post_transcript(self, run: Run, transcript: str,
+                           last_message: str | None = None) -> None:
+    """ADR-0014 D1: attachment = full dump; comment = step line + the
+    `>`-blockquoted last message. last_message missing/empty ⇒ the pointer-only
+    comment (old-image payloads; never derived from the transcript)."""
     transcript = redact(transcript)
     name = f"{run.seq}_{run.mission_type}.md"
     body = f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n---\n\n{transcript}"
@@ -191,7 +198,16 @@ async def _post_transcript(self, run: Run, transcript: str) -> None:
                 f"attached: [{name}]({url})")
     except Exception:  # INV-5: the transcript is always posted, even inline
         log.exception("transcript upload failed — posting inline")
-    await self._feed(run.mission_pmo_id, "issue", body)
+    if last_message:
+        if len(last_message) > FEED_INLINE_MAX:
+            last_message = (last_message[:FEED_INLINE_MAX]
+                            + "\n\n… (truncated — full text in the attachment)")
+        # quoting quarantines the model text from every feed scan; the
+        # opt-out is safe because the full text already rides the attachment
+        body += "\n\n" + _blockquote(last_message)
+        await self._feed(run.mission_pmo_id, "issue", body, externalize=False)
+    else:
+        await self._feed(run.mission_pmo_id, "issue", body)
     self._audit(run.mission_pmo_id, "transcript", name)
 
 

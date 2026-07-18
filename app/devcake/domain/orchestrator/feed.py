@@ -78,6 +78,15 @@ async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
         markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
 
 
+def _blockquote(text: str) -> str:
+    """Inverse of _unquoted: prefix EVERY line with '> ' (bare '>' for blank
+    lines, so lazy-continuation can't leak) — the ADR-0014 D2 quarantine for
+    model-authored text posted inline. Applied app-side at the finalize
+    choke-point, never in the entrypoint: old images stay quarantined too."""
+    return "\n".join("> " + line if line.strip() else ">"
+                     for line in (text or "").splitlines())
+
+
 def _unquoted(body: str | None) -> str:
     """Strip `>`-quoted lines: markers/sentinels inside a human's quote of
     a DevCake comment must never count as DevCake's own."""

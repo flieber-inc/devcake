@@ -932,6 +932,70 @@ def test_finalize_always_posts_report_inv5(tmp_path):
     assert ({"DEVCAKE-PLAN"} in [add for _, add in fake.swaps]) # transition applied
 
 
+def _finalize_payload(**over):
+    base = {"result": {"outcome": "plan_needed", "summary": "s"},
+            "transcript_md": "FULL DUMP",
+            "token_report": {"extraction_method": "unavailable", "model": "m"}}
+    base.update(over)
+    return base
+
+
+def _saved_run(store):
+    run = Run(run_id="T-1-1-ONBOARD-ZZZZZZ", mission_key="T-1",
+              mission_pmo_id="p1", mission_type="ONBOARD",
+              dev_type="senior-dev", seq=1, stage_label_at_dispatch=None,
+              state="finalizing")
+    store.save(run)
+    return run
+
+
+def test_finalize_posts_last_message_blockquoted(tmp_path):
+    # ADR-0014 D1 flip: attachment = full dump; comment = step line + the
+    # last message, EVERY line `>`-prefixed (blank lines as bare `>`)
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="Done.\n\nDetails here.")))
+    assert ("1_ONBOARD.md", b"FULL DUMP") in fake.uploads
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "https://fake/1_ONBOARD.md" in comment
+    assert "> Done." in comment and "> Details here." in comment
+    lines = comment.splitlines()
+    blank_between = lines[lines.index("> Done.") + 1]
+    assert blank_between == ">"                    # blank lines quoted too
+    assert comment.count("`devcake:v1`") == 1
+    assert "Details here." not in "\n".join(       # no unquoted model text
+        l for l in lines if not l.lstrip().startswith(">"))
+
+
+def test_finalize_without_last_message_keeps_pointer_comment(tmp_path):
+    # rolling-deploy pin: an old-image payload (no last_message_md) posts
+    # exactly today's pointer-only comment — never derived from the dump
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload()))
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "https://fake/1_ONBOARD.md" in comment
+    assert not any(l.lstrip().startswith(">") for l in comment.splitlines())
+    assert "FULL DUMP" not in comment
+
+
+def test_finalize_truncates_pathological_last_message(tmp_path):
+    # a giant last message stays inline-bounded: truncated with a pointer,
+    # no comment-*.md externalization (the full text is the attachment)
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="z" * 10_000)))
+    assert [n for n, _ in fake.uploads] == ["1_ONBOARD.md"]   # only the dump
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "truncated — full text in the attachment" in comment
+    assert len(comment) < 4096
+
+
 # ── docs/05 §4 attachment policy ─────────────────────────────────────────────
 
 def test_feed_externalizes_over_2048(tmp_path):

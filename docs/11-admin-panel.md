@@ -38,6 +38,11 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `GET /api/v1/runs/{run_id}/log/stream` | SSE follow of the same log: replays the stored lines, then streams new ones until the run reaches a terminal state (`event: end`). Sends `X-Accel-Buffering: no` so nginx doesn't buffer; 15 s `: ping` heartbeats stay under nginx's 60 s read timeout |
 | `POST /api/v1/system/clear-runs` | Operator wipe: stop in-flight Devs, delete local run records + audit log, purge Dagu run history, delete OpenObserve log/trace streams. Config + secrets + PMO/forge untouched (`10-persistence.md` §5) |
 | `POST /api/v1/relations-mapper/run` | Manually dispatch a Relations Mapper run (`03-mission-lifecycle.md` §4b). Works regardless of the `enabled` toggle (which governs only the interval service); 422 without a valid `dev_type`, 409 while a mapper run is active |
+| `GET /api/v1/profiles` | Config profile rows (ADR-0013): counts + presence only, plus the last-applied breadcrumb and the divergence boolean. Never a secret value |
+| `GET /api/v1/profiles/{name}` | One profile: metadata, full section A, a secrets **presence map**, and the apply-preview `diff` vs current settings |
+| `POST /api/v1/profiles` | Save-current-as: snapshots the live settings + secret values under `{"name": …}`. 409 on collision unless `overwrite: true`; warnings name configured instances whose secret is missing from the snapshot |
+| `POST /api/v1/profiles/{name}/apply` | THE world-swap: replaces the sections the profile contains through the config choke points (a configs-only profile keeps live secrets). **409 while runs are active**; rollback-by-reapply on reload failure; appends an audit event |
+| `POST /api/v1/profiles/{name}/rename` · `DELETE /api/v1/profiles/{name}` | Rename (moves both snapshot files, keeps the breadcrumb honest) / delete a snapshot — live settings untouched |
 | `GET /api/v1/missions` | Current derived Missions + types (poll-cycle snapshot, advisory — INV-1); includes `blocked_by` keys, and the reason string names open blockers |
 | `POST /api/v1/debug/dispatch-hello` | Dispatches the hello stub Dev through the full pipeline (Dagu → container → Redis → finalize). Permanent debug/CI fixture — `scripts/ci_suite.sh` |
 
@@ -137,6 +142,14 @@ Both validate server-side (name shape, required description, per-file 200 KB / t
 
 ### Assignments
 Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).
+
+### Profiles (anchor `#/config/profiles`)
+Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely Instant** — profiles carry secret values, which never enter the client draft, so the section header carries the ImmediateBadge and the apply panel sits in an InstantZone. The UI deals in presence and counts only; a secret value never reaches the SPA.
+
+- **Save current as profile…** (the one primary): PromptDialog for the name; a 409 collision chains into an explicit red **Overwrite** confirm. Save warnings name configured instances whose secret is missing from the snapshot.
+- **Apply a profile**: dropdown + "Apply profile…" (the Prompts workflow-switcher lineage). The ConfirmDialog **renders the backend's diff preview** — per-section change counts, secret deletions by name, "updated after this snapshot" rotation warnings, intake-pause changes — plus honest destroyed/survives copy ("Run history, the skill store, internal repos, and .env values are untouched"). Disabled while the page draft is dirty (Save or Discard first); a 409 while runs are active renders inside the dialog for retry.
+- Rows: mono name (+ "configs only" badge for A-only profiles), capture time + counts, last-applied breadcrumb with the honest divergence note ("settings changed since" / "matches as of apply" — dict compare + secret timestamps, never value fingerprints). Rename/Delete live in the row ⋯ menu; delete states that live settings are unaffected.
+- Applying reloads the whole shared draft (everything changed). Profiles are fire-and-forget: later edits never update a snapshot.
 
 ### Limits
 - **Global max Devs** integer (help text: effective ceiling = min(global, sum of per-type caps)).

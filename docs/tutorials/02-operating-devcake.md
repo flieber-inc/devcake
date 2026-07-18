@@ -64,6 +64,27 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   open (`14` §2 zone C). Independent REVIEW Dev Type is **recommended**, not
   enforced.
 
+## Config profiles — save and switch whole setups
+
+Config → **Profiles** snapshots your entire saved setup — connections, repos,
+Dev Types, prompt templates, limits, **and every stored secret value** — under
+a name, and applies one back in a single click (ADR-0013):
+
+1. Get a setup working, then **Save current as profile…** (e.g. `baseline`).
+2. Reconfigure freely for a different task; save that as `docs-sprint`.
+3. Switch back anytime with **Apply a profile** → the confirm shows exactly
+   what changes (counts and names, never secret values) before anything
+   applies. Applying is blocked while runs are active — pause intake and let
+   them drain first.
+
+Honesty rules worth knowing: profiles are snapshots, not live links — later
+edits never update a profile (the row shows "settings changed since" when
+you've drifted from the last-applied one); applying an old profile restores
+its **old** secret values, and the preview warns when a live secret is newer
+than the snapshot; run history, the skill store, internal repos, and `.env`
+are never touched by a profile. Profile snapshots live on `/data` and hold
+secret values — they are part of why backups are a password export.
+
 ## Security warnings and daily hygiene
 
 - Read **security_warnings** on Overview/health (write token on all stages,

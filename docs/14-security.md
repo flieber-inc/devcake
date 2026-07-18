@@ -34,6 +34,7 @@ If that contract is wrong for your environment, do not run DevCake there.
 | Linear API key | Read/write of the team's project data |
 | `docker.sock` (via Dagu) | **Root-equivalent on the host** |
 | `ADMIN_PASSWORD` / GUI secret store | All operator secrets on the volume |
+| Config profile snapshots (`/data/secrets/profiles/`) | A saved profile's full secret set — same class as the live store; dormant copies survive live rotation/deletion until the profile is deleted (ADR-0013) |
 | `/data` volume (or its backups) | Full secret dump — treat backups like a password-manager export |
 | Mission content + repo content | Feeds agent prompts (trust zone B, §2) |
 
@@ -139,6 +140,15 @@ a capable agent from pushing bad code to a feature branch or exfiltrating tokens
    Config; stored `0600` under `/data/secrets/connections/` and
    `/data/secrets/harness/`. Never echoed (`GET /config` has no secret material;
    `secrets-check` = presence + timestamp only). `.env` = **bootstrap only**.
+6a. **Config profile snapshots (ADR-0013):** saving a profile copies the
+   current secret VALUES to `/data/secrets/profiles/{name}.json` (`0600`, at
+   redaction-glob level — dormant values ≥16 chars are masked by the scan;
+   shorter ones aren't until applied, the same residual as any `/data`
+   backup). The API stays presence-and-counts only for profiles: list/read
+   endpoints and apply previews never emit a value or a fingerprint. Note the
+   rotation caveat: a profile holds the values **as of its save** — rotating
+   a live secret does not touch snapshots, and applying an old profile
+   restores the old value (the apply preview warns).
 7. **Dev-Type secret env (`DevType.secret_env`):** mission-tooling credentials
    (e.g. a log-platform key for an MCP plugin) are the same harness-namespace
    secret class — GUI-stored, `0600`, redaction-registered on write and at boot.
@@ -262,7 +272,9 @@ dismiss.
 7. Strong bootstrap passwords in `.env` (empty/`change-me*` refuse boot unless
    `DEVCAKE_ALLOW_INSECURE=1` — local sandbox only).
 8. Read `/health` **security_warnings**; do not dismiss unread.
-9. Treat **`/data` backups** as secret material.
+9. Treat **`/data` backups** as secret material — including the config
+   profile snapshots under `/data/secrets/profiles/`, which hold every
+   secret value as of each save.
 
 Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 

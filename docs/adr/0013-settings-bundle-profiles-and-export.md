@@ -1,0 +1,48 @@
+# ADR-0013 — Settings bundle, config profiles, and export/import
+
+- **Status:** accepted (2026-07-18; profiles + bundle core shipped first, export/import + setup-env + Gitea scripts follow in the same feature line)
+- **Context:** A deployment's settings span four stores (`config.yaml`, `dev_types/*.yaml`, the two prompt-template trees, `/data/secrets/**`) plus `.env`, each with per-entity CRUD only. There was no way to save, load, import, or export a setup as a whole — the only backup story was "copy `/data`". Setting up a new run configuration, or a second deployment, meant re-entering everything by hand.
+
+## Decision 1 — ONE canonical bundle format
+
+`settings_bundle.py` defines a single versioned serialization (`kind: devcake-settings-bundle`, `bundle_schema_version: 1`) with three sections in the founder's taxonomy: **config** (A — AppConfig, dev types, operator prompt templates, active pointers, per-DevType skill *names*), **secrets** (B — connection/harness secret values, optional dev-type credential files), **setup_env** (C — the `.env` bootstrap values). Profiles and export/import are two consumers of the same serializer — a profile IS a stored bundle; an export file IS a serialized profile.
+
+- Section A is always plaintext YAML — bundles stay diffable (ADR-0002 ethos).
+- Sections B and C travel in ONE passphrase-encrypted envelope by default (scrypt KDF + AESGCM via the `cryptography` package; plaintext export exists behind an explicit `acknowledge_plaintext` gate with password-manager-export framing).
+- Versioning matches the house stance: `bundle_schema_version` is refused loudly on mismatch with no auto-migration; the embedded `config.app` goes through the **existing** `reject_stale_patch`, so stale v1/v3 shapes get the existing migration strings. Additive fields with defaults need no bump. **Consequence: profiles and bundles die on a config schema bump** — the refusal names it; "re-save profiles after upgrading" is runbook material.
+- Exclusions ledger — never in a bundle: internal-forge service tokens (re-provisioned at boot), run state, `dismissed_alerts` (imported dismissals could hide live advisories; live value survives apply), `DEVCAKE_ALLOW_INSECURE` (an exported insecure flag must never disable a production host's password checks), the last-applied sidecar. Dev-type credential files are export-only opt-in — host-migration material, never profile material.
+
+## Decision 2 — narrow never-echo exception
+
+ADR-0011's never-echo contract stands everywhere except ONE deliberate, operator-initiated egress: settings export. Previews, profile reads, and list endpoints stay presence-and-counts only (no values, no fingerprints). The security contract records the posture change honestly: **admin basic auth now includes one-request secret read-out** (docs/14 §2/§4). Guardrails: export is POST-only (no values in URLs/access logs), encrypted by default, plaintext acknowledged explicitly, and every export appends an audit event recording sections + encryption mode.
+
+Import hardening: bundles are operator-supplied input — `yaml.safe_load` only, ~20 MB cap, and **scrubbed validation errors** (pydantic embeds offending input in its messages; a malformed secrets section must not echo a value into a 422 detail or a log line — `_scrub_validation_error` strips inputs, and the secrets validators name keys/paths only).
+
+## Decision 3 — profiles: named snapshots across the two stores
+
+`/data/config/profiles/{name}.yaml` holds section A + metadata (diffable); `/data/secrets/profiles/{name}.json` holds section B (0600). The secrets file sits at glob level two, so `security._known_values()`'s `glob("*/*")` covers a dormant snapshot with **zero redaction changes** (tripwire-tested). Residual, documented: dormant values under the 16-char scan floor aren't masked until applied — the same exposure class as a `/data` backup, which the snapshot is.
+
+Profiles are **fire-and-forget**: no built-ins, no seeding, no active pointer — deleting one breaks nothing. There is deliberately no "active profile" indicator: an honest one needs value-derived secret fingerprints, which ADR-0011 bans. Instead: a last-applied breadcrumb (`/data/state/profiles.json`, outside bundles, harmlessly wiped by clear-runs) plus a divergence boolean computed from non-secret dict comparison and secret `updated_at` timestamps.
+
+**Rejected alternative — profiles/settings history in the internal Gitea.** (1) docs/14 §4: secrets "never in git"; git history is append-only, so rotated-out values would persist in `gitea_data`'s object store outside the 0600 + redaction discipline, gated by a bootstrap password. (2) Settings are boot-critical while the internal forge is optional (`GITEA_ADMIN_PASSWORD` unset ⇒ no forge) and sometimes down — the skill-store tolerates that only because skills are lazy enhancement content with a bundled fallback. (3) A git copy of file-based live settings recreates the rejected activity-mirror pattern (docs/16 discarded list: cache-coherence vs single source of truth). The salvaged kernel is the settings **audit trail**: profile save/apply/rename/delete, import, and export append scrubbed events (action, names, counts, encrypted flag — never values) to the existing `events.jsonl`. A one-way, scrubbed, A-only mirror push to Gitea remains a possible future roadmap item — advisory only, never read back.
+
+## Decision 4 — apply = replace-the-world through the existing choke points
+
+Applying a bundle (the ONLY world-swap path — imports land as profiles first, then apply like any other) replaces the sections it contains: full-document `AppConfig.model_validate` (not deep-merge), per-store writes through `save_dev_type`/`save_template`/`write_connection_secret` (validation stays load-bearing), then deletion of files the bundle doesn't carry. A profile without B keeps live secrets. Cross-store semantic checks are ONE implementation shared with `PUT /config` (`validate_config_semantics` + `dry_run_adapters`, extracted from the PUT).
+
+- **Runs-active guard:** apply 409s while runs are dispatched/running/finalizing (the internal-repo delete pattern). Save/list/read/export stay available.
+- **Crash honesty:** no transactions (ADR-0002). Ordering — additive writes, `config.yaml` commit point, deletions — makes any torn state either pre-commit (old world authoritative, new files inert) or post-commit (new world authoritative, stale extras pruned by re-apply). Recovery = re-apply. A staging-dir swap was rejected: `os.replace` cannot atomically swap non-empty directories.
+- **Rollback-by-reapply:** failure after the commit point re-applies the pre-captured previous bundle through the same code path — with three deliberate relaxations, because restoring what WAS live must not editorialize: semantic cross-checks are skipped, the orphan-secret skip is disabled (a live world may hold a secret whose instance card isn't saved yet), and a rollback reload failure logs instead of aborting the file restore. A double fault (rollback file writes failing too) raises 500 naming both worlds; every file write is individually atomic, so the disk is a consistent mix recoverable by any full re-apply.
+- Unknown-instance secrets in a normal apply are **skipped with a warning, never written** — no orphan secret files. The boot top-up interplay is accepted: applying a profile that lacks a seeded default dev type deletes it, and the next boot re-seeds it (the divergence indicator surfaces this honestly).
+- The apply confirm is a **preview**, not just a warning: `diff_bundle` reports per-section adds/changes/removals, flags `intake_paused` changes, and defuses the rotation trap by warning when a live secret's `updated_at` post-dates the snapshot ("applying restores the older value") — timestamps, never values.
+
+## Decision 5 — setup config (C) and internal Gitea (D)
+
+- **C:** the app container reads `.env` values from its own environment (compose `env_file`) but cannot write the host's `.env` and cannot restart the stack. So C exports in-app (with a staleness note: `os.environ` reflects container-start values) and **imports as a generated `.env` download** plus a documented host step (`docker compose up -d`). `DOCKER_GID`/`DEVCAKE_TAG` ride as values flagged host-specific with verify-comments in the generated file.
+- **D:** the app has no git binary and never shells out; API snapshots of internal work repos would discard the history/branches/PRs that ADR-0010's retention exists to keep, and break at Gitea's ~1000-entry tree truncation. So work repos get **host-side full-fidelity scripts** (`scripts/backup_gitea.sh` / `restore_gitea.sh`, a `gitea_data` volume tar — handled like a `/data` backup, since it contains repo content and Gitea's credential DB). The skill-store — HEAD-only by design — travels in bundles via the optional skills embedding (the existing base64 `files[]` shape).
+
+## Consequences
+
+- The persistence layout gains `config/profiles/`, `secrets/profiles/`, `state/profiles.json` (docs/10). Deleting the profiles dirs loses snapshots only; live settings are untouched.
+- Bundles/`/data`-grade material: an export containing B or C is a password-manager export; docs/14 gains the asset row, the Zone-A read-out sentence, and the operator-checklist item; the `gui-secrets-basic-auth` health warning copy now mentions export capability.
+- The full backup story becomes: `/data` volume + `gitea_data` volume (scripts), with settings bundles as the portable, selective layer on top.

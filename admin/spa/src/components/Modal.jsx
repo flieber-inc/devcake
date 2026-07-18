@@ -64,16 +64,25 @@ export function Overlay({ children, className = "", surfaceClass, onDismiss, ari
 }
 
 // No Escape/backdrop close on purpose: confirms guard consequential actions,
-// so only the explicit buttons may resolve the dialog.
-export function ConfirmDialog({ open, title, body, confirmLabel, busy, onConfirm, onCancel }) {
+// so only the explicit buttons may resolve the dialog. `children` renders
+// between body and buttons (e.g. an apply-preview diff); `error` keeps the
+// dialog open with the failure visible so the operator can retry or cancel.
+export function ConfirmDialog({ open, title, body, confirmLabel, busy, error,
+                                children, onConfirm, onCancel }) {
   if (!open) return null;
   return (
     <Overlay className="max-w-lg p-6">
       <h4 className="mb-2 text-base font-semibold tracking-tight">{title}</h4>
-      <p className="mb-5 whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-300">
+      <p className="mb-4 whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-300">
         {body}
       </p>
-      <div className="flex justify-end gap-2">
+      {children}
+      {error && (
+        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          {error}
+        </p>
+      )}
+      <div className="mt-5 flex justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
         <Button kind="danger" disabled={busy} onClick={onConfirm}>
           {busy ? "Working…" : confirmLabel}

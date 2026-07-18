@@ -11,6 +11,7 @@ import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
 import MoreMenu from "../components/MoreMenu.jsx";
+import ProfilesSection from "../components/ProfilesSection.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SelectionChips from "../components/SelectionChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
@@ -997,6 +998,8 @@ export default function ConfigPage({ section }) {
       <PromptsSection cfg={cfg} setField={setField}
         devTypeNames={Object.keys(dr.draft.devTypes || {})} />
       )}
+
+      {section === "profiles" && <ProfilesSection />}
 
       {section === "limits" && (
       <Section id="limits" title="Limits"

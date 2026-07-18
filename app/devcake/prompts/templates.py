@@ -205,6 +205,14 @@ def _dev_dir(dev_type: str) -> Path:
     return CONFIG_PATH.parent / "devtype_prompt_templates" / dev_type
 
 
+def known_devtype_dirs() -> list[Path]:
+    """Every dev type that has a prompt-template dir on disk — the settings-
+    bundle apply prunes dirs of dev types the bundle removed (ADR-0013)."""
+    from ..config import CONFIG_PATH
+    root = CONFIG_PATH.parent / "devtype_prompt_templates"
+    return sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+
+
 def seed_devtype_prompts(dev_types: dict) -> None:
     """Top-up seeding at boot and on dev-type create: Development ← the dev
     type's current identifying prompt (once); Customer Success ← the preset

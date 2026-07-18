@@ -22,8 +22,12 @@ from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
+from .. import profiles as profiles_store
 from .. import secrets as secrets_store
 from .. import security
+from ..settings_bundle import (BundleError, apply_bundle, audit_event,
+                               diff_bundle, dry_run_adapters,
+                               serialize_current, validate_config_semantics)
 from ..config import (HARNESS_VAR_PATTERN, AppConfig, Assignment, DevType,
                       _INSTANCE_NAME_RE, deep_merge, delete_dev_type,
                       load_config, load_dev_types, reject_stale_patch,
@@ -719,35 +723,17 @@ async def put_config(body: dict):
         merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
     except Exception as e:
         raise HTTPException(422, str(e))
-    rm = merged.relations_mapper
-    if rm.enabled and (not rm.dev_type or rm.dev_type not in dev_types):
-        raise HTTPException(422, "relations_mapper.dev_type must name an existing "
-                                 "Dev Type when the mapper is enabled")
-    if rm.interval_minutes < 1:
-        raise HTTPException(422, "relations_mapper.interval_minutes must be ≥ 1")
-    from ..prompts import PLAYBOOK_VARS
-    for mt, name in (merged.active_prompt_templates or {}).items():
-        if mt not in PLAYBOOK_VARS:
-            raise HTTPException(422, f"active_prompt_templates: unknown "
-                                     f"mission type {mt!r}")
-        if prompt_templates.resolve_playbook(mt, name)[1]:
-            raise HTTPException(422, f"active_prompt_templates: no stored "
-                                     f"template {mt}/{name}")
-    for dt_name, name in (merged.active_devtype_prompts or {}).items():
-        if dt_name not in dev_types:
-            raise HTTPException(422, f"active_devtype_prompts: unknown "
-                                     f"Dev Type {dt_name!r}")
-    # Dry-run adapter construction before persist (ISSUES #11): a bad URL or
-    # forge shape must not leave a broken config on disk. Unconfigured
-    # instances (empty team_key / repo URL) are valid-but-idle (schema v3).
+    # cross-store semantics + dry-run adapter construction (ISSUES #11) live
+    # in settings_bundle — ONE implementation shared with bundle apply
+    # (ADR-0013); the PUT resolves templates against disk
     try:
-        for inst in merged.pmos:
-            make_pmo(inst)
-        for repo in merged.repos:
-            if repo.configured:
-                make_forge(repo)
-    except Exception as e:
-        raise HTTPException(422, f"adapter construction failed: {e}") from e
+        validate_config_semantics(
+            merged, set(dev_types),
+            template_exists=lambda mt, name:
+                not prompt_templates.resolve_playbook(mt, name)[1])
+        dry_run_adapters(merged)
+    except BundleError as e:
+        raise HTTPException(e.status, str(e))
     previous = config.model_dump()
     # a removed instance's stored secrets go with it — otherwise a later
     # instance reusing the name silently inherits the dead credential
@@ -789,6 +775,148 @@ async def put_config(body: dict):
         log.info("auto_merge flipped ON — parked DEVCAKE-MERGE missions "
                  "re-armed for the deferred-merge sweep")
     return config.model_dump()
+
+
+# ── config profiles (ADR-0013): named snapshots of settings + secrets ────────
+
+def _require_no_active_runs(action: str) -> None:
+    """World-swaps are blocked while runs are in flight (founder decision) —
+    the internal-repo delete guard pattern, applied to whole-settings
+    replacement."""
+    n = len(store.active())
+    if n:
+        raise HTTPException(
+            409, f"{n} run(s) active — wait for them to finish or clear "
+                 f"runs before {action}")
+
+
+def _snapshot_warnings(bundle: dict) -> list[str]:
+    """A snapshot silently missing credentials its config expects is a trap
+    at apply time — name the gaps at save time instead."""
+    warns = []
+    sec = bundle.get("secrets") or {}
+    conns = sec.get("connections") or {}
+    cfg = bundle.get("config") or {}
+    for p in (cfg.get("app") or {}).get("pmos") or []:
+        if p.get("team_key") and not (conns.get(f"pmo-{p['name']}") or {}).get("api_key"):
+            warns.append(f"PMO {p['name']!r} is configured but has no stored "
+                         "API key — the snapshot carries none")
+    for r in (cfg.get("app") or {}).get("repos") or []:
+        stored = conns.get(f"repo-{r['name']}") or {}
+        if r.get("url") and not (stored.get("token") or stored.get("token_ro")):
+            warns.append(f"repo {r['name']!r} is configured but has no stored "
+                         "token — the snapshot carries none")
+    return warns
+
+
+@app.get("/api/v1/profiles")
+async def list_profiles():
+    """Profile rows for the admin table — counts and presence only. The
+    last-applied breadcrumb + divergence boolean ride the matching row
+    (dict compare + secret timestamps, never values — ADR-0011)."""
+    rows = profiles_store.list_profiles()
+    la = profiles_store.last_applied()
+    for row in rows:
+        row["last_applied_at"] = None
+        row["diverged"] = None
+        if la and la.get("name") == row["name"] and not row.get("broken"):
+            row["last_applied_at"] = la.get("at")
+            try:
+                bundle = profiles_store.read_profile(row["name"])
+                row["diverged"] = profiles_store.diverged_since(
+                    bundle, la.get("at") or "", config, dev_types)
+            except BundleError:
+                row["diverged"] = None
+    return {"profiles": rows}
+
+
+@app.get("/api/v1/profiles/{name}")
+async def get_profile(name: str):
+    """Full section A + a secrets PRESENCE map + the apply-preview diff.
+    Secret values never leave this endpoint."""
+    try:
+        bundle = profiles_store.read_profile(name)
+        diff = diff_bundle(bundle, config, dev_types)
+    except BundleError as e:
+        raise HTTPException(e.status, str(e))
+    presence = None
+    if "secrets" in (bundle.get("sections") or []):
+        sec = bundle.get("secrets") or {}
+        presence = {"connections": {k: sorted(f) for k, f in
+                                    (sec.get("connections") or {}).items()},
+                    "harness": sorted(sec.get("harness") or {})}
+    return {"name": bundle.get("name", name),
+            "created_at": bundle.get("created_at"),
+            "devcake_tag": bundle.get("devcake_tag", ""),
+            "sections": bundle.get("sections") or [],
+            "config": bundle.get("config"),
+            "secrets_present": presence,
+            "diff": diff}
+
+
+@app.post("/api/v1/profiles")
+async def save_profile(body: dict):
+    """Save-current-as: snapshot the live settings (A) + secret values (B)
+    under a name. 409 on collision unless overwrite — the UI chains an
+    explicit overwrite confirm."""
+    name = str(body.get("name") or "")
+    bundle = serialize_current(config, dev_types,
+                               include_config=True, include_secrets=True)
+    try:
+        profiles_store.save_profile(name, bundle,
+                                    overwrite=bool(body.get("overwrite")))
+    except BundleError as e:
+        raise HTTPException(e.status, str(e))
+    warnings = _snapshot_warnings(bundle)
+    sec = bundle.get("secrets") or {}
+    audit_event("profile_saved",
+                f"name={name} secrets="
+                f"{sum(len(f) for f in (sec.get('connections') or {}).values()) + len(sec.get('harness') or {})}")
+    return {"saved": True, "name": name, "warnings": warnings}
+
+
+@app.post("/api/v1/profiles/{name}/apply")
+async def apply_profile(name: str):
+    """THE world-swap: replaces the sections the profile contains (a profile
+    without secrets keeps the live ones). Blocked while runs are active;
+    rollback-by-reapply on reload failure (settings_bundle)."""
+    _require_no_active_runs("applying a profile")
+    try:
+        bundle = profiles_store.read_profile(name)
+        result = apply_bundle(bundle, config=config, dev_types=dev_types,
+                              reload=reload_connections)
+    except BundleError as e:
+        raise HTTPException(e.status, str(e))
+    if "secrets" in result["applied"]:
+        # fresh credentials clear latched auth state, same as the individual
+        # secret PUT endpoints do
+        shared_breakers.clear()
+        forge_runtime.breakers.clear()
+    profiles_store.record_applied(name)
+    audit_event("profile_applied",
+                f"name={name} sections={'+'.join(result['applied'])}")
+    return {"profile": name, **result}
+
+
+@app.post("/api/v1/profiles/{name}/rename")
+async def rename_profile(name: str, body: dict):
+    new = str(body.get("new_name") or "")
+    try:
+        profiles_store.rename_profile(name, new)
+    except BundleError as e:
+        raise HTTPException(e.status, str(e))
+    audit_event("profile_renamed", f"{name} -> {new}")
+    return {"renamed": True, "name": new}
+
+
+@app.delete("/api/v1/profiles/{name}")
+async def delete_profile(name: str):
+    try:
+        profiles_store.delete_profile(name)
+    except BundleError as e:
+        raise HTTPException(e.status, str(e))
+    audit_event("profile_deleted", f"name={name}")
+    return {"deleted": name}
 
 
 # ── per-Mission-Type prompt templates (v0.1.1) ───────────────────────────────
@@ -1004,11 +1132,11 @@ async def put_assignments(body: dict):
 
 # ── GUI-stored secrets (M12, F5): write-only VALUES, never echoed back ───────
 
-_SECRET_SCOPES = {"pmo", "repo"}
-# per-scope field allowlist — scope/instance/field all reach the filesystem
-# as path components, so every entry point validates against these (audit A5/A9)
-_SECRET_FIELDS = {"pmo": {"api_key"},
-                  "repo": {"token", "token_ro", "reviewer_token"}}
+_SECRET_SCOPES = set(secrets_store.CONNECTION_FIELDS)
+# per-scope field allowlist — ONE definition (secrets.CONNECTION_FIELDS,
+# shared with settings_bundle); scope/instance/field all reach the filesystem
+# as path components, so every entry point validates against it (audit A5/A9)
+_SECRET_FIELDS = secrets_store.CONNECTION_FIELDS
 _HARNESS_VAR_RE = re.compile(f"^{HARNESS_VAR_PATTERN}$")   # one definition: config.py
 
 

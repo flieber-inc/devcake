@@ -14,12 +14,20 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
   config/
     config.yaml                 # human-editable general config (§3)
     dev_types/{name}.yaml       # one file per Dev Type (admin-panel CRUD target)
+    prompt_templates/{TYPE}/{name}.yaml         # per-Mission-Type prompt templates (built-ins re-seeded at boot)
+    devtype_prompt_templates/{dev}/{name}.yaml  # per-Dev-Type identifying-prompt templates
+    profiles/{name}.yaml        # config profiles: section A of a settings bundle + metadata (ADR-0013)
   secrets/
+    connections/{scope}-{instance}.json  # GUI-stored PMO/repo secret VALUES (ADR-0011); 0600
+    harness/{VAR}.json          # GUI-stored harness/model keys; 0600
+    internal_forge/*.json       # bundled-Gitea service/mission tokens (ADR-0010); 0600
+    profiles/{name}.json        # a profile's secret snapshot (section B); 0600, covered by the redaction glob
     {dev_type}/creds.json       # uploaded credential JSONs; chmod 600, owner app
   state/
     runs/{run_id}.json          # Run records (02-domain-model.md §7), one file per run
     runs/quarantine/            # unreadable/model-invalid/pre-v2 records, moved aside at boot (§5)
-    events.jsonl                # append-only audit log of every PMO write the app performs
+    events.jsonl                # append-only audit log: every PMO write + settings changes (profile ops, exports)
+    profiles.json               # last-applied-profile breadcrumb (advisory; wiped harmlessly by clear-runs)
 ```
 
 (The poll snapshot served by `GET /api/v1/missions` is in-memory only — rebuilt
@@ -117,5 +125,6 @@ Direct file edits are tolerated but take effect on the next app start, when `loa
 | Deleted | Consequence |
 |---|---|
 | `/data/state` | Run history, attempt counters, and loop-warning dedupe reset. Mission state is untouched (it lives in the PMO); reconciliation (`04-orchestrator.md` §6) rebuilds the in-flight picture from the Dagu API and Redis. Legal at any time. |
-| `/data/secrets` | Dev Types with `credentials_json` mode fail auth (exit 12 → circuit breaker) until re-uploaded. |
+| `/data/secrets` | Dev Types with `credentials_json` mode fail auth (exit 12 → circuit breaker) until re-uploaded. GUI-stored connection/harness secrets and profile secret snapshots are gone — re-enter via the Config page or re-import a bundle. |
 | `/data/config` | The app blocks startup pending reconfiguration (admin panel first-run flow). |
+| `/data/config/profiles` + `/data/secrets/profiles` | Saved profile snapshots are gone; **live settings are untouched** (profiles are fire-and-forget snapshots, ADR-0013). |

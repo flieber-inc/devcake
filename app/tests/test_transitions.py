@@ -967,19 +967,23 @@ def test_finalize_posts_last_message_blockquoted(tmp_path):
     assert comment.count("`devcake:v1`") == 1
     assert "Details here." not in "\n".join(       # no unquoted model text
         l for l in lines if not l.lstrip().startswith(">"))
+    assert MissionManager._is_devcake_comment(comment)   # provenance holds
 
 
 def test_finalize_without_last_message_keeps_pointer_comment(tmp_path):
-    # rolling-deploy pin: an old-image payload (no last_message_md) posts
-    # exactly today's pointer-only comment — never derived from the dump
-    m = mission("in_progress", {"DEVCAKE"})
-    mgr, fake, store = make_mgr(tmp_path, m)
-    run = _saved_run(store)
-    run_coro(mgr.finalize(run, _finalize_payload()))
-    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
-    assert "https://fake/1_ONBOARD.md" in comment
-    assert not any(l.lstrip().startswith(">") for l in comment.splitlines())
-    assert "FULL DUMP" not in comment
+    # rolling-deploy pin: an old-image payload (no last_message_md) — and an
+    # empty one — posts exactly today's pointer-only comment, never derived
+    # from the dump
+    for payload in (_finalize_payload(), _finalize_payload(last_message_md="")):
+        m = mission("in_progress", {"DEVCAKE"})
+        mgr, fake, store = make_mgr(tmp_path, m)
+        run = _saved_run(store)
+        run_coro(mgr.finalize(run, payload))
+        comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+        assert "https://fake/1_ONBOARD.md" in comment
+        assert not any(l.lstrip().startswith(">")
+                       for l in comment.splitlines())
+        assert "FULL DUMP" not in comment
 
 
 def test_finalize_truncates_pathological_last_message(tmp_path):
@@ -992,7 +996,8 @@ def test_finalize_truncates_pathological_last_message(tmp_path):
         last_message_md="z" * 10_000)))
     assert [n for n, _ in fake.uploads] == ["1_ONBOARD.md"]   # only the dump
     comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
-    assert "truncated — full text in the attachment" in comment
+    # the notice itself is INSIDE the quoted block (quarantine holds)
+    assert "> … (truncated — full text in the attachment)" in comment
     assert len(comment) < 4096
 
 
@@ -1029,6 +1034,40 @@ def test_feed_externalizes_over_2048(tmp_path):
     run_coro(mgr._feed("p1", "issue", "y" * 2048))
     assert len(fake.uploads) == 1
     assert "y" * 2048 in fake.comments[-1]
+
+
+def test_finalize_upload_failure_posts_quoted_inline(tmp_path):
+    # INV-5 fallback under ADR-0014: the inline transcript is model text and
+    # must ride QUARANTINED — only the step-marker header stays unquoted
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+
+    async def _boom(*a, **k):
+        raise RuntimeError("upload down")
+    fake.upload_attachment = _boom
+    run_coro(mgr.finalize(run, _finalize_payload(
+        transcript_md="dump mentions `9_EXECUTE.md`", last_message_md="Done.")))
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert "> dump mentions" in comment                  # transcript quoted
+    entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
+                          kind="comment", body=comment)
+    assert MissionManager._derive_seq(
+        Activity(mission=m, entries=[entry])) == 2       # 9 never counts
+
+
+def test_feed_externalized_preview_strips_quoted_lines(tmp_path):
+    # the 300-char preview of an externalized comment flattens newlines —
+    # quoted content must be dropped from it, or "> " prefixes land mid-line
+    # and markers leak back into scan scope
+    from devcake.domain.orchestrator.feed import _blockquote
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    body = "header line\n" + _blockquote("see `7_EXECUTE.md`\n" + "x" * 3000)
+    run_coro(mgr._feed("p1", "issue", body))
+    posted = fake.comments[-1]
+    assert "full text attached:" in posted
+    assert "7_EXECUTE.md" not in posted        # quoted text never previews
 
 
 def test_feed_externalize_opt_out_posts_long_body_inline(tmp_path):

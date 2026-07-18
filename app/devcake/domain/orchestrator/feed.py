@@ -69,7 +69,11 @@ async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
             name = f"comment-{utcnow():%Y%m%dT%H%M%S}.md"
             url = await self.pmo.upload_attachment(pmo_id, name,
                                                    markdown.encode())
-            markdown = (markdown[:300].replace("\n", " ")
+            # preview from UNQUOTED lines only: flattening newlines would
+            # otherwise land "> "-quarantined text mid-line, back in scan
+            # scope (ADR-0014 D2)
+            preview = _unquoted(markdown) or markdown[:300]
+            markdown = (preview[:300].replace("\n", " ")
                         + f"… — full text attached: [{name}]({url})")
         except Exception:
             log.exception("feed attachment upload failed — posting inline")

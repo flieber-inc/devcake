@@ -394,6 +394,18 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
         payload["extra_repos"] = extras
     if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
         payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
+    # ADR-0014 D4: the activity-repo RO clone spec (secret half — the token
+    # never rests on the Run). Absent for MAPPER (no mission, no repo), when
+    # the forge is off, or before the boot mint — the entrypoint then falls
+    # back to the Redis materialization.
+    if self.internal_forge is not None and run.mission_type != "MAPPER":
+        from ...ports.internal_forge import activity_repo_name
+        creds = self.internal_forge.activity_credentials(
+            activity_repo_name(self.instance_name, run.mission_key))
+        if creds is not None:
+            payload["activity_repo"] = {"url": creds.clone_url,
+                                        "clone_user": creds.username,
+                                        "token": creds.token}
     return payload
 
 

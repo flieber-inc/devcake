@@ -204,6 +204,9 @@ class RunManager:
                  # per-Dev-Type MCP registration, run by the entrypoint
                  # before harness launch (docs/07 §5 step 5, exit 14)
                  "mcp_setup_commands": secret.get("mcp_setup_commands") or [],
+                 # ADR-0014 D4: clone-first activity materialization; None →
+                 # the entrypoint uses the Redis activity.get fallback
+                 "activity_repo": secret.get("activity_repo") or None,
                  "prompt": run.spec_prompt},
             )
         elif kind == "runspec.ack":

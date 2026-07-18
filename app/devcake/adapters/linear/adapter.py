@@ -319,7 +319,8 @@ class LinearAdapter:
         projects have no issue-style comments API (verified live).
 
         Shallow (default): the cheap recent-window query the marker-scan call
-        paths ride — byte-stable, MAX_COMMENT_PAGES valve. Full (ADR-0014 D3,
+        paths ride — FIELD-identical to the pre-ADR-0014 query (whitespace
+        aside; the cost pin is field-based), MAX_COMMENT_PAGES valve. Full (ADR-0014 D3,
         activity-folder builder only): entire history, reply ids, description
         assets + the native attachments connection; the hard stop sets
         Activity.truncated instead of raising (a raise would starve the Dev's
@@ -335,8 +336,8 @@ class LinearAdapter:
         # (docs/03 §4.1) live there, and losing them fails quiet.
         comment_fields = ("id parent { id } body createdAt user { name }"
                           if full else "body createdAt user { name }")
-        attachments_part = ("attachments(first: 50) { nodes { url title } }"
-                            if full else "")
+        attachments_part = ("attachments(first: 50) { pageInfo { hasNextPage }"
+                            " nodes { url title } }" if full else "")
         data = await self._gql(
             """query($id: String!) { issue(id: $id) {
                  id identifier title description url updatedAt priority
@@ -412,7 +413,8 @@ class LinearAdapter:
             if u not in seen:
                 seen.add(u)
                 refs.append(AttachmentRef(url=u, name=names.get(u), kind="file"))
-        for node in ((issue.get("attachments") or {}).get("nodes") or []):
+        conn = issue.get("attachments") or {}
+        for node in (conn.get("nodes") or []):
             u = (node or {}).get("url") or ""
             if not u or u in seen:
                 continue
@@ -420,6 +422,9 @@ class LinearAdapter:
             refs.append(AttachmentRef(
                 url=u, name=node.get("title"),
                 kind="file" if _ASSET_RE.match(u) else "link"))
+        if (conn.get("pageInfo") or {}).get("hasNextPage"):  # never silent
+            log.warning("get_activity: native attachment list exceeds 50 — "
+                        "remainder omitted from the activity folder")
         return refs
 
     # ── writes ───────────────────────────────────────────────────────────────

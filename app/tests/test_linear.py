@@ -132,6 +132,26 @@ def test_get_activity_full_surfaces_description_and_native_attachments():
     assert act2.mission_attachments == []                  # shallow: never
 
 
+def test_get_activity_full_native_attachments_overflow_warns(caplog):
+    # the 51st native attachment must never vanish silently
+    extra = {"attachments": {"pageInfo": {"hasNextPage": True}, "nodes": [
+        {"url": f"https://uploads.linear.app/{i}", "title": f"f{i}"}
+        for i in range(50)]}}
+    with caplog.at_level("WARNING", logger="devcake.linear"):
+        act = run_coro(_full_adapter(issue_extra=extra).get_activity(
+            MissionRef("i1", "issue"), full=True))
+    assert len(act.mission_attachments) == 50
+    assert any("native attachment" in r.message for r in caplog.records)
+
+
+def test_get_activity_full_exact_boundary_not_truncated():
+    from devcake.adapters.linear.adapter import MAX_COMMENT_PAGES_FULL
+    act = run_coro(_paged_adapter(100 * MAX_COMMENT_PAGES_FULL, [])
+                   .get_activity(MissionRef("i1", "issue"), full=True))
+    assert len(act.entries) == 100 * MAX_COMMENT_PAGES_FULL
+    assert act.truncated is False
+
+
 def test_get_activity_full_hard_stop_sets_truncated(caplog):
     from devcake.adapters.linear.adapter import MAX_COMMENT_PAGES_FULL
     total = 100 * MAX_COMMENT_PAGES_FULL + 50

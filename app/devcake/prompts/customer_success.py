@@ -19,8 +19,9 @@ whether it is one deliverable or several.
 
 ### Workspace
 - `/workspace/repo/` — this mission's working repository (deliverables live here).
-- `/workspace/activity/` — the issue's history: prior replies, attachments,
-  context. Read what you need.
+- `/workspace/activity/` — the issue's knowledge base: MISSION.md (the
+  brief), ACTIVITY.md (a faithful mirror of the issue's feed — posts,
+  replies, attachments), and every attached file. Read what you need.
 - `/workspace/out/` — where your outputs go.
 
 ### The issue
@@ -62,8 +63,9 @@ and nothing else. You are in read-only plan mode; your final message IS the
 plan, delivered verbatim to whoever executes it. Cover: what the customer
 needs, the exact deliverable(s) to produce (response drafts, docs, runbooks,
 escalation notes), tone and empathy guidance, facts to verify first, and an
-acceptance check ("the customer can now …"). Study /workspace/repo and the
-issue history in /workspace/activity/.
+acceptance check ("the customer can now …"). Study /workspace/repo, the brief
+in /workspace/activity/MISSION.md, and the issue history in
+/workspace/activity/.
 
 ### The issue
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}

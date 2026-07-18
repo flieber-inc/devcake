@@ -15,10 +15,13 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
                          #   exactly after the repository (standard clone output).
                          #   The ONLY place the harness may do its work (INV-6).
   activity/
-    ACTIVITY.md          # rendered activity feed of the Mission (format: §2)
-    {attachment files}   # every attachment from the feed, downloaded into this same folder
-                         #   under its original name (mission-doc requirement); an attachment
-                         #   literally named ACTIVITY.md gets the collision suffix rule below
+    MISSION.md           # the brief: key/title/meta/labels, FULL description, mission
+                         #   attachments (ADR-0014 — every playbook points here)
+    ACTIVITY.md          # faithful mirror of the Mission's feed (format: §2)
+    {attachment files}   # every attachment from the feed — including prior steps' full
+                         #   session transcripts {seq}_{TYPE}.md — downloaded under its
+                         #   original name; collisions get the suffix rule below (seeded
+                         #   against ACTIVITY.md and MISSION.md)
   out/
     result.json          # REQUIRED structured outcome (schema: 03-mission-lifecycle.md §6)
     PLAN.md              # PLAN runs only: the produced plan
@@ -31,27 +34,25 @@ The workspace is prepared entirely by the container **entrypoint** (not the app)
 
 ## 2. `ACTIVITY.md` format
 
-**Intent (confirmed decision):** the `activity/` folder is a mini **knowledge base the harness taps into as needed** — queryable, greppable reference material. It is *never* inlined into the prompt; the playbook prompt carries only the mission title/description and points here (`03-mission-lifecycle.md` §7). To keep casual full-file reads cheap even on long missions, `ACTIVITY.md` is a compact **index**: short entries (human comments, status changes) appear inline; long bodies live as sibling files that the index references.
+**Intent (confirmed decision, revised by ADR-0014):** the `activity/` folder is a mini **knowledge base the harness taps into as needed** — queryable, greppable reference material. It is *never* inlined into the prompt; the playbook prompt carries only the mission title/description and points here (`03-mission-lifecycle.md` §7). The folder is three parts: **`MISSION.md`** (the brief — key/title/meta/labels, the FULL description, and mission-level attachments: description-embedded assets + the vendor's native attachment list, files downloaded / links rendered as links), **`ACTIVITY.md`** (a **faithful mirror of the feed as seen in the PMO** — every post and reply inline with its full body, `↳ reply to` nesting, `[attachment: name]` markers at their feed positions; heavy content is naturally attachment-borne because DevCake's own long posts externalize at post time), and the **sibling files** (every attachment's bytes, including prior steps' full session transcripts). If the adapter's full-history hard stop ever trips, `ACTIVITY.md` opens with a loud `⚠ FEED TRUNCATED` banner — never silent.
 
 ```markdown
 # {mission_key}: {title}
-> Kind: {issue|project} · Status: {status} · Priority: {priority} · URL: {url}
-> Labels: {labels, comma-separated}
+> Brief: MISSION.md (same folder) — description, labels, mission attachments.
 
-## Description
-{description markdown, verbatim}
-
-## Activity (chronological index — bodies over ~2 KB live as files in this folder)
+## Activity (chronological mirror of the PMO feed)
 Entries marked 🧑 HUMAN are instructions/steering from a person — they
 are authoritative. Entries marked 🤖 DevCake are DevCake's own records.
 ### {timestamp} — {author} — {🧑 HUMAN | 🤖 DevCake} ({comment|status_change|attachment})
-{short body inline · long body → one-line summary + `see: {filename}`}
+{↳ reply to {author} @ {timestamp} — when the entry is a threaded reply}
+{full body, verbatim}
+{[attachment: name] — one line per attachment, at its feed position}
 ...
 ```
 
 **Provenance markers (added with adr/0007):** each entry is classified by the comment-provenance sentinel (`03-mission-lifecycle.md` §8a) — a body ending in `` `devcake:v1` `` is DevCake's; everything else is a human's. The classification is never based on `author`, which is unreliable when DevCake posts with the operator's own PMO credentials. Every playbook instructs the Dev to read 🧑 HUMAN entries before starting and to let the most recent human comment win on conflict.
 
-The index is strictly chronological and complete — *all* the current activity of the Mission, per the mission doc; nothing is omitted, only externalized (`get_activity` is cursor-paginated, verified against a 108-comment mission — `05-pmo-adapter.md` §3). Attachments and long bodies (notably prior DevCake transcripts `N_TYPE.md`, plans, and review reports) are downloaded into `activity/` alongside `ACTIVITY.md` under their original filenames (name-collision suffix `-2`, `-3`, … — implemented app-side in `activity_payload`, deduping the externalized entries and downloaded attachments against each other and against `ACTIVITY.md`). This also caps the compounding-cost failure mode where each step would otherwise re-read every prior transcript in full.
+The mirror is strictly chronological and complete — *all* the current activity of the Mission; nothing is omitted or previewed (`get_activity(full=True)` walks the entire history — `05-pmo-adapter.md` §3). Attachments (notably prior DevCake full-session transcripts `N_TYPE.md`, plans, and review reports) are downloaded into `activity/` under their original filenames (name-collision suffix `-2`, `-3`, … — implemented app-side in `activity_payload`, deduping downloaded attachments against each other and against `ACTIVITY.md`/`MISSION.md`).
 
 ## 3. Environment contract (normative)
 

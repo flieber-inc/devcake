@@ -1,6 +1,7 @@
 """Playbook prompts (docs/03 §7). The playbook restates the binding rules from
 docs/03 — workspace boundaries, result.json contract, bounded effort. Prompts
-inline only the mission title/description; activity/ is reference material.
+inline only the mission title/description; activity/ (MISSION.md brief +
+ACTIVITY.md feed mirror + attached files, ADR-0014) is reference material.
 
 Operator-editable templates (v0.1.1): each Mission Type's playbook can be
 replaced by a stored template (prompts/templates.py; /data/config/
@@ -62,9 +63,11 @@ path is the only exception, and you must be certain).
 
 ### Workspace
 - `/workspace/repo/` — a fresh clone of the repository. The ONLY place work may happen.
-- `/workspace/activity/` — the mission's history and artifacts (ACTIVITY.md index +
-  files). Reference material: grep or read what you need; do not assume you must
-  read all of it.
+- `/workspace/activity/` — the mission's knowledge base: MISSION.md (the
+  brief), ACTIVITY.md (a faithful mirror of the mission's feed — full posts,
+  replies, `[attachment: …]` markers), and every attached file — including
+  prior steps' full session transcripts (`N_TYPE.md`). Reference material:
+  grep or read what you need; do not assume you must read all of it.
 - `/workspace/out/` — where your outputs go.
 
 ### The mission
@@ -191,8 +194,9 @@ nothing else. You are running in the harness's read-only plan mode; your final
 message IS the plan and will be delivered verbatim to the implementer, who has
 no other context. Structure it so a competent engineer (or agent) can execute
 it without asking questions: goals, file-by-file changes, new files, testing
-strategy, and acceptance checks. Study /workspace/repo and the mission history
-in /workspace/activity/ (reference material — read what you need).
+strategy, and acceptance checks. Study /workspace/repo, the brief in
+/workspace/activity/MISSION.md, and the mission history in
+/workspace/activity/ (reference material — read what you need).
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}

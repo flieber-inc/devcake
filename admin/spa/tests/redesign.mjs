@@ -39,9 +39,11 @@ await withPage(async (page) => {
 
   // 5: RunTerminal — focus-trapped dialog, Esc closes, focus returns
   await gotoFresh(page, "#/runs");
-  await page.waitForSelector('h1:has-text("Runs")');
+  // the empty-state row renders before the first /runs fetch resolves —
+  // give real rows time to arrive before concluding the stack has none
   const runBtn = page.locator('td button[title="Open the run terminal"]').first();
-  if (!(await runBtn.count())) {
+  const hasRuns = await runBtn.waitFor({ timeout: 8000 }).then(() => true, () => false);
+  if (!hasRuns) {
     skip("RunTerminal dialog behavior", "no runs recorded on this stack");
   } else {
     await runBtn.click();

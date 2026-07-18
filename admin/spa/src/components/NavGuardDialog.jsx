@@ -1,13 +1,14 @@
 import React from "react";
 import Button from "./Button.jsx";
+import { Overlay } from "./Modal.jsx";
 
 // Shown when navigating away from Config with a dirty draft.
+// Esc / backdrop = "Stay" (the safe choice — nothing is lost).
 export default function NavGuardDialog({ open, count, errors, onStay, onDiscard, onSave }) {
   if (!open) return null;
   const errorList = Object.values(errors || {});
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]">
-      <div className="w-full max-w-lg rounded-card border border-neutral-200 bg-white p-6 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+    <Overlay className="max-w-lg p-6" onDismiss={onStay}>
         <h4 className="mb-2 text-base font-semibold tracking-tight">Unsaved changes</h4>
         <p className="mb-5 text-sm text-neutral-600 dark:text-neutral-300">
           You have {count} unsaved change{count > 1 ? "s" : ""} on this page.
@@ -26,7 +27,6 @@ export default function NavGuardDialog({ open, count, errors, onStay, onDiscard,
             Save &amp; leave…
           </Button>
         </div>
-      </div>
-    </div>
+    </Overlay>
   );
 }

@@ -9,14 +9,17 @@ import DraftChrome from "./components/DraftChrome.jsx";
 import { ConfigDraftProvider } from "./lib/ConfigDraftContext.jsx";
 import LogsPage from "./pages/LogsPage.jsx";
 import deriveAlerts, { alertKey } from "./lib/alerts.js";
+import { CONFIG_SECTIONS } from "./lib/nav.js";
 import usePoll from "./lib/usePoll.js";
 import { get, send } from "./api.js";
 
 const PAGES = ["overview", "runs", "config", "repos", "logs"];
+const SECTION_IDS = CONFIG_SECTIONS.map((s) => s.id);
 
-// tiny hash router: #/overview · #/runs · #/config · #/config/<section> ·
-// #/repos · #/logs. The old #/config/repository deep link redirects to
-// #/repos (the section moved to its own page — v0.1.1 B4).
+// tiny hash router: #/overview · #/runs · #/config/<section> · #/repos ·
+// #/logs. Configuration is settings-style — one section per view — so bare
+// #/config (or an unknown section) lands on the first section. The old
+// #/config/repository deep link redirects to #/repos (v0.1.1 B4).
 function parseHash() {
   if (/^#\/config\/repository$/.test(window.location.hash)) {
     window.location.replace("#/repos");
@@ -24,7 +27,15 @@ function parseHash() {
   }
   const m = window.location.hash.match(/^#\/([^/]+)(?:\/(.+))?/);
   const page = m && PAGES.includes(m[1]) ? m[1] : "overview";
-  return { page, section: page === "config" ? m?.[2] || null : null };
+  if (page === "config") {
+    const sec = m?.[2];
+    if (!sec || !SECTION_IDS.includes(sec)) {
+      window.location.replace(`#/config/${SECTION_IDS[0]}`);
+      return { page: "config", section: SECTION_IDS[0] };
+    }
+    return { page, section: sec };
+  }
+  return { page, section: null };
 }
 
 export default function App() {
@@ -32,7 +43,6 @@ export default function App() {
   const [health, setHealth] = useState({});
   const [healthError, setHealthError] = useState(false);
   const [lastOkAt, setLastOkAt] = useState(null);
-  const [spySection, setSpySection] = useState(null); // scrollspy report from ConfigPage
   const [intakeOverride, setIntakeOverride] = useState(null);
   const [intakeBusy, setIntakeBusy] = useState(false);
   const [intakeError, setIntakeError] = useState("");
@@ -136,7 +146,7 @@ export default function App() {
     <div className="flex h-screen bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
       <Sidebar
         page={page}
-        configSection={spySection || section}
+        configSection={section}
         alertCount={alerts.length}
         health={health}
         healthError={healthError}
@@ -185,12 +195,7 @@ export default function App() {
                 onRestoreAlert={restoreAlert}
               />
             )}
-            {page === "config" && (
-              <ConfigPage
-                section={section}
-                onSectionInView={setSpySection}
-              />
-            )}
+            {page === "config" && <ConfigPage section={section} />}
             {page === "repos" && <ReposPage />}
             {page === "runs" && <RunsPage />}
             {page === "logs" && <LogsPage />}

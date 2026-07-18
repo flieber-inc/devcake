@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  CakeSlice, LayoutDashboard, SquareTerminal, Settings2, FolderGit2, ScrollText,
+  LayoutDashboard, SquareTerminal, Settings2, FolderGit2, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import StatusDot from "./StatusDot.jsx";
@@ -74,7 +74,7 @@ function ThemeToggle({ collapsed }) {
           className={`flex flex-1 items-center justify-center rounded-md py-1.5 transition ${
             pref === value
               ? "bg-stone-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
-              : "text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+              : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
           }`}
         >
           <Icon size={14} aria-hidden />
@@ -131,13 +131,13 @@ function IntakeSwitch({ collapsed, paused, busy, disabled, error, onToggle }) {
           onClick={onToggle}
         />
         <span className={`text-sm font-semibold ${
-          unknown ? "text-neutral-400"
+          unknown ? "text-neutral-500 dark:text-neutral-400"
             : paused ? "text-amber-700 dark:text-amber-300" : "text-green-700 dark:text-green-400"
         }`}>
           {unknown ? "unknown" : paused ? "PAUSED" : "ON"}
         </span>
       </div>
-      <p className="mt-1.5 text-[11px] leading-snug text-neutral-400">
+      <p className="mt-1.5 text-[11px] leading-snug text-neutral-500 dark:text-neutral-400">
         {error
           ? <span className="text-red-600 dark:text-red-400">{error}</span>
           : paused
@@ -178,13 +178,19 @@ export default function Sidebar({
       }`}
     >
       <a href="#/overview" className={`flex items-center gap-2.5 px-3 py-4 ${collapsed ? "justify-center" : "px-4"}`}>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white shadow-card">
-          <CakeSlice size={17} strokeWidth={2} aria-hidden />
+        {/* the app mark is the signature layer-cake, mid-bake */}
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent shadow-card">
+          <span className="flex w-3.5 flex-col-reverse gap-[2.5px]" aria-hidden>
+            <span className="h-[3px] rounded-full bg-white/60" />
+            <span className="h-[3px] rounded-full bg-white/60" />
+            <span className="h-[3px] rounded-full bg-white" />
+            <span className="h-[3px] rounded-full bg-white/25" />
+          </span>
         </span>
         {!collapsed && (
           <span className="leading-tight">
-            <span className="block text-sm font-bold tracking-tight">DevCake</span>
-            <span className="block text-[10px] text-neutral-400">agentic developer</span>
+            <span className="block font-display text-sm font-extrabold tracking-tight">DevCake</span>
+            <span className="block text-[10px] text-neutral-500 dark:text-neutral-400">agentic developer</span>
           </span>
         )}
       </a>
@@ -210,10 +216,6 @@ export default function Sidebar({
                   <a
                     key={s.id}
                     href={`#/config/${s.id}`}
-                    onClick={() => {
-                      // same-hash clicks don't fire hashchange — scroll directly
-                      document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth" });
-                    }}
                     className={`rounded-md px-2 py-1 text-xs transition ${
                       configSection === s.id
                         ? "font-semibold text-accent-700 dark:text-accent-300"
@@ -270,7 +272,7 @@ export default function Sidebar({
           </div>
         )}
         {!collapsed && (
-          <p className="text-[10px] text-neutral-400">
+          <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
             DevCake v0 ·{" "}
             <a className="underline" href="https://github.com/fidecastro/devcake" target="_blank" rel="noopener">
               spec &amp; source
@@ -281,7 +283,7 @@ export default function Sidebar({
           onClick={toggleCollapsed}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
+          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
             collapsed ? "mx-auto h-8 w-8 justify-center" : "w-full px-2.5"
           }`}
         >

@@ -1,13 +1,16 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Play, Plus, Trash2, KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, Help, ListTextarea, SecretField, Input, Select, Textarea } from "../components/Field.jsx";
+import InstantZone from "../components/InstantZone.jsx";
+import SettingRow from "../components/SettingRow.jsx";
 import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
-import { ConfirmDialog, Modal } from "../components/Modal.jsx";
+import { ConfirmDialog, Modal, PromptDialog } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
+import MoreMenu from "../components/MoreMenu.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SelectionChips from "../components/SelectionChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
@@ -43,8 +46,7 @@ function OAuthWizard({ devType, onClose }) {
     return () => clearInterval(timer);
   }, [devType]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]">
-      <div className="w-full max-w-lg rounded-card border border-neutral-200 bg-white p-6 shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+    <Modal onClose={onClose}>
         <h4 className="mb-3 text-base font-semibold tracking-tight">Connect {devType} (OAuth)</h4>
         {error && <p className="text-sm text-red-600">{error}</p>}
         {!error && status.state === "starting" && (
@@ -62,7 +64,7 @@ function OAuthWizard({ devType, onClose }) {
               {status.url}
             </a>
             <p className="text-center text-2xl font-bold tracking-widest">{status.code}</p>
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Waiting for approval… this dialog completes automatically.
             </p>
           </div>
@@ -80,8 +82,7 @@ function OAuthWizard({ devType, onClose }) {
             {status.state === "completed" ? "Done" : "Close"}
           </Button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -123,7 +124,7 @@ function UploadButton({ devType, secretFile, onDone }) {
 
 // Fully controlled: the card renders and edits the shared draft. Save is the
 // page-level Save; only Delete / OAuth / upload act immediately.
-function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onCredChange, skillsCatalog }) {
+function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onRename, onCredChange, skillsCatalog }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
@@ -158,14 +159,14 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               Connect via OAuth…{pending ? " (save first)" : ""}
             </Button>
           )}
-          <Button kind="ghost" onClick={async () => {
-            const nn = window.prompt(`Rename Dev Type "${name}" to:`, name);
-            if (!nn || nn === name) return;
-            try { await send("POST", `/dev-types/${name}/rename`, { new_name: nn }); }
-            catch (e) { window.alert(String(e.message || e)); }
-            onCredChange && onCredChange();   // reload the draft
-          }}>Rename</Button>
-          <Button kind="danger-ghost" icon={Trash2} onClick={() => onDelete(name)}>Delete</Button>
+          <MoreMenu label={`More actions for ${name}`} items={[
+            { label: "Rename",
+              desc: "Config, credentials and prompt templates follow the new name.",
+              onClick: () => onRename(name) },
+            { label: "Delete Dev Type", danger: true,
+              desc: "Removes its config; stored credentials stay on disk.",
+              onClick: () => onDelete(name) },
+          ]} />
         </div>
       </div>
       {/* one line: harness · model · a much smaller max-concurrency box */}
@@ -194,14 +195,14 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           />
         </Field>
       </div>
-      <p className="text-xs text-neutral-400">
-        Identifying prompt is template-managed — edit it (or switch workflow)
-        in the <a className="underline" href="#/config/prompts">Prompts
-        section</a> below.
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        Identifying prompt is managed in the{" "}
+        <a className="underline" href="#/config/prompts">Prompts section</a>.
       </p>
       <Field
         label="MCP setup commands (one per line)"
-        hint="⚠ Run inside the Dev container before the agent starts — arbitrary code execution by design. A failing or hung command fails the run (exit 14, 300s cap per command) with the command + stderr in the run error."
+        hint="⚠ Runs arbitrary code in the Dev container before the agent starts."
+        help="A failing or hung command fails the run (exit 14, 300 s cap per command) with the command and stderr in the run error."
       >
         <ListTextarea
           rows={2}
@@ -211,7 +212,8 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
       </Field>
       <Field
         label="Secret env vars (one per line)"
-        hint="Names only (UPPER_SNAKE_CASE) — values are pasted below and stored in the secret store, never in config. Delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY). A name referenced by a setup command must have a stored value or the mission won't dispatch."
+        hint="Names only (UPPER_SNAKE_CASE) — paste each value below."
+        help="Values live in the secret store, never in config, and are delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY). A name referenced by a setup command must have a stored value or the mission won't dispatch."
       >
         <ListTextarea
           rows={2}
@@ -220,13 +222,13 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         />
       </Field>
       {(d.secret_env || []).length > 0 && (
-        <div className="space-y-2">
+        <InstantZone note="secret values store immediately">
           {[...new Set(d.secret_env || [])].map((v) => (
             <SecretField key={v} label={v}
               help={`Delivered to ${name} runs as $${v}. Stored securely — never echoed, never in .env.`}
               refKey={v} checkKind="harness" paste />
           ))}
-        </div>
+        </InstantZone>
       )}
       <SelectionChips label="Skills"
         help={`Skill-store skills installed to ~/${h.skills_dir || ".claude/skills"} inside the Dev container before the agent starts. The catalog lives in the Skills section below.`}
@@ -248,7 +250,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           set("skills", [...cat.filter((n) => next.includes(n)),
                          ...next.filter((n) => !cat.includes(n))]);
         }} />
-      <div className="space-y-2 rounded-md bg-stone-50 p-3 text-xs dark:bg-neutral-800/50">
+      <InstantZone className="text-xs" note="credentials store immediately">
         <div className="flex items-center justify-between">
           <span>
             Image <span className="font-mono">{h.docker_image || "?"}</span>
@@ -268,7 +270,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           </p>
         )}
         {!h.oauth_available && (
-          <p className="text-neutral-400">
+          <p className="text-neutral-500 dark:text-neutral-400">
             {d.harness_template} has no device-code OAuth flow — it
             authenticates via a pasted key/token below
             {d.harness_template === "claude-code"
@@ -289,18 +291,62 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               <span>
                 {filePresent(cf.secret_file) ? "✓" : "✗"} file{" "}
                 <span className="font-mono">{cf.secret_file}</span>
-                <span className="text-neutral-400"> → {cf.path_hint}</span>
+                <span className="text-neutral-500 dark:text-neutral-400"> → {cf.path_hint}</span>
               </span>
               <UploadButton devType={name} secretFile={cf.secret_file} onDone={onCredChange} />
             </li>
           ))}
         </ul>
-        <p className="text-neutral-400">
-          Any one ✓ is enough — env keys pass through at dispatch; files are delivered
-          per-run over the runspec channel (stored 0600 under /data/secrets/{name}/).
+        <p className="text-neutral-500 dark:text-neutral-400">
+          Any one ✓ is enough — env keys pass through at dispatch; files are
+          delivered securely to each run (stored 0600 under /data/secrets/{name}/).
         </p>
-      </div>
+      </InstantZone>
     </div>
+  );
+}
+
+// "New Dev Type" dialog: name + harness picked up front — the old flow
+// created "new-dev-###" instantly and made the operator rename it after.
+function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [harness, setHarness] = useState(Object.keys(harnesses)[0] || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const create = async () => {
+    setBusy(true); setErr("");
+    try {
+      await send("POST", "/dev-types", {
+        name: name.trim(), harness_template: harness,
+        identifying_prompt: "", max_concurrency: 1,
+      });
+      onCreated(); onClose();
+    } catch (e) { setErr(String(e.message || e).replace(/^\d+ /, "")); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={busy ? undefined : onClose}>
+      <h4 className="mb-3 text-base font-semibold tracking-tight">New Dev Type</h4>
+      <div className="space-y-3">
+        <Field label="Name" hint="lowercase letters/digits/dashes — e.g. senior-dev">
+          <Input value={name} onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && name.trim() && !busy && create()} />
+        </Field>
+        <Field label="Harness template"
+          help="Which coding agent this Dev runs. The Docker image and credential requirements follow it — both can be changed later.">
+          <Select value={harness} onChange={(e) => setHarness(e.target.value)}>
+            {Object.keys(harnesses).map((t) => <option key={t}>{t}</option>)}
+          </Select>
+        </Field>
+        {err && <p className="text-sm text-red-600 dark:text-red-400">✗ {err}</p>}
+        <div className="flex justify-end gap-2">
+          <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button disabled={busy || !name.trim() || !harness} onClick={create}>
+            {busy ? "Creating…" : "Create Dev Type"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -354,7 +400,7 @@ function AddSkillDialog({ onClose, onSaved }) {
   };
 
   return (
-    <Modal className="max-w-2xl">
+    <Modal className="max-w-2xl" onClose={busy ? undefined : onClose}>
       <div className="mb-4 flex items-center justify-between">
         <h4 className="text-base font-semibold tracking-tight">Add skill</h4>
         <div className="flex gap-1 rounded-md bg-stone-100 p-0.5 text-xs dark:bg-neutral-800">
@@ -413,7 +459,7 @@ function AddSkillDialog({ onClose, onSaved }) {
               }} />
           </Field>
           {files.length > 0 && (
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
               {files.length} file(s): {files.map((f) => f.path).join(", ")}
             </p>
           )}
@@ -463,7 +509,7 @@ function RepoChips({ label, help, all, selected, excluded, excludedNote,
   );
 }
 
-export default function ConfigPage({ section, onSectionInView }) {
+export default function ConfigPage({ section }) {
   // the draft, reload, harnesses and health snapshot come from the shared
   // provider (v0.1.1 B4) — the Repositories page edits the SAME draft, and
   // DraftChrome (App-level) owns Save/DirtyBar/NavGuard
@@ -489,10 +535,18 @@ export default function ConfigPage({ section, onSectionInView }) {
   // skill store catalog (v1): store-listed when Gitea is up, bundled
   // fallback otherwise — `store` says which (and where to edit)
   const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
+  const [skillsErr, setSkillsErr] = useState(false);
+  const [skillsMsg, setSkillsMsg] = useState("");
   const loadSkills = () =>
-    get("/skills").then(setSkillsCatalog).catch(() => {});
+    get("/skills")
+      .then((r) => { setSkillsCatalog(r); setSkillsErr(false); })
+      .catch(() => setSkillsErr(true));
   useEffect(() => { loadSkills(); }, []);
   const [addSkill, setAddSkill] = useState(false);
+  const [addDev, setAddDev] = useState(false);
+  const [renameFor, setRenameFor] = useState(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameErr, setRenameErr] = useState("");
   const [testResult, setTestResult] = useState({});
   const [mapperMsg, setMapperMsg] = useState("");
   const [pageErr, setPageErr] = useState("");
@@ -502,49 +556,13 @@ export default function ConfigPage({ section, onSectionInView }) {
 
   const loaded = dr.loaded;
 
-  // deep-link scroll: #/config/<section> — instant on first render, smooth
-  // after. Section clicks are authoritative for the sidebar highlight during
-  // the programmatic scroll (quiet period), then the scrollspy resumes.
-  const scrolledOnce = useRef(false);
-  const spyQuietUntil = useRef(0);
+  // settings-style navigation: one section per view — switching sections
+  // starts at the top of the pane
   useEffect(() => {
-    if (!loaded || !section) return;
-    spyQuietUntil.current = Date.now() + 1000;
-    onSectionInView && onSectionInView(section);
-    document.getElementById(section)?.scrollIntoView({
-      behavior: scrolledOnce.current ? "smooth" : "auto",
-    });
-    scrolledOnce.current = true;
-  }, [loaded, section]);
+    document.querySelector("main")?.scrollTo({ top: 0 });
+  }, [section]);
 
-  // scrollspy → sidebar sub-nav highlight. Scroll-position math instead of an
-  // IntersectionObserver: active = last section whose top crossed the
-  // activation line, clamped to the last section at the bottom of the scroll
-  // (bottom sections can never reach the top of the viewport otherwise).
-  useEffect(() => {
-    if (!loaded || !onSectionInView) return;
-    const main = document.querySelector("main");
-    if (!main) return;
-    const onScroll = () => {
-      if (Date.now() < spyQuietUntil.current) return;
-      const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 8;
-      if (atBottom) {
-        onSectionInView(CONFIG_SECTIONS[CONFIG_SECTIONS.length - 1].id);
-        return;
-      }
-      const line = main.getBoundingClientRect().top + 96; // activation line
-      let active = CONFIG_SECTIONS[0].id;
-      for (const s of CONFIG_SECTIONS) {
-        const el = document.getElementById(s.id);
-        if (el && el.getBoundingClientRect().top <= line) active = s.id;
-      }
-      onSectionInView(active);
-    };
-    main.addEventListener("scroll", onScroll, { passive: true });
-    return () => main.removeEventListener("scroll", onScroll);
-  }, [loaded]);
-
-  if (!loaded) return <p className="text-sm text-neutral-400">Loading…{loadErr}</p>;
+  if (!loaded) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
@@ -605,22 +623,27 @@ export default function ConfigPage({ section, onSectionInView }) {
   return (
     <div className="space-y-5">
       <PageHeader title="Configuration"
-        subtitle="Connections, Dev Types, assignments and limits — edits apply on Save" />
+        subtitle="One section at a time — drafted edits apply on Save, wherever you made them" />
       {pageErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {pageErr}</p>}
 
-      {/* mobile section chips (sidebar sub-nav is expanded-drawer-only) */}
+      {/* mobile section switcher (sidebar sub-nav is expanded-drawer-only) */}
       <div className="sticky top-0 z-20 -mx-4 flex gap-1.5 overflow-x-auto bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90 lg:hidden">
         {CONFIG_SECTIONS.map((s) => (
           <a key={s.id} href={`#/config/${s.id}`}
-            onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth" })}
-            className="shrink-0 rounded-full border border-neutral-200 bg-surface-raised px-3 py-1 text-xs font-medium text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300">
+            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
+              section === s.id
+                ? "border-accent-300 bg-accent-50 font-semibold text-accent-800 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
+                : "border-neutral-200 bg-surface-raised text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300"
+            }`}>
             {s.label}
           </a>
         ))}
       </div>
 
+      {section === "pmo" && (
       <Section id="pmo" title="PMO connections"
-        description={`The PMO teams DevCake watches (one instance each), and how it adopts missions. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
+        description="The PMO teams DevCake watches, and how missions are adopted."
+        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
         {cfg.pmos.map((inst, idx) => {
           const tr = testResult[`pmo:${inst.name}`];
           return (
@@ -699,28 +722,31 @@ export default function ConfigPage({ section, onSectionInView }) {
             </div>
           );
         })}
-        <div className="flex flex-wrap items-center gap-3">
-          <Button kind="ghost" onClick={() => {
-            const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
-            newPmoNames.track(name);
-            setField("cfg.pmos", [...cfg.pmos,
-              { name, system: "linear",
-                team_key: "", api_base: null, repos: [],
-                reference_repos: [] }]);
-          }}>
-            + Add PMO instance
-          </Button>
-          <Field label="Poll interval (s)"
-            help="How often DevCake polls each PMO instance for new or changed missions. Lower = faster pickup, more API calls.">
-            <Input type="number"
-            value={cfg.poll_interval_seconds}
-            onChange={(e) => setField("cfg.poll_interval_seconds", Number(e.target.value))} /></Field>
-        </div>
-        <Field label="Adoption mode"
-          help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">
-          <div className="flex items-center gap-3 text-sm">
-            <span className={cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-400"}>
-              opt-in (label required)
+        <Button kind="ghost" onClick={() => {
+          const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
+          newPmoNames.track(name);
+          setField("cfg.pmos", [...cfg.pmos,
+            { name, system: "linear",
+              team_key: "", api_base: null, repos: [],
+              reference_repos: [] }]);
+        }}>
+          + Add PMO instance
+        </Button>
+        <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+          <SettingRow label="Poll interval"
+            desc="Seconds between polls of each PMO for new or changed missions."
+            help="Lower = faster pickup, more API calls.">
+            <Input type="number" className="w-24" value={cfg.poll_interval_seconds}
+              aria-label="Poll interval (seconds)"
+              onChange={(e) => setField("cfg.poll_interval_seconds", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Adoption mode"
+            desc={cfg.adoption_mode === "opt_in"
+              ? "opt-in — only items you label DEVCAKE are adopted."
+              : "opt-out — every non-completed item in the team, backlog included."}
+            help="opt-in: DevCake only adopts items you label DEVCAKE. opt-out: it adopts every non-completed issue and project in the team, including the backlog.">
+            <span className={`text-xs ${cfg.adoption_mode === "opt_in" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}`}>
+              opt-in
             </span>
             <Toggle on={cfg.adoption_mode === "opt_out"} label="Adoption mode"
               onClick={() =>
@@ -728,27 +754,21 @@ export default function ConfigPage({ section, onSectionInView }) {
                   ? guardedFlip("cfg.adoption_mode", "opt_out", "Adopt the ENTIRE team?",
                       ADOPTION_COPY + "\n\n(Drafted now; applies when you Save.)")
                   : setField("cfg.adoption_mode", "opt_in")} />
-            <span className={cfg.adoption_mode === "opt_out" ? "font-semibold" : "text-neutral-400"}>
-              opt-out (whole team)
+            <span className={`text-xs ${cfg.adoption_mode === "opt_out" ? "font-semibold" : "text-neutral-500 dark:text-neutral-400"}`}>
+              opt-out
             </span>
-          </div>
-        </Field>
+          </SettingRow>
+        </div>
       </Section>
+      )}
 
+      {section === "dev-types" && (
       <Section id="dev-types" title="Dev Types"
         description="Agent configurations — harness, model, concurrency and credentials."
         actions={
           <>
             <ImmediateBadge text="create/delete apply immediately" />
-            <Button kind="ghost" icon={Plus}
-              onClick={async () => {
-                const name = `new-dev-${Date.now() % 1000}`;
-                await send("POST", "/dev-types", {
-                  name, harness_template: "codex", identifying_prompt: "",
-                  max_concurrency: 1,
-                });
-                reload();
-              }}>
+            <Button kind="ghost" icon={Plus} onClick={() => setAddDev(true)}>
               New Dev Type
             </Button>
           </>
@@ -776,41 +796,54 @@ export default function ConfigPage({ section, onSectionInView }) {
                 });
               }}
               onOAuth={setOauthFor}
+              onRename={(nm) => { setRenameErr(""); setRenameFor(nm); }}
               skillsCatalog={skillsCatalog} />
           ))}
         </div>
       </Section>
+      )}
 
+      {section === "skills" && (
       <Section id="skills" title="Skills"
-        description="Claude Code skills Devs can use — reusable expertise installed into the agent session. Select them per Dev Type above."
-        actions={
+        description="Reusable expertise installed into the agent session."
+        help="Skill-store skills Devs can use. Select them per Dev Type in the Dev Types section."
+        actions={skillsCatalog.store?.enabled && (
           <>
-            {skillsCatalog.store?.enabled && (
-              <Button kind="ghost" icon={Plus} onClick={() => setAddSkill(true)}>
-                Add skill
-              </Button>
-            )}
-            {skillsCatalog.store?.enabled && skillsCatalog.store?.html_url && (
-              <a className="text-sm underline" target="_blank" rel="noreferrer"
-                href={skillsCatalog.store.html_url}>
-                Edit in Gitea →
-              </a>
-            )}
-            {skillsCatalog.store?.enabled && (
-              <Button kind="ghost" onClick={async () => {
-                try { await send("POST", "/skills/sync"); await loadSkills(); }
-                catch (e) { setPageErr(`skill re-seed failed: ${String(e.message || e)}`); }
-              }}>
-                Re-seed built-ins
-              </Button>
-            )}
+            <Button icon={Plus} onClick={() => setAddSkill(true)}>
+              Add skill
+            </Button>
+            <MoreMenu label="More skill-store actions" items={[
+              ...(skillsCatalog.store?.html_url ? [{
+                label: "Open the store in Gitea",
+                desc: "Skills live in a Git repo — edit them there directly.",
+                external: true,
+                onClick: () => window.open(skillsCatalog.store.html_url, "_blank", "noopener"),
+              }] : []),
+              {
+                label: "Restore built-in skills",
+                desc: "Re-adds any missing bundled skills. Never overwrites your edits.",
+                onClick: async () => {
+                  try {
+                    await send("POST", "/skills/sync");
+                    await loadSkills();
+                    setSkillsMsg("✓ built-in skills restored");
+                    setTimeout(() => setSkillsMsg(""), 4000);
+                  } catch (e) {
+                    setPageErr(`restoring built-ins failed: ${String(e.message || e)}`);
+                  }
+                },
+              },
+            ]} />
           </>
-        }>
+        )}>
         {skillsCatalog.store && !skillsCatalog.store.enabled && (
-          <p className="mb-3 text-sm text-neutral-400">
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
             Served from the bundled copies — set GITEA_ADMIN_PASSWORD (bundled
             Gitea) to get the editable skill-store repo.
           </p>
+        )}
+        {skillsMsg && (
+          <p className="mb-3 text-sm text-green-700 dark:text-green-400">{skillsMsg}</p>
         )}
         {skillsCatalog.store?.enabled && !skillsCatalog.store.ok && (
           <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
@@ -818,52 +851,81 @@ export default function ConfigPage({ section, onSectionInView }) {
             bundled copies. Runs keep working; store edits are unavailable.
           </p>
         )}
-        {skillsCatalog.skills.length === 0 ? (
-          <p className="text-sm text-neutral-400">No skills found.</p>
+        {skillsErr ? (
+          <p className="text-sm text-red-700 dark:text-red-300">
+            Couldn&apos;t load the skill catalog.{" "}
+            <button type="button" onClick={loadSkills}
+              className="font-medium underline underline-offset-2">
+              Retry
+            </button>
+          </p>
+        ) : skillsCatalog.skills.length === 0 ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">No skills found.</p>
         ) : (
-          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {skillsCatalog.skills.map((s) => (
-              <div key={s.name} className="flex items-baseline gap-3 py-2 text-sm">
-                <span className="shrink-0 font-mono font-semibold">{s.name}</span>
-                <span className="grow text-neutral-500 dark:text-neutral-400">
-                  {s.description || "(no description)"}
-                </span>
-                <span className={"shrink-0 rounded px-1.5 py-0.5 text-xs "
-                  + (s.source === "store"
-                    ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
-                    : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
-                  {s.source === "store" ? "store" : "bundled"}
-                </span>
-                {/* built-ins re-seed at boot — only operator skills delete */}
-                {skillsCatalog.store?.enabled && !s.builtin && (
-                  <button type="button"
-                    title={`Delete skill ${s.name}`}
-                    className="shrink-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
-                    onClick={() => setConfirm({
-                      title: `Delete skill ${s.name}?`,
-                      body: "Removed from the skill store. Dev Types that "
-                        + "selected it keep the name (⚠) but the skill is "
-                        + "skipped at dispatch until re-added.",
-                      confirmLabel: "Delete",
-                      action: async () => {
-                        try {
-                          await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
-                          await loadSkills();
-                        } catch (e) {
-                          setPageErr(`skill delete failed: ${String(e.message || e)}`);
-                        }
-                        setConfirm(null);
-                      },
-                    })}>
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[36rem] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                <tr>
+                  <th className="py-1.5 pr-4 font-semibold">Skill</th>
+                  <th className="pr-4 font-semibold">Description</th>
+                  <th className="pr-2 font-semibold">Source</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {skillsCatalog.skills.map((s) => (
+                  <tr key={s.name} className="border-t border-neutral-100 align-top dark:border-neutral-800">
+                    <td className="whitespace-nowrap py-2.5 pr-4 font-mono text-xs font-semibold">
+                      {s.name}
+                    </td>
+                    <td className="py-2.5 pr-4 text-neutral-500 dark:text-neutral-400">
+                      {s.description || "(no description)"}
+                    </td>
+                    <td className="py-2.5 pr-2">
+                      <span className={"inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs "
+                        + (s.source === "store"
+                          ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+                          : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+                        {s.source === "store" ? "store" : "bundled"}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-right">
+                      {/* built-ins re-seed at boot — only operator skills delete */}
+                      {skillsCatalog.store?.enabled && !s.builtin && (
+                        <button type="button"
+                          title={`Delete skill ${s.name}`}
+                          aria-label={`Delete skill ${s.name}`}
+                          className="rounded text-neutral-500 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-red-400"
+                          onClick={() => setConfirm({
+                            title: `Delete skill ${s.name}?`,
+                            body: "Removed from the skill store. Dev Types that "
+                              + "selected it keep the name (⚠) but the skill is "
+                              + "skipped at dispatch until re-added.",
+                            confirmLabel: "Delete",
+                            action: async () => {
+                              try {
+                                await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
+                                await loadSkills();
+                              } catch (e) {
+                                setPageErr(`skill delete failed: ${String(e.message || e)}`);
+                              }
+                              setConfirm(null);
+                            },
+                          })}>
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </Section>
+      )}
 
+      {section === "assignments" && (
       <Section id="assignments" title="Assignments"
         description="Which Dev Type handles each mission type.">
         {dr.draft.assignments?.EXECUTE?.dev_type
@@ -877,7 +939,7 @@ export default function ConfigPage({ section, onSectionInView }) {
         )}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[32rem] text-sm">
-            <thead className="text-left text-xs uppercase tracking-wide text-neutral-400">
+            <thead className="text-left text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr><th className="py-1">Mission type</th><th>Dev type</th>
                 <th>Extra CLI args (harness-specific)
                   <Help text="Appended to the harness CLI for this mission type, e.g. --max-turns 15. Flags are harness-specific — they rarely survive a dev type change." /></th></tr>
@@ -917,44 +979,48 @@ export default function ConfigPage({ section, onSectionInView }) {
           </table>
         </div>
       </Section>
+      )}
 
+      {section === "prompts" && (
       <PromptsSection cfg={cfg} setField={setField}
         devTypeNames={Object.keys(dr.draft.devTypes || {})} />
+      )}
 
+      {section === "limits" && (
       <Section id="limits" title="Limits"
-        description="Global concurrency and safety ceilings. Dev container Docker HostConfig CPU/memory is not available in Dagu 2.10.5 — concurrency caps are the real throttle.">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <Field label="Global max Devs" hint="Effective ceiling = min(global, Σ per-type caps). Primary host-protection control.">
-            <Input type="number" value={cfg.concurrency.global_max}
+        description="Global concurrency and safety ceilings.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Global max Devs"
+            desc="Effective ceiling = min(global, Σ per-type caps)."
+            help="Primary host-protection control. Dagu 2.10.5 cannot apply Docker CPU/memory/PID limits to Dev containers — this cap is the effective throttle; hard per-container limits are planned.">
+            <Input type="number" className="w-24" value={cfg.concurrency.global_max}
+              aria-label="Global max Devs"
               onChange={(e) => setField("cfg.concurrency.global_max", Number(e.target.value))} />
-          </Field>
-          <Field label="Dev run timeout (min)"
-            help="Wall-clock limit per Dev run (dispatched/running only — finalizing is never timeout-killed). The mission is retried up to its attempt limit.">
-            <Input type="number" value={cfg.dev_timeout_minutes}
+          </SettingRow>
+          <SettingRow label="Dev run timeout"
+            desc="Wall-clock limit per Dev run, in minutes."
+            help="Applies while dispatched/running only — finalizing is never timeout-killed. A timed-out mission is retried up to its attempt limit.">
+            <Input type="number" className="w-24" value={cfg.dev_timeout_minutes}
+              aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
-          </Field>
-          <Field label="Loop warning every N rejections"
+          </SettingRow>
+          <SettingRow label="Review-loop warning"
+            desc="Warn after every N rejections of EXECUTE's work."
             help="When REVIEW keeps rejecting EXECUTE's work, DevCake posts a warning to the mission's activity feed every N rejections so you can intervene. Must be ≥ 1.">
-            <Input type="number" min={1} value={cfg.review_loop_warning_every}
+            <Input type="number" className="w-24" min={1} value={cfg.review_loop_warning_every}
+              aria-label="Review-loop warning every N rejections"
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
-          </Field>
-        </div>
-        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-          <strong className="font-medium text-neutral-800 dark:text-neutral-100">Dev container limits:</strong>{" "}
-          Dagu 2.10.5 cannot apply Docker HostConfig CPU/memory/PID limits to Dev
-          containers; <code className="font-mono text-xs">dagu/dags/dev-run.yaml</code>{" "}
-          carries a best-effort <code className="font-mono text-xs">resources.limits</code>{" "}
-          block, and concurrency caps above are the real throttle (docs/07 §7,
-          hard limits are v0.1 backlog).
-        </div>
-        <div className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
-          <strong className="font-medium text-neutral-800 dark:text-neutral-100">Compose restart:</strong>{" "}
-          long-lived services use <code className="font-mono text-xs">restart: unless-stopped</code> in
-          docker-compose.yml (default on). The SPA cannot rewrite compose — set{" "}
-          <code className="font-mono text-xs">restart: &quot;no&quot;</code> in the file to disable.
+          </SettingRow>
+          <SettingRow label="Service auto-restart"
+            desc="Long-lived services restart unless stopped (compose-managed)."
+            help='Services use restart: unless-stopped in docker-compose.yml. This panel cannot rewrite compose — set restart: "no" in the file to disable.'>
+            <span className="text-sm text-neutral-500 dark:text-neutral-400">managed in compose</span>
+          </SettingRow>
         </div>
       </Section>
+      )}
 
+      {section === "traffic" && (
       <Section id="traffic" title="Traffic control"
         description="The Relations Mapper. (Mission intake is the master switch in the sidebar — it applies immediately.)">
         <div className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
@@ -974,10 +1040,12 @@ export default function ConfigPage({ section, onSectionInView }) {
               </Button>
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Field label="Dev Type"
-              help="Which Dev Type runs the mapper. The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
-              <Select value={rm.dev_type || ""}
+          <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            <SettingRow label="Dev Type"
+              desc="Which Dev Type runs the mapper."
+              help="The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
+              <Select className="w-44" value={rm.dev_type || ""}
+                aria-label="Relations Mapper Dev Type"
                 onChange={(e) => {
                   setField("cfg.relations_mapper.dev_type", e.target.value || null);
                   if (!e.target.value) setField("cfg.relations_mapper.enabled", false);
@@ -985,27 +1053,27 @@ export default function ConfigPage({ section, onSectionInView }) {
                 <option value="">(none)</option>
                 {dr.order.map((n) => <option key={n} value={n}>{n}</option>)}
               </Select>
-            </Field>
-            <Field label="Interval (minutes)"
+            </SettingRow>
+            <SettingRow label="Interval"
+              desc="Minutes between automatic passes."
               help="Cadence of the periodic service when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
-              <Input type="number" min="1" value={rm.interval_minutes}
+              <Input type="number" className="w-24" min="1" value={rm.interval_minutes}
+                aria-label="Relations Mapper interval (minutes)"
                 onChange={(e) => setField("cfg.relations_mapper.interval_minutes", Number(e.target.value))}
                 onBlur={(e) => setField("cfg.relations_mapper.interval_minutes",
                   Math.max(1, Number(e.target.value) || 60))} />
-            </Field>
-            <Field label="Periodic service" hint="Default OFF — use Run now for one-shot passes">
-              <div className="flex h-9 items-center gap-3 text-sm">
-                <Toggle on={rm.enabled} label="Periodic service"
-                  onClick={() => {
-                    if (!rm.enabled && !rm.dev_type) {
-                      setMapperMsg("✗ pick a Dev Type first");
-                      return;
-                    }
-                    setField("cfg.relations_mapper.enabled", !rm.enabled);
-                  }} />
-                <span>{rm.enabled ? "ON — runs on the interval" : "OFF — manual only"}</span>
-              </div>
-            </Field>
+            </SettingRow>
+            <SettingRow label="Periodic service"
+              desc={rm.enabled ? "ON — runs on the interval." : "OFF — manual only (default)."}>
+              <Toggle on={rm.enabled} label="Periodic service"
+                onClick={() => {
+                  if (!rm.enabled && !rm.dev_type) {
+                    setMapperMsg("✗ pick a Dev Type first");
+                    return;
+                  }
+                  setField("cfg.relations_mapper.enabled", !rm.enabled);
+                }} />
+            </SettingRow>
           </div>
           {healthInfo?.mapper_degraded && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
@@ -1021,6 +1089,7 @@ export default function ConfigPage({ section, onSectionInView }) {
           )}
         </div>
       </Section>
+      )}
 
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
@@ -1029,6 +1098,24 @@ export default function ConfigPage({ section, onSectionInView }) {
         onClose={() => { setOauthFor(null); reload(); }} />}
       {addSkill && <AddSkillDialog
         onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
+      {addDev && <NewDevTypeDialog harnesses={harnesses}
+        onClose={() => setAddDev(false)} onCreated={reload} />}
+      <PromptDialog open={!!renameFor}
+        title={`Rename Dev Type "${renameFor}"`}
+        label="New name" initial={renameFor || ""}
+        hint="Renames immediately — config, credentials and prompt templates follow."
+        confirmLabel="Rename" busy={renameBusy} error={renameErr}
+        onConfirm={async (nn) => {
+          if (nn === renameFor) { setRenameFor(null); return; }
+          setRenameBusy(true); setRenameErr("");
+          try {
+            await send("POST", `/dev-types/${renameFor}/rename`, { new_name: nn });
+            setRenameFor(null);
+            await reload();
+          } catch (e) { setRenameErr(String(e.message || e).replace(/^\d+ /, "")); }
+          finally { setRenameBusy(false); }
+        }}
+        onCancel={() => { setRenameFor(null); setRenameErr(""); }} />
     </div>
   );
 }

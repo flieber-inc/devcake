@@ -11,6 +11,24 @@ sandbox, guaranteed independent review, secrets never leave the host under
 injection, hard-gated branch protection) than that file. Design choices
 (dedicated host, adult-operator prompt trust, warnings vs gates) are intentional.
 
+## Admin SPA design system (mandatory)
+
+Any change under `admin/spa/` that affects look, feel, copy, or interaction
+**must follow [`admin/spa/DESIGN.md`](admin/spa/DESIGN.md)** — the decided
+design guideline (identity, tokens, layout idioms, action hierarchy, dialogs,
+copy voice, evidence loop). Read it before touching the SPA. Iron rules:
+
+- Colors come from the `@theme` tokens in `admin/spa/src/index.css` — never raw
+  hex or new color families in components. `accent-*` is the only brand accent.
+- Scalar settings are `SettingRow`s; record lists are real tables styled like
+  the Runs table; config renders one section per `#/config/<section>` view.
+- One primary action per header/card; secondary/rare/destructive actions go in
+  a `MoreMenu` (⋯) with honest one-line consequence descriptions — but never a
+  one-item menu when it's the element's only action.
+- Native `window.confirm/prompt/alert` are banned — use `Modal.jsx` dialogs.
+- Draft semantics are untouchable: config edits ride `useConfigDraft`; anything
+  immediate is wrapped in `InstantZone`.
+
 ## Always Works™ (mandatory before done)
 
 **"Should work" ≠ "does work."** Before marking any change complete, prove it with evidence you personally observed — not assumptions.

@@ -5,6 +5,7 @@ import { Section } from "./Card.jsx";
 import { ConfirmDialog, Modal } from "./Modal.jsx";
 import { Field, Input, Select, Textarea } from "./Field.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
+import SettingRow from "./SettingRow.jsx";
 
 // Per-Mission-Type prompt templates (v0.1.1). Template bodies create/edit/
 // delete IMMEDIATELY (the dev-type precedent — the modal has its own explicit
@@ -34,7 +35,7 @@ function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSa
     }
   };
   return (
-    <Modal className="max-w-3xl">
+    <Modal className="max-w-3xl" onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">
         {editing ? `Edit template "${initial.name}"` : "Create prompt template"} · {mt}
       </h4>
@@ -80,7 +81,12 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
   const [viewing, setViewing] = useState(null); // {mt, entry}
   const [workflow, setWorkflow] = useState("");
   const [switchNote, setSwitchNote] = useState("");
-  const refresh = () => get("/prompt-templates").then(setData).catch(() => setData(null));
+  const [err, setErr] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const refresh = () =>
+    get("/prompt-templates")
+      .then((d) => { setData(d); setLoadFailed(false); })
+      .catch(() => { setData(null); setLoadFailed(true); });
   // re-fetch when the live Dev Type set changes — groups are API-driven,
   // never hardcoded, so a freshly created Dev appears immediately
   useEffect(() => { refresh(); }, [devTypeNames.sort().join(",")]);
@@ -124,8 +130,10 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
         const base = kind === "dev" ? "/devtype-prompts" : "/prompt-templates";
         try {
           await send("DELETE", `${base}/${mt}/${encodeURIComponent(name)}`);
+          setErr("");
         } catch (e) {
-          window.alert(String(e.message || e));   // 409 when active
+          // 409 when the template is still active somewhere
+          setErr(`Could not delete "${name}": ${String(e.message || e).replace(/^\d+ /, "")}`);
         }
         setConfirm(null);
         refresh();
@@ -134,27 +142,39 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
 
   return (
     <Section id="prompts" title="Prompts"
-      description="The playbook DevCake sends a Dev for each Mission Type. The built-in default is read-only and refreshed on upgrade — create a template (copy the default) to customize, then select it as active."
+      description="The playbook DevCake sends a Dev for each Mission Type."
+      help="The built-in default is read-only and refreshed on upgrade — create a template (copy the default) to customize, then select it as active."
       actions={<ImmediateBadge text="templates apply immediately; the active selection saves with the page" />}>
-      {!data && <p className="text-sm text-neutral-400">Loading templates…</p>}
+      {err && (
+        <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          ✗ {err}
+        </p>
+      )}
+      {!data && (loadFailed ? (
+        <p className="text-sm text-red-700 dark:text-red-300">
+          Couldn&apos;t load the prompt templates.{" "}
+          <button type="button" onClick={refresh}
+            className="font-medium underline underline-offset-2">
+            Retry
+          </button>
+        </p>
+      ) : (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading templates…</p>
+      ))}
       {data && (
-        <div className="space-y-2 rounded-card border border-accent-200 bg-accent-50/40 p-4 dark:border-accent-900 dark:bg-accent-950/20">
-          <span className="text-sm font-semibold">Workflow switcher</span>
-          <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            Set EVERY Mission Type and Dev Type below to one stored template
-            name in a single click (e.g. Development ↔ Customer Success).
-            Groups without a template of that name are skipped. Drafted —
-            nothing applies until Save.
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select className="max-w-xs" value={workflow}
+        <div className="rounded-card border border-accent-200 bg-accent-50/40 px-4 py-1 dark:border-accent-900 dark:bg-accent-950/20">
+          <SettingRow label="Workflow switcher"
+            desc="Set every group below to one stored template name in a single click."
+            help="e.g. Development ↔ Customer Success. Groups without a template of that name are skipped. Drafted — nothing applies until Save.">
+            <Select className="w-48" value={workflow}
+              aria-label="Workflow template name"
               onChange={(e) => setWorkflow(e.target.value)}>
               <option value="">choose a workflow…</option>
               {allNames.map((n) => <option key={n} value={n}>{n}</option>)}
             </Select>
             <Button disabled={!workflow} onClick={applyWorkflow}>Apply to all</Button>
-          </div>
-          {switchNote && <p className="text-xs text-amber-600 dark:text-amber-400">{switchNote}</p>}
+          </SettingRow>
+          {switchNote && <p className="pb-2 text-xs text-amber-600 dark:text-amber-400">{switchNote}</p>}
         </div>
       )}
       {data && (
@@ -186,25 +206,35 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                 </Select>
               </Field>
             </div>
-            <ul className="space-y-1">
-              {entries.map((t) => (
-                <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
-                  <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
-                  {t.builtin && <span className="text-xs text-neutral-400">read-only, refreshed on upgrade</span>}
-                  {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
-                  <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                    onClick={() => setViewing({ mt, entry: t })}>View</button>
-                  {!t.builtin && (
-                    <>
-                      <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                        onClick={() => setModal({ mt, initial: t })}>Edit</button>
-                      <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
-                        onClick={() => remove(mt, t.name)}>Delete</button>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <details className="group">
+              <summary className="cursor-pointer list-none text-xs font-medium text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400">
+                <span className="group-open:hidden">Manage templates ({entries.length})…</span>
+                <span className="hidden group-open:inline">Hide templates</span>
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {entries.map((t) => (
+                  <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
+                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
+                    {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
+                    <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
+                      onClick={() => setViewing({ mt, entry: t })}>View</button>
+                    {!t.builtin && (
+                      <>
+                        <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
+                          onClick={() => setModal({ mt, initial: t })}>Edit</button>
+                        <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
+                          onClick={() => remove(mt, t.name)}>Delete</button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {entries.some((t) => t.builtin) && (
+                <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                  Built-in templates are read-only and refreshed on upgrade.
+                </p>
+              )}
+            </details>
           </div>
         );
       })}
@@ -219,7 +249,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
         return (
           <div key={`dev-${n}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-sm font-semibold">{n} <span className="font-sans text-xs text-neutral-400">(Dev Type identifying prompt)</span></span>
+              <span className="font-mono text-sm font-semibold">{n} <span className="font-sans text-xs text-neutral-500 dark:text-neutral-400">(Dev Type identifying prompt)</span></span>
               <Button kind="ghost" onClick={() => setModal({ mt: n, kind: "dev" })}>
                 + Create prompt template
               </Button>
@@ -235,22 +265,28 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                 </Select>
               </Field>
             </div>
-            <ul className="space-y-1">
-              {entries.map((t) => (
-                <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
-                  <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
-                  {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
-                  <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                    onClick={() => setViewing({ mt: n, entry: t })}>View</button>
-                  <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                    onClick={() => setModal({ mt: n, kind: "dev", initial: t })}>Edit</button>
-                  {t.name !== active && (
-                    <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
-                      onClick={() => remove(n, t.name, "dev")}>Delete</button>
-                  )}
-                </li>
-              ))}
-            </ul>
+            <details className="group">
+              <summary className="cursor-pointer list-none text-xs font-medium text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400">
+                <span className="group-open:hidden">Manage templates ({entries.length})…</span>
+                <span className="hidden group-open:inline">Hide templates</span>
+              </summary>
+              <ul className="mt-2 space-y-1">
+                {entries.map((t) => (
+                  <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
+                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
+                    {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
+                    <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
+                      onClick={() => setViewing({ mt: n, entry: t })}>View</button>
+                    <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
+                      onClick={() => setModal({ mt: n, kind: "dev", initial: t })}>Edit</button>
+                    {t.name !== active && (
+                      <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
+                        onClick={() => remove(n, t.name, "dev")}>Delete</button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
           </div>
         );
       })}
@@ -261,7 +297,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
           onSaved={() => { setModal(null); refresh(); }} />
       )}
       {viewing && (
-        <Modal className="max-w-3xl">
+        <Modal className="max-w-3xl" onClose={() => setViewing(null)}>
           <h4 className="mb-2 text-base font-semibold tracking-tight">
             {viewing.mt} · {viewing.entry.name}
           </h4>

@@ -25,7 +25,7 @@ export default function SelectionChips({
     <Field label={label} help={help}>
       <div className="flex flex-wrap items-center gap-1.5 pt-1">
         {options.length === 0 && stale.length === 0 && (
-          <span className="text-xs text-neutral-400">{emptyNote}</span>
+          <span className="text-xs text-neutral-500 dark:text-neutral-400">{emptyNote}</span>
         )}
         {options.map((o) => {
           const sel = selected.includes(o.name);
@@ -57,7 +57,7 @@ export default function SelectionChips({
           </button>
         ))}
         {disabled && disabledNote && (
-          <span className="text-xs text-neutral-400">{disabledNote}</span>
+          <span className="text-xs text-neutral-500 dark:text-neutral-400">{disabledNote}</span>
         )}
       </div>
     </Field>

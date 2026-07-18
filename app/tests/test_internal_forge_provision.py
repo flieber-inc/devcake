@@ -401,3 +401,96 @@ def test_adopt_repairs_stripped_whitelist(tmp_path, monkeypatch):
     prov = _prov(handler, tmp_path, monkeypatch)
     run_coro(prov.create_operator_repo("taken"))
     assert patched and patched[0]["approvals_whitelist_username"] == ["devcake-reviewer"]
+
+
+# ── activity repos (ADR-0014 D4) ─────────────────────────────────────────────
+
+import hashlib
+
+import pytest
+
+
+class _ActivityRecorder:
+    """Route the Gitea calls the activity-repo surface makes; record writes."""
+
+    def __init__(self, tree_entries=(), org_pages=None, tokens=None,
+                 repo_create_status=201):
+        self.calls = []
+        self.contents_batches = []
+        self.repo_creates = []
+        self.token_posts = []
+        self.tree_entries = list(tree_entries)
+        self.org_pages = org_pages or []
+        self.tokens = tokens if tokens is not None else []
+        self.repo_create_status = repo_create_status
+
+    def __call__(self, request):
+        path, method = request.url.path, request.method
+        self.calls.append((method, path))
+        if method == "POST" and path == "/api/v1/orgs":
+            return httpx.Response(409, json={})
+        if method == "POST" and path == "/api/v1/orgs/devcake-repos/repos":
+            self.repo_creates.append(json.loads(request.content))
+            return httpx.Response(self.repo_create_status, json={})
+        if method == "PUT" and "/collaborators/" in path:
+            return httpx.Response(204)
+        if method == "GET" and "/git/trees/" in path:
+            return httpx.Response(200, json={
+                "tree": [{"path": t["path"], "type": "blob", "size": 1,
+                          "sha": t["sha"]} for t in self.tree_entries],
+                "truncated": False})
+        if method == "POST" and "/contents" in path:
+            self.contents_batches.append((path, json.loads(request.content)))
+            return httpx.Response(201, json={})
+        if method == "GET" and path == "/api/v1/orgs/devcake-repos/repos":
+            page = int(request.url.params.get("page", "1"))
+            repos = (self.org_pages[page - 1]
+                     if page <= len(self.org_pages) else [])
+            return httpx.Response(200, json=repos)
+        if method == "DELETE" and path.startswith("/api/v1/repos/devcake-repos/"):
+            return httpx.Response(204)
+        if method == "GET" and path.endswith("/tokens"):
+            return httpx.Response(200, json=self.tokens)
+        if method == "POST" and path.endswith("/tokens"):
+            self.token_posts.append((path, json.loads(request.content)))
+            return httpx.Response(201, json={"sha1": "minted-tok"})
+        if method == "DELETE" and "/tokens/" in path:
+            return httpx.Response(404, json={})
+        if method == "POST" and path == "/api/v1/admin/users":
+            return httpx.Response(201, json={})
+        if method == "GET" and path == "/api/v1/orgs/devcake-internal/teams":
+            return httpx.Response(200, json=[{"id": 1, "name": "Owners"}])
+        if method == "PUT" and "/members/" in path:
+            return httpx.Response(204)
+        return httpx.Response(200, json={})
+
+
+def test_ensure_service_accounts_mints_activity_ro(tmp_path, monkeypatch):
+    rec = _ActivityRecorder()
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_service_accounts())
+    users = [c for c in rec.calls if c == ("POST", "/api/v1/admin/users")]
+    assert len(users) == 3                    # app, reviewer, activity-ro
+    ro_mints = [(p, b) for p, b in rec.token_posts
+                if p == "/api/v1/users/devcake-activity-ro/tokens"]
+    assert len(ro_mints) == 1
+    assert ro_mints[0][1]["scopes"] == ["read:repository"]
+    svc = json.loads(
+        (tmp_path / "secrets" / "internal_forge" / "service.json").read_text())
+    assert svc["activity_ro_token"] == "minted-tok"
+
+
+def test_ensure_service_accounts_reuses_live_activity_token(tmp_path,
+                                                            monkeypatch):
+    d = tmp_path / "secrets" / "internal_forge"
+    d.mkdir(parents=True)
+    (d / "service.json").write_text(json.dumps({
+        "app_token": "app-tok-aaaaaaaa", "reviewer_token": "rev-tok-bbbbbbbb",
+        "activity_ro_token": "act-tok-cccccccc"}))
+    rec = _ActivityRecorder(tokens=[
+        {"name": "devcake-app", "token_last_eight": "aaaaaaaa"},
+        {"name": "devcake-reviewer", "token_last_eight": "bbbbbbbb"},
+        {"name": "devcake-activity-ro", "token_last_eight": "cccccccc"}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.ensure_service_accounts())
+    assert rec.token_posts == []              # everything live — nothing minted

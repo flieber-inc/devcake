@@ -38,6 +38,8 @@ ORG = "devcake-internal"
 OPERATOR_ORG = "devcake-repos"
 APP_USER = "devcake-app"            # org owner: app-side PR ops + merges
 REVIEWER_USER = "devcake-reviewer"  # formal approvals (whitelisted per repo)
+ACTIVITY_RO_USER = "devcake-activity-ro"  # shared RO clone account for
+                                          # activity-* repos (ADR-0014 D4)
 # The skill store (docs/16 skill store v1): one operator-editable repo in
 # OPERATOR_ORG holding Claude Code skills. Deliberately NO branch protection,
 # NO machine user, NO tokens — operators push skills straight to main via the
@@ -96,7 +98,7 @@ class GiteaProvisioner:
         await self._req("POST", "/orgs",
                         json={"username": ORG, "visibility": "private"},
                         tolerate=(409, 422))
-        for user in (APP_USER, REVIEWER_USER):
+        for user in (APP_USER, REVIEWER_USER, ACTIVITY_RO_USER):
             await self._req("POST", "/admin/users", tolerate=(409, 422),
                             json={"username": user,
                                   "email": f"{user}@devcake.example",
@@ -122,6 +124,13 @@ class GiteaProvisioner:
             svc["reviewer_token"] = await self._mint(
                 REVIEWER_USER, "devcake-reviewer",
                 ["write:repository", "write:issue"])
+        # ADR-0014 D4: ONE read-only token clones every activity-* repo
+        # (per-repo collaborator grants happen at ensure_activity_repo)
+        if not await self._service_token_live(ACTIVITY_RO_USER,
+                                              "devcake-activity-ro",
+                                              svc.get("activity_ro_token")):
+            svc["activity_ro_token"] = await self._mint(
+                ACTIVITY_RO_USER, "devcake-activity-ro", ["read:repository"])
         self._store("service.json", svc)
         self._register(svc)
 
@@ -485,6 +494,8 @@ class GiteaProvisioner:
         security.register_runtime_secret("internal:app", svc.get("app_token", ""))
         security.register_runtime_secret("internal:reviewer",
                                          svc.get("reviewer_token", ""))
+        security.register_runtime_secret("internal:activity-ro",
+                                         svc.get("activity_ro_token", ""))
 
     def _register_mission(self, creds: MissionRepoCredentials) -> None:
         security.register_runtime_secret(f"internal:{creds.repo_name}:w",

@@ -58,8 +58,9 @@ ONBOARD_PLAYBOOK = """
 
 Assess the complexity of the mission below against the actual codebase, then
 route it. **Assess, don't deep-dive** — this is a bounded triage pass, not an
-exploration. Do not modify any code in this mission type (the rare trivial
-path is the only exception, and you must be certain).
+exploration. NEVER modify any code in this mission type: ONBOARD is pure
+assessment and holds no write access; even trivial work is implemented by
+the EXECUTE step, from the plan you attach.
 
 ### Workspace
 - `/workspace/repo/` — a fresh clone of the repository. The ONLY place work may happen.
@@ -89,10 +90,13 @@ Write EXACTLY one of:
   what the mission needs and why it is normal complexity>"}}
   Optionally, if while triaging you have ALREADY fully formed the implementation plan
   (never force this), also write it to /workspace/out/PLAN.md — a complete, standalone
-  markdown plan an implementer can execute without further context.
-- Trivial: implement it in /workspace/repo (commit at the very end only; branch
-  `{branch}`; push; open a PR), then {{"schema_version": 1, "outcome":
-  "executed_trivially", "summary": "...", "pr_url": "..."}}
+  markdown plan an implementer can execute without further context. The mission then
+  skips its PLAN step and goes straight to EXECUTE.
+- Trivial: trivial IS the opportunistic-plan case, fully formed by definition — you
+  never implement anything (ONBOARD holds no write access). Write the short exact
+  plan to /workspace/out/PLAN.md (files to touch, the precise change, how to verify)
+  and return {{"schema_version": 1, "outcome": "plan_needed", "summary": "<why this
+  is trivial and what the plan does>"}}. The EXECUTE step implements it.
 - High: {{"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{{"title": "...", "description": "<standalone — reads as an
   independent mission, no references to siblings or 'this mission'>",

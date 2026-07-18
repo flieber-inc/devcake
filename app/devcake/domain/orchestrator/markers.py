@@ -20,7 +20,7 @@ DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN,
 # entrypoint mirrors this table, but old images may run — the app check is the
 # invariant.
 LEGAL_OUTCOMES: dict[str, frozenset[str]] = {
-    "ONBOARD": frozenset({"plan_needed", "executed_trivially", "decomposed",
+    "ONBOARD": frozenset({"plan_needed", "decomposed",
                           "human_needed"}),
     "PLAN": frozenset({"planned"}),
     "EXECUTE": frozenset({"executed", "human_needed"}),
@@ -42,7 +42,6 @@ STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 _SWAP_MARKER_STAGE: dict[str, str | None] = {
     "transition:planned:labels": LABEL_EXECUTE,
     "transition:executed:labels": LABEL_REVIEW,
-    "transition:executed_trivially:labels": LABEL_REVIEW,
     "transition:plan_needed_attach:labels": LABEL_EXECUTE,
     "transition:plan_needed": LABEL_PLAN,
     "review:reject:labels": LABEL_EXECUTE,

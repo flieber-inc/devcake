@@ -23,9 +23,7 @@ The Dev studies the Mission against the actual codebase and classifies it using 
 | `high` | Too large/compound for one plan–execute–review cycle; naturally splits into independent work items. | Rare. |
 
 ### 1.1 Trivial path
-The Dev implements the change immediately (same rules as EXECUTE: branch `devcake/{mission_key}` — the `mission_branch()` convention, §3, commit only at the very end, push, open PR). `result.json`: `outcome: "executed_trivially"` with `pr_url`.
-
-**Finalization:** transcript + token report → add `DEVCAKE-REVIEW`. The trivial path skips PLAN and EXECUTE, but **never skips REVIEW** — self-assessment is not a quality gate; an independent REVIEW pass always stands between any DevCake-written code and Done/merge (confirmed decision).
+**Founder decision 2026-07-18 (rode ADR-0014's PR):** ONBOARD never implements — it holds no write token (per-stage least privilege, `14-security.md` §2a), and the old self-executing trivial path only ever worked on repo cards without a configured RO token. Trivial is now the degenerate case of the opportunistic plan (§1.2): the Dev writes the short exact plan to `/workspace/out/PLAN.md` and returns `outcome: "plan_needed"`; finalization takes the plan-attach path and the mission jumps straight to EXECUTE — the only stage that can push. `executed_trivially` is removed outright (preproduction, no deprecation window); a stray one parks with `DEVCAKE-SKIP` like any illegal outcome. REVIEW still always stands between any DevCake-written code and Done/merge — unchanged.
 
 ### 1.2 Normal path
 No code changes. `result.json`: `outcome: "plan_needed"` with a one-paragraph `summary` of the assessment.
@@ -137,7 +135,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
 ```jsonc
 {
   "schema_version": 1,
-  "outcome": "executed_trivially | plan_needed | decomposed | planned | executed | reviewed | human_needed | relations_mapped",
+  "outcome": "plan_needed | decomposed | planned | executed | reviewed | human_needed | relations_mapped",
   "summary": "one-paragraph human summary of what was done/found",   // required, all outcomes
   "verdict": "approve | reject",          // REVIEW only
   "report_md": "…full review report…",    // REVIEW only
@@ -148,7 +146,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
   "edges": [                               // MAPPER 'relations_mapped' only (§4b)
     {"blocker": "ENG-10", "blocked": "ENG-12"}
   ],
-  "pr_url": "https://…"                    // executed_trivially / executed / reviewed
+  "pr_url": "https://…"                    // executed / reviewed
 }
 ```
 
@@ -158,7 +156,7 @@ A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.
 
 | Run type | Legal outcomes |
 |---|---|
-| ONBOARD | `plan_needed` · `executed_trivially` · `decomposed` · `human_needed` |
+| ONBOARD | `plan_needed` · `decomposed` · `human_needed` |
 | PLAN | `planned` |
 | EXECUTE | `executed` · `human_needed` |
 | REVIEW | `reviewed` · `human_needed` |

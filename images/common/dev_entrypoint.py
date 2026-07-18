@@ -927,7 +927,7 @@ def main() -> None:
     # per-type legality (docs/03 §6). First-line defense only — the app enforces
     # the same table authoritatively at finalization (missions.LEGAL_OUTCOMES).
     legal_outcomes = {
-        "ONBOARD": {"plan_needed", "executed_trivially", "decomposed", "human_needed"},
+        "ONBOARD": {"plan_needed", "decomposed", "human_needed"},
         "PLAN": {"planned"},
         "EXECUTE": {"executed", "human_needed"},
         "REVIEW": {"reviewed", "human_needed"},

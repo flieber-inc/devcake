@@ -43,10 +43,12 @@ Write EXACTLY one of:
 - Normal: {"schema_version": 1, "outcome": "plan_needed", "summary": "<one
   paragraph: what the customer needs and what the deliverable will be>"}
   Optionally, if the full resolution plan is already formed, also write it to
-  /workspace/out/PLAN.md.
-- Trivial: produce the deliverable in /workspace/repo (commit at the very end
-  only; branch `{branch}`; push; open a PR), then {"schema_version": 1,
-  "outcome": "executed_trivially", "summary": "...", "pr_url": "..."}
+  /workspace/out/PLAN.md — the issue then skips PLAN and goes to EXECUTE.
+- Trivial: trivial IS the opportunistic-plan case — you never produce the
+  deliverable yourself (ONBOARD holds no write access). Write the short exact
+  resolution plan to /workspace/out/PLAN.md and return {"schema_version": 1,
+  "outcome": "plan_needed", "summary": "<why trivial + what the plan does>"}.
+  The EXECUTE step produces it.
 - High: {"schema_version": 1, "outcome": "decomposed", "summary": "...",
   "decomposition": [{"title": "...", "description": "<standalone — reads as an
   independent issue>", "priority": "urgent|high|medium|low",

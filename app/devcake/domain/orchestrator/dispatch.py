@@ -110,8 +110,8 @@ def _onboard_repo_options(self, primary: str) -> str:
     return (
         "### This team works across several repositories\n"
         "All of them are cloned READ-ONLY in your workspace for assessment "
-        "(only this mission's repository may be written, and only on the "
-        "trivial path):\n" + "\n".join(lines) + "\n\n"
+        "(ONBOARD writes nothing anywhere — route the work instead):\n"
+        + "\n".join(lines) + "\n\n"
         "**Cross-repo work must never be one mission.** If completing this "
         "mission requires changes in more than one repository, take the "
         "high-complexity path: decompose into ONE child per repository, put "

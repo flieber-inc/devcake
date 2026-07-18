@@ -473,20 +473,33 @@ def test_mcp_setup_artifact_maps_to_dev_mcp_setup(tmp_path):
     assert mgr._attempt_number("p1", "EXECUTE", None) == 2   # counted
 
 
-def test_trivial_feed_uses_descriptor_pr_noun(tmp_path):
-    """Audit A29: the trivial-path feed said 'PR opened' regardless of the
-    forge — _executed_feed already used the descriptor noun; the trivial
-    twin did not."""
+def test_executed_trivially_is_illegal_and_parks(tmp_path):
+    """Founder decision 2026-07-18 (rode ADR-0014's PR): ONBOARD never
+    implements — trivial work rides the opportunistic-plan path to EXECUTE
+    (the only stage holding a write token). `executed_trivially` is gone
+    outright (preproduction, no deprecation window); a stray one parks."""
     m = mission("in_progress", {"DEVCAKE"})
-    forge = FakeForge()
-    forge.descriptor = type("D", (), {"pr_noun": "merge request"})()
-    mgr, fake, _store = make_mgr(tmp_path, m, forge=forge)
+    mgr, fake, _store = make_mgr(tmp_path, m)
     run_coro(mgr._transition(_run("ONBOARD", None),
                              {"outcome": "executed_trivially",
                               "pr_url": "https://forge/mr/1", "summary": "s"},
                              None))
-    assert any("merge request" in c for c in fake.comments)
-    assert not any("PR opened" in c for c in fake.comments)
+    assert ({"DEVCAKE-SKIP"} in [add for _, add in fake.swaps])  # parked
+    assert "DEVCAKE-REVIEW" not in m.labels
+    assert any("not a legal outcome" in c for c in fake.comments)
+
+
+def test_onboard_opportunistic_plan_skips_plan_stage(tmp_path):
+    """The trivial path's replacement: ONBOARD attaches the plan it already
+    formed and the mission jumps straight to EXECUTE."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(mgr._transition(_run("ONBOARD", None),
+                             {"outcome": "plan_needed", "summary": "s"},
+                             "## Plan\nappend the line to README.md"))
+    assert any(n == "PLAN_1.md" for n, _ in fake.uploads)
+    assert any("opportunistic plan" in c for c in fake.comments)
+    assert ({"DEVCAKE-EXECUTE"} in [add for _, add in fake.swaps])
 
 
 def test_apply_health_and_latch_noop_for_unregistered_repo():

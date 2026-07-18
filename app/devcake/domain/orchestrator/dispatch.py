@@ -637,9 +637,13 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
             data = await self.pmo.download_asset(att.url)
         except Exception:
             return f"[attachment unavailable: {att.url}]"
-        fname = self._unique_name(
-            att.name or att.url.rsplit("/", 1)[-1][:80] or "attachment.bin",
-            used)
+        # basename BEFORE dedupe: a slash-bearing link text ([v1/r.md](…))
+        # must yield the same name in the index, the snapshot commit, and
+        # the folder — a path-y name would desync them and trip the
+        # snapshot dup-path guard forever (full-diff review finding)
+        raw = (Path(att.name).name if att.name
+               else att.url.rsplit("/", 1)[-1][:80])
+        fname = self._unique_name(raw or "attachment.bin", used)
         attachments.append({"filename": fname,
                             "content_b64": base64.b64encode(data).decode()})
         return f"[attachment: {fname}]"

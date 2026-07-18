@@ -414,3 +414,28 @@ def test_activity_payload_orphan_reply_marked(tmp_path):
     mgr = make_mgr(tmp_path, pmo)
     md = run_coro(mgr.activity_payload("i1"))["activity_md"]
     assert "↳ reply to (deleted comment)" in md
+
+
+def test_activity_payload_basenames_slashed_attachment_names(tmp_path):
+    # full-diff review: a `[v1/report.md](url)` link must agree end-to-end —
+    # index line, snapshot path, and folder file all use the basename, and
+    # two slashed names colliding on it dedupe instead of desyncing
+    mission = m("i1", "T-1")
+    entries = [
+        ActivityEntry(ts=NOW, author="a", kind="comment", body="x",
+                      attachments=[AttachmentRef(
+                          url="https://uploads.linear.app/a",
+                          name="v1/report.md")]),
+        ActivityEntry(ts=NOW, author="b", kind="comment", body="y",
+                      attachments=[AttachmentRef(
+                          url="https://uploads.linear.app/b",
+                          name="v2/report.md")]),
+    ]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    pmo.download_asset = _returns(b"d")
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    assert [a["filename"] for a in payload["attachments"]] == \
+        ["report.md", "report-2.md"]
+    assert "[attachment: report.md]" in payload["activity_md"]
+    assert "v1/report.md" not in payload["activity_md"]

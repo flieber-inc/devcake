@@ -26,7 +26,7 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 
 **`MissionRef`** is a `NamedTuple(pmo_id: str, kind: "issue" | "project")` — the adapter-facing mission handle. The port's unified read/write methods (`get`, `get_activity`, `post_feed`, `set_status`, `swap_labels`, `children_of` — `05-pmo-adapter.md` §1) take a ref; how each kind is stored (Linear's issue/project duality, or nothing of the sort) is the adapter's business, never the domain's. `Mission.ref` is a property returning `MissionRef(pmo_id, pmo_kind)`.
 
-**`Activity`** is `{mission: Mission, entries: list[ActivityEntry]}` — the normalized feed returned by `get_activity`.
+**`Activity`** is `{mission: Mission, entries: list[ActivityEntry], mission_attachments: list[AttachmentRef], truncated: bool}` — the normalized feed returned by `get_activity`. `mission_attachments` (full mode only, ADR-0014): assets the mission itself references — description-embedded uploads + the vendor's native attachment list. `truncated`: the full-history hard stop tripped; the activity-folder builder renders a loud banner.
 
 **`ActivityEntry`:**
 
@@ -37,8 +37,9 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 | `kind` | `"comment" \| "status_change" \| "attachment"` | |
 | `body` | `str` | Markdown. |
 | `attachments` | `list[AttachmentRef]` | Assets referenced from the entry. |
+| `entry_id` / `parent_id` | `str \| None` | Reply structure (ADR-0014) — populated only by full-mode `get_activity`; `None` on the shallow marker-scan path. |
 
-**`AttachmentRef`** is `{url: str, name: str | None}` — `name` is the markdown link text when the feed carried one; the **adapter** resolves it, so the domain never parses vendor asset URLs (`05-pmo-adapter.md` §4).
+**`AttachmentRef`** is `{url: str, name: str | None, kind: "file" | "link"}` — `name` is the markdown link text when the feed carried one; the **adapter** resolves it, so the domain never parses vendor asset URLs (`05-pmo-adapter.md` §4). `kind` (ADR-0014): `file` = downloadable bytes; `link` = external reference the builder renders as a markdown link.
 
 ## 2. Mission Type derivation (normative table)
 

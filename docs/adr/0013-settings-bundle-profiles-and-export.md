@@ -1,6 +1,6 @@
 # ADR-0013 — Settings bundle, config profiles, and export/import
 
-- **Status:** accepted (2026-07-18; profiles + bundle core shipped first, export/import + setup-env + Gitea scripts follow in the same feature line)
+- **Status:** accepted (2026-07-18; shipped in two parts the same day — profiles + bundle core, then export/import + setup-env + Gitea scripts)
 - **Context:** A deployment's settings span four stores (`config.yaml`, `dev_types/*.yaml`, the two prompt-template trees, `/data/secrets/**`) plus `.env`, each with per-entity CRUD only. There was no way to save, load, import, or export a setup as a whole — the only backup story was "copy `/data`". Setting up a new run configuration, or a second deployment, meant re-entering everything by hand.
 
 ## Decision 1 — ONE canonical bundle format

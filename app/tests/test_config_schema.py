@@ -120,6 +120,24 @@ def test_operational_fields_reject_zero_and_negative():
         AppConfig.model_validate({**base, "concurrency": {"global_max": 0}})
 
 
+def test_max_decomposition_depth_defaults_and_bounds():
+    """Decomposition depth limit is operator policy (Traffic control,
+    ADR-0012): default 2, 0 = unlimited, negatives refused."""
+    base = _base()
+    assert AppConfig.model_validate(base).max_decomposition_depth == 2
+    for ok in (0, 1, 2):
+        got = AppConfig.model_validate(
+            {**base, "max_decomposition_depth": ok})
+        assert got.max_decomposition_depth == ok
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "max_decomposition_depth": -1})
+    # a patch touching an unrelated field must not reset the setting
+    from devcake.config import deep_merge
+    tuned = {**base, "max_decomposition_depth": 1}
+    merged = deep_merge(tuned, {"auto_merge": True})
+    assert AppConfig.model_validate(merged).max_decomposition_depth == 1
+
+
 def test_repo_url_shape_validated():
     """ISSUES #10: malformed forge URLs rejected at schema layer."""
     base = _base()

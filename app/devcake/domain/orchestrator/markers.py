@@ -6,7 +6,8 @@ import os
 import re
 from pathlib import Path
 
-from ..model import (LABEL_EXECUTE, LABEL_PLAN, LABEL_REVIEW, MissionType)
+from ..model import (LABEL_CREATED, LABEL_EXECUTE, LABEL_PLAN, LABEL_REVIEW,
+                     MissionType)
 
 # The full state machine is dispatchable, projects included (ADR-0006).
 DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN,
@@ -81,9 +82,47 @@ MAX_CONFLICT_RESOLVES = 2
 # author/credential-based — DevCake may post with the operator's own PMO key.
 COMMENT_SENTINEL = "`devcake:v1`"
 SENTINEL_RE = re.compile(r"`devcake:v1`\s*$")
+# depth= is optional for backward compatibility: markers written under the
+# depth-1 regime could only ever mark level-1 children, so absent ⇒ 1
+# (ADR-0012). The PMO record itself holds the depth — no internal counters.
 DECOMPOSITION_MARKER_RE = re.compile(
     r"`devcake:decomposition:v1 parent=(\S+) manifest=([0-9a-f]{64}) "
-    r"part=(\d+)/(\d+)`"
+    r"part=(\d+)/(\d+)(?: depth=(\d+))?`"
 )
+
+
+def decomposition_marker(description: str | None) -> re.Match | None:
+    """A mission's own decomposition marker: the LAST match in the
+    description. The app appends the genuine footer AFTER the Dev-authored
+    draft body, so marker-shaped text quoted inside the untrusted body can
+    only ever precede it — anchoring to the last match keeps every marker
+    read pinned to the app's own write. (New child bodies are additionally
+    defanged at creation; last-match covers children created before that.)"""
+    matches = list(DECOMPOSITION_MARKER_RE.finditer(description or ""))
+    return matches[-1] if matches else None
+
+
+def decomposition_depth(mission) -> int | None:
+    """Generations of decomposition above `mission`, read from its own PMO
+    record only. The app-managed DEVCAKE-CREATED label gates the read, so a
+    forged marker in an untrusted description is inert (depth 0 without the
+    label). None = the label is present but the marker is missing or
+    unparseable — callers treat unknown as at-limit (fail-safe)."""
+    if LABEL_CREATED not in mission.labels:
+        return 0
+    marker = decomposition_marker(mission.description)
+    if not marker:
+        return None
+    return int(marker.group(5)) if marker.group(5) else 1
+
+
+def at_decomposition_limit(mission, limit: int) -> bool:
+    """THE at-limit predicate (ADR-0012), shared by the finalizer's depth
+    gate and dispatch's {decomposition_rule} builder so the two can never
+    drift: 0 = unlimited; unknown depth counts as at-limit, fail-safe."""
+    if not limit:
+        return False
+    depth = decomposition_depth(mission)
+    return depth is None or depth >= limit
 
 AUDIT_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "events.jsonl"

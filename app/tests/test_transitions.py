@@ -37,6 +37,8 @@ class FakePMO:
         self.uploads = []       # (name, bytes)
         self.activity_entries = []
         self.all_missions = [mission]
+        self.ops = []           # chronological (op, …) log for ordering asserts
+        self.fail_relations = set()   # (blocker, blocked) pairs that raise
 
     async def get(self, ref):
         self._check_ref(ref)
@@ -58,6 +60,7 @@ class FakePMO:
     async def set_status(self, ref, status):
         self._check_ref(ref)
         self.statuses.append(status)
+        self.ops.append(("status", status))
         self.mission.status = status
 
     async def cancel_mission(self, ref):
@@ -87,12 +90,22 @@ class FakePMO:
     async def list_all(self, team_ref):
         return list(self.all_missions)
 
+    async def append_description(self, ref, text):
+        self._check_ref(ref)
+        if getattr(self, "fail_append", False):
+            raise RuntimeError("description update refused")
+        self.mission.description = (self.mission.description or "") + text
+        self.ops.append(("append_description", text))
+
     async def create_relation(self, blocker_id, blocked_id):
+        if (blocker_id, blocked_id) in self.fail_relations:
+            raise RuntimeError("relation refused")
         self.relations.append((blocker_id, blocked_id))
+        self.ops.append(("relation", blocker_id, blocked_id))
 
     async def children_of(self, ref):
         self._check_ref(ref)
-        return []
+        return list(getattr(self, "children", []))
 
 
 class NullMessaging:
@@ -558,6 +571,285 @@ def test_decomposition_children_clean_without_marker(tmp_path):
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "solo"}]}))
     assert "devcake-repo" not in fake.all_missions[1].description
+
+
+def test_decomposition_children_inherit_containing_project(tmp_path):
+    """ADR-0012: an issue's children stay in its containing project (the
+    tracking sweep then waits for them); standalone issues stay standalone;
+    a project original keeps parenting its children (pinned)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    m.parent_ref = "proj-9"
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "a"},
+                                                    {"title": "b"}]}))
+    assert [pr for _, pr in fake.created] == ["proj-9", "proj-9"]
+
+    solo = mission("in_progress", {"DEVCAKE"})
+    mgr2, fake2, _ = make_mgr(tmp_path / "solo", solo)
+    run_coro(mgr2._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "c"}]}))
+    assert [pr for _, pr in fake2.created] == [None]
+
+    proj = mission("in_progress", {"DEVCAKE"})
+    proj.pmo_kind = "project"
+    mgr3, fake3, _ = make_mgr(tmp_path / "proj", proj)
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(mgr3._finalize_decomposition(
+        run, {"outcome": "decomposed", "decomposition": [{"title": "d"}]}))
+    assert [pr for _, pr in fake3.created] == ["p1"]
+
+
+def test_tracking_sweep_waits_for_open_grandchildren(tmp_path):
+    """First _tracking_sweep coverage: a canceled (replaced-by-decomposition)
+    child counts terminal, but any open issue in the project — including a
+    grandchild — holds the project open."""
+    proj = mission("in_progress", {"DEVCAKE-TRACKING"})
+    proj.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+    canceled_child = mission("canceled", {"DEVCAKE", "DEVCAKE-CREATED"})
+    grandchild = mission("backlog", {"DEVCAKE", "DEVCAKE-CREATED"})
+    fake.children = [canceled_child, grandchild]
+    run_coro(mgr._tracking_sweep(proj))
+    assert proj.status == "in_progress"           # grandchild holds it open
+    grandchild.status = "done"
+    run_coro(mgr._tracking_sweep(proj))
+    assert proj.status == "done"
+    assert "DEVCAKE-TRACKING" not in proj.labels
+
+
+def dep_mission(pmo_id, key, status="backlog", blocked_by=()):
+    m = Mission(instance="linear", pmo_id=pmo_id, pmo_kind="issue", key=key,
+                title=key, status=status, labels={"DEVCAKE"}, repo="main",
+                updated_at=datetime.now(timezone.utc),
+                blocked_by=list(blocked_by))
+    return m
+
+
+def test_decomposition_inherits_dependent_edges_before_cancel(tmp_path):
+    """ADR-0012, the ordering bug fix: every still-open dependent of the
+    original is re-pointed at EVERY child, and all inherited edges exist
+    before the original is canceled — the gate never sees a canceled
+    original without replacement edges."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
+    fake.all_missions.append(dep_mission("d2", "T-91", status="done",
+                                         blocked_by=["p1"]))
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "a"},
+                                                    {"title": "b"}]}))
+    assert ("id-1", "d1") in fake.relations
+    assert ("id-2", "d1") in fake.relations
+    assert not any(blocked == "d2" for _, blocked in fake.relations)
+    cancel_at = fake.ops.index(("status", "canceled"))
+    for i, op in enumerate(fake.ops):
+        if op[0] == "relation":
+            assert i < cancel_at, "inherited edge wired after the cancel"
+
+
+def test_decomposition_inherits_open_blockers_onto_children(tmp_path):
+    """Inbound edges: the original's still-open blockers gate every child;
+    terminal blockers are not resurrected; an off-snapshot blocker counts
+    as open (additive fail-safe)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    m.blocked_by = ["b-open", "b-done", "ghost"]
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.all_missions.append(dep_mission("b-open", "T-80"))
+    fake.all_missions.append(dep_mission("b-done", "T-81", status="done"))
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "a"},
+                                                    {"title": "b"}]}))
+    for child in ("id-1", "id-2"):
+        assert ("b-open", child) in fake.relations
+        assert ("ghost", child) in fake.relations
+        assert ("b-done", child) not in fake.relations
+
+
+def test_inherited_edge_failure_keeps_original_open_and_gated(tmp_path):
+    """Fail-closed (ADR-0012): an inherited-edge failure aborts finalization
+    BEFORE the cancel — the original stays open and keeps gating its
+    dependents; the retry (same run, checkpoints intact) completes once the
+    edge succeeds. Canceling past a missing edge would silently release
+    downstream work early."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
+    fake.fail_relations = {("id-1", "d1")}
+    run = _run("ONBOARD", None)
+    drafts = [{"title": "a"}, {"title": "b"}]
+    with pytest.raises(RuntimeError):
+        run_coro(mgr._finalize_decomposition(
+            run, {"outcome": "decomposed", "decomposition": drafts}))
+    assert m.status != "canceled"                 # original still gates D
+    assert ("status", "canceled") not in fake.ops
+
+    fake.fail_relations = set()                   # transient error heals
+    run_coro(mgr._finalize_decomposition(
+        run, {"outcome": "decomposed", "decomposition": drafts}))
+    assert m.status == "canceled"
+    assert ("id-1", "d1") in fake.relations and ("id-2", "d1") in fake.relations
+
+    m2 = mission("in_progress", {"DEVCAKE"})      # sibling edges stay strict
+    mgr2, fake2, _ = make_mgr(tmp_path / "sib", m2)
+    fake2.fail_relations = {("id-1", "id-2")}
+    with pytest.raises(RuntimeError):
+        run_coro(mgr2._finalize_decomposition(
+            _run("ONBOARD", None),
+            {"outcome": "decomposed",
+             "decomposition": [{"title": "a"},
+                               {"title": "b", "blocked_by": [1]}]}))
+
+
+def test_inherited_edge_to_deleted_dependent_converges_on_retry(tmp_path):
+    """A dependent deleted mid-finalize fails its edge strictly, but the
+    retry recomputes dependents from a fresh snapshot — the vanished mission
+    drops out and finalization completes without it."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    doomed = dep_mission("d1", "T-90", blocked_by=["p1"])
+    fake.all_missions.append(doomed)
+    fake.fail_relations = {("id-1", "d1"), ("id-2", "d1")}
+    run = _run("ONBOARD", None)
+    drafts = [{"title": "a"}, {"title": "b"}]
+    with pytest.raises(RuntimeError):
+        run_coro(mgr._finalize_decomposition(
+            run, {"outcome": "decomposed", "decomposition": drafts}))
+    assert m.status != "canceled"
+
+    fake.all_missions.remove(doomed)              # human deleted the issue
+    run_coro(mgr._finalize_decomposition(
+        run, {"outcome": "decomposed", "decomposition": drafts}))
+    assert m.status == "canceled"
+    assert not any(blocked == "d1" for _, blocked in fake.relations)
+
+
+def test_lineage_note_failure_never_blocks_cancel(tmp_path):
+    """The note is hygiene, not safety: a failing append_description audits
+    and finalization still cancels the original."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.fail_append = True
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert m.status == "canceled"
+    assert "_Decomposed by DevCake into" not in (m.description or "")
+
+
+def test_depth_park_restores_backlog_and_sets_verdict(tmp_path):
+    """The depth park mirrors the conflict park: status back to backlog (no
+    phantom in-progress) and a 'handed off:' verdict so the run never reads
+    as a clean success."""
+    from test_decomposition_depth import marker
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-CREATED"})
+    m.description = marker(depth=2)
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run_coro(mgr._finalize_decomposition(
+        run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert "DEVCAKE-SKIP" in m.labels
+    assert m.status == "backlog"
+    assert run.verdict == "handed off: decomposition depth limit"
+
+
+def test_depth_gate_replay_stable_after_limit_change(tmp_path):
+    """Once child checkpoints exist the decomposition decision was taken —
+    lowering the limit mid-resume must finish the wiring, not strand live
+    children behind a SKIP park."""
+    from test_decomposition_depth import marker
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-CREATED"})
+    m.description = "part\n\n" + marker()          # level 1, legal at limit 2
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    drafts = [{"title": "a"}, {"title": "b"}]
+    fake.fail_relations = {("id-1", "id-2")}       # crash mid-wiring
+    with pytest.raises(RuntimeError):
+        run_coro(mgr._finalize_decomposition(
+            run, {"outcome": "decomposed",
+                  "decomposition": [{"title": "a"},
+                                    {"title": "b", "blocked_by": [1]}]}))
+    mgr.config.max_decomposition_depth = 1         # operator lowers the limit
+    fake.fail_relations = set()
+    run_coro(mgr._finalize_decomposition(
+        run, {"outcome": "decomposed",
+              "decomposition": [{"title": "a"},
+                                {"title": "b", "blocked_by": [1]}]}))
+    assert "DEVCAKE-SKIP" not in m.labels
+    assert m.status == "canceled"                  # wiring completed
+
+
+def test_inherited_edges_replay_semantics(tmp_path):
+    """Same-run redelivery re-executes nothing; a fresh run only re-creates
+    duplicate-tolerated edges (membership stable, children reused)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
+    drafts = [{"title": "a"}, {"title": "b"}]
+    first = _run("ONBOARD", None)
+    run_coro(mgr._finalize_decomposition(
+        first, {"outcome": "decomposed", "decomposition": drafts}))
+    count = len(fake.relations)
+    run_coro(mgr._finalize_decomposition(
+        first, {"outcome": "decomposed", "decomposition": drafts}))
+    assert len(fake.relations) == count           # checkpoints all skipped
+
+    m.status = "in_progress"
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None),
+        {"outcome": "decomposed", "decomposition": drafts}))
+    assert len(fake.created) == 2                 # children reused
+    assert ("id-1", "d1") in fake.relations and ("id-2", "d1") in fake.relations
+
+
+def test_canceled_parent_gets_lineage_note(tmp_path):
+    """ADR-0012 hygiene: the canceled original carries a durable description
+    note naming every child — appended before the cancel, exactly once even
+    across a fresh-run replay."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    drafts = [{"title": "a"}, {"title": "b"}]
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None), {"outcome": "decomposed",
+                                "decomposition": drafts}))
+    assert "_Decomposed by DevCake into T-2, T-3_" in m.description
+    note_at = fake.ops.index(("append_description",
+                              "\n\n---\n_Decomposed by DevCake into T-2, T-3_"))
+    assert note_at < fake.ops.index(("status", "canceled"))
+
+    m.status = "in_progress"                      # fresh-run replay
+    run_coro(mgr._finalize_decomposition(
+        _run("ONBOARD", None), {"outcome": "decomposed",
+                                "decomposition": drafts}))
+    assert m.description.count("_Decomposed by DevCake into") == 1
+
+
+def test_project_decomposition_appends_no_lineage_note(tmp_path):
+    proj = mission("in_progress", {"DEVCAKE"})
+    proj.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(mgr._finalize_decomposition(
+        run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert not any(op[0] == "append_description" for op in fake.ops)
+
+
+def test_project_decomposition_inherits_nothing(tmp_path):
+    proj = mission("in_progress", {"DEVCAKE"})
+    proj.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+    fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(mgr._finalize_decomposition(
+        run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert not any(blocked == "d1" for _, blocked in fake.relations)
 
 
 def test_decomposition_replay_reuses_marker_parts(tmp_path):

@@ -42,6 +42,7 @@ _NAMED_ASSET_RE = re.compile(
 # for `blocks` client-side, so an undersized page can silently evict a blocker
 # and blind the scheduling gate (docs/05 §6). A full page is logged loudly.
 RELATIONS_PAGE = 50
+MAX_RELATION_PAGES = 10  # 10 × 50 = 500 relations fail-loud ceiling (ADR-0012)
 
 # Nested issue/project labels page size (ISSUES #7). Was first: 20 with no
 # tripwire — a heavily labeled issue could omit DEVCAKE-SKIP and re-dispatch.
@@ -168,7 +169,8 @@ class LinearAdapter:
                      labels(first: 50) { pageInfo { hasNextPage endCursor }
                                         nodes { name } }
                      project { id }
-                     inverseRelations(first: 50) { nodes { type issue { id } } }
+                     inverseRelations(first: 50) { pageInfo { hasNextPage endCursor }
+                                            nodes { type issue { id } } }
                    } } }""", "issues", {"teamId": team["id"]})
         projects = await self._paginate(
             """query($teamId: ID!, $after: String) {
@@ -187,6 +189,8 @@ class LinearAdapter:
             page = (n.get("labels") or {}).get("pageInfo") or {}
             if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
                 await self._paginate_issue_labels(n["id"], n)
+            if ((n.get("inverseRelations") or {}).get("pageInfo") or {}).get("hasNextPage"):
+                await self._paginate_issue_relations(n["id"], n)
         for n in projects:
             page = (n.get("labels") or {}).get("pageInfo") or {}
             if page.get("hasNextPage") or len((n.get("labels") or {}).get("nodes") or []) >= LABELS_PAGE:
@@ -210,10 +214,13 @@ class LinearAdapter:
                  labels(first: 50) { pageInfo { hasNextPage endCursor }
                                     nodes { name } }
                  project { id }
-                 inverseRelations(first: 50) { nodes { type issue { id } } }
+                 inverseRelations(first: 50) { pageInfo { hasNextPage endCursor }
+                                            nodes { type issue { id } } }
             } }""", {"id": pmo_id})
         issue = data["issue"]
         await self._paginate_issue_labels(pmo_id, issue)
+        if ((issue.get("inverseRelations") or {}).get("pageInfo") or {}).get("hasNextPage"):
+            await self._paginate_issue_relations(pmo_id, issue)
         return self._issue_to_mission(issue)
 
     async def _get_project(self, pmo_id: str) -> Mission:
@@ -251,6 +258,34 @@ class LinearAdapter:
                         issue.get("identifier") or pmo_id,
                         LABELS_PAGE * MAX_LABEL_PAGES)
         issue["labels"] = {"nodes": nodes, "pageInfo": page_info}
+
+    async def _paginate_issue_relations(self, pmo_id: str, issue: dict) -> None:
+        """Cursor-walk inverseRelations past a full first page (ADR-0012): a
+        truncated read under-blocks the scheduling gate AND silently skips
+        decomposition edge inheritance, so the rare 50+-relation issue pays
+        a follow-up query instead of dropping blockers."""
+        conn = issue.get("inverseRelations") or {}
+        nodes = list(conn.get("nodes") or [])
+        page_info = conn.get("pageInfo") or {}
+        for _ in range(MAX_RELATION_PAGES - 1):
+            if not page_info.get("hasNextPage"):
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { issue(id: $id) {
+                     inverseRelations(first: 50, after: $after) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { type issue { id } }
+                     } } }""",
+                {"id": pmo_id, "after": page_info["endCursor"]})
+            conn = page["issue"]["inverseRelations"]
+            nodes.extend(conn.get("nodes") or [])
+            page_info = conn.get("pageInfo") or {}
+        if page_info.get("hasNextPage"):
+            log.warning("issue %s: relation ceiling (%d) hit — blocked_by may "
+                        "be truncated; the gate could miss a blocker",
+                        issue.get("identifier") or pmo_id,
+                        RELATIONS_PAGE * MAX_RELATION_PAGES)
+        issue["inverseRelations"] = {"nodes": nodes, "pageInfo": page_info}
 
     async def _paginate_project_labels(self, pmo_id: str, project: dict) -> None:
         conn = project.get("labels") or {}
@@ -493,6 +528,20 @@ class LinearAdapter:
                          managed_labels_present=len(present),
                          managed_labels_expected=len(ALL_LABELS))
 
+    async def append_description(self, ref: MissionRef, text: str) -> None:
+        """Read-modify-write append (port contract: append-only, issues
+        only). The read-to-write window is unguarded — acceptable for the
+        lineage-note caller, which appends a marker-shaped footer."""
+        if ref.kind != "issue":
+            raise ValueError(
+                "append_description targets issues only (Linear caps project "
+                "`description` at 255 chars; no project caller exists)")
+        current = (await self._get_issue(ref.pmo_id)).description or ""
+        await self._gql(
+            """mutation($id: String!, $description: String!) {
+                 issueUpdate(id: $id, input: {description: $description}) { success } }""",
+            {"id": ref.pmo_id, "description": current + text})
+
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None:
         """`issueId blocks relatedIssueId` (docs/05 §6, ADR-0007). Duplicate
         relations are tolerated so decomposition resume stays idempotent."""
@@ -605,9 +654,15 @@ class LinearAdapter:
         # on issue B, inverseRelations holds relations where B is relatedIssue;
         # a `blocks` node's `issue` is the blocker (verified live, ADR-0007)
         relations = (n.get("inverseRelations") or {}).get("nodes") or []
-        if len(relations) >= RELATIONS_PAGE:
-            log.warning("issue %s: inverseRelations page is full (%d) — "
-                        "blocked_by may be truncated; the gate could miss a blocker",
+        rel_page = (n.get("inverseRelations") or {}).get("pageInfo")
+        # hasNextPage after the pagination walk = ceiling hit; a pageInfo-less
+        # node (query variants that skip relations) falls back to the length
+        # heuristic so genuine truncation is never silent
+        if (rel_page or {}).get("hasNextPage") or (
+                rel_page is None and len(relations) >= RELATIONS_PAGE):
+            log.warning("issue %s: inverseRelations truncated (%d fetched) — "
+                        "blocked_by may be incomplete; the gate could miss a "
+                        "blocker and decomposition could miss a dependent",
                         n.get("identifier"), len(relations))
         label_nodes = (n.get("labels") or {}).get("nodes") or []
         label_page = (n.get("labels") or {}).get("pageInfo")

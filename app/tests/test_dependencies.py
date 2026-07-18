@@ -65,6 +65,9 @@ def test_open_blocker_skips_candidate(tmp_path):
 
 
 def test_done_or_canceled_blocker_unblocks(tmp_path):
+    # canceled-unblocks stays sound because decomposition re-wires every
+    # still-open dependent onto the replacement children BEFORE canceling
+    # the original (ADR-0012) — see test_decomposed_original_gates_dependents
     for terminal in ("done", "canceled"):
         blocker = m("b1", "T-1", status=terminal)
         blocked = m("b2", "T-2", blocked_by=["b1"])
@@ -72,6 +75,66 @@ def test_done_or_canceled_blocker_unblocks(tmp_path):
         run_coro(mgr.schedule([blocker, blocked]))
         assert dispatched == ["T-2"]
         assert mgr.blocked_reasons == {}
+
+
+MANIFEST = "cd" * 32
+
+
+def created_child(pmo_id, key, parent="o1", status="backlog"):
+    c = m(pmo_id, key, status=status,
+          labels={"DEVCAKE", "DEVCAKE-CREATED"})
+    c.description = (f"work\n\n`devcake:decomposition:v1 parent={parent} "
+                     f"manifest={MANIFEST} part=1/1 depth=1`")
+    return c
+
+
+def test_family_gate_withholds_children_of_open_issue_parent(tmp_path):
+    """ADR-0012 family gate: a decomposition child whose ISSUE parent is
+    still open is mid-wiring (the cancel is finalization's LAST step) —
+    withheld until the parent goes terminal; project parents (which stay
+    open by design) and vanished parents are exempt."""
+    parent = m("o1", "T-1", status="in_progress")
+    child = created_child("c1", "T-10")
+    mgr, dispatched = make_mgr(tmp_path, DepPMO())
+    run_coro(mgr.schedule([parent, child]))
+    assert "T-10" not in dispatched
+    assert "T-1" in mgr.blocked_reasons["c1"]
+
+    parent.status = "canceled"                     # wiring complete
+    mgr2, dispatched2 = make_mgr(tmp_path / "b", DepPMO())
+    run_coro(mgr2.schedule([parent, child]))
+    assert "T-10" in dispatched2
+
+
+def test_family_gate_exempts_project_parents_and_missing_parents(tmp_path):
+    proj = m("proj-1", "PRJ-1", status="in_progress")
+    proj.pmo_kind = "project"
+    proj_child = created_child("c1", "T-10", parent="proj-1")
+    orphan = created_child("c2", "T-11", parent="gone")
+    mgr, dispatched = make_mgr(tmp_path, DepPMO())
+    run_coro(mgr.schedule([proj, proj_child, orphan]))
+    assert "T-10" in dispatched                    # project parent stays open
+    assert "T-11" in dispatched                    # parent off-snapshot
+
+
+def test_decomposed_original_gates_dependents_via_children(tmp_path):
+    """ADR-0012 end-to-end: post-decomposition snapshot — the dependent
+    carries the canceled original PLUS the inherited children edges, so it
+    stays withheld (children named in the reason) until the children finish."""
+    original = m("o1", "T-1", status="canceled")
+    c1 = m("c1", "T-10", labels={"DEVCAKE", "DEVCAKE-CREATED"})
+    c2 = m("c2", "T-11", labels={"DEVCAKE", "DEVCAKE-CREATED"})
+    d = m("d1", "T-2", blocked_by=["o1", "c1", "c2"])
+    mgr, dispatched = make_mgr(tmp_path, DepPMO())
+    run_coro(mgr.schedule([original, c1, c2, d]))
+    assert "T-2" not in dispatched
+    assert "T-10" in mgr.blocked_reasons["d1"]
+    assert "T-11" in mgr.blocked_reasons["d1"]
+
+    c1.status = c2.status = "done"
+    mgr2, dispatched2 = make_mgr(tmp_path / "after", DepPMO())
+    run_coro(mgr2.schedule([original, c1, c2, d]))
+    assert "T-2" in dispatched2
 
 
 def test_failed_blocker_still_blocks_and_is_surfaced(tmp_path):

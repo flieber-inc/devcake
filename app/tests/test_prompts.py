@@ -44,8 +44,25 @@ def test_execute_forge_variants():
     assert "glab mr" in execute_prompt("ID", M, "repo", GL_PR)
 
 
-def test_onboard_depth_limit_stated():
-    assert "DEVCAKE-CREATED" in onboard_prompt("ID", M)
+def test_onboard_decomposition_rule_interpolated():
+    """ADR-0012: the depth rule is per-mission ({decomposition_rule}), no
+    longer the static DEVCAKE-CREATED sentence; operator templates without
+    the placeholder degrade gracefully (identical render for any rule)."""
+    p = onboard_prompt("ID", M, decomposition_rule="RULE-SENTINEL-42")
+    assert "RULE-SENTINEL-42" in p
+    assert "DEVCAKE-CREATED" not in p
+    legacy = "no placeholder here {key}"
+    assert (onboard_prompt("ID", M, playbook=legacy, decomposition_rule="A")
+            == onboard_prompt("ID", M, playbook=legacy,
+                              decomposition_rule="B"))
+
+
+def test_default_onboard_playbooks_carry_decomposition_rule():
+    from devcake.prompts import DEFAULT_PLAYBOOKS
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+    for pb in (DEFAULT_PLAYBOOKS["ONBOARD"], CS_PLAYBOOKS["ONBOARD"]):
+        assert "{decomposition_rule}" in pb
+        assert "DEVCAKE-CREATED" not in pb
 
 
 def test_onboard_declares_blocked_by():

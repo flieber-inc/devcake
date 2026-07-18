@@ -27,8 +27,8 @@ def test_port_declares_expected_surface():
     assert sorted(PORT_METHODS) == sorted([
         "list_missions", "list_all", "get", "get_activity", "children_of",
         "post_feed", "set_status", "cancel_mission", "swap_labels", "create_mission",
-        "create_relation", "ensure_labels", "upload_attachment",
-        "download_asset", "health_probe", "capabilities"])
+        "create_relation", "ensure_labels", "append_description",
+        "upload_attachment", "download_asset", "health_probe", "capabilities"])
 
 
 def test_linear_adapter_implements_full_port():
@@ -109,6 +109,28 @@ def test_post_feed_dispatches_on_kind():
     run(pmo.post_feed(MissionRef("uuid-p1", "project"), "hi"))
     assert any("commentCreate" in q for q in rec.queries)
     assert any("projectUpdateCreate" in q for q in rec.queries)
+
+
+def test_append_description_reads_then_appends():
+    """ADR-0012 lineage note: append-only read-modify-write on the issue
+    description; project refs are refused loudly (no v0 caller, and Linear
+    caps project `description` at 255 chars)."""
+    issue = dict(ISSUE_NODE, description="body")
+    bodies = []
+
+    def handler(req):
+        b = json.loads(req.content)
+        bodies.append(b)
+        if "issueUpdate" in b["query"]:
+            return httpx.Response(200, json={"data": {"issueUpdate": {"success": True}}})
+        return httpx.Response(200, json={"data": {"issue": issue}})
+
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(handler))
+    run(pmo.append_description(MissionRef("uuid-i1", "issue"), "\n\n_note_"))
+    update = next(b for b in bodies if "issueUpdate" in b["query"])
+    assert update["variables"]["description"] == "body\n\n_note_"
+    with pytest.raises(ValueError):
+        run(pmo.append_description(MissionRef("uuid-p1", "project"), "x"))
 
 
 def test_get_activity_on_project_returns_empty_entries():

@@ -84,6 +84,17 @@ class PMOPort(Protocol):
                              parent_ref: Optional[str] = None) -> tuple[str, str]: ...
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
+    async def append_description(self, ref: MissionRef, text: str) -> None:
+        """Append ``text`` to the mission's description (markdown fidelity,
+        same contract as ``post_feed``). Append-only INTENT — DevCake never
+        composes rewrites — but the Linear implementation is an unguarded
+        read-modify-write, so an edit a human saves inside the read-to-write
+        window is lost (last writer wins). Accepted for the single v0
+        caller: a short lineage footer on an issue that is canceled moments
+        later (ADR-0012); callers with higher stakes need a CAS-capable
+        vendor operation first. Issues only: no v0 caller passes a project
+        ref, and callers must treat failures as non-fatal hygiene."""
+        ...
 
     # ── assets ───────────────────────────────────────────────────────────────
     async def upload_attachment(self, pmo_id: str, filename: str,

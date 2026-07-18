@@ -89,6 +89,7 @@ for these.
 Sections (scrollspy anchors `#/config/<id>`): **Traffic control · PMO · Repository · Dev Types · Assignments · Limits**.
 
 ### Traffic control
+- **Decomposition depth** (`SettingRow` select, drafted like every scalar) — `max_decomposition_depth`: **1 level** (a decomposition child is never split again), **2 levels** (default — a Project's missions can each split once more), or **Unlimited** (stored as `0`; the ONBOARD Dev decides every time — removes the fission backstop, and the help copy says so). The schema accepts any depth ≥ 0; a value outside the offered three (set via API/YAML) renders as an extra "*N levels (set via API)*" option so it round-trips instead of being clobbered on the next save. `03-mission-lifecycle.md` §1.3, `adr/0012`.
 - **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `junior-dev`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`). Deleting the mapper's Dev Type is refused with 409.
 
 **Secrets (schema v4 / ADR-0011):** operator secrets are entered as **VALUES**

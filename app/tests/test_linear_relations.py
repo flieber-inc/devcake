@@ -36,6 +36,36 @@ def test_inverse_relations_parse_into_blocked_by():
     assert mission.blocked_by == ["uuid-a"]
 
 
+def test_inverse_relations_paginate_past_first_page():
+    """ADR-0012: a truncated relations read under-blocks the gate AND skips
+    decomposition edge inheritance — the adapter cursor-walks a full page."""
+    page1 = {**ISSUE, "inverseRelations": {
+        "pageInfo": {"hasNextPage": True, "endCursor": "rc1"},
+        "nodes": [{"type": "blocks", "issue": {"id": f"uuid-{i}"}}
+                  for i in range(50)]}}
+    walked = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        q, variables = body["query"], body.get("variables", {})
+        if "inverseRelations(first: 50, after" in q:
+            walked.append(variables.get("after"))
+            return httpx.Response(200, json={"data": {"issue": {
+                "inverseRelations": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [
+                        {"type": "blocks", "issue": {"id": "uuid-extra"}},
+                        {"type": "related", "issue": {"id": "uuid-noise"}},
+                    ]}}}})
+        return httpx.Response(200, json={"data": {"issue": page1}})
+
+    pmo = LinearAdapter("fake-key", transport=httpx.MockTransport(handler))
+    mission = run_coro(pmo.get(MissionRef("uuid-b", "issue")))
+    assert walked == ["rc1"]
+    assert "uuid-extra" in mission.blocked_by
+    assert len(mission.blocked_by) == 51
+
+
 def test_list_all_paginates_issue_pages():
     seen_cursors = []
 
@@ -80,8 +110,10 @@ def test_full_relations_page_warns(caplog):
     with caplog.at_level(logging.WARNING, logger="devcake.linear"):
         mission = run_coro(pmo.get(MissionRef("uuid-b", "issue")))
     assert mission.blocked_by == []                      # blocks evicted by the page
-    assert any("inverseRelations page is full" in r.message
-               for r in caplog.records)                  # …but never silently
+    # a pageInfo-less full page can't be walked — genuine truncation risk,
+    # never silent (pageInfo-bearing pages are cursor-walked instead)
+    assert any("inverseRelations truncated" in r.message
+               for r in caplog.records)
 
 
 def test_create_relation_payload_and_duplicate_tolerance():

@@ -72,6 +72,22 @@ def _identifying_prompt(self, dev_type: DevType) -> str:
     return text
 
 
+def _decomposition_rule(self, live: Mission) -> str:
+    """The per-mission {decomposition_rule} line for ONBOARD prompts
+    (ADR-0012): mirrors the finalizer's gate exactly — a Dev told
+    'forbidden' never wastes a run on a decomposed outcome the app would
+    park. Depth comes from the mission's own PMO record (label + marker);
+    unknown counts as at-limit, fail-safe."""
+    from ... import prompts
+    limit = self.config.max_decomposition_depth
+    if not limit:
+        return prompts.DECOMPOSITION_RULE_UNLIMITED
+    if markers.at_decomposition_limit(live, limit):   # THE shared predicate
+        return prompts.DECOMPOSITION_RULE_AT_LIMIT.format(limit=limit)
+    return prompts.DECOMPOSITION_RULE_ALLOWED.format(
+        depth=markers.decomposition_depth(live), limit=limit)
+
+
 def _onboard_repo_options(self, primary: str) -> str:
     """The multi-repo triage section for ONBOARD prompts (item 2 full scope,
     founder decision 2026-07-15): empty unless the instance's repo SET has
@@ -229,7 +245,8 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             MissionType.ONBOARD: lambda: onboard_prompt(
                 ident, live, playbook=_pb("ONBOARD"),
                 repo_options=self._onboard_repo_options(repo_name),
-                reference_repos=ref_note),
+                reference_repos=ref_note,
+                decomposition_rule=self._decomposition_rule(live)),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=_pb("PLAN"),
                 reference_repos=ref_note),

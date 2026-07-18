@@ -129,6 +129,36 @@ def test_save_list_delete_roundtrip_and_validation(monkeypatch, tmp_path):
 
 # ── slice 4: resolve + fallback + warnings ───────────────────────────────────
 
+def test_decomposition_rule_placeholder_onboard_only(monkeypatch, tmp_path):
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    t.save_template("ONBOARD", "mine", "{decomposition_rule} for {key}")
+    with pytest.raises(ValueError, match="valid variables"):
+        t.save_template("PLAN", "bad", "{decomposition_rule}")
+
+
+def test_template_warning_when_onboard_lacks_decomposition_rule(monkeypatch, tmp_path):
+    """A custom ONBOARD template saved before ADR-0012 keeps the old static
+    prohibition — with a depth limit above 1 the knob would be silently
+    inert, so /health must say so; limit 1 matches the old sentence and
+    stays quiet, as do the placeholder-carrying builtins."""
+    from devcake.config import AppConfig
+    t = _tpl(monkeypatch, tmp_path)
+    t.seed_default_templates()
+    t.save_template("ONBOARD", "legacy",
+                    "triage {key}: Never decompose a mission whose labels "
+                    "include DEVCAKE-CREATED.")
+    stale = AppConfig(active_prompt_templates={"ONBOARD": "legacy"})
+    assert any("decomposition_rule" in w for w in t.template_warnings(stale))
+    quiet = AppConfig(active_prompt_templates={"ONBOARD": "legacy"},
+                      max_decomposition_depth=1)
+    assert not any("decomposition_rule" in w
+                   for w in t.template_warnings(quiet))
+    builtin = AppConfig()
+    assert not any("decomposition_rule" in w
+                   for w in t.template_warnings(builtin))
+
+
 def test_resolve_falls_back_to_default_with_warning(monkeypatch, tmp_path):
     t = _tpl(monkeypatch, tmp_path)
     t.seed_default_templates()

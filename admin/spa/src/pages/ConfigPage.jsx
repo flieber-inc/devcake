@@ -1022,7 +1022,28 @@ export default function ConfigPage({ section }) {
 
       {section === "traffic" && (
       <Section id="traffic" title="Traffic control"
-        description="The Relations Mapper. (Mission intake is the master switch in the sidebar — it applies immediately.)">
+        description="Mission breakdown depth and the Relations Mapper. (Mission intake is the master switch in the sidebar — it applies immediately.)">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Decomposition depth"
+            desc="How many generations of Mission breakdown ONBOARD may create."
+            help="Each ONBOARD pass may split a high-complexity Mission into sub-missions. At 1, a Mission created by a breakdown is never broken down again. At 2 (default), it may be broken down once more — a Project's missions can each split again. Unlimited removes the ceiling entirely and leaves the choice to the ONBOARD Dev on every pass: a runaway Dev could keep splitting work indefinitely.">
+            <Select className="w-40" value={String(cfg.max_decomposition_depth)}
+              aria-label="Decomposition depth limit"
+              onChange={(e) => setField("cfg.max_decomposition_depth", Number(e.target.value))}>
+              {![0, 1, 2].includes(cfg.max_decomposition_depth) && (
+                // an API/YAML-set depth outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={String(cfg.max_decomposition_depth)}>
+                  {cfg.max_decomposition_depth} levels (set via API)
+                </option>
+              )}
+              <option value="1">1 level</option>
+              <option value="2">2 levels</option>
+              <option value="0">Unlimited</option>
+            </Select>
+          </SettingRow>
+        </div>
         <div className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-sm font-semibold">

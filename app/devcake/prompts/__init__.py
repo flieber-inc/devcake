@@ -23,7 +23,8 @@ from ..ports.forge import mission_branch
 # + one DEFAULT_PLAYBOOKS entry.
 PLAYBOOK_VARS: dict[str, tuple[str, ...]] = {
     "ONBOARD": ("key", "priority", "url", "title", "branch", "description",
-                "project_note", "repo_options", "reference_repos"),
+                "project_note", "repo_options", "reference_repos",
+                "decomposition_rule"),
     "PLAN": ("key", "priority", "url", "title", "description",
              "reference_repos"),
     "EXECUTE": ("key", "priority", "url", "title", "repo_name",
@@ -100,7 +101,7 @@ Write EXACTLY one of:
   documentation or design part); independent parts omit it so they can run in
   parallel. Only earlier parts may be referenced — never a part's own index or
   a later one.
-  Never decompose a mission whose labels include DEVCAKE-CREATED.
+  {decomposition_rule}
 
 Your final message should be a concise assessment summary — it becomes part of the
 mission's permanent transcript in the PMO system.
@@ -133,6 +134,25 @@ most recent human comment wins.
 """
 
 
+# {decomposition_rule} wordings (ADR-0012): dispatch picks by the mission's
+# PMO-recorded depth vs the configured limit (dispatch._decomposition_rule).
+# Operator templates missing the placeholder keep their stored sentence —
+# over-restrictive at worst, never a wasted run.
+DECOMPOSITION_RULE_UNLIMITED = (
+    "Decomposition is not depth-limited on this instance: `decomposed` is "
+    "available even for missions that were themselves created by "
+    "decomposition. Use your judgment — prefer the smallest breakdown that "
+    "yields independently executable parts.")
+DECOMPOSITION_RULE_ALLOWED = (
+    "This mission is at decomposition depth {depth} of a limit of {limit}: "
+    "`decomposed` is available if the work is genuinely compound.")
+DECOMPOSITION_RULE_AT_LIMIT = (
+    "This mission is AT the decomposition depth limit ({limit}): the "
+    "`decomposed` outcome is FORBIDDEN here and the app will reject it. "
+    "Classify trivial or normal — or hand off to a human if it is truly "
+    "too large to proceed as one mission.")
+
+
 PROJECT_NOTE = """### This mission is a PROJECT
 Projects ALWAYS take the high-complexity path (never trivial, never normal):
 decompose it into standalone child issues covering the full extent of the work.
@@ -143,10 +163,13 @@ decompose it into standalone child issues covering the full extent of the work.
 def onboard_prompt(identifying_prompt: str, mission: Mission,
                    playbook: str | None = None,
                    repo_options: str = "",
-                   reference_repos: str = "") -> str:
+                   reference_repos: str = "",
+                   decomposition_rule: str = "") -> str:
     """repo_options: the multi-repo triage section (item 2 full scope) —
     dispatch builds it from the instance's repo set; empty for single-repo
-    and zero-repo instances (renders to nothing, like project_note)."""
+    and zero-repo instances (renders to nothing, like project_note).
+    decomposition_rule: the per-mission depth line (ADR-0012) — dispatch
+    computes it via _decomposition_rule; empty renders to nothing."""
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["ONBOARD"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -155,7 +178,8 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "description": mission.description or "(no description)",
          "project_note": PROJECT_NOTE if mission.pmo_kind == "project" else "",
          "repo_options": repo_options,
-         "reference_repos": reference_repos})
+         "reference_repos": reference_repos,
+         "decomposition_rule": decomposition_rule})
     return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 

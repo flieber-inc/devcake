@@ -329,6 +329,10 @@ class AppConfig(BaseModel):
     # operator switch: no NEW runs dispatch while paused; in-flight runs finish
     # and sweeps keep running (docs/11)
     intake_paused: bool = False
+    # how many generations of ONBOARD decomposition are allowed below a root
+    # mission (ADR-0012). 0 = unlimited — the ONBOARD Dev decides; removes
+    # the fission backstop by explicit operator choice (docs/03 §1.3)
+    max_decomposition_depth: int = Field(2, ge=0)
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
     # per-Mission-Type ACTIVE prompt template (v0.1.1): missing key ⇒ the
     # built-in "default". A dict map (deep_merge-safe: a patch touching one

@@ -106,6 +106,7 @@ MissionManager._open_blockers = schedule._open_blockers
 MissionManager.dispatch = dispatch.dispatch
 MissionManager._identifying_prompt = dispatch._identifying_prompt
 MissionManager._onboard_repo_options = dispatch._onboard_repo_options
+MissionManager._decomposition_rule = dispatch._decomposition_rule
 MissionManager._reference_repos_note = dispatch._reference_repos_note
 MissionManager._protocol_spec_env = dispatch._protocol_spec_env
 MissionManager._skill_payload = dispatch._skill_payload

@@ -166,7 +166,10 @@ def resolve_playbook(mission_type: str,
 
 def template_warnings(config) -> list[str]:
     """Health surface: one warning per mission type whose active template
-    doesn't resolve. Stateless, recomputed per call."""
+    doesn't resolve, plus the ADR-0012 inertness check — an ONBOARD template
+    without {decomposition_rule} keeps whatever static depth sentence it was
+    saved with, so a configured limit above 1 silently never reaches the
+    Dev. Stateless, recomputed per call."""
     warns = []
     for mt in PLAYBOOK_VARS:
         active = _canon((config.active_prompt_templates or {}).get(mt))
@@ -174,6 +177,17 @@ def template_warnings(config) -> list[str]:
             _, warn = resolve_playbook(mt, active)
             if warn:
                 warns.append(warn)
+    if getattr(config, "max_decomposition_depth", 1) != 1:
+        active = _canon((config.active_prompt_templates or {}).get("ONBOARD"))
+        text, _ = resolve_playbook("ONBOARD", active)
+        if "{decomposition_rule}" not in text:
+            shown = config.max_decomposition_depth or "unlimited"
+            warns.append(
+                f"ONBOARD: active prompt template '{active}' has no "
+                "{decomposition_rule} placeholder — the configured "
+                f"decomposition depth ({shown}) cannot reach the Dev "
+                "prompt; re-add the placeholder or switch to a built-in "
+                "template")
     return warns
 
 

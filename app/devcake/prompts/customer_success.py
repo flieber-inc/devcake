@@ -50,7 +50,7 @@ Write EXACTLY one of:
   "decomposition": [{"title": "...", "description": "<standalone — reads as an
   independent issue>", "priority": "urgent|high|medium|low",
   "blocked_by": [<1-based indexes of EARLIER parts — omit if independent>]}, ...]}
-  Never decompose an issue whose labels include DEVCAKE-CREATED.
+  {decomposition_rule}
 
 Your final message is a concise triage summary for the customer-success feed.
 """,

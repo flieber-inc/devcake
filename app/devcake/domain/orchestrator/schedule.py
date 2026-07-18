@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from ..model import (LABEL_FAILED, LABEL_SKIP, Mission, MissionRef, MissionType,
-                     PRIORITY_RANK, derive, find_cycles)
-from .markers import DISPATCHABLE_TYPES
+from ..model import (LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, Mission,
+                     MissionRef, MissionType, PRIORITY_RANK, derive,
+                     find_cycles)
+from .markers import DISPATCHABLE_TYPES, decomposition_marker
 
 log = logging.getLogger("devcake.missions")
 
@@ -42,6 +43,26 @@ async def gate_map(self, missions: list[Mission]) -> dict[str, str]:
         open_blockers = await self._open_blockers(m, by_id, memo)
         if open_blockers:
             gate[m.pmo_id] = "blocked by " + ", ".join(open_blockers)
+    # family gate (ADR-0012): a decomposition child whose ISSUE parent is
+    # still open is mid-wiring — its inherited/sibling edges may not all
+    # exist yet, because the parent's cancel is finalization's LAST step.
+    # An open issue-parent therefore means the family graph is incomplete
+    # (or the parent is parked for a human) and the child must wait.
+    # Project parents stay open by design (DEVCAKE-TRACKING) and vanished
+    # parents can never terminate — both exempt (fail-open, pre-ADR
+    # behavior; the snapshot includes terminal missions, docs/04 §2).
+    for m in missions:
+        if m.pmo_kind != "issue" or LABEL_CREATED not in m.labels \
+                or m.status in ("done", "canceled") or m.pmo_id in gate:
+            continue
+        marker = decomposition_marker(m.description)
+        if not marker:
+            continue
+        parent = by_id.get(marker.group(1))
+        if parent is not None and parent.pmo_kind == "issue" \
+                and parent.status not in ("done", "canceled"):
+            gate[m.pmo_id] = (f"decomposition of {parent.key} not finalized "
+                              f"— the parent issue is still open")
     self.blocked_reasons = gate
     return gate
 

@@ -25,8 +25,9 @@ from pathlib import Path
 import httpx
 
 from ... import security
-from ...ports.internal_forge import (InternalRepo, MissionRepoCredentials,
-                                     internal_repo_name)
+from ...ports.internal_forge import (ACTIVITY_PREFIX, ActivityRepoCredentials,
+                                     InternalRepo, MissionRepoCredentials,
+                                     activity_repo_name, internal_repo_name)
 
 log = logging.getLogger("devcake.internal_forge")
 
@@ -326,29 +327,35 @@ class GiteaProvisioner:
                              "content": f["content_b64"]} for f in missing]})
         log.info("skill store seeded: %d file(s) added", len(missing))
 
-    async def skill_store_tree(self) -> list[dict]:
-        """[{path, size}] for every blob on main → [] when there is nothing
-        yet: 404 (repo or branch absent) AND 400 — live Gitea 1.24 answers
-        400 "sha not found [main]" for the tree of a freshly created
-        no-auto_init repo (live-verified 2026-07-17; the ref here is a
-        constant, so a 400 can only mean that). Sizes let SkillService
-        enforce its caps BEFORE downloading content. Gitea truncates trees
-        at ~1000 entries — files past the boundary would read as missing,
-        so an oversized store is surfaced loudly."""
+    async def _repo_tree(self, org: str, repo: str) -> list[dict]:
+        """[{path, size, sha}] for every blob on a repo's main → [] when
+        there is nothing yet: 404 (repo or branch absent) AND 400 — live
+        Gitea 1.24 answers 400 "sha not found [main]" for the tree of a
+        freshly created no-auto_init repo (live-verified 2026-07-17; the ref
+        here is a constant, so a 400 can only mean that). Gitea truncates
+        trees at ~1000 entries — surfaced loudly, never silent."""
         data = await self._req(
-            "GET",
-            f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/git/trees/main?recursive=true",
+            "GET", f"/repos/{org}/{repo}/git/trees/main?recursive=true",
             tolerate=(400, 404))
         if not data:
             return []
         if data.get("truncated"):
-            log.warning("skill store tree is TRUNCATED (~1000-entry Gitea "
-                        "cap) — skills past the boundary will read as "
-                        "missing; prune the %s/%s repo",
-                        OPERATOR_ORG, SKILL_REPO)
+            log.warning("%s/%s tree is TRUNCATED (~1000-entry Gitea cap) — "
+                        "files past the boundary read as missing", org, repo)
         return [{"path": t["path"], "size": int(t.get("size") or 0),
                  "sha": t.get("sha") or ""}
                 for t in data.get("tree") or [] if t.get("type") == "blob"]
+
+    async def _commit_files(self, org: str, repo: str, batch: list[dict],
+                            message: str) -> None:
+        """ONE batch Contents-API commit."""
+        await self._req("POST", f"/repos/{org}/{repo}/contents",
+                        json={"message": message, "files": batch})
+
+    async def skill_store_tree(self) -> list[dict]:
+        """Skill-store blobs — sizes let SkillService enforce its caps
+        BEFORE downloading content; shas drive batch upserts."""
+        return await self._repo_tree(OPERATOR_ORG, SKILL_REPO)
 
     async def skill_store_paths(self) -> list[str]:
         """Blob paths on main (seed-diff input) — the tree read above."""
@@ -367,8 +374,7 @@ class GiteaProvisioner:
             else:
                 entry["operation"] = "create"
             batch.append(entry)
-        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
-                        json={"message": message, "files": batch})
+        await self._commit_files(OPERATOR_ORG, SKILL_REPO, batch, message)
 
     async def delete_skill_paths(self, paths: list[str], message: str) -> None:
         """Delete store files in ONE commit (admin-panel skill removal)."""
@@ -377,8 +383,7 @@ class GiteaProvisioner:
                  for p in paths if p in shas]
         if not batch:
             return
-        await self._req("POST", f"/repos/{OPERATOR_ORG}/{SKILL_REPO}/contents",
-                        json={"message": message, "files": batch})
+        await self._commit_files(OPERATOR_ORG, SKILL_REPO, batch, message)
 
     async def skill_store_file(self, path: str) -> bytes:
         """Raw bytes of one store file at main (GiteaForge.file_content's
@@ -395,6 +400,57 @@ class GiteaProvisioner:
     def skill_store_url(self) -> str:
         """Operator-clickable store URL (ROOT_URL-based, loopback :3300)."""
         return f"{self.public_url}/{OPERATOR_ORG}/{SKILL_REPO}"
+
+    # ── per-mission activity repos (ADR-0014 D4) ─────────────────────────────
+
+    async def ensure_activity_repo(self, instance: str, mission_key: str) -> str:
+        """Create-or-adopt the mission's activity repo in OPERATOR_ORG:
+        private, no auto_init (the first snapshot commit initializes main),
+        NO branch protection, NO machine user — app-written only. The shared
+        ACTIVITY_RO_USER is (re-)ensured as read collaborator so the one RO
+        token can clone it (Gitea tokens are user-scoped)."""
+        repo = activity_repo_name(instance, mission_key)
+        await self._req("POST", "/orgs", tolerate=(409, 422),
+                        json={"username": OPERATOR_ORG, "visibility": "private"})
+        await self._req("POST", f"/orgs/{OPERATOR_ORG}/repos", tolerate=(409,),
+                        json={"name": repo, "private": True,
+                              "auto_init": False, "default_branch": "main"})
+        await self._req(
+            "PUT", f"/repos/{OPERATOR_ORG}/{repo}/collaborators/{ACTIVITY_RO_USER}",
+            json={"permission": "read"})
+        return repo
+
+    async def push_activity_snapshot(self, repo_name: str, files: list[dict],
+                                     message: str) -> None:
+        """ONE Contents-API commit making main exactly match `files`
+        [{path, content_b64}]: the tree decides create vs update (sha),
+        stale paths are DELETED (a renamed feed attachment must not linger),
+        and unchanged blobs (git blob-sha match) are omitted — an identical
+        snapshot commits nothing."""
+        import base64
+        import hashlib
+        shas = {t["path"]: t["sha"]
+                for t in await self._repo_tree(OPERATOR_ORG, repo_name)}
+        wanted, batch = {}, []
+        for f in files:
+            wanted[f["path"]] = f["content_b64"]
+        for path, content_b64 in wanted.items():
+            data = base64.b64decode(content_b64)
+            blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+            if shas.get(path) == blob:
+                continue                        # unchanged — no-op
+            entry = {"path": path, "content": content_b64}
+            if path in shas:
+                entry.update(operation="update", sha=shas[path])
+            else:
+                entry["operation"] = "create"
+            batch.append(entry)
+        for path, sha in shas.items():
+            if path not in wanted:
+                batch.append({"operation": "delete", "path": path, "sha": sha})
+        if not batch:
+            return
+        await self._commit_files(OPERATOR_ORG, repo_name, batch, message)
 
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission credential pair (runspec token source) —

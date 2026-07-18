@@ -494,3 +494,59 @@ def test_ensure_service_accounts_reuses_live_activity_token(tmp_path,
     prov = _prov(rec, tmp_path, monkeypatch)
     run_coro(prov.ensure_service_accounts())
     assert rec.token_posts == []              # everything live — nothing minted
+
+
+def test_ensure_activity_repo_unprotected_with_ro_collaborator(tmp_path,
+                                                               monkeypatch):
+    for status in (201, 409):                 # fresh create AND adopt paths
+        rec = _ActivityRecorder(repo_create_status=status)
+        prov = _prov(rec, tmp_path, monkeypatch)
+        name = run_coro(prov.ensure_activity_repo("linear", "T-1"))
+        assert name == "activity-linear-t-1"
+        assert rec.repo_creates[0]["auto_init"] is False
+        assert ("PUT", "/api/v1/repos/devcake-repos/activity-linear-t-1"
+                       "/collaborators/devcake-activity-ro") in rec.calls
+        assert not any("branch_protections" in p for _, p in rec.calls)
+        assert ("POST", "/api/v1/admin/users") not in rec.calls  # no svc user
+
+
+def test_push_activity_snapshot_upserts_prunes_and_skips_unchanged(
+        tmp_path, monkeypatch):
+    same = b"unchanged bytes"
+    same_sha = hashlib.sha1(b"blob %d\x00" % len(same) + same).hexdigest()
+    rec = _ActivityRecorder(tree_entries=[
+        {"path": "ACTIVITY.md", "sha": "a1"},
+        {"path": "old-entry.md", "sha": "b2"},
+        {"path": "same.md", "sha": same_sha}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    files = [{"path": "ACTIVITY.md",
+              "content_b64": base64.b64encode(b"new feed").decode()},
+             {"path": "photo.png",
+              "content_b64": base64.b64encode(b"\x89PNG").decode()},
+             {"path": "same.md",
+              "content_b64": base64.b64encode(same).decode()}]
+    run_coro(prov.push_activity_snapshot("activity-linear-t-1", files,
+                                         "step 2 EXECUTE dispatch"))
+    assert len(rec.contents_batches) == 1     # ONE commit
+    path, body = rec.contents_batches[0]
+    assert path == "/api/v1/repos/devcake-repos/activity-linear-t-1/contents"
+    assert body["message"] == "step 2 EXECUTE dispatch"
+    ops = {e["path"]: e for e in body["files"]}
+    assert ops["ACTIVITY.md"]["operation"] == "update"
+    assert ops["ACTIVITY.md"]["sha"] == "a1"
+    assert ops["photo.png"]["operation"] == "create"
+    assert ops["old-entry.md"]["operation"] == "delete"      # stale = pruned
+    assert "same.md" not in ops               # blob-sha no-op = omitted
+
+
+def test_push_activity_snapshot_identical_is_a_noop(tmp_path, monkeypatch):
+    same = b"steady"
+    same_sha = hashlib.sha1(b"blob %d\x00" % len(same) + same).hexdigest()
+    rec = _ActivityRecorder(tree_entries=[{"path": "ACTIVITY.md",
+                                           "sha": same_sha}])
+    prov = _prov(rec, tmp_path, monkeypatch)
+    run_coro(prov.push_activity_snapshot(
+        "activity-linear-t-1",
+        [{"path": "ACTIVITY.md",
+          "content_b64": base64.b64encode(same).decode()}], "step 3"))
+    assert rec.contents_batches == []         # nothing changed → no commit

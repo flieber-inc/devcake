@@ -47,6 +47,16 @@ class InternalRepo(BaseModel):
     updated_at: str = ""
 
 
+class ActivityRepoCredentials(BaseModel):
+    """Shared read-only clone credentials for one activity repo (ADR-0014
+    D4): no per-mission machine user — the app is the only writer, so every
+    Dev clones with the single ACTIVITY_RO_USER token."""
+    repo_name: str
+    clone_url: str             # runtime-network origin (Dev-side)
+    username: str
+    token: str
+
+
 class MissionRepoCredentials(BaseModel):
     """Per-mission machine-user credentials (docs/14 §2a: Gitea tokens are
     user-scoped — isolation = one collaborator user per mission in a private

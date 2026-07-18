@@ -283,6 +283,45 @@ def test_fit_payload_truncates_oversized_transcript(monkeypatch):
     assert len(payload["transcript_md"]) == 3 * 1024 * 1024   # input untouched
 
 
+def test_assemble_transcript_full_dump_shape():
+    # ADR-0014 D1: attachment doc = header + full dump + outcome; the Agent
+    # report section survives only as the no-dump fallback
+    tr = {"num_turns": 3, "duration_ms": 42}
+    result = {"schema_version": 1, "outcome": "executed", "summary": "s"}
+    doc = ep.assemble_transcript(seq="2", mtype="EXECUTE", run_id="R-1",
+                                 dev_type="senior", harness="claude-code",
+                                 token_report=tr, dump="FULL DUMP TEXT",
+                                 result_text="last msg", result=result)
+    assert doc.startswith("# 2_EXECUTE — run R-1")
+    assert "**turns:** 3" in doc and "**duration:** 42 ms" in doc
+    assert "## Session transcript\n\nFULL DUMP TEXT" in doc
+    assert "## Agent report" not in doc                    # dump supersedes it
+    assert '"outcome": "executed"' in doc                  # Outcome JSON rides
+    doc2 = ep.assemble_transcript(seq="1", mtype="PLAN", run_id="R",
+                                  dev_type="d", harness="h", token_report={},
+                                  dump="", result_text="only the last message",
+                                  result=result)
+    assert "## Agent report\n\nonly the last message" in doc2
+    doc3 = ep.assemble_transcript(seq="1", mtype="PLAN", run_id="R",
+                                  dev_type="d", harness="h", token_report={},
+                                  dump="D", result_text="x", result=None)
+    assert "## Outcome" not in doc3                        # failure use
+
+
+def test_fit_payload_shrinks_transcript_before_last_message(monkeypatch):
+    # last_message_md is shrinkable, but the (larger) dump always halves first
+    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 64 * 1024)
+    payload = {"result": {"outcome": "x"}, "token_report": {},
+               "transcript_md": "t" * (200 * 1024),
+               "last_message_md": "m" * (20 * 1024)}
+    fitted = ep._fit_payload(payload)
+    assert fitted["last_message_md"] == "m" * (20 * 1024)   # untouched
+    assert "[devcake] transcript_md truncated" in fitted["transcript_md"]
+    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 32 * 1024)
+    fitted2 = ep._fit_payload({"result": {}, "last_message_md": "z" * (100 * 1024)})
+    assert "[devcake] last_message_md truncated" in fitted2["last_message_md"]
+
+
 def test_fit_payload_small_payload_untouched():
     payload = {"result": {"outcome": "hello"}, "transcript_md": "short"}
     assert ep._fit_payload(payload) is payload

@@ -48,7 +48,7 @@ def send(kind: str, payload: dict) -> None:
 
 
 MAX_ARTIFACT_BYTES = 50 * 1024 * 1024 - 256 * 1024  # headroom under ingress caps
-SHRINKABLE_FIELDS = ("transcript_md", "plan_md")     # never result/exit_code/token_report
+SHRINKABLE_FIELDS = ("transcript_md", "plan_md", "last_message_md")  # never result/exit_code/token_report
 TRUNCATE_FLOOR = 10_000
 
 
@@ -477,6 +477,25 @@ def codex_text_dump(out: str) -> str:
     return "\n\n".join(blocks)
 
 
+def assemble_transcript(seq, mtype, run_id, dev_type, harness, token_report,
+                        dump, result_text, result) -> str:
+    """ADR-0014 D1: the attachment doc — header, the FULL session dump (all
+    assistant-visible text), the outcome JSON. `## Agent report` (last message
+    alone) appears only when no dump exists; the feed comment carries the last
+    message, so the attachment need not repeat it. result=None (failure paths)
+    drops the Outcome section."""
+    body = (f"## Session transcript\n\n{dump}\n\n" if dump
+            else f"## Agent report\n\n{result_text}\n\n")
+    return (
+        f"# {seq}_{mtype} — run {run_id}\n\n"
+        f"**Dev:** {dev_type} ({harness}) · "
+        f"**turns:** {token_report.get('num_turns', '—')} · "
+        f"**duration:** {token_report.get('duration_ms', '—')} ms\n\n"
+        + body
+        + (f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n"
+           if result is not None else ""))
+
+
 def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
     send(kind, {})
     last_id, deadline = "0", time.time() + timeout
@@ -787,13 +806,23 @@ def main() -> None:
         except Exception:
             result_text = out[-4000:]
 
+    # ADR-0014 D1: the full dump of assistant-visible text, per harness
+    # (grok: the `grok export` session already includes every message)
+    if harness == "codex":
+        dump = codex_text_dump(out)
+    elif harness == "grok-build":
+        dump = transcript_body
+    else:
+        dump = claude_text_dump(out)
+
     if harness_exit != 0:
         err = err_text[-1500:]
         auth_fail = "authentication" in err.lower() or "unauthorized" in err.lower() \
             or "log in" in err.lower()
         code = 12 if auth_fail else 10
         send_artifacts({"result": None, "exit_code": code,
-                        "transcript_md": f"harness exited {harness_exit}\n\n```\n{err}\n```",
+                        "transcript_md": f"harness exited {harness_exit}\n\n```\n{err}\n```"
+                        + (f"\n\n## Session transcript\n\n{dump}" if dump else ""),
                         "token_report": token_report})
         stop.set()
         sys.exit(code)
@@ -805,7 +834,8 @@ def main() -> None:
         if len((result_text or "").strip()) < 200:  # a real plan is never this short
             send_artifacts({"result": None, "exit_code": 11,
                             "transcript_md": f"plan mode returned no usable plan "
-                                             f"({len(result_text or '')} chars):\n\n{result_text}",
+                                             f"({len(result_text or '')} chars):\n\n{result_text}"
+                            + (f"\n\n## Session transcript\n\n{dump}" if dump else ""),
                             "token_report": token_report})
             stop.set()
             sys.exit(11)  # DEV_BAD_OUTPUT — fail the attempt, never advance an empty plan
@@ -832,21 +862,22 @@ def main() -> None:
         assert isinstance(result.get("summary"), str)
     except Exception as e:
         send_artifacts({"result": None, "exit_code": 11,
-                        "transcript_md": f"result.json missing/invalid: {e}\n\n---\n\n{result_text}",
+                        "transcript_md": f"result.json missing/invalid: {e}\n\n---\n\n{result_text}"
+                        + (f"\n\n## Session transcript\n\n{dump}" if dump else ""),
                         "token_report": token_report})
         stop.set()
         sys.exit(11)
 
     plan_path = WORKSPACE / "out" / "PLAN.md"
-    transcript = (
-        f"# {env.get('DEVCAKE_SEQ')}_{env.get('DEVCAKE_MISSION_TYPE')} — run {RUN_ID}\n\n"
-        f"**Dev:** {env.get('DEVCAKE_DEV_TYPE')} ({harness}) · "
-        f"**turns:** {token_report.get('num_turns', '—')} · "
-        f"**duration:** {token_report.get('duration_ms', '—')} ms\n\n"
-        f"## Agent report\n\n{result_text}\n\n"
-        + (f"## Session transcript\n\n{transcript_body}\n\n" if transcript_body else "")
-        + f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n")
-    payload = {"result": result, "transcript_md": transcript, "token_report": token_report}
+    transcript = assemble_transcript(
+        seq=env.get("DEVCAKE_SEQ"), mtype=env.get("DEVCAKE_MISSION_TYPE"),
+        run_id=RUN_ID, dev_type=env.get("DEVCAKE_DEV_TYPE"), harness=harness,
+        token_report=token_report, dump=dump, result_text=result_text,
+        result=result)
+    # ADR-0014 D1: the last message rides separately for the inline feed
+    # comment; the app treats a missing/empty key as "post the pointer only"
+    payload = {"result": result, "transcript_md": transcript,
+               "last_message_md": result_text, "token_report": token_report}
     if plan_path.exists():
         payload["plan_md"] = plan_path.read_text()
     send_artifacts(payload)

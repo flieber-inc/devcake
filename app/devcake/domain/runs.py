@@ -214,8 +214,9 @@ class RunManager:
                     run_id, "activity.result",
                     await self.finalizer.activity_payload(run))
             else:
-                await self.messaging.reply(run_id, "activity.result",
-                                           {"activity_md": "", "attachments": []})
+                await self.messaging.reply(
+                    run_id, "activity.result",
+                    {"mission_md": "", "activity_md": "", "attachments": []})
         elif kind == "run.log":
             # {"lines": [...]} = streamed harness output (docs/09 §2);
             # {"oauth_url"}/{"oauth_error"} = device-code login progress,

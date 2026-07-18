@@ -89,7 +89,7 @@ class FinalizerRouter:
     async def activity_payload(self, run: Run) -> dict:
         mgr = self._mgr(run)
         if mgr is None:
-            return {"activity_md": "", "attachments": []}
+            return {"mission_md": "", "activity_md": "", "attachments": []}
         return await mgr.activity_payload(run.mission_pmo_id, run.pmo_kind)
 
     def dev_failure_error(self, run: Run, payload: dict) -> str:

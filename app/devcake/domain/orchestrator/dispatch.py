@@ -22,7 +22,7 @@ from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
 from ..run import Run, utcnow
 from . import markers
 from .feed import _unquoted
-from .markers import FEED_INLINE_MAX, STEP_MARKER
+from .markers import STEP_MARKER
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -546,55 +546,86 @@ async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) ->
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 
 
-async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
-    if kind == "project":
-        # projects have no comments/attachments: ACTIVITY.md = the brief itself
-        m = await self.pmo.get(MissionRef(pmo_id, "project"))
-        md = "\n".join([
-            f"# {m.key}: {m.title}",
-            f"> Kind: project · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
-            f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
-            "## Description", m.description or "(none)", "",
-            "## Activity", "(projects carry no comment feed — see child issues)"])
-        return {"activity_md": md, "attachments": []}
-    act = await self.pmo.get_activity(MissionRef(pmo_id, "issue"))
-    m = act.mission
+def _mission_md(m, attachment_lines=()) -> str:
+    """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;
+    every step playbook points here."""
     lines = [
         f"# {m.key}: {m.title}",
         f"> Kind: {m.pmo_kind} · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
         f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
-        "## Description", m.description or "(none)", "",
-        "## Activity (chronological index — long bodies live as files in this folder)",
+        "## Description", m.description or "(none)"]
+    if attachment_lines:
+        lines += ["", "## Mission attachments", *attachment_lines]
+    return "\n".join(lines)
+
+
+async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
+    """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
+    of the feed — full bodies inline (never externalized), attachments by
+    name in feed order, reply nesting; every attachment's bytes ride as
+    sibling files."""
+    if kind == "project":
+        # projects have no comments/attachments: the brief IS the payload
+        m = await self.pmo.get(MissionRef(pmo_id, "project"))
+        md = "\n".join([
+            f"# {m.key}: {m.title}",
+            "> The mission brief lives in MISSION.md (same folder).", "",
+            "## Activity", "(projects carry no comment feed — see child issues)"])
+        return {"mission_md": _mission_md(m), "activity_md": md,
+                "attachments": []}
+    act = await self.pmo.get_activity(MissionRef(pmo_id, "issue"), full=True)
+    m = act.mission
+    attachments = []
+    used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed
+
+    async def _materialize(att):
+        """Download one file attachment into the folder; return its index
+        line. The adapter resolves names (AttachmentRef.name) — the domain
+        never parses vendor asset URLs."""
+        try:
+            data = await self.pmo.download_asset(att.url)
+        except Exception:
+            return f"[attachment unavailable: {att.url}]"
+        fname = self._unique_name(
+            att.name or att.url.rsplit("/", 1)[-1][:80] or "attachment.bin",
+            used)
+        attachments.append({"filename": fname,
+                            "content_b64": base64.b64encode(data).decode()})
+        return f"[attachment: {fname}]"
+
+    mission_lines = []
+    for att in act.mission_attachments:
+        if att.kind == "link":
+            mission_lines.append(f"[link: {att.name or att.url}]({att.url})")
+        else:
+            mission_lines.append(await _materialize(att))
+
+    lines = []
+    if act.truncated:   # the adapter's hard stop — never silent (ADR-0014)
+        lines += ["⚠ FEED TRUNCATED — the feed exceeded the full-history "
+                  "hard stop; the OLDEST entries are missing from this "
+                  "mirror.", ""]
+    lines += [
+        f"# {m.key}: {m.title}",
+        "> Brief: MISSION.md (same folder) — description, labels, mission attachments.", "",
+        "## Activity (chronological mirror of the PMO feed)",
         "Entries marked 🧑 HUMAN are instructions/steering from a person — they",
         "are authoritative. Entries marked 🤖 DevCake are DevCake's own records.",
     ]
-    attachments = []
-    used: set[str] = {"ACTIVITY.md"}     # docs/07 §2: suffix-dedupe filenames
+    by_id = {e.entry_id: e for e in act.entries if e.entry_id}
     for e in act.entries:
         body = e.body or ""
         # provenance is sentinel-based, never author-based (docs/03 §8a):
         # DevCake may post with the operator's own PMO credentials
         provenance = "🤖 DevCake" if self._is_devcake_comment(body) else "🧑 HUMAN"
-        if len(body) > FEED_INLINE_MAX:                 # externalize long bodies
-            fname = self._unique_name(f"entry-{e.ts:%Y%m%dT%H%M%S}.md", used)
-            attachments.append({"filename": fname,
-                                "content_b64": base64.b64encode(body.encode()).decode()})
-            body = body[:300].replace("\n", " ") + f"… — see: {fname}"
         lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} — {provenance} ({e.kind})")
-        lines.append(body)
-        # the adapter resolves human-readable names (AttachmentRef.name) —
-        # the domain never parses vendor asset URLs
+        parent = by_id.get(e.parent_id) if e.parent_id else None
+        if parent is not None:
+            lines.append(f"↳ reply to {parent.author} @ {parent.ts:%Y-%m-%d %H:%M}")
+        lines.append(body)                # full body — the mirror never trims
         for att in e.attachments:
-            try:
-                data = await self.pmo.download_asset(att.url)
-                fname = self._unique_name(
-                    att.name or att.url.rsplit("/", 1)[-1][:80] or "attachment.bin",
-                    used)
-                attachments.append({"filename": fname,
-                                    "content_b64": base64.b64encode(data).decode()})
-                lines.append(f"[attachment: {fname}]")
-            except Exception:
-                lines.append(f"[attachment unavailable: {att.url}]")
+            lines.append(await _materialize(att))
         lines.append("")
-    return {"activity_md": "\n".join(lines), "attachments": attachments}
+    return {"mission_md": _mission_md(m, mission_lines),
+            "activity_md": "\n".join(lines), "attachments": attachments}
 

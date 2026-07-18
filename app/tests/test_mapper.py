@@ -31,6 +31,7 @@ class MapPMO:
         self.activity = activity
         self.relations = []
         self.comments = []
+        self.activity_calls = []
 
     async def list_all(self, team_ref):
         return self.missions
@@ -42,6 +43,7 @@ class MapPMO:
         self.comments.append((ref.pmo_id, markdown))
 
     async def get_activity(self, ref, full=False):
+        self.activity_calls.append(full)
         return self.activity
 
 
@@ -243,41 +245,117 @@ def test_derive_seq_ignores_quoted_markers():
         Activity(mission=mission, entries=quoted_only)) == 1
 
 
-def test_activity_payload_dedupes_colliding_filenames(tmp_path):
-    # docs/07 §2 collision rule: same-second externalized entries get -2/-3
-    # suffixes, and each index preview points at its OWN file
+def test_activity_payload_inlines_long_bodies_verbatim(tmp_path):
+    # ADR-0014 D3: ACTIVITY.md is a faithful MIRROR — long feed bodies appear
+    # whole and inline, never externalized to entry-*.md previews
     mission = m("i1", "T-1")
-    entries = [
-        ActivityEntry(ts=NOW, author="a", kind="comment", body="first " + "x" * 3000),
-        ActivityEntry(ts=NOW, author="b", kind="comment", body="second " + "y" * 3000),
-    ]
+    long_body = "first " + "x" * 3000
+    entries = [ActivityEntry(ts=NOW, author="a", kind="comment", body=long_body)]
     pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
     mgr = make_mgr(tmp_path, pmo)
     payload = run_coro(mgr.activity_payload("i1"))
-    names = [a["filename"] for a in payload["attachments"]]
-    base = f"entry-{NOW:%Y%m%dT%H%M%S}.md"
-    assert names == [base, base.replace(".md", "-2.md")]
-    md = payload["activity_md"]
-    assert f"see: {base}" in md and f"see: {base.replace('.md', '-2.md')}" in md
+    assert long_body in payload["activity_md"]
+    assert payload["attachments"] == []            # no entry-*.md files
 
 
 def test_activity_payload_dedupes_downloaded_attachment_names(tmp_path):
-    # a Linear attachment whose filename collides with an externalized entry
+    # docs/07 §2 collision rule: two feed attachments sharing a filename get
+    # -2/-3 suffixes, each index line naming its OWN file
     mission = m("i1", "T-1")
-    base = f"entry-{NOW:%Y%m%dT%H%M%S}.md"
-    url = "https://uploads.linear.app/abc"
+    url1, url2 = "https://uploads.linear.app/a", "https://uploads.linear.app/b"
     entries = [
-        ActivityEntry(ts=NOW, author="a", kind="comment", body="long " + "x" * 3000),
         ActivityEntry(ts=NOW, author="a", kind="comment",
-                      body=f"file here: [{base}]({url})",
-                      attachments=[AttachmentRef(url=url, name=base)]),
+                      body=f"[report.md]({url1})",
+                      attachments=[AttachmentRef(url=url1, name="report.md")]),
+        ActivityEntry(ts=NOW, author="b", kind="comment",
+                      body=f"[report.md]({url2})",
+                      attachments=[AttachmentRef(url=url2, name="report.md")]),
     ]
     pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
     pmo.download_asset = _returns(b"data")
     mgr = make_mgr(tmp_path, pmo)
     payload = run_coro(mgr.activity_payload("i1"))
     names = [a["filename"] for a in payload["attachments"]]
-    assert names == [base, base.replace(".md", "-2.md")]
+    assert names == ["report.md", "report-2.md"]
+    assert "[attachment: report.md]" in payload["activity_md"]
+    assert "[attachment: report-2.md]" in payload["activity_md"]
+
+
+def test_activity_payload_returns_mission_md_brief(tmp_path):
+    # ADR-0014 D3: MISSION.md carries the brief with the FULL description;
+    # ACTIVITY.md keeps a minimal header pointing at it
+    mission = m("i1", "T-1")
+    mission.description = "long brief " * 500
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=[]))
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    assert ("long brief " * 500).strip() in payload["mission_md"]
+    assert "## Description" in payload["mission_md"]
+    assert "## Description" not in payload["activity_md"]
+    assert "MISSION.md" in payload["activity_md"]  # the pointer
+
+
+def test_activity_payload_requests_full_history(tmp_path):
+    pmo = MapPMO([], activity=Activity(mission=m("i1", "T-1"), entries=[]))
+    mgr = make_mgr(tmp_path, pmo)
+    run_coro(mgr.activity_payload("i1"))
+    assert pmo.activity_calls == [True]            # builder = full mode, always
+
+
+def test_activity_payload_renders_reply_nesting(tmp_path):
+    mission = m("i1", "T-1")
+    entries = [
+        ActivityEntry(ts=NOW, author="felipe", kind="comment",
+                      body="root post", entry_id="c1"),
+        ActivityEntry(ts=NOW, author="cake", kind="comment",
+                      body="the reply", entry_id="c2", parent_id="c1"),
+    ]
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    mgr = make_mgr(tmp_path, pmo)
+    md = run_coro(mgr.activity_payload("i1"))["activity_md"]
+    marker_at = md.find("↳ reply to felipe")
+    assert marker_at != -1 and marker_at < md.find("the reply")
+
+
+def test_activity_payload_materializes_mission_attachments(tmp_path):
+    # description/native assets: files downloaded as siblings + listed in
+    # MISSION.md; links rendered as markdown links, never downloaded
+    mission = m("i1", "T-1")
+    act = Activity(mission=mission, entries=[], mission_attachments=[
+        AttachmentRef(url="https://uploads.linear.app/spec",
+                      name="spec.pdf", kind="file"),
+        AttachmentRef(url="https://github.com/x/pull/1",
+                      name="PR #1", kind="link")])
+    pmo = MapPMO([], activity=act)
+    pmo.download_asset = _returns(b"bytes")
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    assert [a["filename"] for a in payload["attachments"]] == ["spec.pdf"]
+    assert "[attachment: spec.pdf]" in payload["mission_md"]
+    assert "[link: PR #1](https://github.com/x/pull/1)" in payload["mission_md"]
+
+
+def test_activity_payload_project_brief_is_mission_md(tmp_path):
+    proj = Mission(pmo_id="p9", pmo_kind="project", key="P-1", title="proj",
+                   status="backlog", description="the project brief",
+                   updated_at=NOW)
+    pmo = MapPMO([], activity=None)
+
+    async def _get(ref):
+        return proj
+    pmo.get = _get
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("p9", "project"))
+    assert "the project brief" in payload["mission_md"]
+    assert "no comment feed" in payload["activity_md"]
+
+
+def test_activity_payload_renders_truncation_banner(tmp_path):
+    act = Activity(mission=m("i1", "T-1"), entries=[], truncated=True)
+    pmo = MapPMO([], activity=act)
+    mgr = make_mgr(tmp_path, pmo)
+    md = run_coro(mgr.activity_payload("i1"))["activity_md"]
+    assert "FEED TRUNCATED" in md.splitlines()[0]   # loud, first line
 
 
 def _returns(value):

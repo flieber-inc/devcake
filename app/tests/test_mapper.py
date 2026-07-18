@@ -227,6 +227,22 @@ def test_activity_payload_marks_provenance(tmp_path):
         Activity(mission=mission, entries=entries)) == 3   # STEP_MARKER intact
 
 
+def test_derive_seq_ignores_quoted_markers():
+    # ADR-0014 D2: `>`-quoted lines are quarantined — a human citing a
+    # transcript name (or a blockquoted last message) must never bump seq
+    mission = m("i1", "T-1")
+    mixed = [ActivityEntry(ts=NOW, author="felipe", kind="comment",
+                           body="🧾 DevCake transcript `2_EXECUTE.md` (run `x`)\n"
+                                "> as the Dev said in `7_EXECUTE.md` and `9_PLAN.md`\n"
+                                "`devcake:v1`")]
+    assert MissionManager._derive_seq(
+        Activity(mission=mission, entries=mixed)) == 3     # 2 counts; 7/9 don't
+    quoted_only = [ActivityEntry(ts=NOW, author="h", kind="comment",
+                                 body="> see `7_EXECUTE.md` for details")]
+    assert MissionManager._derive_seq(
+        Activity(mission=mission, entries=quoted_only)) == 1
+
+
 def test_activity_payload_dedupes_colliding_filenames(tmp_path):
     # docs/07 §2 collision rule: same-second externalized entries get -2/-3
     # suffixes, and each index preview points at its OWN file

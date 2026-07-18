@@ -21,6 +21,7 @@ from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
 from . import markers
+from .feed import _unquoted
 from .markers import FEED_INLINE_MAX, STEP_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -456,9 +457,10 @@ def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict
 
 
 def _derive_seq(activity) -> int:
-    """docs/02 §8 — count prior step artifacts in the feed + 1."""
+    """docs/02 §8 — count prior step artifacts in the feed + 1. Scans
+    _unquoted bodies only (ADR-0014 D2): quoted marker mentions never count."""
     steps = [int(m.group(1)) for e in activity.entries
-             for m in STEP_MARKER.finditer(e.body or "")]
+             for m in STEP_MARKER.finditer(_unquoted(e.body))]
     return (max(steps) + 1) if steps else 1
 
 

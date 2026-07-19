@@ -154,18 +154,30 @@ export default function Sidebar({
   page, configSection, alertCount, health, healthError,
   intakePaused, intakeBusy, intakeError, onIntakeToggle,
 }) {
-  const [collapsed, setCollapsed] = useState(() => {
+  const [collapsedPref, setCollapsedPref] = useState(() => {
     const v = localStorage.getItem("devcake-sidebar");
     if (v === "collapsed") return true;
     if (v === "expanded") return false;
     return !window.matchMedia("(min-width: 1024px)").matches;
   });
   const toggleCollapsed = () => {
-    setCollapsed((c) => {
+    setCollapsedPref((c) => {
       localStorage.setItem("devcake-sidebar", !c ? "collapsed" : "expanded");
       return !c;
     });
   };
+  // Missions kanban needs ≥1440 to fit 7 cols; force-collapse below that on
+  // this page only, without touching the persisted preference.
+  const [narrowForMissions, setNarrowForMissions] = useState(false);
+  useEffect(() => {
+    if (page !== "missions") { setNarrowForMissions(false); return; }
+    const mq = window.matchMedia("(max-width: 1439.98px)");
+    const update = () => setNarrowForMissions(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [page]);
+  const collapsed = collapsedPref || narrowForMissions;
 
   const dotOk = (key) =>
     (healthError && key === "app" ? false : serviceValue(health, key));
@@ -281,11 +293,20 @@ export default function Sidebar({
             </a>
           </p>
         )}
+        {/* When Missions force-collapses under 1440, toggling would just flip
+           the persisted preference without any visible change (effective
+           stays collapsed) — a control that lies about being functional.
+           Disable it with an honest title instead. */}
         <button
           onClick={toggleCollapsed}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
+          disabled={narrowForMissions}
+          title={narrowForMissions
+            ? "Sidebar auto-collapsed on Missions below 1440 px so the board fits"
+            : collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={narrowForMissions
+            ? "Sidebar auto-collapsed on Missions below 1440 px"
+            : collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-500 dark:disabled:hover:bg-transparent dark:disabled:hover:text-neutral-400 ${
             collapsed ? "mx-auto h-8 w-8 justify-center" : "w-full px-2.5"
           }`}
         >

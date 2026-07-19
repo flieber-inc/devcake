@@ -1,7 +1,7 @@
 # 00 — Overview: Vision, Glossary, and Core Invariants
 
 > **Audience:** everyone. Every other document in `docs/` assumes you have read this one.
-> **Status:** v0 specification.
+> **Status:** technical preview.
 > **Security:** the product security contract lives in [`14-security.md`](14-security.md) — this file must not claim a stronger posture.
 
 ## 1. What DevCake is
@@ -61,7 +61,7 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 | **Dev Type** | A named configuration: harness template + identifying prompt + MCP servers + credentials + concurrency cap. v0 ships three: **Senior Dev** (Claude Fable / Claude Code), **Main Dev** (Grok 4.5 / Grok Build), and **Junior Dev** (Claude Haiku / Claude Code — the Relations Mapper's default vehicle). |
 | **Harness Template** | One of three hardcoded (but easily editable) model/harness pairs a Dev Type is built from: `claude-code` (Claude Fable), `grok-build` (Grok 4.5), `codex` (gpt-5.6-sol). Specified in `08-harness-templates.md`. |
 | **PMO System** | The external project-management system holding the Missions. Adapters are pluggable (registered in `adapters/registry.py`); v0: Linear is the one implemented. A stack may configure **0..N** PMO instances; **each instance is scoped to exactly one team**. Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
-| **Forge** | The code-hosting platform holding the configured repository: GitHub or GitLab. Accessed only through the `ForgePort` adapter (`06-forge-adapter.md`). |
+| **Forge** | The code-hosting platform holding the configured repository: GitHub, GitLab, or Gitea (including the bundled internal Gitea for zero-repo missions). Accessed only through the `ForgePort` adapter (`06-forge-adapter.md`). |
 | **Run** | The locally persisted record of one Mission Step attempt: telemetry, timing, outcome, token report. Advisory data only — never authoritative (see INV-1). |
 | **Activity feed** | The Mission's chronological record inside the PMO System: description, comments, attachments, status changes. Rendered into `ACTIVITY.md` for each Dev run. |
 | **Stage label** | One of `DEVCAKE-PLAN`, `DEVCAKE-EXECUTE`, `DEVCAKE-REVIEW` — the label that drives the Mission state machine. A Mission carries at most one at a time (INV-2). |
@@ -118,7 +118,7 @@ A concrete end-to-end pass, naming the governing document at each hop:
 5. **The Dev assesses complexity** and, say, deems it *normal*. It writes `/workspace/out/result.json` with `outcome: "plan_needed"` and exits 0. The entrypoint publishes the transcript, token report, and result over Redis (`09-messaging.md`).
 6. **The app finalizes**: posts `1_ONBOARD.md` and the token report to the Linear activity feed, then — after re-reading the Mission live (compare-and-transition, `04-orchestrator.md` §4) — adds the `DEVCAKE-PLAN` label.
 7. **Next poll cycle**: status `started` + `DEVCAKE-PLAN` ⇒ Mission Type **PLAN** ⇒ Senior Dev produces `PLAN.md`; the app uploads it, swaps the label to `DEVCAKE-EXECUTE`.
-8. **EXECUTE**: Main Dev (Grok Build) implements the plan on branch `devcake/ENG-142`, opens a PR (`06-forge-adapter.md`), and the app swaps the label to `DEVCAKE-REVIEW`.
+8. **EXECUTE**: Main Dev (Grok Build) implements the plan on branch `devcake/LINEAR-ENG-142` (instance-prefixed — `mission_branch(instance, key)`), opens a PR (`06-forge-adapter.md`), and the app swaps the label to `DEVCAKE-REVIEW`.
 9. **REVIEW:** by **recommended** config, a *different* Dev Type than EXECUTE reviews the PR (warned if shared — not a hard gate; `14` §8). On approval, the app removes the stage label and approves the PR (second reviewer token if configured); then **merge precedes Done**: with `auto_merge` **off** (default) the Mission carries `DEVCAKE-MERGE` until a **human** merges; with it on the app merges and only then marks **Done**. On rejection, the report is posted and the label swaps back to `DEVCAKE-EXECUTE`.
 10. **Throughout**, every hop is one connected OpenTelemetry trace (dispatch → container → finalization), visible in OpenObserve (`12-observability.md`).
 
@@ -153,7 +153,7 @@ Operating duties — once at setup and recurring — live in
 | `03-mission-lifecycle.md` | The four Mission Type playbooks, `result.json`, canonical prompts |
 | `04-orchestrator.md` | Poll loop, scheduling, no-lock atomicity, crash recovery |
 | `05-pmo-adapter.md` | `PMOPort` + Linear adapter |
-| `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab adapters, PR/branch conventions |
+| `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab/Gitea adapters, PR/branch conventions |
 | `07-dev-runtime.md` | Dev container contract: filesystem, env, exit codes, lifecycle |
 | `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup |
 | `09-messaging.md` | Redis Streams protocol |

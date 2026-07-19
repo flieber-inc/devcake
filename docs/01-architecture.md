@@ -56,18 +56,20 @@ app/devcake/
   ports/           # Protocols + the DTOs that cross them
     pmo.py         #   PMOPort, PMOHealth, PMOCapabilities, PMOTransient (05)
     forge.py       #   ForgePort, PullRequest, BranchProtection,
-                   #   ForgeDescriptor, ForgeError, mission_branch() (06)
+                   #   ForgeDescriptor, ForgeCapabilities, ForgeError,
+                   #   mission_branch(instance, key) (06)
+    internal_forge.py  # InternalForgePort — bundled Gitea provisioner (ADR-0010)
     executor.py    #   ExecutorPort — start/stop/status (dagu adapter)
     state.py       #   StatePort — run-record persistence (files adapter)
     messaging.py   #   MessagingPort — Redis Streams surface (redis adapter)
     finalizer.py   #   RunFinalizer — mission finalize/restore (MissionManager)
   adapters/
-    registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), forges() —
-                   #   the ONE place that knows which adapters exist
+    registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), make_internal_forge(),
+                   #   forges() — the ONE place that knows which adapters exist
     linear/        #   PMOPort impl (05)
-    github/ gitlab/#   ForgePort impls (06)
+    github/ gitlab/ gitea/  # ForgePort impls + Gitea provisioner (06, ADR-0010)
     dagu/          #   ExecutorPort impl
-    files/         #   StatePort impl (+ runlog.py) (10)
+    files/         #   StatePort impl (+ runlog.py, owner_store.py) (10)
     redis/         #   MessagingPort impl — ingress + replies (09)
   api/             # FastAPI (11, ADR-0015): main.py = composition root +
                    #   ≤4-statement route forwards; behavior in service
@@ -86,7 +88,7 @@ app/devcake/
 
 The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.
 
-**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`). Production adapters: Linear, GitHub/GitLab, Dagu, files, Redis Streams; `MissionManager` satisfies `RunFinalizer`. Composition root (`api/main.py`) builds adapters, injects them into `RunManager` / `MissionManager`, then `manager.set_finalizer(mission_mgr)` so ingress/kill never type against the concrete orchestrator. All four dispatch flavors (hello, mission, mapper, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
+**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files, Redis Streams; `MissionManager` satisfies `RunFinalizer`. Composition root (`api/main.py`) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, mapper, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
 
 **Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). Domain modules depend on **port Protocols**, not adapter packages.
 

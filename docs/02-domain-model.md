@@ -21,6 +21,9 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 | `url` | `str` | Deep link into the PMO System. |
 | `parent_ref` | `str \| None` | For Issues that belong to a Project: the project's `pmo_id`. |
 | `blocked_by` | `list[str]` | `pmo_id`s of Missions that block this one, read from the PMO System's native issue relations (`05-pmo-adapter.md` §3, `adr/0007`). Always `[]` for Projects (Linear relations are issue-scoped). Gates scheduling (`04-orchestrator.md` §2), not derivation. |
+| `instance` | `str` | Which configured PMO instance produced this Mission (schema v3) — stamped by the adapter at normalization so no fetch path can return an unstamped mission. |
+| `repo` | `str \| None` | Resolved work-repo instance name for this mission (poll-cycle stamp; never persisted). |
+| `repo_reason` | `str \| None` | Human-readable reason the mission is gated without a resolved repo (poll-cycle stamp). |
 
 ## 1a. MissionRef and the activity feed DTOs
 
@@ -179,17 +182,20 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | Field | Type | Notes |
 |---|---|---|
 | `schema_version` | `int` (= 2) | Bumped by the credential-state hardening (secrets left the record). Records `< 2` are quarantined at boot, never migrated (`10-persistence.md` §5). The `pmo_ref`/`repo_ref` additions were additive with defaults — no bump of their own. |
-| `run_id` | `str` | Human-readable and unique: `{mission_key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). Also the Dagu run ID and the Dev container name suffix, so Linear, the Dagu UI, `docker ps`, traces, and Redis streams all speak the same name (confirmed decision). |
+| `run_id` | `str` | Human-readable and unique: `{INSTANCE}-{key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). The uppercased PMO-instance prefix (schema v3) keeps run ids — and therefore ACL users, container names, and reply streams — collision-free across instances. Also the Dagu run ID and the Dev container name suffix, so Linear, the Dagu UI, `docker ps`, traces, and Redis streams all speak the same name (confirmed decision). HELLO/OAUTH runs use the fixed pseudo-instance `sys`. |
 | `mission_key` | `str` | Denormalized for log/trace readability. |
 | `mission_pmo_id` | `str` | |
 | `pmo_kind` | `str` (default `"issue"`) | The mission's kind at dispatch. |
-| `pmo_ref` / `repo_ref` | `str` (default `"main"`) | Which configured instance served this run — the `AppConfig.pmos`/`repos` entry `id` (§9). |
+| `pmo_ref` / `repo_ref` | `str` (default `"main"`) | Which configured instance served this run — the `AppConfig.pmos`/`repos` entry **`name`** (§9). Default `"main"` marks pre-v3 legacy records (not a live instance name). |
 | `mission_type` | `str` | The type this run was dispatched as. |
 | `dev_type` | `str` | |
 | `seq` | `int` | Step number for transcript naming (§8). |
 | `attempt_of_step` | `int` | 1-based attempt counter for this (mission, type) — seq-independent, since failed runs advance `seq` by posting transcripts. Resets at the newest of: last give-up watermark, any finished run for the mission, or the latest human feed comment (`15-errors-and-retries.md` §3). |
 | `stage_label_at_dispatch` | `str \| None` | Input to compare-and-transition (`04-orchestrator.md` §4). |
+| `branch` | `str` | The PR branch minted at dispatch (schema v3) — stored so review/merge lookups never drift from what the Dev pushed. Empty on legacy/mapper/hello records (`ports.forge.run_branch` derives those). |
 | `spec_prompt` | `str` | The composed prompt delivered in the run spec. |
+| `spec_skills` | `list[dict]` | Skill-store files for the Dev, snapshotted at dispatch: `[{name, files: [{path, content_b64}]}]` so a mid-run Gitea outage cannot change what a runspec re-request serves. |
+| `spec_skills_dir` | `str` | HOME-relative dir the entrypoint writes `spec_skills` under — snapshotted from the harness registry at dispatch; empty on legacy records → entrypoint default. |
 | `state` | `"dispatched" \| "running" \| "finalizing" \| "finished" \| "failed" \| "timed_out" \| "orphaned"` | |
 | `created_at` | `datetime` | |
 | `started_at` / `ended_at` | `datetime \| None` | |
@@ -204,6 +210,7 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | `artifact_bytes` | `int \| None` | Size of the collected result payload (finalization telemetry). |
 | `error` | `str \| None` | Mapped error class + message (`15-errors-and-retries.md`). |
 | `verdict` | `str \| None` | App-level judgment when it diverges from the executor's: a run can end `state="finished"` (Dagu succeeded, artifacts were legal) yet carry `"rejected: …"` because the transition refused to act on the outcome. `None` = ordinary success. |
+| `store_gen` | `int` (default 0) | Process-local wipe generation stamped at launch (`10-persistence.md`): `RunStore.clear` bumps `wipe_generation` then unlinks files; `save()` drops any run whose `store_gen` is older so in-flight finalize/heartbeat cannot resurrect a record after clear-runs. |
 
 ## 8. `seq` derivation rule (normative)
 
@@ -218,8 +225,8 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | Field | Type | Notes |
 |---|---|---|
 | `schema_version` | `int` (= 4) | Stale shapes refused at boot with hand-migration instructions (`10-persistence.md` §3). |
-| `pmos` | `list[PMOInstance]` — `{name, system, team_key, api_base, …}` | Instance `name` is the identity. `system` validated against `PMO_SYSTEMS`. **`api_key` is a read-through** over the GUI secret store (`secrets/pmo/{name}/api_key`) — not an env-var name. |
-| `repos` | `list[RepoInstance]` — `{name, forge, url, api_base, default_branch, …}` | `forge` validated against `forges()`. **`token` / `token_ro` / `reviewer_token` are read-throughs** over `/data/secrets/connections/` — not `*_env` fields. |
+| `pmos` | `list[PMOInstance]` — `{name, system, team_key, api_base, repos, reference_repos, …}` | Instance `name` is the identity. `system` validated against `PMO_SYSTEMS`. **`api_key` is a read-through** over the GUI secret store (`/data/secrets/connections/pmo-{name}.json`) — not an env-var name. `repos` is the ordered work-repo set for that instance (first = default for unmarked missions); `reference_repos` are read-only consultation clones, disjoint from the work set. |
+| `repos` | `list[RepoInstance]` — `{name, forge, url, api_base, default_branch, …}` | `forge` validated against `forges()`. **`token` / `token_ro` / `reviewer_token` are read-throughs** over `/data/secrets/connections/repo-{name}.json` — not `*_env` fields. |
 | `adoption_mode` | `"opt_in" \| "opt_out"` (default `opt_in`) | `opt_in`: only Missions labeled `DEVCAKE` are adopted. `opt_out`: every non-terminal item in the team is adopted (the original mission-doc behavior — enable deliberately; the admin panel warns about the backlog-wide consequence, `11-admin-panel.md` §3). |
 | `assignments` | `dict[MissionType, {dev_type: str, extra_cli_args: str}]` | Mission Type → Dev Type name, plus optional **extra CLI args** appended verbatim to the harness invocation for that Mission Type (`08-harness-templates.md` §1). Args are admin-set data, never hardcoded — they are harness-specific, so the admin UI warns and offers to clear them when the Mission Type is reassigned to a Dev Type with a different harness (`11-admin-panel.md` §3). Validation: all four types assigned. |
 | `concurrency` | `{global_max: int}` | Per-type caps live on each DevType. Effective ceiling = min(global_max, Σ per-type) — this is a property of the dispatch check, not a separate rule. |
@@ -231,7 +238,10 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
 | `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §0): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
+| `max_decomposition_depth` | `int` ≥ 0 (default 2) | How many generations of ONBOARD decomposition are allowed below a root (`adr/0012`). `0` = unlimited — the ONBOARD Dev decides (`03-mission-lifecycle.md` §1.3). |
 | `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`junior-dev`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
+| `active_prompt_templates` | `dict[str, str]` (default `{}`) | Per-Mission-Type active prompt template name; missing key ⇒ built-in `"default"`. |
+| `active_devtype_prompts` | `dict[str, str]` (default `{}`) | Per-Dev-Type active identifying-prompt template name; missing key ⇒ `"Development"` (the seeded original). |
 | `dismissed_alerts` | `list[str]` (default `[]`) | Admin-UI state: dismissed advisory alerts as `"id:signature"` strings. A list (not a dict) on purpose — `deep_merge` can't delete dict keys, so the UI un-dismisses by PUTting the whole replacement list. |
 
 ## 10. TokenReport
@@ -245,9 +255,9 @@ Produced once per Dev run by the harness template's extraction strategy (`08-har
 | `cache_read_tokens` | `int \| None` | |
 | `cache_write_tokens` | `int \| None` | |
 | `total_tokens` | `int \| None` | For harnesses that only expose a total (Grok v0.2.93 `contextTokensUsed`); filled alongside or instead of the split. Tokens are the primary cost signal; billed cost is best-effort on top. |
-| `cost_usd` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`) or the model's prices are known from the price table in `08-harness-templates.md`. Never guessed. |
+| `cost_usd` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed. |
 | `model` | `str` | |
-| `extraction_method` | `"session_json" \| "stdout_parse" \| "unavailable"` | |
+| `extraction_method` | `"session_json" \| "unavailable"` | The entrypoint records which path filled the report; silence is never acceptable (INV-5). |
 | `notes` | `str \| None` | e.g. which fallback triggered. |
 
 ## 11. Decomposition drafts

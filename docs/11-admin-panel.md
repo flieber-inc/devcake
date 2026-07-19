@@ -3,15 +3,15 @@
 > **Audience:** frontend implementer + app API implementer.
 > **Depends on:** `02-domain-model.md` (AppConfig, DevType), `10-persistence.md` (write path), `13-deployment.md` (proxy topology).
 
-Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router (`#/overview · #/runs · #/config · #/config/<section> · #/logs`) drives **four pages**: **Overview**, **Runs**, **Config**, **Logs**. The Dagu and OpenObserve UIs are **not** embedded: the Runs and Logs pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
+Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router drives **six pages**: **Overview** (`#/overview`), **Missions** (`#/missions`), **Runs** (`#/runs`), **Repos** (`#/repos`), **Config** (`#/config/<section>`), **Logs** (`#/logs`). Config sections (from `admin/spa/src/lib/nav.js`): `pmo`, `dev-types`, `skills`, `assignments`, `prompts`, `profiles`, `limits`, `traffic` — **repository is not a Config section** (repos live on `#/repos`; the old `#/config/repository` hash redirects there). The Dagu and OpenObserve UIs are **not** embedded: the Runs and Logs pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
 
 **Health polling is honest by design:** the SPA polls `GET /api/v1/health` every 10 s, keeps the last-known data on failure, and renders an unreachable backend **RED** (never gray/unknown) — the failure itself is the signal (founder decision, 2026-07-13).
 
 ## 0. Sidebar (persistent shell)
 
-- Navigation to the four pages, with scrollspy sub-entries for the Config sections; collapsible to an icon rail.
+- Navigation to the six pages, with Config sub-entries for the sections above; collapsible to an icon rail.
 - **Mission-intake master switch** — THE operational control, so it lives in the sidebar (visible even collapsed, founder decision) and applies immediately (its own `PUT /config`, outside the Config draft): OFF pauses intake — no new runs start (missions or mapper) while the operator rearranges missions in the PMO. In-flight runs finish normally (pause freezes dispatch, not consequence) and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. Disabled (with an explanatory tooltip) while the backend is unreachable or health is unknown; save errors surface inline — the toggle never fails silently.
-- Component health dots (app/PMO/forge/Redis/Dagu/OpenObserve) from the 10 s health poll, plus a theme toggle.
+- Component health dots from the 10 s health poll: app / pmo / redis / dagu / **gitea** (`health.internal_forge`, grey when Gitea is unset) / logs (OpenObserve) — not a generic forge dot — plus a theme toggle.
 
 ## 1. REST API contract (`/api/v1`)
 
@@ -19,7 +19,7 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 |---|---|
 | `GET /api/v1/health` | Full component health (below) |
 | `GET /api/v1/health/live` | Unauthenticated liveness (`{"app": true}`) — the compose healthcheck |
-| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**; singular v1-shaped `{"pmo": {…}}`/`{"repo": {…}}` bodies are **rejected with 422** (never silently dropped — the v1→v2 migration was removed at v0). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
+| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**; stale-shaped bodies (singular `pmo`/`repo`, `id:` keys, `*_env` fields, non-v4 schema) are **rejected with 422** by `reject_stale_patch` (never silently dropped). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
 | `GET /api/v1/harnesses` | The harness registry: derived image, credential requirements, OAuth availability per `harness_template` — the Dev Type card renders (and previews unsaved harness switches) from this |
 | `GET /api/v1/dev-types` · `POST /api/v1/dev-types` | List (enriched: `harness` info + `secrets_present`) / create Dev Types |
 | `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login; credential lands in `/data/secrets/{name}/` |
@@ -30,8 +30,8 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `PUT/DELETE /api/v1/harness-secrets/{VAR}` | Write/delete harness/model key VALUES |
 | `GET /api/v1/secrets-check` | Presence + `updated_at` only (no values, no fingerprints) — powers Config ✓/✗ |
 | `GET /api/v1/connections/registry` | Adapter registry metadata: PMO systems + forges, `secret_shape_prefixes` (paste guard), `managed_labels_expected` |
-| `POST /api/v1/connections/pmo/test` | Live probe: auth + team fetch; returns `{ok, team, labels, labels_expected, missions_visible}` — `labels` counts the intersection with DevCake's managed label set |
-| `POST /api/v1/connections/forge/test` | Live probe: authenticated repo fetch + explicit push permission + default branch (+ reviewer token check + branch-protection state). A read-only or fine-grained token that omits the configured repository returns `ok: false` and trips the global forge breaker before dispatch; transient probe failures (5xx/network/rate-limit) are reported but never latch the breaker, and a latched breaker re-probes every poll cycle (`15-errors-and-retries.md` §4) |
+| `POST /api/v1/connections/pmo/{name}/test` | Live probe for one named PMO instance: auth + team fetch; returns `{ok, team, labels, labels_expected, missions_visible}` — `labels` counts the intersection with DevCake's managed label set |
+| `POST /api/v1/connections/forge/{name}/test` | Live probe for one named repo: authenticated repo fetch + explicit push permission + default branch (+ reviewer token check + branch-protection state). A read-only or fine-grained token that omits the configured repository returns `ok: false` and can latch the **per-repo** forge breaker (`repo:{name}`); transient probe failures (5xx/network/rate-limit) are reported but never latch the breaker, and a latched breaker re-probes every poll cycle (`15-errors-and-retries.md` §4) |
 | `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
 | `GET /api/v1/runs/{run_id}` | Fixed allowlist of operational Run fields (incl. `verdict`); run specs, prompts, results/token reports, envelope verifiers, and credential material are never serialized |
 | `GET /api/v1/runs/{run_id}/log?tail=N` | Plain-text condensed run output (from `/data/state/runlogs/`, relayed live by the Dev via `run.log` — `09-messaging.md` §3) |
@@ -59,29 +59,47 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 
 | field | content |
 |---|---|
-| `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; PMO via `health_probe`) |
-| `forge` | the latest `ForgeHealth` dict (`ok`, `can_push`, `transient`, `detail`, …) |
-| `circuit_breakers` | per-Dev-Type auth breakers + the global `forge` breaker (`15-errors-and-retries.md` §4) |
+| `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; `pmo` is the aggregate over configured instances) |
+| `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team`); unconfigured instances show grey (`ok: null`) |
+| `forge` | per-repo `ForgeHealth` map (`ok`, `can_push`, `can_read`, `transient`, `detail`, …) |
+| `circuit_breakers` | per-Dev-Type auth breakers + **per-repo** `repo:{name}` forge breakers (`15-errors-and-retries.md` §4) |
 | `intake_paused` | the master switch state |
 | `last_poll_at` | ISO-8601 UTC of the last poll cycle that finished (periodic OR manual); `null` before the first cycle. Powers the Missions board's "Last polled Ns ago · next in ~Ns" honesty line |
 | `poll_interval_seconds` | current `config.poll_interval_seconds`, echoed here so the SPA doesn't need a separate `/config` read to compute the cadence line |
+| `poll_degraded` | instance → reason when that instance's poll segment hit a permanent error (other instances keep polling) |
+| `internal_forge` | bundled Gitea health (`{ok, detail}`) or `null` when `GITEA_ADMIN_PASSWORD` is unset |
 | `active_runs` | count of dispatched/running/finalizing runs |
-| `forge_protection` | default-branch protection probe (cached ~5 min; `null` when unknown) |
+| `forge_protection` | default-branch protection probe per repo (cached ~5 min; `null` when unknown) — **not** part of `security_warnings` |
 | `anomalies` | per-mission advisory strings (out-of-pipeline merges etc.; pruned when terminal) |
 | `merge_handoffs` | pmo_id → "awaiting human merge" strings — the live merge queue banner |
 | `needs_human` | pmo_id → advisory string, rebuilt each cycle from the `DEVCAKE-NEEDS-HUMAN` label (clears the moment the human removes the label) |
 | `dependency_cycles` | detected blocked-by loops (each names the mission keys in the loop) |
 | `blocked_reasons` | pmo_id → why the scheduler is currently holding a mission back (advisory mirror of the last gate map) |
 | `mapper_degraded` | `null`, or the error string when the last 3 mapper runs all died (periodic service backs off; Run now still works) |
+| `security_warnings` | dismissable credential-posture list from `security.security_warnings` (`14` §8) — e.g. `gui-secrets-basic-auth`, `forge-write-token:{repo}`, `repo-read-only:{repo}` |
+| `prompt_template_warnings` | active templates that no longer resolve (fallback-to-default in effect) |
 
 ## 2. Overview page
 
 The landing dashboard, fed by the health poll:
 
-- **Component health cards** — every `/health` boolean plus the forge detail; backend unreachable renders RED.
-- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: dependency cycles (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · default branch unprotected (a Dev's forge token could merge without review — `13-deployment.md` §8a) · out-of-pipeline activity (`15-errors-and-retries.md`) · mapper degraded · circuit breakers. Alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
+- **Component health cards** — every `/health` boolean plus forge / internal_forge detail; multi-instance PMO via `pmo_instances`; backend unreachable renders RED.
+- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: dependency cycles (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · default branch unprotected (from `forge_protection`, not `security_warnings`) · out-of-pipeline activity (`15-errors-and-retries.md`) · mapper degraded · poll_degraded · circuit breakers · `security_warnings` (write-token / repo-read-only / basic-auth posture). Alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
 - **Merge queue** — every `DEVCAKE-MERGE` mission awaiting a human (from `merge_handoffs`), and **Needs attention** — every `DEVCAKE-NEEDS-HUMAN` mission (from `needs_human`), each with its remove-the-label call to action.
 - **Recent runs** — the last 5 from `GET /runs`, linking into the Runs page.
+
+## 2a. Missions board (`#/missions`)
+
+Hermes-style kanban of the current poll snapshot (`GET /api/v1/missions`): cards per derived mission with stage glyphs, priority, blockers, and a drawer for runs + PR link. Primary action **Poll now** (`POST /api/v1/poll/run` — 409 while a cycle is in flight). Card / drawer **MoreMenu** actions: steering comment, stop run, label ops (retry / park / …). See `docs/img/missions-board/` for UI evidence.
+
+## 2b. Repos page (`#/repos`)
+
+Operator-facing repository inventory: external `RepoInstance` cards (forge, URL, secret presence, connection test via `POST /api/v1/connections/forge/{name}/test`) plus bundled internal Gitea operator repos when `internal_forge` is live. This is where repository identity lives — **not** under Config.
+
+Also hosts the merge posture toggles (drafted with the rest of config):
+- **`auto_merge`** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."* Only enable with branch protection + eyes open (`14` zone C).
+- **`auto_resolve_merge_conflicts`** — default ON; dimmed while `auto_merge` is OFF. Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
+- **`merge_retry_window_minutes`** — default 30, min 0; dimmed while `auto_merge` is OFF.
 
 ## 3. Config page — draft/Save model and sections
 
@@ -100,7 +118,7 @@ removable — a stale name must never wedge the Save PUT), and an explicit
 empty-state note. Do not introduce checkbox lists or multi-select dropdowns
 for these.
 
-Sections (scrollspy anchors `#/config/<id>`): **Traffic control · PMO · Repository · Dev Types · Assignments · Limits**.
+Sections (one section per `#/config/<id>` view, from `nav.js`): **PMO · Dev Types · Skills · Assignments · Prompts · Profiles · Limits · Traffic control**. Repositories are **not** a Config section — use `#/repos`.
 
 ### Traffic control
 - **Decomposition depth** (`SettingRow` select, drafted like every scalar) — `max_decomposition_depth`: **1 level** (a decomposition child is never split again), **2 levels** (default — a Project's missions can each split once more), or **Unlimited** (stored as `0`; the ONBOARD Dev decides every time — removes the fission backstop, and the help copy says so). The schema accepts any depth ≥ 0; a value outside the offered three (set via API/YAML) renders as an extra "*N levels (set via API)*" option so it round-trips instead of being clobbered on the next save. `03-mission-lifecycle.md` §1.3, `adr/0012`.
@@ -117,19 +135,10 @@ Connection tests fail clearly when a required secret is absent.
 Fields edit configured PMO instances (`02-domain-model.md` §9); section copy
 renders from `GET /connections/registry` and stays **PMO-neutral**.
 - System selector, instance name, team/workspace key.
-- **API key VALUE** via secret field (`secrets/pmo/{name}/api_key`) — Set / clear; ✓ from `secrets-check`.
-- Validated by **Test connection** (`connections/pmo/{name}/test`).
+- **API key VALUE** via secret field (`/data/secrets/connections/pmo-{name}.json`) — Set / clear; ✓ from `secrets-check`.
+- Validated by **Test connection** (`POST /api/v1/connections/pmo/{name}/test`).
 - **Adoption mode toggle** — `opt_in` (default) vs `opt_out`. Flipping to `opt_out` opens a confirmation dialog: *"DevCake will adopt EVERY non-completed Issue and Project in this team — including the entire existing backlog — and start working through them by priority, consuming tokens. In opt-in mode it only touches items you label `DEVCAKE`."* Remember: the whole team is in the agent trust boundary (`14` §0). The confirm writes the draft; Save applies it.
 - Poll interval (seconds).
-
-### Repository
-Fields edit configured repo instances.
-- Forge selector — options from registry `forges` (GitHub / GitLab / …).
-- Repo URL; **access token / optional RO / optional reviewer** as secret VALUES
-  (`token`, `token_ro`, `reviewer_token`) — not env-var names (`06` token posture, `14` §8).
-- **`auto_merge` toggle** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."* Only enable with branch protection + eyes open (`14` zone C).
-- **`auto_resolve_merge_conflicts` toggle** — default ON, no confirm dialog (every resulting merge still passes the full EXECUTE→REVIEW gate). Dimmed and non-interactive while `auto_merge` is OFF (the setting is inert without it). Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
-- **`merge_retry_window_minutes` number field** — default 30, min 0; also dimmed while `auto_merge` is OFF. Tooltip: lower it on CI-light repos to surface unmergeable PRs faster; raise it on CI-heavy repos to stop premature `DEVCAKE-MERGE` hand-offs; 0 = hand off immediately. Live-tunable: raising it mid-wait extends an active window.
 
 ### Dev Types
 Card list + editor (the harness combobox is **authoritative**, `08-harness-templates.md` §2):
@@ -168,13 +177,13 @@ Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely
 
 ## 4. Runs page
 
-A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a **"Clear runs"** danger button, above a live run table from `GET /api/v1/runs` (10 s poll) — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Rows show state and, where the app's judgment diverged from the executor's, the `verdict` (rejected/skipped/parked/handed-off — `02-domain-model.md` §7). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live). No iframe.
+A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a **MoreMenu (⋯)** for rare/destructive run actions — **not** a bare danger button in the header. The menu carries **Stop all runs** and **Clear run history** (each with an honest one-line consequence description). Live run table from `GET /api/v1/runs` (10 s poll) — **paginated** (25/page, `limit`+`offset`, total count) and **filterable by mission key** (substring match on key or run id). Rows show state and, where the app's judgment diverged from the executor's, the `verdict` (rejected/skipped/parked/handed-off — `02-domain-model.md` §7). Every row carries a **trace ↗ deep link** into OpenObserve pre-filtered to that run: `{OO}/web/traces?org_identifier=default&stream=default&period=1w&search_mode=spans&query=BASE64(devcake_run_id='<run_id>')` (URL shape verified live). No iframe.
 
 **Run terminal (popup):** clicking any run row opens a terminal-styled modal (dark chrome, monospace, blinking cursor while live) showing the run's condensed output. Live runs follow `GET /runs/{id}/log/stream` over `EventSource` (the server replays the stored log first, so no separate initial fetch); terminal runs fetch `GET /runs/{id}/log?tail=1000` once. The stream's `end` event prints `[process exited]` and stops the cursor. This is a simulacrum, not a TTY: the harness runs headless (no PTY) and the app deliberately holds no docker.sock (`13-deployment.md` §5), so the feed is the Dev's own `run.log` relay — the same condensed lines Dagu captures in its step log. Client caps at ~5000 lines; ESC / backdrop / ✕ close it.
 
 **Stop all runs** (More menu, confirm dialog) calls `POST /api/v1/system/stop-runs`: every dispatched/running Dev is killed through the run manager (failure record shipped, terminal state, ACL teardown); finalizing runs complete on their own and are named in the response. Nothing is deleted.
 
-**Clear runs** opens a React confirmation dialog (never `window.confirm`) and on confirm calls `POST /api/v1/system/clear-runs`. That endpoint:
+**Clear run history** opens a React confirmation dialog (never `window.confirm`) and on confirm calls `POST /api/v1/system/clear-runs`. That endpoint:
 
 The whole wipe holds **two locks for the entire `clear_all`** (including OpenObserve stream deletes — intentional; dispatch is paused for the full wall-clock window):
 
@@ -195,7 +204,7 @@ Operator impact: no new Devs start until clear finishes; OO stream delete can do
 
 ## 5. Logs page
 
-A prominent **"Open OpenObserve ↗"** button (new tab, URL from `OO_UI_URL`), plus canned deep links (also opening in new tabs): **Errors (last hour)** · **Trace by mission key** (input box → trace search) · **Cost dashboard** (`12-observability.md` §5). No iframe.
+A prominent **"Open OpenObserve ↗"** button (new tab, URL from `OO_UI_URL`). **Canned deep links (Errors last hour / Trace by mission key / Cost dashboard) are not implemented** in the SPA — only the Open OpenObserve action ships. No iframe.
 
 ## 6. Auth and control-plane posture
 
@@ -204,7 +213,7 @@ v0 ships **HTTP basic auth at both nginx and FastAPI**, using the same
 **single-operator dedicated host** with **loopback** binds (`14-security.md`
 §0, §4) — not multi-tenant RBAC. Admin credentials protect the GUI secret store
 (`/data/secrets`), config (including MCP free-text / `extra_cli_args` = ACE in
-Dev containers), and destructive **Clear runs**.
+Dev containers), and destructive **Clear run history**.
 
 Nginx covers the SPA and proxy; FastAPI independently protects every route
 except minimal `/api/v1/health/live`. OpenAPI/docs endpoints are disabled.

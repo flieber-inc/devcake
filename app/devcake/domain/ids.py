@@ -1,4 +1,6 @@
-"""Human-readable run ids: {mission_key}-{seq}-{TYPE}-{6-char suffix} (docs/02 §7).
+"""Human-readable run ids: {INSTANCE}-{key}-{seq}-{TYPE}-{6-char suffix}
+(docs/02 §7). The uppercased PMO-instance prefix (schema v3) keeps ids
+collision-free across instances.
 
 The id is simultaneously the Dagu dagRunId, the container name suffix
 (dev-{run_id}), the Redis reply-stream key, and the trace correlation id —

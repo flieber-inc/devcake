@@ -8,7 +8,7 @@ Devs run as ephemeral sibling containers and must deliver artifacts (transcript,
 
 ## Decision
 
-One channel: **Redis Streams** (`devcake:ingress` with a consumer group; per-run reply streams for request/reply). The "endpoint" is the `devcake-relay` CLI speaking this protocol; the app is the sole PMO client (INV-4). Protocol in `09-messaging.md`.
+One channel: **Redis Streams** (`devcake:ingress` with a consumer group; per-run reply streams for request/reply). The Dev-side speaker is the **shared container entrypoint** (`images/common/dev_entrypoint.py`) — not a separate CLI. (An early name for this role was `devcake-relay`; that binary was never shipped.) The app is the sole PMO client (INV-4). Protocol in `09-messaging.md`.
 
 ## Alternatives considered
 

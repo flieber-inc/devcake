@@ -2,6 +2,14 @@
 
 **Status:** accepted (2026-07-13) · **Relates to:** ADR-0003 (PMO as source of truth), ADR-0004 (label namespace), ADR-0006/0007 (Linear-specific policies)
 
+> **Supersession note (runtime today — do not read D4–D5 / D7 as current law):**
+> multi-instance is **0..N** PMO and repos (ADR-0009 / schema v4); `ForgeCapabilities`
+> **exists** as a ClassVar on each forge adapter; branch naming is
+> **instance-prefixed** (`mission_branch(instance, key)` → `devcake/{INSTANCE}-{key}`,
+> with `legacy_branch` for pre-v3 records); `cancel_mission` is on `PMOPort` and used
+> by decomposition/sweeps. The historical narrative below records the ADR as accepted
+> on 2026-07-13 — leave it intact for provenance.
+
 ## Context
 
 v0 shipped with Linear as the only PMO and GitHub/GitLab as duck-typed forge

@@ -255,10 +255,11 @@ for **app-mediated** posts to Linear/forges, not a substitute for zone C.
 
 | Signal | Kind | Notes |
 |---|---|---|
-| `forge-write-token:*` | **Warning** (dismissable) | No RO PAT — all stages get write token |
-| Unprotected default branch | **Warning** | Operator must fix forge-side |
-| EXECUTE and REVIEW share Dev Type | **Warning** | Independent review recommended, not enforced |
-| `gui-secrets-basic-auth` | **Info** | Reminder of control-plane posture |
+| `forge-write-token:{repo}` | **Warning** in `security_warnings` (dismissable) | No RO PAT — all stages get write token for that repo |
+| `repo-read-only:{repo}` | **Warning** in `security_warnings` (dismissable) | Repo is in a PMO work set but stores only a RO token (no write) — EXECUTE will fail at push; move it to reference repos or add a write token |
+| `gui-secrets-basic-auth` | **Info** in `security_warnings` | Reminder of control-plane posture |
+| Unprotected default branch | **Advisory** via `/health` `forge_protection` (SPA alert) — **not** in the `security_warnings` list | Operator must fix forge-side |
+| EXECUTE and REVIEW share Dev Type | **Warning** (SPA) | Independent review recommended, not enforced |
 | `secret_env` value missing **and** referenced by an mcp_setup_command | **Gate** (dispatch refused) | `blocked_reasons`/health names the var; self-heals the poll cycle after the value is pasted. Declared-but-unreferenced = warning only (log + ✗ on the Config card) |
 | `auto_merge` enable | Confirm dialog | Operator accepts merge without human PR click |
 | `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |

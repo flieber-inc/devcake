@@ -37,7 +37,7 @@ The entrypoint pumps the harness's stdout line-by-line instead of buffering it (
 grok -p "$PROMPT" --output-format streaming-json --always-approve
 ```
 - **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output).
-- **Behavior verified against CLI v0.2.93** (current stable at spec time). The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest and records `LABEL devcake.grok_cli_verified="0.2.93"`; re-verify the shapes below after rebuilds (ISSUES #29 residual). Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`) — **`text`/`thought` are token-level deltas** (re-verified live 2026-07-12; no tool-call events in the stream), so the entrypoint coalesces `text` deltas into lines for the relay (§1a) and reconstructs the result text by concatenating them; `sessionId` comes from the `end` event. **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future CLI release adds usage/cost to headless output, bump the pin and promote that to the primary strategy.
+- **Behavior verified against CLI v0.2.93** (current stable at spec time). The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image. Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`) — **`text`/`thought` are token-level deltas** (re-verified live 2026-07-12; no tool-call events in the stream), so the entrypoint coalesces `text` deltas into lines for the relay (§1a) and reconstructs the result text by concatenating them; `sessionId` comes from the `end` event. **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future CLI release adds usage/cost to headless output, bump the pin and promote that to the primary strategy.
 - Sessions persist under `~/.grok/sessions/{urlencoded-cwd}/{session_id}/` (verified) — the `sessionId` from the headless output locates the directory; `signals.json` there carries `contextTokensUsed`/`totalTokens`, `contextWindowTokens`, `modelsUsed` (totals only — no input/output split, no cost). The TUI `/usage` command is interactive-only and not used.
 
 ### `codex`
@@ -45,9 +45,9 @@ grok -p "$PROMPT" --output-format streaming-json --always-approve
 codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
   --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
 ```
-- **Verified on an installed CLI (codex-cli 0.144.x, 2026-07; the image pins `@openai/codex@0.144.3`).** `--json` emits a JSONL event stream (`thread.started` → `turn.started` → `item.completed` → `turn.completed`); **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `type: agent_message` is the in-stream equivalent).
+- **Verified on an installed CLI (codex-cli 0.144.x, 2026-07; the image pins `@openai/codex@0.144.4`).** `--json` emits a JSONL event stream (`thread.started` → `turn.started` → `item.completed` → `turn.completed`); **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `type: agent_message` is the in-stream equivalent).
 - Sandboxing: `--dangerously-bypass-approvals-and-sandbox` is the container invocation — its own help text says "intended solely for running in environments that are externally sandboxed", which is exactly the Dev container. The plan-substitute run uses `--sandbox read-only` instead. `--ephemeral` (no session files) and `--ignore-user-config` exist for hermetic runs.
-- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (probe: 12196/10112/5/0). Caveat: on `codex exec resume` these are cumulative across the session — DevCake runs are single-session so this is naturally correct. No cost field → `cost_usd` from the price table.
+- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (probe: 12196/10112/5/0). Caveat: on `codex exec resume` these are cumulative across the session — DevCake runs are single-session so this is naturally correct. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
 
 ## 2. Base images
@@ -88,44 +88,37 @@ In all three cases the deliverable is the same: `/workspace/out/PLAN.md`, upload
 
 Per DevType `credential.kind` (`02-domain-model.md` §6); **OAuth/subscription is preferred** (mission-doc requirement — the goal is to run Dev work on subscriptions):
 
-| Template | `env_api_key` mode | `credentials_json` / subscription mode |
+| Template | `credential_env` (registry) | File / OAuth (registry `credential_files` / `oauth`) |
 |---|---|---|
-| `claude-code` | `ANTHROPIC_API_KEY` | `claude setup-token` (run once, interactively, on any machine with a Pro/Max/Team subscription) → paste the ~1-year OAuth token into the admin panel → injected as `CLAUDE_CODE_OAUTH_TOKEN`. Alternatively upload the `~/.claude` auth state as credentials JSON, installed by the entrypoint. |
-| `grok-build` | `XAI_API_KEY` (one key covers CLI + API) | Device-code flow (RFC 8628) performed once; resulting session/config from `~/.grok/` uploaded as credentials JSON, installed to `~/.grok/` in-container. |
-| `codex` | `CODEX_API_KEY` (per-invocation) or `OPENAI_API_KEY` piped to `codex login --with-api-key` | `codex login --device-auth` once (ChatGPT subscription); upload `~/.codex/auth.json` as credentials JSON, installed to `$CODEX_HOME/auth.json`. |
+| `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` **or** `ANTHROPIC_API_KEY` (any one stored is enough) | **No** `credential_files` entry. Preferred: `claude setup-token` once → paste the OAuth token into the admin panel as `CLAUDE_CODE_OAUTH_TOKEN`. |
+| `grok-build` | `XAI_API_KEY` | Device-code OAuth → secret file **`grok-auth.json`** → `~/.grok/auth.json` in-container. |
+| `codex` | `CODEX_API_KEY` | Device-code OAuth → secret file **`codex-auth.json`** → `~/.codex/auth.json` in-container. |
 
-Uploaded credential files live at `/data/secrets/{dev_type}/` (0600); their content is delivered to the Dev in the run spec (`runspec.get`, `09-messaging.md` §3) and the entrypoint writes it to the harness-expected path (0600) before dropping privileges (`07-dev-runtime.md` §5, `14-security.md` §3). Auth failure at harness launch ⇒ exit 12 ⇒ the per-Dev-Type circuit breaker (`15-errors-and-retries.md`, `DEV_AUTH`).
+Uploaded credential files (when the harness registry declares them) live at `/data/secrets/{dev_type}/{secret_file}` (0600); their content is delivered to the Dev in the run spec (`runspec.get`, `09-messaging.md` §3) and the entrypoint writes it to the harness-expected path (0600). Auth failure at harness launch ⇒ exit 12 ⇒ the per-Dev-Type circuit breaker (`15-errors-and-retries.md`, `DEV_AUTH`).
 
 ## 5. Token extraction (INV-5 — a report is ALWAYS posted)
 
-Strategy order per template; the first that yields data wins, and `TokenReport.extraction_method` records which:
+Implemented extraction methods (`TokenReport.extraction_method`); silence is never acceptable (INV-5):
 
-1. **`session_json`** — structured harness output:
-   - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown — same fields the old `json` blob carried).
-   - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `output_tokens→output`; `reasoning_output_tokens` recorded in `notes`. Secondary: last `token_count` event in the session rollout file (§1).
-   - `grok-build` (pinned v0.2.93, verified): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`); revisit on every CLI pin bump.
-2. **`stdout_parse`** — regex over captured stdout/stderr for token summary lines.
-3. **`unavailable`** — post an explicit report: *"Token usage could not be extracted for this run (harness: grok-build). See the trace in OpenObserve for duration-based cost estimation."* Silence is never acceptable.
-
-**Price table** (maintained here; used to compute `cost_usd` only when the harness doesn't report cost natively AND the model's prices are known — otherwise `cost_usd` is omitted, never guessed):
-
-| Model | Input $/M | Output $/M | Source |
-|---|---|---|---|
-| `grok-4.5` | 2.00 | 6.00 | x.ai pricing, 2026-07 |
-| `claude-fable-5` | *(native `total_cost_usd` used; table entry not needed)* | | |
-| gpt-5.6-sol | *(fill at M4 from OpenAI pricing page)* | | |
+1. **`session_json`** — structured harness output (the only path that fills real usage today):
+   - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown).
+   - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `output_tokens→output`; `reasoning_output_tokens` recorded in `notes`. No native cost field → `cost_usd` omitted.
+   - `grok-build` (verified v0.2.93 shapes): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`); revisit on every CLI pin bump.
+2. **`unavailable`** — post an explicit report when structured extraction fails. There is **no** `stdout_parse` strategy in the entrypoint, and **no** in-code price table that invents `cost_usd` from token counts.
 
 The token report message posted to the activity feed (format in `03-mission-lifecycle.md` §8) accompanies **every** step, and the same numbers ride the `dev.run` span as `devcake.tokens.*` / `devcake.cost.usd` attributes (`12-observability.md`).
 
 ## 6. Transcript capture
 
-| Template | Source |
+The shared entrypoint's `assemble_transcript(seq, mtype, run_id, dev_type, harness, token_report, dump, result_text, result)` builds one markdown document: header with run metadata (turns / duration from the token report), then either the full session dump or (when no dump) the agent report, then the outcome JSON. That string is what ships as `transcript_md` on `run.artifacts` and becomes `{seq}_{TYPE}.md` on the PMO feed. Secrets are redacted app-side before feed post (`14-security.md` §7).
+
+| Template | Dump source fed into `assemble_transcript` |
 |---|---|
 | `claude-code` | Session JSONL from `~/.claude/projects/...` (plus the `-p` JSON result). |
-| `grok-build` | `grok export <session_id>` — emits a clean Markdown transcript to stdout (verified) — plus the captured `streaming-json` stream and the session dir's `chat_history.jsonl` for tool-call detail. |
+| `grok-build` | Captured `streaming-json` stream + session dir artifacts. |
 | `codex` | Session files under `$CODEX_HOME/sessions/` + captured JSONL. |
 
-A shared `transcript_render` module (spec: one markdown document — header with run metadata, then chronological turns, tool calls collapsed to fenced blocks, secrets redacted per `14-security.md` §5) converts the raw source into `{seq}_{TYPE}.md`. Raw artifacts stay in `/workspace/out/transcript/` and are shipped to OpenObserve as logs; only the rendered markdown goes to the PMO feed.
+There is **no** `/workspace/out/transcript/` contract — the entrypoint does not stage raw transcript trees under that path for collection.
 
 ## 7. MCP registration syntax
 
@@ -178,4 +171,4 @@ harness reaches for a skill varies — the delivery contract is identical.
 2. Add a target to `images/Dockerfile` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and a matching target in `docker-bake.hcl` (group `images` / `all`).
 3. Add the invocation + renderer + token-extraction branches in `images/common/dev_entrypoint.py` (§1, §1a, §5).
 4. Run the M1 hello-world DAG with the new image, then the M3 ONBOARD end-to-end demo.
-5. Update the price table (§5) and this document.
+5. Update the token-extraction section (§5) and this document.

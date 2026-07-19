@@ -32,7 +32,7 @@ No code changes. `result.json`: `outcome: "plan_needed"` with a one-paragraph `s
 
 **Opportunistic plan:** if, in the course of assessing, the Dev has already effectively formed the complete plan, it may write it to `/workspace/out/PLAN.md`. This is optional and confidence-gated — never forced; assessment and planning remain separate jobs by default.
 
-**Finalization:** transcript + token report → if a `PLAN.md` was attached: upload it to the activity feed and add `DEVCAKE-EXECUTE` (the PLAN step is skipped — its work already exists); otherwise add `DEVCAKE-PLAN`.
+**Finalization:** transcript + token report → if a `PLAN.md` was attached: upload it as `PLAN_{seq}.md` to the activity feed and add `DEVCAKE-EXECUTE` (the PLAN step is skipped — its work already exists); otherwise add `DEVCAKE-PLAN`.
 
 ### 1.3 High-complexity path (decomposition)
 No code changes. The Dev emits a **decomposition manifest** in `result.json` (`outcome: "decomposed"`, `decomposition: [{title, description, priority, …}, …]` — entry schema in `02-domain-model.md` §11), observing:
@@ -52,7 +52,7 @@ No code changes. The Dev emits a **decomposition manifest** in `result.json` (`o
 
 The Dev invokes the harness's plan capability (mapping per harness in `08-harness-templates.md` §3) over the Mission and the codebase, producing `/workspace/out/PLAN.md`. No code changes. `result.json`: `outcome: "planned"`.
 
-**Finalization:** transcript + token report → upload `PLAN.md` to the activity feed (as attachment, referenced from a comment) → swap `DEVCAKE-PLAN` → `DEVCAKE-EXECUTE`.
+**Finalization:** transcript + token report → upload `PLAN_{seq}.md` to the activity feed (as attachment, referenced from a comment) → swap `DEVCAKE-PLAN` → `DEVCAKE-EXECUTE`.
 
 ## 3. EXECUTE
 
@@ -60,14 +60,14 @@ The Dev invokes the harness's plan capability (mapping per harness in `08-harnes
 
 The Dev reads the latest `PLAN.md` and the latest REVIEW report from `ACTIVITY.md`/attachments, then:
 
-1. **Branch:** `devcake/{mission_key}` — the branch convention is defined once as `mission_branch()` in `ports/forge.py` and imported by the orchestrator and prompt templates alike. If the branch already exists on the remote (a prior EXECUTE loop), check it out and continue on it. **Never force-push.**
+1. **Branch:** `devcake/{INSTANCE}-{mission_key}` (e.g. instance `linear`, key `ENG-142` → `devcake/LINEAR-ENG-142`) — the branch convention is defined once as `mission_branch(instance, key)` in `ports/forge.py` and imported by the orchestrator and prompt templates alike. The uppercased instance prefix keeps branches collision-free across PMO instances (schema v3); pre-v3 unprefixed branches remain findable via `legacy_branch(key)`. If the branch already exists on the remote (a prior EXECUTE loop), check it out and continue on it. **Never force-push.**
 2. Implement; run the repo's tests/build where present.
 3. **Commit only at the very end** (INV-6). Commit message: `[{mission_key}] {concise summary}`.
 4. Push; the PR/MR is opened by the Dev via the forge CLI/API using injected credentials — **idempotently**: if a PR for the branch exists, update it (title/body) instead of creating another. Title: `[{mission_key}] {title}`; body links the Mission URL and the plan. The concrete CLI instructions in the playbook prompt come from the active forge adapter's `ForgeDescriptor.pr_instructions` — never hardcoded per forge.
 
 `result.json`: `outcome: "executed"` with `pr_url` and `summary`.
 
-**Finalization:** transcript + token report → swap `DEVCAKE-EXECUTE` → `DEVCAKE-REVIEW` → post the PR link as a comment (idempotent — skipped when the same `pr_url` was already posted).
+**Finalization:** transcript + token report → swap `DEVCAKE-EXECUTE` → `DEVCAKE-REVIEW` → post the PR link as a feed comment. The PR-link comment is **not** idempotent by scanning prior `pr_url` posts — redelivery safety rides `run.finalized_steps` checkpoints, not a feed scan for the same URL.
 
 ## 4. REVIEW
 
@@ -95,7 +95,7 @@ The Dev must: check out the PR branch in its clone; diff against the plan; hunt 
 ### 4.2 Reject
 **Finalization:** transcript + token report → upload `report_md` as a `{seq}_REVIEW_REPORT.md` attachment referenced by a short feed comment (docs/05 §4), AND post it in full as a PR comment → swap `DEVCAKE-REVIEW` → `DEVCAKE-EXECUTE`. The next EXECUTE Dev finds the report in its `activity/` folder and reworks the same branch/PR.
 
-**Loop guardrail:** loops are unlimited by design, but every `review_loop_warning_every`-th (default 3rd) rejection of the same Mission, the app posts a warning **to the Mission's activity feed** (the source of truth, where a human intervenes by adding `DEVCAKE-SKIP`) **and mirrors it as a PR comment**, containing the loop count and cumulative token cost across all the Mission's runs; also emitted as a metric (`12-observability.md`). Loop count is derived from the activity feed (count of prior `N_REVIEW.md` artifacts), not local state.
+**Loop guardrail:** loops are unlimited by design, but every `review_loop_warning_every`-th (default 3rd) rejection of the same Mission, the app posts a warning **to the Mission's activity feed** (the source of truth, where a human intervenes by adding `DEVCAKE-SKIP`) **and mirrors it as a PR comment**, containing the loop count and cumulative token cost across all the Mission's runs; also emitted as a metric (`12-observability.md`). Loop count is derived from **local finished REVIEW runs with `verdict == "reject"`** for that mission (store-side), not from feed artifacts.
 
 ## 4a. Human hand-off (`human_needed`)
 
@@ -152,7 +152,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
 
 A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
 
-**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on; the Dev entrypoint mirrors the same table as first-line defense (exit 11), but the app check is the invariant (old images may run):
+**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome on a mission step is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on. The Dev entrypoint applies a related first-line check (exit 11) that also knows MAPPER's `relations_mapped`; the app table below is the mission-step invariant (old images may run):
 
 | Run type | Legal outcomes |
 |---|---|
@@ -160,7 +160,8 @@ A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.
 | PLAN | `planned` |
 | EXECUTE | `executed` · `human_needed` |
 | REVIEW | `reviewed` · `human_needed` |
-| MAPPER | `relations_mapped` |
+
+**MAPPER is not in `LEGAL_OUTCOMES`.** Mapper runs finalize through a separate path (`finalize_mapper`): the only accepted outcome is `relations_mapped`; anything else marks the run **`failed`** (no `DEVCAKE-SKIP` parking — there is no host mission to park).
 
 A **structurally invalid payload** behind a legal outcome (empty decomposition, forward/self `blocked_by` index) is different: it fails the run as `DEV_BAD_OUTPUT` — a counted attempt that retries naturally (`15-errors-and-retries.md` §2) — because a formatting slip deserves a retry where a forged outcome does not.
 

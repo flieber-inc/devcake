@@ -209,6 +209,19 @@ Exit criteria:
 
 **Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
 
+## v0.2 — FINAL (tagged 2026-07-19)
+
+The consolidation release: everything on `main` since v0.1.1, responding to an external skeptical review and then audited to convergence. **All four hard release gates met** — the two live E2Es (ADR-0012 decomposition chain, ADR-0013 settings round-trip incl. a real Gitea volume restore), the Clear-Runs stop hardening, and a multi-agent audit that ran to a clean re-audit.
+
+- **Positioning (PR #16):** "Your board is the interface" replaces the walked-back "You never operate it"; normative when-to-use / when-not §1b; a real operator contract (`docs/18`) incl. the first consolidated secret-rotation procedure; roadmap status vocabulary (built / live-verified / ⏳).
+- **Reliability (PR #18):** ruff `BLE001` enforced — every blanket `except Exception` narrowed or contract-justified inline (`docs/15 §7`); the grok-auth classifier trips the DEV_AUTH breaker on revoked creds (exit 12) instead of burning three attempts.
+- **Structure (ADR-0015, PRs #21–#27):** the orchestrator binding façade is gone — `MissionManager` is DI + advisory state + verbs, implementation is module functions taking `mgr`; `api/main.py` went 1,837 → ~780 lines (composition root + ≤4-statement route forwards + service modules, AST-guarded); the admin ConfigPage god component became a 69-line dispatcher + section components. All behavior-preserving; a guard test is the "do not resurrect the god module" ratchet.
+- **Clear-Runs concurrency (PRs #28, #30–#32, #34):** the hard one. A stop-then-**drain** wipe that stops every dispatch flavor at the true chokepoints — `RunBootstrap.launch` holds a `dispatch_lock` (every dispatcher funnels through it; an AST tripwire fails CI if that ever stops being true), `RunManager._kill_inner` guards its final save atomically, and a process-local **wipe generation** no-ops any stale save at the store layer (restamped for adopted runs on reconcile). Found incomplete by audit **three times** (D3 fixed ordering not concurrency; #30's poll-lock missed the oauth/mapper/hello paths; #31's kill-guard left a phantom-record window) and closed each time at a deeper chokepoint. **Live-verified 2026-07-19:** clear-runs triggered while a Dev run was live → run stopped + drained, records wiped, **zero ghost runs after a forced poll, zero `AuthenticationError`, zero orphaned ACL users** — the ACL/SIGTERM race is closed end-to-end.
+
+**What the audit taught, recorded so it isn't relearned:** the test suite stayed green through all three incomplete concurrency fixes — only adversarial multi-agent re-audit of each fix delta caught them. Fix concurrency at the chokepoint (launch / kill / save-generation), never per-call-site; prove a structure tripwire fires by planting a violation; run the suite in the Redis harness (`pytest_app.sh`), not bare pytest.
+
+Final state: 662 unit tests + 46 admin `check:ui` checks green; `ci_suite.sh` (pin gate, gitea battery 13/13, dispatch-hello smoke) green on the deployed stack; the live clear-under-load smoke passed. Non-gating trailers deferred past the tag (⏳): the `profiles.mjs` `check:ui` suite and a fresh-`/data` operator-drill re-run.
+
 ## v0.1 — FINAL (tagged 2026-07-15)
 
 **The true v0.1 is the tag at the end of the three rounds below** — M8–M12 plus the full audit-fix round and the live-test/UX rounds, consolidated (the interim working tags v0.1.1/v0.1.2 were folded in; the 2026-07-14 pre-audit tag was a release candidate in hindsight). Final state: 347 unit tests, ci_suite green (pin gate, gitea battery 13/13, stub smoke), live Linear connection green, all SPA flows browser-verified.

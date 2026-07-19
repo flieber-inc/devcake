@@ -238,10 +238,37 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 
 ## Post-v0.1 backlog
 
+> **Status vocabulary** (applies below; the honesty rule: a feature is not
+> *done* until the live box proves it): **built** = merged, full suite + CI
+> green · **live-verified (date)** = exercised on the live stack, evidence
+> noted · **⏳ live-pending** = built, live end-to-end still owed. Milestone
+> checkboxes `[x]` above mark exit criteria verified at that milestone's close.
+
 ### Shipped post-v0.1
 
-- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section.
-- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013 part 2): single-file export (source = current or a profile; sections A/B/C; scrypt+AESGCM encrypted by default, plaintext behind explicit acknowledgment; optional skill embedding; audited), stateless import that **lands as a profile** (apply remains the one world-swap path), section C as a generated ready-to-place `.env` download, `scripts/backup_gitea.sh`/`restore_gitea.sh` for full-fidelity internal-forge backups, and the Export…/Import… transfer UI. **Remaining in the ADR-0013 line:** the `profiles.mjs` UI suite (after the check:ui branch merges).
+- **MCP plugins — core ports** (2026-07-17, PR #6): `DevType.secret_env` +
+  live `mcp_setup_commands` runspec wire, referenced-missing-secret dispatch
+  gate, exit-14 `DEV_MCP_SETUP` reporting, `tutorials/03-mcp-plugins.md`;
+  connectors live out-of-repo (vendor segregation). **built** · ⏳ live plugin
+  round pending the founder-owned `LOGS_MCP_GIT_TOKEN` PAT.
+- **Decomposition depth + fail-closed edge inheritance** (2026-07-18,
+  ADR-0012, PR #10): depth-tagged markers, `max_decomposition_depth` +
+  Traffic-control UI, strict inherited edges, scheduler family gate, lineage
+  notes on canceled parents. **built** (493 tests at merge) ·
+  **⏳ live-pending** — live E2E plan on file.
+- **Missions board** (2026-07-18, PR #11, rflpazini): Hermes-style kanban with
+  steering comments + stop-run; pre-merge review fixed priority-validation
+  500, stop-of-finalizing 409, `create_mission` 502. **built** · deployed live
+  2026-07-18 (UI suite green).
+- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section. **built** (530 tests at merge) · **⏳ live-pending** — profile save/apply round-trip on the live stack owed.
+- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013 part 2): single-file export (source = current or a profile; sections A/B/C; scrypt+AESGCM encrypted by default, plaintext behind explicit acknowledgment; optional skill embedding; audited), stateless import that **lands as a profile** (apply remains the one world-swap path), section C as a generated ready-to-place `.env` download, `scripts/backup_gitea.sh`/`restore_gitea.sh` for full-fidelity internal-forge backups, and the Export…/Import… transfer UI. **built** (548 tests at merge) · **⏳ live-pending** — encrypted export/import round-trip + `restore_gitea.sh` drill owed; the `profiles.mjs` UI suite owed (check:ui branch has merged — unblocked).
+- **Activity-feed fidelity + per-mission activity repos** (2026-07-18,
+  ADR-0014, PR #15): last-message-inline + full-dump flip, `MISSION.md`
+  faithful mirror, per-mission `activity-*` repos swept on Clear, quoting
+  quarantine, `executed_trivially` removed. **live-verified 2026-07-18**
+  (missions DEV-126/DEV-127 on the live sandbox).
+- **Missions "Poll now"** (2026-07-18, PR #14, rflpazini): INV-1-aligned poll
+  CTA; "New mission" dropped from the board. **live-verified 2026-07-18**.
 
 ### Deferred (v0.2+)
 

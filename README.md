@@ -1,6 +1,6 @@
 # DevCake 🍰
 
-**You never babysit a chat UI. You run your board.**
+**Your board is the interface. Tickets in, pull requests out.**
 
 DevCake staffs the task board you already use with AI developers. You write a
 ticket in plain language; disposable containers triage, plan, implement, and
@@ -29,9 +29,15 @@ Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning
   Bake, your forge, your models) — not multi-tenant SaaS
 - People who want **receipts** (transcripts, costs, traces) more than a chat copilot
 
-**Not for:** shared Docker hosts, exposing the admin UI to the open internet on
-basic auth alone, or expecting injection-proof agents. Prompt injection is in
-scope of “ticket writers are trusted,” not a product defect to be papered over.
+**Not for:** anyone wanting a hosted, zero-ops service (self-hosting *is* the
+trust model); boards without discipline (DevCake amplifies your board — it
+cannot invent one); shared Docker hosts; exposing the admin UI to the open
+internet on basic auth alone; or expecting injection-proof agents. Prompt
+injection is in scope of “ticket writers are trusted,” not a product defect to
+be papered over.
+
+What you own as the operator — once at setup, and recurring — fits on one page:
+[`docs/18-operator-contract.md`](docs/18-operator-contract.md).
 
 ---
 
@@ -183,7 +189,9 @@ must not exceed [`docs/14-security.md`](docs/14-security.md).
 | I want to… | Start here |
 |---|---|
 | Understand the product and invariants | [`docs/00-overview.md`](docs/00-overview.md) |
+| Onboard as a new engineer (reading path) | [`docs/00-overview.md`](docs/00-overview.md) §6a |
 | Understand the security deal | [`docs/14-security.md`](docs/14-security.md) |
+| Know what you own as operator | [`docs/18-operator-contract.md`](docs/18-operator-contract.md) |
 | Run a first mission / operate daily | [`docs/tutorials/`](docs/tutorials/) |
 | Deploy, networks, runbook | [`docs/13-deployment.md`](docs/13-deployment.md) |
 | Labels, lifecycle, orchestrator | [`docs/02`](docs/02-domain-model.md) · [`03`](docs/03-mission-lifecycle.md) · [`04`](docs/04-orchestrator.md) |

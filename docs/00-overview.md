@@ -122,6 +122,27 @@ A concrete end-to-end pass, naming the governing document at each hop:
 9. **REVIEW:** by **recommended** config, a *different* Dev Type than EXECUTE reviews the PR (warned if shared — not a hard gate; `14` §8). On approval, the app removes the stage label and approves the PR (second reviewer token if configured); then **merge precedes Done**: with `auto_merge` **off** (default) the Mission carries `DEVCAKE-MERGE` until a **human** merges; with it on the app merges and only then marks **Done**. On rejection, the report is posted and the label swaps back to `DEVCAKE-EXECUTE`.
 10. **Throughout**, every hop is one connected OpenTelemetry trace (dispatch → container → finalization), visible in OpenObserve (`12-observability.md`).
 
+## 6a. Onboarding path (30 minutes for a new engineer)
+
+Read in this order — each doc assumes the ones before it:
+
+1. This overview, §1–§6 — what it is, the invariants, one Mission's life.
+2. [`02-domain-model.md`](02-domain-model.md) — the entities and the label
+   state machine everything else speaks in.
+3. [`03-mission-lifecycle.md`](03-mission-lifecycle.md) — what each Mission
+   Type actually does.
+4. **[`14-security.md`](14-security.md)** — the trust contract; nothing you
+   build or operate may outclaim it.
+5. [`04-orchestrator.md`](04-orchestrator.md) — scheduling, dispatch,
+   finalization, crash recovery.
+6. [`13-deployment.md`](13-deployment.md) — the stack you'll actually touch,
+   plus the runbook.
+7. [`tutorials/01-first-mission.md`](tutorials/01-first-mission.md) — drive one
+   mission end to end.
+
+Operating duties — once at setup and recurring — live in
+[`18-operator-contract.md`](18-operator-contract.md).
+
 ## 7. Document map
 
 | Doc | Governs |
@@ -143,5 +164,6 @@ A concrete end-to-end pass, naming the governing document at each hop:
 | `15-errors-and-retries.md` | Error taxonomy, retry matrix, `DEVCAKE-FAILED` |
 | `16-roadmap.md` | Milestones with exit criteria |
 | `17-positioning.md` | Outward voice — must not outclaim `14` |
+| `18-operator-contract.md` | What the operator owns — setup pointer + recurring duties + rotation |
 | `adr/` | Records of significant architectural decisions |
 | `tutorials/` | Operator path (includes supply-chain checklist) |

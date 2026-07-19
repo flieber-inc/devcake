@@ -3,7 +3,7 @@
 > **Audience:** implementers.
 > **Depends on:** `02-domain-model.md` (AppConfig.repos), `03-mission-lifecycle.md` (branch/PR conventions).
 
-Both GitHub and GitLab adapters ship behind `ForgePort` (`app/devcake/ports/forge.py`). Exactly **one repository on one forge is active at a time** — but the persisted config is already plural (`repos:` list, exactly-one enforced by an AppConfig validator, mirroring `pmos:`), so multi-repo is a declared future seam that needs no schema break. Both credential slots may nevertheless be configured so Devs can read cross-forge dependencies.
+Both GitHub and GitLab adapters ship behind `ForgePort` (`app/devcake/ports/forge.py`). Config holds **0..N** repos (`repos:` list, mirroring `pmos:` — `10-persistence.md`); each mission resolves to **0 or 1** work repo (plus optional reference clones). Credential slots (write / read-only / reviewer) may all be configured so non-EXECUTE stages and cross-repo consultation stay least-privilege where the operator supplies RO tokens.
 
 Terminology: this doc says "PR" throughout; on GitLab the same operations target Merge Requests.
 

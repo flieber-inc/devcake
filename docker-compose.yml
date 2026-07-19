@@ -59,7 +59,7 @@ services:
       - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
     volumes:
       - dagu_data:/var/lib/dagu
-      - ./dagu/dags:/var/lib/dagu/dags    # contains the single dev-run DAG
+      - ./dagu/dags:/var/lib/dagu/dags:ro  # trusted launch code — RO (docs/14 §5)
       - ./dagu/init:/etc/custom-init.d:ro # repairs the image's DOCKER_GID mechanism
       - /var/run/docker.sock:/var/run/docker.sock  # ⚠ root-equivalent host access — docs/14 §4
     depends_on:

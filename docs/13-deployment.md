@@ -55,9 +55,10 @@ services:
       - DOCKER_GID=${DOCKER_GID}
     volumes:
       - dagu_data:/var/lib/dagu
-      # Prefer :ro — DAG YAML is trusted launch code (14 §5). Committed compose
-      # may still be RW; treat host tree as operator-controlled either way.
-      - ./dagu/dags:/var/lib/dagu/dags
+      # :ro — DAG YAML is trusted launch code (14 §5). Runtime state stays on
+      # dagu_data (data/logs/suspend); Dagu may WARN that it cannot write
+      # .dag.index under the RO bind — non-fatal (in-memory rebuild).
+      - ./dagu/dags:/var/lib/dagu/dags:ro
       - ./dagu/init:/etc/custom-init.d:ro
       - /var/run/docker.sock:/var/run/docker.sock  # ⚠ host root-equivalent — 14 §5
     networks: [control]
@@ -214,7 +215,7 @@ match.
 2. Do not run on a shared multi-tenant Docker host.
 3. Treat `/data` volume backups as **secret dumps** — likewise `gitea_data` backups (repo content + Gitea's credential DB) and any settings-export bundle containing secrets or setup values (ADR-0013).
 4. Before first real EXECUTE: branch protection + team membership + checklist in `14` §9.
-5. Prefer mounting `./dagu/dags` **read-only** into Dagu when compose allows.
+5. Mount `./dagu/dags` **read-only** into Dagu (compose does: `:ro`).
 
 ## 6. Image build matrix (Bake only — `docker-bake.hcl`)
 

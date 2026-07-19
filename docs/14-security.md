@@ -194,9 +194,9 @@ deployment: **dedicated VM/host**, not a shared Docker workstation with other
 tenants’ workloads.
 
 **DAG definitions** under `./dagu/dags` must be treated as trusted code that
-can launch containers. Compose should mount them **read-only** into Dagu
-(`13-deployment.md`); operators must not leave world-writable DAG trees on the
-host.
+can launch containers. Compose mounts them **read-only** into Dagu
+(`docker-compose.yml`, `13-deployment.md`); operators must not leave
+world-writable DAG trees on the host.
 
 ---
 
@@ -334,7 +334,6 @@ contract:
 
 - Docker HostConfig CPU/memory/PID limits on Dev containers (when Dagu supports
   them, or via another spawn path).
-- Compose: read-only mount of `./dagu/dags` if not already.
 - Protocol hardens: credential-upload filename allowlist + size cap; Linear
   `download_asset` host allowlist / redirect policy; stronger bootstrap password
   policy than a short deny-list.

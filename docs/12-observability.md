@@ -20,7 +20,7 @@ observability gap.
 - The **app** exports OTLP HTTP directly to OpenObserve; **Dev entrypoints export to the inserted `otel-collector`** (`http://otel-collector:4318/v1/traces` on `devcake_runtime`, M8/ISSUES #13), **unauthenticated** — the collector alone holds the OO credentials and forwards to `http://openobserve:5080/api/{org}/v1/traces` (`otel/collector-config.yaml`). Devs carry no OO credentials at all; there is no `OTEL_EXPORTER_OTLP_BASIC` anywhere. The app deliberately does NOT route through the collector (a sick collector must never blind the control plane). **Residual (dedicated-host posture):** a Dev can forge or flood spans on this host — OO alerts are **ops** signals, not a security boundary (`14-security.md` §10).
 - App auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance), derived from the `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD` service account (`telemetry/__init__.py`); root creds are used only for admin ops (stream deletion `api/clear.py`, `scripts/provision_oo.py` — which also creates the ingest user, role `service_account`).
 - Container **stdout** of compose services that use the fluentd logging driver (incl. `dagu`, `redis`, **`gitea`**, and others wired in `docker-compose.yml`) is shipped to OpenObserve via fluent-bit (`13-deployment.md` §7) so non-instrumented services remain searchable.
-- `service.name`: the app OTLP resource is **`devcake-app`** only (`telemetry/__init__.py`). There is no `devcake-admin` service name in OTel (admin is nginx + static SPA). Dev entrypoints emit as their own process resource; the run's `dev_type` is an attribute, not the service name.
+- `service.name`: the app OTLP resource is **`devcake-app`** (`telemetry/__init__.py`). Dev entrypoints (shared + hello) set **`devcake-dev`**. There is no `devcake-admin` service name in OTel (admin is nginx + static SPA). The run's `dev_type` is a span attribute, not the service name.
 
 ## 2. Span taxonomy (normative)
 
@@ -99,11 +99,12 @@ same stream. The admin panel's Logs page deep-links here (`11-admin-panel.md` §
 
 Discovered live (2026-07-11, first real-world mission): when a Dev container
 dies before it can emit telemetry — bad credentials, clone failure, crashed
-entrypoint — **nothing reaches OpenObserve**. Fluent-bit ships only the
-dagu/redis containers' own stdout (`13-deployment.md` §7); Dev containers are
-spawned via docker.sock with the default logging driver and removed on exit
-(`keep_container: false`). The only surviving post-mortem is the Dagu run
-record, whose per-step `error` field embeds a stderr tail.
+entrypoint — **nothing reaches OpenObserve**. Fluent-bit ships compose services
+that opt into the fluentd driver (`dagu`, `redis`, **`gitea`** — `13-deployment.md`
+§7); Dev containers are spawned via docker.sock with the default logging driver
+and removed on exit (`keep_container: false`). The only surviving post-mortem
+for those Devs is the Dagu run record, whose per-step `error` field embeds a
+stderr tail.
 
 *Narrowed 2026-07-12 by the live output relay (`08-harness-templates.md` §1a):
 the entrypoint now streams condensed harness output into the Dagu step log

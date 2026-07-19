@@ -23,8 +23,9 @@ class ForgePort(Protocol):
     async def approve(self, pr_number: int) -> bool: ...
         # formal approval with the reviewer token; returns False when none configured (§4)
     async def merge(self, pr_number: int) -> None: ...
-        # squash merge; retries the forge's transient merge race (409 head-modified/
-        # SHA race) up to 2 times internally — only real failures propagate
+        # squash merge; retries the forge's transient merge race (GitHub/GitLab
+        # 409 head-modified; Gitea 405 "try again later") up to 2 times —
+        # only real failures propagate
     async def mergeable(self, pr_number: int) -> Optional[bool]: ...
         # single-shot, non-blocking tri-state (§5): False = auto-resolvable by
         # a branch sync; True = ready to merge now; None = wait (computing, CI
@@ -61,7 +62,7 @@ Each adapter declares a `capabilities` ClassVar so call sites branch on behavior
 |---|---|---|---|---|
 | `mergeable_tristate` | real tri-state vs True/False/None-on-absent | True | True | False |
 | `self_approval_blocked` | server rejects PR author approving own PR | True | **False** (allows by default) | True |
-| `branch_protection_read` | scope needed to READ protection | `"admin"` | `"admin"` | `"admin"` |
+| `branch_protection_read` | scope needed to READ protection | `"admin"` | `"maintainer"` | `"admin"` |
 | `pr_list_head_filter` | server-side `head` filter on PR list | True | True | False (adapter filters client-side) |
 
 ## 2. Branch convention (single definition)
@@ -95,7 +96,7 @@ The idempotency rule binds both sides: the descriptor's `pr_instructions` templa
 
 ### 3a. `ForgeDescriptor` — the dev-side dialect
 
-Each adapter ships a `DESCRIPTOR` classvar (a `ForgeDescriptor`); prompts, `spec_env`, redaction, and the admin SPA consume it from the registry instead of hardcoding per-forge tables:
+Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec_env`, redaction, and the admin SPA consume it from the registry instead of hardcoding per-forge tables:
 
 | Field | Meaning | Consumed by |
 |---|---|---|
@@ -141,11 +142,11 @@ GitHub and Gitea forbid approving a PR with the account that opened it (`self_ap
 - `auto_merge` **ON**: after approval, the app merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §3).
 - `auto_merge` **OFF**: after approval the Mission carries `DEVCAKE-MERGE` and stays In Progress; the poll-cycle merge sweep (`04-orchestrator.md` §1) marks it Done when a human merges the PR, or Canceled if the PR is closed unmerged.
 
-**Merge-failure classes.** Neither forge's merge status code alone identifies the cause (GitHub 405 covers conflicts, branch protection, AND pending required checks; GitLab 405 covers conflicts, drafts, running/failed pipelines) — so after a failed merge the app reads the port's `mergeable()` and classifies:
+**Merge-failure classes.** Neither forge's merge status code alone identifies the cause (GitHub 405 covers conflicts, branch protection, AND pending required checks; GitLab 405 covers conflicts, drafts, running/failed pipelines; Gitea 405 is similarly overloaded — see §7a) — so after a failed merge the app reads the port's `mergeable()` and classifies:
 
 - **Auto-resolvable** (`False` — conflict or stale branch behind an up-to-date rule): with `auto_resolve_merge_conflicts` ON, the Mission goes back to EXECUTE for a sync-and-resolve rework, max 2 attempts (`03-mission-lifecycle.md` §4.1).
 - **Deferred** (`True`/`None` — ready-but-raced, mergeability computing, CI pending): the Mission lands on `DEVCAKE-MERGE` and the merge sweep retries for `merge_retry_window_minutes` before handing off. On large repos mergeability computation takes a while and CI-gated repos legitimately block merges for many minutes — `None` means "keep watching," never "give up."
-- **Transient** (409 head-modified/SHA race): retried inside the adapter's `merge()`, invisible to the orchestrator.
+- **Transient** (GitHub 409 head-modified/SHA race; Gitea 405 with *"Please try again later"* during async mergeability): short in-adapter retries, invisible to the orchestrator. Other 405s are **not** retried as transient — classify via `mergeable()` / already-merged probes.
 - **Everything else** is `FORGE_PERMANENT`: the Mission lands on `DEVCAKE-MERGE` (never a hollow Done), the PR stays open, a comment explains, and an admin-panel health warning is raised — never silent (`15-errors-and-retries.md`).
 
 Per-adapter `mergeable()` signal mapping:
@@ -174,9 +175,10 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 
 ## 7a. Gitea specifics
 
-- Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010).
-- Auth: Gitea personal/access tokens; machine users + scoped token pairs for per-mission isolation on the internal forge (`14` §2a).
+- Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos); isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped).
+- Auth: Gitea personal/access tokens; machine users + scoped token pairs for per-mission isolation on the internal forge (ADR-0010; container isolation posture `14` §6 — Gitea admin password never enters the Dev env).
 - Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True`, `pr_list_head_filter=False` (client-side head filter).
+- **Merge 405:** Gitea's 405 is overloaded — `"Please try again later"` (async mergeability) is retried briefly inside `merge()`; `"Does not have enough approvals"` and already-merged paths are definitive (probe `merged` before reporting failure so redelivery is safe).
 - Contract battery: `scripts/contract_tests_forge.py --forge gitea` (wired into `ci_suite.sh`).
 
 ## 8. Adapter contract tests
@@ -189,7 +191,7 @@ Two layers:
 |---|---|
 | 1 | Port conformance: registered adapters implement every `ForgePort` method with signatures that match the protocol |
 | 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
-| 3 | `merge()` retries a transient 409 twice then succeeds/raises; a 405 raises immediately (no retry) |
+| 3 | `merge()` retries a transient GitHub 409 twice then succeeds/raises; non-retryable 405s raise (Gitea's "try again later" 405 is the documented exception — §7a) |
 | 4 | Error normalization: adapters raise `ForgeError` with `.status` from `_req` (GitLab never leaks httpx exceptions) |
 | 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub/GitLab/Gitea payloads to identical `PullRequest` values; no PR → `None` |
 | 6 | `BranchProtection` DTO: GitHub `protected` flag; GitLab 404 → `protected=False` |
@@ -203,7 +205,7 @@ Two layers:
 
 ## 9. Adding a forge (checklist)
 
-1. One adapter package under `app/devcake/adapters/{forge}/` implementing every `ForgePort` method plus a `DESCRIPTOR` and `capabilities` ClassVar (§1a/§3a) — constructor signature `(repo_url, token, reviewer_token=None, api_base=None)`.
+1. One adapter package under `app/devcake/adapters/{forge}/` implementing every `ForgePort` method plus a `descriptor` and `capabilities` ClassVar (§1a/§3a) — constructor signature `(repo_url, token, reviewer_token=None, api_base=None)`.
 2. One entry in `registry._forge_classes()`.
 3. If the dialect's `pr_instructions` needs a CLI, bake it into the Dev images (`07-dev-runtime.md` §8).
 

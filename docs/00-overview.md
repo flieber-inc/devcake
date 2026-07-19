@@ -75,7 +75,7 @@ These are **behavioral** contracts (not the full security model — that is
 covered by automated tests (`16-roadmap.md`, M7).
 
 - **INV-1 — The PMO System is the single source of truth.** All Mission status, labels, and priority are read live from the PMO System. No local data is ever deemed current; local state (`/data/state`) is advisory telemetry that can be wiped without corrupting the system (consequences of a wipe are documented in `10-persistence.md`).
-- **INV-2 — At most one stage label per Mission.** A Mission carrying two or more stage labels is in conflict: DevCake refuses to schedule it and asks a human to resolve (`15-errors-and-retries.md`, `LABEL_CONFLICT`).
+- **INV-2 — At most one stage label per Mission.** A Mission carrying two or more stage labels is in conflict: DevCake refuses to schedule it (`LABEL_CONFLICT` — unschedulable gate reason only; no auto-comment; `15-errors-and-retries.md`).
 - **INV-3 — No new work before the PMO reflects the previous step.** There are no locks or checkouts. A Mission Step may only be dispatched when the PMO System's live state shows the previous step's transition fully applied. A crashed Dev holds nothing; its Mission simply re-derives and reschedules.
 - **INV-4 — Devs never talk to the PMO System directly.** The main app is the sole PMO client. Devs communicate only via Redis Streams (`09-messaging.md`); all PMO writes are performed by the app during run finalization.
 - **INV-5 — Every Dev run posts a transcript AND a token/cost report to the activity feed.** No exceptions. When token usage cannot be extracted, an explicit "unavailable" report is posted instead of silence (`08-harness-templates.md` §Token extraction).

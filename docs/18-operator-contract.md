@@ -32,7 +32,7 @@ proving a fresh machine works is the
 | **Acknowledge breakers** | When tripped | `DEV_AUTH`: re-upload that Dev Type's credentials — the write clears the breaker ([`15`](15-errors-and-retries.md) §4). Repo breakers clear on a green probe: fix the token, wait a poll |
 | **Back up `/data`** | Before every upgrade; weekly otherwise | Volume copy; it is a **secret dump** — store accordingly ([`10`](10-persistence.md), [`13`](13-deployment.md) §8) |
 | **Back up `gitea_data`** | Same cadence, if the internal forge holds real work | `scripts/backup_gitea.sh` / `restore_gitea.sh` ([`13`](13-deployment.md) §8) |
-| **Export a settings bundle** | Before risky config surgery | Admin Settings export — encrypted by default; store like a credential dump ([`11`](11-admin-panel.md)) |
+| **Export a settings bundle** | Before risky config surgery | **Configuration → Profiles & Export** — encrypted by default; store like a credential dump ([`11`](11-admin-panel.md)) |
 | **Rotate secrets** | On a schedule you choose; immediately on suspicion or a team departure | §4 below |
 | **Pause intake** | Before maintenance, upgrades, or anything that shouldn't dispatch new work | Sidebar master switch; in-flight runs finish ([`02`](02-domain-model.md), [`11`](11-admin-panel.md)) |
 | **Re-run the fresh-`/data` drill** | Each release you adopt; quarterly otherwise | [operator drill](tutorials/operator-drill.md) — the standing stranger-operability proof |
@@ -44,12 +44,13 @@ proving a fresh machine works is the
 
 Rotation is four different motions depending on the secret:
 
-1. **PMO and forge tokens** — mint the new token at the provider, paste it
-   into the Config card's secret field, **Save**, then run the connection
-   test. The write path hot-reloads adapters ([`11`](11-admin-panel.md)).
-2. **Model / harness credentials** — upload via the Dev Type card (OAuth
-   wizard, credential upload, or `scripts/grok_login.sh`). The write clears
-   any `DEV_AUTH` breaker for Dev Types using that credential
+1. **PMO tokens** — mint the new token at the provider, paste it into the
+   **Configuration → PMO** secret field, **Save**, then run the named
+   connection test. **Forge tokens** — same motion on **Repositories**
+   (`#/repos`). The write path hot-reloads adapters ([`11`](11-admin-panel.md)).
+2. **Model / harness credentials** — upload via the Dev Type card under
+   Configuration (OAuth wizard, credential upload, or `scripts/grok_login.sh`).
+   The write clears any `DEV_AUTH` breaker for Dev Types using that credential
    ([`15`](15-errors-and-retries.md) §4).
 3. **Stack bootstrap passwords** (`ADMIN_*`, `REDIS_*`, `DAGU_*`, `OO_*`,
    `GITEA_ADMIN_*`) — edit `.env`, then restart the stack; services take

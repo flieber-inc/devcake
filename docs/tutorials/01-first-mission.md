@@ -48,33 +48,31 @@ docker compose up -d      # compose does not build DevCake images
 ```
 
 Open **http://localhost:8080** (loopback; admin user/password from `.env`).
-Header health should go green.
+**Sidebar** health dots should go green (service health lives in the sidebar, not a page header).
 
-### Step 1b — Config secrets and connections
+### Step 1b — Secrets and connections
 
-On **Config**:
-
-1. Add PMO instance → team key → **Set** Linear API key → Test.
-2. Add repository → URL → **Set** write token (and optional RO / reviewer) → Test.
-3. Assign harness secrets / OAuth on Dev Types.
-4. Leave **`auto_merge` OFF** for this tutorial.
+1. **Configuration → PMO** — Add PMO instance → team key → **Set** Linear API key → Test.
+2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token (and optional RO / reviewer) → Test. Repos are **not** under Configuration.
+3. **Configuration → Dev Types** — Assign harness secrets / OAuth.
+4. On **Repositories**, leave **`auto_merge` OFF** for this tutorial.
 5. Prefer different Dev Types for EXECUTE vs REVIEW (warned if shared).
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
 ## Step 2 — Meet the six pages
 
-- **Overview** — health (incl. multi-instance PMO, `internal_forge`/gitea, `poll_degraded`), advisory **security_warnings**, merge queue, human hand-offs.
-- **Missions** — kanban board of the poll snapshot; **Poll now**; card drawer for runs + steering.
+- **Overview** — masthead answer sentence, Let's get baking checklist, alerts, Needs Human Action, stats, In the oven, recent runs, quick links. Service health = **sidebar** dots.
+- **Missions** — kanban board of the poll snapshot; **Poll now**; card MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
 - **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
-- **Repos** — external forge repos + bundled internal Gitea operator repos (not under Config).
-- **Config** — sections: PMO, Dev Types, Skills, Assignments, Prompts, Profiles, Limits, Traffic.
+- **Repositories** — external forge repos + bundled internal Gitea operator repos + merge posture toggles (not under Configuration).
+- **Configuration** — sections: PMO, Dev Types, Skills, Assignments, Prompts, Profiles & Export, Limits, Traffic.
   Secrets are VALUES here (never echoed back). Connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
 - **Logs** — **Open OpenObserve ↗**. One Dev run = one trace.
 
 ## Step 3 — Log Grok in (one time)
 
-On Config, **main-dev** → **Connect via OAuth…** — dialog shows URL + code.
+On Configuration → Dev Types, **main-dev** → **Connect via OAuth…** — dialog shows URL + code.
 (Or `./scripts/grok_login.sh`.) Session is DevCake's own.
 
 ## Step 3b — Supply-chain checklist (before you create the mission)

@@ -52,21 +52,21 @@ For aggregates, the Logs page (OpenObserve) carries every run as a trace with
 warning** comment: every third review rejection it posts the mission's
 cumulative recorded cost — that's your cue to intervene or SKIP.
 
-## The two big switches (Config)
+## The two big switches
 
-- **`adoption_mode`** — `opt_in` (default: only `DEVCAKE`-labeled items) vs
+- **`adoption_mode`** (Configuration → PMO) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** — off (default): every merge is yours; `DEVCAKE-MERGE` is the
-  handoff point. On: approved PRs merge themselves and missions go straight to
+- **`auto_merge`** (Repositories page, not Configuration) — off (default): every merge is yours; `DEVCAKE-MERGE` is the
+  handoff point. On: after REVIEW approves, PRs merge themselves and missions go straight to
   Done. Enable only with **branch protection**, a clear review setup, and eyes
   open (`14` §2 zone C). Independent REVIEW Dev Type is **recommended**, not
   enforced.
 
 ## Config profiles — save and switch whole setups
 
-Config → **Profiles** snapshots your entire saved setup — connections, repos,
+Configuration → **Profiles & Export** snapshots your entire saved setup — connections, repos,
 Dev Types, prompt templates, limits, **and every stored secret value** — under
 a name, and applies one back in a single click (ADR-0013):
 

@@ -13,7 +13,7 @@ A **harness template** fully describes how one model/harness pair runs inside a 
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
-> Facts below were verified in July 2026 against official docs — and, for **Grok Build (v0.2.93)** and **Codex (codex-cli 0.144.1)**, against live installed CLIs including live probes of their headless output shapes. No open items remain; every invocation, flag, and extraction path in this document is verified.
+> Facts below were verified in July 2026 against official docs — and, for **Grok Build (v0.2.93)** and **Codex (image pin `@openai/codex@0.144.4`)**, against live installed CLIs including live probes of their headless output shapes. No open items remain; every invocation, flag, and extraction path in this document is verified.
 
 ## 1. Invocation patterns
 
@@ -45,7 +45,7 @@ grok -p "$PROMPT" --output-format streaming-json --always-approve
 codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
   --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
 ```
-- **Verified on an installed CLI (codex-cli 0.144.x, 2026-07; the image pins `@openai/codex@0.144.4`).** `--json` emits a JSONL event stream (`thread.started` → `turn.started` → `item.completed` → `turn.completed`); **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `type: agent_message` is the in-stream equivalent).
+- **Verified on the installed CLI pinned by the image (`@openai/codex@0.144.4`, 2026-07).** `--json` emits a JSONL event stream (`thread.started` → `turn.started` → `item.completed` → `turn.completed`); **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `type: agent_message` is the in-stream equivalent).
 - Sandboxing: `--dangerously-bypass-approvals-and-sandbox` is the container invocation — its own help text says "intended solely for running in environments that are externally sandboxed", which is exactly the Dev container. The plan-substitute run uses `--sandbox read-only` instead. `--ephemeral` (no session files) and `--ignore-user-config` exist for hermetic runs.
 - Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (probe: 12196/10112/5/0). Caveat: on `codex exec resume` these are cumulative across the session — DevCake runs are single-session so this is naturally correct. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
@@ -86,7 +86,7 @@ In all three cases the deliverable is the same: `/workspace/out/PLAN.md`, upload
 
 ## 4. Credential modes
 
-Per DevType `credential.kind` (`02-domain-model.md` §6); **OAuth/subscription is preferred** (mission-doc requirement — the goal is to run Dev work on subscriptions):
+Credential requirements are **registry-driven** (`HARNESSES` in `app/devcake/harness.py` — `credential_env` / `credential_files` / `oauth`); Dev Types store no credential-kind field. **OAuth/subscription is preferred** (mission-doc requirement — the goal is to run Dev work on subscriptions):
 
 | Template | `credential_env` (registry) | File / OAuth (registry `credential_files` / `oauth`) |
 |---|---|---|
@@ -128,7 +128,7 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 |---|---|
 | `claude-code` | `claude mcp add [--transport http\|stdio] [--env K=V] <name> -- <command…>` (or per-run `--mcp-config <file>`) |
 | `grok-build` | **Verified (CLI v0.2.93):** `grok mcp add [-t stdio\|http\|sse] [-s user\|project] [-e K=V] [-H "Name: value"] <name> [--] <command…>` (or a URL for http/sse) — writes `~/.grok/config.toml` (user scope) or `./.grok/config.toml` (project). Also `grok mcp list\|remove\|doctor`. |
-| `codex` | **Verified (CLI 0.144.1):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
+| `codex` | **Verified (CLI 0.144.4):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
 
 Scope caveat: `claude mcp add`'s default (local) scope is **cwd-keyed**, and the entrypoint runs both the MCP commands and the harness in the **same** directory — the cloned repo root `/workspace/repo/<repo-name>` — so local-scope registrations survive into the harness. Anything that re-registers from a different cwd silently disappears.
 

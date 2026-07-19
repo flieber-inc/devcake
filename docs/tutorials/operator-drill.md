@@ -40,13 +40,13 @@ Open `http://localhost:8080` (admin basic auth). `/health` should show `app`,
 `redis`, `dagu`, `openobserve`, `oo_ingest`, and the internal forge green;
 `pmo_instances` empty (nothing configured yet).
 
-## 2. Configure everything via the Config page
+## 2. Configure everything via the GUI
 
-- **PMO connection** → Add PMO instance → name + team key → **Set** the API key (stored 0600, never echoed) → Test connection (expect ✓ team + labels).
-- **Repositories** (optional) → Add repository → name + forge + URL → **Set** the access token (+ optional read-only / reviewer tokens) → Test connection.
+- **Configuration → PMO** → Add PMO instance → name + team key → **Set** the API key (stored 0600, never echoed) → Test connection (expect ✓ team + labels).
+- **Repositories** (`#/repos`, not under Configuration) → Add repository → name + forge + URL → **Set** the access token (+ optional read-only / reviewer tokens) → Test connection.
   *(Skip this to exercise the zero-repo / internal-forge path.)*
-- **Dev Types** → for each harness key (e.g. `ANTHROPIC_API_KEY`) **Set** the value, or **Connect via OAuth** for subscription harnesses.
-- Set assignments; leave intake enabled.
+- **Configuration → Dev Types** → for each harness key (e.g. `ANTHROPIC_API_KEY`) **Set** the value, or **Connect via OAuth** for subscription harnesses.
+- Set assignments; leave intake enabled (sidebar master switch). Sidebar health dots should go green.
 
 The `.env` file is not touched by any of this.
 

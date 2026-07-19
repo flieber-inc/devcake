@@ -11,7 +11,7 @@
 | `app` | built from `app/` (Python 3.12, FastAPI + asyncio) | PMO Handler (poll loop), scheduler, ingress consumer/finalizer, watchdog, `/api/v1`, all PMO+forge writes |
 | `dagu` | `ghcr.io/dagucloud/dagu:<pinned>` | Executor: runs the single parameterized `dev-run` DAG; spawns Dev containers as siblings via host `docker.sock` (**root-equivalent** — dedicated host only, `14` §5) |
 | `redis` | `redis:7-alpine` | Streams transport between Devs and app (`09-messaging.md`); AOF persistence; on **control + runtime** |
-| `openobserve` | `openobserve/openobserve:<pinned>` | Logs, traces, metrics, cost dashboards — **control network only** (not reachable from Devs) |
+| `openobserve` | `public.ecr.aws/zinclabs/openobserve:<pinned>` | Logs, traces, metrics, cost dashboards — **control network only** (not reachable from Devs) |
 | `otel-collector` | contrib collector (pinned) | Dev-side OTLP receiver (unauthenticated on runtime); forwards to OO with ingest credentials (`12-observability.md`) |
 | `fluentbit` | fluent-bit (pinned) | Ships container stdout to OO |
 | `gitea` | gitea (pinned, rootless) | Internal fallback forge for zero-repo missions; **control + runtime** (ADR-0010) |

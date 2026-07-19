@@ -60,7 +60,7 @@ class ActivityRepoCredentials(BaseModel):
 
 
 class MissionRepoCredentials(BaseModel):
-    """Per-mission machine-user credentials (docs/14 §2a: Gitea tokens are
+    """Per-mission machine-user credentials (docs/14 §2 Zone B + ADR-0010: Gitea tokens are
     user-scoped — isolation = one collaborator user per mission in a private
     org, holding a write+read scoped token pair; the read token is token_ro
     so per-stage scoping works exactly as on external repos)."""

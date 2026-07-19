@@ -40,7 +40,7 @@ every cycle, nothing on disk.)
 ## 2. Format rules
 
 - **YAML** for anything humans edit (`config/`); **JSON** for machine state (`state/runs/`); **JSONL** for the append-only audit log.
-- Every file carries `schema_version`. The pydantic models (`app/devcake/config.py` for config, `app/devcake/domain/run.py` for run records) are the single schema definition for all of them (`02-domain-model.md`).
+- Versioned config and run records carry `schema_version` (config v4, runs v2). The pydantic models (`app/devcake/config.py` for config, `app/devcake/domain/run.py` for run records) are the single schema definition for those shapes (`02-domain-model.md`). Sidecars like `events.jsonl` and `mission_owner.json` are unversioned append/map files.
 - **Atomic writes, always (config / run JSON / secrets):** write to `{path}.tmp` in the same directory → `fsync` → `rename`. **`events.jsonl` is append-only best-effort** — each audit line is written with a plain append; there is no per-line `fsync`.
 - **Schema evolution:** purely **additive** fields with defaults need no version bump — the Run record gained `pmo_ref`/`repo_ref` (both default `"main"`) that way. There is no auto-migration machinery: the v1→v2 migrators were removed at v0 crystallization (founder decision); pre-v2 data is refused (config) or quarantined (run records) with instructions, never silently upgraded.
 
@@ -146,6 +146,6 @@ Direct file edits are tolerated but take effect on the next app start, when `loa
 | Deleted | Consequence |
 |---|---|
 | `/data/state` | Run history, attempt counters, and loop-warning dedupe reset. Mission state is untouched (it lives in the PMO); reconciliation (`04-orchestrator.md` §6) rebuilds the in-flight picture from the Dagu API and Redis. Legal at any time. |
-| `/data/secrets` | Dev Types with `credentials_json` mode fail auth (exit 12 → circuit breaker) until re-uploaded. GUI-stored connection/harness secrets and profile secret snapshots are gone — re-enter via the Config page or re-import a bundle. |
+| `/data/secrets` | Dev Types whose harness credential files / harness secret VALUES lived here fail auth (exit 12 → circuit breaker) until re-uploaded or re-entered. GUI-stored connection secrets and profile secret snapshots are gone — re-enter via the Configuration page or re-import a bundle. |
 | `/data/config` | The app blocks startup pending reconfiguration (admin panel first-run flow). |
 | `/data/config/profiles` + `/data/secrets/profiles` | Saved profile snapshots are gone; **live settings are untouched** (profiles are fire-and-forget snapshots, ADR-0013). |

@@ -44,7 +44,7 @@ No code changes. The Dev emits a **decomposition manifest** in `result.json` (`o
 
 **Finalization:** transcript + token report → canonicalize the normalized draft list as sorted compact JSON and hash it with SHA-256 → create each child via `PMOPort.create_mission` (app adds `DEVCAKE-CREATED`, plus `DEVCAKE` in opt-in mode). Every child carries `devcake:decomposition:v1 parent={pmo_id} manifest={sha256} part={i}/{n} depth={d}` (the depth field is the marker's only post-v0.1.1 addition; markers without it parse as depth 1 — adr/0012). Before any write, the app scans all `DEVCAKE-CREATED` missions: exact marker parts are reused and a partial manifest is topped up (the machine marker is the only recognized format). A different manifest, duplicate part, or title/marker disagreement creates **nothing** and hands the parent off with `DEVCAKE-NEEDS-HUMAN`. Then:
 - original is an **Issue** → **containment:** children are created inside the original's containing Project when it has one (`parent_ref` passthrough), so the tracking sweep waits for them. **Edge inheritance (adr/0012):** before anything terminal happens to the original, its dependency topology is replicated onto the children — every still-open blocker of the original (re-read from a **post-creation** snapshot, so relations a human adds mid-finalize are honored) gains a relation onto **each** child, and **each** child gains a relation onto every still-open dependent of the original (all-children fan-out; a mission "blocked by the original" becomes "blocked by all of its replacements"). Inherited edges are checkpointed, duplicate-tolerant, and **strict — fail-closed exactly like sibling edges**: a failed edge aborts finalization *before* the cancel, so the original stays open and keeps gating its dependents; a transient error heals on the retry, a deleted endpoint drops out of the recomputed lists, and a persistent error parks the mission with ordering intact for a human. The lineage description note `_Decomposed by DevCake into {children keys}_` is appended next (**best-effort by design** — it is provenance, not ordering safety; a failing append audits `lineage_note_failed` and never blocks the cancel; replay-guarded via stable child keys). Only then is the linking comment posted and the original `canceled`. Because every inherited edge must exist **before** the cancel, the gate never sees a canceled original without replacement edges — unconditionally (`04-orchestrator.md` §2);
-- original is a **Project** → children are created inside the Project, the Project gets `DEVCAKE-TRACKING` and stays open; the poll loop auto-completes it when all children are done (`04-orchestrator.md` §1.3, ADR-0006). Projects always take this path — never trivial or normal (`05-pmo-adapter.md` §6). Relations are issue-scoped, so the project path needs no edge inheritance.
+- original is a **Project** → children are created inside the Project, the Project gets `DEVCAKE-TRACKING` and stays open; the poll loop auto-completes it when all children are done (`04-orchestrator.md` §1.3, ADR-0006). Projects always take this path — never trivial or normal (`05-pmo-adapter.md` §6). Relations are issue-scoped, so the project path needs no edge inheritance. Project ONBOARD runs always use **`seq = 1`** (projects have no issue-style comment feed to derive seq from — `04-orchestrator.md` / dispatch).
 
 ## 2. PLAN
 
@@ -140,8 +140,11 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
   "verdict": "approve | reject",          // REVIEW only
   "report_md": "…full review report…",    // REVIEW only
   "decomposition": [                       // ONBOARD 'decomposed' only
-    {"title": "…", "description": "…", "priority": "high", "parent_ref": null,
+    {"title": "…", "description": "…", "priority": "high",
      "blocked_by": [1]}                    // optional: earlier-sibling indexes (§1.3)
+                                           // parent_ref is NOT in the draft — the app
+                                           // supplies create_mission's parent_ref
+                                           // (02-domain-model.md §11)
   ],
   "edges": [                               // MAPPER 'relations_mapped' only (§4b)
     {"blocker": "ENG-10", "blocked": "ENG-12"}

@@ -3,7 +3,7 @@
 > **Audience:** frontend implementer + app API implementer.
 > **Depends on:** `02-domain-model.md` (AppConfig, DevType), `10-persistence.md` (write path), `13-deployment.md` (proxy topology).
 
-Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router drives **six pages**: **Overview** (`#/overview`), **Missions** (`#/missions`), **Runs** (`#/runs`), **Repos** (`#/repos`), **Config** (`#/config/<section>`), **Logs** (`#/logs`). Config sections (from `admin/spa/src/lib/nav.js`): `pmo`, `dev-types`, `skills`, `assignments`, `prompts`, `profiles`, `limits`, `traffic` — **repository is not a Config section** (repos live on `#/repos`; the old `#/config/repository` hash redirects there). The Dagu and OpenObserve UIs are **not** embedded: the Runs and Logs pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
+Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router drives **six pages**: **Overview** (`#/overview`), **Missions** (`#/missions`), **Runs** (`#/runs`), **Repositories** (`#/repos`), **Configuration** (`#/config/<section>`), **Logs** (`#/logs`). Config sections (from `admin/spa/src/lib/nav.js`): `pmo`, `dev-types`, `skills`, `assignments`, `prompts`, `profiles` (**Profiles & Export**), `limits`, `traffic` — **repository is not a Configuration section** (repos live on `#/repos`; the old `#/config/repository` hash redirects there). The Dagu and OpenObserve UIs are **not** embedded: the Runs and Logs pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
 
 **Health polling is honest by design:** the SPA polls `GET /api/v1/health` every 10 s, keeps the last-known data on failure, and renders an unreachable backend **RED** (never gray/unknown) — the failure itself is the signal (founder decision, 2026-07-13).
 
@@ -32,10 +32,18 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `GET /api/v1/connections/registry` | Adapter registry metadata: PMO systems + forges, `secret_shape_prefixes` (paste guard), `managed_labels_expected` |
 | `POST /api/v1/connections/pmo/{name}/test` | Live probe for one named PMO instance: auth + team fetch; returns `{ok, team, labels, labels_expected, missions_visible}` — `labels` counts the intersection with DevCake's managed label set |
 | `POST /api/v1/connections/forge/{name}/test` | Live probe for one named repo: authenticated repo fetch + explicit push permission + default branch (+ reviewer token check + branch-protection state). A read-only or fine-grained token that omits the configured repository returns `ok: false` and can latch the **per-repo** forge breaker (`repo:{name}`); transient probe failures (5xx/network/rate-limit) are reported but never latch the breaker, and a latched breaker re-probes every poll cycle (`15-errors-and-retries.md` §4) |
-| `GET /api/v1/runs?mission_key=…&limit=…` | Read-only run history (from `/data/state/runs/`) for context |
+| `GET /api/v1/runs?mission_key=…&limit=…&offset=…` | Read-only run history (from `/data/state/runs/`) for context. Response shape `{total, offset, limit, runs: […]}` |
 | `GET /api/v1/runs/{run_id}` | Fixed allowlist of operational Run fields (incl. `verdict`); run specs, prompts, results/token reports, envelope verifiers, and credential material are never serialized |
 | `GET /api/v1/runs/{run_id}/log?tail=N` | Plain-text condensed run output (from `/data/state/runlogs/`, relayed live by the Dev via `run.log` — `09-messaging.md` §3) |
 | `GET /api/v1/runs/{run_id}/log/stream` | SSE follow of the same log: replays the stored lines, then streams new ones until the run reaches a terminal state (`event: end`). Sends `X-Accel-Buffering: no` so nginx doesn't buffer; 15 s `: ping` heartbeats stay under nginx's 60 s read timeout |
+| `POST /api/v1/runs/{run_id}/stop` | Stop one active run (dispatched/running); 409 once finalizing or terminal |
+| `POST /api/v1/missions/{pmo_id}/actions` | Card MoreMenu ops: park / retry / resume / unpark (label mutations against the live PMO) |
+| `POST /api/v1/missions/{pmo_id}/comment` | Drawer **Send guidance** — posts a human feed comment (attempt-counter reset input, `15` §3) |
+| `GET /api/v1/prompt-templates` · `PUT/DELETE /api/v1/prompt-templates/{mission_type}/{name}` | Mission-type playbook templates; active selection rides `config.active_prompt_templates` |
+| `PUT/DELETE /api/v1/devtype-prompts/{dev_type}/{name}` | Per-Dev-Type identifying-prompt templates; active selection rides `config.active_devtype_prompts` |
+| `GET /api/v1/skills` · `POST /api/v1/skills` · `POST /api/v1/skills/import` · `DELETE /api/v1/skills/{name}` · `POST /api/v1/skills/sync` | Skill-store catalog CRUD + re-seed built-ins |
+| `GET /api/v1/internal-repos` · `POST /api/v1/internal-repos/create` · `DELETE /api/v1/internal-repos/{name}` | Bundled-Gitea operator repos (list / create / clear one) |
+| `POST /api/v1/dev-types/{name}/rename` | Rename a Dev Type (moves files, migrates breakers / active-prompt keys) |
 | `POST /api/v1/system/stop-runs` | Stop every dispatched/running Dev via the run manager (full per-run teardown; each counts as a failed attempt). Finalizing runs are skipped — never killed — and named in the response. Nothing is deleted |
 | `POST /api/v1/system/clear-runs` | Operator wipe: stop **and drain** in-flight Devs (wait for container exit, capped just past Dagu's 30 s SIGTERM grace — the later ACL sweep must never race a live Dev), delete local run records + audit log, purge Dagu run history, delete OpenObserve log/trace streams, **delete every `activity-*` repo on the internal Gitea** (ADR-0014 D4 — the PMO stays the source of truth; repo git history, incl. pre-edit feed states, is lost; the `activity-` prefix is reserved — never hand-create repos with it in `devcake-repos`, the sweep would delete them). Config + secrets + PMO + operator repos + skill-store + work repos untouched (`10-persistence.md` §5) |
 | `POST /api/v1/relations-mapper/run` | Manually dispatch a Relations Mapper run (`03-mission-lifecycle.md` §4b). Works regardless of the `enabled` toggle (which governs only the interval service); 422 without a valid `dev_type`, 409 while a mapper run is active |
@@ -60,6 +68,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | field | content |
 |---|---|
 | `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; `pmo` is the aggregate over configured instances) |
+| `oo_ingest` | ingest-path probe (`{ok, detail}`) — distinct from the OO admin UI boolean; used by the operator drill / readiness |
 | `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team`); unconfigured instances show grey (`ok: null`) |
 | `forge` | per-repo `ForgeHealth` map (`ok`, `can_push`, `can_read`, `transient`, `detail`, …) |
 | `circuit_breakers` | per-Dev-Type auth breakers + **per-repo** `repo:{name}` forge breakers (`15-errors-and-retries.md` §4) |
@@ -67,7 +76,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `last_poll_at` | ISO-8601 UTC of the last poll cycle that finished (periodic OR manual); `null` before the first cycle. Powers the Missions board's "Last polled Ns ago · next in ~Ns" honesty line |
 | `poll_interval_seconds` | current `config.poll_interval_seconds`, echoed here so the SPA doesn't need a separate `/config` read to compute the cadence line |
 | `poll_degraded` | instance → reason when that instance's poll segment hit a permanent error (other instances keep polling) |
-| `internal_forge` | bundled Gitea health (`{ok, detail}`) or `null` when `GITEA_ADMIN_PASSWORD` is unset |
+| `internal_forge` | bundled Gitea health (`{ok, detail, ui_url}`) or `null` when `GITEA_ADMIN_PASSWORD` is unset |
 | `active_runs` | count of dispatched/running/finalizing runs |
 | `forge_protection` | default-branch protection probe per repo (cached ~5 min; `null` when unknown) — **not** part of `security_warnings` |
 | `anomalies` | per-mission advisory strings (out-of-pipeline merges etc.; pruned when terminal) |
@@ -75,29 +84,33 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `needs_human` | pmo_id → advisory string, rebuilt each cycle from the `DEVCAKE-NEEDS-HUMAN` label (clears the moment the human removes the label) |
 | `dependency_cycles` | detected blocked-by loops (each names the mission keys in the loop) |
 | `blocked_reasons` | pmo_id → why the scheduler is currently holding a mission back (advisory mirror of the last gate map) |
-| `mapper_degraded` | `null`, or the error string when the last 3 mapper runs all died (periodic service backs off; Run now still works) |
+| `mapper_degraded` | `null`, or the error string when the last 3 mapper runs all died (periodic service backs off; Run now still works). Surfaced on the **Traffic** config card, **not** as an Overview SPA alert |
 | `security_warnings` | dismissable credential-posture list from `security.security_warnings` (`14` §8) — e.g. `gui-secrets-basic-auth`, `forge-write-token:{repo}`, `repo-read-only:{repo}` |
 | `prompt_template_warnings` | active templates that no longer resolve (fallback-to-default in effect) |
 
 ## 2. Overview page
 
-The landing dashboard, fed by the health poll:
+The landing dashboard, fed by the health poll + a short runs/dev-types poll. **Service health lives as sidebar dots** (app / pmo / redis / dagu / gitea / logs) — not as Overview cards.
 
-- **Component health cards** — every `/health` boolean plus forge / internal_forge detail; multi-instance PMO via `pmo_instances`; backend unreachable renders RED.
-- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: dependency cycles (names the loop: "DEV-10 → DEV-12 → DEV-10 — these missions will never start until a relation is deleted") · default branch unprotected (from `forge_protection`, not `security_warnings`) · out-of-pipeline activity (`15-errors-and-retries.md`) · mapper degraded · poll_degraded · circuit breakers · `security_warnings` (write-token / repo-read-only / basic-auth posture). Alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
-- **Merge queue** — every `DEVCAKE-MERGE` mission awaiting a human (from `merge_handoffs`), and **Needs attention** — every `DEVCAKE-NEEDS-HUMAN` mission (from `needs_human`), each with its remove-the-label call to action.
-- **Recent runs** — the last 5 from `GET /runs`, linking into the Runs page.
+- **Masthead answer sentence** — display-face title that answers "do I need to do anything?": *"Nothing needs you."* / *"{N} things need you."* / critical-warning count when health is known; eyebrow line for service health ("all services healthy" / "a service is down — see the sidebar"). Subline: active Devs baking · intake ON/PAUSED · runs recorded.
+- **Let's get baking** checklist — first-run three-step card (Connect a PMO, Add a repository, Give a Dev Type credentials); retires itself once all three pass.
+- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: **intake paused** · **dependency cycles** · **unprotected default branch** (`forge_protection`) · **`security_warnings`** · **`prompt_template_warnings`** · **`poll_degraded`** · **anomalies** (out-of-pipeline) · **circuit breakers**. **Not** `mapper_degraded` (that is the Traffic card only). Some alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
+- **Needs Human Action** — unified panel of `merge_handoffs` (`DEVCAKE-MERGE`) and `needs_human` (`DEVCAKE-NEEDS-HUMAN`) rows (not separate "merge queue" / "needs attention" cards).
+- **Stats strip** — Active runs · Mission intake · Devs (available/running/broken color code) · Needs human count.
+- **In the oven** — active runs by stage (ONBOARD/PLAN/EXECUTE/REVIEW), linking into Runs.
+- **Recent runs** — first 5 from `GET /runs?limit=25&offset=0` (click opens the run terminal).
+- **Quick links** — Dagu, OpenObserve, Gitea (when `internal_forge` is live), Spec & source.
 
 ## 2a. Missions board (`#/missions`)
 
-Hermes-style kanban of the current poll snapshot (`GET /api/v1/missions`): cards per derived mission with stage glyphs, priority, blockers, and a drawer for runs + PR link. Primary action **Poll now** (`POST /api/v1/poll/run` — 409 while a cycle is in flight). Card / drawer **MoreMenu** actions: steering comment, stop run, label ops (retry / park / …). See `docs/img/missions-board/` for UI evidence.
+Hermes-style kanban of the current poll snapshot (`GET /api/v1/missions`): cards per derived mission with stage glyphs, priority, blockers, and a drawer for runs + PR link. Primary action **Poll now** (`POST /api/v1/poll/run` — 409 while a cycle is in flight). Card **MoreMenu**: **Park** / **Retry** (when `DEVCAKE-FAILED`) / **Resume** (when `DEVCAKE-NEEDS-HUMAN`) / **Unpark** (when `DEVCAKE-SKIP`) via `POST /missions/{id}/actions`. Drawer: **Send guidance** (`POST /missions/{id}/comment`) and per-run **Stop** (`POST /runs/{id}/stop`). See `docs/img/missions-board/` for UI evidence.
 
 ## 2b. Repos page (`#/repos`)
 
-Operator-facing repository inventory: external `RepoInstance` cards (forge, URL, secret presence, connection test via `POST /api/v1/connections/forge/{name}/test`) plus bundled internal Gitea operator repos when `internal_forge` is live. This is where repository identity lives — **not** under Config.
+Operator-facing repository inventory: external `RepoInstance` cards (forge, URL, secret presence, connection test via `POST /api/v1/connections/forge/{name}/test`) plus bundled internal Gitea operator repos when `internal_forge` is live. This is where repository identity lives — **not** under Configuration.
 
 Also hosts the merge posture toggles (drafted with the rest of config):
-- **`auto_merge`** — default OFF; enabling shows a confirm dialog: *"DevCake will merge its own pull requests to the default branch without human review. On GitHub without a reviewer token, merges proceed without formal approval."* Only enable with branch protection + eyes open (`14` zone C).
+- **`auto_merge`** — default OFF; enabling shows a confirm dialog whose body matches `AUTO_MERGE_COPY` (`lib/configLabels.js`): *"DevCake will merge its own pull requests to the default branch without human intervention (after its REVIEW step approves). Without a reviewer token, merges proceed without a formal approval on the forge. Missions already parked at DEVCAKE-MERGE are picked back up…"* Only enable with branch protection + eyes open (`14` zone C).
 - **`auto_resolve_merge_conflicts`** — default ON; dimmed while `auto_merge` is OFF. Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
 - **`merge_retry_window_minutes`** — default 30, min 0; dimmed while `auto_merge` is OFF.
 
@@ -118,7 +131,7 @@ removable — a stale name must never wedge the Save PUT), and an explicit
 empty-state note. Do not introduce checkbox lists or multi-select dropdowns
 for these.
 
-Sections (one section per `#/config/<id>` view, from `nav.js`): **PMO · Dev Types · Skills · Assignments · Prompts · Profiles · Limits · Traffic control**. Repositories are **not** a Config section — use `#/repos`.
+Sections (one section per `#/config/<id>` view, from `nav.js`): **PMO · Dev Types · Skills · Assignments · Prompts · Profiles & Export · Limits · Traffic control**. Repositories are **not** a Configuration section — use `#/repos`.
 
 ### Traffic control
 - **Decomposition depth** (`SettingRow` select, drafted like every scalar) — `max_decomposition_depth`: **1 level** (a decomposition child is never split again), **2 levels** (default — a Project's missions can each split once more), or **Unlimited** (stored as `0`; the ONBOARD Dev decides every time — removes the fission backstop, and the help copy says so). The schema accepts any depth ≥ 0; a value outside the offered three (set via API/YAML) renders as an extra "*N levels (set via API)*" option so it round-trips instead of being clobbered on the next save. `03-mission-lifecycle.md` §1.3, `adr/0012`.
@@ -170,10 +183,14 @@ Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely
 - Applying reloads the whole shared draft (everything changed). Profiles are fire-and-forget: later edits never update a snapshot.
 - **Transfer rows** (same section): **Export…** — source select (current / any profile), section checkboxes (runtime configs on by default; secrets row shows live counts from `export/summary`; setup values), "Embed skill contents" toggle, and the encryption block when secrets/setup are checked (passphrase+confirm preselected; **Plaintext** flips the primary to a red "Download with plaintext secrets" under a password-manager-export warning). Download is a Blob + `<a download>` with the server-authoritative filename. **Import…** — file picker → passphrase step for encrypted bundles → server preview (per-section diffs, secret counts, amber warnings verbatim) → name it → **Save as profile** (409 → red overwrite flip). The done step offers the generated-`.env` download + numbered host steps when the bundle carries setup values.
 
+### Prompts (anchor `#/config/prompts`)
+Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{name}`) and per-Dev-Type **identifying-prompt templates** (`/devtype-prompts/{dev}/{name}`). Template create/edit/delete is **Immediate** (own Save in the modal); only the **active** selection per mission type / Dev Type rides the unified config draft (`active_prompt_templates` / `active_devtype_prompts`). Missing actives fall back to the built-in default; unresolved actives surface as `prompt_template_warnings` on `/health`.
+
 ### Limits
 - **Global max Devs** integer (help text: effective ceiling = min(global, sum of per-type caps)).
 - **Dev run timeout** minutes (default 120).
-- Review-loop warning cadence; max attempts.
+- **Review-loop warning** cadence (every N rejections).
+- Service auto-restart is compose-managed (read-only note). **`max_attempts` is a config field** (`config.yaml` / `PUT /config`) but is **not** exposed on the Limits UI today — edit via API/YAML or leave the default 3.
 
 ## 4. Runs page
 

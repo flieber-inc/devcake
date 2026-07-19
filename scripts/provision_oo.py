@@ -40,7 +40,7 @@ def ensure_ingest_user():
     with (collector, fluentbit, app push_oo_log) — ISSUES #13. Live-verified
     on OO v0.91.1: accepted roles are `admin` and `service_account` ("member"
     is refused: "Custom roles not allowed"); passwords need upper+lower+digit+
-    special. NOTE (docs/14 §2a): OSS OpenObserve role separation is advisory —
+    special. NOTE (docs/14 §2 Zone B): OSS OpenObserve role separation is advisory —
     the real boundary is that Dev containers hold no OO credentials at all.
 
     Fail-loud contract: any failure exits non-zero — a missing/broken service

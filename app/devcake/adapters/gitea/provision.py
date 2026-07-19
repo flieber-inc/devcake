@@ -6,7 +6,7 @@ land under /data/secrets/internal_forge/ — deliberately TWO path levels so
 security._known_values()'s existing glob("*/*") scan auto-redacts every token
 (plus explicit register_runtime_secret at mint/load for immediate coverage).
 
-Isolation honesty (docs/14 §2a, live-verified): Gitea tokens are USER-scoped.
+Isolation honesty (docs/14 §2 Zone B + ADR-0010, live-verified): Gitea tokens are USER-scoped.
 One machine user per mission, collaborator on ONLY its repo inside a private
 org, holding a write+read `*:repository`-scoped token pair → the token
 reaches exactly one repo (cross-repo = 404), and non-EXECUTE stages get the

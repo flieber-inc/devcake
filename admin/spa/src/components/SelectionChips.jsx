@@ -19,6 +19,11 @@ export default function SelectionChips({
   firstBadge = "",         // appended to the FIRST selected chip (e.g. " · default")
   disabled = false,        // whole-control off (note rendered after the chips)
   disabledNote = "",
+  // when true (e.g. the catalog fetch failed), a selected name absent from
+  // options is NOT assumed stale — it renders as a neutral present chip, not a
+  // red click-to-remove one, so a transient outage can't read as "deleted"
+  // and invite accidental removal (re-audit #7)
+  optionsUnavailable = false,
 }) {
   const stale = selected.filter((n) => !options.some((o) => o.name === n));
   return (
@@ -50,11 +55,22 @@ export default function SelectionChips({
           );
         })}
         {stale.map((n) => (
-          <button key={n} type="button" title={staleNote} disabled={disabled}
-            onClick={() => onChange(selected.filter((x) => x !== n))}
-            className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
-            {n} ✕
-          </button>
+          optionsUnavailable ? (
+            // catalog couldn't load — show as a normal present chip (neutral,
+            // still toggleable), never as a "deleted" red ✕ (re-audit #7)
+            <button key={n} type="button" title={staleNote} disabled={disabled}
+              onClick={() => onChange(selected.filter((x) => x !== n))}
+              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200${
+                disabled ? " cursor-not-allowed opacity-60" : ""}`}>
+              {n}
+            </button>
+          ) : (
+            <button key={n} type="button" title={staleNote} disabled={disabled}
+              onClick={() => onChange(selected.filter((x) => x !== n))}
+              className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
+              {n} ✕
+            </button>
+          )
         ))}
         {disabled && disabledNote && (
           <span className="text-xs text-neutral-500 dark:text-neutral-400">{disabledNote}</span>

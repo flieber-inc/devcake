@@ -7,6 +7,7 @@ oauth) should call launch(); callers own mission-specific fields and spans.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from .run import Run, auth_digest
@@ -27,6 +28,14 @@ class RunBootstrap:
         self.store = store
         self.messaging = messaging
         self.executor = executor
+        # THE serialization point for every dispatch flavor (audit re-audit
+        # #0/#6): clear-runs holds this lock across its whole wipe, so no run
+        # can create a `dev-<run_id>` ACL user or start a container while the
+        # ACL sweep is deleting `dev-*` — the poll-loop lock alone missed the
+        # oauth / mapper-run-now / hello paths, which bypass it. A run
+        # launched just BEFORE the wipe grabs the lock is already in
+        # store.save (below) → the drain's active() snapshot catches it.
+        self.dispatch_lock = asyncio.Lock()
 
     async def launch(self, run: Run, *, image: str) -> Run:
         """Persist durable intent, then trigger the executor.
@@ -35,17 +44,18 @@ class RunBootstrap:
         Callers must fully populate mission/dev fields (and optional
         ``traceparent``) before calling.
         """
-        password = await self.messaging.create_run_user(run.run_id)
-        run.auth_digest = auth_digest(password)
-        self.store.save(run)  # durable intent BEFORE the trigger
-        await self.executor.start(
-            params={
-                "RUN_ID": run.run_id,
-                "IMAGE": image,
-                "TRACEPARENT": run.traceparent or "",
-                "REDIS_USER": f"dev-{run.run_id}",
-                "REDIS_PASSWORD": password,
-            },
-            dag_run_id=run.run_id,
-        )
+        async with self.dispatch_lock:
+            password = await self.messaging.create_run_user(run.run_id)
+            run.auth_digest = auth_digest(password)
+            self.store.save(run)  # durable intent BEFORE the trigger
+            await self.executor.start(
+                params={
+                    "RUN_ID": run.run_id,
+                    "IMAGE": image,
+                    "TRACEPARENT": run.traceparent or "",
+                    "REDIS_USER": f"dev-{run.run_id}",
+                    "REDIS_PASSWORD": password,
+                },
+                dag_run_id=run.run_id,
+            )
         return run

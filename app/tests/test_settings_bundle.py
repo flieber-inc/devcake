@@ -86,6 +86,22 @@ def test_serialize_apply_roundtrip_onto_fresh_deployment(monkeypatch, tmp_path):
     assert (dst / "secrets" / "connections" / "pmo-linear.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_rollback_snapshot_keeps_orphan_secrets_byte_exact(monkeypatch, tmp_path):
+    """Re-audit #3: user-facing snapshots drop orphan secrets, but the apply
+    ROLLBACK snapshot must be byte-exact — include_orphan_secrets=True — or a
+    failed apply loses a secret stored for an instance the bundle was adding."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_connection_secret("repo", "incoming", "token", "ghp_incoming_7")
+    # user-facing (default) drops the not-yet-in-config secret
+    facing = sb.serialize_current(cfg, dts, include_secrets=True)
+    assert "repo-incoming" not in facing["secrets"]["connections"]
+    # rollback snapshot keeps it byte-exact
+    rollback = sb.serialize_current(cfg, dts, include_secrets=True,
+                                    include_orphan_secrets=True)
+    assert rollback["secrets"]["connections"]["repo-incoming"] == {"token": "ghp_incoming_7"}
+
+
 def test_serialize_excludes_orphan_connection_secrets(monkeypatch, tmp_path):
     """Audit D5 #15/#16: a stored secret for an instance NOT in the config
     (deleted card, secret lingered) must not ride the snapshot — else it shows

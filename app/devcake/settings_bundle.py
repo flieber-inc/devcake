@@ -123,11 +123,19 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
                       include_secrets: bool = True,
                       include_credential_files: bool = False,
                       include_setup_env: bool = False,
+                      include_orphan_secrets: bool = False,
                       skill_payloads: list[dict] | None = None) -> dict:
     """Snapshot the live world into a bundle dict. dismissed_alerts is
     STRIPPED (importing someone else's dismissals could hide active
     advisories); credential files are export-only opt-in (host-migration
-    material, never profile material)."""
+    material, never profile material).
+
+    ``include_orphan_secrets`` (default False): user-facing snapshots
+    (profiles, export) drop connection secrets for instances not in the
+    config — they are not part of the reproducible world (audit D5 #15/#16).
+    The apply/rollback path sets it True so the pre-apply snapshot is
+    BYTE-EXACT — a rollback must restore secrets stored for an instance the
+    incoming bundle was about to add (re-audit #3)."""
     bundle: dict = {
         "kind": BUNDLE_KIND,
         "bundle_schema_version": BUNDLE_SCHEMA_VERSION,
@@ -161,10 +169,16 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
         # profile permanently diverged. A snapshot reproduces the CONFIG's
         # world; an instance-less secret is not part of it. The live orphan
         # itself is untouched (it has its own lifecycle — docs/18).
-        live_keys = ({f"pmo-{p.name}" for p in config.pmos}
-                     | {f"repo-{r.name}" for r in config.repos})
-        conns = {k: v for k, v in secrets_store.list_connection_secrets().items()
-                 if k in live_keys}
+        # EXCEPTION: the rollback path (include_orphan_secrets=True) keeps them
+        # so the pre-apply snapshot is byte-exact and a rollback loses nothing
+        # (re-audit #3).
+        all_conns = secrets_store.list_connection_secrets()
+        if include_orphan_secrets:
+            conns = all_conns
+        else:
+            live_keys = ({f"pmo-{p.name}" for p in config.pmos}
+                         | {f"repo-{r.name}" for r in config.repos})
+            conns = {k: v for k, v in all_conns.items() if k in live_keys}
         sec: dict = {
             "connections": conns,
             "harness": secrets_store.list_harness_secrets(),
@@ -657,7 +671,8 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     previous = serialize_current(
         config, dev_types,
         include_config=new_cfg is not None,
-        include_secrets=parsed["secrets"] is not None)
+        include_secrets=parsed["secrets"] is not None,
+        include_orphan_secrets=True)   # byte-exact rollback (re-audit #3)
 
     applied: list[str] = []
     try:

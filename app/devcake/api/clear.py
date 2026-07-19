@@ -58,9 +58,9 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
         # mission status against the live finalize. Skip anything no longer
         # dispatched/running. (The caller also holds the poll lock, so no
         # NEW run is dispatched during the drain — audit D5 #2/#8.)
-        run = store.get(snap.run_id) or snap
-        if run.state not in ("dispatched", "running"):
-            continue
+        run = store.get(snap.run_id)
+        if run is None or run.state not in ("dispatched", "running"):
+            continue                                    # gone / finalizing / terminal
         try:
             await run_manager.kill(run, "failed", "operator clear-runs")
             stopped.append(run.run_id)

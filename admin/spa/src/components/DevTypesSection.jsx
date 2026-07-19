@@ -228,6 +228,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           !h.skills_dir && (d.skills || []).length
             ? ` — ${d.skills.length} selected skill(s) will be skipped`
             : ""}.`}
+        optionsUnavailable={catalogErr}
         emptyNote={catalogErr
           ? "skill catalog unavailable (couldn't load /skills) — selected skills shown as-is"
           : "no skills in the catalog yet — see the Skills section"}

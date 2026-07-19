@@ -30,9 +30,15 @@ if docker ps --format '{{.Names}}' | grep -q gitea; then
   echo "      re-run this script, then docker compose up -d." >&2
 fi
 
-# --user "$(id -u):$(id -g)" so the credential tarball is owned by the invoking
-# operator, not root, and umask 077 so it is not world-readable (audit D5 #19).
-docker run --rm --user "$(id -u):$(id -g)" \
+# tar runs as ROOT (the container default) so it can read gitea's rootless
+# 0700 data dirs (git/, custom/, jwt/private.pem — owned by the in-container
+# uid 1000, unreadable to a host operator whose uid != 1000; re-audit #4).
+# The basename rides an ENV VAR, never interpolated into the shell string, so
+# a filename with quotes/spaces is safe (re-audit #5). umask 077 keeps the
+# tarball non-world-readable, and a trailing chown hands it to the invoking
+# operator instead of leaving it root-owned (audit D5 #19).
+docker run --rm \
+  -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" \
   -v "$VOLUME":/src:ro -v "$OUT_DIR":/out alpine \
-  sh -c "umask 077 && tar czf '/out/$OUT_BASE' -C /src ."
+  sh -c 'umask 077 && tar czf "/out/$OUT_BASE" -C /src . && chown "$OWNER" "/out/$OUT_BASE"'
 echo "wrote $OUT_DIR/$OUT_BASE — contains repo content AND Gitea's credential DB; store like a password export"

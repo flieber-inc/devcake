@@ -257,7 +257,12 @@ async def stop_all_runs(
     skipped: list[str] = []
     errors: list[dict[str, str]] = []
     for snap in run_store.active():
-        run = run_store.get(snap.run_id) or snap        # re-read current state
+        run = run_store.get(snap.run_id)                # re-read current state
+        if run is None:
+            # the record was deleted under us (a concurrent clear-runs wipe);
+            # killing would store.save it back, resurrecting a phantom failed
+            # run after "start fresh" (re-audit #1). Nothing to stop here.
+            continue
         if getattr(run, "state", None) not in ("dispatched", "running"):
             skipped.append(run.run_id)                  # finalizing/terminal
             continue

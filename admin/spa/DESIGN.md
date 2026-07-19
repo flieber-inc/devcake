@@ -68,11 +68,17 @@ section chip row, and the scroll-to-top on section change — then switches on
 the route to exactly ONE section component. Every section is a component in
 `src/components/`: `PmoSection`, `DevTypesSection`, `SkillsSection`,
 `AssignmentsSection`, `PromptsSection`, `ProfilesSection`, `LimitsSection`,
-`TrafficSection`. A section pulls the shared draft itself via
-`useSharedDraft()` (ConfigDraftContext) and owns its section-local state and
-dialogs (its own `ConfirmDialog`, wizards, etc. — closed dialogs render null,
-so this stays invisible in the DOM); anything cross-page (the draft itself,
-Save/DirtyBar/NavGuard in `DraftChrome`) stays at App/context level. Shared
+`TrafficSection`. Most sections pull the shared draft themselves via
+`useSharedDraft()` (ConfigDraftContext); the two oldest (`PromptsSection`,
+`ProfilesSection`) still take `cfg`/`setField` as props from the dispatcher —
+either wiring is acceptable, but new sections use `useSharedDraft()`. A section
+owns its section-local state and dialogs (its own `ConfirmDialog`, wizards,
+etc. — closed dialogs render null, so this stays invisible in the DOM);
+anything cross-page (the draft itself, Save/DirtyBar/NavGuard in `DraftChrome`)
+stays at App/context level. **Caveat (audit D5 #12):** section-local state
+resets on a section *switch* (the section component unmounts) — state that must
+survive switching within Config (e.g. session name-tracking spanning cards)
+belongs at the dispatcher or context level, not inside a section. Shared
 sub-components used by more than one section get their own file (e.g.
 `RepoChips.jsx`); a new config section means a new `<Name>Section.jsx`, not
 inline JSX in ConfigPage. Sidebar sub-nav active state is route-driven —

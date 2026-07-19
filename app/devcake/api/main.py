@@ -462,9 +462,17 @@ async def clear_runs():
     """
     from .clear import clear_all
     with tracer.start_as_current_span("system.clear_runs") as span:
-        result = await clear_all(store, executor, messaging, runlog,
-                                 internal_forge=internal_forge,
-                                 run_manager=manager)
+        # Hold the poll lock across the ENTIRE wipe (audit D5 #2/#8): the poll
+        # loop is the only dispatcher, and it acquires this same lock — so a
+        # cycle cannot dispatch a fresh run mid-drain/mid-wipe. Without this,
+        # a mission whose run we just killed (and whose stage label survives)
+        # is redispatched during the drain, its record then deleted while its
+        # container is live, and clear_redis's ACL sweep races that container's
+        # SIGTERM grace — the exact root cause D3 was meant to close.
+        async with poll_rt.lock:
+            result = await clear_all(store, executor, messaging, runlog,
+                                     internal_forge=internal_forge,
+                                     run_manager=manager)
         poll_rt.missions_cache.clear()
         for mgr in managers.values():
             mgr._grace.clear()

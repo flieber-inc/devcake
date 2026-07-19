@@ -112,7 +112,7 @@ function UploadButton({ devType, secretFile, onDone }) {
 
 // Fully controlled: the card renders and edits the shared draft. Save is the
 // page-level Save; only Delete / OAuth / upload act immediately.
-function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onRename, onCredChange, skillsCatalog }) {
+function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, onOAuth, onRename, onCredChange, skillsCatalog, catalogErr }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
@@ -228,8 +228,12 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           !h.skills_dir && (d.skills || []).length
             ? ` — ${d.skills.length} selected skill(s) will be skipped`
             : ""}.`}
-        emptyNote="no skills in the catalog yet — see the Skills section"
-        staleNote="not in the skill store — skipped at dispatch; click to remove"
+        emptyNote={catalogErr
+          ? "skill catalog unavailable (couldn't load /skills) — selected skills shown as-is"
+          : "no skills in the catalog yet — see the Skills section"}
+        staleNote={catalogErr
+          ? "skill catalog unavailable — cannot confirm this is in the store"
+          : "not in the skill store — skipped at dispatch; click to remove"}
         onChange={(next) => {
           // write back in CATALOG order (unknown names last): uncheck-then-
           // recheck must not surface a reorder-only dirty diff (diffLeaves
@@ -347,9 +351,18 @@ export default function DevTypesSection({ setPageErr }) {
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameErr, setRenameErr] = useState("");
   // skill store catalog — read here only for DevTypeCard's skill chips;
-  // authoring (add/delete/restore) lives in the Skills section
+  // authoring (add/delete/restore) lives in the Skills section. On a fetch
+  // failure `catalogErr` is set so DevTypeCard can render selected skills as
+  // "catalog unavailable" rather than as stale red click-to-remove chips
+  // (audit D5 #13): a transient /skills error must not read as "these skills
+  // were deleted".
   const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
-  useEffect(() => { get("/skills").then(setSkillsCatalog).catch(() => {}); }, []);
+  const [catalogErr, setCatalogErr] = useState(false);
+  useEffect(() => {
+    get("/skills")
+      .then((c) => { setSkillsCatalog(c); setCatalogErr(false); })
+      .catch(() => setCatalogErr(true));
+  }, []);
 
   const setField = dr.setField;
 
@@ -389,7 +402,7 @@ export default function DevTypesSection({ setPageErr }) {
               }}
               onOAuth={setOauthFor}
               onRename={(nm) => { setRenameErr(""); setRenameFor(nm); }}
-              skillsCatalog={skillsCatalog} />
+              skillsCatalog={skillsCatalog} catalogErr={catalogErr} />
           ))}
         </div>
       </Section>

@@ -117,7 +117,7 @@ async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
                          memo: dict[str, Mission | None]) -> list[str]:
     """Blockers of `m` that are still open (status not done/canceled), as
     human-readable keys. A blocker we cannot read counts as open (fail-safe;
-    mgr-heals next cycle). ADR-0007."""
+    self-heals next cycle). ADR-0007."""
     open_ = []
     for bid in m.blocked_by:
         b = by_id.get(bid)
@@ -125,7 +125,7 @@ async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
             if bid not in memo:
                 try:
                     memo[bid] = await mgr.pmo.get(MissionRef(bid, "issue"))
-                except Exception:  # noqa: BLE001 — fail-safe per ADR-0007: an unreadable blocker counts as open (logged); mgr-heals next cycle
+                except Exception:  # noqa: BLE001 — fail-safe per ADR-0007: an unreadable blocker counts as open (logged); self-heals next cycle
                     log.warning("blocker %s of %s unreadable — treated as open",
                                 bid, m.key)
                     memo[bid] = None

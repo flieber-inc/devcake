@@ -126,6 +126,24 @@ def test_artifacts_enters_finalize_from_running(tmp_path):
     assert store.get(run.run_id).state == "finalizing"
 
 
+def test_started_does_not_resurrect_a_killed_run(tmp_path):
+    """Audit D5 #10: a run.started arriving AFTER the run was killed (its
+    container was just booting when stop-all fired) must NOT flip the record
+    back to 'running' — it would re-enter store.active() and hold the
+    mission's in-flight slot until the watchdog grace expires."""
+    store = RunStore(tmp_path / "runs")
+    mgr = RunManager(store, FakeMessaging(), FakeExecutor())
+    for state in ("failed", "timed_out", "orphaned", "finished"):
+        run = _make_run(store, state=state, run_id=f"S-{state}", started_at=None)
+        run_coro(mgr.handle(run.run_id, "run.started", {}))
+        assert store.get(run.run_id).state == state       # unchanged
+        assert store.get(run.run_id).started_at is None
+    # a genuinely dispatched run still starts normally
+    live = _make_run(store, state="dispatched", run_id="S-live", started_at=None)
+    run_coro(mgr.handle(live.run_id, "run.started", {}))
+    assert store.get(live.run_id).state == "running"
+
+
 def test_kill_teardown_when_stop_raises(tmp_path):
     """ISSUES #3: ACL + terminal state even if executor.stop raises."""
     store = RunStore(tmp_path / "runs")

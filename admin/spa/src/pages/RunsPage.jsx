@@ -65,6 +65,10 @@ export default function RunsPage() {
       );
       if (!result.ok) {
         const bits = [];
+        // drain phase (#28 stop-and-drain): a container wedged past the cap
+        // means the wipe ran while it was still live — surface it loudly
+        if (result.stopped?.undrained?.length) bits.push(`Still running after stop: ${result.stopped.undrained.join(", ")}`);
+        if (result.stopped?.error) bits.push(`Stop phase: ${result.stopped.error}`);
         if (result.dagu?.failed?.length) bits.push(`Dagu still holds: ${result.dagu.failed.join(", ")}`);
         if (result.openobserve?.errors?.length) bits.push(result.openobserve.errors.join("; "));
         if (result.dagu?.error) bits.push(result.dagu.error);
@@ -84,24 +88,32 @@ export default function RunsPage() {
     }
   };
 
+  const [stopErr, setStopErr] = useState("");
   const doStopAll = async () => {
     setStopping(true);
-    setClearErr("");
+    setStopErr("");
     setClearMsg("");
     try {
       const result = await send("POST", "/system/stop-runs");
       const n = (result.stopped || []).length;
       const fin = (result.skipped_finalizing || []).length;
+      const errs = result.errors || [];
       setClearMsg(
         `Stopped ${n} run${n === 1 ? "" : "s"}.` +
         (fin ? ` ${fin} finalizing run${fin === 1 ? "" : "s"} left to complete on ${fin === 1 ? "its" : "their"} own.` : "")
       );
+      if (errs.length) {
+        // per-run kill failures: report them, keep the dialog open so the
+        // operator can retry (nothing was deleted — this is stop, not clear)
+        setStopErr(errs.map((e) => `${e.run_id}: ${e.error}`).join(" · "));
+      } else {
+        setStopConfirmOpen(false);
+      }
       load();
     } catch (e) {
-      setClearErr(String(e.message || e));
+      setStopErr(String(e.message || e));
     } finally {
       setStopping(false);
-      setStopConfirmOpen(false);
     }
   };
 
@@ -132,6 +144,11 @@ export default function RunsPage() {
       {clearErr && (
         <p className="rounded-card border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           Partial clear: {clearErr}
+        </p>
+      )}
+      {stopErr && (
+        <p className="rounded-card border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          Stop failed (nothing was deleted): {stopErr}
         </p>
       )}
       <Card className="p-4">
@@ -255,8 +272,9 @@ export default function RunsPage() {
         }
         confirmLabel="Stop all runs"
         busy={stopping}
+        error={stopErr}
         onConfirm={doStopAll}
-        onCancel={() => !stopping && setStopConfirmOpen(false)}
+        onCancel={() => !stopping && (setStopConfirmOpen(false), setStopErr(""))}
       />
       <ConfirmDialog
         open={confirmOpen}

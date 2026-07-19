@@ -62,7 +62,12 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     issues anyway (ADR-0006)."""
     markdown = redact(markdown)
     if kind == "project":
-        _audit(mgr, pmo_id, "project_feed_suppressed", markdown[:120])
+        # via the MANAGER method, not _audit(mgr, ...) directly (audit D5 #1):
+        # tests override mgr._audit as an instance attribute (fakes noop_audit,
+        # the activity-repo audit collector) — the direct module call would
+        # bypass that seam, leaking to the global events.jsonl and adding a
+        # grace-cycle skip the pre-refactor code did not.
+        mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
         return
     if externalize and len(markdown) > FEED_INLINE_MAX:
         try:

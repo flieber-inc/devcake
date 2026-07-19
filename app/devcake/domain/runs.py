@@ -178,6 +178,13 @@ class RunManager:
             run.last_heartbeat = utcnow()
             self.store.save(run)
         elif kind == "run.started":
+            # terminal guard (mirrors run.artifacts below): a run killed while
+            # its container was still booting must NOT be resurrected to
+            # 'running' by an in-flight run.started — it would re-enter
+            # store.active(), hold the mission's in-flight slot, and only
+            # self-heal at the watchdog's heartbeat grace (audit D5 #10).
+            if run.state in ("finished", "failed", "timed_out", "orphaned"):
+                return
             run.state, run.started_at = "running", utcnow()
             self.store.save(run)
         elif kind == "runspec.get":

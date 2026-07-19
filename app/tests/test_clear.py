@@ -222,8 +222,11 @@ class _RM:
         self.kills.append((r.run_id, state, reason))
 
 
-def _store(runs):
-    return SimpleNamespace(active=lambda: runs)
+def _store(runs, live=None):
+    """active() returns the initial snapshot; get() returns the CURRENT object
+    (from `live` if given) so the drain's re-fetch guard is exercised."""
+    live = live if live is not None else {r.run_id: r for r in runs}
+    return SimpleNamespace(active=lambda: runs, get=lambda rid: live.get(rid))
 
 
 def test_stop_and_drain_kills_waits_and_skips_finalizing(monkeypatch):
@@ -247,6 +250,21 @@ def test_stop_and_drain_times_out_on_wedged_container(monkeypatch):
                                   _RM(), timeout_s=0.01))
     assert out["stopped"] == 1
     assert out["undrained"] == ["R-9"]                  # reported, wipe proceeds
+
+
+def test_stop_and_drain_refetches_state_before_kill(monkeypatch):
+    """Audit D5 #7: a run in the initial snapshot that flipped to finalizing
+    (via the concurrent ingress consumer) must NOT be killed — the re-fetch
+    guard reads current state, not the stale snapshot object."""
+    from devcake.api.clear import stop_and_drain
+    monkeypatch.setattr("asyncio.sleep", lambda *_: _instant())
+    snap = SimpleNamespace(run_id="R-1", state="running")   # stale: says running
+    current = SimpleNamespace(run_id="R-1", state="finalizing")  # actually finalizing
+    rm = _RM()
+    out = run_coro(stop_and_drain(_store([snap], live={"R-1": current}),
+                                  _DrainExec(running_polls=0), rm, timeout_s=1))
+    assert rm.kills == []                               # never killed
+    assert out["stopped"] == 0
 
 
 async def _instant():

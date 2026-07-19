@@ -154,8 +154,19 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
         }
         bundle["sections"].append("config")
     if include_secrets:
+        # Exclude ORPHAN connection secrets — stored for an instance no longer
+        # in the config (audit D5 #15/#16): a lingering repo-bare.token from a
+        # deleted card would otherwise ride the snapshot, show as "replaced" in
+        # the apply preview yet be dropped by the apply write, and flag the
+        # profile permanently diverged. A snapshot reproduces the CONFIG's
+        # world; an instance-less secret is not part of it. The live orphan
+        # itself is untouched (it has its own lifecycle — docs/18).
+        live_keys = ({f"pmo-{p.name}" for p in config.pmos}
+                     | {f"repo-{r.name}" for r in config.repos})
+        conns = {k: v for k, v in secrets_store.list_connection_secrets().items()
+                 if k in live_keys}
         sec: dict = {
-            "connections": secrets_store.list_connection_secrets(),
+            "connections": conns,
             "harness": secrets_store.list_harness_secrets(),
         }
         if include_credential_files:

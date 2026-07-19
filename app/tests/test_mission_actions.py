@@ -376,8 +376,10 @@ def test_force_poll_now_releases_lock_when_cycle_raises():
 # ── 4a) stop-all endpoint (Clear-Runs hardening) ────────────────────────────
 
 class _ActiveStore(FakeStore):
-    def __init__(self, runs):
-        super().__init__({r.run_id: r for r in runs})
+    def __init__(self, runs, live=None):
+        # active() = the initial snapshot; get() = the CURRENT object (from
+        # `live` when given) so the re-fetch guard is exercised.
+        super().__init__(live if live is not None else {r.run_id: r for r in runs})
         self._active = runs
 
     def active(self):
@@ -397,7 +399,7 @@ def test_stop_all_kills_live_and_skips_finalizing():
     assert [k[0].run_id for k in rm.kills] == ["r-1", "r-2"]
     assert all(k[1] == "failed" and "operator" in k[2] for k in rm.kills)
     assert out == {"ok": True, "stopped": ["r-1", "r-2"],
-                   "skipped_finalizing": ["r-3"]}
+                   "skipped_finalizing": ["r-3"], "errors": []}
 
 
 def test_stop_all_with_nothing_active_is_a_noop():
@@ -405,3 +407,36 @@ def test_stop_all_with_nothing_active_is_a_noop():
     out = run(ma.stop_all_runs(run_manager=rm, run_store=_ActiveStore([])))
     assert out["stopped"] == [] and out["skipped_finalizing"] == []
     assert not rm.kills
+
+
+def test_stop_all_refetches_state_before_kill():
+    """Audit D5 #6: a snapshot run that flipped to finalizing mid-batch (via
+    the concurrent ingress consumer) must not be killed — re-fetch, not the
+    stale snapshot object."""
+    stale = SimpleNamespace(run_id="r-1", state="running")
+    current = SimpleNamespace(run_id="r-1", state="finalizing")
+    rm = FakeRunManager()
+    out = run(ma.stop_all_runs(run_manager=rm,
+                               run_store=_ActiveStore([stale], live={"r-1": current})))
+    assert rm.kills == []
+    assert out["skipped_finalizing"] == ["r-1"] and out["stopped"] == []
+
+
+def test_stop_all_isolates_a_failing_kill():
+    """Audit D5 #9: one kill raising (e.g. store.save OSError on a full/RO
+    /data) must not abort the batch or lose accounting."""
+    class _FlakyRM(FakeRunManager):
+        async def kill(self, run, new_state, reason):
+            if run.run_id == "r-2":
+                raise OSError("read-only file system")
+            await super().kill(run, new_state, reason)
+
+    a = SimpleNamespace(run_id="r-1", state="running")
+    b = SimpleNamespace(run_id="r-2", state="running")
+    c = SimpleNamespace(run_id="r-3", state="running")
+    rm = _FlakyRM()
+    out = run(ma.stop_all_runs(run_manager=rm, run_store=_ActiveStore([a, b, c])))
+    assert out["stopped"] == ["r-1", "r-3"]            # c still stopped
+    assert out["ok"] is False
+    assert out["errors"][0]["run_id"] == "r-2"
+    assert "read-only" in out["errors"][0]["error"]

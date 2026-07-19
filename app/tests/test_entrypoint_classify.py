@@ -38,8 +38,22 @@ for _k, _v in _saved.items():
 def test_grok_revoked_session_is_auth():
     assert ep.classify_harness_failure("Error: Not signed in.") == 12
     assert ep.classify_harness_failure(
-        "You are signed out. Run `grok login` to continue.") == 12
-    assert ep.classify_harness_failure("Please sign in to continue") == 12
+        "You are logged out. Run `grok login` to continue.") == 12
+
+
+def test_dropped_generic_markers_no_longer_trip():
+    # "signed out" / "please sign in" were dropped (audit D5 #5): generic
+    # SSO/proxy stderr uses them, and a false 12 pauses the whole Dev Type
+    assert ep.classify_harness_failure("SSO session signed out by the IdP") == 10
+    assert ep.classify_harness_failure("please sign in at the portal") == 10
+
+
+def test_no_substring_false_positive_in_compound_words():
+    # word-boundary anchoring (audit D5 #4): these contain "signed out" and
+    # "log in" as substrings of larger words but are NOT auth failures
+    assert ep.classify_harness_failure("the designed output was wrong") == 10
+    assert ep.classify_harness_failure("assigned outside the retry window") == 10
+    assert ep.classify_harness_failure("backlog inspection failed") == 10
 
 
 def test_legacy_markers_still_auth():

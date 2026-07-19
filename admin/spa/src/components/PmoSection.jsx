@@ -13,7 +13,7 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 
-export default function PmoSection() {
+export default function PmoSection({ newNamesState }) {
   const { dr } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
@@ -35,7 +35,9 @@ export default function PmoSection() {
   const [testResult, setTestResult] = useState({});
   // PMO cards added/renamed this session stay name-editable even when their
   // name collides with a still-saved one (delete-then-re-add / mid-typing trap)
-  const newPmoNames = useNewNames(dr.server?.cfg.pmos, dr.draft?.cfg.pmos);
+  // the Set is owned by the dispatcher (survives section switches — D5 #12)
+  const newPmoNames = useNewNames(dr.server?.cfg.pmos, dr.draft?.cfg.pmos,
+                                  newNamesState);
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;

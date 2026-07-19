@@ -33,6 +33,56 @@ def _oo_auth_header() -> str:
     return "Basic " + base64.b64encode(f"{email}:{password}".encode()).decode()
 
 
+async def stop_and_drain(store: RunStore, executor: DaguExecutor,
+                         run_manager, timeout_s: float = 40.0) -> dict[str, Any]:
+    """Stop every active run and WAIT for the containers to actually exit
+    before anything is wiped (founder-scoped hardening, root cause 2026-07-18:
+    clear_redis's `ACL DELUSER dev-*` raced Dagu's 30s SIGTERM grace — a
+    stopping Dev re-authenticated as its deleted user and died exit 1 mid-
+    teardown with `AuthenticationError: user is disabled`).
+
+    Kill (not bare stop): RunManager.kill runs the full per-run teardown —
+    executor stop, failure record to OpenObserve, terminal state. Finalizing
+    runs have no container (never killed; their records are wiped right
+    after). Then poll Dagu until every stopped run reports terminal, capped
+    just past the SIGTERM grace so a wedged container can't hold the wipe
+    hostage forever."""
+    import asyncio
+    import time as _time
+
+    stopped: list[str] = []
+    for run in store.active():
+        if run.state == "finalizing":
+            continue
+        try:
+            await run_manager.kill(run, "failed", "operator clear-runs")
+            stopped.append(run.run_id)
+        except Exception:  # noqa: BLE001 — best-effort teardown: a kill failure is logged; the drain below still waits on Dagu's view
+            log.exception("clear: kill failed for %s — continuing", run.run_id)
+    deadline = _time.monotonic() + timeout_s
+    live = list(stopped)
+    while live and _time.monotonic() < deadline:
+        still: list[str] = []
+        for rid in live:
+            try:
+                status = await executor.status(rid)
+            except Exception:  # noqa: BLE001 — drain probe is best-effort; an unreachable Dagu must not wedge the wipe (the cap bounds the wait)
+                still.append(rid)
+                continue
+            detail = (status or {}).get("dagRunDetails") or {}
+            label = str(detail.get("statusLabel", detail.get("status", ""))).lower()
+            if status is not None and label in ("running", "queued", "started"):
+                still.append(rid)
+        live = still
+        if live:
+            await asyncio.sleep(2)
+    if live:
+        log.warning("clear: %d container(s) still reported running after "
+                    "%.0fs drain — proceeding with the wipe: %s",
+                    len(live), timeout_s, live)
+    return {"stopped": len(stopped), "undrained": live}
+
+
 def clear_local_state(store: RunStore,
                       runlog: RunLogStore | None = None) -> dict[str, int]:
     """Wipe run files, run logs, and the audit log. Config/secrets untouched."""
@@ -182,8 +232,19 @@ async def clear_all(
     messaging: Messaging,
     runlog: RunLogStore | None = None,
     internal_forge=None,
+    run_manager=None,
 ) -> dict[str, Any]:
-    """Full operator wipe. Best-effort per subsystem; partial failures are reported."""
+    """Full operator wipe. Best-effort per subsystem; partial failures are
+    reported. Order is load-bearing: stop-and-DRAIN first, wipe after — the
+    ACL sweep must never race a container still inside its SIGTERM grace."""
+    drain: dict[str, Any] = {"stopped": 0, "undrained": [],
+                             "skipped": "no run_manager"}
+    if run_manager is not None:
+        try:
+            drain = await stop_and_drain(store, executor, run_manager)
+        except Exception as e:  # noqa: BLE001 — the wipe must proceed even if the drain phase itself fails; the failure is reported
+            log.exception("stop_and_drain failed")
+            drain = {"error": str(e)[:300], "stopped": 0, "undrained": []}
     local = clear_local_state(store, runlog)
     dagu: dict[str, Any]
     oo: dict[str, Any]
@@ -213,7 +274,9 @@ async def clear_all(
     return {
         "ok": not dagu.get("failed") and not oo.get("errors") and "error" not in dagu
               and "error" not in oo and "error" not in redis_info
-              and not activity.get("errors"),
+              and not activity.get("errors") and "error" not in drain
+              and not drain.get("undrained"),
+        "stopped": drain,
         "local": local,
         "dagu": dagu,
         "openobserve": oo,

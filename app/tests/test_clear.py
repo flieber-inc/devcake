@@ -185,3 +185,146 @@ def test_clear_all_threads_internal_forge(tmp_path: Path, monkeypatch):
     out3 = run_coro(clear_mod.clear_all(store, None, None,
                                         internal_forge=failing))
     assert out3["ok"] is False                       # sweep errors surface
+
+
+# ── stop-and-drain (Clear-Runs hardening, founder-scoped 2026-07-18) ─────────
+# Root cause: clear_redis's `ACL DELUSER dev-*` ran while Dev containers were
+# still inside Dagu's 30s SIGTERM grace → AuthenticationError → exit 1.
+
+import asyncio
+from types import SimpleNamespace
+
+
+def run_coro(c):
+    return asyncio.new_event_loop().run_until_complete(c)
+
+
+class _DrainExec:
+    """Reports each run as running for N status polls, then terminal."""
+
+    def __init__(self, running_polls: int = 1):
+        self.polls: dict[str, int] = {}
+        self.running_polls = running_polls
+
+    async def status(self, rid):
+        n = self.polls.get(rid, 0)
+        self.polls[rid] = n + 1
+        if n < self.running_polls:
+            return {"dagRunDetails": {"statusLabel": "running"}}
+        return {"dagRunDetails": {"statusLabel": "failed"}}
+
+
+class _RM:
+    def __init__(self):
+        self.kills = []
+
+    async def kill(self, r, state, reason):
+        self.kills.append((r.run_id, state, reason))
+
+
+def _store(runs):
+    return SimpleNamespace(active=lambda: runs)
+
+
+def test_stop_and_drain_kills_waits_and_skips_finalizing(monkeypatch):
+    from devcake.api.clear import stop_and_drain
+    monkeypatch.setattr("asyncio.sleep", lambda *_: _instant())
+    live = SimpleNamespace(run_id="R-1", state="running")
+    fin = SimpleNamespace(run_id="R-2", state="finalizing")
+    rm, ex = _RM(), _DrainExec(running_polls=2)
+    out = run_coro(stop_and_drain(_store([live, fin]), ex, rm, timeout_s=30))
+    assert [k[0] for k in rm.kills] == ["R-1"]          # finalizing untouched
+    assert "clear" in rm.kills[0][2]
+    assert out == {"stopped": 1, "undrained": []}
+    assert ex.polls["R-1"] >= 3                         # waited past running
+
+
+def test_stop_and_drain_times_out_on_wedged_container(monkeypatch):
+    from devcake.api.clear import stop_and_drain
+    monkeypatch.setattr("asyncio.sleep", lambda *_: _instant())
+    live = SimpleNamespace(run_id="R-9", state="running")
+    out = run_coro(stop_and_drain(_store([live]), _DrainExec(running_polls=10**6),
+                                  _RM(), timeout_s=0.01))
+    assert out["stopped"] == 1
+    assert out["undrained"] == ["R-9"]                  # reported, wipe proceeds
+
+
+async def _instant():
+    return None
+
+
+def test_clear_all_drains_before_every_wipe(monkeypatch):
+    """Order is load-bearing: the ACL sweep must never race a live container.
+    All subsystem clears are recorded; the drain must come first."""
+    import devcake.api.clear as clear_mod
+
+    calls: list[str] = []
+
+    async def fake_drain(store, executor, run_manager, timeout_s=40.0):
+        calls.append("drain")
+        return {"stopped": 1, "undrained": []}
+
+    def fake_local(store, runlog=None):
+        calls.append("local")
+        return {"runs_deleted": 0, "runlogs_deleted": 0, "audit_cleared": 0}
+
+    async def fake_dagu(executor):
+        calls.append("dagu")
+        return {"stop_errors": [], "listed": 0, "deleted": 0, "failed": []}
+
+    async def fake_oo():
+        calls.append("oo")
+        return {"deleted": [], "errors": []}
+
+    async def fake_redis(messaging):
+        calls.append("redis")
+        return {"keys_deleted": 0, "ingress_trimmed": True,
+                "acl_users_deleted": 0}
+
+    async def fake_activity(internal_forge):
+        calls.append("activity")
+        return {"deleted": 0, "errors": []}
+
+    monkeypatch.setattr(clear_mod, "stop_and_drain", fake_drain)
+    monkeypatch.setattr(clear_mod, "clear_local_state", fake_local)
+    monkeypatch.setattr(clear_mod, "clear_dagu", fake_dagu)
+    monkeypatch.setattr(clear_mod, "clear_openobserve", fake_oo)
+    monkeypatch.setattr(clear_mod, "clear_redis", fake_redis)
+    monkeypatch.setattr(clear_mod, "clear_activity_repos", fake_activity)
+
+    out = run_coro(clear_mod.clear_all(None, None, None,
+                                       run_manager=object()))
+    assert calls[0] == "drain"
+    assert calls.index("drain") < calls.index("redis")
+    assert out["ok"] is True and out["stopped"]["stopped"] == 1
+
+
+def test_clear_all_without_run_manager_still_wipes(monkeypatch):
+    """Back-compat: callers without a run_manager (old signature) skip the
+    drain phase explicitly — reported, never crashing."""
+    import devcake.api.clear as clear_mod
+
+    async def fake_dagu(executor):
+        return {"stop_errors": [], "listed": 0, "deleted": 0, "failed": []}
+
+    async def fake_oo():
+        return {"deleted": [], "errors": []}
+
+    async def fake_redis(messaging):
+        return {"keys_deleted": 0, "ingress_trimmed": True,
+                "acl_users_deleted": 0}
+
+    async def fake_activity(internal_forge):
+        return {"deleted": 0, "errors": []}
+
+    monkeypatch.setattr(clear_mod, "clear_local_state",
+                        lambda store, runlog=None: {"runs_deleted": 0,
+                                                    "runlogs_deleted": 0,
+                                                    "audit_cleared": 0})
+    monkeypatch.setattr(clear_mod, "clear_dagu", fake_dagu)
+    monkeypatch.setattr(clear_mod, "clear_openobserve", fake_oo)
+    monkeypatch.setattr(clear_mod, "clear_redis", fake_redis)
+    monkeypatch.setattr(clear_mod, "clear_activity_repos", fake_activity)
+
+    out = run_coro(clear_mod.clear_all(None, None, None))
+    assert out["stopped"]["skipped"] == "no run_manager"

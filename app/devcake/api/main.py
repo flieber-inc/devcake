@@ -445,6 +445,14 @@ async def stream_run_log(run_id: str):
     )
 
 
+@app.post("/api/v1/system/stop-runs")
+async def stop_runs_route():
+    """Stop every in-flight run without wiping anything (Clear-Runs
+    hardening): finalizing runs are skipped and named in the response."""
+    from .mission_actions import stop_all_runs
+    return await stop_all_runs(run_manager=manager, run_store=store)
+
+
 @app.post("/api/v1/system/clear-runs")
 async def clear_runs():
     """Operator wipe: local run state + Dagu history + OpenObserve data.
@@ -455,7 +463,8 @@ async def clear_runs():
     from .clear import clear_all
     with tracer.start_as_current_span("system.clear_runs") as span:
         result = await clear_all(store, executor, messaging, runlog,
-                                 internal_forge=internal_forge)
+                                 internal_forge=internal_forge,
+                                 run_manager=manager)
         poll_rt.missions_cache.clear()
         for mgr in managers.values():
             mgr._grace.clear()

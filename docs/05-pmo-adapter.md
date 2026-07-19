@@ -96,7 +96,7 @@ class PMOCapabilities(BaseModel):
 `app/devcake/adapters/registry.py` is the single place that knows which PMO systems exist and how to construct them. The domain never imports it — `api/main.py` builds adapters here and injects them (`01-architecture.md` §3).
 
 - **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `api_key_env_default`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`. The secret fields feed `security.redact` (`14-security.md` §5) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
-- **`make_pmo(inst) -> PMOPort`** constructs the adapter for the one configured `PMOInstance` (`config.pmos[0]`); an unregistered `inst.system` raises.
+- **`make_pmo(inst) -> PMOPort`** constructs one adapter for a single `PMOInstance` (`inst`); the composition root builds **one manager/adapter per** configured entry in `config.pmos` (0..N). An unregistered `inst.system` raises.
 - **`PMOInstance.system` is validated against `PMO_SYSTEMS`** at config-load/PUT time (pydantic field validator), so a typo'd system name is a 422, not a boot crash.
 - **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, default env-var names, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin Config page's selectors and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).
 - **Hot reload:** a successful config `PUT` calls `reload_connections()` — the PMO (and forge) adapters are rebuilt from the saved config, the orchestrator is repointed, and `ensure_labels` is re-run for the (possibly new) team. Label bootstrap is otherwise startup-only; without the re-ensure, a hot-swapped `team_key` would run unlabeled until restart.
@@ -107,7 +107,7 @@ The registry also carries the forge side (`forges()` / `make_forge`, `06-forge-a
 
 - Endpoint: `POST https://api.linear.app/graphql`.
 - Auth: personal API key in the `Authorization` header **without a `Bearer` prefix** (OAuth apps would use `Bearer`; v0 uses a personal API key from the GUI secret store for the instance — ADR-0011).
-- Scope: exactly one team, `pmos[0].team_key` (e.g. `ENG`). **No work is ever done outside the configured team** (mission-doc requirement) — every query filters by team, and `create_mission` targets it explicitly.
+- Scope: **exactly one team per adapter instance** — `inst.team_key` (e.g. `ENG`). A stack may run 0..N PMO instances, each with its own team; **no work is ever done outside that instance's configured team** (mission-doc requirement) — every query filters by team, and `create_mission` targets it explicitly.
 - Rate limits: ~5,000 requests/hour for API-key auth, plus GraphQL complexity limits. At the default 30 s poll of a single team this is comfortable; the adapter still backs off on `RATELIMITED`/429 per `15-errors-and-retries.md` (`_gql` raises `PMOTransient`).
 
 ## 3. Normalization tables (normative)

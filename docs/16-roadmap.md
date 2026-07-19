@@ -275,6 +275,15 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
   (missions DEV-126/DEV-127 on the live sandbox).
 - **Missions "Poll now"** (2026-07-18, PR #14, rflpazini): INV-1-aligned poll
   CTA; "New mission" dropped from the board. **live-verified 2026-07-18**.
+- **Clear-runs concurrency follow-up** (post independent review of #30–#32):
+  wipe generation (`store_gen`) so in-flight finalize cannot resurrect runs or
+  keep posting after clear; force-remove pass via Dagu when soft drain times
+  out (then wipe; `ok:false` if still undrained — no host docker.sock);
+  dispatch chokepoint AST tripwire; SelectionChips unavailable tooltip; docs
+  honesty (dual locks for full wipe including OO; not “poll is the only
+  dispatcher”). **built** in this PR · ⏳ live clear-under-load smoke optional
+  before v0.2 tag. **Does not claim** multi-threaded store safety or host-level
+  force-kill.
 
 ### Deferred (v0.2+)
 

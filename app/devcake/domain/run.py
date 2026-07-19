@@ -72,3 +72,9 @@ class Run(BaseModel):
     # verdict like "rejected: …" because _transition refused to act on the
     # outcome. None means an ordinary success.
     verdict: Optional[str] = None
+    # Process-local wipe generation stamped at launch (docs/10): RunStore.clear
+    # bumps wipe_generation then unlinks files; save() drops any run whose
+    # store_gen is older so in-flight finalize/heartbeat cannot resurrect a
+    # record after "start fresh". Default 0 = born before any wipe in-process
+    # (legacy records load as 0). Optional so older JSON still validates.
+    store_gen: int = 0

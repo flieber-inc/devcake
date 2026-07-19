@@ -65,12 +65,14 @@ Properties:
 
 ### 3.1 Dispatch (ordered, crash-safe)
 
-Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_mapper`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart:
+Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_mapper`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart. **`dispatch_lock`** serializes every flavor with clear-runs (poll alone is not enough — oauth / mapper / hello bypass the poll lock). Launch also stamps `run.store_gen` from `RunStore.wipe_generation` so a later clear cannot be undone by in-flight saves (`10-persistence.md`).
 
 ```
 def launch(run, *, image):                         # RunBootstrap — all four flavors
+  async with dispatch_lock:                        # clear-runs holds this for the full wipe
     password = messaging.create_run_user(run.run_id)  # MessagingPort
     run.auth_digest = sha256(password)                # never persist the raw ACL secret
+    run.store_gen = store.wipe_generation             # clear-runs generation guard
     state.save(run)                                   # (1) durable intent BEFORE side effects
     executor.start(params={                           # (2) ExecutorPort (Dagu in prod)
         "RUN_ID": run.run_id, "IMAGE": image,         #     non-secret params only (13 §4)

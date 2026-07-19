@@ -24,6 +24,7 @@ export default function SelectionChips({
   // red click-to-remove one, so a transient outage can't read as "deleted"
   // and invite accidental removal (re-audit #7)
   optionsUnavailable = false,
+  unavailableNote = "catalog unavailable — selection preserved until it loads",
 }) {
   const stale = selected.filter((n) => !options.some((o) => o.name === n));
   return (
@@ -60,8 +61,8 @@ export default function SelectionChips({
             // (re-audit #31 #3): while the catalog is unknown there is no
             // option chip to re-select from, so a misclick-remove would be
             // unrecoverable in-UI. Non-interactive preserves the selection
-            // until the catalog loads.
-            <span key={n} title={staleNote}
+            // until the catalog loads. Title must NOT say "click to remove".
+            <span key={n} title={unavailableNote}
               className="rounded-full border px-2.5 py-0.5 text-xs font-medium border-accent-400 bg-accent-50 text-accent-800 opacity-70 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200">
               {n}
             </span>

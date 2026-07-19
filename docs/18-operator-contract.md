@@ -37,6 +37,7 @@ proving a fresh machine works is the
 | **Pause intake** | Before maintenance, upgrades, or anything that shouldn't dispatch new work | Sidebar master switch; in-flight runs finish ([`02`](02-domain-model.md), [`11`](11-admin-panel.md)) |
 | **Re-run the fresh-`/data` drill** | Each release you adopt; quarterly otherwise | [operator drill](tutorials/operator-drill.md) — the standing stranger-operability proof |
 | **Rebuild in lockstep on upgrade** | Every time `app/`, `admin/`, or `images/` change | `docker buildx bake all && docker compose up -d` ([`13`](13-deployment.md) §8, `AGENTS.md`) |
+| **Treat Clear runs as a maintenance window** | When you press Clear runs | Dispatch (poll, hello, OAuth, mapper) is paused for the **entire** wipe, including OpenObserve stream deletes ([`11`](11-admin-panel.md)). Soft drain + Dagu force-stop, then wipe; if the response still lists undrained containers, check Dagu — the app has no `docker.sock` and cannot host-kill. In-flight finalize cannot resurrect local run files after the wipe (`store_gen`, [`10`](10-persistence.md)) |
 
 ## 4. Secret rotation (the procedure, in one place)
 

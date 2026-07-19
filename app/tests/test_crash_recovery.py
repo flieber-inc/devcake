@@ -131,7 +131,8 @@ def test_kill_does_not_resurrect_a_concurrently_wiped_record(tmp_path):
     clear-runs wipe (while kill was awaiting teardown) must NOT store.save it
     back — that recreated a phantom terminal run after 'start fresh'. The
     get()+save() guard in _kill_inner is atomic (no await between), so a gone
-    record stays gone for EVERY killer path."""
+    record stays gone for EVERY killer path. Wipe generation also drops saves
+    whose store_gen predates the clear."""
     store = RunStore(tmp_path / "runs")
     mgr = RunManager(store, FakeMessaging(), FakeExecutor())
     run = _make_run(store, state="running", run_id="W-1")
@@ -142,9 +143,76 @@ def test_kill_does_not_resurrect_a_concurrently_wiped_record(tmp_path):
     run_coro(mgr.kill(run, "timed_out", "watchdog timeout"))
     assert store.get("W-1") is None                    # not resurrected
     # a normal kill (record present) still persists the terminal state
-    live = _make_run(store, state="running", run_id="W-2")
+    live = _make_run(store, state="running", run_id="W-2",
+                     store_gen=store.wipe_generation)
     run_coro(mgr.kill(live, "failed", "operator"))
     assert store.get("W-2").state == "failed"
+
+
+def test_kill_interleaved_with_clear_during_executor_stop(tmp_path):
+    """Issue F: clear bumps wipe_generation while kill awaits executor.stop;
+    the final save must not resurrect the record."""
+    store = RunStore(tmp_path / "runs")
+    gate = asyncio.Event()
+
+    class GatedExecutor(FakeExecutor):
+        async def stop(self, rid):
+            self.stopped.append(rid)
+            await gate.wait()
+            return True
+
+    mgr = RunManager(store, FakeMessaging(), GatedExecutor())
+    run = _make_run(store, state="running", run_id="W-GATE")
+    run.store_gen = 0
+    store.save(run)
+
+    async def scenario():
+        task = asyncio.ensure_future(
+            mgr.kill(run, "failed", "operator stop"))
+        await asyncio.sleep(0)                # let kill reach gated stop
+        store.clear()                         # concurrent wipe mid-kill
+        assert store.get("W-GATE") is None
+        gate.set()
+        await task
+        assert store.get("W-GATE") is None
+
+    asyncio.new_event_loop().run_until_complete(scenario())
+
+
+def test_finalize_does_not_resurrect_or_post_after_clear(tmp_path):
+    """Residual A: in-flight finalize after clear must not recreate the run
+    file or drive further PMO side effects."""
+    from devcake.domain.orchestrator import finalize as fin_mod
+
+    store = RunStore(tmp_path / "runs")
+    mgr = RunManager(store, FakeMessaging(), FakeExecutor())
+    posts: list[str] = []
+    run = _make_run(store, state="running", run_id="F-1",
+                    mission_pmo_id="pmo-1", store_gen=0)
+    store.clear()
+    assert store.get("F-1") is None
+
+    class M:
+        pass
+
+    m = M()
+    m.runs = mgr
+    m.messaging = mgr.messaging
+
+    async def _feed(pmo_id, kind, md, externalize=True):
+        posts.append("feed")
+
+    m._feed = _feed
+
+    # Call the public finalize seam with the pre-wipe in-memory Run (the
+    # race shape: clear unlinked the file while finalize still holds `run`).
+    run_coro(fin_mod.finalize(m, run, {
+        "result": {"outcome": "executed"},
+        "transcript_md": "hello",
+        "token_report": {"total_tokens": 1},
+    }))
+    assert store.get("F-1") is None
+    assert posts == []
 
 
 def test_started_does_not_resurrect_a_killed_run(tmp_path):
@@ -322,6 +390,73 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
     saved = store.get(dead.run_id)
     assert saved.state == "orphaned"
     assert saved.error == "DEV_FORGE: clone failed"      # exit-13 enrichment
+
+
+def test_recon_restamps_store_gen_for_adopted_and_finalizing(tmp_path):
+    """PR #34 review follow-up: wipe_generation resets to 0 on process start,
+    but run files may still carry store_gen from a prior process. Reconcile
+    must restamp kept-alive runs so the first clear in THIS process treats
+    them as pre-wipe (no PMO post / no resurrect after clear)."""
+    from devcake.domain.orchestrator import finalize as fin_mod
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    assert store.wipe_generation == 0
+
+    # Simulate runs written by a prior process that had cleared twice.
+    live = _make_run(store, state="running", run_id="LIVE-OLD",
+                     store_gen=2, mission_pmo_id="pmo-1")
+    fin = _make_run(store, state="finalizing", run_id="FIN-OLD",
+                    store_gen=5, mission_pmo_id="pmo-2")
+    assert store.get(live.run_id).store_gen == 2
+    assert store.get(fin.run_id).store_gen == 5
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {"status": "running",
+                                      "statusLabel": "running"}}
+
+    messaging = FakeMessaging()
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run_coro(reconcile_runs(mgr))
+
+    # Born into this process's generation (0 until first clear).
+    assert store.get(live.run_id).store_gen == 0
+    assert store.get(fin.run_id).store_gen == 0
+
+    # First clear in this process → wipe_generation = 1; pre-wipe catches
+    # restamped runs so finalize cannot resurrect or post.
+    posts: list[str] = []
+    store.clear()
+    assert store.wipe_generation == 1
+    assert store.get(live.run_id) is None
+
+    class M:
+        pass
+
+    m = M()
+    m.runs = mgr
+    m.messaging = mgr.messaging
+
+    async def _feed(pmo_id, kind, md, externalize=True):
+        posts.append("feed")
+
+    m._feed = _feed
+    # In-memory object still holds the restamped store_gen=0 from reconcile.
+    live.store_gen = 0
+    run_coro(fin_mod.finalize(m, live, {
+        "result": {"outcome": "executed"},
+        "transcript_md": "should not land",
+        "token_report": {"total_tokens": 1},
+    }))
+    assert store.get(live.run_id) is None
+    assert posts == []
 
 
 def test_recon_enriches_exit14_mcp_setup(tmp_path):

@@ -47,6 +47,10 @@ class RunBootstrap:
         async with self.dispatch_lock:
             password = await self.messaging.create_run_user(run.run_id)
             run.auth_digest = auth_digest(password)
+            # Stamp the process-local wipe generation so a later clear-runs
+            # cannot be undone by this run's in-flight saves (docs/10).
+            wipe_gen = int(getattr(self.store, "wipe_generation", 0) or 0)
+            run.store_gen = wipe_gen
             self.store.save(run)  # durable intent BEFORE the trigger
             await self.executor.start(
                 params={

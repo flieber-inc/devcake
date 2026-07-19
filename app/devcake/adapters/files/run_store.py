@@ -20,6 +20,12 @@ class RunStore:
     def __init__(self, root: Path = RUNS_DIR):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        # Monotonic wipe generation (process-local; docs/10): clear() bumps
+        # this then unlinks files. save() drops runs stamped with an older
+        # store_gen so in-flight finalize/heartbeat cannot resurrect records
+        # after operator "start fresh". Restarts reset to 0 with an empty or
+        # reloaded store — that is fine (no cross-process phantom writers).
+        self.wipe_generation: int = 0
 
     def _write_text(self, path: Path, text: str) -> None:
         fd, tmp = tempfile.mkstemp(dir=self.root, suffix=".tmp")
@@ -34,6 +40,14 @@ class RunStore:
                 os.unlink(tmp)
 
     def save(self, run: Run) -> None:
+        gen = int(getattr(run, "store_gen", 0) or 0)
+        if gen < self.wipe_generation:
+            log.info(
+                "drop save for %s (store_gen=%s < wipe_generation=%s) — "
+                "run predates the last clear-runs wipe",
+                run.run_id, gen, self.wipe_generation,
+            )
+            return
         self._write_text(self.root / f"{run.run_id}.json", run.model_dump_json(indent=2))
 
     @staticmethod
@@ -116,7 +130,12 @@ class RunStore:
         return moved
 
     def clear(self) -> int:
-        """Delete every run record. Returns how many files were removed."""
+        """Delete every run record. Returns how many files were removed.
+
+        Bumps ``wipe_generation`` *before* unlinking so any in-flight
+        ``save`` of a pre-wipe run (finalize, heartbeat, kill) is a no-op.
+        """
+        self.wipe_generation += 1
         n = 0
         for p in list(self.root.glob("*.json")) + list(self.root.glob("quarantine/*.json")):
             try:

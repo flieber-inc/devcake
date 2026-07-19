@@ -15,6 +15,7 @@ from devcake.domain.orchestrator import (MapperBusy, MapperService, MapperUnconf
 from devcake.domain.model import Activity, ActivityEntry, AttachmentRef, Mission
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
+from devcake.domain.orchestrator import dispatch, mapper
 
 NOW = datetime.now(timezone.utc)
 
@@ -65,7 +66,7 @@ def test_apply_mapper_edges_validates_everything(tmp_path):
     pmo = MapPMO([m("ia", "T-A"), m("ib", "T-B", blocked_by=["ia"]),
                   m("ic", "T-C", status="done"), m("id", "T-D")])
     mgr = make_mgr(tmp_path, pmo)
-    created, rejected = run_coro(mgr._apply_mapper_edges([
+    created, rejected = run_coro(mapper.apply_mapper_edges(mgr, [
         {"blocker": "T-X", "blocked": "T-A"},      # unknown key
         {"blocker": "T-A", "blocked": "T-A"},      # self-edge
         {"blocker": "T-C", "blocked": "T-D"},      # terminal blocker
@@ -82,8 +83,8 @@ def test_apply_mapper_edges_validates_everything(tmp_path):
 
 def test_creates_cycle_transitive():
     graph = {"a": {"b"}, "b": {"c"}}               # a depends on b depends on c
-    assert MissionManager._creates_cycle(graph, "a", "c")       # c←a would loop
-    assert not MissionManager._creates_cycle(graph, "c", "d")   # fresh edge is fine
+    assert mapper._creates_cycle(graph, "a", "c")       # c←a would loop
+    assert not mapper._creates_cycle(graph, "c", "d")   # fresh edge is fine
 
 
 def test_config_defaults():
@@ -225,7 +226,7 @@ def test_activity_payload_marks_provenance(tmp_path):
     assert md.count("— 🤖 DevCake") == 1           # entry headers, not the legend
     assert md.count("— 🧑 HUMAN") == 1
     # same author on both entries — provenance came from the sentinel, not the name
-    assert MissionManager._derive_seq(
+    assert dispatch._derive_seq(
         Activity(mission=mission, entries=entries)) == 3   # STEP_MARKER intact
 
 
@@ -237,11 +238,11 @@ def test_derive_seq_ignores_quoted_markers():
                            body="🧾 DevCake transcript `2_EXECUTE.md` (run `x`)\n"
                                 "> as the Dev said in `7_EXECUTE.md` and `9_PLAN.md`\n"
                                 "`devcake:v1`")]
-    assert MissionManager._derive_seq(
+    assert dispatch._derive_seq(
         Activity(mission=mission, entries=mixed)) == 3     # 2 counts; 7/9 don't
     quoted_only = [ActivityEntry(ts=NOW, author="h", kind="comment",
                                  body="> see `7_EXECUTE.md` for details")]
-    assert MissionManager._derive_seq(
+    assert dispatch._derive_seq(
         Activity(mission=mission, entries=quoted_only)) == 1
 
 

@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from devcake.config import DevType
+from devcake.domain.orchestrator import dispatch
 
 
 def _run(c):
@@ -407,7 +408,7 @@ def test_skill_payload_attaches_for_claude_harness():
     mgr = make_mission_manager(skills=_FakeSkillService())
     dt = DevType(name="senior-dev", harness_template="claude-code",
                  skills=["tdd", "pr-hygiene"])
-    payload = _run(mgr._skill_payload(dt))
+    payload = _run(dispatch._skill_payload(mgr, dt))
     assert [s["name"] for s in payload] == ["tdd", "pr-hygiene"]
     assert mgr.skills.calls == [["tdd", "pr-hygiene"]]
 
@@ -420,7 +421,7 @@ def test_skill_payload_attaches_for_grok_and_codex(harness):
     from fakes import make_mission_manager
     mgr = make_mission_manager(skills=_FakeSkillService())
     dt = DevType(name="main-dev", harness_template=harness, skills=["tdd"])
-    payload = _run(mgr._skill_payload(dt))
+    payload = _run(dispatch._skill_payload(mgr, dt))
     assert [s["name"] for s in payload] == ["tdd"]
     assert mgr.skills.calls == [["tdd"]]
 
@@ -438,7 +439,7 @@ def test_skill_payload_skipped_when_harness_has_no_skills_dir(monkeypatch):
                         "skills_dir", None)
     mgr = make_mission_manager(skills=_FakeSkillService())
     dt = DevType(name="main-dev", harness_template="grok-build", skills=["tdd"])
-    assert _run(mgr._skill_payload(dt)) == []
+    assert _run(dispatch._skill_payload(mgr, dt)) == []
     assert mgr.skills.calls == []          # never even asked
 
 
@@ -447,10 +448,10 @@ def test_skill_payload_empty_without_service_or_selection():
     mgr = make_mission_manager()           # skills service not wired
     dt = DevType(name="senior-dev", harness_template="claude-code",
                  skills=["tdd"])
-    assert _run(mgr._skill_payload(dt)) == []
+    assert _run(dispatch._skill_payload(mgr, dt)) == []
     mgr2 = make_mission_manager(skills=_FakeSkillService())
     dt2 = DevType(name="senior-dev", harness_template="claude-code")
-    assert _run(mgr2._skill_payload(dt2)) == []
+    assert _run(dispatch._skill_payload(mgr2, dt2)) == []
 
 
 def test_runspec_reply_carries_skills(tmp_path):
@@ -536,7 +537,7 @@ def test_skill_payload_never_raises_out_of_dispatch():
     mgr = make_mission_manager(skills=_ExplodingService())
     dt = DevType(name="senior-dev", harness_template="claude-code",
                  skills=["tdd"])
-    assert _run(mgr._skill_payload(dt)) == []
+    assert _run(dispatch._skill_payload(mgr, dt)) == []
 
 
 def test_payload_ships_skill_md_first_under_mid_skill_cap(tmp_path):

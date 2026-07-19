@@ -1,0 +1,292 @@
+import React, { useEffect, useRef, useState } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import { get, send } from "../api.js";
+import { Section } from "./Card.jsx";
+import { Field, Input, Textarea } from "./Field.jsx";
+import Button from "./Button.jsx";
+import { ConfirmDialog, Modal } from "./Modal.jsx";
+import MoreMenu from "./MoreMenu.jsx";
+import { fileToB64 } from "../lib/files.js";
+
+// ── skill authoring (docs/11 Skills section) ─────────────────────────────────
+
+// "Add skill" dialog: Write (name + trigger + markdown; the app generates
+// the frontmatter — the operator never sees YAML) or Import (upload a
+// SKILL.md + optional supporting files). 409 flips into an explicit
+// overwrite confirmation instead of silently replacing.
+function AddSkillDialog({ onClose, onSaved }) {
+  const [mode, setMode] = useState("write");
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [body, setBody] = useState("");
+  const [files, setFiles] = useState([]);      // [{path, content_b64}]
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [askOverwrite, setAskOverwrite] = useState(false);
+
+  const canSubmit = mode === "write"
+    ? name.trim() && desc.trim() && body.trim()
+    : files.length > 0;
+
+  // any content edit invalidates a pending 409/overwrite decision — the
+  // collision was for the OLD name/payload, so re-check from scratch
+  const edited = (setter) => (v) => { setter(v); setAskOverwrite(false); setErr(""); };
+
+  const submit = async (overwrite) => {
+    setBusy(true); setErr("");
+    try {
+      if (mode === "write")
+        await send("POST", "/skills",
+          { name: name.trim(), description: desc.trim(), body, overwrite });
+      else
+        await send("POST", "/skills/import", { files, overwrite });
+      onSaved(); onClose();
+    } catch (e) {
+      setAskOverwrite(e.status === 409);
+      setErr(String(e.message || e).replace(/^\d+ /, ""));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal className="max-w-2xl" onClose={busy ? undefined : onClose}>
+      <div className="mb-4 flex items-center justify-between">
+        <h4 className="text-base font-semibold tracking-tight">Add skill</h4>
+        <div className="flex gap-1 rounded-md bg-stone-100 p-0.5 text-xs dark:bg-neutral-800">
+          {[["write", "Write"], ["import", "Import files"]].map(([m, l]) => (
+            <button key={m} type="button"
+              onClick={() => { setMode(m); setErr(""); setAskOverwrite(false); }}
+              className={`rounded px-2.5 py-1 font-medium transition ${
+                mode === m ? "bg-white shadow-sm dark:bg-neutral-700"
+                           : "text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      {mode === "write" ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Name" hint="lowercase, - or _ (e.g. release-notes)">
+              <Input value={name} onChange={(e) => edited(setName)(e.target.value)}
+                placeholder="my-skill" />
+            </Field>
+            <Field label="When should the agent use it?"
+              hint="this description is the trigger — be specific">
+              <Input value={desc} onChange={(e) => edited(setDesc)(e.target.value)}
+                placeholder="Writes release notes: use when a release is being prepared." />
+            </Field>
+          </div>
+          <Field label="Instructions (markdown)">
+            <Textarea rows={10} value={body}
+              onChange={(e) => edited(setBody)(e.target.value)}
+              placeholder={"# Release notes\n\nStep-by-step guidance the agent should follow…"} />
+          </Field>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Skill folder"
+            hint="pick the skill's folder (containing SKILL.md) — nested files keep their layout; the name comes from the frontmatter">
+            {/* webkitdirectory: a plain multi-file picker only exposes
+                basenames, which silently flattens refs/x.md → x.md and
+                collides same-named files. A folder pick carries
+                webkitRelativePath, so the layout under the skill dir survives. */}
+            <input type="file" webkitdirectory="" directory=""
+              className="block w-full text-sm text-neutral-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:file:bg-neutral-800"
+              onChange={async (e) => {
+                setErr(""); setAskOverwrite(false);
+                const fs = [];
+                for (const f of e.target.files) {
+                  // "<folder>/<rel>" → drop the chosen folder's own name
+                  const rel = (f.webkitRelativePath || f.name)
+                    .split("/").slice(1).join("/") || f.name;
+                  // skip OS/VCS cruft a folder pick sweeps in (.DS_Store, .git/…)
+                  if (rel.split("/").some((seg) => seg.startsWith("."))) continue;
+                  fs.push({ path: rel, content_b64: await fileToB64(f) });
+                }
+                setFiles(fs);
+              }} />
+          </Field>
+          {files.length > 0 && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              {files.length} file(s): {files.map((f) => f.path).join(", ")}
+            </p>
+          )}
+        </div>
+      )}
+      {err && (
+        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          {err}
+        </p>
+      )}
+      <div className="mt-5 flex justify-end gap-2">
+        <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
+        {askOverwrite ? (
+          <Button kind="danger" disabled={busy || !canSubmit} onClick={() => submit(true)}>
+            {busy ? "Working…" : "Overwrite existing skill"}
+          </Button>
+        ) : (
+          <Button disabled={busy || !canSubmit} onClick={() => submit(false)}>
+            {busy ? "Working…" : "Save to store"}
+          </Button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+export default function SkillsSection({ setPageErr }) {
+  const [confirm, setConfirm] = useState(null); // delete confirms
+  // skill store catalog (v1): store-listed when Gitea is up, bundled
+  // fallback otherwise — `store` says which (and where to edit)
+  const [skillsCatalog, setSkillsCatalog] = useState({ skills: [], store: null });
+  const [skillsErr, setSkillsErr] = useState(false);
+  const [skillsMsg, setSkillsMsg] = useState("");
+  const skillsMsgTimer = useRef(null);
+  useEffect(() => () => clearTimeout(skillsMsgTimer.current), []);
+  const loadSkills = () =>
+    get("/skills")
+      .then((r) => { setSkillsCatalog(r); setSkillsErr(false); })
+      .catch(() => setSkillsErr(true));
+  useEffect(() => { loadSkills(); }, []);
+  const restoreBuiltins = async () => {
+    try {
+      await send("POST", "/skills/sync");
+      await loadSkills();
+      setSkillsMsg("✓ built-in skills restored");
+      clearTimeout(skillsMsgTimer.current);
+      skillsMsgTimer.current = setTimeout(() => setSkillsMsg(""), 4000);
+    } catch (e) {
+      setPageErr(`restoring built-ins failed: ${String(e.message || e)}`);
+    }
+  };
+  const [addSkill, setAddSkill] = useState(false);
+
+  return (
+    <>
+      <Section id="skills" title="Skills"
+        description="Reusable expertise installed into the agent session."
+        help="Skill-store skills Devs can use. Select them per Dev Type in the Dev Types section."
+        actions={skillsCatalog.store?.enabled && (
+          <>
+            <Button icon={Plus} onClick={() => setAddSkill(true)}>
+              Add skill
+            </Button>
+            {/* no html_url → the menu would hold a single item; DESIGN §3
+                says a lone action stays a visible ghost button instead */}
+            {skillsCatalog.store?.html_url ? (
+              <MoreMenu label="More skill-store actions" items={[
+                {
+                  label: "Open the store in Gitea",
+                  desc: "Skills live in a Git repo — edit them there directly.",
+                  external: true,
+                  onClick: () => window.open(skillsCatalog.store.html_url, "_blank", "noopener"),
+                },
+                {
+                  label: "Restore built-in skills",
+                  desc: "Re-adds any missing bundled skills. Never overwrites your edits.",
+                  onClick: restoreBuiltins,
+                },
+              ]} />
+            ) : (
+              <Button kind="ghost" onClick={restoreBuiltins}>
+                Restore built-in skills
+              </Button>
+            )}
+          </>
+        )}>
+        {skillsCatalog.store && !skillsCatalog.store.enabled && (
+          <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+            Served from the bundled copies — set GITEA_ADMIN_PASSWORD (bundled
+            Gitea) to get the editable skill-store repo.
+          </p>
+        )}
+        {skillsMsg && (
+          <p className="mb-3 text-sm text-green-700 dark:text-green-400">{skillsMsg}</p>
+        )}
+        {skillsCatalog.store?.enabled && !skillsCatalog.store.ok && (
+          <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+            Skill store unreachable ({skillsCatalog.store.detail}) — serving the
+            bundled copies. Runs keep working; store edits are unavailable.
+          </p>
+        )}
+        {skillsErr ? (
+          <p className="text-sm text-red-700 dark:text-red-300">
+            Couldn&apos;t load the skill catalog.{" "}
+            <button type="button" onClick={loadSkills}
+              className="font-medium underline underline-offset-2">
+              Retry
+            </button>
+          </p>
+        ) : skillsCatalog.skills.length === 0 ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">No skills found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[36rem] text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+                <tr>
+                  <th className="py-1.5 pr-4 font-semibold">Skill</th>
+                  <th className="pr-4 font-semibold">Description</th>
+                  <th className="pr-2 font-semibold">Source</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {skillsCatalog.skills.map((s) => (
+                  <tr key={s.name} className="border-t border-neutral-100 align-top dark:border-neutral-800">
+                    <td className="whitespace-nowrap py-2.5 pr-4 font-mono text-xs font-semibold">
+                      {s.name}
+                    </td>
+                    <td className="py-2.5 pr-4 text-neutral-500 dark:text-neutral-400">
+                      {s.description || "(no description)"}
+                    </td>
+                    <td className="py-2.5 pr-2">
+                      <span className={"inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs "
+                        + (s.source === "store"
+                          ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+                          : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+                        {s.source === "store" ? "store" : "bundled"}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-right">
+                      {/* built-ins re-seed at boot — only operator skills delete */}
+                      {skillsCatalog.store?.enabled && !s.builtin && (
+                        <button type="button"
+                          title={`Delete skill ${s.name}`}
+                          aria-label={`Delete skill ${s.name}`}
+                          className="rounded text-neutral-500 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-red-400"
+                          onClick={() => setConfirm({
+                            title: `Delete skill ${s.name}?`,
+                            body: "Removed from the skill store. Dev Types that "
+                              + "selected it keep the name (⚠) but the skill is "
+                              + "skipped at dispatch until re-added.",
+                            confirmLabel: "Delete",
+                            action: async () => {
+                              try {
+                                await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
+                                await loadSkills();
+                              } catch (e) {
+                                setPageErr(`skill delete failed: ${String(e.message || e)}`);
+                              }
+                              setConfirm(null);
+                            },
+                          })}>
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      <ConfirmDialog open={!!confirm} {...(confirm || {})}
+        onConfirm={() => confirm.action()}
+        onCancel={() => setConfirm(null)} />
+      {addSkill && <AddSkillDialog
+        onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
+    </>
+  );
+}

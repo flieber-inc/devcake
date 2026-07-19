@@ -7,8 +7,9 @@ them per-PR. If a rule genuinely can't fit a new case, say so explicitly in the 
 instead of silently deviating.
 
 Reference implementations to copy from: `src/pages/RunsPage.jsx` (tables, header
-actions), `src/pages/ConfigPage.jsx` (settings sections, SettingRow, MoreMenu,
-InstantZone), `src/pages/OverviewPage.jsx` (masthead, glyph rows).
+actions), the Config section components `src/components/*Section.jsx` (settings
+sections, SettingRow, MoreMenu, InstantZone), `src/pages/OverviewPage.jsx`
+(masthead, glyph rows).
 
 ---
 
@@ -60,10 +61,23 @@ Nothing else.
 ### Settings model (Cursor/Codex style)
 
 Configuration renders **one section per view**, routed as `#/config/<section>`
-(bare `#/config` redirects to the first section). `ConfigPage.jsx` is a
-switchboard of `{section === "x" && <Section …>}` blocks. Sidebar sub-nav active
-state is route-driven — there is no scrollspy; don't reintroduce one. On section
-change, `<main>` scrolls to top.
+(bare `#/config` redirects to the first section). `ConfigPage.jsx` is a thin
+dispatcher: it owns the page header, the page-level error line (`pageErr`,
+passed as `setPageErr` to sections that report async failures), the mobile
+section chip row, and the scroll-to-top on section change — then switches on
+the route to exactly ONE section component. Every section is a component in
+`src/components/`: `PmoSection`, `DevTypesSection`, `SkillsSection`,
+`AssignmentsSection`, `PromptsSection`, `ProfilesSection`, `LimitsSection`,
+`TrafficSection`. A section pulls the shared draft itself via
+`useSharedDraft()` (ConfigDraftContext) and owns its section-local state and
+dialogs (its own `ConfirmDialog`, wizards, etc. — closed dialogs render null,
+so this stays invisible in the DOM); anything cross-page (the draft itself,
+Save/DirtyBar/NavGuard in `DraftChrome`) stays at App/context level. Shared
+sub-components used by more than one section get their own file (e.g.
+`RepoChips.jsx`); a new config section means a new `<Name>Section.jsx`, not
+inline JSX in ConfigPage. Sidebar sub-nav active state is route-driven —
+there is no scrollspy; don't reintroduce one. On section change, `<main>`
+scrolls to top.
 
 ### SettingRow — the default for scalar settings
 

@@ -6,12 +6,10 @@
 
 ## 1. What DevCake is
 
-DevCake is a lightweight **agentic developer system** (v0: technical preview for a
-**single operator on a dedicated host**). It runs automated coding agents
+DevCake is a **CLI agent orchestrator** for automating ticket resolutions, designed for a
+**single operator on a dedicated host**. It runs automated coding agents
 ("**Devs**") inside Docker containers that systematically resolve work items
-("**Missions**") pulled from a project-management system ("**PMO System**" — v0:
-Linear). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to
-the main app through Redis Streams, and telemetry lands in OpenObserve.
+("**Missions**") pulled from a project-management system ("**PMO System**"). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to the main app through Redis Streams and a Gitea internal server, and telemetry lands in OpenObserve.
 
 **Deployment premise:** one machine you control; host `docker.sock` on Dagu;
 admin + secrets ≅ host trust. Not multi-tenant SaaS. Ticket writers and repo

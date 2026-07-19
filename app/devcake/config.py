@@ -392,8 +392,8 @@ class AppConfig(BaseModel):
     @field_validator("repos")
     @classmethod
     def _repos_valid(cls, v):
-        # 0..N repos (M10): zero = every mission gates on "no repository"
-        # until the internal fallback forge (M11)
+        # 0..N repos (M10): zero = missions resolve via the internal
+        # fallback forge when available (M11 shipped); otherwise gated
         names = [e.name for e in v]
         if len(set(names)) != len(names):
             raise ValueError("repos: duplicate instance names")

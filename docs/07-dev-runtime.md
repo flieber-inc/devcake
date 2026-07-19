@@ -3,7 +3,7 @@
 > **Audience:** implementers and harness-image authors. Anyone should be able to build a new Dev image from this document alone.
 > **Depends on:** `02-domain-model.md` (Run, DevType), `03-mission-lifecycle.md` (`result.json`), `08-harness-templates.md` (per-harness specifics), `09-messaging.md` (Redis protocol).
 
-A **Dev container** is an ephemeral Docker container that performs exactly one Mission Step and exits. It is spawned by Dagu as a sibling of the compose stack (`13-deployment.md`), named `dev-{run_id}`, and attached to the compose network so it reaches `redis` and `openobserve` by service name.
+A **Dev container** is an ephemeral Docker container that performs exactly one Mission Step and exits. It is spawned by Dagu as a sibling of the compose stack (`13-deployment.md`), named `dev-{run_id}`, and attached to the **`devcake_runtime`** network so it reaches `redis`, `otel-collector`, and (when used) internal Gitea by service name. **OpenObserve is not on the runtime network** — Devs export OTLP to the collector only (`12-observability.md`, `14` §10).
 
 Devs are **pure functions from (workspace, prompt) to artifacts**: they never write to the PMO System or mutate any shared state other than pushing a git branch at the very end (INV-4, INV-6). All PMO effects are applied by the app when it consumes the run's artifacts.
 

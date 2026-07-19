@@ -231,13 +231,14 @@ export default function MissionsPage() {
           create one there and DevCake will pick it up on the next cycle.
         </p>
       )}
-      <div className="overflow-x-auto pb-4">
-        <div className="flex min-w-max gap-3">
+      {/* Fluid columns; overflow-x-auto is the mobile fallback below 9rem/col. */}
+      <div data-testid="board-scroller" className="overflow-x-auto pb-4">
+        <div className="flex gap-2">
           {COLUMNS.map((col) => (
             <section
               key={col.id}
               aria-label={col.label}
-              className="flex w-72 shrink-0 flex-col rounded-card border border-neutral-200 bg-stone-50 p-2 dark:border-neutral-800 dark:bg-neutral-950/40"
+              className="flex flex-1 basis-0 min-w-[9rem] max-w-[18rem] flex-col rounded-card border border-neutral-200 bg-stone-50 p-2 dark:border-neutral-800 dark:bg-neutral-950/40"
             >
               <header className="mb-2 flex items-center justify-between px-1 pb-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">

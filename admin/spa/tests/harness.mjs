@@ -12,17 +12,32 @@ export const BASE = process.env.UI_BASE || "http://127.0.0.1:5199";
 
 function chromePath() {
   if (process.env.UI_CHROME) return process.env.UI_CHROME;
-  const root = join(homedir(), ".cache", "ms-playwright");
-  const revs = existsSync(root)
-    ? readdirSync(root).filter((d) => d.startsWith("chromium_headless_shell-")).sort().reverse()
-    : [];
-  for (const rev of revs) {
-    const p = join(root, rev, "chrome-linux", "headless_shell");
-    if (existsSync(p)) return p;
+  // Playwright's browser cache lives under a different root on macOS than on
+  // Linux, and the headless-shell exe has a different basename on each.
+  const roots = [
+    join(homedir(), ".cache", "ms-playwright"),                    // Linux
+    join(homedir(), "Library", "Caches", "ms-playwright"),         // macOS
+  ];
+  const layouts = [
+    ["chrome-linux", "headless_shell"],
+    ["chrome-headless-shell-mac-arm64", "chrome-headless-shell"],
+    ["chrome-headless-shell-mac-x64", "chrome-headless-shell"],
+  ];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    const revs = readdirSync(root)
+      .filter((d) => d.startsWith("chromium_headless_shell-"))
+      .sort().reverse();
+    for (const rev of revs) {
+      for (const [dir, exe] of layouts) {
+        const p = join(root, rev, dir, exe);
+        if (existsSync(p)) return p;
+      }
+    }
   }
   throw new Error(
-    "no cached Chromium headless shell under ~/.cache/ms-playwright — " +
-    "set UI_CHROME to a Chrome/Chromium executable",
+    "no cached Chromium headless shell under ~/.cache/ms-playwright or " +
+    "~/Library/Caches/ms-playwright — set UI_CHROME to a Chrome/Chromium executable",
   );
 }
 

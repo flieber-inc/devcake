@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const spa = join(here, "..");
-const SUITES = ["settings.mjs", "hierarchy.mjs", "redesign.mjs"];
+const SUITES = ["settings.mjs", "hierarchy.mjs", "redesign.mjs", "missions.mjs"];
 
 // pick up admin credentials from the repo-root .env when not already set
 try {
@@ -27,7 +27,10 @@ let vite = null;
 const base = process.env.UI_BASE || "http://127.0.0.1:5199";
 
 if (!process.env.UI_BASE) {
-  vite = spawn("npx", ["vite", "--port", "5199", "--strictPort"], {
+  // --host 127.0.0.1 forces IPv4 binding; without it, macOS vite listens on
+  // ::1 only while the harness probes 127.0.0.1, and the readiness check
+  // silently hits its 30s timeout.
+  vite = spawn("npx", ["vite", "--host", "127.0.0.1", "--port", "5199", "--strictPort"], {
     cwd: spa, stdio: "ignore", env: process.env,
   });
   const deadline = Date.now() + 30000;

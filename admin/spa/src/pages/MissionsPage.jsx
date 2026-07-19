@@ -231,14 +231,16 @@ export default function MissionsPage() {
           create one there and DevCake will pick it up on the next cycle.
         </p>
       )}
-      {/* Fluid columns; overflow-x-auto is the mobile fallback below 9rem/col. */}
+      {/* Fluid columns (max 18rem); 8rem/col floor keeps all 7 columns fitting
+          without horizontal scroll down to 1280 (7×8rem + gaps < the content
+          area) — overflow-x-auto is the mobile fallback below that. */}
       <div data-testid="board-scroller" className="overflow-x-auto pb-4">
         <div className="flex gap-2">
           {COLUMNS.map((col) => (
             <section
               key={col.id}
               aria-label={col.label}
-              className="flex flex-1 basis-0 min-w-[9rem] max-w-[18rem] flex-col rounded-card border border-neutral-200 bg-stone-50 p-2 dark:border-neutral-800 dark:bg-neutral-950/40"
+              className="flex flex-1 basis-0 min-w-[8rem] max-w-[18rem] flex-col rounded-card border border-neutral-200 bg-stone-50 p-2 dark:border-neutral-800 dark:bg-neutral-950/40"
             >
               <header className="mb-2 flex items-center justify-between px-1 pb-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">

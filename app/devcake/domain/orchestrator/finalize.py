@@ -18,7 +18,7 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-async def _checkpoint(self, run: Run, key: str, fn) -> None:
+async def _checkpoint(mgr, run: Run, key: str, fn) -> None:
     """Idempotent finalize sub-step (ISSUES #4–6): skip if already done;
     append+save only after the side effect succeeds.
 
@@ -29,10 +29,10 @@ async def _checkpoint(self, run: Run, key: str, fn) -> None:
         return
     await fn()
     run.finalized_steps.append(key)
-    self.runs.store.save(run)
+    mgr.runs.store.save(run)
 
 
-async def finalize(self, run: Run, payload: dict) -> None:
+async def finalize(mgr, run: Run, payload: dict) -> None:
     result = payload.get("result") or {}
     outcome = result.get("outcome", "")
     transcript = payload.get("transcript_md", "")
@@ -57,18 +57,18 @@ async def finalize(self, run: Run, payload: dict) -> None:
 
         # 1 — transcript (idempotent via finalized_steps)
         if "transcript" not in run.finalized_steps:
-            await self._post_transcript(run, transcript,
+            await _post_transcript(mgr, run, transcript,
                                         payload.get("last_message_md"))
             run.finalized_steps.append("transcript")
-            self.runs.store.save(run)
+            mgr.runs.store.save(run)
 
         run.token_report = redact_value(token_report)  # persisted cost source
         # 2 — token report (INV-5: always)
         if "token_report" not in run.finalized_steps:
-            await self._feed(pmo_id, run.pmo_kind,
-                             self._token_report_md(run, token_report))
+            await mgr._feed(pmo_id, run.pmo_kind,
+                             _token_report_md(run, token_report))
             run.finalized_steps.append("token_report")
-            self.runs.store.save(run)
+            mgr.runs.store.save(run)
 
         # failure artifact (docs/07 §4 nonzero exits): evidence posted above,
         # NO transition — and the dispatch-time status write is REVERTED so the
@@ -76,16 +76,16 @@ async def finalize(self, run: Run, payload: dict) -> None:
         # a failed first ONBOARD strands the mission at in_progress/no-label = row 9)
         if not outcome:
             exit_code = payload.get("exit_code")
-            await self.messaging.delete_run_user(run.run_id)
-            await self.messaging.delete_reply_stream(run.run_id)
+            await mgr.messaging.delete_run_user(run.run_id)
+            await mgr.messaging.delete_reply_stream(run.run_id)
             run.result = None
             run.state = "failed"
-            run.error = self.dev_failure_error(run, payload)
+            run.error = dev_failure_error(mgr, run, payload)
             run.ended_at = utcnow()
-            self.runs.store.save(run)
+            mgr.runs.store.save(run)
             span.set_attribute("devcake.verdict", f"failed: {run.error}")
             span.set_status(Status(StatusCode.ERROR, run.error))
-            await self.restore_after_failure(run)
+            await restore_after_failure(mgr, run)
             log.warning("run %s failed (exit %s, attempt %d)",
                         run.run_id, exit_code, run.attempt_of_step)
             return
@@ -98,29 +98,29 @@ async def finalize(self, run: Run, payload: dict) -> None:
         # instead of stranding in `finalizing` until the watchdog timeout.
         if "transition" not in run.finalized_steps:
             try:
-                await transitions.transition(self, run, result, plan_md)
+                await transitions.transition(mgr, run, result, plan_md)
             except ValueError as e:
-                await self.messaging.delete_run_user(run.run_id)
-                await self.messaging.delete_reply_stream(run.run_id)
+                await mgr.messaging.delete_run_user(run.run_id)
+                await mgr.messaging.delete_reply_stream(run.run_id)
                 run.result = redact_value(result)
                 run.state = "failed"
                 run.error = redact(f"DEV_BAD_OUTPUT: {e}")
                 run.ended_at = utcnow()
-                self.runs.store.save(run)
+                mgr.runs.store.save(run)
                 span.set_attribute("devcake.verdict", f"failed: {run.error}")
                 span.set_status(Status(StatusCode.ERROR, run.error))
-                await self.restore_after_failure(run)
+                await restore_after_failure(mgr, run)
                 log.warning("run %s failed with DEV_BAD_OUTPUT: %s",
                             run.run_id, e)
                 return
             run.finalized_steps.append("transition")
-            self.runs.store.save(run)
+            mgr.runs.store.save(run)
 
-        await self.messaging.delete_run_user(run.run_id)
-        await self.messaging.delete_reply_stream(run.run_id)
+        await mgr.messaging.delete_run_user(run.run_id)
+        await mgr.messaging.delete_reply_stream(run.run_id)
         run.result = redact_value(result)
         run.state, run.ended_at = "finished", utcnow()
-        self.runs.store.save(run)
+        mgr.runs.store.save(run)
         # app-level judgment onto the trace: Dagu can report the step green
         # while _transition refused to act — make that visible in OO
         span.set_attribute("devcake.verdict", run.verdict or "success")
@@ -130,11 +130,11 @@ async def finalize(self, run: Run, payload: dict) -> None:
         log.info("finalized %s (%s)", run.run_id, outcome)
 
 
-def dev_failure_error(self, run: Run, payload: dict) -> str:
+def dev_failure_error(mgr, run: Run, payload: dict) -> str:
     # public: part of the RunFinalizer port (reconcile enriches exit-13 orphans)
     exit_code = payload.get("exit_code")
     if exit_code == 12:
-        self._trip_breaker(run.dev_type, f"auth failure in {run.run_id}")
+        mgr._trip_breaker(run.dev_type, f"auth failure in {run.run_id}")
         return "DEV_AUTH (does not count toward attempts; breaker tripped)"
     detail = redact(str(payload.get("error_detail") or ""))
     detail = " ".join(detail.split())[:500]
@@ -150,7 +150,7 @@ def dev_failure_error(self, run: Run, payload: dict) -> str:
         if error_class == "DEV_FORGE_AUTH":
             # latch only THIS run's repo (M10): a bad credential on repo A
             # must never stop repo B's missions
-            self.forges.latch(
+            mgr.forges.latch(
                 run.repo_ref, f"repository credential rejected in {run.run_id}")
         return "DEV_FORGE_AUTH: " + (detail or "repository credential rejected")
     if exit_code == 13:
@@ -163,23 +163,23 @@ def dev_failure_error(self, run: Run, payload: dict) -> str:
     return f"dev failure artifact (exit {exit_code})"
 
 
-async def restore_after_failure(self, run: Run) -> None:
+async def restore_after_failure(mgr, run: Run) -> None:
     """Revert the dispatch-time backlog→in_progress write after a failed attempt,
     iff the mission is still exactly as we left it (live re-read; human edits win)."""
     if run.stage_label_at_dispatch is not None or not run.mission_pmo_id:
         return  # only ONBOARD dispatches from backlog change the status
     try:
-        live = await self.pmo.get(MissionRef(run.mission_pmo_id, run.pmo_kind))
+        live = await mgr.pmo.get(MissionRef(run.mission_pmo_id, run.pmo_kind))
         if live.status == "in_progress" and _stage_of(live) is None:
-            await self.pmo.set_status(
+            await mgr.pmo.set_status(
                 MissionRef(run.mission_pmo_id, run.pmo_kind), "backlog")
-            self._audit(run.mission_pmo_id, "set_status",
+            mgr._audit(run.mission_pmo_id, "set_status",
                         "backlog (restored after failed attempt)")
     except Exception:
         log.exception("status restore failed for %s", run.run_id)
 
 
-async def _post_transcript(self, run: Run, transcript: str,
+async def _post_transcript(mgr, run: Run, transcript: str,
                            last_message: str | None = None) -> None:
     """ADR-0014 D1: attachment = full dump; comment = step line + the
     `>`-blockquoted last message. last_message missing/empty ⇒ the pointer-only
@@ -187,13 +187,13 @@ async def _post_transcript(self, run: Run, transcript: str,
     transcript = redact(transcript)
     name = f"{run.seq}_{run.mission_type}.md"
     if run.pmo_kind == "project":
-        await self._feed(run.mission_pmo_id, "project",
+        await mgr._feed(run.mission_pmo_id, "project",
                          f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)"
                          f"\n\n---\n\n{transcript}")
         return
     attached = False
     try:  # docs/05 §4: transcripts always live as attachments, never inline
-        url = await self.pmo.upload_attachment(run.mission_pmo_id, name,
+        url = await mgr.pmo.upload_attachment(run.mission_pmo_id, name,
                                                transcript.encode())
         # the backticked `{name}` must stay in the comment — STEP_MARKER
         # counts it for seq derivation (docs/02 §8)
@@ -217,12 +217,12 @@ async def _post_transcript(self, run: Run, transcript: str,
         # quoting quarantines the model text from every feed scan; the
         # opt-out is safe because the full text already rides the attachment
         body += "\n\n" + _blockquote(last_message)
-        await self._feed(run.mission_pmo_id, "issue", body, externalize=False)
+        await mgr._feed(run.mission_pmo_id, "issue", body, externalize=False)
     else:
         # no attachment ⇒ the last message already rides inside the (quoted)
         # inline dump; externalization stays on as the size second-chance
-        await self._feed(run.mission_pmo_id, "issue", body)
-    self._audit(run.mission_pmo_id, "transcript", name)
+        await mgr._feed(run.mission_pmo_id, "issue", body)
+    mgr._audit(run.mission_pmo_id, "transcript", name)
 
 
 def _token_report_md(run: Run, tr: dict) -> str:

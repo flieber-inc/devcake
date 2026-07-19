@@ -11,6 +11,7 @@ from devcake.harness import HARNESSES, dev_type_status
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.model import Mission
 from devcake.adapters.files.run_store import RunStore
+from devcake.domain.orchestrator import dispatch
 
 
 def run_coro(c):
@@ -149,7 +150,7 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
 
     from fakes import make_mission_manager
     mgr = make_mission_manager(noop_audit=False)
-    env, files = mgr._credential_spec(DevType(name="main-dev",
+    env, files = dispatch._credential_spec(mgr, DevType(name="main-dev",
                                               harness_template="grok-build"))
     assert env == {"XAI_API_KEY": "xai-test-000000000000000000000"}
     assert files == [{"path_hint": "~/.grok/auth.json",
@@ -157,7 +158,7 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
 
     # same dev type NAME, different harness → different requirements entirely
     secrets_store.write_harness_secret("CLAUDE_CODE_OAUTH_TOKEN", "tok")
-    env, files = mgr._credential_spec(DevType(name="main-dev",
+    env, files = dispatch._credential_spec(mgr, DevType(name="main-dev",
                                               harness_template="claude-code"))
     assert "CLAUDE_CODE_OAUTH_TOKEN" in env and "XAI_API_KEY" not in env
     assert files == []  # claude-code requires no credential files
@@ -178,7 +179,7 @@ def test_credential_spec_includes_dev_type_secret_env(tmp_path, monkeypatch):
     mgr = make_mission_manager(noop_audit=False)
     dt = DevType(name="senior-dev", harness_template="claude-code",
                  secret_env=["DD_API_KEY", "DD_MISSING"])
-    env, files = mgr._credential_spec(dt)
+    env, files = dispatch._credential_spec(mgr, dt)
     assert env["DD_API_KEY"] == "dd-api-key-0123456789abcdef"
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok"   # harness creds untouched
     assert "DD_MISSING" not in env                   # warn, never crash
@@ -455,7 +456,7 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     from devcake.config import RepoInstance
     mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
     repo = RepoInstance(url="https://github.com/o/r")
-    env = mgr._protocol_spec_env(
+    env = dispatch._protocol_spec_env(mgr, 
         mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
         dev_type=DevType(name="main-dev", harness_template="grok-build"),
         seq=1, extra_args="", repo=repo, forge=make_forge(repo))
@@ -475,12 +476,12 @@ def test_harness_default_model_flows_into_spec_env(tmp_path):
         "clone_user": "x", "git_user_name": "n", "git_email": "e",
         "cli_token_envs": ["T"]})()})()
     grok = DevType(name="g", harness_template="grok-build")
-    env = mgr._protocol_spec_env(mission_id="p", mission_key="T-1",
+    env = dispatch._protocol_spec_env(mgr, mission_id="p", mission_key="T-1",
                                  mission_type="EXECUTE", dev_type=grok, seq=1,
                                  extra_args="", repo=repo, forge=forge)
     assert env["DEVCAKE_MODEL"] == "grok-4.5"
     pinned = DevType(name="g2", harness_template="grok-build", model="grok-5")
-    env2 = mgr._protocol_spec_env(mission_id="p", mission_key="T-1",
+    env2 = dispatch._protocol_spec_env(mgr, mission_id="p", mission_key="T-1",
                                   mission_type="EXECUTE", dev_type=pinned, seq=1,
                                   extra_args="", repo=repo, forge=forge)
     assert env2["DEVCAKE_MODEL"] == "grok-5"

@@ -13,6 +13,7 @@ from devcake.domain.orchestrator.markers import (DECOMPOSITION_MARKER_RE,
 
 from fakes import make_mission_manager
 from test_transitions import FakePMO, NullMessaging, _run, mission, run_coro
+from devcake.domain.orchestrator import dispatch
 
 MANIFEST = "ab" * 32
 
@@ -173,22 +174,22 @@ def test_decomposition_rule_wordings(tmp_path):
     judgment-based when unlimited."""
     root = mission()
     mgr, _ = make_depth_mgr(tmp_path, root, limit=2)
-    assert "FORBIDDEN" not in mgr._decomposition_rule(root)
+    assert "FORBIDDEN" not in dispatch.decomposition_rule(mgr, root)
 
     l1 = mission("backlog", {"DEVCAKE", "DEVCAKE-CREATED"})
     l1.description = marker()
-    assert "FORBIDDEN" not in mgr._decomposition_rule(l1)
+    assert "FORBIDDEN" not in dispatch.decomposition_rule(mgr, l1)
 
     l2 = mission("backlog", {"DEVCAKE", "DEVCAKE-CREATED"})
     l2.description = marker(depth=2)
-    assert "FORBIDDEN" in mgr._decomposition_rule(l2)
+    assert "FORBIDDEN" in dispatch.decomposition_rule(mgr, l2)
 
     stripped = mission("backlog", {"DEVCAKE", "DEVCAKE-CREATED"})
     stripped.description = "marker gone"
-    assert "FORBIDDEN" in mgr._decomposition_rule(stripped)
+    assert "FORBIDDEN" in dispatch.decomposition_rule(mgr, stripped)
 
     mgr0, _ = make_depth_mgr(tmp_path / "u", mission(), limit=0)
-    rule = mgr0._decomposition_rule(l2)
+    rule = dispatch.decomposition_rule(mgr0, l2)
     assert "FORBIDDEN" not in rule and "not depth-limited" in rule
 
 

@@ -15,9 +15,9 @@ on config reload precisely so this state survives. The advisory set:
 ``_merge_window_closed``.
 
 Tests construct via the real ``__init__`` (``tests/fakes.make_mission_manager``
-with a real RunManager when a tmp path is given). Private-seam tests
-(``_transition``, ``_merge_sweep``, …) remain until ADR-0015's C2/C3 retarget
-them to the modules' public functions.
+with a real RunManager when a tmp path is given) and exercise behavior through
+the modules' public functions (transitions.transition, sweeps.merge_sweep,
+dispatch.attempt_number, …) — the sanctioned seam per ADR-0015.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from ...ports.pmo import PMOPort
 from ..runs import RunManager
 from typing import TYPE_CHECKING as _TC
 
-from . import (decomposition, deliver, dispatch, feed, finalize, mapper, review,
-               schedule, sweeps, transitions)
+from . import (deliver, dispatch, feed, finalize, mapper, review, schedule,
+               sweeps)
 
 if _TC:
     from ..forge_runtime import ForgeRuntime
@@ -108,12 +108,11 @@ class MissionManager:
         self._grace, self._grace_next = self._grace_next, set()
 
 
-    # Delegating methods — implementation lives in the sibling modules
-    # (ADR-0015; signatures mirror the module functions exactly). Private
-    # `_x` delegators are transitional: C2/C3 retarget their callers and
-    # tests to the modules' public functions, then delete them.
+    # Public verb surface + cross-cutting primitives (ADR-0015 end state).
+    # Everything else is a module function taking `mgr` — the modules' public
+    # functions are the sanctioned test seam.
 
-    # ── feed ──
+    # ── primitives (stay methods: instance-overridable, shared substrate) ──
     def _audit(self, pmo_id: str, action: str, detail: str = ''):
         return feed._audit(self, pmo_id, action, detail)
 
@@ -123,165 +122,12 @@ class MissionManager:
     async def _feed(self, pmo_id: str, kind: str, markdown: str, *, externalize: bool = True):
         return await feed._feed(self, pmo_id, kind, markdown, externalize=externalize)
 
-    @staticmethod
-    def _unquoted(body: str | None):
-        return feed._unquoted(body)
-
-    @staticmethod
-    def _is_devcake_comment(body: str | None):
-        return feed._is_devcake_comment(body)
-
-    @staticmethod
-    def _stage_of(mission: Mission):
-        return feed._stage_of(mission)
-
-    # ── schedule ──
-    async def gate_map(self, missions: list[Mission]):
-        return await schedule.gate_map(self, missions)
-
-    async def schedule(self, missions: list[Mission], gate: dict[str, str] | None = None):
-        return await schedule.schedule(self, missions, gate)
-
-    async def _open_blockers(self, m: Mission, by_id: dict[str, Mission],
-                             memo: dict[str, Mission | None]):
-        return await schedule._open_blockers(self, m, by_id, memo)
-
-    # ── dispatch ──
-    async def dispatch(self, mission: Mission, mtype: MissionType, dev_type: DevType):
-        return await dispatch.dispatch(self, mission, mtype, dev_type)
-
-    def _identifying_prompt(self, dev_type: DevType):
-        return dispatch._identifying_prompt(self, dev_type)
-
-    def _onboard_repo_options(self, primary: str):
-        return dispatch._onboard_repo_options(self, primary)
-
-    def _decomposition_rule(self, live: Mission):
-        return dispatch._decomposition_rule(self, live)
-
-    def _reference_repos_note(self, primary: str):
-        return dispatch._reference_repos_note(self, primary)
-
-    def _protocol_spec_env(self, *, mission_id: str, mission_key: str, mission_type: str,
-                           dev_type: DevType, seq: int, extra_args: str, repo, forge):
-        return dispatch._protocol_spec_env(
-            self, mission_id=mission_id, mission_key=mission_key,
-            mission_type=mission_type, dev_type=dev_type, seq=seq,
-            extra_args=extra_args, repo=repo, forge=forge)
-
-    async def _skill_payload(self, dev_type: DevType):
-        return await dispatch._skill_payload(self, dev_type)
-
-    def runspec_secret_payload(self, run: Run):
-        return dispatch.runspec_secret_payload(self, run)
-
-    def _extra_repos_for(self, run: Run):
-        return dispatch._extra_repos_for(self, run)
-
-    def _credential_spec(self, dev_type: DevType):
-        return dispatch._credential_spec(self, dev_type)
-
-    @staticmethod
-    def _derive_seq(activity):
-        return dispatch._derive_seq(activity)
-
-    @staticmethod
-    def _unique_name(name: str, used: set[str]):
-        return dispatch._unique_name(name, used)
-
-    @staticmethod
-    def _aware(ts: datetime):
-        return dispatch._aware(ts)
-
-    @classmethod
-    def _last_giveup_at(cls, pmo_id: str):
-        return dispatch._last_giveup_at(cls, pmo_id)
-
-    def _attempt_number(self, pmo_id: str, mission_type: str, activity: Activity | None = None):
-        return dispatch._attempt_number(self, pmo_id, mission_type, activity)
-
-    async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int):
-        return await dispatch._give_up(self, mission, mtype, attempts)
-
-    async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
-        return await dispatch.activity_payload(self, pmo_id, kind)
-
-    async def _push_activity_repo(self, mission, mtype, seq: int):
-        return await dispatch._push_activity_repo(self, mission, mtype, seq)
-
-    def _resolve_repo(self, mission: Mission, all_runs: list | None = None):
-        return dispatch._resolve_repo(self, mission, all_runs)
-
-    def _mapper_repo(self):
-        return dispatch._mapper_repo(self)
-
-    # ── finalize ──
     async def _checkpoint(self, run: Run, key: str, fn):
         return await finalize._checkpoint(self, run, key, fn)
 
-    async def finalize(self, run: Run, payload: dict):
-        return await finalize.finalize(self, run, payload)
-
-    def dev_failure_error(self, run: Run, payload: dict):
-        return finalize.dev_failure_error(self, run, payload)
-
-    async def restore_after_failure(self, run: Run):
-        return await finalize.restore_after_failure(self, run)
-
-    async def _post_transcript(self, run: Run, transcript: str, last_message: str | None = None):
-        return await finalize._post_transcript(self, run, transcript, last_message)
-
-    @staticmethod
-    def _token_report_md(run: Run, tr: dict):
-        return finalize._token_report_md(run, tr)
-
-    # ── review ── (transition/finalize seams are module-public since C2:
-    # transitions.transition, review.finalize_review,
-    # decomposition.finalize_decomposition)
     async def _flag_out_of_pipeline_merge(self, run: Run):
-        # stays a method: instance-overridable (tests suppress it per-manager)
         return await review._flag_out_of_pipeline_merge(self, run)
 
-    async def _maybe_route_conflict_to_execute(self, pmo_id: str, key: str, pr_url: str,
-                                               from_label: str):
-        return await review._maybe_route_conflict_to_execute(self, pmo_id, key, pr_url,
-                                                             from_label)
-
-    # ── mapper ──
-    async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]):
-        return await mapper.dispatch_mapper(self, dev_type, missions)
-
-    async def finalize_mapper(self, run: Run, payload: dict):
-        return await mapper.finalize_mapper(self, run, payload)
-
-    async def _apply_mapper_edges(self, edges: list):
-        return await mapper._apply_mapper_edges(self, edges)
-
-    @staticmethod
-    def _creates_cycle(graph: dict[str, set[str]], blocker: str, blocked: str):
-        return mapper._creates_cycle(graph, blocker, blocked)
-
-    # ── sweeps ──
-    async def sweeps(self, missions: list[Mission]):
-        return await sweeps.sweeps(self, missions)
-
-    async def _merge_sweep(self, m: Mission):
-        return await sweeps._merge_sweep(self, m)
-
-    async def _deferred_merge_retry(self, m: Mission, pr, pr_url: str):
-        return await sweeps._deferred_merge_retry(self, m, pr, pr_url)
-
-    async def _tracking_sweep(self, m: Mission):
-        return await sweeps._tracking_sweep(self, m)
-
-    # ── deliver ──
-    async def deliver_internal_zip(self, run, pr):
-        return await deliver.deliver_internal_zip(self, run, pr)
-
-    async def deliver_internal_zip_for_mission(self, m, pr):
-        return await deliver.deliver_internal_zip_for_mission(self, m, pr)
-
-    # ── defined here (no module home yet) ──
     def _attachment_cap(self) -> int:
         """The PMO's attachment size cap (deliverable zip bound)."""
         try:
@@ -297,77 +143,48 @@ class MissionManager:
         attempt counters on upgrade (count, don't hide)."""
         return r.pmo_ref in ("", "main", self.instance_name)
 
+    # ── public verbs ──
+    async def gate_map(self, missions: list[Mission]):
+        return await schedule.gate_map(self, missions)
+
+    async def schedule(self, missions: list[Mission], gate: dict[str, str] | None = None):
+        return await schedule.schedule(self, missions, gate)
+
+    async def dispatch(self, mission: Mission, mtype: MissionType, dev_type: DevType):
+        return await dispatch.dispatch(self, mission, mtype, dev_type)
+
+    def runspec_secret_payload(self, run: Run):
+        return dispatch.runspec_secret_payload(self, run)
+
+    async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
+        return await dispatch.activity_payload(self, pmo_id, kind)
 
     async def resolve_repo_live(self, mission, all_runs=None):
-        """(repo_name | None, gate_reason | None), UN-GATING zero-repo missions
-        onto the internal fallback forge (M11). Async — it may provision a repo.
+        return await dispatch.resolve_repo_live(self, mission, all_runs)
 
-        Order: re-register any internal repo this mission already used (so the
-        sticky resolver finds it after an app restart), run the sticky resolver,
-        and if that returns the specific zero-repo gate, provision an internal
-        repo. Any OTHER gate (unknown marker, sticky-vanished external, mid-
-        mission change) is a real gate — never silently redirected internal."""
-        from ..repo_routing import REASON_ZERO_REPO
-        from ...ports.internal_forge import internal_repo_name
-        from ...adapters.registry import make_gitea_adapter
+    def mapper_repo(self):
+        return dispatch.mapper_repo(self)
 
-        from ...config import RepoInstance
+    async def finalize(self, run: Run, payload: dict):
+        return await finalize.finalize(self, run, payload)
 
-        if all_runs is None:
-            all_runs = self.runs.store.all()
+    def dev_failure_error(self, run: Run, payload: dict):
+        return finalize.dev_failure_error(self, run, payload)
 
-        async def _provision() -> str:
-            # ensure service accounts first (lazy retry — boot provisioning may
-            # have failed against a not-yet-ready Gitea; review finding #7)
-            svc = self.internal_forge.service_tokens()
-            if not svc:
-                await self.internal_forge.ensure_service_accounts()
-                svc = self.internal_forge.service_tokens() or {}
-            creds = await self.internal_forge.ensure_mission_repo(
-                self.instance_name, mission.key)
-            # the APP-SIDE adapter uses the devcake-app SERVICE token (org owner:
-            # write:issue for PR comments + write:repository for merge), NOT the
-            # mission's Dev write token (write:repository only → issue-scope 403s;
-            # review finding #1). The mission's write/read pair is the Dev's,
-            # delivered via runspec.
-            adapter = make_gitea_adapter(creds.clone_url, svc.get("app_token"),
-                                         svc.get("reviewer_token"))
-            # model_construct: internal repo names carry hyphens / exceed the
-            # operator-name pattern by design — they are synthesized, not input
-            inst = RepoInstance.model_construct(
-                name=creds.repo_name, forge="gitea", url=creds.clone_url,
-                default_branch="main", api_base=None)
-            self.forges.register_internal(creds.repo_name, inst, adapter)
-            return creds.repo_name
+    async def restore_after_failure(self, run: Run):
+        return await finalize.restore_after_failure(self, run)
 
-        async def _ensure_registered(name: str) -> None:
-            # already registered this process → no per-cycle I/O (finding #8);
-            # else (re)provision — covers restart recovery + first intake
-            if name not in self.forges.instances:
-                await _provision()
+    async def sweeps(self, missions: list[Mission]):
+        return await sweeps.sweeps(self, missions)
 
-        expected = (internal_repo_name(self.instance_name, mission.key)
-                    if self.internal_forge is not None else None)
+    async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]):
+        return await mapper.dispatch_mapper(self, dev_type, missions)
 
-        # a done/canceled mission must never (re-)provision: the poll loop sees
-        # terminal missions too, so without this guard the admin Clear endpoint
-        # was silently undone within one cycle — repo, svc user, and a fresh
-        # token pair resurrected (audit A4). Terminal missions are never
-        # scheduled (derivation row 5), so gating them is inert.
-        terminal = mission.status in ("done", "canceled")
+    async def finalize_mapper(self, run: Run, payload: dict):
+        return await mapper.finalize_mapper(self, run, payload)
 
-        # restart recovery: a prior run points at this mission's internal repo,
-        # but ForgeRuntime lost it on restart — re-register before resolving
-        if not terminal and expected is not None and any(
-                r.repo_ref == expected for r in all_runs
-                if r.mission_pmo_id == mission.pmo_id):
-            await _ensure_registered(expected)
+    async def deliver_internal_zip(self, run, pr):
+        return await deliver.deliver_internal_zip(self, run, pr)
 
-        name, reason = self._resolve_repo(mission, all_runs=all_runs)
-        if name is not None:
-            return name, reason
-        if (reason is REASON_ZERO_REPO and self.internal_forge is not None
-                and not terminal):
-            await _ensure_registered(expected)
-            return expected, None
-        return None, reason
+    async def deliver_internal_zip_for_mission(self, m, pr):
+        return await deliver.deliver_internal_zip_for_mission(self, m, pr)

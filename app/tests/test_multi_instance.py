@@ -156,11 +156,11 @@ def test_dispatch_stamps_the_dispatching_instances_pmo_ref():
     import inspect
     from devcake.domain.orchestrator import dispatch as dispatch_mod
     src = inspect.getsource(dispatch_mod.dispatch)
-    assert "pmo_ref=self.instance_name" in src
+    assert "pmo_ref=mgr.instance_name" in src
     assert "pmo_ref=self.config.pmos[0]" not in src
     from devcake.domain.orchestrator import mapper as mapper_mod
     src = inspect.getsource(mapper_mod.dispatch_mapper)
-    assert "pmo_ref=self.instance_name" in src
+    assert "pmo_ref=mgr.instance_name" in src
 
 
 def test_ownership_survives_a_transient_cycle(tmp_path, monkeypatch):

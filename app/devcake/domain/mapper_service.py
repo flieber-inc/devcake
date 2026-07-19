@@ -72,7 +72,7 @@ class MapperService:
         """The interval path, called once per poll cycle (never while paused)."""
         rm = self.config.relations_mapper
         dt = self.dev_type()
-        repo = self.mgr._mapper_repo()
+        repo = self.mgr.mapper_repo()
         if not rm.enabled or dt is None or repo is None \
                 or repo in self.mgr.forges.breakers:   # no/broken repo → idle
             return
@@ -124,7 +124,7 @@ class MapperService:
                 f"dev type {dt.name}: secret env {', '.join(missing)} is "
                 "referenced by mcp_setup_commands but has no stored value — "
                 "paste it on the admin Config page")
-        repo = self.mgr._mapper_repo()
+        repo = self.mgr.mapper_repo()
         if repo is None:
             raise MapperUnconfigured(
                 "no repository configured — mapper runs need the forge "

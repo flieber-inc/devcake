@@ -9,6 +9,7 @@ import pytest
 import devcake.config as config_mod
 from devcake.config import (AppConfig, DevType, PMOInstance, RepoInstance,
                             reject_stale_patch)
+from devcake.domain.orchestrator import dispatch
 
 V1_YAML = """
 schema_version: 1
@@ -274,7 +275,6 @@ def test_secret_env_blocklist_covers_registry_and_protocol():
     from types import SimpleNamespace
 
     from devcake.adapters.registry import forges
-    from devcake.domain.orchestrator import dispatch as dispatch_mod
 
     def refused(name):
         with pytest.raises(Exception, match="shadow"):
@@ -291,7 +291,7 @@ def test_secret_env_blocklist_covers_registry_and_protocol():
         clone_user="x", git_user_name="x", git_email="x@x",
         cli_token_envs=["GH_TOKEN"]))
     repo = SimpleNamespace(url="https://x/r.git", default_branch="main")
-    spec = dispatch_mod._protocol_spec_env(
+    spec = dispatch._protocol_spec_env(
         None, mission_id="m", mission_key="K-1", mission_type="EXECUTE",
         dev_type=DevType(name="x", harness_template="claude-code"), seq=1,
         extra_args="", repo=repo, forge=forge)

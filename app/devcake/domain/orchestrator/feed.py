@@ -19,13 +19,13 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-def _audit(self, pmo_id: str, action: str, detail: str = "") -> None:
+def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
     markers.AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(markers.AUDIT_PATH, "a") as f:
         f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
-                            "instance": getattr(self, "instance_name", ""),
+                            "instance": getattr(mgr, "instance_name", ""),
                             "pmo_id": pmo_id, "action": action, "detail": detail}) + "\n")
-    self._grace_next.add(pmo_id)
+    mgr._grace_next.add(pmo_id)
     # mirror every audit action as a span so OO alerts can fire on them
     # (ISSUES #23: `devcake_needs_human` was a file-only record no alert
     # could ever see). One span name, action as attribute — the alert set
@@ -36,18 +36,18 @@ def _audit(self, pmo_id: str, action: str, detail: str = "") -> None:
         span.set_attribute("devcake.audit.detail", redact(detail)[:500])
 
 
-def _trip_breaker(self, name: str, reason: str) -> None:
+def _trip_breaker(mgr, name: str, reason: str) -> None:
     """Single choke point for tripping a breaker: sets the in-memory dict
     AND emits a span — breakers had no telemetry at all, so the documented
     DEV_AUTH alert could never fire (ISSUES #23)."""
-    self.breakers[name] = reason
+    mgr.breakers[name] = reason
     with tracer.start_as_current_span("breaker.trip") as span:
         span.set_attribute("devcake.breaker", name)
         span.set_attribute("devcake.reason", redact(reason)[:500])
         span.set_status(Status(StatusCode.ERROR, f"breaker {name} tripped"))
 
 
-async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
+async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
                 externalize: bool = True) -> None:
     """The single choke-point for PMO comments: redaction + the provenance
     sentinel. Bodies over FEED_INLINE_MAX are uploaded as .md attachments
@@ -62,12 +62,12 @@ async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
     issues anyway (ADR-0006)."""
     markdown = redact(markdown)
     if kind == "project":
-        self._audit(pmo_id, "project_feed_suppressed", markdown[:120])
+        _audit(mgr, pmo_id, "project_feed_suppressed", markdown[:120])
         return
     if externalize and len(markdown) > FEED_INLINE_MAX:
         try:
             name = f"comment-{utcnow():%Y%m%dT%H%M%S}.md"
-            url = await self.pmo.upload_attachment(pmo_id, name,
+            url = await mgr.pmo.upload_attachment(pmo_id, name,
                                                    markdown.encode())
             # preview from UNQUOTED lines only: flattening newlines would
             # otherwise land "> "-quarantined text mid-line, back in scan
@@ -77,7 +77,7 @@ async def _feed(self, pmo_id: str, kind: str, markdown: str, *,
                         + f"… — full text attached: [{name}]({url})")
         except Exception:
             log.exception("feed attachment upload failed — posting inline")
-    await self.pmo.post_feed(
+    await mgr.pmo.post_feed(
         MissionRef(pmo_id, "issue"),
         markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
 

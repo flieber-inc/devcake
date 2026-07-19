@@ -12,27 +12,28 @@ from ...harness import HARNESSES
 from ...security import redact_value
 from ...config import DevType
 from ..model import LABEL_OPTIN, Mission
+from . import dispatch
 from ..run import Run, utcnow
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> Run:
+async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Run:
     """Dispatch a MAPPER run: a Dev whose only job is proposing missing
     blocked-by edges. No PMO writes at dispatch (no status, no labels) —
     finalize_mapper validates and applies whatever it proposes."""
     from ..ids import make_run_id
     from ...prompts import MAPPER_MISSION_CAP, mapper_prompt
-    repo_name = self._mapper_repo()
+    repo_name = dispatch.mapper_repo(mgr)
     if repo_name is None:
         # spec env carries the forge dialect — no repo, no mapper runs either
         raise RuntimeError("no repository configured — mapper runs need the "
                            "forge dialect in their run spec")
-    repo, forge = self.forges.instance(repo_name), self.forges.get(repo_name)
+    repo, forge = mgr.forges.instance(repo_name), mgr.forges.get(repo_name)
     eligible = [m for m in missions
                 if m.pmo_kind == "issue" and m.status not in ("done", "canceled")
-                and (self.config.adoption_mode != "opt_in"
+                and (mgr.config.adoption_mode != "opt_in"
                      or LABEL_OPTIN in m.labels)]
     if len(eligible) > MAPPER_MISSION_CAP:
         log.warning("mapper prompt truncated to %d of %d missions",
@@ -40,9 +41,9 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
     # own-instance MAPPER runs only (audit A29, cosmetic): run ids carry the
     # instance prefix + random suffix, so no collision — but a cross-instance
     # count made the human-visible seq misleading
-    seq = 1 + sum(1 for r in self.runs.store.all()
-                  if r.mission_type == "MAPPER" and self._run_is_ours(r))
-    run_id = make_run_id(self.instance_name, "TEAM", seq, "MAPPER")
+    seq = 1 + sum(1 for r in mgr.runs.store.all()
+                  if r.mission_type == "MAPPER" and mgr._run_is_ours(r))
+    run_id = make_run_id(mgr.instance_name, "TEAM", seq, "MAPPER")
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)
@@ -53,29 +54,29 @@ async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]) -> R
         inject(carrier)
         traceparent = carrier.get("traceparent", "")
 
-        spec_env = self._protocol_spec_env(
+        spec_env = dispatch._protocol_spec_env(mgr, 
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
             dev_type=dev_type, seq=seq, extra_args="",
             repo=repo, forge=forge)
         run = Run(
             run_id=run_id, mission_key="TEAM", mission_type="MAPPER",
-            pmo_ref=self.instance_name, repo_ref=repo_name,
+            pmo_ref=mgr.instance_name, repo_ref=repo_name,
             dev_type=dev_type.name, seq=seq,
-            timeout_seconds=self.config.dev_timeout_minutes * 60,
+            timeout_seconds=mgr.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
             spec_env=spec_env,
         )
-        run.spec_prompt = mapper_prompt(self._identifying_prompt(dev_type), eligible)
-        run.spec_skills = await self._skill_payload(dev_type)
+        run.spec_prompt = mapper_prompt(dispatch._identifying_prompt(mgr, dev_type), eligible)
+        run.spec_skills = await dispatch._skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
-        await self.runs.bootstrap.launch(
+        await mgr.runs.bootstrap.launch(
             run, image=HARNESSES[dev_type.harness_template].image)
         log.info("dispatched mapper %s (dev=%s, %d missions in prompt)",
                  run_id, dev_type.name, len(eligible))
         return run
 
 
-async def finalize_mapper(self, run: Run, payload: dict) -> None:
+async def finalize_mapper(mgr, run: Run, payload: dict) -> None:
     """MAPPER runs have no host mission: no transcript/token-report comments —
     the output lands as relations + a notification comment on each blocked
     mission. Failures are logged only; the next interval simply retries."""
@@ -91,29 +92,29 @@ async def finalize_mapper(self, run: Run, payload: dict) -> None:
                                       kind=SpanKind.CONSUMER) as span:
         span.set_attribute("devcake.run.id", run.run_id)
         span.set_attribute("devcake.outcome", outcome or "(failure artifact)")
-        await self.messaging.delete_run_user(run.run_id)
-        await self.messaging.delete_reply_stream(run.run_id)
+        await mgr.messaging.delete_run_user(run.run_id)
+        await mgr.messaging.delete_reply_stream(run.run_id)
         if outcome != "relations_mapped":
             run.state = "failed"
-            run.error = self.dev_failure_error(run, payload)
+            run.error = mgr.dev_failure_error(run, payload)
             run.ended_at = utcnow()
-            self.runs.store.save(run)
+            mgr.runs.store.save(run)
             log.warning("mapper run %s failed: %s", run.run_id, run.error)
             return
-        created, rejected = await self._apply_mapper_edges(result.get("edges") or [])
+        created, rejected = await apply_mapper_edges(mgr, result.get("edges") or [])
         span.set_attribute("devcake.mapper.edges_created", created)
         span.set_attribute("devcake.mapper.edges_rejected", rejected)
         run.result = redact_value(result)
         run.state, run.ended_at = "finished", utcnow()
-        self.runs.store.save(run)
+        mgr.runs.store.save(run)
         log.info("mapper %s finished: %d edges created, %d rejected",
                  run.run_id, created, rejected)
 
 
-async def _apply_mapper_edges(self, edges: list) -> tuple[int, int]:
+async def apply_mapper_edges(mgr, edges: list) -> tuple[int, int]:
     """The Dev is advisory; the app is the gatekeeper — drop edges that are
-    unknown, self, terminal, duplicate, or cycle-forming (ADR-0007)."""
-    missions = await self.pmo.list_all(self.instance.team_key)
+    unknown, mgr, terminal, duplicate, or cycle-forming (ADR-0007)."""
+    missions = await mgr.pmo.list_all(mgr.instance.team_key)
     by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
     graph = {m.pmo_id: set(m.blocked_by) for m in missions
              if m.pmo_kind == "issue"}                 # node → its blockers
@@ -126,26 +127,26 @@ async def _apply_mapper_edges(self, edges: list) -> tuple[int, int]:
         if blocker is None or blocked is None:
             reason = "unknown mission key"
         elif blocker.pmo_id == blocked.pmo_id:
-            reason = "self-edge"
+            reason = "mgr-edge"
         elif blocker.status in ("done", "canceled") \
                 or blocked.status in ("done", "canceled"):
             reason = "terminal mission"
         elif blocker.pmo_id in graph.get(blocked.pmo_id, set()):
             reason = "duplicate"
-        elif self._creates_cycle(graph, blocker.pmo_id, blocked.pmo_id):
+        elif _creates_cycle(graph, blocker.pmo_id, blocked.pmo_id):
             reason = "would create a cycle"
         if reason:
             rejected += 1
-            self._audit(blocked.pmo_id if blocked else "", "mapper_edge_rejected",
+            mgr._audit(blocked.pmo_id if blocked else "", "mapper_edge_rejected",
                         f"{blocker_key}→{blocked_key}: {reason}")
             log.info("mapper edge %s blocks %s rejected: %s",
                      blocker_key, blocked_key, reason)
             continue
-        await self.pmo.create_relation(blocker.pmo_id, blocked.pmo_id)
+        await mgr.pmo.create_relation(blocker.pmo_id, blocked.pmo_id)
         graph.setdefault(blocked.pmo_id, set()).add(blocker.pmo_id)
-        self._audit(blocked.pmo_id, "relation_created",
+        mgr._audit(blocked.pmo_id, "relation_created",
                     f"mapper: blocked by {blocker.key}")
-        await self._feed(
+        await mgr._feed(
             blocked.pmo_id, "issue",
             f"🔗 DevCake mapped a blocking relation: this mission is blocked by "
             f"**{blocker.key}** and will not start before it finishes. Remove "

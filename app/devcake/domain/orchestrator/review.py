@@ -8,6 +8,7 @@ from ...security import redact
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import mission_branch, run_branch
+from .feed import _unquoted
 from .markers import (CONFLICT_MARKER, MAX_CONFLICT_RESOLVES, MERGE_HANDOFF_MARKER,
                       MERGE_RETRY_MARKER)
 
@@ -59,7 +60,7 @@ async def _conflict_attempts(mgr, pmo_id: str) -> int:
     human deleting directive comments deliberately resets it."""
     act = await mgr.pmo.get_activity(MissionRef(pmo_id, "issue"))
     hits = [int(mt.group(1)) for e in act.entries
-            for mt in CONFLICT_MARKER.finditer(mgr._unquoted(e.body))]
+            for mt in CONFLICT_MARKER.finditer(_unquoted(e.body))]
     return max(hits) if hits else 0
 
 

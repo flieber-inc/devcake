@@ -11,6 +11,7 @@ from devcake.domain.orchestrator import review
 from devcake.domain.repo_routing import (REASON_ZERO_REPO, marker_repo,
                                          resolve_repo)
 from devcake.domain.run import Run
+from devcake.domain.orchestrator import dispatch, sweeps
 
 
 def run_coro(c):
@@ -118,7 +119,7 @@ def test_vanished_repo_contract_in_sweeps_and_review(tmp_path):
     mgr = make_mission_manager(forge_runtime=FakeForgeRuntime(None))
     m = _m()
     m.repo, m.repo_reason = None, "repo 'beta' no longer configured"
-    run_coro(mgr._merge_sweep(m))                # must not raise
+    run_coro(sweeps.merge_sweep(mgr, m))                # must not raise
     assert "no longer configured" in mgr.blocked_reasons["p1"]
 
     run = _run("gone")
@@ -180,10 +181,10 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
     )
     dt = mgr.dev_types["senior-dev"]
 
-    env_gh = mgr._protocol_spec_env(
+    env_gh = dispatch._protocol_spec_env(mgr, 
         mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
         dev_type=dt, seq=1, extra_args="", repo=gh, forge=rt.get("ghrepo"))
-    env_gl = mgr._protocol_spec_env(
+    env_gl = dispatch._protocol_spec_env(mgr, 
         mission_id="p2", mission_key="T-2", mission_type="EXECUTE",
         dev_type=dt, seq=1, extra_args="", repo=gl, forge=rt.get("glrepo"))
     assert env_gh["DEVCAKE_REPO_URL"] == gh.url and env_gl["DEVCAKE_REPO_URL"] == gl.url
@@ -242,7 +243,7 @@ def test_resolve_repo_history_assembly(tmp_path):
         return orig(mission, instance, {"alpha", "beta"}, history)
     rr.resolve_repo = spy
     try:
-        name, reason = mgr._resolve_repo(_m())
+        name, reason = dispatch.resolve_repo(mgr, _m())
     finally:
         rr.resolve_repo = orig
     # newest-first, only THIS mission's non-mapper, same-instance records
@@ -549,12 +550,12 @@ def test_onboard_runspec_carries_extra_repo_read_tokens(tmp_path, monkeypatch):
 
     # the prompt-side counterpart: multi-repo instances get the section
     # (primary listed first), single-repo instances get nothing
-    txt = mgr._onboard_repo_options("beta")
+    txt = dispatch._onboard_repo_options(mgr, "beta")
     assert "`beta`" in txt and "`alpha`" in txt
     assert txt.index("`beta`") < txt.index("`alpha`")
     assert "devcake-repo:" in txt and "blocked_by" in txt
     mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
-    assert mgr._onboard_repo_options("alpha") == ""
+    assert dispatch._onboard_repo_options(mgr, "alpha") == ""
 
 
 def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch):
@@ -609,7 +610,7 @@ def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch
     assert name is None and "REFERENCE" in reason
 
     # every stage's prompt names the reference clones
-    note = mgr._reference_repos_note("alpha")
+    note = dispatch._reference_repos_note(mgr, "alpha")
     assert "`docs`" in note and "`guides`" in note and "NEVER modify" in note
     from devcake.prompts import execute_prompt, plan_prompt
     out = execute_prompt("ID", m, "a", "pr {branch}", reference_repos=note)

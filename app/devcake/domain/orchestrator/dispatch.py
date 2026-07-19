@@ -21,14 +21,15 @@ from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
 from . import markers
-from .feed import _unquoted
+from . import schedule
+from .feed import _is_devcake_comment, _stage_of, _unquoted
 from .markers import STEP_MARKER
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-def _resolve_repo(self, mission: Mission, all_runs: list | None = None):
+def resolve_repo(mgr, mission: Mission, all_runs: list | None = None):
     """(repo_name | None, gate_reason | None) — marker > instance default >
     zero-repo gate, STICKY once a run exists (domain/repo_routing.py).
     `all_runs`: pre-fetched store snapshot — the poll loop stamps every
@@ -36,51 +37,51 @@ def _resolve_repo(self, mission: Mission, all_runs: list | None = None):
     once per mission; dispatch's live re-resolve reads fresh."""
     from ..repo_routing import resolve_repo
     if all_runs is None:
-        all_runs = self.runs.store.all()
+        all_runs = mgr.runs.store.all()
     history = sorted(
         (r for r in all_runs
-         if r.mission_pmo_id == mission.pmo_id and self._run_is_ours(r)
+         if r.mission_pmo_id == mission.pmo_id and mgr._run_is_ours(r)
          and r.mission_type != "MAPPER"),
         key=lambda r: r.created_at, reverse=True)
-    return resolve_repo(mission, self.instance,
-                        set(self.forges.instances), history)
+    return resolve_repo(mission, mgr.instance,
+                        set(mgr.forges.instances), history)
 
 
-def _mapper_repo(self) -> str | None:
+def mapper_repo(mgr) -> str | None:
     """The repo a MAPPER run clones (the entrypoint always clones): the
     instance's default repo when configured, else any configured repo. A
     MAPPER run reads the whole team's relations, not a mission — it never
     routes to a per-mission internal repo (returns None → mapper stays idle
     when only the internal forge exists)."""
-    for name in (self.instance.repos or []):      # set order = preference
-        if name in self.forges.instances:
+    for name in (mgr.instance.repos or []):      # set order = preference
+        if name in mgr.forges.instances:
             return name
-    external = [n for n in self.forges.instances if n not in self.forges.internal]
+    external = [n for n in mgr.forges.instances if n not in mgr.forges.internal]
     return external[0] if external else None
 
 
-def _identifying_prompt(self, dev_type: DevType) -> str:
+def _identifying_prompt(mgr, dev_type: DevType) -> str:
     """The Dev Type's identifying prompt via its ACTIVE workflow template
     (2026-07-15); falls back Development → the stored identifying_prompt
     field, warning in the log (and /health) on a broken named template."""
     from ...prompts import templates as prompt_templates
     text, warn = prompt_templates.resolve_devtype_prompt(
         dev_type.name,
-        self.config.active_devtype_prompts.get(dev_type.name),
+        mgr.config.active_devtype_prompts.get(dev_type.name),
         fallback=dev_type.identifying_prompt)
     if warn:
         log.warning("devtype prompt fallback: %s", warn)
     return text
 
 
-def _decomposition_rule(self, live: Mission) -> str:
+def decomposition_rule(mgr, live: Mission) -> str:
     """The per-mission {decomposition_rule} line for ONBOARD prompts
     (ADR-0012): mirrors the finalizer's gate exactly — a Dev told
     'forbidden' never wastes a run on a decomposed outcome the app would
     park. Depth comes from the mission's own PMO record (label + marker);
     unknown counts as at-limit, fail-safe."""
     from ... import prompts
-    limit = self.config.max_decomposition_depth
+    limit = mgr.config.max_decomposition_depth
     if not limit:
         return prompts.DECOMPOSITION_RULE_UNLIMITED
     if markers.at_decomposition_limit(live, limit):   # THE shared predicate
@@ -89,24 +90,24 @@ def _decomposition_rule(self, live: Mission) -> str:
         depth=markers.decomposition_depth(live), limit=limit)
 
 
-def _onboard_repo_options(self, primary: str) -> str:
+def _onboard_repo_options(mgr, primary: str) -> str:
     """The multi-repo triage section for ONBOARD prompts (item 2 full scope,
     founder decision 2026-07-15): empty unless the instance's repo SET has
     more than one member. Lists every set repo (primary first) — all of them
     are cloned into the triage workspace — and states the split-by-repo
     decomposition rule."""
-    names = [n for n in (self.instance.repos or [])
-             if n in self.forges.instances]
+    names = [n for n in (mgr.instance.repos or [])
+             if n in mgr.forges.instances]
     if len(names) < 2:
         return ""
     ordered = [primary] + [n for n in names if n != primary]
     lines = []
     for i, n in enumerate(ordered):
-        inst_x = self.forges.instance(n)
+        inst_x = mgr.forges.instance(n)
         slug = inst_x.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         suffix = ("  ← this mission's repository" if i == 0 else "")
         lines.append(f"- `{n}` → /workspace/repo/{slug}/ ({inst_x.url}){suffix}")
-    default = self.instance.repos[0]
+    default = mgr.instance.repos[0]
     return (
         "### This team works across several repositories\n"
         "All of them are cloned READ-ONLY in your workspace for assessment "
@@ -122,18 +123,18 @@ def _onboard_repo_options(self, primary: str) -> str:
         f"(`{default}`).\n\n")
 
 
-def _reference_repos_note(self, primary: str) -> str:
+def _reference_repos_note(mgr, primary: str) -> str:
     """The read-only reference-repos section for EVERY stage's prompt
     (founder request 2026-07-15): consultation material cloned alongside
     the mission's repository. Empty when the instance has none configured
     (or they all vanished from config)."""
-    names = [n for n in (self.instance.reference_repos or [])
-             if n != primary and n in self.forges.instances]
+    names = [n for n in (mgr.instance.reference_repos or [])
+             if n != primary and n in mgr.forges.instances]
     if not names:
         return ""
     lines = []
     for n in names:
-        inst_x = self.forges.instance(n)
+        inst_x = mgr.forges.instance(n)
         slug = inst_x.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         lines.append(f"- `{n}` → /workspace/repo/{slug}/ ({inst_x.url})")
     return (
@@ -144,7 +145,7 @@ def _reference_repos_note(self, primary: str) -> str:
         + "\n".join(lines) + "\n")
 
 
-async def dispatch(self, mission: Mission, mtype: MissionType,
+async def dispatch(mgr, mission: Mission, mtype: MissionType,
                    dev_type: DevType) -> Run | None:
     missing = missing_referenced_secret_env(dev_type)
     if missing:
@@ -152,37 +153,37 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         # var would exit 14 in-container with the cause buried in a warning
         # — refuse deterministically, burn no attempt, launch no container;
         # pasting the value un-gates on the next poll cycle
-        self.blocked_reasons[mission.pmo_id] = (
+        mgr.blocked_reasons[mission.pmo_id] = (
             f"dev type {dev_type.name}: secret env {', '.join(missing)} is "
             "referenced by mcp_setup_commands but has no stored value — "
             "paste it on the admin Config page")
         log.warning("dispatch of %s refused — %s", mission.key,
-                    self.blocked_reasons[mission.pmo_id])
+                    mgr.blocked_reasons[mission.pmo_id])
         return None
     try:
-        live = await self.pmo.get(mission.ref)                 # live re-read
+        live = await mgr.pmo.get(mission.ref)                 # live re-read
     except Exception as e:  # noqa: BLE001 — any PMO failure gates this ONE mission (reason recorded + logged); escaping would abort the whole poll segment (audit A1)
         # a PMO failure here (transient or permanent) gates the ONE mission —
         # letting it escape would abort the whole poll segment (audit A1)
-        self.blocked_reasons[mission.pmo_id] = (
+        mgr.blocked_reasons[mission.pmo_id] = (
             f"PMO read failed at dispatch: {type(e).__name__}: {str(e)[:150]}")
         log.warning("dispatch of %s refused — PMO read failed: %s", mission.key, e)
         return None
-    d = derive(live, self.config.adoption_mode)
+    d = derive(live, mgr.config.adoption_mode)
     if d.mission_type != mtype:
         return None                                            # world moved on
     # per-mission repo resolution, re-checked LIVE at dispatch (M10; sticky —
     # a mid-mission routing change gates instead of re-routing, plan H3;
     # M11: zero-repo missions un-gate onto the internal forge)
-    repo_name, gate_reason = await self.resolve_repo_live(live)
+    repo_name, gate_reason = await resolve_repo_live(mgr, live)
     if repo_name is None:
-        self.blocked_reasons[live.pmo_id] = gate_reason
+        mgr.blocked_reasons[live.pmo_id] = gate_reason
         log.info("dispatch of %s refused — %s", live.key, gate_reason)
         return None
-    repo = self.forges.instance(repo_name)
-    forge = self.forges.get(repo_name)
+    repo = mgr.forges.instance(repo_name)
+    forge = mgr.forges.get(repo_name)
     if live.blocked_by:
-        open_blockers = await self._open_blockers(live, {}, {})  # all live
+        open_blockers = await schedule._open_blockers(mgr, live, {}, {})  # all live
         if open_blockers:
             log.info("dispatch of %s aborted — blocked by %s",
                      live.key, ", ".join(open_blockers))
@@ -192,23 +193,23 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         seq = 1                       # projects only ever ONBOARD (ADR-0006)
         activity = None
     else:
-        activity = await self.pmo.get_activity(mission.ref)
-        seq = self._derive_seq(activity)
+        activity = await mgr.pmo.get_activity(mission.ref)
+        seq = _derive_seq(activity)
     # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3),
     # a later step finishes, or a human comments on the mission
-    attempt = self._attempt_number(mission.pmo_id, mtype.value, activity)
-    if attempt > self.config.max_attempts:
-        await self._give_up(live, mtype, attempt - 1)
+    attempt = attempt_number(mgr, mission.pmo_id, mtype.value, activity)
+    if attempt > mgr.config.max_attempts:
+        await _give_up(mgr, live, mtype, attempt - 1)
         return None
 
-    assignment = self.config.assignments[mtype.value]
+    assignment = mgr.config.assignments[mtype.value]
     from ..ids import RunIdOverflow, make_run_id
     try:
-        run_id = make_run_id(self.instance_name, mission.key, seq, mtype.value)
+        run_id = make_run_id(mgr.instance_name, mission.key, seq, mtype.value)
     except RunIdOverflow as e:
         # an inflated seq (forged/overflowed `N_TYPE.md` feed marker) must
         # gate this mission, never wedge the poll segment (audit A15)
-        self.blocked_reasons[live.pmo_id] = (
+        mgr.blocked_reasons[live.pmo_id] = (
             f"run id would exceed the 64-char budget (step marker seq {seq}) "
             f"— remove or fix the oversized `N_{mtype.value}.md` marker in "
             f"the activity feed")
@@ -217,7 +218,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
 
     # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
     # repo records what this Dev actually receives. NEVER gates dispatch.
-    await self._push_activity_repo(live, mtype, seq)
+    await _push_activity_repo(mgr, live, mtype, seq)
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)
@@ -238,20 +239,20 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
             # corrupt file falls back to the built-in default — dispatch
             # never fails on template trouble (warning also in /health)
             text, warn = prompt_templates.resolve_playbook(
-                mt_name, self.config.active_prompt_templates.get(mt_name))
+                mt_name, mgr.config.active_prompt_templates.get(mt_name))
             if warn:
                 log.warning("prompt template fallback: %s", warn)
             return text
 
         repo_slug = repo.url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        ref_note = self._reference_repos_note(repo_name)
-        ident = self._identifying_prompt(dev_type)
+        ref_note = _reference_repos_note(mgr, repo_name)
+        ident = _identifying_prompt(mgr, dev_type)
         prompt = {
             MissionType.ONBOARD: lambda: onboard_prompt(
                 ident, live, playbook=_pb("ONBOARD"),
-                repo_options=self._onboard_repo_options(repo_name),
+                repo_options=_onboard_repo_options(mgr, repo_name),
                 reference_repos=ref_note,
-                decomposition_rule=self._decomposition_rule(live)),
+                decomposition_rule=decomposition_rule(mgr, live)),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=_pb("PLAN"),
                 reference_repos=ref_note),
@@ -266,41 +267,41 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
                 reference_repos=ref_note),
         }[mtype]()
 
-        spec_env = self._protocol_spec_env(
+        spec_env = _protocol_spec_env(mgr, 
             mission_id=mission.pmo_id, mission_key=mission.key,
             mission_type=mtype.value, dev_type=dev_type, seq=seq,
             extra_args=assignment.extra_cli_args, repo=repo, forge=forge)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
-            pmo_ref=self.instance_name, repo_ref=repo_name,
+            pmo_ref=mgr.instance_name, repo_ref=repo_name,
             dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
-            timeout_seconds=self.config.dev_timeout_minutes * 60,
+            timeout_seconds=mgr.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
             spec_env=spec_env,
         )
         run.spec_prompt = prompt
-        run.spec_skills = await self._skill_payload(dev_type)
+        run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
-        run.branch = mission_branch(self.instance_name, mission.key)
-        run.stage_label_at_dispatch = self._stage_of(live)
+        run.branch = mission_branch(mgr.instance_name, mission.key)
+        run.stage_label_at_dispatch = _stage_of(live)
         run.mission_pmo_id = mission.pmo_id
-        await self.runs.bootstrap.launch(
+        await mgr.runs.bootstrap.launch(
             run, image=HARNESSES[dev_type.harness_template].image)
 
         if live.status == "backlog":
-            await self.pmo.set_status(mission.ref, "in_progress")
-            self._audit(mission.pmo_id, "set_status", "in_progress")
+            await mgr.pmo.set_status(mission.ref, "in_progress")
+            mgr._audit(mission.pmo_id, "set_status", "in_progress")
         log.info("dispatched %s (attempt %d, dev=%s)", run_id, attempt, dev_type.name)
         return run
 
 
-async def _skill_payload(self, dev_type: DevType) -> list[dict]:
+async def _skill_payload(mgr, dev_type: DevType) -> list[dict]:
     """Skill-store files for this Dev Type's runs. Delivery is registry-
     driven: a harness with no skills_dir (harness.py) doesn't read personal
     skills anywhere, so a selection there is skipped with a warning — never
     a refused run."""
-    if not dev_type.skills or getattr(self, "skills", None) is None:
+    if not dev_type.skills or getattr(mgr, "skills", None) is None:
         return []
     if HARNESSES[dev_type.harness_template].skills_dir is None:
         log.warning("dev type %s: skills %s configured but harness %s does "
@@ -308,7 +309,7 @@ async def _skill_payload(self, dev_type: DevType) -> list[dict]:
                     dev_type.skills, dev_type.harness_template)
         return []
     try:
-        payload, warnings = await self.skills.payload_for(dev_type.skills)
+        payload, warnings = await mgr.skills.payload_for(dev_type.skills)
     except Exception as e:  # noqa: BLE001 — skills are additive and must never refuse a run; dispatch proceeds without them (logged)
         # payload_for swallows STORE errors, but a bundled-copy read can
         # still raise — skills are additive and must never refuse a run
@@ -320,7 +321,7 @@ async def _skill_payload(self, dev_type: DevType) -> list[dict]:
     return payload
 
 
-def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
+def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        mission_type: str, dev_type: DevType, seq: int,
                        extra_args: str, repo, forge) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
@@ -347,22 +348,22 @@ def _protocol_spec_env(self, *, mission_id: str, mission_key: str,
     }
 
 
-def runspec_secret_payload(self, run: Run) -> dict | None:
+def runspec_secret_payload(mgr, run: Run) -> dict | None:
     """Secret half of a run spec, built from current config on request
     (docs/09 §5): nothing secret is at rest between dispatch and the Dev's
     runspec.get, and a slow container start or Redis restart cannot expire
     it. verify_auth has already authenticated the requester."""
-    dt = self.dev_types.get(run.dev_type)
+    dt = mgr.dev_types.get(run.dev_type)
     if dt is None:
         return None            # dev type deleted mid-run → runspec.error
-    env_creds, spec_files = self._credential_spec(dt)
+    env_creds, spec_files = _credential_spec(mgr, dt)
     # Stage-scope forge credentials (ISSUES #15): every stage clones the
     # repo (entrypoint always git-clones), so all stages need a
     # clone-capable token. EXECUTE gets the write token (push/PR). Other
     # stages prefer token_ro when set, else fall back to the write token
     # so private repos keep working without a separate RO PAT.
     # Reviewer PAT stays app-side only.
-    repo = self.forges.instance(run.repo_ref)
+    repo = mgr.forges.instance(run.repo_ref)
     if repo is None:
         # the run's repo vanished from config mid-flight → runspec.error
         # (the resolution-failure contract, domain/forge_runtime.py)
@@ -370,11 +371,11 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
                   run.run_id, run.repo_ref)
         return None
     env: dict[str, str] = {**env_creds}
-    if run.repo_ref in self.forges.internal and self.internal_forge is not None:
+    if run.repo_ref in mgr.forges.internal and mgr.internal_forge is not None:
         # internal fallback forge (M11): Dev tokens are the mission's
         # per-user scoped pair (NOT env vars) — write for EXECUTE, read
         # elsewhere; isolation lives in the token scope (docs/14 §2a)
-        creds = self.internal_forge.mission_credentials(run.repo_ref)
+        creds = mgr.internal_forge.mission_credentials(run.repo_ref)
         if creds is None:
             log.error("runspec for %s refused: internal repo %r credentials "
                       "missing", run.run_id, run.repo_ref)
@@ -389,7 +390,7 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
                                       else ro or write)
     # one shared tail — the forge branches differ ONLY in token choice
     payload = {"env": env, "credential_files": spec_files}
-    extras = self._extra_repos_for(run)   # references reach zero-repo
+    extras = _extra_repos_for(mgr, run)   # references reach zero-repo
     if extras:                            # missions too
         payload["extra_repos"] = extras
     if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
@@ -398,10 +399,10 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     # never rests on the Run). Absent for MAPPER (no mission, no repo), when
     # the forge is off, or before the boot mint — the entrypoint then falls
     # back to the Redis materialization.
-    if self.internal_forge is not None and run.mission_type != "MAPPER":
+    if mgr.internal_forge is not None and run.mission_type != "MAPPER":
         from ...ports.internal_forge import activity_repo_name
-        creds = self.internal_forge.activity_credentials(
-            activity_repo_name(self.instance_name, run.mission_key))
+        creds = mgr.internal_forge.activity_credentials(
+            activity_repo_name(mgr.instance_name, run.mission_key))
         if creds is not None:
             payload["activity_repo"] = {"url": creds.clone_url,
                                         "clone_user": creds.username,
@@ -409,7 +410,7 @@ def runspec_secret_payload(self, run: Run) -> dict | None:
     return payload
 
 
-def _extra_repos_for(self, run: Run) -> list[dict]:
+def _extra_repos_for(mgr, run: Run) -> list[dict]:
     """Read-only sibling clones for a run, built at request time (nothing
     secret at rest); read tokens preferred, write fallback (same rule as
     the primary token). Two sources:
@@ -419,16 +420,16 @@ def _extra_repos_for(self, run: Run) -> list[dict]:
       material — docs sources, style guides; founder request 2026-07-15)"""
     wanted: list[str] = []
     if run.mission_type == "ONBOARD":
-        wanted += list(self.instance.repos or [])
+        wanted += list(mgr.instance.repos or [])
     if run.mission_type in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW"):
-        wanted += list(self.instance.reference_repos or [])
+        wanted += list(mgr.instance.reference_repos or [])
     extras, seen = [], {run.repo_ref}
     for name in wanted:
         if name in seen:
             continue
         seen.add(name)
-        inst_x = self.forges.instance(name)
-        forge_x = self.forges.get(name)
+        inst_x = mgr.forges.instance(name)
+        forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
             continue         # removed mid-flight — proceed on what remains
         extras.append({"name": name, "url": inst_x.url,
@@ -437,7 +438,7 @@ def _extra_repos_for(self, run: Run) -> list[dict]:
     return extras
 
 
-def _credential_spec(self, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:
+def _credential_spec(mgr, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:
     """Harness credentials for a run spec: requirements come from the
     harness registry, secret material from /data/secrets/{dev_type}/
     (docs/08 §4)."""
@@ -498,7 +499,7 @@ def _aware(ts: datetime) -> datetime:
     return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
-def _last_giveup_at(cls, pmo_id: str) -> datetime | None:
+def _last_giveup_at(pmo_id: str) -> datetime | None:
     try:
         ts = None
         with open(markers.AUDIT_PATH) as f:
@@ -507,7 +508,7 @@ def _last_giveup_at(cls, pmo_id: str) -> datetime | None:
                     e = json.loads(line)
                     if e.get("pmo_id") == pmo_id \
                             and e.get("action") == "devcake_failed":
-                        ts = cls._aware(datetime.fromisoformat(e["ts"]))
+                        ts = _aware(datetime.fromisoformat(e["ts"]))
                 except Exception:  # noqa: BLE001 — one bad audit line must never halt scheduling
                     log.debug("_last_giveup_at: skipping unparseable audit line")
                     continue
@@ -516,7 +517,7 @@ def _last_giveup_at(cls, pmo_id: str) -> datetime | None:
         return None
 
 
-def _attempt_number(self, pmo_id: str, mission_type: str,
+def attempt_number(mgr, pmo_id: str, mission_type: str,
                     activity: Activity | None = None) -> int:
     """Count consecutive counted failures, independent of transcript seq.
 
@@ -524,27 +525,27 @@ def _attempt_number(self, pmo_id: str, mission_type: str,
     run for this mission (a later step finishing implies earlier failures
     were resolved), or the latest human feed comment (a human touching the
     mission is an intervention — the step deserves fresh attempts)."""
-    all_runs = [r for r in self.runs.store.all()
-                if r.mission_pmo_id == pmo_id and self._run_is_ours(r)]
+    all_runs = [r for r in mgr.runs.store.all()
+                if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r)]
     history = [r for r in all_runs if r.mission_type == mission_type]
-    anchors = [t for t in [self._last_giveup_at(pmo_id),
-                           *(self._aware(r.created_at) for r in all_runs
+    anchors = [t for t in [_last_giveup_at(pmo_id),
+                           *(_aware(r.created_at) for r in all_runs
                              if r.state == "finished")] if t]
     if activity is not None:
-        anchors += [self._aware(e.ts) for e in activity.entries
+        anchors += [_aware(e.ts) for e in activity.entries
                     if e.kind == "comment"
-                    and not self._is_devcake_comment(e.body)]
+                    and not _is_devcake_comment(e.body)]
     since = max(anchors, default=None)
     ignored = ("DEV_AUTH", "DEV_FORGE_AUTH", "dev failure artifact (exit 13)")
     return 1 + sum(
         1 for r in history
         if r.state in ("failed", "timed_out", "orphaned")
         and not any(marker in (r.error or "") for marker in ignored)
-        and (since is None or self._aware(r.created_at) > since)
+        and (since is None or _aware(r.created_at) > since)
     )
 
 
-async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) -> None:
+async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> None:
     if LABEL_FAILED in mission.labels:
         return
     with tracer.start_as_current_span("mission.give_up") as span:
@@ -553,13 +554,13 @@ async def _give_up(self, mission: Mission, mtype: MissionType, attempts: int) ->
         span.set_attribute("devcake.run.attempt", attempts)
         span.set_status(Status(StatusCode.ERROR,
                                f"gave up after {attempts} attempts"))
-        await self.pmo.swap_labels(mission.ref, remove=set(), add={LABEL_FAILED})
-        await self._feed(
+        await mgr.pmo.swap_labels(mission.ref, remove=set(), add={LABEL_FAILED})
+        await mgr._feed(
             mission.pmo_id, mission.pmo_kind,
             f"⚠️ **DevCake gave up on this mission's {mtype.value} step** after "
             f"{attempts} failed attempts. Remove the `DEVCAKE-FAILED` label to retry. "
             f"(Traces: search run ids `{mission.key}-*` in OpenObserve.)")
-        self._audit(mission.pmo_id, "devcake_failed", mtype.value)
+        mgr._audit(mission.pmo_id, "devcake_failed", mtype.value)
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 
 
@@ -578,23 +579,23 @@ def _activity_snapshot_files(payload: dict) -> list[dict]:
     return files
 
 
-async def _push_activity_repo(self, mission, mtype, seq: int) -> None:
+async def _push_activity_repo(mgr, mission, mtype, seq: int) -> None:
     """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
     audited loudly and swallowed — the run proceeds on the Redis fallback;
     Gitea down degrades to pre-ADR behavior, never to a halt."""
-    if self.internal_forge is None:
+    if mgr.internal_forge is None:
         return
     try:
-        payload = await self.activity_payload(mission.pmo_id, mission.pmo_kind)
-        name = await self.internal_forge.ensure_activity_repo(
-            self.instance_name, mission.key)
-        await self.internal_forge.push_activity_snapshot(
+        payload = await activity_payload(mgr, mission.pmo_id, mission.pmo_kind)
+        name = await mgr.internal_forge.ensure_activity_repo(
+            mgr.instance_name, mission.key)
+        await mgr.internal_forge.push_activity_snapshot(
             name, _activity_snapshot_files(payload),
             f"step {seq} {mtype.value} dispatch")
         log.info("activity repo %s: snapshot for step %d", name, seq)
     except Exception as e:
         log.exception("activity repo push failed for %s", mission.key)
-        self._audit(mission.pmo_id, "activity_repo_push_failed",
+        mgr._audit(mission.pmo_id, "activity_repo_push_failed",
                     f"{mission.key}: {type(e).__name__}: {str(e)[:180]}")
 
 
@@ -611,21 +612,21 @@ def _mission_md(m, attachment_lines=()) -> str:
     return "\n".join(lines)
 
 
-async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
+async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
     """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
     of the feed — full bodies inline (never externalized), attachments by
     name in feed order, reply nesting; every attachment's bytes ride as
     sibling files."""
     if kind == "project":
         # projects have no comments/attachments: the brief IS the payload
-        m = await self.pmo.get(MissionRef(pmo_id, "project"))
+        m = await mgr.pmo.get(MissionRef(pmo_id, "project"))
         md = "\n".join([
             f"# {m.key}: {m.title}",
             "> The mission brief lives in MISSION.md (same folder).", "",
             "## Activity", "(projects carry no comment feed — see child issues)"])
         return {"mission_md": _mission_md(m), "activity_md": md,
                 "attachments": []}
-    act = await self.pmo.get_activity(MissionRef(pmo_id, "issue"), full=True)
+    act = await mgr.pmo.get_activity(MissionRef(pmo_id, "issue"), full=True)
     m = act.mission
     attachments = []
     used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed
@@ -635,7 +636,7 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
         line. The adapter resolves names (AttachmentRef.name) — the domain
         never parses vendor asset URLs."""
         try:
-            data = await self.pmo.download_asset(att.url)
+            data = await mgr.pmo.download_asset(att.url)
         except Exception:  # noqa: BLE001 — attachment fetch degrades to an inline "unavailable" marker; the mirror build continues
             return f"[attachment unavailable: {att.url}]"
         # basename BEFORE dedupe: a slash-bearing link text ([v1/r.md](…))
@@ -644,7 +645,7 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
         # snapshot dup-path guard forever (full-diff review finding)
         raw = (Path(att.name).name if att.name
                else att.url.rsplit("/", 1)[-1][:80])
-        fname = self._unique_name(raw or "attachment.bin", used)
+        fname = _unique_name(raw or "attachment.bin", used)
         attachments.append({"filename": fname,
                             "content_b64": base64.b64encode(data).decode()})
         return f"[attachment: {fname}]"
@@ -673,7 +674,7 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
         body = e.body or ""
         # provenance is sentinel-based, never author-based (docs/03 §8a):
         # DevCake may post with the operator's own PMO credentials
-        provenance = "🤖 DevCake" if self._is_devcake_comment(body) else "🧑 HUMAN"
+        provenance = "🤖 DevCake" if _is_devcake_comment(body) else "🧑 HUMAN"
         lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} — {provenance} ({e.kind})")
         parent = by_id.get(e.parent_id) if e.parent_id else None
         if parent is not None:
@@ -687,3 +688,77 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
     return {"mission_md": _mission_md(m, mission_lines),
             "activity_md": "\n".join(lines), "attachments": attachments}
 
+
+async def resolve_repo_live(mgr, mission, all_runs=None):
+    """(repo_name | None, gate_reason | None), UN-GATING zero-repo missions
+    onto the internal fallback forge (M11). Async — it may provision a repo.
+
+    Order: re-register any internal repo this mission already used (so the
+    sticky resolver finds it after an app restart), run the sticky resolver,
+    and if that returns the specific zero-repo gate, provision an internal
+    repo. Any OTHER gate (unknown marker, sticky-vanished external, mid-
+    mission change) is a real gate — never silently redirected internal."""
+    from ..repo_routing import REASON_ZERO_REPO
+    from ...ports.internal_forge import internal_repo_name
+    from ...adapters.registry import make_gitea_adapter
+
+    from ...config import RepoInstance
+
+    if all_runs is None:
+        all_runs = mgr.runs.store.all()
+
+    async def _provision() -> str:
+        # ensure service accounts first (lazy retry — boot provisioning may
+        # have failed against a not-yet-ready Gitea; review finding #7)
+        svc = mgr.internal_forge.service_tokens()
+        if not svc:
+            await mgr.internal_forge.ensure_service_accounts()
+            svc = mgr.internal_forge.service_tokens() or {}
+        creds = await mgr.internal_forge.ensure_mission_repo(
+            mgr.instance_name, mission.key)
+        # the APP-SIDE adapter uses the devcake-app SERVICE token (org owner:
+        # write:issue for PR comments + write:repository for merge), NOT the
+        # mission's Dev write token (write:repository only → issue-scope 403s;
+        # review finding #1). The mission's write/read pair is the Dev's,
+        # delivered via runspec.
+        adapter = make_gitea_adapter(creds.clone_url, svc.get("app_token"),
+                                     svc.get("reviewer_token"))
+        # model_construct: internal repo names carry hyphens / exceed the
+        # operator-name pattern by design — they are synthesized, not input
+        inst = RepoInstance.model_construct(
+            name=creds.repo_name, forge="gitea", url=creds.clone_url,
+            default_branch="main", api_base=None)
+        mgr.forges.register_internal(creds.repo_name, inst, adapter)
+        return creds.repo_name
+
+    async def _ensure_registered(name: str) -> None:
+        # already registered this process → no per-cycle I/O (finding #8);
+        # else (re)provision — covers restart recovery + first intake
+        if name not in mgr.forges.instances:
+            await _provision()
+
+    expected = (internal_repo_name(mgr.instance_name, mission.key)
+                if mgr.internal_forge is not None else None)
+
+    # a done/canceled mission must never (re-)provision: the poll loop sees
+    # terminal missions too, so without this guard the admin Clear endpoint
+    # was silently undone within one cycle — repo, svc user, and a fresh
+    # token pair resurrected (audit A4). Terminal missions are never
+    # scheduled (derivation row 5), so gating them is inert.
+    terminal = mission.status in ("done", "canceled")
+
+    # restart recovery: a prior run points at this mission's internal repo,
+    # but ForgeRuntime lost it on restart — re-register before resolving
+    if not terminal and expected is not None and any(
+            r.repo_ref == expected for r in all_runs
+            if r.mission_pmo_id == mission.pmo_id):
+        await _ensure_registered(expected)
+
+    name, reason = resolve_repo(mgr, mission, all_runs=all_runs)
+    if name is not None:
+        return name, reason
+    if (reason is REASON_ZERO_REPO and mgr.internal_forge is not None
+            and not terminal):
+        await _ensure_registered(expected)
+        return expected, None
+    return None, reason

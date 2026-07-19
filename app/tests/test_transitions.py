@@ -14,6 +14,7 @@ from devcake.domain.orchestrator import decomposition, review, transitions
 from devcake.domain.model import Activity, ActivityEntry, Mission
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
+from devcake.domain.orchestrator import dispatch, feed, sweeps
 
 
 class FakePMO:
@@ -329,20 +330,20 @@ def test_attempts_count_across_transcript_sequences_and_reset(tmp_path, monkeypa
         r.state = "failed"
         r.error = "DEV_BAD_OUTPUT"
         store.save(r)
-    assert mgr._attempt_number("p1", "ONBOARD") == 3
+    assert dispatch.attempt_number(mgr, "p1", "ONBOARD") == 3
 
     auth = _run("ONBOARD", None)
     auth.run_id = "T-1-3-ONBOARD-AUTH"
     auth.state = "failed"
     auth.error = "DEV_FORGE_AUTH: denied"
     store.save(auth)
-    assert mgr._attempt_number("p1", "ONBOARD") == 3
+    assert dispatch.attempt_number(mgr, "p1", "ONBOARD") == 3
 
     success = _run("ONBOARD", None)
     success.run_id = "T-1-4-ONBOARD-OK"
     success.state = "finished"
     store.save(success)
-    assert mgr._attempt_number("p1", "ONBOARD") == 1
+    assert dispatch.attempt_number(mgr, "p1", "ONBOARD") == 1
 
 
 def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
@@ -364,7 +365,7 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
         r.error = "DEV_BAD_OUTPUT"
         r.created_at = t0 + timedelta(seconds=i)
         store.save(r)
-    assert mgr._attempt_number("p1", "EXECUTE") == 3
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 3
 
     failed_review = _run("REVIEW", None)
     failed_review.run_id = "T-1-3-REVIEW-FAIL"
@@ -372,7 +373,7 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
     failed_review.error = "DEV_BAD_OUTPUT"
     failed_review.created_at = t0 + timedelta(seconds=3)
     store.save(failed_review)
-    assert mgr._attempt_number("p1", "EXECUTE") == 3   # failure ≠ resolution
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 3   # failure ≠ resolution
 
     stray = _run("MAPPER", None)
     stray.run_id = "T-0-1-MAPPER-OK"
@@ -380,14 +381,14 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
     stray.state = "finished"
     stray.created_at = t0 + timedelta(seconds=4)
     store.save(stray)
-    assert mgr._attempt_number("p1", "EXECUTE") == 3   # other missions don't reset
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 3   # other missions don't reset
 
     ok_review = _run("REVIEW", None)
     ok_review.run_id = "T-1-4-REVIEW-OK"
     ok_review.state = "finished"
     ok_review.created_at = t0 + timedelta(seconds=5)
     store.save(ok_review)
-    assert mgr._attempt_number("p1", "EXECUTE") == 1
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 1
 
 
 def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
@@ -414,12 +415,12 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
     old_human = ActivityEntry(ts=t0 - timedelta(minutes=5), author="felix",
                               kind="comment", body="please pick this up")
     activity = Activity(mission=m, entries=[devcake_note, old_human])
-    assert mgr._attempt_number("p1", "EXECUTE", activity) == 3
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 3
 
     human = ActivityEntry(ts=t0 + timedelta(seconds=20), author="felix",
                           kind="comment", body="resolved this by hand, carry on")
     activity = Activity(mission=m, entries=[devcake_note, old_human, human])
-    assert mgr._attempt_number("p1", "EXECUTE", activity) == 1
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
 
 
 def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
@@ -471,7 +472,7 @@ def test_mcp_setup_artifact_maps_to_dev_mcp_setup(tmp_path):
     run.state = "failed"
     run.error = error
     store.save(run)
-    assert mgr._attempt_number("p1", "EXECUTE", None) == 2   # counted
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", None) == 2   # counted
 
 
 def test_executed_trivially_is_illegal_and_parks(tmp_path):
@@ -539,8 +540,8 @@ def test_quoted_sentinel_still_classifies_human():
     quoted = ("please also add tests\n\n"
               "> ✋ **DevCake needs a human.** blah\n> `devcake:v1`")
     genuine = "> user asked:\n> do X\n\nDone.\n\n`devcake:v1`"
-    assert not MissionManager._is_devcake_comment(quoted)
-    assert MissionManager._is_devcake_comment(genuine)
+    assert not feed._is_devcake_comment(quoted)
+    assert feed._is_devcake_comment(genuine)
 
 
 def test_decomposition_wires_blocked_by_edges(tmp_path):
@@ -627,10 +628,10 @@ def test_tracking_sweep_waits_for_open_grandchildren(tmp_path):
     canceled_child = mission("canceled", {"DEVCAKE", "DEVCAKE-CREATED"})
     grandchild = mission("backlog", {"DEVCAKE", "DEVCAKE-CREATED"})
     fake.children = [canceled_child, grandchild]
-    run_coro(mgr._tracking_sweep(proj))
+    run_coro(sweeps.tracking_sweep(mgr, proj))
     assert proj.status == "in_progress"           # grandchild holds it open
     grandchild.status = "done"
-    run_coro(mgr._tracking_sweep(proj))
+    run_coro(sweeps.tracking_sweep(mgr, proj))
     assert proj.status == "done"
     assert "DEVCAKE-TRACKING" not in proj.labels
 
@@ -981,7 +982,7 @@ def test_finalize_posts_last_message_blockquoted(tmp_path):
     assert comment.count("`devcake:v1`") == 1
     assert "Details here." not in "\n".join(       # no unquoted model text
         l for l in lines if not l.lstrip().startswith(">"))
-    assert MissionManager._is_devcake_comment(comment)   # provenance holds
+    assert feed._is_devcake_comment(comment)   # provenance holds
 
 
 def test_finalize_without_last_message_keeps_pointer_comment(tmp_path):
@@ -1026,7 +1027,7 @@ def test_finalize_last_message_markers_are_quarantined(tmp_path):
     comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
     entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
                           kind="comment", body=comment)
-    assert MissionManager._derive_seq(
+    assert dispatch._derive_seq(
         Activity(mission=m, entries=[entry])) == 2      # only the real step
     from devcake.domain.orchestrator.feed import _unquoted
     assert "T-1-deliverable.zip" not in _unquoted(comment)
@@ -1066,7 +1067,7 @@ def test_finalize_upload_failure_posts_quoted_inline(tmp_path):
     assert "> dump mentions" in comment                  # transcript quoted
     entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
                           kind="comment", body=comment)
-    assert MissionManager._derive_seq(
+    assert dispatch._derive_seq(
         Activity(mission=m, entries=[entry])) == 2       # 9 never counts
 
 
@@ -1221,7 +1222,7 @@ def sweep_mgr(tmp_path, mergeable_result, merge_exc=None):
 
 def test_sweep_merges_when_ready(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == [8]
     assert "DEVCAKE-MERGE" not in m.labels and m.status == "done"
     assert any("Merged after deferred retry" in c for c in fake.comments)
@@ -1229,7 +1230,7 @@ def test_sweep_merges_when_ready(tmp_path):
 
 def test_sweep_waits_while_computing(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == [] and fake.comments == []
     assert "DEVCAKE-MERGE" in m.labels                # untouched, next cycle re-reads
 
@@ -1238,7 +1239,7 @@ def test_sweep_routes_conflict_to_execute(tmp_path):
     m, mgr, fake, forge = sweep_mgr(
         tmp_path, mergeable_result=False,
         merge_exc=ForgeError("405: conflicts", status=405))
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == [8]                # merge tried before the rework
     assert "DEVCAKE-EXECUTE" in m.labels and "DEVCAKE-MERGE" not in m.labels
     assert any("`devcake:conflict-resolve:1`" in c for c in fake.comments)
@@ -1248,7 +1249,7 @@ def test_sweep_merges_behind_branch_without_rework(tmp_path):
     # "behind" reads as False but is only blocking under strict up-to-date
     # rules — when the plain merge succeeds, no EXECUTE rework is dispatched
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=False)
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == [8] and m.status == "done"
     assert "DEVCAKE-EXECUTE" not in m.labels
     assert not any("devcake:conflict-resolve" in c for c in fake.comments)
@@ -1257,7 +1258,7 @@ def test_sweep_merges_behind_branch_without_rework(tmp_path):
 def test_sweep_window_expiry_hands_off_once(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     mgr.config.merge_retry_window_minutes = 0          # expires immediately
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == []                          # no merge attempt past expiry
     handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
     assert len(handoffs) == 1 and "DEVCAKE-MERGE" in m.labels
@@ -1265,7 +1266,7 @@ def test_sweep_window_expiry_hands_off_once(tmp_path):
     fake.activity_entries.append(ActivityEntry(
         ts=datetime.now(timezone.utc), author="devcake", kind="comment",
         body=handoffs[0]))
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert len([c for c in fake.comments
                 if "`devcake:merge-handoff`" in c]) == 1
 
@@ -1274,7 +1275,7 @@ def test_sweep_ignores_missions_without_retry_marker(tmp_path):
     # auto_merge-OFF parks carry no marker — the sweep must not touch them
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == [] and fake.comments == []
     assert "DEVCAKE-MERGE" in m.labels
 
@@ -1286,14 +1287,14 @@ def test_manual_park_banners_without_feed_read(tmp_path):
     # get_activity calls for the operator's normal merge queue
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     mgr.config.auto_merge = False
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert getattr(fake, "get_activity_calls", 0) == 0
 
 
 def test_active_retry_window_suppresses_banner(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert m.pmo_id not in mgr.merge_handoffs        # DevCake is still driving
     assert m.pmo_id not in mgr._merge_window_closed
 
@@ -1301,11 +1302,11 @@ def test_active_retry_window_suppresses_banner(tmp_path):
 def test_expired_window_banners_and_skips_future_feed_reads(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     mgr.config.merge_retry_window_minutes = 0        # expires immediately
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert m.pmo_id in mgr._merge_window_closed
     calls = fake.get_activity_calls
-    run_coro(mgr._merge_sweep(m))                    # second cycle: skip-set hit
+    run_coro(sweeps.merge_sweep(mgr, m))                    # second cycle: skip-set hit
     assert fake.get_activity_calls == calls          # no new feed read
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
 
@@ -1315,8 +1316,8 @@ def test_closed_window_park_banners_without_repeat_reads(tmp_path):
     # discovers the closed window, then the skip-set takes over
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []
-    run_coro(mgr._merge_sweep(m))
-    run_coro(mgr._merge_sweep(m))
+    run_coro(sweeps.merge_sweep(mgr, m))
+    run_coro(sweeps.merge_sweep(mgr, m))
     assert fake.get_activity_calls == 1
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
 

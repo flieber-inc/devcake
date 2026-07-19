@@ -142,7 +142,8 @@ def make_mission_manager(
     ``noop_audit=True`` only when a test needs to silence PMO audit feeds.
 
     Transitional: many tests still call private façade methods; construction
-    path matches production. Full private-seam retarget is a follow-up epic.
+    path matches production. Behavior seams are the modules' public
+    functions (ADR-0015).
     """
     from devcake.adapters.files.run_store import RunStore
     from devcake.domain.runs import RunManager

@@ -235,7 +235,8 @@ def test_yaml_object_tags_are_refused(monkeypatch, tmp_path):
 def test_size_cap_and_bad_base64(monkeypatch, tmp_path):
     from fastapi import HTTPException
     app_main, *_ = _wire_app(monkeypatch, tmp_path)
-    monkeypatch.setattr(app_main, "MAX_BUNDLE_BYTES", 64)
+    from devcake.api import settings_transfer
+    monkeypatch.setattr(settings_transfer, "MAX_BUNDLE_BYTES", 64)
     with pytest.raises(HTTPException) as e:
         run_coro(app_main.import_preview({"content_b64": _b64("x" * 100)}))
     assert "exceeds" in e.value.detail

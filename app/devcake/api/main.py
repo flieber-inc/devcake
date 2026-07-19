@@ -55,6 +55,8 @@ from ..prompts import templates as prompt_templates
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
 from .auth import credentials_configured, enforce_control_plane_auth
+from . import profiles_service, settings_transfer
+from .config_service import apply_config_patch
 from .health import build_health_payload, reset_protection_cache
 from .poll import PollRuntime
 
@@ -476,425 +478,73 @@ async def get_config():
 
 @app.put("/api/v1/config")
 async def put_config(body: dict):
-    global config
-    try:
-        reject_stale_patch(body)
-        merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
-    except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
-        raise HTTPException(422, str(e))
-    # cross-store semantics + dry-run adapter construction (ISSUES #11) live
-    # in settings_bundle — ONE implementation shared with bundle apply
-    # (ADR-0013); the PUT resolves templates against disk
-    try:
-        validate_config_semantics(
-            merged, set(dev_types),
-            template_exists=lambda mt, name:
-                not prompt_templates.resolve_playbook(mt, name)[1])
-        dry_run_adapters(merged)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    previous = config.model_dump()
-    # a removed instance's stored secrets go with it — otherwise a later
-    # instance reusing the name silently inherits the dead credential
-    removed = [("pmo", p["name"]) for p in previous["pmos"]
-               if p["name"] not in {i.name for i in merged.pmos}]
-    removed += [("repo", r["name"]) for r in previous["repos"]
-                if r["name"] not in {i.name for i in merged.repos}]
-    for field in type(merged).model_fields:
-        setattr(config, field, getattr(merged, field))
-    save_config(config)
-    try:
-        reload_connections()                     # hot reload pmo + forge
-    except Exception as e:
-        log.exception("reload_connections failed — restoring previous config")
-        restored = AppConfig.model_validate(previous)
-        for field in type(restored).model_fields:
-            setattr(config, field, getattr(restored, field))
-        save_config(config)
-        try:
-            reload_connections()
-        except Exception:
-            log.exception("restore reload also failed")
-        raise HTTPException(500, f"config reload failed; previous config restored: {e}")
-    for scope, name in removed:                  # only once the new config took
-        try:
-            secrets_store.delete_connection_instance(scope, name)
-        except Exception:
-            # the config change is APPLIED at this point — a cleanup failure
-            # must not 500 it (audit A21); the orphaned file is deletable
-            # later and named here
-            log.exception("could not delete stored secrets of removed "
-                          "%s instance %r", scope, name)
-    if not previous["auto_merge"] and config.auto_merge:
-        # auto_merge flipped OFF→ON (founder request 2026-07-15): re-arm the
-        # deferred-merge window for missions already parked at DEVCAKE-MERGE —
-        # the next sweep posts a fresh window entry and drives their merges
-        for mgr in managers.values():
-            mgr.rearm_merge_windows = True
-        log.info("auto_merge flipped ON — parked DEVCAKE-MERGE missions "
-                 "re-armed for the deferred-merge sweep")
-    return config.model_dump()
+    return await apply_config_patch(body, config=config, dev_types=dev_types,
+                                    managers=managers, reload=reload_connections)
 
 
-# ── config profiles (ADR-0013): named snapshots of settings + secrets ────────
-
-def _require_no_active_runs(action: str) -> None:
-    """World-swaps are blocked while runs are in flight (founder decision) —
-    the internal-repo delete guard pattern, applied to whole-settings
-    replacement."""
-    n = len(store.active())
-    if n:
-        raise HTTPException(
-            409, f"{n} run(s) active — wait for them to finish or clear "
-                 f"runs before {action}")
-
-
-def _snapshot_warnings(bundle: dict) -> list[str]:
-    """A snapshot silently missing credentials its config expects is a trap
-    at apply time — name the gaps at save time instead."""
-    warns = []
-    sec = bundle.get("secrets") or {}
-    conns = sec.get("connections") or {}
-    cfg = bundle.get("config") or {}
-    for p in (cfg.get("app") or {}).get("pmos") or []:
-        if p.get("team_key") and not (conns.get(f"pmo-{p['name']}") or {}).get("api_key"):
-            warns.append(f"PMO {p['name']!r} is configured but has no stored "
-                         "API key — the snapshot carries none")
-    for r in (cfg.get("app") or {}).get("repos") or []:
-        stored = conns.get(f"repo-{r['name']}") or {}
-        if r.get("url") and not (stored.get("token") or stored.get("token_ro")):
-            warns.append(f"repo {r['name']!r} is configured but has no stored "
-                         "token — the snapshot carries none")
-    return warns
-
+# ── config profiles (ADR-0013): named snapshots — bodies in profiles_service ─
 
 @app.get("/api/v1/profiles")
 async def list_profiles():
-    """Profile rows for the admin table — counts and presence only. The
-    last-applied breadcrumb + divergence boolean ride the matching row
-    (dict compare + secret timestamps, never values — ADR-0011)."""
-    rows = profiles_store.list_profiles()
-    la = profiles_store.last_applied()
-    for row in rows:
-        row["last_applied_at"] = None
-        row["diverged"] = None
-        if la and la.get("name") == row["name"] and not row.get("broken"):
-            row["last_applied_at"] = la.get("at")
-            try:
-                bundle = profiles_store.read_profile(row["name"])
-                row["diverged"] = profiles_store.diverged_since(
-                    bundle, la.get("at") or "", config, dev_types)
-            except BundleError:
-                row["diverged"] = None
-    return {"profiles": rows}
+    return profiles_service.list_profiles_rows(config, dev_types)
 
 
 @app.get("/api/v1/profiles/{name}")
 async def get_profile(name: str):
-    """Full section A + a secrets PRESENCE map + the apply-preview diff.
-    Secret values never leave this endpoint."""
-    try:
-        bundle = profiles_store.read_profile(name)
-        diff = diff_bundle(bundle, config, dev_types)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    presence = None
-    if "secrets" in (bundle.get("sections") or []):
-        sec = bundle.get("secrets") or {}
-        presence = {"connections": {k: sorted(f) for k, f in
-                                    (sec.get("connections") or {}).items()},
-                    "harness": sorted(sec.get("harness") or {})}
-    return {"name": bundle.get("name", name),
-            "created_at": bundle.get("created_at"),
-            "devcake_tag": bundle.get("devcake_tag", ""),
-            "sections": bundle.get("sections") or [],
-            "config": bundle.get("config"),
-            "secrets_present": presence,
-            "diff": diff}
+    return profiles_service.get_profile_payload(name, config, dev_types)
 
 
 @app.post("/api/v1/profiles")
 async def save_profile(body: dict):
-    """Save-current-as: snapshot the live settings (A) + secret values (B)
-    under a name. 409 on collision unless overwrite — the UI chains an
-    explicit overwrite confirm."""
-    name = str(body.get("name") or "")
-    bundle = serialize_current(config, dev_types,
-                               include_config=True, include_secrets=True)
-    try:
-        profiles_store.save_profile(name, bundle,
-                                    overwrite=bool(body.get("overwrite")))
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    warnings = _snapshot_warnings(bundle)
-    sec = bundle.get("secrets") or {}
-    audit_event("profile_saved",
-                f"name={name} secrets="
-                f"{sum(len(f) for f in (sec.get('connections') or {}).values()) + len(sec.get('harness') or {})}")
-    return {"saved": True, "name": name, "warnings": warnings}
+    return profiles_service.save_profile_body(body, config, dev_types)
 
 
 @app.post("/api/v1/profiles/{name}/apply")
 async def apply_profile(name: str):
-    """THE world-swap: replaces the sections the profile contains (a profile
-    without secrets keeps the live ones). Blocked while runs are active;
-    rollback-by-reapply on reload failure (settings_bundle)."""
-    _require_no_active_runs("applying a profile")
-    try:
-        bundle = profiles_store.read_profile(name)
-        result = apply_bundle(bundle, config=config, dev_types=dev_types,
-                              reload=reload_connections)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    if "secrets" in result["applied"]:
-        # fresh credentials clear latched auth state, same as the individual
-        # secret PUT endpoints do
-        shared_breakers.clear()
-        forge_runtime.breakers.clear()
-    profiles_store.record_applied(name)
-    audit_event("profile_applied",
-                f"name={name} sections={'+'.join(result['applied'])}")
-    return {"profile": name, **result}
+    return profiles_service.apply_profile_body(
+        name, config=config, dev_types=dev_types, store=store,
+        reload=reload_connections, shared_breakers=shared_breakers,
+        forge_breakers=forge_runtime.breakers)
 
 
 @app.post("/api/v1/profiles/{name}/rename")
 async def rename_profile(name: str, body: dict):
-    new = str(body.get("new_name") or "")
-    try:
-        profiles_store.rename_profile(name, new)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    audit_event("profile_renamed", f"{name} -> {new}")
-    return {"renamed": True, "name": new}
+    return profiles_service.rename_profile_body(name, body)
 
 
 @app.delete("/api/v1/profiles/{name}")
 async def delete_profile(name: str):
-    try:
-        profiles_store.delete_profile(name)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    audit_event("profile_deleted", f"name={name}")
-    return {"deleted": name}
+    return profiles_service.delete_profile_body(name)
 
 
-# ── settings transfer (ADR-0013): export / import as a single file ───────────
-# The ONE sanctioned secret-value egress: POST-only, encrypted by default,
-# plaintext behind an explicit acknowledgment, every export audited. Import
-# LANDS AS A PROFILE — applying stays the profiles endpoint's job, so there
-# is exactly one world-swap path (and one runs-active guard) in the product.
-
-class _PassphraseRequired(Exception):
-    pass
-
-
-def _open_uploaded_bundle(body: dict) -> dict:
-    """content_b64 → dict, hardened: base64 + size cap + yaml.safe_load only,
-    protected-envelope unwrap when a passphrase rides along."""
-    try:
-        raw = base64.b64decode(str(body.get("content_b64") or ""), validate=True)
-    except Exception:  # noqa: BLE001 — upload-parsing contract: any decode failure is the client's 422, never a 500
-        raise HTTPException(422, "content_b64 must be valid base64")
-    if len(raw) > MAX_BUNDLE_BYTES:
-        raise HTTPException(422, f"bundle exceeds "
-                                 f"{MAX_BUNDLE_BYTES // (1024 * 1024)} MB")
-    try:
-        doc = yaml.safe_load(raw.decode("utf-8"))
-    except Exception:  # noqa: BLE001 — upload-parsing contract: any decode/parse failure is the client's 422, never a 500
-        raise HTTPException(422, "not a readable YAML bundle")
-    if not isinstance(doc, dict):
-        raise HTTPException(422, "not a settings bundle")
-    if "protected" in doc:
-        passphrase = body.get("passphrase")
-        if not passphrase:
-            raise _PassphraseRequired()
-        try:
-            doc = unprotect_bundle(doc, str(passphrase))
-        except DecryptError as e:
-            raise HTTPException(422, str(e))
-        except BundleError as e:
-            raise HTTPException(e.status, str(e))
-    return doc
-
-
-def _bundle_filename() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("devcake-settings-%Y%m%d-%H%M.yaml")
-
+# ── settings transfer (ADR-0013): export/import — bodies in settings_transfer ─
 
 @app.post("/api/v1/settings/export")
 async def export_settings(body: dict):
-    sections = body.get("sections") or {}
-    inc_cfg = bool(sections.get("config"))
-    inc_sec = bool(sections.get("secrets"))
-    inc_env = bool(sections.get("setup_env"))
-    if not (inc_cfg or inc_sec or inc_env):
-        raise HTTPException(422, "select at least one section to export")
-    enc = body.get("encryption") or {}
-    passphrase = None
-    if inc_sec or inc_env:
-        mode = enc.get("mode")
-        if mode == "passphrase":
-            passphrase = str(enc.get("passphrase") or "")
-            if len(passphrase) < MIN_PASSPHRASE_LEN:
-                raise HTTPException(422, f"passphrase must be at least "
-                                         f"{MIN_PASSPHRASE_LEN} characters")
-        elif mode == "plaintext":
-            if not enc.get("acknowledge_plaintext"):
-                raise HTTPException(422, "plaintext secret export must be "
-                                         "explicitly acknowledged")
-        else:
-            raise HTTPException(422, "exports containing secrets or setup "
-                                     "values require an encryption choice")
-    source = body.get("source") or "current"
-    if source == "current":
-        skill_payloads = None
-        if inc_cfg and body.get("include_skills"):
-            names = [s.name for s in (await skill_service.list_skills())[0]]
-            skill_payloads, _warns = await skill_service.payload_for(names)
-        bundle = serialize_current(
-            config, dev_types,
-            include_config=inc_cfg, include_secrets=inc_sec,
-            include_credential_files=inc_sec and bool(body.get("include_credential_files")),
-            include_setup_env=inc_env, skill_payloads=skill_payloads)
-    else:
-        name = str((source or {}).get("profile") or "")
-        if inc_env:
-            raise HTTPException(422, "profiles never hold setup values — "
-                                     "export setup_env from current settings")
-        try:
-            stored = profiles_store.read_profile(name)
-        except BundleError as e:
-            raise HTTPException(e.status, str(e))
-        for want, key in ((inc_cfg, "config"), (inc_sec, "secrets")):
-            if want and key not in stored:
-                raise HTTPException(422, f"profile {name!r} has no {key} section")
-        bundle = {k: v for k, v in stored.items() if k != "name"}
-        bundle["sections"] = [s for s in ("config", "secrets")
-                              if (s == "config" and inc_cfg) or (s == "secrets" and inc_sec)]
-        if not inc_cfg:
-            bundle.pop("config", None)
-        if not inc_sec:
-            bundle.pop("secrets", None)
-    if (inc_sec or inc_env) and passphrase is None:
-        bundle["plaintext_secrets"] = True
-    if passphrase is not None:
-        bundle = protect_bundle(bundle, passphrase)
-    audit_event("settings_exported",
-                f"source={'current' if source == 'current' else source.get('profile')} "
-                f"sections={'+'.join(bundle.get('sections') or [])} "
-                f"encrypted={passphrase is not None}")
-    return PlainTextResponse(
-        yaml.safe_dump(bundle, sort_keys=False),
-        media_type="application/yaml",
-        headers={"Content-Disposition":
-                 f'attachment; filename="{_bundle_filename()}"'})
+    return await settings_transfer.export_settings_body(
+        body, config=config, dev_types=dev_types, skill_service=skill_service)
 
 
 @app.get("/api/v1/settings/export/summary")
 async def export_summary():
-    """Counts for the export dialog — never values, never names of values'
-    contents."""
-    conns = secrets_store.list_connection_secrets()
-    by_scope: dict[str, int] = {"pmo": 0, "repo": 0}
-    for key, fields in conns.items():
-        scope = key.partition("-")[0]
-        by_scope[scope] = by_scope.get(scope, 0) + len(fields)
-    harness_n = len(secrets_store.list_harness_secrets())
-    try:
-        skills_n = len((await skill_service.list_skills())[0])
-    except Exception:  # noqa: BLE001 — advisory count: a skill-store outage shows 0, the export dialog must still render
-        skills_n = 0
-    return {"secrets": {"total": sum(by_scope.values()) + harness_n,
-                        "by_scope": by_scope, "harness": harness_n,
-                        "connections": len(conns)},
-            "env_keys": [n for n, _ in SETUP_ENV_VARS
-                         if os.environ.get(n) is not None],
-            "skills": skills_n}
+    return await settings_transfer.export_summary_body(skill_service=skill_service)
 
 
 @app.post("/api/v1/settings/import/preview")
 async def import_preview(body: dict):
-    """Stateless preview: parse, decrypt if needed, diff vs current. No
-    values in the response — presence, names, counts, warnings only."""
-    try:
-        bundle = _open_uploaded_bundle(body)
-    except _PassphraseRequired:
-        return {"needs_passphrase": True}
-    try:
-        diff = diff_bundle(bundle, config, dev_types)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    return {"sections_present": bundle.get("sections")
-            or [k for k in ("config", "secrets", "setup_env") if k in bundle],
-            "created_at": bundle.get("created_at"),
-            "devcake_tag": bundle.get("devcake_tag", ""),
-            "plaintext_secrets": bool(bundle.get("plaintext_secrets")),
-            "has_skills": bool((bundle.get("skills") or {}).get("embedded")),
-            "summary": diff, "warnings": diff["warnings"]}
+    return settings_transfer.import_preview_body(body, config=config,
+                                                 dev_types=dev_types)
 
 
 @app.post("/api/v1/settings/import")
 async def import_settings(body: dict):
-    """Import LANDS AS A PROFILE (never applies): the risky transfer is
-    decoupled from the risky world-swap. No runs guard here — nothing about
-    the live world changes except (opt-in) additive skill-store writes."""
-    try:
-        bundle = _open_uploaded_bundle(body)
-    except _PassphraseRequired:
-        raise HTTPException(422, "bundle is encrypted — supply the passphrase")
-    name = str(body.get("save_as") or "")
-    try:
-        parsed = validate_bundle(bundle)
-        stored = {k: v for k, v in bundle.items()
-                  if k not in ("setup_env", "skills", "plaintext_secrets")}
-        stored["sections"] = [s for s in ("config", "secrets") if s in stored]
-        if not stored["sections"]:
-            raise BundleError(422, "bundle carries no config or secrets "
-                                   "section to save as a profile")
-        profiles_store.save_profile(name, stored,
-                                    overwrite=bool(body.get("overwrite")))
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    warnings = list(parsed["warnings"])
-    skills_imported: list[str] = []
-    if body.get("import_skills"):
-        for skill in (bundle.get("skills") or {}).get("embedded") or []:
-            try:
-                skill_name = skill_service.validate_import(skill.get("files") or [])
-                await skill_service.save_skill(skill_name,
-                                               skill.get("files") or [],
-                                               overwrite=True)
-                skills_imported.append(skill_name)
-            except SkillStoreError as e:
-                warnings.append(f"skill {skill.get('name')!r}: {e}")
-    audit_event("settings_imported",
-                f"save_as={name} sections={'+'.join(stored['sections'])} "
-                f"skills={len(skills_imported)}")
-    return {"saved_as": name, "sections": stored["sections"],
-            "has_setup_env": "setup_env" in bundle,
-            "skills_imported": skills_imported, "warnings": warnings}
+    return await settings_transfer.import_settings_body(
+        body, skill_service=skill_service)
 
 
 @app.post("/api/v1/settings/import/env")
 async def import_env(body: dict):
-    """Section C → a generated .env download. No server state changes and no
-    runs guard — the app cannot write the host's .env; the operator places
-    the file and restarts the stack."""
-    try:
-        bundle = _open_uploaded_bundle(body)
-    except _PassphraseRequired:
-        raise HTTPException(422, "bundle is encrypted — supply the passphrase")
-    try:
-        parsed = validate_bundle(bundle)
-    except BundleError as e:
-        raise HTTPException(e.status, str(e))
-    if parsed["setup_env"] is None:
-        raise HTTPException(422, "bundle has no setup_env section")
-    return PlainTextResponse(
-        generate_env_file(parsed["setup_env"]),
-        media_type="text/plain",
-        headers={"Content-Disposition": 'attachment; filename="devcake.env"'})
+    return settings_transfer.import_env_body(body)
 
 
 # ── per-Mission-Type prompt templates (v0.1.1) ───────────────────────────────

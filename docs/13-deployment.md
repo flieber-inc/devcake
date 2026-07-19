@@ -156,6 +156,8 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 # dev-run: launch one Dev container. Only non-secret params; everything else via runspec.get.
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
+retry_policy:
+  limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting
 
 params:
   - name: RUN_ID
@@ -256,11 +258,11 @@ Which Dev image a run uses is `HARNESSES[harness_template].image` (`08-harness-t
 
 ## 7. Log shipping for non-instrumented services
 
-`dagu` and `redis` stdout is shipped to OpenObserve via a lightweight shipper (vector/fluent-bit sidecar or compose logging driver) into stream `container_logs`. App and Devs use OTLP directly (`12-observability.md` §1).
+Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, **`gitea`**, and others wired in `docker-compose.yml`) ship stdout to **fluent-bit** (`fluentbit` service, host `127.0.0.1:24224`) → OpenObserve stream `container_logs`. The stack does **not** use Vector. **OTLP:** the **app** exports traces directly to OpenObserve; **Devs export unauthenticated OTLP to `otel-collector`**, which alone holds ingest credentials and forwards to OO (`12-observability.md` §1). Fluent-bit's OO path currently hardcodes org `default` in `fluentbit/fluent-bit.conf` (and SPA deep-links often assume `org_identifier=default`); changing `OO_ORG` without updating those is a footgun.
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → strong bootstrap passwords + `DOCKER_GID` → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → Config page: enter PMO/forge/model **secret VALUES**, connection tests, Dev Types → done. Labels bootstrap on startup. Then `14` §9 checklist before first EXECUTE.
+- **First run:** `cp .env.example .env` → strong bootstrap passwords + `DOCKER_GID` → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → **Configuration** (PMO + model/harness secrets, Dev Types) and **Repositories** (`#/repos`: forge tokens + merge posture) → connection tests → done. Labels bootstrap on startup. Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 

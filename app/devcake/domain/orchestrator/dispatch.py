@@ -374,7 +374,7 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     if run.repo_ref in mgr.forges.internal and mgr.internal_forge is not None:
         # internal fallback forge (M11): Dev tokens are the mission's
         # per-user scoped pair (NOT env vars) — write for EXECUTE, read
-        # elsewhere; isolation lives in the token scope (docs/14 §2a)
+        # elsewhere; isolation lives in the token scope (docs/14 §2 Zone B / ADR-0010)
         creds = mgr.internal_forge.mission_credentials(run.repo_ref)
         if creds is None:
             log.error("runspec for %s refused: internal repo %r credentials "

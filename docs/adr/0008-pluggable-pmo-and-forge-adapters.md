@@ -66,26 +66,31 @@ instance, eventually — without touching the core.
    matter (`DEVCAKE_FORGE`/`DEVCAKE_FORGE_TOKEN` remain the legacy contract).
    The `devcake/{key}` branch convention is defined once:
    `ports/forge.py:mission_branch()`.
+   *(Addendum: entrypoint fallbacks and `DEVCAKE_FORGE` discriminator removed
+   at v0 crystallization — see Addendum below. Branch naming is now
+   instance-prefixed via `mission_branch(instance, key)`.)*
 
-5. **Config schema v2 — plural now, single-instance runtime.** `pmo:`/`repo:`
-   blocks became `pmos:`/`repos:` lists with **exactly one entry enforced**;
-   multi-instance is a future wiring change, not a schema break. Forward-only
-   on-load migration per ADR-0002 (atomic write; `config.yaml.v1.bak` kept as
-   the rollback). `deep_merge` replaces lists wholesale on PUT;
-   `migrate_config_patch` adapts legacy singular PUT bodies — without it,
-   pydantic's ignore-extra behavior would *silently drop* a stale client's
-   edit. Run records carry `pmo_ref`/`repo_ref` (additive defaults, no schema
-   bump) so runs stay disambiguable once instances multiply.
+5. ~~**Config schema v2 — plural now, single-instance runtime.**~~
+   **SUPERSEDED** by schema v4 / ADR-0009 / multi-PMO: `pmos:`/`repos:` are
+   **0..N** name-keyed instances (not "exactly one"); migration machinery was
+   removed at crystallization (stale schemas refused). Historical body kept for
+   provenance: *`pmo:`/`repo:` blocks became `pmos:`/`repos:` lists with
+   exactly one entry enforced; multi-instance is a future wiring change…*
+   Runtime today is multi-instance; see supersession note at top.
 
 6. **Registry-driven redaction.** `security.py` = static platform lists +
    contributions from **every registered** adapter (configured or not — no gap
    when switching). A superset tripwire test pins the v0 lists as literals; it
    was written before the rewrite and must never be weakened.
 
-7. **Doc fiction removed.** Never-implemented interfaces (`watch()`/
-   `ChangeEvent`, `cancel_mission()`, `MissionDraft`, `ensure_pr()`,
+7. ~~**Doc fiction removed.**~~ **PARTIALLY SUPERSEDED:**
+   `ForgeCapabilities` **exists** today as a ClassVar on each forge adapter;
+   `cancel_mission` **is** on `PMOPort` and used by decomposition/sweeps.
+   Historical body: *Never-implemented interfaces (`watch()`/`ChangeEvent`,
+   `cancel_mission()`, `MissionDraft`, `ensure_pr()`,
    `authenticated_clone_url()`, `RepoRef`, `ForgeCapabilities`) are deleted
-   from docs/05–06; the genuinely planned seams are recorded in docs/16.
+   from docs/05–06…* — treat the struck list as the 2026-07-13 snapshot, not
+   current law.
 
 ## Intentional behavior deltas — the complete ledger
 
@@ -103,15 +108,15 @@ differs is a regression):
 
 - Adding a PMO system = one adapter package implementing `PMOPort` + one
   `PMO_SYSTEMS` entry (+ contract tests). Adding a forge = adapter +
-  `DESCRIPTOR` + registry entry (+ CLI baked into dev images if its dialect
+  `descriptor` + registry entry (+ CLI baked into dev images if its dialect
   needs one). Neither touches the domain, prompts, entrypoint, redaction, or
   the SPA.
 - The port contracts are pinned by tests: `test_pmo_contract.py` (surface,
   signatures, fake drift, unified dispatch) and `test_forge.py` (conformance,
   DTO shape parity across adapters, descriptor completeness).
-- Multi-instance runtime remains future work: per-mission adapter resolution,
-  per-instance wiring of poll loops/sweeps, and mission→repo mapping (config
-  and Run records are already shaped for it).
+- ~~Multi-instance runtime remains future work…~~ **SUPERSEDED** — multi-PMO /
+  multi-repo runtime ships (ADR-0009, schema v4); config and Run records carry
+  `pmo_ref`/`repo_ref`.
 
 ## Follow-up — run-infrastructure ports + RunBootstrap (2026-07-14)
 

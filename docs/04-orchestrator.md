@@ -23,7 +23,7 @@ Every `poll_interval_seconds` (default 30). **Multi-PMO:** the poll runtime walk
 6. **Relations Mapper cadence (`MapperService`):** when `relations_mapper.enabled` with a valid `dev_type`, no MAPPER run active, `interval_minutes` elapsed, and the service not **degraded** (3 most recent MAPPER runs all dead — store-derived, restart-safe) → dispatch a MAPPER run (`03-mission-lifecycle.md` §4b). One lock serializes this with the manual "Run now" endpoint; the watermark advances only after a successful dispatch. MAPPER runs count toward `global_max`.
 7. Refresh the in-memory missions snapshot served by `GET /api/v1/missions` (advisory only, rebuilt every cycle) and emit the `poll.cycle` span with counts (`12-observability.md`).
 
-A poll cycle that fails on a PMO transient error is skipped after retries (`15-errors-and-retries.md`, `PMO_TRANSIENT`) — the next cycle starts fresh; nothing is lost because nothing local is authoritative.
+A `PMOTransient` on one instance skips **only that instance's segment** for this cycle (`15-errors-and-retries.md`, `PMO_TRANSIENT`); other configured PMO instances still poll. The next tick re-attempts the sick instance — nothing is lost because nothing local is authoritative.
 
 ## 2. Candidate filtering
 
@@ -37,7 +37,7 @@ A poll cycle that fails on a PMO transient error is skipped after retries (`15-e
 
 **The gate is a poll artifact (`MissionManager.gate_map`), not a scheduling side effect:** the poll loop computes it EVERY cycle — paused or not — and both `schedule()` and the `/api/v1/missions` snapshot consume the same map. Pause freezes dispatch, never information: relations edited in Linear during a pause are reflected within one poll interval.
 
-**Dependency-cycle detection (§2a):** `gate_map` runs a pure cycle finder (`find_cycles`, `domain/model.py`) over the snapshot's blocked-by graph. A cycle is an *unsatisfiable* wait — every member is parked until a human deletes a relation — so members get the explicit reason `dependency cycle: A → B → A — will never unblock; delete one relation in Linear` instead of ordinary blocking, `/api/v1/health` reports `dependency_cycles`, and the admin header shows an amber banner. Nothing prevents a human from creating a cycle (the PMO accepts both relations); DevCake's job is to make the deadlock unmistakable.
+**Dependency-cycle detection (§2a):** `gate_map` runs a pure cycle finder (`find_cycles`, `domain/model.py`) over the snapshot's blocked-by graph. A cycle is an *unsatisfiable* wait — every member is parked until a human deletes a relation — so members get the explicit reason `dependency cycle: A → B → A — will never unblock; delete one relation in Linear` instead of ordinary blocking, `/api/v1/health` reports `dependency_cycles`, and the SPA surfaces an amber alert (Overview + slim strip elsewhere). Nothing prevents a human from creating a cycle (the PMO accepts both relations); DevCake's job is to make the deadlock unmistakable.
 
 > **Philosophy — blocking is deliberately pipeline-coarse.** A blocked Mission does not ONBOARD, PLAN, or anything else until its blockers are done. Better bottlenecked by a single well-ordered lane than accumulating parallel garbage: routing quality is the product thesis (founder decision 2026-07-12).
 
@@ -65,7 +65,7 @@ Properties:
 
 ### 3.1 Dispatch (ordered, crash-safe)
 
-Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_mapper`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart. **`dispatch_lock`** serializes every flavor with clear-runs (poll alone is not enough — oauth / mapper / hello bypass the poll lock). Launch also stamps `run.store_gen` from `RunStore.wipe_generation` so a later clear cannot be undone by in-flight saves (`10-persistence.md`).
+Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_mapper`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart. **`dispatch_lock`** serializes every flavor with clear-runs (poll alone is not enough — oauth / mapper / hello bypass the poll lock). Clear-runs itself holds **`poll_rt.lock` and `bootstrap.dispatch_lock`** for the full wipe (order: poll then dispatch — matching the poll loop's own acquire order so it never deadlocks with an in-flight cycle). Launch also stamps `run.store_gen` from `RunStore.wipe_generation` so a later clear cannot be undone by in-flight saves (`10-persistence.md`).
 
 ```
 def launch(run, *, image):                         # RunBootstrap — all four flavors
@@ -112,14 +112,18 @@ There are no locks, leases, or checkouts (INV-3). The only synchronization primi
 
 Finalization side-effect order is fixed:
 
-1. **Post transcript** — upload `{seq}_{TYPE}.md` (comment, or file attachment when > ~50 KB — `05-pmo-adapter.md` §4). *Idempotent:* skip if an artifact with that exact name already exists in the feed.
-2. **Post token report** — the accompanying cost message (INV-5). *Idempotent:* keyed by run_id embedded in the message footer.
+1. **Post transcript** — for issues, **always** upload `{seq}_{TYPE}.md` as a file attachment with a short referencing comment (`05-pmo-adapter.md` §4). Upload failure falls back to an inline (blockquoted) post so INV-5 still holds. *Idempotent:* skip when `"transcript"` is already in `run.finalized_steps` (not by scanning the feed for the attachment name).
+2. **Post token report** — the accompanying cost message (INV-5). *Idempotent:* `"token_report"` ∈ `run.finalized_steps` (and the run_id embedded in the message footer).
 3. **Compare-and-transition:**
 
 ```
 def compare_and_transition(run, intended: Transition):
     live = pmo.get(run.mission_ref)                     # re-read, live
-    if stage_label(live) != run.stage_label_at_dispatch:
+    # EXTERNAL_TRANSITION redelivery: a live stage matching a checkpointed
+    # swap marker of ours (_SWAP_MARKER_STAGE) is accepted as our own prior
+    # work — not an external change. A human change between deliveries still
+    # halts further mutation.
+    if stage_label(live) not in expected_stages(run):
         # A human (or another actor) changed state mid-run.
         pmo.post_feed(run.mission_ref,
             "DevCake completed a {type} run, but the mission's state was changed "
@@ -134,7 +138,7 @@ def compare_and_transition(run, intended: Transition):
 
 4. **Forge side effects** (EXECUTE/REVIEW only): PR comments/approval per `03-mission-lifecycle.md` and `06-forge-adapter.md`. **Exception to the ordering:** on REVIEW-approve, the merge (when `auto_merge` is on) runs *before* the status transition — Done is only declared after a real merge; a failed merge lands on `DEVCAKE-MERGE` instead (`03-mission-lifecycle.md` §4.1).
 
-Each completed side effect is appended to `run.finalized_steps` and the Run file rewritten (atomic tmp+rename), so a crash mid-finalization resumes exactly where it stopped — already-done steps are skipped by their idempotency keys.
+Each completed side effect is appended to `run.finalized_steps` and the Run file rewritten (atomic tmp+rename), so a crash mid-finalization resumes exactly where it stopped — already-done steps are skipped by their step keys.
 
 Because the *label swap is the stage-advancing PMO mutation* and scheduling only derives work from live labels, a Mission can never be worked twice concurrently: until the swap lands, the Mission still derives as its old type, and the in-flight guard + grace cycle (§2) keep it out of candidates; after the swap, it derives as the next type. (Feed posts and other non-stage side effects may still land after the swap on some paths — the scheduler keys on the stage label, not on "last write wins.")
 
@@ -170,5 +174,5 @@ On every app boot, before the first poll cycle:
 | Dev container crashes | Mission label untouched (INV-3); **the dispatch-time backlog→in_progress status write is reverted** (live compare first — human edits win), else a failed first ONBOARD would strand the mission at derivation row 9 (verified at M3) | Run `failed`; attempt++; reschedules next cycle; after `max_attempts` → `DEVCAKE-FAILED` |
 | Dev exceeds timeout | Watchdog kills container | Same as crash (`DEV_TIMEOUT`) |
 | Redis down | Devs buffer/retry publishes with backoff; app consumer reconnects | Streams are durable (AOF); nothing lost; finalization is stream-driven |
-| Linear down | Poll cycles skip; running Devs unaffected (they don't talk to PMO — INV-4) | Backoff per `PMO_TRANSIENT`; finalizations queue on the ingress until PMO is writable |
+| Linear down | That instance's poll segment skips; other instances continue; running Devs unaffected (they don't talk to PMO — INV-4) | Next poll tick re-tries the sick instance (`PMO_TRANSIENT`); finalizations queue on the ingress until PMO is writable |
 | `/data/state` wiped | Attempt counters and run history lost — nothing else (INV-1) | §6 rebuilds in-flight picture from the Dagu API and Redis |

@@ -5,7 +5,7 @@
 
 ## Decision
 
-Bundle **Gitea as the sixth compose service** (`gitea/gitea:1.24.7-rootless`, digest-pinned, sqlite3, loopback UI :3300, straddling both networks like redis/OO). A mission that resolves to no configured repo un-gates onto an auto-created internal repo at intake; on the REVIEW-approved merge, the changed files are zipped and attached to the PMO activity feed — the PMO stays the one place the user looks.
+Bundle **Gitea as a long-lived compose service** among the eight-service stack (`13-deployment.md` §1: app, dagu, redis, openobserve, admin, fluentbit, otel-collector, gitea). Image `gitea/gitea:1.24.7-rootless`, digest-pinned, sqlite3, loopback UI :3300, dual-homed on **control + runtime** like redis and the otel-collector — **not** like OpenObserve (OO is control-only after A23). A mission that resolves to no configured repo un-gates onto an auto-created internal repo at intake; on the REVIEW-approved merge, the changed files are zipped and attached to the PMO activity feed — the PMO stays the one place the user looks.
 
 ### Isolation — honest mechanism
 

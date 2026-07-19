@@ -25,12 +25,13 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
   out/
     result.json          # REQUIRED structured outcome (schema: 03-mission-lifecycle.md §6)
     PLAN.md              # PLAN runs only: the produced plan
-    transcript/          # raw harness session artifacts, collected by the entrypoint
   .devcake/              # entrypoint scratch: credentials, MCP setup logs, relay socket info.
                          #   Excluded from transcripts and never uploaded.
 ```
 
-The workspace is prepared entirely by the container **entrypoint** (not the app): the entrypoint receives its run spec via environment variables (§3), materializes the activity folder **clone-first** — a full-history `git clone` of the mission's `activity-*` repo (ADR-0014 D4; `git log -p ACTIVITY.md` works in-container) with the Redis request/reply channel (`activity.get`, `09-messaging.md` §4) as the degraded fallback — clones the repo using injected credentials, runs the Dev Type's MCP setup commands, and only then launches the harness.
+There is **no** `/workspace/out/transcript/` directory. The entrypoint assembles the session transcript **in memory** (`assemble_transcript`) and ships it as `transcript_md` on the `run.artifacts` payload; the app posts it as `{seq}_{TYPE}.md` on the PMO feed.
+
+The workspace is prepared entirely by the container **entrypoint** (not the app): stage-1 env from Dagu, stage-2 (secrets, repo, prompt, …) via Redis `runspec.get` (§3), then the entrypoint materializes the activity folder **clone-first** — a full-history `git clone` of the mission's `activity-*` repo (ADR-0014 D4; `git log -p ACTIVITY.md` works in-container) with the Redis request/reply channel (`activity.get`, `09-messaging.md` §4) as the degraded fallback — clones the repo using injected credentials, runs the Dev Type's MCP setup commands, and only then launches the harness.
 
 ## 2. `ACTIVITY.md` format
 
@@ -71,18 +72,18 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `DEVCAKE_MISSION_KEY` | 2 | e.g. `ENG-142`. Branch name is `devcake/{INSTANCE}-{mission_key}` via `mission_branch` (not derived from this env alone). |
 | `DEVCAKE_MISSION_TYPE` | 2 | `ONBOARD \| PLAN \| EXECUTE \| REVIEW`. |
 | `DEVCAKE_DEV_TYPE` | 2 | Dev Type name. |
-| `DEVCAKE_HARNESS` | 1/2 | Harness id (image-baked fallback; dispatch may override via runspec). |
+| `DEVCAKE_HARNESS` | 2 | Harness id — image-baked `ENV` is the fallback; the runspec (from dispatch) is authoritative. Not a DAG stage-1 param. |
 | `DEVCAKE_MODEL` | 2 | Per-Dev-Type model pin; empty = harness default. |
 | `DEVCAKE_SEQ` | 2 | Step number (transcript naming `{seq}_{type}.md`). |
 | `DEVCAKE_REPO_URL` | 2 | Clone URL (credential-free; auth via helper, §5). |
-| `DEVCAKE_DEFAULT_BRANCH` | 2 | The resolved work repo's `default_branch` (from that `RepoInstance` — not a singular `config.repo`). |
+| `DEVCAKE_DEFAULT_BRANCH` | 2 | The resolved work repo's `default_branch` (from that `RepoInstance` — not a singular `config.repo`). Present in the runspec for playbooks/spec; the shared entrypoint itself may not read it. |
 | `DEVCAKE_CLONE_USER` | 2 | Credential-in-URL user for the https clone (from the forge descriptor, `06-forge-adapter.md` §3a — `x-access-token` / `oauth2`). |
 | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` | 2 | The Dev's git identity (from the forge descriptor). |
 | `DEVCAKE_FORGE_CLI_ENVS` | 2 | Comma-joined env-var names the entrypoint mirrors `DEVCAKE_FORGE_TOKEN` into for the forge CLI (from the descriptor's `cli_token_envs`, e.g. `GH_TOKEN`). |
 | `DEVCAKE_EXTRA_ARGS` | 2 | Per-Mission-Type extra CLI args from `assignments` (`02-domain-model.md` §9), appended verbatim to the harness invocation (`08-harness-templates.md` §1). May be empty. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OTLP endpoint = the stack's `otel-collector` on `devcake_runtime`. **Unauthenticated**: Devs hold no OO credentials at all; the collector alone authenticates upstream (`12-observability.md` §1, ISSUES #13). |
-| *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `OPENAI_API_KEY` / `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
-| *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active repo's token; optionally the other forge's token for cross-forge reads). |
+| *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
+| *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active work repo's token for this run). |
 | *Dev-Type secret env* | 2 | Named vars from `DevType.secret_env` (`02-domain-model.md` §6), values GUI-stored under `/data/secrets/harness/` — mission-tooling credentials (e.g. a log-platform key) referenced as `$VAR` from `mcp_setup_commands` (`08-harness-templates.md` §7). Missing value: **referenced** by a setup command ⇒ dispatch refuses (`14-security.md` §8); unreferenced ⇒ warn-and-proceed. |
 
 Real secrets (harness and forge credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §3, `09-messaging.md` §1a).
@@ -96,11 +97,12 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 | 0 | Success — `result.json` present and valid | — |
 | 10 | Harness exited nonzero / crashed | `DEV_CRASH` |
 | 11 | `result.json` missing or schema-invalid | `DEV_BAD_OUTPUT` |
-| 12 | Credential/auth failure (harness or forge) | `DEV_AUTH` |
-| 13 | Clone or forge operation failed | `FORGE_*` |
+| 12 | Credential/auth failure (harness) | `DEV_AUTH` |
+| 13 | Clone or forge operation failed | `DEV_FORGE` / `DEV_FORGE_AUTH` (classified from git stderr — `15-errors-and-retries.md` §4) |
 | 14 | MCP setup command failed or timed out (300 s per command) | `DEV_MCP_SETUP` (counted) |
 | 20 | Entrypoint internal error | `DEV_CRASH` |
-| 124 | Killed by timeout (watchdog / Dagu) | `DEV_TIMEOUT` |
+
+App-side timeout is **not** an entrypoint exit code: the watchdog kills the run via Dagu stop (SIGTERM → SIGKILL), and the Run is marked `timed_out` (`DEV_TIMEOUT`). The container may exit on SIGTERM; it does **not** emit exit 124 from the entrypoint.
 
 ## 5. Lifecycle
 

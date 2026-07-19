@@ -66,6 +66,8 @@ Compromise of Dagu auth, the admin password, or the host is total for that machi
 | Skill-store skills (`DevType.skills`) | **Operator-controlled agent instructions** injected into the session (same trust class as the MCP command area); the store repo is writable by anyone with Gitea access. The entrypoint refuses absolute/`..` paths and confines writes to the registry-declared skills dir under `$HOME` (the runspec `skills_dir` is itself validated home-relative — absolute/`..` values fall back to the default) — that guards file placement, not content. |
 | Harness flags (`--dangerously-skip-permissions`, etc.) | Autonomous coding requires them; Devs are not a secure sandbox product (§6). |
 | Unauthenticated OTLP to `otel-collector` | Residual on the dedicated host (self-noise / volume fill). Ops signal, not a tenancy boundary (§10). |
+| Internal Gitea mission tokens | **User-scoped, not repo-scoped** (live-verified). Isolation is one machine user + collaborator grant per mission (`adr/0010`), not forge-side repo ACLs. Admin password never enters Devs. |
+| OpenObserve ingest vs UI roles | OSS OO role separation is **advisory** only — do not treat ingest-only accounts as a hard multi-tenant boundary. |
 
 ### Zone C — Software supply chain (primary mitigation)
 

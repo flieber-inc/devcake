@@ -29,9 +29,9 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 **Product / runtime**
 
 - Webhook-based ingestion (v0 polls; the internal interface is webhook-ready).
-- Multiple repositories or multiple PMO teams per DevCake instance at *runtime*
-  (the config schema is already plural — `pmos:`/`repos:` — with exactly-one
-  enforced where required).
+- N work repos *per mission* (each mission resolves to **0 or 1** work repo;
+  reference repos may still ride along read-only — `10-persistence.md`).
+  **0..N** PMO instances and repos *per stack* are in scope (multi-connection).
 - Human-in-the-loop approval steps *inside* DevCake (approval happens in the PMO
   System and the forge).
 - PMO systems other than Linear in-tree (adapters are pluggable; Linear is

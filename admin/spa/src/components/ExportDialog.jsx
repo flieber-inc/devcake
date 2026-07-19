@@ -71,7 +71,7 @@ export default function ExportDialog({ profiles, onClose }) {
   };
 
   return (
-    <Modal className="max-w-2xl" onClose={busy ? undefined : onClose}>
+    <Modal className="max-w-2xl" ariaLabel="Export settings" onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">Export settings</h4>
       <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
         Downloads one bundle file. Import it on another DevCake to restore
@@ -80,7 +80,7 @@ export default function ExportDialog({ profiles, onClose }) {
 
       <label className="mb-3 block text-sm">
         <span className="mb-1 block font-medium">Source</span>
-        <Select className="w-64" value={source} aria-label="Export source"
+        <Select className="w-full sm:w-64" value={source} aria-label="Export source"
           onChange={(e) => setSource(e.target.value)}>
           <option value="current">Current settings</option>
           {(profiles || []).map((p) => (
@@ -105,7 +105,7 @@ export default function ExportDialog({ profiles, onClose }) {
       </div>
 
       {incCfg && !fromProfile && (
-        <div className="mt-3 flex items-center justify-between gap-3">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="block text-sm font-medium">Embed skill contents</span>
             <span className="block text-xs text-neutral-500 dark:text-neutral-400">
@@ -172,7 +172,7 @@ export default function ExportDialog({ profiles, onClose }) {
           {err}
         </p>
       )}
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
         <Button kind={plaintext ? "danger" : "primary"} disabled={!canSubmit}
           onClick={submit}>

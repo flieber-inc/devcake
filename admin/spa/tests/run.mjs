@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const spa = join(here, "..");
-const SUITES = ["settings.mjs", "hierarchy.mjs", "redesign.mjs"];
+const SUITES = ["settings.mjs", "hierarchy.mjs", "redesign.mjs", "missions.mjs", "responsive.mjs"];
 
 // pick up admin credentials from the repo-root .env when not already set
 try {

@@ -24,12 +24,12 @@ function Item({ entry }) {
   const i = entry.lastIndexOf(" — ");
   const [text, url] = i > -1 ? [entry.slice(0, i), entry.slice(i + 3)] : [entry, null];
   return (
-    <li className="list-disc">
+    <li className="min-w-0 list-disc break-words">
       {text}
       {url && (
         <>
           {" — "}
-          <a href={url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+          <a href={url} target="_blank" rel="noreferrer" className="break-all underline underline-offset-2">
             {url}
           </a>
         </>

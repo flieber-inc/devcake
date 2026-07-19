@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { get, send } from "../api.js";
 import { ConfirmDialog } from "./Modal.jsx";
 import { getRegistry } from "../lib/registry.js";
@@ -46,39 +46,80 @@ export function ListTextarea({ value, onChange, ...props }) {
 }
 
 // Click-to-toggle help popover: a real button, so it works on touch and by
-// keyboard (the old hover-only tooltip simply didn't exist on a phone).
+// keyboard. Fixed positioning keeps it inside drawers and narrow form cards.
 export function Help({ text }) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 8, top: 8, maxHeight: 320 });
   const id = useId();
   const ref = useRef(null);
+  const buttonRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const place = () => {
+    const trigger = buttonRef.current?.getBoundingClientRect();
+    const tooltip = tooltipRef.current;
+    if (!trigger || !tooltip) return;
+    const gutter = 8;
+    const gap = 6;
+    const width = tooltip.offsetWidth || Math.min(256, innerWidth - gutter * 2);
+    const maxHeight = Math.max(96, innerHeight - gutter * 2);
+    const height = Math.min(tooltip.scrollHeight, maxHeight);
+    const left = Math.min(
+      Math.max(gutter, trigger.left + trigger.width / 2 - width / 2),
+      Math.max(gutter, innerWidth - width - gutter),
+    );
+    const below = trigger.bottom + gap;
+    const top = below + height <= innerHeight - gutter
+      ? below
+      : Math.max(gutter, trigger.top - height - gap);
+    setPosition({ left, top, maxHeight });
+  };
+  useLayoutEffect(() => {
+    if (!open) return;
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const away = (e) => ref.current && !ref.current.contains(e.target) && setOpen(false);
-    const esc = (e) => e.key === "Escape" && setOpen(false);
+    const esc = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
     document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", esc);
+    document.addEventListener("keydown", esc, true);
     return () => {
       document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", esc);
+      document.removeEventListener("keydown", esc, true);
     };
   }, [open]);
   return (
     <span ref={ref} className="relative ml-1 inline-block align-middle">
       <button
+        ref={buttonRef}
         type="button"
         aria-label="Help"
         aria-expanded={open}
         aria-describedby={open ? id : undefined}
         onClick={(e) => { e.preventDefault(); setOpen(!open); }}
-        className="flex h-4 w-4 items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-600 hover:bg-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:bg-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-600"
+        className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-600 hover:bg-neutral-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:bg-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-600 sm:h-4 sm:w-4"
       >
         ?
       </button>
       {open && (
         <span
+          ref={tooltipRef}
           id={id}
           role="tooltip"
-          className="absolute left-1/2 top-full z-40 mt-1.5 w-64 max-w-[min(16rem,calc(100vw-2rem))] -translate-x-1/2 rounded-md bg-neutral-950 p-2 text-left text-xs font-normal leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800"
+          style={position}
+          className="fixed z-50 w-64 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-md bg-neutral-950 p-2 text-left text-xs font-normal leading-relaxed text-neutral-100 shadow-lg dark:bg-neutral-800"
         >
           {text}
         </span>
@@ -187,13 +228,13 @@ export function SecretField({ label, help, hint, refKey, checkKind = "conn",
   }
   return (
     <Field label={label} help={help} hint={hint}>
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <Input type="password" value={draft} aria-label={label}
           placeholder={status?.present ? "•••••• (stored)" : "paste value"}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()} />
         <button type="button" disabled={!draft || busy}
-          className="rounded bg-neutral-800 px-3 text-sm text-white disabled:opacity-40 dark:bg-neutral-200 dark:text-black"
+          className="min-h-10 rounded bg-neutral-800 px-3 text-sm text-white disabled:opacity-40 dark:bg-neutral-200 dark:text-black sm:min-h-0"
           onClick={submit}>{status?.present ? "Replace" : "Set"}</button>
       </div>
       {shapeWarn && <span className="mt-1 block text-xs text-amber-600">⚠ {shapeWarn}</span>}

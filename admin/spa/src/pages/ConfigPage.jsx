@@ -48,7 +48,7 @@ function OAuthWizard({ devType, onClose }) {
     return () => clearInterval(timer);
   }, [devType]);
   return (
-    <Modal onClose={onClose}>
+    <Modal ariaLabel={`Connect ${devType} with OAuth`} onClose={onClose}>
         <h4 className="mb-3 text-base font-semibold tracking-tight">Connect {devType} (OAuth)</h4>
         {error && <p className="text-sm text-red-600">{error}</p>}
         {!error && status.state === "starting" && (
@@ -148,7 +148,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
     <div className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-sm font-semibold">{name}</span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {/* keyed on the DRAFTED harness so switching to an OAuth-capable
               harness shows the button immediately; disabled until the switch
               is saved (the device flow runs against the SAVED harness) */}
@@ -172,7 +172,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         </div>
       </div>
       {/* one line: harness · model · a much smaller max-concurrency box */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_6rem]">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_6rem]">
         <Field label="Harness template"
           help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements below follow it automatically on Save.">
           <Select
@@ -327,7 +327,7 @@ function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
     finally { setBusy(false); }
   };
   return (
-    <Modal onClose={busy ? undefined : onClose}>
+    <Modal ariaLabel="New Dev Type" onClose={busy ? undefined : onClose}>
       <h4 className="mb-3 text-base font-semibold tracking-tight">New Dev Type</h4>
       <div className="space-y-3">
         <Field label="Name" hint="lowercase letters/digits/dashes — e.g. senior-dev">
@@ -341,7 +341,7 @@ function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
           </Select>
         </Field>
         {err && <p className="text-sm text-red-600 dark:text-red-400">✗ {err}</p>}
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button disabled={busy || !name.trim() || !harness} onClick={create}>
             {busy ? "Creating…" : "Create Dev Type"}
@@ -392,8 +392,8 @@ function AddSkillDialog({ onClose, onSaved }) {
   };
 
   return (
-    <Modal className="max-w-2xl" onClose={busy ? undefined : onClose}>
-      <div className="mb-4 flex items-center justify-between">
+    <Modal className="max-w-2xl" ariaLabel="Add skill" onClose={busy ? undefined : onClose}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-base font-semibold tracking-tight">Add skill</h4>
         <div className="flex gap-1 rounded-md bg-stone-100 p-0.5 text-xs dark:bg-neutral-800">
           {[["write", "Write"], ["import", "Import files"]].map(([m, l]) => (
@@ -409,7 +409,7 @@ function AddSkillDialog({ onClose, onSaved }) {
       </div>
       {mode === "write" ? (
         <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Field label="Name" hint="lowercase, - or _ (e.g. release-notes)">
               <Input value={name} onChange={(e) => edited(setName)(e.target.value)}
                 placeholder="my-skill" />
@@ -501,7 +501,7 @@ function RepoChips({ label, help, all, selected, excluded, excludedNote,
   );
 }
 
-export default function ConfigPage({ section }) {
+export default function ConfigPage({ section, sidebarCollapsed }) {
   // the draft, reload, harnesses and health snapshot come from the shared
   // provider (v0.1.1 B4) — the Repositories page edits the SAME draft, and
   // DraftChrome (App-level) owns Save/DirtyBar/NavGuard
@@ -560,12 +560,6 @@ export default function ConfigPage({ section }) {
   const newPmoNames = useNewNames(dr.server?.cfg.pmos, dr.draft?.cfg.pmos);
 
   const loaded = dr.loaded;
-
-  // settings-style navigation: one section per view — switching sections
-  // starts at the top of the pane
-  useEffect(() => {
-    document.querySelector("main")?.scrollTo({ top: 0 });
-  }, [section]);
 
   if (!loaded) return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
 
@@ -631,19 +625,21 @@ export default function ConfigPage({ section }) {
         subtitle="One section at a time — drafted edits apply on Save, wherever you made them" />
       {pageErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {pageErr}</p>}
 
-      {/* mobile section switcher (sidebar sub-nav is expanded-drawer-only) */}
-      <div className="sticky top-0 z-20 -mx-4 flex gap-1.5 overflow-x-auto bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90 lg:hidden">
-        {CONFIG_SECTIONS.map((s) => (
-          <a key={s.id} href={`#/config/${s.id}`}
-            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
-              section === s.id
-                ? "border-accent-300 bg-accent-50 font-semibold text-accent-800 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
-                : "border-neutral-200 bg-surface-raised text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300"
-            }`}>
-            {s.label}
-          </a>
-        ))}
-      </div>
+      {/* Section navigation remains available whenever the sidebar is a rail. */}
+      {sidebarCollapsed && (
+        <div className="sticky top-0 z-20 -mx-4 flex gap-1.5 overflow-x-auto bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90">
+          {CONFIG_SECTIONS.map((s) => (
+            <a key={s.id} href={`#/config/${s.id}`}
+              className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
+                section === s.id
+                  ? "border-accent-300 bg-accent-50 font-semibold text-accent-800 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
+                  : "border-neutral-200 bg-surface-raised text-neutral-600 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-300"
+              }`}>
+              {s.label}
+            </a>
+          ))}
+        </div>
+      )}
 
       {section === "pmo" && (
       <Section id="pmo" title="PMO connections"
@@ -676,7 +672,7 @@ export default function ConfigPage({ section }) {
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Instance name"
                   help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
                   <Input value={inst.name} disabled={pmoNameLocked(inst.name, idx)}

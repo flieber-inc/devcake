@@ -102,14 +102,17 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
 
   return (
     <Overlay
-      className="ml-auto h-[100dvh] max-w-2xl rounded-none border-l border-neutral-200 dark:border-neutral-800"
+      className="ml-auto h-dvh max-w-2xl overflow-hidden rounded-none border-l border-neutral-200 dark:border-neutral-800"
+      placementClass="items-stretch justify-end p-0"
+      bounded={false}
+      ariaLabel={`Mission ${mission.key}`}
       onDismiss={onClose}
     >
       <div className="flex h-full flex-col">
         {/* Header */}
         <div className="flex items-start gap-3 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
           <div className="min-w-0 grow">
-            <div className="mb-1 flex items-center gap-2">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
               {mission.mission_type && <StageGlyph stage={mission.mission_type} />}
               <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
                 {mission.key}

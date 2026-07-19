@@ -103,7 +103,7 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
     }
   };
   return (
-    <Modal onClose={busy ? undefined : onClose}>
+    <Modal ariaLabel="Create repository on the internal Gitea" onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">
         Create repository on the internal Gitea
       </h4>
@@ -122,7 +122,7 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
             placeholder="e.g. notes" />
         </Field>
         {err && <p className="text-sm text-red-600 dark:text-red-400">⚠ {err}</p>}
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
           <Button disabled={busy || !name} onClick={create}>
             {busy ? "Creating…" : "Create repository"}
@@ -246,7 +246,7 @@ export default function ReposPage() {
                   </Button>
                 )}
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="Repo name"
                   help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Missions reference it in `devcake-repo:` markers and PMO default-repo settings. Locked once saved — stored tokens key on it; remove and re-add to rename.">
                   <Input value={repo.name} disabled={nameLocked(repo.name, idx)}

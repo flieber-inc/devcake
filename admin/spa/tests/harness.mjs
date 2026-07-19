@@ -55,6 +55,9 @@ export async function withPage(fn, { width = 1280, height = 900 } = {}) {
     check(`no native dialog (got ${d.type()}: "${d.message()}")`, false);
     d.dismiss().catch(() => {});
   });
+  page.on("pageerror", (error) => {
+    check("no uncaught browser error", false, String(error?.message || error));
+  });
   try {
     await fn(page);
   } finally {

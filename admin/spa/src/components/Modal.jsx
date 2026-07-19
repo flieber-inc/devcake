@@ -10,11 +10,15 @@ const FOCUSABLE =
 // default white-card surface wholesale (border + background) — pass it
 // instead of stacking conflicting utilities in `className` (Tailwind
 // resolves duplicate properties by stylesheet order, not class order).
-export function Overlay({ children, className = "", surfaceClass, onDismiss, ariaLabel }) {
+export function Overlay({
+  children, className = "", surfaceClass, onDismiss, ariaLabel,
+  placementClass = "items-center justify-center p-4", bounded = true,
+}) {
   const ref = useRef(null);
+  const returnFocus = useRef(document.activeElement);
   useEffect(() => {
     const node = ref.current;
-    const prev = document.activeElement;
+    const prev = returnFocus.current;
     (node.querySelector(FOCUSABLE) || node).focus();
     const onKey = (e) => {
       if (e.key === "Tab") {
@@ -36,15 +40,16 @@ export function Overlay({ children, className = "", surfaceClass, onDismiss, ari
       prev && prev.focus && prev.focus();
     };
   }, []);
-  useEffect(() => {
-    if (!onDismiss) return;
-    const esc = (e) => e.key === "Escape" && onDismiss();
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, [onDismiss]);
+  const onOverlayKeyDown = (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onDismiss?.();
+  };
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
+      className={`fixed inset-0 z-50 flex overflow-hidden bg-black/50 backdrop-blur-[2px] ${placementClass}`}
+      onKeyDown={onOverlayKeyDown}
       onClick={onDismiss ? (e) => e.target === e.currentTarget && onDismiss() : undefined}
     >
       <div
@@ -54,6 +59,8 @@ export function Overlay({ children, className = "", surfaceClass, onDismiss, ari
         aria-label={ariaLabel}
         tabIndex={-1}
         className={`w-full rounded-card shadow-2xl focus:outline-none ${
+          bounded ? "max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain" : ""
+        } ${
           surfaceClass || "border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
         } ${className}`}
       >
@@ -71,18 +78,18 @@ export function ConfirmDialog({ open, title, body, confirmLabel, busy, error,
                                 children, onConfirm, onCancel }) {
   if (!open) return null;
   return (
-    <Overlay className="max-w-lg p-6">
+    <Overlay className="max-w-lg p-6" ariaLabel={title}>
       <h4 className="mb-2 text-base font-semibold tracking-tight">{title}</h4>
       <p className="mb-4 whitespace-pre-line text-sm text-neutral-600 dark:text-neutral-300">
         {body}
       </p>
       {children}
       {error && (
-        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+        <p role="alert" className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
           {error}
         </p>
       )}
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
         <Button kind="danger" disabled={busy} onClick={onConfirm}>
           {busy ? "Working…" : confirmLabel}
@@ -102,7 +109,7 @@ export function PromptDialog({
   if (!open) return null;
   const submit = () => value.trim() && !busy && onConfirm(value.trim());
   return (
-    <Overlay className="max-w-lg p-6" onDismiss={onCancel}>
+    <Overlay className="max-w-lg p-6" ariaLabel={title} onDismiss={onCancel}>
       <h4 className="mb-3 text-base font-semibold tracking-tight">{title}</h4>
       <label className="block text-sm">
         <span className="mb-1 block font-medium">{label}</span>
@@ -117,11 +124,11 @@ export function PromptDialog({
         {hint && <span className="mt-1 block text-xs text-neutral-500 dark:text-neutral-400">{hint}</span>}
       </label>
       {error && (
-        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+        <p role="alert" className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
           {error}
         </p>
       )}
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
         <Button disabled={busy || !value.trim()} onClick={submit}>
           {busy ? "Working…" : confirmLabel}
@@ -131,9 +138,9 @@ export function PromptDialog({
   );
 }
 
-export function Modal({ children, className = "max-w-lg", onClose }) {
+export function Modal({ children, className = "max-w-lg", onClose, ariaLabel }) {
   return (
-    <Overlay className={`p-6 ${className}`} onDismiss={onClose}>
+    <Overlay className={`p-6 ${className}`} ariaLabel={ariaLabel} onDismiss={onClose}>
       {children}
     </Overlay>
   );

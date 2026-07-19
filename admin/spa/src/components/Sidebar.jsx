@@ -25,7 +25,7 @@ function NavItem({ href, icon: Icon, label, active, collapsed, onClick }) {
       href={href}
       title={label}
       onClick={onClick}
-      className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition ${
+      className={`flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition ${
         collapsed ? "justify-center" : ""
       } ${
         active
@@ -153,20 +153,8 @@ function IntakeSwitch({ collapsed, paused, busy, disabled, error, onToggle }) {
 export default function Sidebar({
   page, configSection, alertCount, health, healthError,
   intakePaused, intakeBusy, intakeError, onIntakeToggle,
+  collapsed, canToggle, onToggleCollapsed,
 }) {
-  const [collapsed, setCollapsed] = useState(() => {
-    const v = localStorage.getItem("devcake-sidebar");
-    if (v === "collapsed") return true;
-    if (v === "expanded") return false;
-    return !window.matchMedia("(min-width: 1024px)").matches;
-  });
-  const toggleCollapsed = () => {
-    setCollapsed((c) => {
-      localStorage.setItem("devcake-sidebar", !c ? "collapsed" : "expanded");
-      return !c;
-    });
-  };
-
   const dotOk = (key) =>
     (healthError && key === "app" ? false : serviceValue(health, key));
   const anyDown = healthError || SERVICES.some(([k]) => dotOk(k) === false);
@@ -175,11 +163,11 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`flex shrink-0 flex-col border-r border-neutral-200 bg-surface-raised transition-[width] duration-200 dark:border-neutral-800 dark:bg-surface-raised-dark ${
+      className={`flex min-h-0 shrink-0 flex-col overflow-y-auto overscroll-contain border-r border-neutral-200 bg-surface-raised transition-[width] duration-200 motion-reduce:transition-none dark:border-neutral-800 dark:bg-surface-raised-dark ${
         collapsed ? "w-14" : "w-60"
       }`}
     >
-      <a href="#/overview" className={`flex items-center gap-2.5 px-3 py-4 ${collapsed ? "justify-center" : "px-4"}`}>
+      <a href="#/overview" aria-label="DevCake home" className={`flex items-center gap-2.5 px-3 py-4 ${collapsed ? "justify-center" : "px-4"}`}>
         {/* the app mark is the signature layer-cake, mid-bake */}
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent shadow-card">
           <span className="flex w-3.5 flex-col-reverse gap-[2.5px]" aria-hidden>
@@ -281,17 +269,19 @@ export default function Sidebar({
             </a>
           </p>
         )}
-        <button
-          onClick={toggleCollapsed}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
-            collapsed ? "mx-auto h-8 w-8 justify-center" : "w-full px-2.5"
-          }`}
-        >
-          {collapsed ? <PanelLeftOpen size={15} aria-hidden /> : <PanelLeftClose size={15} aria-hidden />}
-          {!collapsed && "Collapse"}
-        </button>
+        {canToggle && (
+          <button
+            onClick={onToggleCollapsed}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
+              collapsed ? "mx-auto h-8 w-8 justify-center" : "w-full px-2.5"
+            }`}
+          >
+            {collapsed ? <PanelLeftOpen size={15} aria-hidden /> : <PanelLeftClose size={15} aria-hidden />}
+            {!collapsed && "Collapse"}
+          </button>
+        )}
       </div>
     </aside>
   );

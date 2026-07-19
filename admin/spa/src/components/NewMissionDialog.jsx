@@ -45,7 +45,7 @@ export default function NewMissionDialog({ instances, onClose, onCreated }) {
   };
 
   return (
-    <Modal className="max-w-lg" onClose={busy ? undefined : onClose}>
+    <Modal className="max-w-lg" ariaLabel="New mission" onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">New mission</h4>
       <p className="mb-4 text-xs text-neutral-500 dark:text-neutral-400">
         Creates a backlog issue in Linear with the DEVCAKE label. ONBOARD triage
@@ -71,7 +71,7 @@ export default function NewMissionDialog({ instances, onClose, onCreated }) {
             aria-label="Mission description"
           />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Priority">
             <Select
               value={priority}
@@ -113,11 +113,11 @@ export default function NewMissionDialog({ instances, onClose, onCreated }) {
         </div>
       </div>
       {error && (
-        <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+        <p role="alert" className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
           {error}
         </p>
       )}
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onClose}>
           Cancel
         </Button>

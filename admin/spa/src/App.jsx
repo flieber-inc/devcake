@@ -41,6 +41,13 @@ function parseHash() {
 
 export default function App() {
   const [route, setRoute] = useState(parseHash);
+  const mainRef = useRef(null);
+  const [desktopViewport, setDesktopViewport] = useState(
+    () => window.matchMedia("(min-width: 1024px)").matches,
+  );
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(
+    () => localStorage.getItem("devcake-sidebar") === "collapsed",
+  );
   const [health, setHealth] = useState({});
   const [healthError, setHealthError] = useState(false);
   const [lastOkAt, setLastOkAt] = useState(null);
@@ -59,6 +66,15 @@ export default function App() {
         [...new Set([...(c.dismissed_alerts || []), ...local])]))
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px)");
+    const update = (event) => setDesktopViewport(event.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [route.page, route.section]);
   const persistDismissed = async (list) => {
     setDismissed(list);
     try {
@@ -141,10 +157,19 @@ export default function App() {
   const restoreAlert = (a) => persistDismissed(dismissed.filter((k) => k !== alertKey(a)));
   const critical = alerts.filter((a) => a.severity === "critical");
   const { page, section } = route;
+  const sidebarCollapsed = page === "missions" || !desktopViewport || desktopSidebarCollapsed;
+  const sidebarCanToggle = desktopViewport && page !== "missions";
+  const toggleSidebar = () => {
+    setDesktopSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      localStorage.setItem("devcake-sidebar", next ? "collapsed" : "expanded");
+      return next;
+    });
+  };
 
   return (
     <ConfigDraftProvider>
-    <div className="flex h-screen bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
       <Sidebar
         page={page}
         configSection={section}
@@ -155,8 +180,11 @@ export default function App() {
         intakeBusy={intakeBusy}
         intakeError={intakeError}
         onIntakeToggle={toggleIntake}
+        collapsed={sidebarCollapsed}
+        canToggle={sidebarCanToggle}
+        onToggleCollapsed={toggleSidebar}
       />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {healthError && (
           <div className="flex items-center gap-2 border-b border-red-300 bg-red-50 px-4 py-1.5 text-xs font-medium text-red-800 dark:border-red-900 dark:bg-red-950/80 dark:text-red-200 sm:px-8">
             <OctagonAlert size={13} className="shrink-0" aria-hidden />
@@ -185,8 +213,15 @@ export default function App() {
             </span>
           </a>
         )}
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
-          <div className="mx-auto w-full max-w-6xl">
+        <main
+          ref={mainRef}
+          className={`min-h-0 flex-1 ${
+            page === "missions"
+              ? "overflow-hidden px-3 py-3 sm:px-4"
+              : "overflow-y-auto px-4 py-6 sm:px-8"
+          }`}
+        >
+          <div className={`mx-auto w-full ${page === "missions" ? "h-full max-w-none" : "max-w-6xl"}`}>
             {page === "overview" && (
               <OverviewPage
                 health={health}
@@ -196,7 +231,7 @@ export default function App() {
                 onRestoreAlert={restoreAlert}
               />
             )}
-            {page === "config" && <ConfigPage section={section} />}
+            {page === "config" && <ConfigPage section={section} sidebarCollapsed={sidebarCollapsed} />}
             {page === "repos" && <ReposPage />}
             {page === "runs" && <RunsPage />}
             {page === "missions" && <MissionsPage />}

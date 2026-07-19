@@ -131,7 +131,7 @@ export default function ImportDialog({ onClose, onImported }) {
   };
 
   return (
-    <Modal className="max-w-2xl" onClose={busy ? undefined : onClose}>
+    <Modal className="max-w-2xl" ariaLabel="Import settings" onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">Import settings</h4>
       <p className="mb-4 text-sm text-neutral-500 dark:text-neutral-400">
         Upload a bundle file. It lands as a saved profile — nothing applies
@@ -140,7 +140,7 @@ export default function ImportDialog({ onClose, onImported }) {
 
       {!result && (
         <div className="space-y-3">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
             <input id="import-bundle-file" type="file" accept=".yaml,.yml"
               className="hidden"
               onChange={(e) => onPick(e.target.files?.[0])} />
@@ -148,11 +148,11 @@ export default function ImportDialog({ onClose, onImported }) {
               className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium transition hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800">
               Choose bundle file…
             </label>
-            {fileName && <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">{fileName}</span>}
+            {fileName && <span className="min-w-0 break-all font-mono text-xs text-neutral-500 dark:text-neutral-400">{fileName}</span>}
           </div>
 
           {needsPw && (
-            <div className="flex max-w-sm items-center gap-2">
+            <div className="flex max-w-sm flex-col gap-2 sm:flex-row sm:items-center">
               <input type="password" value={passphrase}
                 placeholder="bundle passphrase"
                 aria-label="Bundle passphrase"
@@ -229,7 +229,7 @@ export default function ImportDialog({ onClose, onImported }) {
         </div>
       )}
 
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onClose}>
           {result ? "Close" : "Cancel"}
         </Button>

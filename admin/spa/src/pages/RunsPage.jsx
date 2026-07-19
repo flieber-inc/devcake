@@ -106,33 +106,36 @@ export default function RunsPage() {
         </p>
       )}
       <Card className="p-4">
-        <div className="mb-3 flex items-center gap-3">
-          <span className="relative">
-            <Input className="w-64 pr-7"
-              placeholder="Filter by mission (e.g. DEV-17)"
-              aria-label="Filter runs by mission key"
-              value={filter}
-              onChange={(e) => { setFilter(e.target.value); setOffset(0); }}
-            />
-            {filter && (
-              <button type="button" aria-label="Clear filter"
-                onClick={() => { setFilter(""); setOffset(0); }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
-                ✕
-              </button>
-            )}
-          </span>
-          <span className="text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
-          <span className="grow" />
-          <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE))}>newer</Button>
-          <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-            {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}
-          </span>
-          <Button kind="ghost" size="sm" disabled={offset + PAGE >= data.total}
-            onClick={() => setOffset(offset + PAGE)}>
-            older <ChevronRight size={13} aria-hidden />
-          </Button>
+        <div className="mb-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="relative min-w-0 flex-1 sm:flex-none">
+              <Input className="w-full pr-7 sm:w-64"
+                placeholder="Filter by mission (e.g. DEV-17)"
+                aria-label="Filter runs by mission key"
+                value={filter}
+                onChange={(e) => { setFilter(e.target.value); setOffset(0); }}
+              />
+              {filter && (
+                <button type="button" aria-label="Clear filter"
+                  onClick={() => { setFilter(""); setOffset(0); }}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                  ✕
+                </button>
+              )}
+            </span>
+            <span className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE))}>newer</Button>
+            <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+              {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}
+            </span>
+            <Button kind="ghost" size="sm" disabled={offset + PAGE >= data.total}
+              onClick={() => setOffset(offset + PAGE)}>
+              older <ChevronRight size={13} aria-hidden />
+            </Button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[42rem] text-left text-sm">

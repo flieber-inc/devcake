@@ -35,7 +35,7 @@ function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSa
     }
   };
   return (
-    <Modal className="max-w-3xl" onClose={busy ? undefined : onClose}>
+    <Modal className="max-w-3xl" ariaLabel={editing ? `Edit prompt template ${initial.name}` : "Create prompt template"} onClose={busy ? undefined : onClose}>
       <h4 className="mb-1 text-base font-semibold tracking-tight">
         {editing ? `Edit template "${initial.name}"` : "Create prompt template"} · {mt}
       </h4>
@@ -193,7 +193,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                 + Create prompt template
               </Button>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <Field label="Active template"
                 help="Which playbook this Mission Type dispatches with. Saved with the page-level Save; if the template file disappears, dispatch falls back to the built-in default and /health warns.">
                 <Select value={active}
@@ -254,7 +254,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                 + Create prompt template
               </Button>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <Field label="Active template"
                 help="The identifying prompt this Dev Type runs with, delivered before every playbook. Saved with the page-level Save.">
                 <Select value={active}
@@ -297,7 +297,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
           onSaved={() => { setModal(null); refresh(); }} />
       )}
       {viewing && (
-        <Modal className="max-w-3xl" onClose={() => setViewing(null)}>
+        <Modal className="max-w-3xl" ariaLabel={`Prompt template ${viewing.entry.name}`} onClose={() => setViewing(null)}>
           <h4 className="mb-2 text-base font-semibold tracking-tight">
             {viewing.mt} · {viewing.entry.name}
           </h4>

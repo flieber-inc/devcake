@@ -27,9 +27,10 @@ from . import security
 log = logging.getLogger("devcake.secrets")
 
 # ONE definition of the per-scope connection-secret field allowlist —
-# api.main validates endpoint input against it and settings_bundle validates
-# bundle shapes. scope/instance/field become path components everywhere, so
-# every entry point re-validates against this (audit A5/A9).
+# api.connections_service validates endpoint input against it and
+# settings_bundle validates bundle shapes. scope/instance/field become path
+# components everywhere, so every entry point re-validates against this
+# (audit A5/A9).
 CONNECTION_FIELDS: dict[str, set[str]] = {
     "pmo": {"api_key"},
     "repo": {"token", "token_ro", "reviewer_token"},

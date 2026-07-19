@@ -277,11 +277,12 @@ def test_devtype_prompt_store_seed_resolve_roundtrip(monkeypatch, tmp_path):
 
 def test_rename_dev_type_moves_templates_and_refs(monkeypatch, tmp_path):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.api import devtypes_service
     from devcake.api import main as app_main
     from devcake.config import DevType
-    monkeypatch.setattr(app_main, "save_config", lambda c: None)
-    monkeypatch.setattr(app_main, "save_dev_type", lambda d: None)
-    monkeypatch.setattr(app_main, "delete_dev_type", lambda n: None)
+    monkeypatch.setattr(devtypes_service, "save_config", lambda c: None)
+    monkeypatch.setattr(devtypes_service, "save_dev_type", lambda d: None)
+    monkeypatch.setattr(devtypes_service, "delete_dev_type", lambda n: None)
     dt = DevType(name="olddev", harness_template="codex",
                  identifying_prompt="I am old.")
     app_main.dev_types["olddev"] = dt

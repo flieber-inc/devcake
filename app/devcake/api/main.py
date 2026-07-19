@@ -55,7 +55,8 @@ from ..prompts import templates as prompt_templates
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
 from .auth import credentials_configured, enforce_control_plane_auth
-from . import profiles_service, settings_transfer
+from . import (connections_service, devtypes_service, internal_repos_service,
+               profiles_service, settings_transfer)
 from .config_service import apply_config_patch
 from .health import build_health_payload, reset_protection_cache
 from .poll import PollRuntime
@@ -547,538 +548,184 @@ async def import_env(body: dict):
     return settings_transfer.import_env_body(body)
 
 
-# ── per-Mission-Type prompt templates (v0.1.1) ───────────────────────────────
+# ── per-Mission-Type prompt templates (v0.1.1) + Dev Types — bodies in
+# devtypes_service; forwards pass the singletons at call time ────────────────
 
 @app.get("/api/v1/prompt-templates")
 async def get_prompt_templates():
-    """Every stored template per mission type (the built-in default first),
-    the per-type variable allowlists (drives the SPA's hint chips), and the
-    active selection."""
-    from ..prompts import PLAYBOOK_VARS
-    return {
-        "variables": {mt: list(v) for mt, v in PLAYBOOK_VARS.items()},
-        "templates": prompt_templates.list_templates(),
-        "active": {mt: config.active_prompt_templates.get(mt, "Development")
-                   for mt in PLAYBOOK_VARS},
-        # dev-type identifying-prompt templates (2026-07-15): same workflow
-        # names, per Dev Type; all editable (Development is seeded user data)
-        "dev_types": prompt_templates.list_devtype_prompts(dev_types),
-        "active_dev": {n: config.active_devtype_prompts.get(n, "Development")
-                       for n in dev_types},
-    }
+    return await devtypes_service.get_prompt_templates(config=config,
+                                                       dev_types=dev_types)
 
 
 @app.put("/api/v1/prompt-templates/{mission_type}/{name}")
 async def put_prompt_template(mission_type: str, name: str, body: dict):
-    text = body.get("template")
-    if not isinstance(text, str):
-        raise HTTPException(422, "body must carry a string 'template'")
-    try:
-        prompt_templates.save_template(mission_type, name, text)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    return {"mission_type": mission_type, "name": name, "saved": True}
+    return await devtypes_service.put_prompt_template(mission_type, name, body)
 
 
 @app.delete("/api/v1/prompt-templates/{mission_type}/{name}")
 async def delete_prompt_template(mission_type: str, name: str):
-    if config.active_prompt_templates.get(mission_type) == name:
-        raise HTTPException(
-            409, f"template {name!r} is the ACTIVE template for "
-                 f"{mission_type} — switch back to 'default' first")
-    try:
-        prompt_templates.delete_template(mission_type, name)
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    return {"deleted": True}
+    return await devtypes_service.delete_prompt_template(mission_type, name,
+                                                         config=config)
 
 
 @app.put("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def put_devtype_prompt(dev_type: str, name: str, body: dict):
-    if dev_type not in dev_types:
-        raise HTTPException(404, f"no Dev Type named {dev_type!r}")
-    text = body.get("template")
-    if not isinstance(text, str):
-        raise HTTPException(422, "body must carry a string 'template'")
-    try:
-        prompt_templates.save_devtype_prompt(dev_type, name, text)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-    return {"dev_type": dev_type, "name": name, "saved": True}
+    return await devtypes_service.put_devtype_prompt(dev_type, name, body,
+                                                     dev_types=dev_types)
 
 
 @app.delete("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def delete_devtype_prompt(dev_type: str, name: str):
-    active = config.active_devtype_prompts.get(dev_type, "Development")
-    if active == name or (name == "Development" and active in ("Development",)):
-        raise HTTPException(409, f"template {name!r} is ACTIVE for "
-                                 f"{dev_type} — switch first")
-    try:
-        prompt_templates.delete_devtype_prompt(dev_type, name)
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    return {"deleted": True}
+    return await devtypes_service.delete_devtype_prompt(dev_type, name,
+                                                        config=config)
 
 
 @app.get("/api/v1/harnesses")
 async def list_harnesses():
-    """The harness registry — image + credential requirements per
-    harness_template. Read-only; the admin Dev Type card derives its display
-    (including previews of unsaved harness switches) from this."""
-    return {name: {"docker_image": h.image,
-                   "default_model": h.default_model,
-                   "credential_env": h.credential_env,
-                   "credential_files": [cf.model_dump() for cf in h.credential_files],
-                   "oauth_available": h.oauth is not None,
-                   "skills_dir": h.skills_dir}
-            for name, h in HARNESSES.items()}
+    return await devtypes_service.list_harnesses()
 
 
 @app.get("/api/v1/dev-types")
 async def list_dev_types():
-    return [dev_type_status(d) for d in dev_types.values()]
+    return await devtypes_service.list_dev_types(dev_types=dev_types)
 
 
 @app.post("/api/v1/dev-types")
 @app.put("/api/v1/dev-types/{name}")
 async def upsert_dev_type(body: dict, name: str | None = None):
-    try:
-        dt = DevType.model_validate(body if name is None else {**body, "name": name})
-    except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
-        raise HTTPException(422, str(e))
-    dev_types[dt.name] = dt
-    save_dev_type(dt)
-    prompt_templates.seed_devtype_prompts({dt.name: dt})
-    return dt.model_dump()
+    return await devtypes_service.upsert_dev_type(body, name,
+                                                  dev_types=dev_types)
 
 
 @app.post("/api/v1/dev-types/{name}/rename")
 async def rename_dev_type(name: str, body: dict):
-    """Rename a Dev Type in place (2026-07-15): moves its YAML, credential
-    dir, and prompt-template dir, and remaps every reference (assignments,
-    mapper, active prompt selection, breaker)."""
-    import shutil
-    from pathlib import Path as _P
-    new = str(body.get("new_name") or "")
-    if name not in dev_types:
-        raise HTTPException(404, f"no Dev Type named {name!r}")
-    if not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", new) or ":" in new:
-        raise HTTPException(422, "new_name must match ^[A-Za-z0-9][A-Za-z0-9_-]*$")
-    if new in dev_types:
-        raise HTTPException(409, f"a Dev Type named {new!r} already exists")
-    dt = dev_types.pop(name).model_copy(update={"name": new})
-    dev_types[new] = dt
-    save_dev_type(dt)
-    delete_dev_type(name)
-    data = _P(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
-    for sub in ("secrets", "config/devtype_prompt_templates"):
-        src = data / sub / name
-        if src.is_dir():
-            shutil.move(str(src), str(data / sub / new))
-    changed = False
-    for mt, a in config.assignments.items():
-        if a.dev_type == name:
-            a.dev_type = new
-            changed = True
-    if config.relations_mapper.dev_type == name:
-        config.relations_mapper.dev_type = new
-        changed = True
-    if name in config.active_devtype_prompts:
-        config.active_devtype_prompts[new] = config.active_devtype_prompts.pop(name)
-        changed = True
-    if changed or True:
-        save_config(config)
-    if name in shared_breakers:
-        shared_breakers[new] = shared_breakers.pop(name)
-    return {"renamed": True, "name": new}
+    return await devtypes_service.rename_dev_type(
+        name, body, config=config, dev_types=dev_types,
+        shared_breakers=shared_breakers)
 
 
 @app.delete("/api/v1/dev-types/{name}")
 async def remove_dev_type(name: str):
-    if any(a.dev_type == name for a in config.assignments.values()):
-        raise HTTPException(409, f"{name} is assigned to a mission type")
-    if config.relations_mapper.dev_type == name:
-        raise HTTPException(409, f"{name} is the Relations Mapper's Dev Type — "
-                                 "repoint or disable the mapper first")
-    dev_types.pop(name, None)
-    delete_dev_type(name)
-    return {"deleted": name}
+    return await devtypes_service.remove_dev_type(name, config=config,
+                                                  dev_types=dev_types)
 
 
 @app.post("/api/v1/dev-types/{name}/credentials")
 async def upload_credentials(name: str, body: dict):
-    """{"filename": "...", "content": "..."} → /data/secrets/{name}/ (0600)."""
-    if name not in dev_types:
-        raise HTTPException(404)
-    from pathlib import Path
-    target = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / name
-    target.mkdir(parents=True, exist_ok=True)
-    fname = os.path.basename(body.get("filename") or "creds.json")
-    p = target / fname
-    p.write_text(body.get("content") or "")
-    p.chmod(0o600)
-    shared_breakers.pop(name, None)   # fresh credential clears the breaker
-    return {"stored": f"{name}/{fname}"}
+    return await devtypes_service.upload_credentials(
+        name, body, dev_types=dev_types, shared_breakers=shared_breakers)
 
 
 @app.get("/api/v1/assignments")
 async def get_assignments():
-    return {k: v.model_dump() for k, v in config.assignments.items()}
+    return await devtypes_service.get_assignments(config=config)
 
 
 @app.put("/api/v1/assignments")
 async def put_assignments(body: dict):
-    try:
-        new = {k: Assignment.model_validate(v) for k, v in body.items()}
-    except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
-        raise HTTPException(422, str(e))
-    missing = {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"} - set(new)
-    if missing:
-        raise HTTPException(422, f"unassigned mission types: {sorted(missing)}")
-    unknown = {a.dev_type for a in new.values()} - set(dev_types)
-    if unknown:
-        raise HTTPException(422, f"unknown dev types: {sorted(unknown)}")
-    # Independent review is default config, not a hard invariant (ISSUES #19)
-    warnings: list[str] = []
-    ex = new.get("EXECUTE")
-    rev = new.get("REVIEW")
-    if ex and rev and ex.dev_type == rev.dev_type:
-        msg = (f"EXECUTE and REVIEW share Dev Type {ex.dev_type!r} — "
-               "independent AI review is not enforced")
-        log.warning(msg)
-        warnings.append(msg)
-    config.assignments = new
-    save_config(config)
-    # warnings ride in their own field — mixing them into the mission-type
-    # mapping handed clients a phantom "_warnings" mission type
-    return {"assignments": {k: v.model_dump()
-                            for k, v in config.assignments.items()},
-            "warnings": warnings}
+    return await devtypes_service.put_assignments(body, config=config,
+                                                  dev_types=dev_types)
 
 
-# ── GUI-stored secrets (M12, F5): write-only VALUES, never echoed back ───────
-
-_SECRET_SCOPES = set(secrets_store.CONNECTION_FIELDS)
-# per-scope field allowlist — ONE definition (secrets.CONNECTION_FIELDS,
-# shared with settings_bundle); scope/instance/field all reach the filesystem
-# as path components, so every entry point validates against it (audit A5/A9)
-_SECRET_FIELDS = secrets_store.CONNECTION_FIELDS
-_HARNESS_VAR_RE = re.compile(f"^{HARNESS_VAR_PATTERN}$")   # one definition: config.py
-
-
-def _valid_secret_ref(scope: str, instance: str, field: str) -> bool:
-    return (scope in _SECRET_FIELDS and field in _SECRET_FIELDS[scope]
-            and re.fullmatch(_INSTANCE_NAME_RE, instance) is not None)
-
-
-def _require_secret_ref(scope: str, instance: str, field: str) -> None:
-    if scope not in _SECRET_SCOPES:
-        raise HTTPException(404, f"unknown secret scope {scope!r}")
-    if not _valid_secret_ref(scope, instance, field):
-        raise HTTPException(
-            422, f"invalid secret ref: instance must match {_INSTANCE_NAME_RE}"
-                 f" and field ∈ {sorted(_SECRET_FIELDS[scope])}")
-
-
-def _require_harness_var(var: str) -> None:
-    if not _HARNESS_VAR_RE.fullmatch(var):
-        raise HTTPException(422, "harness var must match ^[A-Z][A-Z0-9_]{0,63}$")
-
+# ── GUI-stored secrets (M12, F5) + connection tests — bodies (and the
+# secret-ref/harness-var validators) in connections_service ──────────────────
 
 @app.put("/api/v1/secrets/{scope}/{instance}/{field}")
 async def put_secret(scope: str, instance: str, field: str, body: dict):
-    """Store a connection secret VALUE (never echoed). scope ∈ pmo|repo;
-    instance is the config instance name; field ∈ api_key|token|token_ro|
-    reviewer_token. Writing a repo/pmo secret clears any latched breaker."""
-    _require_secret_ref(scope, instance, field)
-    value = body.get("value")
-    if not isinstance(value, str) or not value:
-        raise HTTPException(422, "value must be a non-empty string")
-    secrets_store.write_connection_secret(scope, instance, field, value)
-    if scope == "repo":
-        forge_runtime.breakers.pop(instance, None)
-        reset_protection_cache()
-    # adapters capture credentials by VALUE at construction — a rotated
-    # secret takes effect only through a rebuild, same as a config PUT
-    reload_connections()
-    return secrets_store.connection_status(scope, instance, field)
+    return await connections_service.put_secret(
+        scope, instance, field, body,
+        forge_runtime=forge_runtime, reload=reload_connections)
 
 
 @app.delete("/api/v1/secrets/{scope}/{instance}/{field}")
 async def delete_secret(scope: str, instance: str, field: str):
-    _require_secret_ref(scope, instance, field)
-    secrets_store.delete_connection_field(scope, instance, field)
-    if scope == "repo":
-        forge_runtime.breakers.pop(instance, None)
-        reset_protection_cache()
-    reload_connections()
-    return {"present": False}
+    return await connections_service.delete_secret(
+        scope, instance, field,
+        forge_runtime=forge_runtime, reload=reload_connections)
 
 
 @app.put("/api/v1/harness-secrets/{var}")
 async def put_harness_secret(var: str, body: dict):
-    """Store a harness/model key VALUE (e.g. ANTHROPIC_API_KEY)."""
-    _require_harness_var(var)
-    value = body.get("value")
-    if not isinstance(value, str) or not value:
-        raise HTTPException(422, "value must be a non-empty string")
-    secrets_store.write_harness_secret(var, value)
-    # fresh key clears the DEV_AUTH breaker of every dev type running a
-    # harness that consumes this var (mirrors the credential-file path)
-    for dt_name, dt in dev_types.items():
-        if var in HARNESSES[dt.harness_template].credential_env:
-            shared_breakers.pop(dt_name, None)
-    return secrets_store.harness_status(var)
+    return await connections_service.put_harness_secret(
+        var, body, dev_types=dev_types, shared_breakers=shared_breakers)
 
 
 @app.delete("/api/v1/harness-secrets/{var}")
 async def delete_harness_secret(var: str):
-    """Revoke a stored harness/model key (audit A10) — previously a
-    compromised key could only be overwritten, never removed, from the GUI.
-    No reload needed: harness keys are read live at dispatch."""
-    _require_harness_var(var)
-    secrets_store.delete_harness_secret(var)
-    return {"present": False}
+    return await connections_service.delete_harness_secret(var)
 
 
 @app.get("/api/v1/secrets-check")
 async def secrets_check(conn: str = "", harness: str = ""):
-    """Presence + updated_at (NEVER the value) for the ✓/✗ UI. `conn` is a
-    comma list of scope:instance:field triples; `harness` a comma list of
-    var names. Invalid refs are silently dropped — they previously reached
-    the filesystem, an existence/mtime oracle for arbitrary *.json paths
-    (audit A5)."""
-    out: dict = {"conn": {}, "harness": {}}
-    for triple in (t for t in conn.split(",") if t):
-        parts = triple.split(":")
-        if len(parts) == 3 and _valid_secret_ref(*parts):
-            out["conn"][triple] = secrets_store.connection_status(*parts)
-    for var in (v for v in harness.split(",") if v):
-        if _HARNESS_VAR_RE.fullmatch(var):
-            out["harness"][var] = secrets_store.harness_status(var)
-    return out
+    return await connections_service.secrets_check(conn, harness)
 
 
 @app.get("/api/v1/connections/registry")
 async def connections_registry():
-    """Available PMO systems and forges with display metadata — drives the
-    admin Config page's selectors and paste guard, so adding an adapter never
-    means editing the SPA (docs/11)."""
-    from ..adapters.registry import PMO_SYSTEMS, forges
-    forge_descriptors = forges()
-    return {
-        "pmo_systems": [{"id": s.id, "display_name": s.display_name}
-                        for s in PMO_SYSTEMS.values()],
-        "forges": [{"id": d.id, "display_name": d.display_name}
-                   for d in forge_descriptors.values()],
-        "secret_shape_prefixes": sorted(
-            {p for s in PMO_SYSTEMS.values() for p in s.secret_shape_prefixes}
-            | {p for d in forge_descriptors.values()
-               for p in d.secret_shape_prefixes}),
-        "managed_labels_expected": len(ALL_LABELS),
-    }
+    return await connections_service.connections_registry()
 
 
 @app.post("/api/v1/connections/pmo/{name}/test")
 async def test_pmo(name: str):
-    inst = next((i for i in config.pmos if i.name == name), None)
-    if inst is None:
-        raise HTTPException(404, f"no PMO instance named {name!r}")
-    if not inst.configured:
-        return {"ok": False, "error": "team key is empty — the instance is "
-                                      "idle until one is set"}
-    if not inst.api_key:
-        return {"ok": False, "error": "API key not set — enter it on the "
-                                      "Config page (it is stored securely, "
-                                      "never in .env)"}
-    mgr = managers.get(name)
-    if mgr is None:
-        return {"ok": False, "error": "instance not active — save the config "
-                                      "first, then test"}
-    try:
-        h = await mgr.pmo.health_probe(inst.team_key)
-        missions = await mgr.pmo.list_all(inst.team_key)
-        return {"ok": h.ok, "instance": name,
-                "team": h.workspace or inst.team_key,
-                "labels": h.managed_labels_present,
-                "labels_expected": h.managed_labels_expected,
-                "missions_visible": len(missions)}
-    except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
-        return {"ok": False, "error": str(e)[:300]}
+    return await connections_service.test_pmo(name, config=config,
+                                              managers=managers)
 
 
 @app.post("/api/v1/connections/forge/{name}/test")
 async def test_forge(name: str):
-    inst = next((r for r in config.repos if r.name == name), None)
-    if inst is None:
-        raise HTTPException(404, f"no repo named {name!r}")
-    if not inst.configured:
-        return {"ok": False, "error": "repository URL is empty — the repo is "
-                                      "idle until one is set"}
-    f = forge_runtime.get(name)
-    if f is None:
-        return {"ok": False, "error": "repo not active — save the config "
-                                      "first, then test"}
-    # a read-only token alone is a valid, testable state (reference-only —
-    # founder decision 2026-07-15); only ZERO stored tokens refuses
-    if not inst.token and not inst.token_ro:
-        return {"ok": False, "error": "no token stored — enter an Access "
-                                      "token (work repo) or a Read-only token "
-                                      "(reference-only) on this card"}
-    try:
-        health = await forge_runtime.refresh_health(name)
-        if not health["ok"]:
-            return health
-        # reference-only: read access is the WHOLE contract — the PR-listing
-        # and branch-protection probes need API scopes a read-only PAT may
-        # lack, and DevCake never opens PRs here anyway
-        if inst.reference_only:
-            return {"ok": True, "repo_name": name, "forge": inst.forge,
-                    "repo": inst.url, "can_push": False,
-                    "reference_only": True,
-                    "reviewer_token_configured": False, "probe_pr": None,
-                    "branch_protection": None}
-        # v4 allows a repo-only (0-pmo) config — probe with the SYS
-        # pseudo-instance then (HELLO/OAUTH precedent, never a real branch)
-        probe = config.pmos[0].name if config.pmos else "sys"
-        pr = await f.get_pr_by_branch(mission_branch(probe, "__connection_test__"))
-        reviewer = bool(getattr(f, "reviewer_token", None))
-        protection = await f.default_branch_protection(inst.default_branch)
-        return {"ok": True, "repo_name": name, "forge": inst.forge,
-                "repo": inst.url, "can_push": health["can_push"],
-                "reference_only": inst.reference_only,
-                "reviewer_token_configured": reviewer, "probe_pr": pr is None,
-                "branch_protection": protection.model_dump() if protection else None}
-    except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
-        return {"ok": False, "error": str(e)[:300]}
+    return await connections_service.test_forge(name, config=config,
+                                                forge_runtime=forge_runtime)
 
+
+# ── internal-forge repos + skill store (M11, docs/16) — bodies in
+# internal_repos_service ─────────────────────────────────────────────────────
 
 @app.get("/api/v1/internal-repos")
 async def list_internal_repos():
-    """Read-only admin surface (M11, founder decision): the auto-created
-    internal-forge repos. Empty list when the internal forge is disabled."""
-    if internal_forge is None:
-        return {"repos": [], "ui_url": None}
-    try:
-        repos = await internal_forge.list_repos()
-    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
-        raise HTTPException(502, f"internal forge unreachable: {str(e)[:200]}")
-    return {"repos": [r.model_dump() for r in repos],
-            "ui_url": os.environ.get("GITEA_UI_URL", "http://localhost:3300")}
+    return await internal_repos_service.list_internal_repos(
+        internal_forge=internal_forge)
 
 
 @app.post("/api/v1/internal-repos/create")
 async def create_internal_repo(body: dict):
-    """Operator repo on the bundled Gitea (item 4): created in the separate
-    devcake-repos org (never listed or swept by the per-mission surface
-    above); the card's token set is minted and stored under repo:{name}, so
-    saving a repo card with this name + the returned clone_url completes
-    the setup."""
-    if internal_forge is None:
-        raise HTTPException(503, "internal forge is disabled "
-                                 "(GITEA_ADMIN_PASSWORD unset)")
-    name = str(body.get("name") or "")
-    if not re.fullmatch(_INSTANCE_NAME_RE, name):
-        raise HTTPException(422, f"name must match {_INSTANCE_NAME_RE} "
-                                 f"(it doubles as the repo card name)")
-    try:
-        return await internal_forge.create_operator_repo(name)
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
-        raise HTTPException(502, f"internal forge: {str(e)[:200]}")
+    return await internal_repos_service.create_internal_repo(
+        body, internal_forge=internal_forge)
 
 
 @app.get("/api/v1/skills")
 async def list_skills():
-    """Skill store catalog (v1): store-listed when the internal forge is up,
-    bundled fallback otherwise — `store` tells the UI which it is (and where
-    to edit)."""
-    skills, store_status = await skill_service.list_skills()
-    return {"skills": [s.model_dump() for s in skills], "store": store_status}
+    return await internal_repos_service.list_skills(skill_service=skill_service)
 
 
 @app.post("/api/v1/skills")
 async def create_skill(body: dict):
-    """'Add skill' form (docs/11): name + trigger description + markdown
-    body. Frontmatter is generated app-side — the operator never touches
-    YAML. 409 on collision unless overwrite is set."""
-    name = str(body.get("name") or "").strip()
-    description = str(body.get("description") or "").strip()
-    md = str(body.get("body") or "").strip()
-    if not (name and description and md):
-        raise HTTPException(422, "name, description and instructions are "
-                                 "all required")
-    try:
-        await skill_service.save_skill(
-            name, skill_service.compose_skill(name, description, md),
-            overwrite=bool(body.get("overwrite")))
-    except SkillStoreError as e:
-        raise HTTPException(e.status, str(e))
-    return {"ok": True, "name": name}
+    return await internal_repos_service.create_skill(
+        body, skill_service=skill_service)
 
 
 @app.post("/api/v1/skills/import")
 async def import_skill(body: dict):
-    """Import an uploaded skill: files = [{path, content_b64}] relative to
-    the skill dir, one of them SKILL.md — the name comes from its
-    frontmatter. 409 on collision unless overwrite is set."""
-    files = body.get("files") or []
-    try:
-        name = skill_service.validate_import(files)
-        await skill_service.save_skill(name, files,
-                                       overwrite=bool(body.get("overwrite")))
-    except SkillStoreError as e:
-        raise HTTPException(e.status, str(e))
-    return {"ok": True, "name": name}
+    return await internal_repos_service.import_skill(
+        body, skill_service=skill_service)
 
 
 @app.delete("/api/v1/skills/{name}")
 async def delete_skill_endpoint(name: str):
-    """Remove an operator skill (built-ins refuse — they re-seed at boot)."""
-    try:
-        await skill_service.delete_skill(name)
-    except SkillStoreError as e:
-        raise HTTPException(e.status, str(e))
-    return {"ok": True}
+    return await internal_repos_service.delete_skill_endpoint(
+        name, skill_service=skill_service)
 
 
 @app.post("/api/v1/skills/sync")
 async def sync_skills():
-    """Re-seed missing built-in skills without a restart — heals a first
-    boot where Gitea came up after the app, and re-seeds after upgrades.
-    Never overwrites operator edits (missing paths only)."""
-    if internal_forge is None:
-        raise HTTPException(503, "internal forge is disabled "
-                                 "(GITEA_ADMIN_PASSWORD unset)")
-    try:
-        await internal_forge.ensure_skill_store(skill_service.builtin_seed())
-    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
-        raise HTTPException(502, f"internal forge: {str(e)[:200]}")
-    return {"ok": True}
+    return await internal_repos_service.sync_skills(
+        internal_forge=internal_forge, skill_service=skill_service)
 
 
 @app.delete("/api/v1/internal-repos/{name}")
 async def delete_internal_repo(name: str):
-    """Manual Clear (founder decision: retain-by-default, delete-on-demand).
-    Refuses while a live run exists for the mission — its Dev still needs
-    the repo. Deletes repo + machine user (revoking both tokens) + secret."""
-    if internal_forge is None:
-        raise HTTPException(404, "internal forge is not enabled")
-    if any(r.repo_ref == name and r.state in ("dispatched", "running", "finalizing")
-           for r in store.active()):
-        raise HTTPException(409, "a live run is using this repo — wait for it "
-                                 "to finish before clearing")
-    try:
-        await internal_forge.delete_repo(name)
-    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
-        raise HTTPException(502, f"delete failed: {str(e)[:200]}")
-    forge_runtime.forges.pop(name, None)
-    forge_runtime.instances.pop(name, None)
-    forge_runtime.internal.discard(name)
-    return {"deleted": name}
+    return await internal_repos_service.delete_internal_repo(
+        name, internal_forge=internal_forge, store=store,
+        forge_runtime=forge_runtime)
 
 
 @app.post("/api/v1/relations-mapper/run")

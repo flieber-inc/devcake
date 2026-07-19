@@ -240,7 +240,8 @@ def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):
 def test_dev_type_secret_env_names_validated():
     """secret_env delivers named GUI-stored secrets into the Dev's runspec
     env, where the secret half OVERRIDES spec_env (runs.py runspec.result) —
-    names must be harness-secret-shaped (api.main._HARNESS_VAR_RE) and must
+    names must be harness-secret-shaped (api.connections_service
+    ._HARNESS_VAR_RE) and must
     not shadow the Dev protocol/tooling contract."""
     dt = DevType(name="senior-dev", harness_template="claude-code",
                  secret_env=["DD_API_KEY", "DD_APP_KEY"])
@@ -304,10 +305,10 @@ def test_secret_env_blocklist_covers_registry_and_protocol():
 
 
 def test_harness_var_regex_shared():
-    """One shape definition: api.main._HARNESS_VAR_RE compiles from
-    config.HARNESS_VAR_PATTERN — the validator and the store gate can't
+    """One shape definition: api.connections_service._HARNESS_VAR_RE compiles
+    from config.HARNESS_VAR_PATTERN — the validator and the store gate can't
     drift apart."""
-    from devcake.api.main import _HARNESS_VAR_RE
+    from devcake.api.connections_service import _HARNESS_VAR_RE
     from devcake.config import HARNESS_VAR_PATTERN
     assert _HARNESS_VAR_RE.pattern == f"^{HARNESS_VAR_PATTERN}$"
 

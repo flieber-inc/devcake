@@ -69,7 +69,13 @@ app/devcake/
     dagu/          #   ExecutorPort impl
     files/         #   StatePort impl (+ runlog.py) (10)
     redis/         #   MessagingPort impl — ingress + replies (09)
-  api/             # FastAPI: main.py (/api/v1, health — 11), clear.py
+  api/             # FastAPI (11, ADR-0015): main.py = composition root +
+                   #   ≤4-statement route forwards; behavior in service
+                   #   modules — poll.py (PollRuntime), health.py,
+                   #   mission_actions.py, clear.py, config_service.py,
+                   #   profiles_service.py, settings_transfer.py,
+                   #   devtypes_service.py, connections_service.py,
+                   #   internal_repos_service.py
   telemetry/       # OTel setup, devcake.* attribute helpers (12)
   prompts/         # playbook prompt templates (03 §7)
   config.py        # single pydantic schema authority for config.yaml (root-level:

@@ -1,10 +1,14 @@
-"""Structure ratchet (ADR-0015): the orchestrator god module must not return.
+"""Structure ratchet (ADR-0015): the god modules must not return.
 
 C1 rule: ``domain/orchestrator/manager.py`` contains the class and nothing
 executable after it — no module-level ``MissionManager.<attr> = ...`` bindings
-(the old façade mechanism) and no module-level ``def`` below the class. The
-API route-body rule (every ``@app.<verb>`` body ≤ 4 statements, allowlist
-shrinking to ``{"dispatch_hello"}``) arrives with the C6 close-out.
+(the old façade mechanism) and no module-level ``def`` below the class.
+
+C6 rule: ``api/main.py`` is composition root + route forwards — every
+``@app.<verb>`` route body is ≤ 4 statements (docstring excluded). Endpoint
+behavior lives in ``api/`` service modules. The allowlist below is the
+residual read-side surface at close-out; it may SHRINK, never grow — a new
+endpoint that needs more than a forward gets a service module.
 """
 
 import ast
@@ -12,6 +16,15 @@ from pathlib import Path
 
 MANAGER = (Path(__file__).parents[1] / "devcake" / "domain" / "orchestrator"
            / "manager.py")
+MAIN = Path(__file__).parents[1] / "devcake" / "api" / "main.py"
+
+# Residual bodies allowed in main.py (C6 close-out; shrink opportunistically):
+# the CI fixture, the mapper/OAuth trio, and the small read-side runs/log/
+# clear endpoints. Everything else forwards to a service module.
+ROUTE_BODY_ALLOWLIST = {
+    "dispatch_hello", "run_mapper", "oauth_start", "oauth_status",
+    "clear_runs", "list_runs", "get_run", "get_run_log", "stream_run_log",
+}
 
 
 def test_manager_has_no_post_class_bindings():
@@ -29,3 +42,34 @@ def test_manager_has_no_post_class_bindings():
     assert not offenders, (
         "manager.py grew post-class bindings — ADR-0015 forbids resurrecting "
         "the façade: " + "; ".join(offenders))
+
+
+def _is_route(node) -> bool:
+    for dec in node.decorator_list:
+        call = dec if isinstance(dec, ast.Call) else None
+        target = call.func if call else dec
+        if (isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "app"):
+            return True
+    return False
+
+
+def test_main_route_bodies_stay_thin():
+    tree = ast.parse(MAIN.read_text())
+    offenders = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not _is_route(node) or node.name in ROUTE_BODY_ALLOWLIST:
+            continue
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]                       # docstring doesn't count
+        if len(body) > 4:
+            offenders.append(f"{node.name} ({len(body)} statements)")
+    assert not offenders, (
+        "main.py route bodies grew past 4 statements — move the behavior to "
+        "an api/ service module (ADR-0015 Decision 3): " + "; ".join(offenders))

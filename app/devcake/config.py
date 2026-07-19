@@ -26,8 +26,9 @@ CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "co
 # compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
 _INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
 
-# Shared shape for GUI-stored harness/secret-env var names — api.main
-# compiles _HARNESS_VAR_RE from this (one definition; docs/02 §6).
+# Shared shape for GUI-stored harness/secret-env var names —
+# api.connections_service compiles _HARNESS_VAR_RE from this (one
+# definition; docs/02 §6).
 HARNESS_VAR_PATTERN = r"[A-Z][A-Z0-9_]{0,63}"
 
 # Env names the Dev protocol/runtime owns. The runspec reply layers the
@@ -242,8 +243,8 @@ class DevType(BaseModel):
     def _secret_env_names(cls, v: list[str]) -> list[str]:
         """The runspec reply merges the secret half OVER spec_env (runs.py
         runspec.result), so an unguarded name could shadow the Dev protocol
-        contract. Shape mirrors api.main._HARNESS_VAR_RE — the store these
-        names read from."""
+        contract. Shape mirrors api.connections_service._HARNESS_VAR_RE —
+        the store these names read from."""
         seen: set[str] = set()
         for name in v:
             if not re.fullmatch(HARNESS_VAR_PATTERN, name):

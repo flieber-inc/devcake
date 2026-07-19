@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from devcake.config import PMOInstance
 from devcake.domain.model import Mission
+from devcake.domain.orchestrator import review
 from devcake.domain.repo_routing import (REASON_ZERO_REPO, marker_repo,
                                          resolve_repo)
 from devcake.domain.run import Run
@@ -122,7 +123,7 @@ def test_vanished_repo_contract_in_sweeps_and_review(tmp_path):
 
     run = _run("gone")
     run.mission_pmo_id = "p1"
-    run_coro(mgr._finalize_review(run, {"verdict": "approve"}))   # must not raise
+    run_coro(review.finalize_review(mgr, run, {"verdict": "approve"}))   # must not raise
     assert "no longer configured" in (run.verdict or "")
 
 

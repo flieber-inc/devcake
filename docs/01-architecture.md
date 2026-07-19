@@ -45,7 +45,7 @@ app/devcake/
     model.py       #   entities, Mission Type derivation, label set (02)
     run.py         #   Run record + state machine
     run_bootstrap.py#  dispatch spine: ACL → digest → durable save → executor.start (04 §3.1)
-    orchestrator/  #   package: MissionManager façade + focused modules (04)
+    orchestrator/  #   package: MissionManager (DI + verbs) + module functions (04, ADR-0015)
                    #     manager, schedule, dispatch, finalize, transitions,
                    #     review, decomposition, sweeps, feed, markers, mapper
     mapper_service.py  # Relations Mapper cadence (ADR-0007; ISSUES #36 first cut)

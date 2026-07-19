@@ -10,7 +10,8 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from ...security import redact, redact_value
 from ..model import MissionRef
 from ..run import Run, utcnow
-from .feed import _blockquote
+from . import transitions
+from .feed import _blockquote, _stage_of
 from .markers import FEED_INLINE_MAX
 
 log = logging.getLogger("devcake.missions")
@@ -97,7 +98,7 @@ async def finalize(self, run: Run, payload: dict) -> None:
         # instead of stranding in `finalizing` until the watchdog timeout.
         if "transition" not in run.finalized_steps:
             try:
-                await self._transition(run, result, plan_md)
+                await transitions.transition(self, run, result, plan_md)
             except ValueError as e:
                 await self.messaging.delete_run_user(run.run_id)
                 await self.messaging.delete_reply_stream(run.run_id)
@@ -169,7 +170,7 @@ async def restore_after_failure(self, run: Run) -> None:
         return  # only ONBOARD dispatches from backlog change the status
     try:
         live = await self.pmo.get(MissionRef(run.mission_pmo_id, run.pmo_kind))
-        if live.status == "in_progress" and self._stage_of(live) is None:
+        if live.status == "in_progress" and _stage_of(live) is None:
             await self.pmo.set_status(
                 MissionRef(run.mission_pmo_id, run.pmo_kind), "backlog")
             self._audit(run.mission_pmo_id, "set_status",

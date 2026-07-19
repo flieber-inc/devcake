@@ -6,6 +6,7 @@ unlimited). Depth is read from the mission's own record only: the app-managed
 description is inert."""
 
 from devcake.config import AppConfig
+from devcake.domain.orchestrator import decomposition
 from devcake.domain.orchestrator.markers import (DECOMPOSITION_MARKER_RE,
                                                  at_decomposition_limit,
                                                  decomposition_depth)
@@ -33,7 +34,7 @@ def make_depth_mgr(tmp_path, m, limit=2):
 
 def decompose(mgr, drafts=None):
     drafts = drafts if drafts is not None else [{"title": "a"}, {"title": "b"}]
-    return run_coro(mgr._finalize_decomposition(
+    return run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": drafts}))
 

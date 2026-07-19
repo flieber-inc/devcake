@@ -10,6 +10,7 @@ import pytest
 from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
+from devcake.domain.orchestrator import decomposition, review, transitions
 from devcake.domain.model import Activity, ActivityEntry, Mission
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
@@ -180,7 +181,7 @@ def test_external_transition_aborts_inv3(tmp_path):
     run = Run(run_id="T-1-1-ONBOARD-XXXXXX", mission_key="T-1", mission_pmo_id="p1",
               mission_type="ONBOARD", dev_type="senior-dev", seq=1,
               stage_label_at_dispatch=None)   # dispatched when NO stage label
-    run_coro(mgr._transition(run, {"outcome": "plan_needed"}, None))
+    run_coro(transitions.transition(mgr, run, {"outcome": "plan_needed"}, None))
     assert fake.swaps == []                    # nothing applied — human won
     assert any("changed externally" in c for c in fake.comments)
 
@@ -204,7 +205,7 @@ def _run(mission_type="EXECUTE", stage="DEVCAKE-EXECUTE"):
 def test_human_needed_keeps_stage_and_hands_off(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, store = make_mgr(tmp_path, m)
-    run_coro(mgr._transition(_run(), {"outcome": "human_needed",
+    run_coro(transitions.transition(mgr, _run(), {"outcome": "human_needed",
                                       "summary": "grant repo:write to the token"},
                              None))
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels
@@ -217,7 +218,7 @@ def test_human_needed_keeps_stage_and_hands_off(tmp_path):
 def test_human_needed_from_onboard_restores_backlog(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})       # ONBOARD flipped it in_progress
     mgr, fake, store = make_mgr(tmp_path, m)
-    run_coro(mgr._transition(_run("ONBOARD", None),
+    run_coro(transitions.transition(mgr, _run("ONBOARD", None),
                              {"outcome": "human_needed", "summary": "s"}, None))
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels
     assert fake.statuses == ["backlog"]           # avoids row-9 stranding
@@ -229,7 +230,7 @@ def test_human_needed_allowed_for_projects(tmp_path):
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _run("ONBOARD", None)
     run.pmo_kind = "project"
-    run_coro(mgr._transition(run, {"outcome": "human_needed",
+    run_coro(transitions.transition(mgr, run, {"outcome": "human_needed",
                                    "summary": "grant the scope"}, None))
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # not parked with SKIP
     assert "DEVCAKE-SKIP" not in m.labels
@@ -251,7 +252,7 @@ def test_awaiting_merge_redelivery_not_misread_as_external(tmp_path):
     mgr.config.auto_merge = False
     run = _run("REVIEW", "DEVCAKE-REVIEW")
     run.finalized_steps = ["review:awaiting_merge"]            # checkpointed
-    run_coro(mgr._transition(run, {"outcome": "reviewed", "verdict": "approve",
+    run_coro(transitions.transition(mgr, run, {"outcome": "reviewed", "verdict": "approve",
                                    "report_md": "ok"}, None))
     assert not any("changed externally" in c for c in fake.comments)
     assert not (run.verdict or "").startswith("skipped:")
@@ -264,7 +265,7 @@ def test_illegal_outcome_parks_never_acts(tmp_path):
     # would raise AttributeError and fail this test)
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, store = make_mgr(tmp_path, m)
-    run_coro(mgr._transition(_run(), {"outcome": "reviewed",
+    run_coro(transitions.transition(mgr, _run(), {"outcome": "reviewed",
                                       "verdict": "approve"}, None))
     assert "DEVCAKE-SKIP" in m.labels
     assert "DEVCAKE-EXECUTE" in m.labels          # stage untouched, only parked
@@ -272,7 +273,7 @@ def test_illegal_outcome_parks_never_acts(tmp_path):
     # and a PLAN run may only return "planned"
     m2 = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
     mgr2, fake2, _ = make_mgr(tmp_path, m2)
-    run_coro(mgr2._transition(_run("PLAN", "DEVCAKE-PLAN"),
+    run_coro(transitions.transition(mgr2, _run("PLAN", "DEVCAKE-PLAN"),
                               {"outcome": "decomposed", "decomposition": [{}]},
                               None))
     assert "DEVCAKE-SKIP" in m2.labels and fake2.created == []
@@ -281,7 +282,7 @@ def test_illegal_outcome_parks_never_acts(tmp_path):
 def test_second_handoff_escalates_warning(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, store = make_mgr(tmp_path, m)
-    run_coro(mgr._transition(_run(), {"outcome": "human_needed", "summary": "s1"},
+    run_coro(transitions.transition(mgr, _run(), {"outcome": "human_needed", "summary": "s1"},
                              None))
     assert not any("Hand-off #" in c for c in fake.comments)   # first: no warning
     prior = _run()
@@ -290,7 +291,7 @@ def test_second_handoff_escalates_warning(tmp_path):
     prior.result = {"outcome": "human_needed"}
     store.save(prior)
     m.labels.discard("DEVCAKE-NEEDS-HUMAN")       # human resolved + resumed
-    run_coro(mgr._transition(_run(), {"outcome": "human_needed", "summary": "s2"},
+    run_coro(transitions.transition(mgr, _run(), {"outcome": "human_needed", "summary": "s2"},
                              None))
     assert any("Hand-off #2" in c and "DEVCAKE-SKIP" in c for c in fake.comments)
     assert "DEVCAKE-NEEDS-HUMAN" in m.labels      # warned, never parked
@@ -480,7 +481,7 @@ def test_executed_trivially_is_illegal_and_parks(tmp_path):
     outright (preproduction, no deprecation window); a stray one parks."""
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
-    run_coro(mgr._transition(_run("ONBOARD", None),
+    run_coro(transitions.transition(mgr, _run("ONBOARD", None),
                              {"outcome": "executed_trivially",
                               "pr_url": "https://forge/mr/1", "summary": "s"},
                              None))
@@ -494,7 +495,7 @@ def test_onboard_opportunistic_plan_skips_plan_stage(tmp_path):
     formed and the mission jumps straight to EXECUTE."""
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
-    run_coro(mgr._transition(_run("ONBOARD", None),
+    run_coro(transitions.transition(mgr, _run("ONBOARD", None),
                              {"outcome": "plan_needed", "summary": "s"},
                              "## Plan\nappend the line to README.md"))
     assert any(n == "PLAN_1.md" for n, _ in fake.uploads)
@@ -548,7 +549,7 @@ def test_decomposition_wires_blocked_by_edges(tmp_path):
     drafts = [{"title": "docs", "priority": "high"},
               {"title": "code", "priority": "high", "blocked_by": [1]},
               {"title": "polish", "blocked_by": [1, 2]}]
-    run_coro(mgr._transition(_run("ONBOARD", None),
+    run_coro(transitions.transition(mgr, _run("ONBOARD", None),
                              {"outcome": "decomposed", "decomposition": drafts},
                              None))
     assert [t for t, _ in fake.created] == ["docs", "code", "polish"]
@@ -565,14 +566,14 @@ def test_decomposition_children_inherit_repo_marker(tmp_path):
     m.description = "Do the big thing\n\n`devcake-repo:beta`"
     mgr, fake, _store = make_mgr(tmp_path, m)
     drafts = [{"title": "docs"}, {"title": "code", "blocked_by": [1]}]
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None), {"outcome": "decomposed", "decomposition": drafts}))
     children = fake.all_missions[1:]
     assert len(children) == 2
     assert all("`devcake-repo:beta`" in c.description for c in children)
     # replay with the marker present stays idempotent
     m.status = "in_progress"
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None), {"outcome": "decomposed", "decomposition": drafts}))
     assert len(fake.created) == 2
 
@@ -580,7 +581,7 @@ def test_decomposition_children_inherit_repo_marker(tmp_path):
 def test_decomposition_children_clean_without_marker(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "solo"}]}))
     assert "devcake-repo" not in fake.all_missions[1].description
@@ -593,7 +594,7 @@ def test_decomposition_children_inherit_containing_project(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     m.parent_ref = "proj-9"
     mgr, fake, _store = make_mgr(tmp_path, m)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "a"},
                                                     {"title": "b"}]}))
@@ -601,7 +602,7 @@ def test_decomposition_children_inherit_containing_project(tmp_path):
 
     solo = mission("in_progress", {"DEVCAKE"})
     mgr2, fake2, _ = make_mgr(tmp_path / "solo", solo)
-    run_coro(mgr2._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr2, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "c"}]}))
     assert [pr for _, pr in fake2.created] == [None]
@@ -611,7 +612,7 @@ def test_decomposition_children_inherit_containing_project(tmp_path):
     mgr3, fake3, _ = make_mgr(tmp_path / "proj", proj)
     run = _run("ONBOARD", None)
     run.pmo_kind = "project"
-    run_coro(mgr3._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr3, 
         run, {"outcome": "decomposed", "decomposition": [{"title": "d"}]}))
     assert [pr for _, pr in fake3.created] == ["p1"]
 
@@ -652,7 +653,7 @@ def test_decomposition_inherits_dependent_edges_before_cancel(tmp_path):
     fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
     fake.all_missions.append(dep_mission("d2", "T-91", status="done",
                                          blocked_by=["p1"]))
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "a"},
                                                     {"title": "b"}]}))
@@ -674,7 +675,7 @@ def test_decomposition_inherits_open_blockers_onto_children(tmp_path):
     mgr, fake, _store = make_mgr(tmp_path, m)
     fake.all_missions.append(dep_mission("b-open", "T-80"))
     fake.all_missions.append(dep_mission("b-done", "T-81", status="done"))
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "a"},
                                                     {"title": "b"}]}))
@@ -697,13 +698,13 @@ def test_inherited_edge_failure_keeps_original_open_and_gated(tmp_path):
     run = _run("ONBOARD", None)
     drafts = [{"title": "a"}, {"title": "b"}]
     with pytest.raises(RuntimeError):
-        run_coro(mgr._finalize_decomposition(
+        run_coro(decomposition.finalize_decomposition(mgr, 
             run, {"outcome": "decomposed", "decomposition": drafts}))
     assert m.status != "canceled"                 # original still gates D
     assert ("status", "canceled") not in fake.ops
 
     fake.fail_relations = set()                   # transient error heals
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         run, {"outcome": "decomposed", "decomposition": drafts}))
     assert m.status == "canceled"
     assert ("id-1", "d1") in fake.relations and ("id-2", "d1") in fake.relations
@@ -712,7 +713,7 @@ def test_inherited_edge_failure_keeps_original_open_and_gated(tmp_path):
     mgr2, fake2, _ = make_mgr(tmp_path / "sib", m2)
     fake2.fail_relations = {("id-1", "id-2")}
     with pytest.raises(RuntimeError):
-        run_coro(mgr2._finalize_decomposition(
+        run_coro(decomposition.finalize_decomposition(mgr2, 
             _run("ONBOARD", None),
             {"outcome": "decomposed",
              "decomposition": [{"title": "a"},
@@ -731,12 +732,12 @@ def test_inherited_edge_to_deleted_dependent_converges_on_retry(tmp_path):
     run = _run("ONBOARD", None)
     drafts = [{"title": "a"}, {"title": "b"}]
     with pytest.raises(RuntimeError):
-        run_coro(mgr._finalize_decomposition(
+        run_coro(decomposition.finalize_decomposition(mgr, 
             run, {"outcome": "decomposed", "decomposition": drafts}))
     assert m.status != "canceled"
 
     fake.all_missions.remove(doomed)              # human deleted the issue
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         run, {"outcome": "decomposed", "decomposition": drafts}))
     assert m.status == "canceled"
     assert not any(blocked == "d1" for _, blocked in fake.relations)
@@ -748,7 +749,7 @@ def test_lineage_note_failure_never_blocks_cancel(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
     fake.fail_append = True
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
     assert m.status == "canceled"
@@ -764,7 +765,7 @@ def test_depth_park_restores_backlog_and_sets_verdict(tmp_path):
     m.description = marker(depth=2)
     mgr, fake, _store = make_mgr(tmp_path, m)
     run = _run("ONBOARD", None)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
     assert "DEVCAKE-SKIP" in m.labels
     assert m.status == "backlog"
@@ -783,13 +784,13 @@ def test_depth_gate_replay_stable_after_limit_change(tmp_path):
     drafts = [{"title": "a"}, {"title": "b"}]
     fake.fail_relations = {("id-1", "id-2")}       # crash mid-wiring
     with pytest.raises(RuntimeError):
-        run_coro(mgr._finalize_decomposition(
+        run_coro(decomposition.finalize_decomposition(mgr, 
             run, {"outcome": "decomposed",
                   "decomposition": [{"title": "a"},
                                     {"title": "b", "blocked_by": [1]}]}))
     mgr.config.max_decomposition_depth = 1         # operator lowers the limit
     fake.fail_relations = set()
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         run, {"outcome": "decomposed",
               "decomposition": [{"title": "a"},
                                 {"title": "b", "blocked_by": [1]}]}))
@@ -805,15 +806,15 @@ def test_inherited_edges_replay_semantics(tmp_path):
     fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
     drafts = [{"title": "a"}, {"title": "b"}]
     first = _run("ONBOARD", None)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         first, {"outcome": "decomposed", "decomposition": drafts}))
     count = len(fake.relations)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         first, {"outcome": "decomposed", "decomposition": drafts}))
     assert len(fake.relations) == count           # checkpoints all skipped
 
     m.status = "in_progress"
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": drafts}))
     assert len(fake.created) == 2                 # children reused
@@ -827,7 +828,7 @@ def test_canceled_parent_gets_lineage_note(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
     drafts = [{"title": "a"}, {"title": "b"}]
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None), {"outcome": "decomposed",
                                 "decomposition": drafts}))
     assert "_Decomposed by DevCake into T-2, T-3_" in m.description
@@ -836,7 +837,7 @@ def test_canceled_parent_gets_lineage_note(tmp_path):
     assert note_at < fake.ops.index(("status", "canceled"))
 
     m.status = "in_progress"                      # fresh-run replay
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None), {"outcome": "decomposed",
                                 "decomposition": drafts}))
     assert m.description.count("_Decomposed by DevCake into") == 1
@@ -848,7 +849,7 @@ def test_project_decomposition_appends_no_lineage_note(tmp_path):
     mgr, fake, _store = make_mgr(tmp_path, proj)
     run = _run("ONBOARD", None)
     run.pmo_kind = "project"
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
     assert not any(op[0] == "append_description" for op in fake.ops)
 
@@ -860,7 +861,7 @@ def test_project_decomposition_inherits_nothing(tmp_path):
     fake.all_missions.append(dep_mission("d1", "T-90", blocked_by=["p1"]))
     run = _run("ONBOARD", None)
     run.pmo_kind = "project"
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         run, {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
     assert not any(blocked == "d1" for _, blocked in fake.relations)
 
@@ -870,13 +871,13 @@ def test_decomposition_replay_reuses_marker_parts(tmp_path):
     mgr, fake, _store = make_mgr(tmp_path, m)
     drafts = [{"title": "docs"}, {"title": "code", "blocked_by": [1]}]
     first = _run("ONBOARD", None)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         first, {"outcome": "decomposed", "decomposition": drafts}))
     assert len(fake.created) == 2
 
     m.status = "in_progress"
     second = _run("ONBOARD", None)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         second, {"outcome": "decomposed", "decomposition": drafts}))
 
     assert len(fake.created) == 2
@@ -887,14 +888,14 @@ def test_decomposition_replay_reuses_marker_parts(tmp_path):
 def test_decomposition_manifest_conflict_hands_off_without_writes(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         _run("ONBOARD", None),
         {"outcome": "decomposed", "decomposition": [{"title": "original"}]}))
     assert len(fake.created) == 1
 
     m.status = "in_progress"
     retry = _run("ONBOARD", None)
-    run_coro(mgr._finalize_decomposition(
+    run_coro(decomposition.finalize_decomposition(mgr, 
         retry,
         {"outcome": "decomposed", "decomposition": [{"title": "changed"}]}))
 
@@ -909,7 +910,7 @@ def test_decomposition_rejects_forward_or_self_blocked_by(tmp_path):
     mgr, fake, store = make_mgr(tmp_path, m)
     for bad in ([1], [2]):                        # self-reference / forward reference
         with pytest.raises(ValueError):
-            run_coro(mgr._finalize_decomposition(
+            run_coro(decomposition.finalize_decomposition(mgr, 
                 _run("ONBOARD", None),
                 {"outcome": "decomposed",
                  "decomposition": [{"title": "a", "blocked_by": bad},
@@ -1100,7 +1101,7 @@ def test_reject_report_attached_feed_short_pr_full(tmp_path):
     forge = FakeForge()
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
     report = "finding: " + "R" * 3000
-    run_coro(mgr._finalize_review(_run("REVIEW", "DEVCAKE-REVIEW"),
+    run_coro(review.finalize_review(mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
                                   {"verdict": "reject", "report_md": report}))
     assert any(n == "1_REVIEW_REPORT.md" for n, _ in fake.uploads)
     feed = next(c for c in fake.comments if "REVIEW rejected" in c)
@@ -1123,7 +1124,7 @@ def test_reject_report_upload_redacts_run_password(tmp_path):
     register_runtime_secret(run.run_id, "s3cret-relay-pw")
     try:
         report = "leaked: s3cret-relay-pw\n" + "R" * 3000
-        run_coro(mgr._finalize_review(run, {"verdict": "reject",
+        run_coro(review.finalize_review(mgr, run, {"verdict": "reject",
                                             "report_md": report}))
     finally:
         unregister_runtime_secret(run.run_id)
@@ -1134,7 +1135,7 @@ def test_reject_report_upload_redacts_run_password(tmp_path):
 # ── docs/03 §4.1 merge-failure branches ──────────────────────────────────────
 
 def _approve_review(mgr):
-    return mgr._finalize_review(_run("REVIEW", "DEVCAKE-REVIEW"),
+    return review.finalize_review(mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
                                 {"verdict": "approve", "report_md": "ok"})
 
 
@@ -1343,7 +1344,7 @@ def test_illegal_outcome_sets_verdict(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _run()
-    run_coro(mgr._transition(run, {"outcome": "reviewed", "verdict": "approve"},
+    run_coro(transitions.transition(mgr, run, {"outcome": "reviewed", "verdict": "approve"},
                              None))
     assert run.verdict and run.verdict.startswith("rejected:")
     assert "illegal for EXECUTE" in run.verdict
@@ -1355,7 +1356,7 @@ def test_external_transition_sets_verdict(tmp_path):
     run = Run(run_id="T-1-1-ONBOARD-XXXXXX", mission_key="T-1",
               mission_pmo_id="p1", mission_type="ONBOARD",
               dev_type="senior-dev", seq=1, stage_label_at_dispatch=None)
-    run_coro(mgr._transition(run, {"outcome": "plan_needed"}, None))
+    run_coro(transitions.transition(mgr, run, {"outcome": "plan_needed"}, None))
     assert run.verdict and run.verdict.startswith("skipped:")
 
 
@@ -1363,7 +1364,7 @@ def test_human_needed_sets_verdict_and_advisory(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-EXECUTE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _run()
-    run_coro(mgr._transition(run, {"outcome": "human_needed", "summary": "s"},
+    run_coro(transitions.transition(mgr, run, {"outcome": "human_needed", "summary": "s"},
                              None))
     assert run.verdict == "handed off: needs human on EXECUTE"
     assert "p1" in mgr.needs_human
@@ -1426,7 +1427,7 @@ def test_executed_feed_uses_descriptor_pr_noun(tmp_path):
     forge = FakeForge()
     forge.descriptor = type("D", (), {"pr_noun": "merge request"})()
     mgr, fake, _store = make_mgr(tmp_path, m, forge=forge)
-    run_coro(mgr._transition(_run("EXECUTE", "DEVCAKE-EXECUTE"),
+    run_coro(transitions.transition(mgr, _run("EXECUTE", "DEVCAKE-EXECUTE"),
                              {"outcome": "executed",
                               "pr_url": "https://forge/mr/1", "summary": "s"},
                              None))

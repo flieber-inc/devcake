@@ -56,8 +56,8 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
         # concurrently, so a run may have flipped to finalizing while an
         # earlier kill was awaiting — killing it then would revert its
         # mission status against the live finalize. Skip anything no longer
-        # dispatched/running. (The caller also holds the poll lock, so no
-        # NEW run is dispatched during the drain — audit D5 #2/#8.)
+        # dispatched/running. (The caller also holds poll + dispatch locks
+        # for the full wipe — new launches cannot create ACL users mid-drain.)
         run = store.get(snap.run_id)
         if run is None or run.state not in ("dispatched", "running"):
             continue                                    # gone / finalizing / terminal
@@ -83,11 +83,61 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
         live = still
         if live:
             await asyncio.sleep(2)
+
+    # Force-remove pass (post-#32 residual B): soft drain timed out with
+    # containers still live. App has no docker.sock — force means Dagu stop
+    # (+ stop_all hammer) and a short re-poll, then wipe proceeds anyway so
+    # ACL DELUSER does not wait forever. ok:false when undrained remain.
+    force_attempted = False
+    force_stops = 0
     if live:
-        log.warning("clear: %d container(s) still reported running after "
-                    "%.0fs drain — proceeding with the wipe: %s",
-                    len(live), timeout_s, live)
-    return {"stopped": len(stopped), "undrained": live}
+        force_attempted = True
+        log.error(
+            "clear: %d container(s) still running after %.0fs soft drain — "
+            "force-stop via Dagu then re-poll: %s",
+            len(live), timeout_s, live,
+        )
+        for rid in list(live):
+            try:
+                await executor.stop(rid)
+                force_stops += 1
+            except Exception:  # noqa: BLE001 — force stop is best-effort per run; re-poll decides undrained
+                log.exception("clear: force stop failed for %s", rid)
+        stop_all = getattr(executor, "stop_all", None)
+        if callable(stop_all):
+            try:
+                await stop_all()
+            except Exception:  # noqa: BLE001 — stop_all hammer is best-effort; residual undrained reported below
+                log.exception("clear: executor.stop_all failed during force pass")
+        # short re-poll (capped; does not re-open the soft-drain budget)
+        force_deadline = _time.monotonic() + min(15.0, max(4.0, timeout_s * 0.25))
+        while live and _time.monotonic() < force_deadline:
+            still = []
+            for rid in live:
+                try:
+                    status = await executor.status(rid)
+                except Exception:  # noqa: BLE001 — force re-poll best-effort; treat probe failure as still live
+                    still.append(rid)
+                    continue
+                detail = (status or {}).get("dagRunDetails") or {}
+                label = str(detail.get("statusLabel", detail.get("status", ""))).lower()
+                if status is not None and label in ("running", "queued", "started"):
+                    still.append(rid)
+            live = still
+            if live:
+                await asyncio.sleep(1)
+        if live:
+            log.error(
+                "clear: %d container(s) STILL live after force-remove — "
+                "proceeding with wipe (ACL may race residual containers): %s",
+                len(live), live,
+            )
+    return {
+        "stopped": len(stopped),
+        "undrained": live,
+        "force_remove_attempted": force_attempted,
+        "force_stops": force_stops,
+    }
 
 
 def clear_local_state(store: RunStore,

@@ -20,12 +20,20 @@ def run_coro(c):
 
 
 class InMemoryStore:
-    """StatePort adapter for tests — dict-backed, no filesystem."""
+    """StatePort adapter for tests — dict-backed, no filesystem.
+
+    Implements wipe_generation + save guard (docs/10) so launch/clear tests
+    exercise the same contract as RunStore.
+    """
 
     def __init__(self) -> None:
         self._runs: dict[str, Run] = {}
+        self.wipe_generation: int = 0
 
     def save(self, run: Run) -> None:
+        gen = int(getattr(run, "store_gen", 0) or 0)
+        if gen < self.wipe_generation:
+            return
         self._runs[run.run_id] = run.model_copy(deep=True)
 
     def get(self, run_id: str) -> Run | None:
@@ -38,6 +46,12 @@ class InMemoryStore:
     def active(self) -> list[Run]:
         return [r for r in self.all()
                 if r.state in ("dispatched", "running", "finalizing")]
+
+    def clear(self) -> int:
+        self.wipe_generation += 1
+        n = len(self._runs)
+        self._runs.clear()
+        return n
 
 
 class FakeMessaging:
@@ -163,6 +177,29 @@ def test_launch_serializes_on_dispatch_lock():
         await task
         assert len(store.all()) == 1                    # now it proceeds
     asyncio.new_event_loop().run_until_complete(scenario())
+
+
+def test_launch_stamps_store_gen_and_survives_prior_wipe():
+    """After clear bumps wipe_generation, a new launch must stamp store_gen
+    to the current generation and persist; pre-wipe saves must not resurrect."""
+    store = InMemoryStore()
+    bootstrap = RunBootstrap(store, FakeMessaging(), FakeExecutor(store))
+    old = run_coro(bootstrap.launch(_hello_run("HELLO-OLD"), image="img"))
+    assert old.store_gen == 0
+    assert store.get(old.run_id) is not None
+
+    store.clear()
+    assert store.wipe_generation == 1
+    assert store.all() == []
+    # in-memory pre-wipe object must not resurrect after clear
+    old.state = "finished"
+    store.save(old)
+    assert store.get(old.run_id) is None
+
+    fresh = run_coro(bootstrap.launch(_hello_run("HELLO-NEW"), image="img"))
+    assert fresh.store_gen == 1
+    assert store.get(fresh.run_id) is not None
+    assert store.get(fresh.run_id).store_gen == 1
 
 
 def test_dispatch_hello_uses_bootstrap_spine():

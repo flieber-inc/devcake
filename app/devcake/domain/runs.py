@@ -148,10 +148,24 @@ class RunManager:
             and hmac.compare_digest(run.auth_digest, auth_digest(auth))
         )
 
+    def _pre_wipe(self, run: Run) -> bool:
+        """True when this run was stamped before the last clear-runs wipe
+        (docs/10 store_gen). In-flight finalize/heartbeat must not resurrect
+        records or drive further PMO side effects after "start fresh"."""
+        wipe_gen = int(getattr(self.store, "wipe_generation", 0) or 0)
+        return int(getattr(run, "store_gen", 0) or 0) < wipe_gen
+
     async def handle(self, run_id: str, kind: str, payload: dict) -> None:
         run = self.store.get(run_id)
         if run is None:
             log.warning("message for unknown run %s (%s)", run_id, kind)
+            return
+        # A concurrent clear can wipe the file while we still hold an older
+        # in-memory object only if handle was entered before clear — get()
+        # already returned None above for post-wipe messages. Pre-wipe check
+        # still matters for callers that pass a cached Run into kill/finalize.
+        if self._pre_wipe(run):
+            log.info("drop ingress %s for pre-wipe run %s", kind, run_id)
             return
 
         # heartbeats (2/min/run) and streamed-log batches (one every few
@@ -248,8 +262,16 @@ class RunManager:
             # double-ran side effects after mid-finalize crashes (ISSUES #1).
             if run.state in ("finished", "failed", "timed_out", "orphaned"):
                 return
+            if self._pre_wipe(run):
+                log.info("drop finalize for pre-wipe run %s", run_id)
+                return
             run.state = "finalizing"
             self.store.save(run)
+            if self._pre_wipe(run):
+                # clear raced between the check and save — save was a no-op;
+                # do not drive PMO transitions on a wiped run.
+                log.info("abort finalize after wipe race for %s", run_id)
+                return
             if self.finalizer and run.mission_type == "MAPPER":
                 await self.finalizer.finalize_mapper(run, payload)
             elif self.finalizer and run.mission_pmo_id:
@@ -264,6 +286,9 @@ class RunManager:
     # ── finalization (docs/04 §4 — PMO-less runs: hello) ─────────────────────
 
     async def _finalize(self, run: Run, payload: dict) -> None:
+        if self._pre_wipe(run):
+            log.info("skip hello finalize for pre-wipe run %s", run.run_id)
+            return
         ctx = extract({"traceparent": run.traceparent}) if run.traceparent else None
         with tracer.start_as_current_span(
             "run.finalize", context=ctx, kind=SpanKind.CONSUMER

@@ -42,6 +42,19 @@ every cycle, nothing on disk.)
 
 Run records are schema **v2**. They contain non-secret execution context and a one-way Redis envelope verifier, never raw Redis passwords, forge/model credentials, or credential-file content. Secret run-spec material is not persisted anywhere: the app builds it from current config when the Dev sends `runspec.get` (`09-messaging.md` §§3, 5). At every boot, an integrity sweep (`RunStore.quarantine_unreadable`) moves unparseable, model-invalid, or **pre-v2** records to `runs/quarantine/` (0600, named in the log) — so one corrupt record can never block boot, and a restored v1 backup (which persisted credentials) can never sit silently in the store. A record that still parses as JSON is **scrubbed of known credential-bearing fields before the move** (quarantine must not become secret-at-rest); only unparseable bytes are preserved verbatim, for inspection, under the restrictive modes. Because a quarantined record is forgotten, boot also best-effort tears down anything it may have left live — the Dagu run, the per-run Redis ACL user, the reply stream — keyed on the file's run id. Quarantined files are removed by clear-runs.
 
+### Wipe generation (`store_gen`)
+
+Clear-runs must not be undone by in-flight writers that still hold a `Run` in memory (finalize, heartbeat, kill). The production `RunStore` keeps a process-local monotonic **`wipe_generation`** (starts at 0; not persisted across app restarts).
+
+| Event | Behavior |
+|---|---|
+| `RunBootstrap.launch` | Stamps `run.store_gen = store.wipe_generation` before the durable save |
+| `RunStore.clear()` | Bumps `wipe_generation`, then unlinks every run JSON (and quarantine) |
+| `RunStore.save(run)` | **No-op** when `run.store_gen < wipe_generation` (log at info) |
+| Mission / hello finalize | Early-abort when pre-wipe — no further PMO posts after a wipe is observed mid-flight |
+
+Legacy records without the field load as `store_gen: 0` (additive optional field — no schema bump). After a clear in-process, only runs launched **after** the wipe (stamped with the new generation) may persist again.
+
 ## 3. `config.yaml` — annotated example (normative shape)
 
 Schema **v4** (docs/16 M12): the connection blocks are plural lists of **instances-with-identities** — each entry carries an operator-chosen `name` (lowercase alnum, ≤12 chars, no hyphens; `^[a-z][a-z0-9]{0,11}$`). The name is the instance's identity everywhere: `Run.pmo_ref`/`repo_ref`, branch prefixes (`devcake/LINEAR-DEV-17`), run ids. **0..N** PMO instances and repos (empty = idle first boot). Two PMO instances must not target the same `(system, api_base, team_key)`; two repos must not target the same URL. An instance with an empty `team_key` (or a repo with an empty `url`) is **valid but idle**. **No `*_env` fields:** secret VALUES are GUI-stored under `/data/secrets/` (ADR-0011) — `config.yaml` holds no credentials.

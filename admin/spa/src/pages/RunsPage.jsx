@@ -67,7 +67,12 @@ export default function RunsPage() {
         const bits = [];
         // drain phase (#28 stop-and-drain): a container wedged past the cap
         // means the wipe ran while it was still live — surface it loudly
-        if (result.stopped?.undrained?.length) bits.push(`Still running after stop: ${result.stopped.undrained.join(", ")}`);
+        if (result.stopped?.undrained?.length) {
+          const force = result.stopped.force_remove_attempted
+            ? " (Dagu force-stop attempted; app has no docker.sock)"
+            : "";
+          bits.push(`Still running after drain${force}: ${result.stopped.undrained.join(", ")}`);
+        }
         if (result.stopped?.error) bits.push(`Stop phase: ${result.stopped.error}`);
         if (result.dagu?.failed?.length) bits.push(`Dagu still holds: ${result.dagu.failed.join(", ")}`);
         if (result.openobserve?.errors?.length) bits.push(result.openobserve.errors.join("; "));

@@ -18,6 +18,12 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
+def _pre_wipe(mgr, run: Run) -> bool:
+    """True when run.store_gen predates the store's last clear-runs wipe."""
+    wipe_gen = int(getattr(mgr.runs.store, "wipe_generation", 0) or 0)
+    return int(getattr(run, "store_gen", 0) or 0) < wipe_gen
+
+
 async def _checkpoint(mgr, run: Run, key: str, fn) -> None:
     """Idempotent finalize sub-step (ISSUES #4–6): skip if already done;
     append+save only after the side effect succeeds.
@@ -27,12 +33,24 @@ async def _checkpoint(mgr, run: Run, key: str, fn) -> None:
     """
     if key in run.finalized_steps:
         return
+    if _pre_wipe(mgr, run):
+        return
     await fn()
+    if _pre_wipe(mgr, run):
+        return
     run.finalized_steps.append(key)
     mgr.runs.store.save(run)
 
 
 async def finalize(mgr, run: Run, payload: dict) -> None:
+    # Clear-runs wipe generation (docs/10): a run stamped before the last
+    # wipe must not post to the PMO or resurrect local records. Saves are
+    # already no-ops at RunStore; re-check after every await so a wipe that
+    # lands mid-finalize stops further feed/transition side effects.
+    if _pre_wipe(mgr, run):
+        log.info("skip mission finalize for pre-wipe run %s", run.run_id)
+        return
+
     result = payload.get("result") or {}
     outcome = result.get("outcome", "")
     transcript = payload.get("transcript_md", "")
@@ -57,16 +75,27 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
 
         # 1 — transcript (idempotent via finalized_steps)
         if "transcript" not in run.finalized_steps:
+            if _pre_wipe(mgr, run):
+                log.info("abort finalize (transcript) pre-wipe %s", run.run_id)
+                return
             await _post_transcript(mgr, run, transcript,
                                         payload.get("last_message_md"))
             run.finalized_steps.append("transcript")
             mgr.runs.store.save(run)
+
+        if _pre_wipe(mgr, run):
+            log.info("abort finalize mid-flight pre-wipe %s", run.run_id)
+            return
 
         run.token_report = redact_value(token_report)  # persisted cost source
         # 2 — token report (INV-5: always)
         if "token_report" not in run.finalized_steps:
             await mgr._feed(pmo_id, run.pmo_kind,
                              _token_report_md(run, token_report))
+            if _pre_wipe(mgr, run):
+                log.info("abort finalize after token_report pre-wipe %s",
+                         run.run_id)
+                return
             run.finalized_steps.append("token_report")
             mgr.runs.store.save(run)
 
@@ -75,6 +104,8 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         # mission re-derives exactly as before the attempt (INV-3; without this,
         # a failed first ONBOARD strands the mission at in_progress/no-label = row 9)
         if not outcome:
+            if _pre_wipe(mgr, run):
+                return
             exit_code = payload.get("exit_code")
             await mgr.messaging.delete_run_user(run.run_id)
             await mgr.messaging.delete_reply_stream(run.run_id)
@@ -85,7 +116,8 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
             mgr.runs.store.save(run)
             span.set_attribute("devcake.verdict", f"failed: {run.error}")
             span.set_status(Status(StatusCode.ERROR, run.error))
-            await restore_after_failure(mgr, run)
+            if not _pre_wipe(mgr, run):
+                await restore_after_failure(mgr, run)
             log.warning("run %s failed (exit %s, attempt %d)",
                         run.run_id, exit_code, run.attempt_of_step)
             return
@@ -97,6 +129,8 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         # run must fail cleanly so the mission reschedules next cycle
         # instead of stranding in `finalizing` until the watchdog timeout.
         if "transition" not in run.finalized_steps:
+            if _pre_wipe(mgr, run):
+                return
             try:
                 await transitions.transition(mgr, run, result, plan_md)
             except ValueError as e:
@@ -109,9 +143,12 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                 mgr.runs.store.save(run)
                 span.set_attribute("devcake.verdict", f"failed: {run.error}")
                 span.set_status(Status(StatusCode.ERROR, run.error))
-                await restore_after_failure(mgr, run)
+                if not _pre_wipe(mgr, run):
+                    await restore_after_failure(mgr, run)
                 log.warning("run %s failed with DEV_BAD_OUTPUT: %s",
                             run.run_id, e)
+                return
+            if _pre_wipe(mgr, run):
                 return
             run.finalized_steps.append("transition")
             mgr.runs.store.save(run)

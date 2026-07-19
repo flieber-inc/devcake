@@ -20,10 +20,38 @@ def test_runstore_clear(tmp_path: Path):
             created_at=datetime.now(timezone.utc),
         ))
     assert len(store.all()) == 3
+    assert store.wipe_generation == 0
     n = store.clear()
     assert n == 3
+    assert store.wipe_generation == 1
     assert store.all() == []
     assert store.clear() == 0
+    assert store.wipe_generation == 2
+
+
+def test_runstore_save_drops_pre_wipe_runs(tmp_path: Path):
+    """Post-#32 residual A: in-flight finalize holds a Run and must not
+    resurrect the file after clear bumps wipe_generation."""
+    store = RunStore(root=tmp_path / "runs")
+    run = Run(
+        run_id="T-0-1-ONBOARD-AAAAAA",
+        mission_key="T-0",
+        mission_type="ONBOARD",
+        dev_type="senior-dev",
+        seq=1,
+        store_gen=0,
+    )
+    store.save(run)
+    assert store.get(run.run_id) is not None
+    store.clear()
+    assert store.get(run.run_id) is None
+    run.state = "finished"
+    store.save(run)                                   # pre-wipe stamp
+    assert store.get(run.run_id) is None
+    # post-wipe stamp is allowed
+    run.store_gen = store.wipe_generation
+    store.save(run)
+    assert store.get(run.run_id) is not None
 
 
 def test_clear_local_state_preserves_nothing_but_wipes_audit(tmp_path: Path, monkeypatch):
@@ -200,16 +228,26 @@ def run_coro(c):
 
 
 class _DrainExec:
-    """Reports each run as running for N status polls, then terminal."""
+    """Reports each run as running for N status polls, then terminal.
 
-    def __init__(self, running_polls: int = 1):
+    Implements ``stop`` (no-op) so the force-remove pass does not AttributeError
+    on the Fake — a wedged container is modelled by ``running_polls=None``
+    (always running) or a huge poll budget.
+    """
+
+    def __init__(self, running_polls: int | None = 1):
         self.polls: dict[str, int] = {}
-        self.running_polls = running_polls
+        self.running_polls = running_polls  # None = forever running
+        self.stops: list[str] = []
+
+    async def stop(self, rid):
+        self.stops.append(rid)
+        return True
 
     async def status(self, rid):
         n = self.polls.get(rid, 0)
         self.polls[rid] = n + 1
-        if n < self.running_polls:
+        if self.running_polls is None or n < self.running_polls:
             return {"dagRunDetails": {"statusLabel": "running"}}
         return {"dagRunDetails": {"statusLabel": "failed"}}
 
@@ -238,7 +276,9 @@ def test_stop_and_drain_kills_waits_and_skips_finalizing(monkeypatch):
     out = run_coro(stop_and_drain(_store([live, fin]), ex, rm, timeout_s=30))
     assert [k[0] for k in rm.kills] == ["R-1"]          # finalizing untouched
     assert "clear" in rm.kills[0][2]
-    assert out == {"stopped": 1, "undrained": []}
+    assert out["stopped"] == 1
+    assert out["undrained"] == []
+    assert out["force_remove_attempted"] is False
     assert ex.polls["R-1"] >= 3                         # waited past running
 
 
@@ -246,10 +286,41 @@ def test_stop_and_drain_times_out_on_wedged_container(monkeypatch):
     from devcake.api.clear import stop_and_drain
     monkeypatch.setattr("asyncio.sleep", lambda *_: _instant())
     live = SimpleNamespace(run_id="R-9", state="running")
-    out = run_coro(stop_and_drain(_store([live]), _DrainExec(running_polls=10**6),
-                                  _RM(), timeout_s=0.01))
+    ex = _DrainExec(running_polls=None)                 # forever wedged
+    out = run_coro(stop_and_drain(_store([live]), ex, _RM(), timeout_s=0.01))
     assert out["stopped"] == 1
     assert out["undrained"] == ["R-9"]                  # reported, wipe proceeds
+    assert out["force_remove_attempted"] is True        # force pass ran
+    assert out["force_stops"] >= 1
+    assert "R-9" in ex.stops
+
+
+def test_stop_and_drain_force_remove_clears_undrained(monkeypatch):
+    """Force pass: soft drain sees still-running; force stop + re-poll empties live."""
+    from devcake.api.clear import stop_and_drain
+    monkeypatch.setattr("asyncio.sleep", lambda *_: _instant())
+
+    class ForceExec(_DrainExec):
+        def __init__(self):
+            super().__init__(running_polls=None)
+            self._force_cleared = False
+
+        async def stop(self, rid):
+            await super().stop(rid)
+            self._force_cleared = True
+            return True
+
+        async def status(self, rid):
+            if self._force_cleared:
+                return {"dagRunDetails": {"statusLabel": "failed"}}
+            return await super().status(rid)
+
+    live = SimpleNamespace(run_id="R-force", state="running")
+    ex = ForceExec()
+    out = run_coro(stop_and_drain(_store([live]), ex, _RM(), timeout_s=0.01))
+    assert out["force_remove_attempted"] is True
+    assert "R-force" in ex.stops
+    assert out["undrained"] == []
 
 
 def test_stop_and_drain_refetches_state_before_kill(monkeypatch):

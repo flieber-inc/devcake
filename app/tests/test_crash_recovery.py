@@ -131,7 +131,8 @@ def test_kill_does_not_resurrect_a_concurrently_wiped_record(tmp_path):
     clear-runs wipe (while kill was awaiting teardown) must NOT store.save it
     back — that recreated a phantom terminal run after 'start fresh'. The
     get()+save() guard in _kill_inner is atomic (no await between), so a gone
-    record stays gone for EVERY killer path."""
+    record stays gone for EVERY killer path. Wipe generation also drops saves
+    whose store_gen predates the clear."""
     store = RunStore(tmp_path / "runs")
     mgr = RunManager(store, FakeMessaging(), FakeExecutor())
     run = _make_run(store, state="running", run_id="W-1")
@@ -142,9 +143,76 @@ def test_kill_does_not_resurrect_a_concurrently_wiped_record(tmp_path):
     run_coro(mgr.kill(run, "timed_out", "watchdog timeout"))
     assert store.get("W-1") is None                    # not resurrected
     # a normal kill (record present) still persists the terminal state
-    live = _make_run(store, state="running", run_id="W-2")
+    live = _make_run(store, state="running", run_id="W-2",
+                     store_gen=store.wipe_generation)
     run_coro(mgr.kill(live, "failed", "operator"))
     assert store.get("W-2").state == "failed"
+
+
+def test_kill_interleaved_with_clear_during_executor_stop(tmp_path):
+    """Issue F: clear bumps wipe_generation while kill awaits executor.stop;
+    the final save must not resurrect the record."""
+    store = RunStore(tmp_path / "runs")
+    gate = asyncio.Event()
+
+    class GatedExecutor(FakeExecutor):
+        async def stop(self, rid):
+            self.stopped.append(rid)
+            await gate.wait()
+            return True
+
+    mgr = RunManager(store, FakeMessaging(), GatedExecutor())
+    run = _make_run(store, state="running", run_id="W-GATE")
+    run.store_gen = 0
+    store.save(run)
+
+    async def scenario():
+        task = asyncio.ensure_future(
+            mgr.kill(run, "failed", "operator stop"))
+        await asyncio.sleep(0)                # let kill reach gated stop
+        store.clear()                         # concurrent wipe mid-kill
+        assert store.get("W-GATE") is None
+        gate.set()
+        await task
+        assert store.get("W-GATE") is None
+
+    asyncio.new_event_loop().run_until_complete(scenario())
+
+
+def test_finalize_does_not_resurrect_or_post_after_clear(tmp_path):
+    """Residual A: in-flight finalize after clear must not recreate the run
+    file or drive further PMO side effects."""
+    from devcake.domain.orchestrator import finalize as fin_mod
+
+    store = RunStore(tmp_path / "runs")
+    mgr = RunManager(store, FakeMessaging(), FakeExecutor())
+    posts: list[str] = []
+    run = _make_run(store, state="running", run_id="F-1",
+                    mission_pmo_id="pmo-1", store_gen=0)
+    store.clear()
+    assert store.get("F-1") is None
+
+    class M:
+        pass
+
+    m = M()
+    m.runs = mgr
+    m.messaging = mgr.messaging
+
+    async def _feed(pmo_id, kind, md, externalize=True):
+        posts.append("feed")
+
+    m._feed = _feed
+
+    # Call the public finalize seam with the pre-wipe in-memory Run (the
+    # race shape: clear unlinked the file while finalize still holds `run`).
+    run_coro(fin_mod.finalize(m, run, {
+        "result": {"outcome": "executed"},
+        "transcript_md": "hello",
+        "token_report": {"total_tokens": 1},
+    }))
+    assert store.get("F-1") is None
+    assert posts == []
 
 
 def test_started_does_not_resurrect_a_killed_run(tmp_path):

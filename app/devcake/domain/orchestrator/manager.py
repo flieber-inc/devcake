@@ -235,28 +235,17 @@ class MissionManager:
     def _token_report_md(run: Run, tr: dict):
         return finalize._token_report_md(run, tr)
 
-    # ── transitions ──
-    async def _transition(self, run: Run, result: dict, plan_md: str | None):
-        return await transitions._transition(self, run, result, plan_md)
-
-    # ── review ──
+    # ── review ── (transition/finalize seams are module-public since C2:
+    # transitions.transition, review.finalize_review,
+    # decomposition.finalize_decomposition)
     async def _flag_out_of_pipeline_merge(self, run: Run):
+        # stays a method: instance-overridable (tests suppress it per-manager)
         return await review._flag_out_of_pipeline_merge(self, run)
-
-    async def _conflict_attempts(self, pmo_id: str):
-        return await review._conflict_attempts(self, pmo_id)
 
     async def _maybe_route_conflict_to_execute(self, pmo_id: str, key: str, pr_url: str,
                                                from_label: str):
         return await review._maybe_route_conflict_to_execute(self, pmo_id, key, pr_url,
                                                              from_label)
-
-    async def _finalize_review(self, run: Run, result: dict):
-        return await review._finalize_review(self, run, result)
-
-    # ── decomposition ──
-    async def _finalize_decomposition(self, run: Run, result: dict):
-        return await decomposition._finalize_decomposition(self, run, result)
 
     # ── mapper ──
     async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]):

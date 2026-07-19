@@ -16,33 +16,33 @@ from .markers import (COMMENT_SENTINEL, at_decomposition_limit,
 log = logging.getLogger("devcake.missions")
 
 
-async def _finalize_decomposition(self, run: Run, result: dict) -> None:
+async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
-    live = await self.pmo.get(MissionRef(pmo_id, run.pmo_kind))
+    live = await mgr.pmo.get(MissionRef(pmo_id, run.pmo_kind))
     # depth is PMO state — the mission's own label + marker (ADR-0012);
     # unknown (label without a readable marker) counts as at-limit, fail-safe.
     # Replay-stable: once any child checkpoint exists the decision was taken
     # under the limit of that moment — a config change mid-resume must finish
     # the wiring, not strand live children behind a SKIP park.
-    limit = self.config.max_decomposition_depth
+    limit = mgr.config.max_decomposition_depth
     committed = any(s.startswith("decomp:child:") for s in run.finalized_steps)
     if not committed and at_decomposition_limit(live, limit):
         depth = decomposition_depth(live)
         async def _depth_limit():
-            await self.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
+            await mgr.pmo.swap_labels(MissionRef(pmo_id, run.pmo_kind),
                                    remove=set(), add={LABEL_SKIP})
             if live.status == "in_progress":
-                await self.pmo.set_status(
+                await mgr.pmo.set_status(
                     MissionRef(pmo_id, run.pmo_kind), "backlog")
-            await self._feed(
+            await mgr._feed(
                 pmo_id, run.pmo_kind,
                 f"⛔ Depth limit: this mission is at decomposition depth "
                 f"{depth if depth is not None else 'unknown'} of the "
                 f"configured limit {limit} and may not be decomposed "
                 f"again. Parked with `DEVCAKE-SKIP` for a human to "
                 f"re-scope.")
-            self._audit(pmo_id, "depth_limit_rejected", run.run_id)
-        await self._checkpoint(run, "decomp:depth_limit", _depth_limit)
+            mgr._audit(pmo_id, "depth_limit_rejected", run.run_id)
+        await mgr._checkpoint(run, "decomp:depth_limit", _depth_limit)
         run.verdict = "handed off: decomposition depth limit"
         return
     # children of an unknown-depth parent (unlimited mode) record depth 2 —
@@ -81,7 +81,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
     existing: dict[int, str] = {}
     existing_keys: dict[int, str] = {}
     conflicts: list[str] = []
-    for mission in await self.pmo.list_all(self.instance.team_key):
+    for mission in await mgr.pmo.list_all(mgr.instance.team_key):
         if LABEL_CREATED not in mission.labels:
             continue
         marker = decomposition_marker(mission.description)
@@ -108,11 +108,11 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
     if conflicts:
         detail = "; ".join(conflicts[:8])
         async def _decomp_conflict():
-            await self.pmo.swap_labels(
+            await mgr.pmo.swap_labels(
                 MissionRef(pmo_id, live.pmo_kind), remove=set(),
                 add={LABEL_NEEDS_HUMAN})
             if live.status == "in_progress":
-                await self.pmo.set_status(
+                await mgr.pmo.set_status(
                     MissionRef(pmo_id, live.pmo_kind), "backlog")
             baton = (
                 "Decomposition replay conflict: no children were created. "
@@ -120,18 +120,18 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                 + ". Reconcile the existing `DEVCAKE-CREATED` missions, "
                   "then remove `DEVCAKE-NEEDS-HUMAN` to retry."
             )
-            await self._feed(pmo_id, live.pmo_kind, baton)
+            await mgr._feed(pmo_id, live.pmo_kind, baton)
             if live.pmo_kind == "project":
-                await self.pmo.post_feed(
+                await mgr.pmo.post_feed(
                     MissionRef(pmo_id, "project"),
                     redact(baton) + "\n\n" + COMMENT_SENTINEL)
-            self._audit(pmo_id, "decomposition_conflict", detail)
-        await self._checkpoint(run, "decomp:conflict", _decomp_conflict)
+            mgr._audit(pmo_id, "decomposition_conflict", detail)
+        await mgr._checkpoint(run, "decomp:conflict", _decomp_conflict)
         run.verdict = "handed off: decomposition replay conflict"
         return
 
     labels = {LABEL_CREATED}
-    if self.config.adoption_mode == "opt_in":
+    if mgr.config.adoption_mode == "opt_in":
         labels.add(LABEL_OPTIN)
     created = []
     child_ids: dict[int, str] = {}                            # part index → issue id
@@ -140,7 +140,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
     async def _resolve_existing_child(part: int) -> tuple[str, str] | None:
         if part in existing:
             return existing[part], existing_keys[part]
-        for mission in await self.pmo.list_all(self.instance.team_key):
+        for mission in await mgr.pmo.list_all(mgr.instance.team_key):
             marker = decomposition_marker(mission.description)
             if marker and marker.group(1) == pmo_id \
                     and int(marker.group(3)) == part:
@@ -171,8 +171,8 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                 # Appended AFTER the manifest hash is computed, like the
                 # rest of the footer, so replay idempotency is unaffected.
                 footer += f"\n`devcake-repo:{parent_repo_marker}`"
-            key, child_id = await self.pmo.create_mission(
-                self.instance.team_key, title,
+            key, child_id = await mgr.pmo.create_mission(
+                mgr.instance.team_key, title,
                 d["description"] + footer,
                 d["priority"], labels,
                 # an issue's children stay in its containing project so the
@@ -180,7 +180,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
                 parent_ref=pmo_id if is_project else live.parent_ref)
             created.append(key)
             run.finalized_steps.append(key_child)
-            self.runs.store.save(run)
+            mgr.runs.store.save(run)
         child_ids[i] = child_id
         child_key_by_part[i] = key
         # edges wired immediately per child (crash-safe resume; duplicate
@@ -190,10 +190,10 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
             if blocker_id:
                 rel_key = f"decomp:rel:{j}->{i}"
                 async def _rel(blocker_id=blocker_id, child_id=child_id, j=j):
-                    await self.pmo.create_relation(blocker_id, child_id)
-                    self._audit(child_id, "relation_created",
+                    await mgr.pmo.create_relation(blocker_id, child_id)
+                    mgr._audit(child_id, "relation_created",
                                 f"blocked by part {j} ({blocker_id})")
-                await self._checkpoint(run, rel_key, _rel)
+                await mgr._checkpoint(run, rel_key, _rel)
     # all children in part order, reused parts included — key sources are
     # authoritative (create_mission return / marker scan), never a snapshot,
     # so the lineage note below renders identically on every replay
@@ -214,18 +214,18 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
         # The snapshot is deliberately taken AFTER child creation (a second
         # team read): relations a human added while the children were being
         # created are honored on both sides.
-        snapshot = await self.pmo.list_all(self.instance.team_key)
+        snapshot = await mgr.pmo.list_all(mgr.instance.team_key)
         by_id = {sm.pmo_id: sm for sm in snapshot}
         child_id_set = set(child_ids.values())
 
         async def _inherit(blocker_id: str, blocked_id: str) -> None:
             try:
-                await self.pmo.create_relation(blocker_id, blocked_id)
+                await mgr.pmo.create_relation(blocker_id, blocked_id)
             except Exception:
-                self._audit(blocked_id, "relation_inherit_failed",
+                mgr._audit(blocked_id, "relation_inherit_failed",
                             f"{blocker_id} blocks {blocked_id}")
                 raise
-            self._audit(blocked_id, "relation_inherited",
+            mgr._audit(blocked_id, "relation_inherited",
                         f"{blocker_id} blocks {blocked_id}")
 
         # the original's blockers re-read from the post-creation snapshot;
@@ -247,11 +247,11 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
             for b in open_blockers:
                 async def _in(b=b, child_id=child_id):
                     await _inherit(b, child_id)
-                await self._checkpoint(run, f"decomp:inherit:in:{b}->{i}", _in)
+                await mgr._checkpoint(run, f"decomp:inherit:in:{b}->{i}", _in)
             for dep in dependents:
                 async def _out(child_id=child_id, dep=dep):
                     await _inherit(child_id, dep)
-                await self._checkpoint(run, f"decomp:inherit:out:{i}->{dep}",
+                await mgr._checkpoint(run, f"decomp:inherit:out:{i}->{dep}",
                                        _out)
 
         # lineage note (ADR-0012 hygiene): best-effort BY DESIGN — the note
@@ -265,23 +265,23 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
             if note in (live.description or ""):
                 return
             try:
-                await self.pmo.append_description(
+                await mgr.pmo.append_description(
                     MissionRef(pmo_id, "issue"), note)
             except Exception as e:  # noqa: BLE001 — lineage note is best-effort BY DESIGN (comment above); failure recorded in the audit, the cancel proceeds
-                self._audit(pmo_id, "lineage_note_failed", str(e)[:200])
-        await self._checkpoint(run, "decomp:parent_note", _parent_note)
+                mgr._audit(pmo_id, "lineage_note_failed", str(e)[:200])
+        await mgr._checkpoint(run, "decomp:parent_note", _parent_note)
 
     links = ", ".join(created) or "(all already existed)"
     async def _tracking():
         if is_project:
-            await self.pmo.swap_labels(MissionRef(pmo_id, "project"),
+            await mgr.pmo.swap_labels(MissionRef(pmo_id, "project"),
                                        remove=set(), add={LABEL_TRACKING})
-            self._audit(pmo_id, "decomposed_project", links)
+            mgr._audit(pmo_id, "decomposed_project", links)
         else:
-            await self._feed(
+            await mgr._feed(
                 pmo_id, "issue",
                 f"🧩 Decomposed into {len(normalized)} standalone issues: "
                 f"{links}. This issue is canceled in their favor.")
-            await self.pmo.cancel_mission(MissionRef(pmo_id, "issue"))
-            self._audit(pmo_id, "decomposed_canceled", links)
-    await self._checkpoint(run, "decomp:tracking", _tracking)
+            await mgr.pmo.cancel_mission(MissionRef(pmo_id, "issue"))
+            mgr._audit(pmo_id, "decomposed_canceled", links)
+    await mgr._checkpoint(run, "decomp:tracking", _tracking)

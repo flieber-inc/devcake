@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from devcake.config import PMOInstance
+from devcake.domain.orchestrator import transitions
 from fakes import FakeForgeRuntime
 
 from devcake.domain.run import Run, utcnow
@@ -499,11 +500,11 @@ def test_human_needed_baton_posted_once(tmp_path):
     )
     store.save(run)
     result = {"outcome": "human_needed", "summary": "stuck on secrets"}
-    run_coro(mgr._transition(run, result, None))
+    run_coro(transitions.transition(mgr, run, result, None))
     assert sum(1 for c in comments if "needs a human" in c.lower()
                or "DevCake needs a human" in c) == 1
     # redelivery: checkpoint skips baton
-    run_coro(mgr._transition(run, result, None))
+    run_coro(transitions.transition(mgr, run, result, None))
     assert sum(1 for c in comments if "needs a human" in c.lower()
                or "DevCake needs a human" in c) == 1
     assert "transition:human_needed" in run.finalized_steps
@@ -564,7 +565,7 @@ def test_redelivery_own_label_swap_is_not_external_transition(tmp_path):
     )
     store.save(run)
     result = {"outcome": "executed", "pr_url": "https://x/pr/1"}
-    run_coro(mgr._transition(run, result, None))
+    run_coro(transitions.transition(mgr, run, result, None))
     assert not any("changed externally" in c for c in comments)
     assert any("awaiting REVIEW" in c for c in comments)  # transition resumed
     assert "transition:executed" in run.finalized_steps
@@ -577,7 +578,7 @@ def test_redelivery_own_label_swap_is_not_external_transition(tmp_path):
         state="finalizing", stage_label_at_dispatch=LABEL_EXECUTE,
     )
     store.save(fresh)
-    run_coro(mgr._transition(fresh, result, None))
+    run_coro(transitions.transition(mgr, fresh, result, None))
     assert any("changed externally" in c for c in comments)
     # non-swap checkpoints (feeds, pr comments) must NOT suppress the check:
     # a human canceling the mission between deliveries still halts the resume
@@ -591,7 +592,7 @@ def test_redelivery_own_label_swap_is_not_external_transition(tmp_path):
         finalized_steps=["transition:executed:feed"],  # feed is not a swap
     )
     store.save(canceled)
-    run_coro(mgr._transition(canceled, result, None))
+    run_coro(transitions.transition(mgr, canceled, result, None))
     assert any("changed externally" in c for c in comments)
     assert "transition:executed" not in canceled.finalized_steps
 

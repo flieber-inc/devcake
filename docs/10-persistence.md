@@ -52,6 +52,7 @@ Clear-runs must not be undone by in-flight writers that still hold a `Run` in me
 | `RunStore.clear()` | Bumps `wipe_generation`, then unlinks every run JSON (and quarantine) |
 | `RunStore.save(run)` | **No-op** when `run.store_gen < wipe_generation` (log at info) |
 | Mission / hello finalize | Early-abort when pre-wipe — no further PMO posts after a wipe is observed mid-flight |
+| Startup `reconcile_runs` | Re-stamps adopted / finalizing-for-reclaim runs to **this** process's `wipe_generation` (resets to 0 on restart). Without that, a prior process's `store_gen ≥ 1` would survive a restart and miss the first post-restart clear |
 
 Legacy records without the field load as `store_gen: 0` (additive optional field — no schema bump). After a clear in-process, only runs launched **after** the wipe (stamped with the new generation) may persist again.
 

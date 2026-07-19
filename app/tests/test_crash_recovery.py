@@ -392,6 +392,73 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
     assert saved.error == "DEV_FORGE: clone failed"      # exit-13 enrichment
 
 
+def test_recon_restamps_store_gen_for_adopted_and_finalizing(tmp_path):
+    """PR #34 review follow-up: wipe_generation resets to 0 on process start,
+    but run files may still carry store_gen from a prior process. Reconcile
+    must restamp kept-alive runs so the first clear in THIS process treats
+    them as pre-wipe (no PMO post / no resurrect after clear)."""
+    from devcake.domain.orchestrator import finalize as fin_mod
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    assert store.wipe_generation == 0
+
+    # Simulate runs written by a prior process that had cleared twice.
+    live = _make_run(store, state="running", run_id="LIVE-OLD",
+                     store_gen=2, mission_pmo_id="pmo-1")
+    fin = _make_run(store, state="finalizing", run_id="FIN-OLD",
+                    store_gen=5, mission_pmo_id="pmo-2")
+    assert store.get(live.run_id).store_gen == 2
+    assert store.get(fin.run_id).store_gen == 5
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {"status": "running",
+                                      "statusLabel": "running"}}
+
+    messaging = FakeMessaging()
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run_coro(reconcile_runs(mgr))
+
+    # Born into this process's generation (0 until first clear).
+    assert store.get(live.run_id).store_gen == 0
+    assert store.get(fin.run_id).store_gen == 0
+
+    # First clear in this process → wipe_generation = 1; pre-wipe catches
+    # restamped runs so finalize cannot resurrect or post.
+    posts: list[str] = []
+    store.clear()
+    assert store.wipe_generation == 1
+    assert store.get(live.run_id) is None
+
+    class M:
+        pass
+
+    m = M()
+    m.runs = mgr
+    m.messaging = mgr.messaging
+
+    async def _feed(pmo_id, kind, md, externalize=True):
+        posts.append("feed")
+
+    m._feed = _feed
+    # In-memory object still holds the restamped store_gen=0 from reconcile.
+    live.store_gen = 0
+    run_coro(fin_mod.finalize(m, live, {
+        "result": {"outcome": "executed"},
+        "transcript_md": "should not land",
+        "token_report": {"total_tokens": 1},
+    }))
+    assert store.get(live.run_id) is None
+    assert posts == []
+
+
 def test_recon_enriches_exit14_mcp_setup(tmp_path):
     """Same enrichment for the other classified pre-harness exit: a dead run
     whose step errors carry exit status 14 (MCP setup failed while the app

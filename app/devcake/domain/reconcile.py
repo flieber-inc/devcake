@@ -7,6 +7,27 @@ import re
 log = logging.getLogger("devcake.reconcile")
 
 
+def _restamp_store_gen(store, run) -> None:
+    """Bind a kept-alive run into THIS process's wipe generation (docs/10).
+
+    ``wipe_generation`` is process-local and resets to 0 on restart, but run
+    files may still carry ``store_gen`` from a prior process (e.g. 2 after
+    two clears). Without restamping, the first clear in the new process
+    bumps wipe 0→1 and ``_pre_wipe(store_gen=2, wipe=1)`` is false — so
+    in-flight finalize after that clear can still post to the PMO and
+    resurrect the record. Orphaned runs are not restamped (they are
+    terminalled via kill and leave the active set).
+    """
+    wipe_gen = int(getattr(store, "wipe_generation", 0) or 0)
+    if int(getattr(run, "store_gen", 0) or 0) == wipe_gen:
+        return
+    prev = getattr(run, "store_gen", 0)
+    run.store_gen = wipe_gen
+    store.save(run)
+    log.info("reconciliation: restamped store_gen %s → %s for %s",
+             prev, wipe_gen, run.run_id)
+
+
 async def reconcile_runs(manager) -> None:
     """Step 3: orphan dead Dagu runs. Skip state=="finalizing" — those may have
     pending run.artifacts on the ingress stream; killing them to orphaned
@@ -22,6 +43,9 @@ async def reconcile_runs(manager) -> None:
     messaging, finalizer = manager.messaging, manager.finalizer
     for r in store.active():
         if r.state == "finalizing":
+            # keep for reclaim, but born into this process's wipe generation
+            # so a later clear-runs correctly treats it as pre-wipe
+            _restamp_store_gen(store, r)
             log.info("reconciliation: leaving finalizing run %s for reclaim",
                      r.run_id)
             continue
@@ -46,6 +70,7 @@ async def reconcile_runs(manager) -> None:
                             "error_detail": detail})
                     store.save(r)
             else:
+                _restamp_store_gen(store, r)
                 log.info("reconciliation: adopted in-flight run %s (dagu: %s)",
                          r.run_id, label or st or "running")
         except Exception:

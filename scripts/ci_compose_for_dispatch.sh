@@ -7,6 +7,14 @@
 #   openobserve — app depends_on service_started
 #   otel-collector — hello OTLP export target
 #   redis, dagu, app, admin
+#
+# Third-party pull resilience (no registry credentials):
+#   - Skip services whose digest-pinned image is already local (GHA unit-test
+#     Redis leaves redis:7-alpine@sha256:… present before this step).
+#   - Retry remaining pulls with exponential backoff — Docker Hub anonymous
+#     `toomanyrequests` on shared GHA egress is the common failure mode.
+# Override: CI_COMPOSE_PULL_ATTEMPTS (default 6), CI_COMPOSE_PULL_INITIAL_DELAY
+# (seconds, default 20; doubles each retry, capped at 120).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -72,9 +80,60 @@ export DEVCAKE_TAG="$TAG"
 export ADMIN_USER ADMIN_PASSWORD REDIS_PASSWORD DAGU_USER DAGU_PASSWORD
 
 SERVICES=(fluentbit openobserve redis dagu otel-collector app admin)
+THIRD_PARTY=(fluentbit openobserve redis dagu otel-collector)
+
+# Resolve compose image refs once (digest-pinned in docker-compose.yml).
+# Prints "service<TAB>image" lines for the given service names.
+_third_party_images() {
+  docker compose config --format json | python3 -c '
+import json, sys
+cfg = json.load(sys.stdin)
+for name in sys.argv[1:]:
+    svc = cfg["services"].get(name)
+    if not svc or "image" not in svc:
+        sys.stderr.write("compose service %r has no image\n" % (name,))
+        sys.exit(1)
+    print("%s\t%s" % (name, svc["image"]))
+' "$@"
+}
 
 echo "── pull third-party images for dispatch set"
-docker compose pull fluentbit openobserve redis dagu otel-collector
+PULL_ATTEMPTS="${CI_COMPOSE_PULL_ATTEMPTS:-6}"
+PULL_DELAY="${CI_COMPOSE_PULL_INITIAL_DELAY:-20}"
+attempt=1
+while true; do
+  mapfile -t _img_rows < <(_third_party_images "${THIRD_PARTY[@]}")
+  to_pull=()
+  for row in "${_img_rows[@]}"; do
+    svc="${row%%$'\t'*}"
+    img="${row#*$'\t'}"
+    if docker image inspect "$img" >/dev/null 2>&1; then
+      echo "  $svc: already local"
+    else
+      echo "  $svc: need pull"
+      to_pull+=("$svc")
+    fi
+  done
+  if [[ ${#to_pull[@]} -eq 0 ]]; then
+    echo "  all third-party images present"
+    break
+  fi
+  echo "  pulling: ${to_pull[*]} (attempt ${attempt}/${PULL_ATTEMPTS})"
+  if docker compose pull "${to_pull[@]}"; then
+    break
+  fi
+  if [[ "$attempt" -ge "$PULL_ATTEMPTS" ]]; then
+    echo "compose pull failed after ${PULL_ATTEMPTS} attempts (Docker Hub rate limit?)" >&2
+    exit 1
+  fi
+  echo "  pull failed (often toomanyrequests); sleeping ${PULL_DELAY}s before retry…"
+  sleep "$PULL_DELAY"
+  attempt=$((attempt + 1))
+  PULL_DELAY=$((PULL_DELAY * 2))
+  if [[ "$PULL_DELAY" -gt 120 ]]; then
+    PULL_DELAY=120
+  fi
+done
 
 echo "── compose up: ${SERVICES[*]}"
 docker compose up -d "${SERVICES[@]}"

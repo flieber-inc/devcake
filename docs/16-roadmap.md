@@ -11,7 +11,7 @@
 Exit criteria — **all verified 2026-07-11 (M0 complete)**:
 - [x] `docker compose up -d` from a fresh clone + `.env` → all services healthy.
 - [x] `app` emits a stub `poll.cycle` trace visible in OpenObserve (verified via `_search?type=traces`).
-- [x] Admin panel serves the three tabs *(the M0-era layout; today a four-page sidebar SPA — `11-admin-panel.md`)*; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
+- [x] Admin panel serves the three tabs *(M0-era layout; current SPA is six pages — Overview, Missions, Runs, Repos, Config, Logs — `11-admin-panel.md`)*; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
 - [x] Container stdout of `dagu`/`redis` searchable in OpenObserve (`container_logs` stream, via fluent-bit + fluentd logging driver).
 
 **Demo:** open the admin panel, click through the three tabs, show the trace.
@@ -296,11 +296,12 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
   out (then wipe; `ok:false` if still undrained — no host docker.sock);
   dispatch chokepoint AST tripwire; SelectionChips unavailable tooltip; docs
   honesty (dual locks for full wipe including OO; not “poll is the only
-  dispatcher”). **built** in this PR · ⏳ live clear-under-load smoke optional
-  before v0.2 tag. **Does not claim** multi-threaded store safety or host-level
-  force-kill.
+  dispatcher”). **built** · **live-verified 2026-07-19** (clear-under-load:
+  stop+drain while a Dev was live — zero ghost runs, zero orphaned ACL users;
+  see Clear-Runs concurrency note above). **Does not claim** multi-threaded
+  store safety or host-level force-kill.
 
-### Deferred (v0.2+)
+### Deferred (post-v0.2)
 
 - **Webhook ingestion** — a PMO `watch()`/webhook `ChangeEvent` seam replacing polling (+ tunnel guide). Deliberately sequenced *after* F2: the multi-PMO port reshapes the exact surface the seam attaches to. Top candidate once v0.1 ships — multi-PMO instances multiply polling cost.
 - **Additional PMO adapters** (GitHub Issues, GitLab, Monday) + the **markdown-fidelity adapter refactor** (ISSUES #35) — deliberately fenced out of v0.1 (founder decision 2026-07-14): v0.1 completes the port; adapters ride on it afterward. First-wave candidate alongside webhooks.

@@ -63,17 +63,19 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 
 | Variable | Stage | Meaning |
 |---|---|---|
-| `DEVCAKE_RUN_ID` | 1 | Human-readable run id (`02-domain-model.md` §7, e.g. `ENG-142-3-EXECUTE-9GX2TQ`); container is named `dev-{DEVCAKE_RUN_ID}`. |
+| `DEVCAKE_RUN_ID` | 1 | Human-readable run id (`02-domain-model.md` §7, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ`); container is named `dev-{DEVCAKE_RUN_ID}`. |
 | `TRACEPARENT` | 1 | W3C trace context — links the Dev's spans into the dispatch trace (`12-observability.md`). |
 | `REDIS_URL` | 1 | `redis://redis:6379/0`. |
 | `REDIS_USER` / `REDIS_PASSWORD` | 1 | Per-run scoped ACL credential (`09-messaging.md` §1a); doubles as the envelope `auth` token. |
 | `DEVCAKE_MISSION_ID` | 2 | PMO `pmo_id`. |
-| `DEVCAKE_MISSION_KEY` | 2 | e.g. `ENG-142` — used for the branch name `devcake/{mission_key}`. |
+| `DEVCAKE_MISSION_KEY` | 2 | e.g. `ENG-142`. Branch name is `devcake/{INSTANCE}-{mission_key}` via `mission_branch` (not derived from this env alone). |
 | `DEVCAKE_MISSION_TYPE` | 2 | `ONBOARD \| PLAN \| EXECUTE \| REVIEW`. |
 | `DEVCAKE_DEV_TYPE` | 2 | Dev Type name. |
+| `DEVCAKE_HARNESS` | 1/2 | Harness id (image-baked fallback; dispatch may override via runspec). |
+| `DEVCAKE_MODEL` | 2 | Per-Dev-Type model pin; empty = harness default. |
 | `DEVCAKE_SEQ` | 2 | Step number (transcript naming `{seq}_{type}.md`). |
 | `DEVCAKE_REPO_URL` | 2 | Clone URL (credential-free; auth via helper, §5). |
-| `DEVCAKE_DEFAULT_BRANCH` | 2 | The repo's default branch (`config.repo.default_branch` — not necessarily `main`). |
+| `DEVCAKE_DEFAULT_BRANCH` | 2 | The resolved work repo's `default_branch` (from that `RepoInstance` — not a singular `config.repo`). |
 | `DEVCAKE_CLONE_USER` | 2 | Credential-in-URL user for the https clone (from the forge descriptor, `06-forge-adapter.md` §3a — `x-access-token` / `oauth2`). |
 | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` | 2 | The Dev's git identity (from the forge descriptor). |
 | `DEVCAKE_FORGE_CLI_ENVS` | 2 | Comma-joined env-var names the entrypoint mirrors `DEVCAKE_FORGE_TOKEN` into for the forge CLI (from the descriptor's `cli_token_envs`, e.g. `GH_TOKEN`). |
@@ -104,9 +106,11 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 
 ```
 entrypoint start
-  │ 0. fetch run spec via `runspec.get` (req/reply; retries with backoff; failure → exit 20);
+  │ 0. fetch run spec via `runspec.get` (req/reply; retries with backoff;
+  │      `runspec.error` → exit 20; timeout → exit 20);
   │      export stage-2 env, write credential material (0600)
   │ 1. emit `run.started` on Redis  ──────────────►  app marks Run "running"
+  │      (runspec.get first, then run.started — never the reverse)
   │ 2. clone the mission's activity-* repo into /workspace/activity (full history);
   │      fallback: `activity.get` (req/reply) → materialize MISSION.md + ACTIVITY.md + attachments
   │ 3. git clone → /workspace/repo (credential helper from run-spec token; token never in URL on disk)
@@ -123,22 +127,20 @@ entrypoint start
   │      • the live log announces harness start and, while user-visible output is
   │        absent, emits one liveness notice per 60 s (hidden reasoning stays hidden)
   │ 7. harness finishes; entrypoint validates /workspace/out/result.json
-  │ 8. collect transcript (08-harness-templates.md §6) + extract TokenReport (§5 there)
+  │ 8. assemble transcript (`assemble_transcript` in the shared entrypoint —
+  │      header + session dump / agent report + outcome JSON) + extract TokenReport
+  │      (`session_json` or `unavailable` — 08-harness-templates.md §5)
   │ 9. publish `run.artifacts` {result.json, transcript_md, token_report} on Redis
   └ 10. exit with code per §4  ──────────────────►  app finalizes (04-orchestrator.md §4)
 ```
 
 Git pushes and PR interactions (EXECUTE, REVIEW approval checkout) happen inside step 6, driven by the playbook prompt, but **commits only at the very end of the work** (INV-6) — the playbook prompts state this explicitly and the transcript is evidence of compliance.
 
-## 6. Mid-run PMO access: the `devcake-relay`
+## 6. Mid-run PMO access (not shipped as a CLI)
 
-Every Dev image ships a small CLI, `devcake-relay`, that speaks the Redis protocol of `09-messaging.md`. v0 exposes exactly one read-only command, usable by the harness as a shell command (and registrable as an MCP tool):
+**`devcake-relay` is not a shipped CLI.** Devs speak the Redis protocol of `09-messaging.md` **directly from the shared entrypoint** (`runspec.get`, `activity.get`, heartbeats, artifacts). There is no separate relay binary in the image.
 
-```
-devcake-relay activity get        # re-fetch the current activity payload
-```
-
-There is **no write access** to the PMO mid-run in v0 (INV-4). "The endpoint able to update/communicate with the PMO System" from the mission doc *is* this relay: writes travel as end-of-run artifacts that the app applies.
+There is **no write access** to the PMO mid-run (INV-4). Writes travel as end-of-run artifacts that the app applies. Mid-run re-fetch of the activity payload uses the same `activity.get` request/reply channel the entrypoint already speaks.
 
 Other tooling (log-platform access and the like) arrives as **MCP plugins** — standalone servers living outside this repo, installed per Dev Type at run time via `mcp_setup_commands` (`08-harness-templates.md` §7, `tutorials/03-mcp-plugins.md`). The official log connector is <https://github.com/fidecastro/devcake-logs-mcp>.
 
@@ -155,6 +157,6 @@ DevCake is **not** a multi-tenant sandbox product (`14-security.md` §6). Isolat
 ## 8. Building a new Dev image (checklist)
 
 1. Start from the harness template's base image (`08-harness-templates.md` §2).
-2. Include: `git`, the harness CLI, `devcake-relay`, the shared entrypoint, an OTel-emitting wrapper.
+2. Include: `git`, the harness CLI, the shared entrypoint (Redis protocol speaker), an OTel-emitting wrapper.
 3. Honor every env var in §3; produce every artifact in §1; exit per §4.
 4. Verify with the M1 hello-world DAG and the contract test battery (`16-roadmap.md`).

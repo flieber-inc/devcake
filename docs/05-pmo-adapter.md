@@ -58,6 +58,9 @@ class PMOPort(Protocol):
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
         # creates the managed set in EVERY namespace the vendor requires
         # (Linear: team issue labels + workspace project labels)
+    async def cancel_mission(self, ref: MissionRef) -> None: ...
+        # terminal cancel/archive — used by decomposition (issue children) and
+        # the merge sweep (PR closed unmerged)
 
     # ── assets ──
     async def upload_attachment(self, pmo_id: str, filename: str,
@@ -89,13 +92,13 @@ class PMOCapabilities(BaseModel):
     relations_supported: bool = False # Linear: True (issue relations; issue-only)
 ```
 
-`/health` and `POST /api/v1/connections/pmo/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.
+`/health` and `POST /api/v1/connections/pmo/{name}/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.
 
 ## 1a. Adapter registry
 
 `app/devcake/adapters/registry.py` is the single place that knows which PMO systems exist and how to construct them. The domain never imports it — `api/main.py` builds adapters here and injects them (`01-architecture.md` §3).
 
-- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `api_key_env_default`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`. The secret fields feed `security.redact` (`14-security.md` §5) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
+- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`. (There is no `api_key_env_default` field — schema v4 stores secret VALUES in the GUI store.) The secret fields feed `security.redact` (`14-security.md` §7) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env names for redaction `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
 - **`make_pmo(inst) -> PMOPort`** constructs one adapter for a single `PMOInstance` (`inst`); the composition root builds **one manager/adapter per** configured entry in `config.pmos` (0..N). An unregistered `inst.system` raises.
 - **`PMOInstance.system` is validated against `PMO_SYSTEMS`** at config-load/PUT time (pydantic field validator), so a typo'd system name is a 422, not a boot crash.
 - **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, default env-var names, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin Config page's selectors and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).

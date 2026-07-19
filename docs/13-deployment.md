@@ -146,8 +146,8 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 - **v2 YAML is snake_case only** (`timeout_sec`, not `timeoutSec` — camelCase keys are rejected with a hint). The step-level `container:` field is the current preferred syntax; `action: docker.run` and the legacy `type: docker` shapes also parse but are not used here.
 - **Timeout ownership:** the app watchdog owns the real kill (`04-orchestrator.md` §5) via Dagu's **stop endpoint** (verified: SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed → run status `aborted`). Dagu gets a belt-and-suspenders DAG-level `timeout_sec` set to *app timeout + 30 min* so it can never fire first — satisfying the mission-doc requirement that Dagu never times out a run prematurely.
 - **Trigger (verified):** `POST /api/v1/dags/dev-run/start` with body
-  `{"params": "{\"RUN_ID\": \"ENG-142-3-EXECUTE-9GX2TQ\", \"IMAGE\": \"devcake/dev-claude-code:latest\", \"TRACEPARENT\": \"<w3c>\", …}", "dagRunId": "ENG-142-3-EXECUTE-9GX2TQ"}` —
-  `params` is a JSON-**encoded string** of named params; the client-chosen `dagRunId` (`^[-a-zA-Z0-9_]+$`, ≤ 64 chars — our human-readable run id fits) makes duplicate triggers return **HTTP 409** `already_exists` (`04-orchestrator.md` §6.3). Auth: `Authorization: Bearer dagu_<api-key>`.
+  `{"params": "{\"RUN_ID\": \"LINEAR-ENG-142-3-EXECUTE-9GX2TQ\", \"IMAGE\": \"devcake/dev-claude-code:latest\", \"TRACEPARENT\": \"<w3c>\", …}", "dagRunId": "LINEAR-ENG-142-3-EXECUTE-9GX2TQ"}` —
+  `params` is a JSON-**encoded string** of named params; the client-chosen `dagRunId` (`^[-a-zA-Z0-9_]+$`, ≤ 64 chars — our human-readable run id fits) makes duplicate triggers return **HTTP 409** `already_exists` (`04-orchestrator.md` §6.3). Auth: **HTTP Basic** with `DAGU_USER` / `DAGU_PASSWORD` (same as `DAGU_AUTH_MODE=basic` above) — not a Bearer API key.
 - **Stop (watchdog kill, verified):** `POST /api/v1/dag-runs/dev-run/{dagRunId}/stop`, empty body, returns 200 immediately (async).
 - **Params are visible unmasked in the Dagu UI and run API** (verified) — therefore params carry only non-secret values (`RUN_ID`, `IMAGE`, `TRACEPARENT`) **plus one deliberate exception**: the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD`), acceptable because the Dagu UI/API is itself authenticated and the credential is revoked at finalization (`09-messaging.md` §1a). All real secrets reach the Dev via the Redis `runspec.get` channel (`14-security.md` §3). Keep params small (they travel as one CLI arg; practical ceiling ~128 KiB).
 - **The single `dev-run` DAG** (`dagu/dags/dev-run.yaml`) — all business logic stays in the app; the DAG is a dumb container launcher. This exact shape (container field, param interpolation into `name`/`env`, network attach, auto-removal, blocking on the entrypoint) was validated and executed on v2.10.5:
@@ -170,7 +170,7 @@ params:
     default: ""
 
 steps:
-  - id: run-dev
+  - id: run_dev
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}
@@ -187,7 +187,7 @@ steps:
         REDIS_PASSWORD: ${params.REDIS_PASSWORD}
 ```
 
-> Notes from the live verification: no `volumes:` are needed (credentials arrive via `runspec.get`, not bind mounts — and bind-mount sources would resolve on the *daemon host*, not inside the Dagu container). The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's `DOCKER_GID` entrypoint mechanism is broken on the 2.10.5 ubuntu image — hence `user: "0:0"` in §2. In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
+> Notes from the live verification: no `volumes:` are needed (credentials arrive via `runspec.get`, not bind mounts — and bind-mount sources would resolve on the *daemon host*, not inside the Dagu container). The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the 2.10.5 ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix creates the docker group so the daemon runs as `dagu:docker` (not root / not `user: "0:0"`). In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
 
 ## 5. Two-level containers and networking
 
@@ -250,7 +250,7 @@ docker buildx bake all
 docker compose up -d          # compose reads DEVCAKE_TAG for app/admin
 ```
 
-Harness images stay at the tag Dagu dispatches (`HARNESSES[…].image` in `app/devcake/harness.py` — still `…:latest` in v0 unless you retag). Production digests are pinned in run specs at dispatch time.
+Harness image tags follow **`DEVCAKE_TAG`** (same as app/admin — default `latest`): `HARNESSES[…].image` in `app/devcake/harness.py` is `devcake/dev-*:${DEVCAKE_TAG}`. Digest pinning at dispatch is **not** implemented; re-bake lockstep with app upgrades and keep `DEVCAKE_TAG` exported for `compose up` so dispatch matches what you baked.
 
 Which Dev image a run uses is `HARNESSES[harness_template].image` (`08-harness-templates.md` §2); `docker_image` is no longer stored config. Since any harness is selectable from the admin panel at any time, **all three `devcake/dev-*` images must be baked locally**.
 

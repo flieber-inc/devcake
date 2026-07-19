@@ -62,13 +62,15 @@ On **Config**:
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
-## Step 2 — Meet the four pages
+## Step 2 — Meet the six pages
 
-- **Overview** — health, advisory **security_warnings**, merge queue, human hand-offs.
-- **Config** — PMO, repos, Dev Types, assignments, limits, adoption / auto-merge.
-  Secrets are VALUES here (never echoed back).
-- **Runs** — live table; click a row for the terminal; open Dagu for the executor.
-- **Logs** — OpenObserve. One Dev run = one trace.
+- **Overview** — health (incl. multi-instance PMO, `internal_forge`/gitea, `poll_degraded`), advisory **security_warnings**, merge queue, human hand-offs.
+- **Missions** — kanban board of the poll snapshot; **Poll now**; card drawer for runs + steering.
+- **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
+- **Repos** — external forge repos + bundled internal Gitea operator repos (not under Config).
+- **Config** — sections: PMO, Dev Types, Skills, Assignments, Prompts, Profiles, Limits, Traffic.
+  Secrets are VALUES here (never echoed back). Connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
+- **Logs** — **Open OpenObserve ↗**. One Dev run = one trace.
 
 ## Step 3 — Log Grok in (one time)
 
@@ -105,7 +107,7 @@ Within ~30 seconds (poll interval), on the issue feed:
 2. Transcript `1_ONBOARD.md` + **token report** (every step posts one).
 3. Label: `DEVCAKE-PLAN`, or `DEVCAKE-EXECUTE` (plan attached — trivial or
    opportunistic; ONBOARD never implements).
-4. Cycle continues: plan → branch `devcake/<KEY>` → PR → `DEVCAKE-REVIEW`.
+4. Cycle continues: plan → branch `devcake/<INSTANCE>-<KEY>` (e.g. `devcake/LINEAR-DEV-1`) → PR → `DEVCAKE-REVIEW`.
 5. On approval (with auto-merge **off**): **`DEVCAKE-MERGE`** — you merge:
    ```
    gh pr review --approve <url> && gh pr merge --squash <url>

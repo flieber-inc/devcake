@@ -16,7 +16,7 @@
 | `DEV_MCP_SETUP` | exit 14: an `mcp_setup_commands` entry failed or hit the 300 s per-command cap; `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | exit 124 / watchdog kill | counted attempt |
 | `DEV_AUTH` | exit 12 — harness credential wording per the §4 marker contract | circuit breaker (§4) — **not** a counted attempt |
-| `DEV_FORGE_AUTH` | exit 13 with GitHub/GitLab auth/permission evidence | global forge circuit breaker; no run dispatch until the configured token can push |
+| `DEV_FORGE_AUTH` | exit 13 with forge auth/permission evidence | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
@@ -37,7 +37,7 @@
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
 | `DEV_AUTH` | no — pointless until creds fixed | **no** | — | circuit breaker (§4) + health strip |
-| `DEV_FORGE_AUTH` | no — pointless until repository access is fixed | **no** | — | global forge breaker + actionable connection-test error |
+| `DEV_FORGE_AUTH` | no — pointless until repository access is fixed | **no** | — | per-repo forge breaker + actionable connection-test error |
 | `LABEL_CONFLICT` | n/a — skipped until resolved | no | — | one PMO comment (deduped via local state) asking a human to fix; metric |
 | `EXTERNAL_TRANSITION` | n/a | no | — | explanatory PMO comment; run's artifacts already posted |
 
@@ -78,7 +78,7 @@ Exit 12 trips a **per-Dev-Type breaker**: all scheduling for that Dev Type pause
 
 **Harness-auth marker contract** (the Dev entrypoint's `classify_harness_failure`, mirrored by `test_entrypoint_classify.py`): a nonzero harness exit maps to 12 only when the stderr tail carries credential wording — `authentication`, `unauthorized`, `log in`, plus the grok CLI's revoked-session phrases `not signed in`, `please sign in`, `signed out`, `grok login`. Markers are **precise phrases by design**: a false 12 pauses the entire Dev Type until a human re-uploads credentials, while a false 10 merely burns one attempt — when extending the list, err toward 10. (Bare `login`/`sign in` are deliberately absent.)
 
-Exit 13 trips the **global forge breaker** only when the Dev's clone-failure classification is the structured `DEV_FORGE_AUTH` class, which itself requires git's credential wording ("returned error: 403/401", "Authentication failed", "could not read Username", …) — a bare "403" in stderr (rate limit, URL fragment) never halts dispatch. Probes latch the breaker only on **definitive** credential/permission failures (HTTP 401/403/404; a GitHub rate-limit 403 is exempt): 5xx/network/probe errors are marked *transient* and neither latch nor clear it. While the breaker is latched, the poll loop re-probes every cycle — a false latch or a restored token self-heals within one poll interval, while a genuinely revoked token stays latched (and alerted) until fixed. Startup and the Forge connection test run the same probe and require push permission, so a private repository omitted from a fine-grained PAT is rejected before another Dev starts.
+Exit 13 trips a **per-repo forge breaker** (`repo:{name}` in `circuit_breakers`) only when the Dev's clone-failure classification is the structured `DEV_FORGE_AUTH` class, which itself requires git's credential wording ("returned error: 403/401", "Authentication failed", "could not read Username", …) — a bare "403" in stderr (rate limit, URL fragment) never halts dispatch. A latched breaker on repo A never stops missions on repo B. Probes latch the breaker only on **definitive** credential/permission failures (HTTP 401/403/404; a GitHub rate-limit 403 is exempt): 5xx/network/probe errors are marked *transient* and neither latch nor clear it. While the breaker is latched, the poll loop re-probes every cycle — a false latch or a restored token self-heals within one poll interval, while a genuinely revoked token stays latched (and alerted) until fixed. Startup and the Forge connection test run the same probe and require push permission, so a private repository omitted from a fine-grained PAT is rejected before another Dev starts on that repo.
 
 ## 5. Poison messages
 

@@ -19,8 +19,8 @@ observability gap.
 
 - The **app** exports OTLP HTTP directly to OpenObserve; **Dev entrypoints export to the inserted `otel-collector`** (`http://otel-collector:4318/v1/traces` on `devcake_runtime`, M8/ISSUES #13), **unauthenticated** — the collector alone holds the OO credentials and forwards to `http://openobserve:5080/api/{org}/v1/traces` (`otel/collector-config.yaml`). Devs carry no OO credentials at all; there is no `OTEL_EXPORTER_OTLP_BASIC` anywhere. The app deliberately does NOT route through the collector (a sick collector must never blind the control plane). **Residual (dedicated-host posture):** a Dev can forge or flood spans on this host — OO alerts are **ops** signals, not a security boundary (`14-security.md` §10).
 - App auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance), derived from the `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD` service account (`telemetry/__init__.py`); root creds are used only for admin ops (stream deletion `api/clear.py`, `scripts/provision_oo.py` — which also creates the ingest user, role `service_account`).
-- Container **stdout** of every compose service (incl. `dagu`, `redis`) is also shipped to OpenObserve (fluent-forward or filelog shipper, `13-deployment.md` §7) so non-instrumented services remain searchable.
-- `service.name`: `devcake-app`, `devcake-admin`, `devcake-dev` (Dev entrypoints; the run's `dev_type` is an attribute, not the service name).
+- Container **stdout** of compose services that use the fluentd logging driver (incl. `dagu`, `redis`, **`gitea`**, and others wired in `docker-compose.yml`) is shipped to OpenObserve via fluent-bit (`13-deployment.md` §7) so non-instrumented services remain searchable.
+- `service.name`: the app OTLP resource is **`devcake-app`** only (`telemetry/__init__.py`). There is no `devcake-admin` service name in OTel (admin is nginx + static SPA). Dev entrypoints emit as their own process resource; the run's `dev_type` is an attribute, not the service name.
 
 ## 2. Span taxonomy (normative)
 
@@ -122,7 +122,7 @@ reconciliation-orphaned) ships one JSON record to the OO log stream
 | `outcome` | `failed` / `timed_out` / `orphaned` |
 | `reason` | the watchdog's kill reason |
 | `trace_id` | from the run's traceparent — joins with the trace in OO |
-| `detail` | Dagu step errors + stderr tail, **redacted** (`14-security.md` §5) |
+| `detail` | Dagu step errors + stderr tail, **redacted** (`14-security.md` §7) |
 
 Shipping is best-effort (`push_oo_log` never raises): losing a log record must
 not break the kill path. Dev-reported failures (`outcome: failure` in

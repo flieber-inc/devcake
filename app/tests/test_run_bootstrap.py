@@ -144,6 +144,27 @@ def test_launch_makes_run_retrievable_and_active():
     assert any(r.run_id == run.run_id for r in store.active())
 
 
+def test_launch_serializes_on_dispatch_lock():
+    """Re-audit #0/#6: clear-runs holds bootstrap.dispatch_lock across its wipe
+    so NO dispatch flavor (poll/oauth/mapper/hello) can create an ACL user or
+    start a container mid-wipe. Prove launch actually blocks on the lock."""
+    async def scenario():
+        store = InMemoryStore()
+        messaging = FakeMessaging()
+        bootstrap = RunBootstrap(store, messaging, FakeExecutor(store))
+        await bootstrap.dispatch_lock.acquire()        # clear-runs holds it
+        task = asyncio.ensure_future(
+            bootstrap.launch(_hello_run(), image="devcake/dev-hello:latest"))
+        await asyncio.sleep(0)                          # let launch try to run
+        # blocked: no ACL user created, no executor start, nothing persisted
+        assert not hasattr(messaging, "last_run_id")
+        assert store.all() == []
+        bootstrap.dispatch_lock.release()              # wipe done
+        await task
+        assert len(store.all()) == 1                    # now it proceeds
+    asyncio.new_event_loop().run_until_complete(scenario())
+
+
 def test_dispatch_hello_uses_bootstrap_spine():
     """Hello path (docs/04 §3.1): fields are hello-specific; spine is shared."""
     from devcake.domain.runs import HELLO_IMAGE, RunManager

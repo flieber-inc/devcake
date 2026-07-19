@@ -462,14 +462,19 @@ async def clear_runs():
     """
     from .clear import clear_all
     with tracer.start_as_current_span("system.clear_runs") as span:
-        # Hold the poll lock across the ENTIRE wipe (audit D5 #2/#8): the poll
-        # loop is the only dispatcher, and it acquires this same lock — so a
-        # cycle cannot dispatch a fresh run mid-drain/mid-wipe. Without this,
-        # a mission whose run we just killed (and whose stage label survives)
-        # is redispatched during the drain, its record then deleted while its
-        # container is live, and clear_redis's ACL sweep races that container's
-        # SIGTERM grace — the exact root cause D3 was meant to close.
-        async with poll_rt.lock:
+        # Serialize the wipe against EVERY dispatch path (audit D5 #2/#8 +
+        # re-audit #0/#6). Two locks, acquired in a fixed order:
+        #   • poll_rt.lock stops the periodic poll cycle (and force-poll) —
+        #     the poll loop takes it at cycle start, so no cycle runs.
+        #   • bootstrap.dispatch_lock is the true chokepoint: EVERY dispatch
+        #     flavor (poll, oauth, mapper "run now", hello) creates its ACL
+        #     user + container inside RunBootstrap.launch under this lock.
+        #     poll_rt.lock alone missed the three non-poll paths, so the
+        #     ACL/SIGTERM race D3 targeted was still reachable — this closes it.
+        # Order poll_rt.lock → dispatch_lock matches the poll loop's own order
+        # (run_cycle holds poll_rt.lock, then launch takes dispatch_lock), so
+        # there is no lock-ordering inversion / deadlock.
+        async with poll_rt.lock, manager.bootstrap.dispatch_lock:
             result = await clear_all(store, executor, messaging, runlog,
                                      internal_forge=internal_forge,
                                      run_manager=manager)

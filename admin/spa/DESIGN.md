@@ -69,9 +69,9 @@ the route to exactly ONE section component. Every section is a component in
 `src/components/`: `PmoSection`, `DevTypesSection`, `SkillsSection`,
 `AssignmentsSection`, `PromptsSection`, `ProfilesSection`, `LimitsSection`,
 `TrafficSection`. Most sections pull the shared draft themselves via
-`useSharedDraft()` (ConfigDraftContext); the two oldest (`PromptsSection`,
-`ProfilesSection`) still take `cfg`/`setField` as props from the dispatcher —
-either wiring is acceptable, but new sections use `useSharedDraft()`. A section
+`useSharedDraft()` (ConfigDraftContext); `PromptsSection` is the exception —
+it takes `cfg`/`setField`/`devTypeNames` as props from the dispatcher. Either
+wiring is acceptable, but new sections use `useSharedDraft()`. A section
 owns its section-local state and dialogs (its own `ConfirmDialog`, wizards,
 etc. — closed dialogs render null, so this stays invisible in the DOM);
 anything cross-page (the draft itself, Save/DirtyBar/NavGuard in `DraftChrome`)

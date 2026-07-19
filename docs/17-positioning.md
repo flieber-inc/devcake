@@ -2,7 +2,8 @@
 
 > **Audience:** anyone writing outward-facing words about this project — README,
 > website, pitch, launch post. The README is the applied version of this doc.
-> **Status:** adopted at v0 close; **aligned with the product security contract**
+> **Status:** adopted at v0 close; motto and fit criteria revised 2026-07-18
+> (pre-v0.2) — §1, §1b. **Aligned with the product security contract**
 > in [`14-security.md`](14-security.md). Outward copy must not claim a stronger
 > posture than `14`. The product name is **provisional** (§6).
 
@@ -14,13 +15,15 @@ control surface is the task board you already run. You manage AI developers
 exactly the way you manage human ones: write a ticket, get work back on a pull
 request, approve it or send it back with notes.
 
-**Motto: "You never operate it."**  
-(Long form: *You never operate it. You write a ticket; finished work comes back
-on a PR — with a receipt.*)
+**Motto: "Your board is the interface."**  
+(Long form: *Your board is the interface. Tickets dispatch work; labels steer
+it; finished work comes back on a PR — with a receipt.*)
 
-“Never operate it” means **no day-to-day chat babysitting** — not “no trust
-decisions.” You still choose who can write tickets, protect the default branch,
-and whether auto-merge is on. Those are operator duties (`14` §9).
+There is no second place of work — and no pretense that the work runs itself.
+You self-host it, you decide who writes tickets, you protect the default
+branch, and you hold the merge button. That ownership is the deal, stated
+plainly: it is *why* the output can be trusted, not fine print to walk back
+(`14` §9; recurring duties in [`18-operator-contract.md`](18-operator-contract.md)).
 
 The second pillar is **autonomy with receipts.** Every step posts its transcript
 and token bill to the ticket; dispatches, kills, sweeps, and PMO writes are
@@ -48,10 +51,37 @@ Forbidden overclaims:
 - “Independent review by default” as a hard product guarantee.
 - Implying sandboxed multi-customer isolation.
 
+### 1b. When to use it — and when not (normative for all outward copy)
+
+Fit is part of the pitch. Every outward description of the product should make
+both lists recognizable within the first minute.
+
+**Use DevCake when:**
+
+- Your team already runs real work through a task board (Linear in-tree today)
+  and the board has discipline: tickets are written to be picked up, and
+  labels mean things.
+- One adult operator can own a dedicated machine and the trust envelope that
+  comes with it — team membership, branch protection, credentials, backups
+  ([`18-operator-contract.md`](18-operator-contract.md)).
+- You want **delegation with receipts** — transcripts, token bills, traces —
+  more than a chat copilot at your elbow.
+
+**Don't use DevCake when:**
+
+- You want a hosted, zero-ops service. There isn't one; self-hosting on your
+  own box *is* the trust model (`14` §2).
+- There is no board discipline to inherit. DevCake amplifies the board you
+  run; it cannot invent one for you.
+- You need multi-tenant isolation, or agents that stay safe under malicious
+  ticket writers — ticket writers are inside the trust boundary (`14` §3).
+- You want pair programming in an editor. This is delegation, not
+  companionship.
+
 ## 2. The pitches
 
 **The hero line (10 words):**
-> You never operate it. Your task board just gets done.
+> Your board is the interface. Tickets in, pull requests out.
 
 **One-liner (for "what is this repo?"):**
 > DevCake staffs your task board with AI developers whose work arrives on a
@@ -71,9 +101,9 @@ Forbidden overclaims:
 > looks at the work skeptically before you merge. What comes back is a pull
 > request plus a receipt for every step and what it cost. It runs on a machine
 > you control, with your own AI subscriptions. Nothing reaches main without
-> your green light unless you turn on auto-merge and accept that path. You
-> don't babysit a chat UI. You run your board — and you still own branch
-> protection and who can write tickets.
+> your green light unless you turn on auto-merge and accept that path. Your
+> board is the interface — no chat UI to babysit. And you own the shop:
+> branch protection, who can write tickets, and the merge button.
 
 **The kitchen-table version (zero tech vocabulary):**
 > It's a robot work crew for my to-do list. I write down what I want in plain
@@ -101,10 +131,10 @@ Forbidden overclaims:
 
 | | |
 |---|---|
-| **Roof (motto)** | *You never operate it.* (no chat babysitting — not “no trust work”) |
-| **Pillar 1 — No new interface** | Your task board is the product. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. |
+| **Roof (motto)** | *Your board is the interface.* (no new place of work — and you own the trust envelope) |
+| **Pillar 1 — No new place of work** | Your task board is the product. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. |
 | **Pillar 2 — Autonomy with receipts** | Every step posts transcript + token bill. Traced and audited. Independent AI review is **recommended config** (warned if violated). “Done” never lies about merge. |
-| **Pillar 3 — Your models, your box** | Self-hosted on a **dedicated** machine. Mix Claude/Grok/Codex per role. Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
+| **Pillar 3 — Your box, your rules** | Self-hosted on a **dedicated** machine; you own the trust envelope — team membership, branch protection, the merge button, backups (`18`). Mix Claude/Grok/Codex per role. Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
 | **Foundation** | Verified, not vibed: acceptance path tickets → PRs, GitHub and GitLab, invariant tests, redaction of app-mediated posts. Security contract in `14`. |
 
 ## 4. Tone guide

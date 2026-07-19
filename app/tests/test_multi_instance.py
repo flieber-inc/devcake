@@ -113,7 +113,7 @@ def test_shared_mission_claimed_once_with_anomaly(tmp_path, monkeypatch):
     # api.main has import-time singletons (config load, adapters) — point its
     # data dir at tmp so the first import in this process is hermetic
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    from devcake.api.main import _claim_missions
+    from devcake.api.poll import _claim_missions
     a, b = _mgr("linteama"), _mgr("linteamb")
     shared = _mission("proj-uuid-1", "PRJ-shared", "linteama")
     only_b = _mission("issue-uuid-2", "DEV-9", "linteamb")
@@ -163,12 +163,33 @@ def test_dispatch_stamps_the_dispatching_instances_pmo_ref():
     assert "pmo_ref=mgr.instance_name" in src
 
 
-def test_ownership_survives_a_transient_cycle(tmp_path, monkeypatch):
+def _rt(tmp_path, managers=None, store=None, order=None):
+    """A PollRuntime over fakes (ADR-0015 C4: the poll machinery's test seam
+    is the runtime object itself, not monkeypatched module globals)."""
+    from types import SimpleNamespace
+
+    from devcake.adapters.files.owner_store import OwnerStore
+    from devcake.api.poll import PollRuntime
+    from devcake.config import AppConfig
+
+    managers = managers if managers is not None else {}
+
+    async def _noop():
+        return {}
+
+    return PollRuntime(
+        config=AppConfig(), managers=managers, mappers={},
+        store=store if store is not None else SimpleNamespace(active=lambda: []),
+        forge_runtime=SimpleNamespace(breakers={}),
+        refresh_forge_health=_noop,
+        managers_in_config_order=(order or (lambda: list(managers.values()))),
+        owner_store=OwnerStore(tmp_path / "state" / "mission_owner.json"))
+
+
+def test_ownership_survives_a_transient_cycle(tmp_path):
     """Review finding: ownership of a shared mission must NOT flip to the
     second instance just because the owner had one PMOTransient cycle."""
-    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    from devcake.api.main import _claim_missions, _release_stale_ownership
-    from devcake.api import main as app_main
+    from devcake.api.poll import _claim_missions
     a, b = _mgr("linteama"), _mgr("linteamb")
     owner: dict[str, str] = {"proj-1": "linteama"}   # A claimed earlier
     # A's cycle fails (PMOTransient) → A contributes nothing to polled_ok;
@@ -176,11 +197,11 @@ def test_ownership_survives_a_transient_cycle(tmp_path, monkeypatch):
     got_b = _claim_missions(b, [_mission("proj-1", "PRJ-s", "linteamb")], owner)
     assert got_b == [] and owner["proj-1"] == "linteama"
     # release only when the OWNER successfully polls without the mission
-    monkeypatch.setattr(app_main, "managers", {"linteama": a, "linteamb": b})
-    monkeypatch.setattr(app_main, "_mission_owner", owner)
-    app_main._release_stale_ownership({"linteamb": {"proj-1"}})   # B ok, A failed
-    assert owner.get("proj-1") == "linteama"                      # kept
-    app_main._release_stale_ownership({"linteama": set()})        # A ok, gone
+    rt = _rt(tmp_path, managers={"linteama": a, "linteamb": b})
+    rt.mission_owner = owner
+    rt.release_stale_ownership({"linteamb": {"proj-1"}})   # B ok, A failed
+    assert owner.get("proj-1") == "linteama"               # kept
+    rt.release_stale_ownership({"linteama": set()})        # A ok, gone
     assert "proj-1" not in owner
 
 
@@ -198,25 +219,21 @@ def test_owner_store_roundtrip_and_corrupt_file(tmp_path):
     assert OwnerStore(path).load() == {}                       # never wedges boot
 
 
-def test_poll_cycle_persists_ownership_changes(tmp_path, monkeypatch):
+def test_poll_cycle_persists_ownership_changes(tmp_path):
     from devcake.adapters.files.owner_store import OwnerStore
-    from devcake.api import main as app_main
+    from devcake.api.poll import _claim_missions
     a = _mgr("linteama")
-    store_path = tmp_path / "state" / "mission_owner.json"
-    monkeypatch.setattr(app_main, "_owner_store", OwnerStore(store_path))
-    monkeypatch.setattr(app_main, "_mission_owner", {})
-    monkeypatch.setattr(app_main, "managers", {"linteama": a})
-    monkeypatch.setattr(app_main, "_managers_in_config_order", lambda: [a])
-    monkeypatch.setattr(app_main, "missions_cache", [])
+    rt = _rt(tmp_path, managers={"linteama": a})
 
     async def claiming_poll(mgr, cache_rows):
-        got = app_main._claim_missions(
+        got = _claim_missions(
             mgr, [_mission("proj-9", "PRJ-9", mgr.instance_name)],
-            app_main._mission_owner)
+            rt.mission_owner)
         return (len(got), 0, 0, {"proj-9"})
 
-    monkeypatch.setattr(app_main, "_poll_instance", claiming_poll)
-    run_coro(app_main.run_poll_cycle(1))
+    rt.poll_instance = claiming_poll   # instance-attr override, like fakes._audit
+    run_coro(rt.run_cycle(1))
+    store_path = tmp_path / "state" / "mission_owner.json"
     assert OwnerStore(store_path).load() == {"proj-9": "linteama"}
 
 
@@ -224,8 +241,6 @@ def test_release_deferred_while_ex_owner_run_still_active(tmp_path, monkeypatch)
     """Audit A15: releasing a shared mission the moment its owner no longer
     sees it (or left config) lets the surviving instance re-dispatch while
     the ex-owner's run is still executing — duplicate work."""
-    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    from devcake.api import main as app_main
     a, b = _mgr("linteama"), _mgr("linteamb")
 
     class FakeStore:
@@ -240,15 +255,15 @@ def test_release_deferred_while_ex_owner_run_still_active(tmp_path, monkeypatch)
                pmo_ref="linteama", state="running")
     live.mission_pmo_id = "proj-1"
     owner = {"proj-1": "linteama"}
-    monkeypatch.setattr(app_main, "managers", {"linteama": a, "linteamb": b})
-    monkeypatch.setattr(app_main, "_mission_owner", owner)
-    monkeypatch.setattr(app_main, "store", FakeStore([live]))
+    rt = _rt(tmp_path, managers={"linteama": a, "linteamb": b},
+             store=FakeStore([live]))
+    rt.mission_owner = owner
     # owner polled green and no longer sees the mission — but its run lives
-    app_main._release_stale_ownership({"linteama": set()})
+    rt.release_stale_ownership({"linteama": set()})
     assert owner == {"proj-1": "linteama"}
     # run finished → release proceeds
-    monkeypatch.setattr(app_main, "store", FakeStore([]))
-    app_main._release_stale_ownership({"linteama": set()})
+    rt.store = FakeStore([])
+    rt.release_stale_ownership({"linteama": set()})
     assert owner == {}
 
 
@@ -257,14 +272,11 @@ def test_permanent_pmo_error_starves_no_other_instance(tmp_path, monkeypatch):
     PMOTransient) on instance A must skip only A's segment — B still polls,
     A's cache rows are retained, and /health surfaces the degradation. A
     green segment clears the degraded flag."""
-    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
-    from devcake.api import main as app_main
     a, b = _mgr("linteama"), _mgr("linteamb")
-    monkeypatch.setattr(app_main, "managers", {"linteama": a, "linteamb": b})
-    monkeypatch.setattr(app_main, "_managers_in_config_order", lambda: [a, b])
+    rt = _rt(tmp_path, managers={"linteama": a, "linteamb": b},
+             order=lambda: [a, b])
     stale_row = {"instance": "linteama", "key": "T-9"}
-    monkeypatch.setattr(app_main, "missions_cache", [stale_row])
-    app_main._poll_degraded.clear()
+    rt.missions_cache[:] = [stale_row]
 
     polled: list[str] = []
 
@@ -275,20 +287,20 @@ def test_permanent_pmo_error_starves_no_other_instance(tmp_path, monkeypatch):
         cache_rows.append({"instance": mgr.instance_name, "key": "T-1"})
         return (1, 0, 0, set())
 
-    monkeypatch.setattr(app_main, "_poll_instance", broken_poll)
-    run_coro(app_main.run_poll_cycle(1))
+    rt.poll_instance = broken_poll
+    run_coro(rt.run_cycle(1))
     assert polled == ["linteamb"]                     # B was never starved
-    assert "RuntimeError" in app_main._poll_degraded["linteama"]
+    assert "RuntimeError" in rt.poll_degraded["linteama"]
     # A keeps its last snapshot (v0 behavior extended to permanent errors)
-    assert stale_row in app_main.missions_cache
+    assert stale_row in rt.missions_cache
 
     async def ok_poll(mgr, cache_rows):
         polled.append(mgr.instance_name)
         return (0, 0, 0, set())
 
-    monkeypatch.setattr(app_main, "_poll_instance", ok_poll)
-    run_coro(app_main.run_poll_cycle(2))
-    assert app_main._poll_degraded == {}              # green cycle clears it
+    rt.poll_instance = ok_poll
+    run_coro(rt.run_cycle(2))
+    assert rt.poll_degraded == {}                     # green cycle clears it
 
 
 def test_dispatch_gates_on_pmo_read_failure(tmp_path):

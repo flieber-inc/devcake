@@ -52,9 +52,14 @@ as forwards with **unchanged coroutine names and signatures** — tests call
 them directly (`app_main.save_profile(...)`), so the forward layer is the
 API's stable test seam. No `APIRouter`: it would be a second routing idiom for
 zero behavior. Every `@app.<verb>` body is ≤ 4 statements, AST-guarded with an
-allowlist that shrinks per PR and ends at `{"dispatch_hello"}` (the CI
-fixture). Poll machinery lives in `api/poll.py` as `PollRuntime`; health
-probes in `api/health.py`.
+allowlist that may only shrink, never grow. At C6 close-out it holds nine
+read-side residuals — `dispatch_hello` (CI fixture), the `run_mapper`/`oauth`
+trio, and the small `runs`/`log`/`clear-runs` endpoints whose bodies are
+inherently a few statements (`list_runs`, `get_run`, `get_run_log`,
+`stream_run_log`, `clear_runs`) — not the single-entry end state an earlier
+draft imagined; the guard test (`test_structure_guards.py`) is the source of
+truth. Poll machinery lives in `api/poll.py` as `PollRuntime`; health probes
+in `api/health.py`.
 
 ## Decision 4 — module-public functions are the sanctioned test seam
 

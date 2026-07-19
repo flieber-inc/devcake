@@ -398,13 +398,17 @@ def test_config_put_survives_secret_cleanup_failure(tmp_path, monkeypatch):
     an already-applied change."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     from devcake.api import main as app_main
+    from devcake.api import config_service
     from devcake.config import RepoInstance
 
     def boom(scope, name):
         raise RuntimeError("disk error")
 
     monkeypatch.setattr(app_main, "reload_connections", lambda: None)
-    monkeypatch.setattr(app_main, "save_config", lambda c: None)
+    # save_config is called by config_service after the C5 split — patch it
+    # THERE, not on app_main (audit D5 #3: the app_main patch is dead, so the
+    # PUT persisted repos:[] to the real config path).
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
     monkeypatch.setattr(app_main.secrets_store, "delete_connection_instance", boom)
     original_repos = app_main.config.repos
     app_main.config.repos = [RepoInstance(name="gone",

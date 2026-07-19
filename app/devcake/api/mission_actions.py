@@ -244,16 +244,31 @@ async def stop_all_runs(
     kill every dispatched/running run. Finalizing runs are SKIPPED, not 409'd —
     their containers already exited and the watchdog's never-kill-finalizing
     rule applies (see stop_run above); they surface in the response so the
-    operator knows what is still completing on its own."""
+    operator knows what is still completing on its own.
+
+    Each run's state is RE-FETCHED immediately before the kill (audit D5 #6):
+    the ingress consumer runs concurrently, so a run in the initial snapshot
+    may have flipped to `finalizing` while an earlier kill was awaiting — the
+    stale snapshot object would still read `running` and we'd kill a run whose
+    container already exited. Each kill is isolated (audit D5 #9): one failure
+    (e.g. an OSError from a full/read-only /data during store.save) records an
+    error and moves on rather than aborting the batch and losing accounting."""
     stopped: list[str] = []
     skipped: list[str] = []
-    for run in run_store.active():
-        if getattr(run, "state", None) == "finalizing":
-            skipped.append(run.run_id)
+    errors: list[dict[str, str]] = []
+    for snap in run_store.active():
+        run = run_store.get(snap.run_id) or snap        # re-read current state
+        if getattr(run, "state", None) not in ("dispatched", "running"):
+            skipped.append(run.run_id)                  # finalizing/terminal
             continue
-        await run_manager.kill(run, "failed", "stopped by operator (stop all)")
-        stopped.append(run.run_id)
-    return {"ok": True, "stopped": stopped, "skipped_finalizing": skipped}
+        try:
+            await run_manager.kill(run, "failed", "stopped by operator (stop all)")
+            stopped.append(run.run_id)
+        except Exception as e:  # noqa: BLE001 — one kill failure must not abort the batch or lose accounting; recorded per-run
+            log.exception("stop_all_runs: kill failed for %s", run.run_id)
+            errors.append({"run_id": run.run_id, "error": str(e)[:200]})
+    return {"ok": not errors, "stopped": stopped,
+            "skipped_finalizing": skipped, "errors": errors}
 
 
 # ── 5) force-poll endpoint ──────────────────────────────────────────────────

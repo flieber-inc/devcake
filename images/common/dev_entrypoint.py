@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re as _re
 import shlex
 import shutil
 import subprocess
@@ -201,23 +202,28 @@ def clone_error_class(stderr: str) -> str:
     return "DEV_FORGE_AUTH" if any(m in lowered for m in auth_markers) else "DEV_FORGE"
 
 
-HARNESS_AUTH_MARKERS = (
+# Word-boundary regexes, NOT substrings (audit D5 #4): plain `"signed out" in
+# text` matches "de|signed out|put" / "as|signed out|side", and `"log in"`
+# matches "back|log in|spection" — a false 12 pauses the whole Dev Type until a
+# human re-uploads credentials, so the asymmetry says: never over-match.
+HARNESS_AUTH_MARKERS = tuple(_re.compile(r"\b" + p + r"\b") for p in (
     # generic credential wording (any harness)
     "authentication", "unauthorized", "log in",
-    # grok CLI revoked/expired-session wording — without these a revoked grok
-    # cred exits 10 (DEV_CRASH, three burned attempts) instead of 12 (DEV_AUTH
-    # breaker trip)
-    "not signed in", "please sign in", "signed out", "grok login",
-)
+    # grok CLI revoked/expired-session wording — the two DISTINCTIVE phrases
+    # (audit D5 #5): "signed out"/"please sign in" are dropped because generic
+    # SSO/proxy stderr uses them and would false-trip a breaker. Without these
+    # two a revoked grok cred exits 10 (three burned attempts) not 12.
+    "not signed in", r"grok login",
+))
 
 
 def classify_harness_failure(err_text: str) -> int:
     """Exit code for a nonzero harness exit: 12 (DEV_AUTH) only on credential
-    wording, else 10 (DEV_CRASH). Markers are precise phrases on purpose — a
-    false 12 pauses the whole Dev Type until a human re-uploads credentials;
-    a false 10 merely burns one attempt (docs/15 §4)."""
+    wording, else 10 (DEV_CRASH). Markers are word-boundary-anchored on
+    purpose (see above): a false 12 pauses the whole Dev Type, a false 10
+    merely burns one attempt (docs/15 §4)."""
     lowered = err_text.lower()
-    return 12 if any(m in lowered for m in HARNESS_AUTH_MARKERS) else 10
+    return 12 if any(rx.search(lowered) for rx in HARNESS_AUTH_MARKERS) else 10
 
 
 # ── live output relay (docs/08 §4, docs/09 §2) ──────────────────────────────

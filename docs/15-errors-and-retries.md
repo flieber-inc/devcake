@@ -120,7 +120,13 @@ keeps that deliberate without becoming sloppy:
   record* (fall back to a default and record it — bundled skill copy, warnings
   list, quarantine).
 - **Never sanctioned:** a blanket catch whose handler neither logs, records,
-  falls back visibly, nor re-raises. There are none in the tree; the lint keeps
-  it that way.
+  falls back visibly, nor re-raises. None remain under the linted scope, and
+  the lint keeps it that way.
+- **Scope (be honest about it):** the gate runs `ruff check devcake tests`
+  (`scripts/ci_suite.sh`, `.github/workflows/ci.yml`) — it covers `app/devcake`
+  and the test tree. `images/common/dev_entrypoint.py` runs INSIDE every Dev
+  container and is **not** under this gate; its blanket handlers follow the
+  same contracts by convention but are not lint-enforced (a standing follow-up
+  is to extend the gate to `images/`).
 - Test code is exempt (`tests/*` per-file ignore) — tests legitimately catch
   broadly.

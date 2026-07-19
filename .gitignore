@@ -26,3 +26,6 @@ dagu/dags/.dag.index
 
 # BuildKit local bake cache (docker-bake.hcl BAKE_CACHE_DIR)
 .buildx-cache/
+
+# Gitea credential-bearing backup tarballs (scripts/backup_gitea.sh) — never commit
+devcake-gitea-*.tar.gz

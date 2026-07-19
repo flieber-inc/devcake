@@ -86,6 +86,23 @@ def test_serialize_apply_roundtrip_onto_fresh_deployment(monkeypatch, tmp_path):
     assert (dst / "secrets" / "connections" / "pmo-linear.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_serialize_excludes_orphan_connection_secrets(monkeypatch, tmp_path):
+    """Audit D5 #15/#16: a stored secret for an instance NOT in the config
+    (deleted card, secret lingered) must not ride the snapshot — else it shows
+    'replaced' in the apply preview but is dropped by apply, and flags the
+    profile permanently diverged."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    # an orphan: 'bare' is in neither cfg.pmos nor cfg.repos
+    secrets.write_connection_secret("repo", "bare", "token", "ghp_orphan_9999")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    conns = bundle["secrets"]["connections"]
+    assert "repo-bare" not in conns                 # orphan excluded
+    assert "pmo-linear" in conns and "repo-main" in conns   # live ones kept
+    # the live orphan on disk is untouched
+    assert secrets.read_connection_secret("repo", "bare", "token") == "ghp_orphan_9999"
+
+
 def test_apply_is_replace_the_world_and_spares_the_exclusions(monkeypatch, tmp_path):
     sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
     cfg, dts = _world(config_mod, secrets, tpl)

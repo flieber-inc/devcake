@@ -51,8 +51,15 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
     import time as _time
 
     stopped: list[str] = []
-    for run in store.active():
-        if run.state == "finalizing":
+    for snap in store.active():
+        # re-read current state (audit D5 #7): the ingress consumer runs
+        # concurrently, so a run may have flipped to finalizing while an
+        # earlier kill was awaiting — killing it then would revert its
+        # mission status against the live finalize. Skip anything no longer
+        # dispatched/running. (The caller also holds the poll lock, so no
+        # NEW run is dispatched during the drain — audit D5 #2/#8.)
+        run = store.get(snap.run_id) or snap
+        if run.state not in ("dispatched", "running"):
             continue
         try:
             await run_manager.kill(run, "failed", "operator clear-runs")

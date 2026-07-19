@@ -113,7 +113,7 @@ async def finalize_mapper(mgr, run: Run, payload: dict) -> None:
 
 async def apply_mapper_edges(mgr, edges: list) -> tuple[int, int]:
     """The Dev is advisory; the app is the gatekeeper — drop edges that are
-    unknown, mgr, terminal, duplicate, or cycle-forming (ADR-0007)."""
+    unknown, self-referential, terminal, duplicate, or cycle-forming (ADR-0007)."""
     missions = await mgr.pmo.list_all(mgr.instance.team_key)
     by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
     graph = {m.pmo_id: set(m.blocked_by) for m in missions
@@ -127,7 +127,7 @@ async def apply_mapper_edges(mgr, edges: list) -> tuple[int, int]:
         if blocker is None or blocked is None:
             reason = "unknown mission key"
         elif blocker.pmo_id == blocked.pmo_id:
-            reason = "mgr-edge"
+            reason = "self-edge"
         elif blocker.status in ("done", "canceled") \
                 or blocked.status in ("done", "canceled"):
             reason = "terminal mission"

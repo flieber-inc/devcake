@@ -176,11 +176,14 @@ A prominent **"Open Dagu ↗"** button (new tab, URL from `DAGU_UI_URL`) and a *
 
 **Clear runs** opens a React confirmation dialog (never `window.confirm`) and on confirm calls `POST /api/v1/system/clear-runs`. That endpoint:
 
+The whole wipe runs while holding the poll lock, so no new run is dispatched mid-wipe (hardening 2026-07-19).
+
 1. Stops every dispatched/running Dev via the run manager and **waits for the containers to actually exit** (drain capped just past Dagu's 30 s SIGTERM grace — hardening 2026-07-19: the ACL sweep in step 6 used to race a stopping Dev's grace window, killing it with `AuthenticationError` mid-teardown). Undrained stragglers are reported in the response.
 2. Deletes every local Run file under `/data/state/runs/` (including quarantined records), every run log under `/data/state/runlogs/` (open SSE followers get the end sentinel), and truncates `events.jsonl` (attempt counters and give-up watermarks reset — INV-1 / `10-persistence.md` §5).
 3. Deletes every Dagu `dev-run` history record (`DELETE /dag-runs/dev-run/{id}`, paginated list).
 4. Deletes OpenObserve log/trace streams (they recreate on next ingest; dashboards stay).
 5. Trims the Redis ingress stream, drops leftover reply streams and per-run ACL users.
+6. Deletes every per-mission `activity-*` repo on the internal Gitea (ADR-0014 D4; the "ACL sweep in step 6" wording in step 1 predates this addition — the ACL sweep is step 5).
 
 **Preserved:** `/data/config`, `/data/secrets`, PMO/forge state, circuit breakers (credential health).
 

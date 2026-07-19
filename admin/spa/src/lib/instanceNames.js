@@ -27,8 +27,15 @@ export function nextFreeName(base, draftRows, serverRows) {
 // itself. Track the names of cards added/renamed this session; those stay
 // editable until a successful Save lands them on the server (the rebased
 // draft row deep-equals the fresh server row), then they lock like the rest.
-export function useNewNames(serverRows, draftRows) {
-  const [names, setNames] = useState(() => new Set());
+// `external` — an optional [names, setNames] pair owned by a component that
+// OUTLIVES this hook's caller (audit D5 #12): the Config section components
+// unmount on every section switch, so a section holding this state internally
+// would lose in-progress "new card" tracking the moment the operator visits
+// another section. The dispatcher (ConfigPage) stays mounted, so it owns the
+// Set and threads it down. Falls back to internal state when unmanaged.
+export function useNewNames(serverRows, draftRows, external) {
+  const internal = useState(() => new Set());
+  const [names, setNames] = external || internal;
   useEffect(() => {
     setNames((prev) => {
       if (prev.size === 0) return prev;

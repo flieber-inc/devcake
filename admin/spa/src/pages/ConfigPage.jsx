@@ -22,6 +22,10 @@ export default function ConfigPage({ section }) {
   // page-level error line — sections report async failures here (delete /
   // restore flows) so the message survives their local re-renders
   const [pageErr, setPageErr] = useState("");
+  // "new PMO card" name tracking lives HERE, not in PmoSection (audit D5 #12):
+  // the dispatcher stays mounted across section switches, so a card added then
+  // navigated-away-from keeps its editable-name status when the operator returns
+  const pmoNewNames = useState(() => new Set());
 
   const loaded = dr.loaded;
 
@@ -53,7 +57,7 @@ export default function ConfigPage({ section }) {
         ))}
       </div>
 
-      {section === "pmo" && <PmoSection />}
+      {section === "pmo" && <PmoSection newNamesState={pmoNewNames} />}
       {section === "dev-types" && <DevTypesSection setPageErr={setPageErr} />}
       {section === "skills" && <SkillsSection setPageErr={setPageErr} />}
       {section === "assignments" && <AssignmentsSection />}

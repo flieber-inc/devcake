@@ -8,7 +8,8 @@ v0 assumed every schedulable Mission was unblocked and fully parallelizable. A r
 
 ## Decision
 
-Five coupled mechanisms, all live-derivable from PMO state (ADR-0003/0005 preserved — no locks, no local authority):
+Five coupled mechanisms, all live-derivable from PMO state (ADR-0003/0005
+preserved — no persistent per-Mission lease and no local Mission authority):
 
 1. **Ordering = native Linear `blocked by` issue relations.** `Mission.blocked_by` is read from `inverseRelations`; the scheduler skips any Mission with a blocker not `done`/`canceled` (re-verified live at dispatch; unreadable blocker ⇒ blocked, fail-safe). It is a **scheduler gate, not a derivation row** — `derive()` stays a pure single-Mission function. ONBOARD's decomposition declares `blocked_by` as 1-based indexes of *earlier* siblings (structurally acyclic; app-validated); the app creates the relations. Because the gate honors *any* relation, humans steer ordering directly in Linear's UI.
 2. **Human hand-off = `DEVCAKE-NEEDS-HUMAN` (the tenth label) + the `human_needed` outcome.** A clean, deliberate hand-off: the run finishes, never counts toward `max_attempts`, the stage label stays, and an ONBOARD hand-off restores `backlog`. Removing the label resumes at the same step.

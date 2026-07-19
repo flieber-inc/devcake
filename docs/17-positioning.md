@@ -9,17 +9,19 @@
 
 ## 1. The core insight
 
-Every AI-developer product asks you to adopt a new place of work — a chat
-window, a special IDE, someone else's web app. This one doesn't. Its entire
-control surface is the task board you already run. You manage AI developers
-exactly the way you manage human ones: write a ticket, get work back on a pull
-request, approve it or send it back with notes.
+Most AI-developer products ask you to manage each task in a chat window, a
+special IDE, or someone else's work queue. DevCake keeps the **day-to-day
+Mission interface** on the task board you already run: write a ticket, get work
+back on a pull request, approve it or send it back with notes. Its bundled
+admin UI is the separate configuration and operations surface — health, runs,
+credentials, and maintenance — not another Mission queue.
 
 **Motto: "Your board is the interface."**  
 (Long form: *Your board is the interface. Tickets dispatch work; labels steer
 it; finished work comes back on a PR — with a receipt.*)
 
-There is no second place of work — and no pretense that the work runs itself.
+There is no second day-to-day work queue — and no pretense that the work runs
+itself.
 You self-host it, you decide who writes tickets, you protect the default
 branch, and you hold the merge button. That ownership is the deal, stated
 plainly: it is *why* the output can be trusted, not fine print to walk back
@@ -117,10 +119,12 @@ both lists recognizable within the first minute.
 > Under the hood it's deliberately boring: your PMO system (Linear in v0) is
 > the single source of truth, and labels form the state machine — triage, plan,
 > execute, review. Each step runs as a disposable Docker container wrapping a
-> real coding harness — Claude Code, Grok Build, or Codex — on subscriptions
-> you already pay for. Dagu holds `docker.sock` on a dedicated host; that is
-> intentional, not an accident (`14`). There are no locks: a crashed agent holds
-> nothing, and a human edit to a ticket always beats an in-flight agent. "Done"
+> real coding harness — Claude Code, Grok Build, or Codex — using the
+> subscription or API credentials you provide. Dagu holds `docker.sock` on a
+> dedicated host; that is intentional, not an accident (`14`). There are no
+> persistent per-Mission leases or checkouts: a crashed agent holds nothing,
+> while process-local locks only serialize dispatch and maintenance. A human
+> edit to a ticket always beats an in-flight agent. "Done"
 > means *merged* — never before. Everything is traced in OpenTelemetry down to
 > token counts; a large test suite pins behavioral invariants. The security
 > contract is adult-operator: prompt injection is in scope of “ticket writers
@@ -131,11 +135,11 @@ both lists recognizable within the first minute.
 
 | | |
 |---|---|
-| **Roof (motto)** | *Your board is the interface.* (no new place of work — and you own the trust envelope) |
-| **Pillar 1 — No new place of work** | Your task board is the product. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. |
+| **Roof (motto)** | *Your board is the interface.* (board-native day-to-day Mission work — and you own the trust envelope) |
+| **Pillar 1 — Board-native Mission work** | Your task board is the day-to-day Mission interface. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. The admin UI remains the configuration and operations surface. |
 | **Pillar 2 — Autonomy with receipts** | Every step posts transcript + token bill. Traced and audited. Independent AI review is **recommended config** (warned if violated). “Done” never lies about merge. |
 | **Pillar 3 — Your box, your rules** | Self-hosted on a **dedicated** machine; you own the trust envelope — team membership, branch protection, the merge button, backups (`18`). Mix Claude/Grok/Codex per role. Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
-| **Foundation** | Verified, not vibed: acceptance path tickets → PRs, GitHub and GitLab, invariant tests, redaction of app-mediated posts. Security contract in `14`. |
+| **Foundation** | Verified, not vibed: acceptance path tickets → PRs, GitHub, GitLab, and Gitea, invariant tests, redaction of app-mediated posts. Security contract in `14`. |
 
 ## 4. Tone guide
 

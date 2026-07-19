@@ -11,8 +11,10 @@ token bill** on the ticket. Labels are the control plane. A human edit always
 beats an in-flight agent. **Done means merged** — never before — unless you turn
 auto-merge on.
 
-It runs on **your** machine, with **your** model subscriptions and **your**
-forge. There is no hosted SaaS and no second product UI to live in.
+It runs on **your** machine, with **your** model subscriptions or API
+credentials and **your** forge. There is no hosted SaaS and no second
+day-to-day work queue: the board drives missions, while the bundled admin UI
+handles configuration and operations.
 
 > Anyone who can write tickets on the configured team (or land content in a
 > configured repo) can influence agents that hold forge and model credentials.
@@ -48,7 +50,7 @@ What you own as the operator — once at setup, and recurring — fits on one pa
 | You set up | The system does |
 |---|---|
 | One or more **PMO instances** (teams) | Polls, managed labels, feed posts, adoption modes |
-| One or more **repos** | Clone, branch, PR; optional read-only and reviewer tokens |
+| Zero or more **external repos** | Clone, branch, PR; zero uses the bundled Gitea; optional read-only and reviewer tokens |
 | **Work** vs **reference** repos per PMO | Routing targets vs read-only consultation clones |
 | **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional mapper) |
 | **Skills** per Dev Type (skill store) | Curated Claude Code skills seeded into an editable Gitea repo, installed into agent sessions |
@@ -103,7 +105,8 @@ PMO (Linear) ──poll / labels──► app (orchestrator)
 
 - **Dedicated host.** Dagu holds `docker.sock` (root-equivalent). See
   [`docs/14`](docs/14-security.md) §5 and [`docs/13`](docs/13-deployment.md).
-- **No locks.** A crashed agent holds nothing; the next poll reschedules.
+- **No per-mission lease or checkout.** A crashed agent holds nothing; the next
+  poll reschedules. Process-local locks serialize dispatch and maintenance.
 - **PMO is source of truth.** Local run files are advisory
   ([`docs/10`](docs/10-persistence.md)).
 - **Control plane** (app, admin, Dagu, OpenObserve) stays off the Dev network;
@@ -115,7 +118,8 @@ PMO (Linear) ──poll / labels──► app (orchestrator)
 
 Self-hosted, single operator, loopback by default. Stack passwords live in
 `.env`; **operator secrets** (PMO keys, forge tokens, model credentials) are
-entered in the admin Config UI and stored on the app volume — never echoed back.
+entered through the admin UI's Configuration and Repositories pages and stored
+on the app volume — never echoed back.
 
 Agents are powerful by design. The app enforces outcome legality and never lets
 Devs write the PMO directly; it **warns** on weak posture (write token on every

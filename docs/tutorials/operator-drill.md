@@ -64,15 +64,42 @@ grep -E '^(LINEAR|GITHUB|GITLAB|ANTHROPIC|XAI|OPENAI|CODEX|CLAUDE_CODE|DEVCAKE_T
 Scriptable health checks (all should pass):
 
 ```bash
+PMO_INSTANCE=linear  # replace with the PMO instance name chosen in step 2
 # every configured secret shows present
 curl -su "$ADMIN_USER:$ADMIN_PASSWORD" \
-  "http://localhost:8080/api/v1/secrets-check?conn=pmo:linear:api_key"
-# GET /config carries NO secret material and NO *_env fields
+  "http://localhost:8080/api/v1/secrets-check?conn=pmo:${PMO_INSTANCE}:api_key"
+# GET /config carries no secret-bearing or legacy *_env fields
 curl -su "$ADMIN_USER:$ADMIN_PASSWORD" http://localhost:8080/api/v1/config \
-  | python3 -c "import json,sys; c=json.load(sys.stdin); assert not any('_env' in k or 'token' in str(v).lower()[:0] for r in c['repos'] for k,v in r.items()); print('config clean')"
+  | python3 -c '
+import json, sys
+
+forbidden = {"api_key", "token", "token_ro", "reviewer_token"}
+
+def exposed_paths(value, path=()):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = path + (str(key),)
+            if key in forbidden or key.endswith("_env"):
+                yield ".".join(child_path)
+            yield from exposed_paths(child, child_path)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from exposed_paths(child, path + (str(index),))
+
+bad = list(exposed_paths(json.load(sys.stdin)))
+if bad:
+    print("secret-bearing config fields: " + ", ".join(bad), file=sys.stderr)
+    raise SystemExit(1)
+print("config structure clean")
+'
 ```
+
+The second check is structural and prints field paths only, never values. The
+automated API regression test additionally plants known secret values and
+proves neither the field names nor those values appear in the response.
 
 The drill itself stays manual — it *is* the stranger-operability check. The
 `acceptance.py --forge gitea` lane automates the zero-repo assertion (merged
 internal PR + deliverable zip) using the bootstrap `GITEA_ADMIN_*`, spending
-no external tokens.
+no external **forge** credentials. It still uses a Linear API key and real
+model credentials.

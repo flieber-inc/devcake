@@ -8,7 +8,18 @@ Dev work must be atomistic; runs may break at any point. The mission doc forbids
 
 ## Decision
 
-The only synchronization primitive is the PMO System's own state. A step's effects are applied by the app at finalization in a fixed order — transcript, token report, then **compare-and-transition** (re-read the mission live; apply the label swap only if the stage label still matches what the run started from; otherwise abort with an explanatory comment). Until the swap lands, the mission still derives as its old type; the in-flight Run guard and a one-cycle grace period keep it out of scheduling. Every finalization side effect is individually idempotent and checkpointed (`finalized_steps`), so crashed finalizations resume. Full protocol: `04-orchestrator.md` §§3–4.
+The PMO System's own state is the only **authoritative Mission-coordination**
+primitive; there are no persistent per-Mission leases or checkouts. A step's
+effects are applied by the app at finalization in a fixed order — transcript,
+token report, then **compare-and-transition** (re-read the mission live; apply
+the label swap only if the stage label still matches what the run started
+from; otherwise abort with an explanatory comment). Process-local locks may
+serialize poll, dispatch, and maintenance paths, but hold no Mission authority
+and disappear on crash. Until the swap lands, the mission still derives as its
+old type; the in-flight Run guard and a one-cycle grace period keep it out of
+scheduling. Every finalization side effect is individually idempotent and
+checkpointed (`finalized_steps`), so crashed finalizations resume. Full
+protocol: `04-orchestrator.md` §§3–4.
 
 ## Alternatives considered
 

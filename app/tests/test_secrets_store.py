@@ -6,6 +6,8 @@ import asyncio
 import json
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 def run_coro(c):
@@ -73,6 +75,59 @@ def _main(monkeypatch, tmp_path):
     return app_main
 
 
+def test_public_config_response_never_echoes_stored_secrets(monkeypatch,
+                                                            tmp_path):
+    """GET /config exposes configuration, never credential fields or values."""
+    app_main = _main(monkeypatch, tmp_path)
+    s = _store(monkeypatch, tmp_path)
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+
+    pmo_secret = "pmo-sentinel-secret-1234"
+    repo_secrets = {
+        "token": "repo-write-sentinel-1234",
+        "token_ro": "repo-read-sentinel-1234",
+        "reviewer_token": "repo-review-sentinel-1234",
+    }
+    harness_secret = "harness-sentinel-secret-1234"
+    s.write_connection_secret("pmo", "linear", "api_key", pmo_secret)
+    for field, value in repo_secrets.items():
+        s.write_connection_secret("repo", "main", field, value)
+    s.write_harness_secret("ANTHROPIC_API_KEY", harness_secret)
+    planted = {pmo_secret, *repo_secrets.values(), harness_secret}
+
+    monkeypatch.setattr(
+        app_main, "config",
+        AppConfig(
+            pmos=[PMOInstance(name="linear", team_key="DEV")],
+            repos=[RepoInstance(name="main", url="https://example.test/o/r")],
+        ),
+    )
+    probe = FastAPI()
+    probe.add_api_route("/api/v1/config", app_main.get_config, methods=["GET"])
+    response = TestClient(probe).get("/api/v1/config")
+    assert response.status_code == 200
+
+    payload = response.json()
+    serialized = json.dumps(payload, sort_keys=True)
+    for secret in planted:
+        assert secret not in serialized
+
+    forbidden = {"api_key", "token", "token_ro", "reviewer_token"}
+
+    def keys(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield key
+                yield from keys(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from keys(child)
+
+    exposed = {key for key in keys(payload)
+               if key in forbidden or key.endswith("_env")}
+    assert exposed == set()
+
+
 def test_secrets_check_drops_invalid_refs(monkeypatch, tmp_path):
     """Query-string scope/instance/field reach the filesystem — hostile
     values (`../`, absolute paths) must be dropped, not stat'ed. Previously
@@ -87,7 +142,10 @@ def test_secrets_check_drops_invalid_refs(monkeypatch, tmp_path):
              ",nope:main:token",
         harness="GOOD_VAR,../../evil,lower_case"))
     assert list(out["conn"]) == ["repo:main:token"]
-    assert out["conn"]["repo:main:token"]["present"] is True
+    status = out["conn"]["repo:main:token"]
+    assert set(status) == {"present", "updated_at"}
+    assert status["present"] is True
+    assert "tok-value-1234" not in json.dumps(out)
     assert list(out["harness"]) == ["GOOD_VAR"]
 
 

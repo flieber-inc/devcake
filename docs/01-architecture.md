@@ -83,7 +83,7 @@ app/devcake/
   config.py        # single pydantic schema authority for config.yaml (root-level:
                    #   cross-cutting — consumed by domain, adapters, and api alike)
   security.py      # redaction choke point, fed token shapes by the registry (14)
-  harness.py       # harness registry: the 3 model/harness pairs (08)
+  harness.py       # harness registry: CLI/image/credential runtime adapters (08)
 ```
 
 The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.

@@ -62,7 +62,7 @@ Mechanics worth knowing (`../07-dev-runtime.md` §5, `../08-harness-templates.md
 ## 3. Save and verify
 
 - Headless provisioning check:
-  `curl -su $ADMIN_USER:$ADMIN_PASSWORD localhost:8080/api/v1/dev-types | jq '.[].secret_env_present'`
+  `curl -su "$ADMIN_USER:$ADMIN_PASSWORD" localhost:8080/api/v1/dev-types | jq '.[].secret_env_present'`
   — every declared name `true`.
 - Run any mission on the Dev Type: the run log shows the install and
   register lines executing, then `mcp__devcake-logs__*` tool calls once the
@@ -79,4 +79,6 @@ Mechanics worth knowing (`../07-dev-runtime.md` §5, `../08-harness-templates.md
 | Plugin tools error at call time (e.g. `DD_API_KEY … not set`) | The register line doesn't pass the var with `-e`, or the stored value is wrong — the plugin's own error message names the variable. |
 
 Registration syntax for the grok/codex harnesses: `../08-harness-templates.md`
-§7 (their `mcp add` forms are documented there; unverified in v0).
+§7. Its verification labels are version-specific: Grok 0.2.93 and the pinned
+Codex CLI 0.144.4 were live-probed; Grok's unpinned installer means the syntax
+must be rechecked after an image rebuild.

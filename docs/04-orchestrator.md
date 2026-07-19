@@ -106,9 +106,20 @@ Writing the Run file *before* the executor trigger means a crash between (1) and
 
 The run spec (stage-2 env, credentials, repo info) is fully resolved by the app at dispatch and served to the Dev over `runspec.get` (`09-messaging.md` §3); Dagu receives only non-secret params and executes with zero business logic (app is the brain, Dagu is muscle).
 
-## 4. No-lock atomicity: compare-and-transition
+## 4. Mission atomicity without leases: compare-and-transition
 
-There are no locks, leases, or checkouts (INV-3). The only synchronization primitive is the PMO System's own state, applied at **finalization** — after the ingress consumer receives the Dev's `run.artifacts` message (`09-messaging.md`). Ingress lives in `RunManager` (`domain/runs.py`); mission and MAPPER artifacts are routed through the injected **`RunFinalizer`** (`finalize` / `finalize_mapper`); hello and other PMO-less runs use the local finalize checklist. Composition binds `manager.set_finalizer(mission_mgr)` at boot (`01-architecture.md` §3).
+There are no persistent per-Mission leases or checkouts (INV-3). The PMO
+System's own state is the authoritative Mission-coordination primitive, applied
+at **finalization** — after the ingress consumer receives the Dev's
+`run.artifacts` message (`09-messaging.md`). Process-local locks serve a
+different purpose: `poll_rt.lock` serializes poll cycles and
+`RunBootstrap.dispatch_lock` serializes dispatch against Clear run history;
+neither survives a crash or owns a Mission (`18-operator-contract.md` §3).
+Ingress lives in `RunManager` (`domain/runs.py`); mission and MAPPER artifacts
+are routed through the injected **`RunFinalizer`** (`finalize` /
+`finalize_mapper`); hello and other PMO-less runs use the local finalize
+checklist. Composition binds `manager.set_finalizer(mission_mgr)` at boot
+(`01-architecture.md` §3).
 
 Finalization side-effect order is fixed:
 

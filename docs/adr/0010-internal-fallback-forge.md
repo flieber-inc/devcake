@@ -19,7 +19,7 @@ The admin credential the provisioner uses (`GITEA_ADMIN_*`, a stack bootstrap se
 
 ### Redaction
 
-Gitea tokens are 40 hex chars — a redaction regex would mask every git SHA in transcripts. So the descriptor's `token_patterns` is **deliberately empty**; value-registration (at mint/load) is the only redaction line for internal-forge tokens (docs/14 §5).
+Gitea tokens are 40 hex chars — a redaction regex would mask every git SHA in transcripts. So the descriptor's `token_patterns` is **deliberately empty**; value-registration (at mint/load) is the only redaction line for internal-forge tokens (docs/14 §7).
 
 ### Retention (founder decision, 2026-07-14)
 

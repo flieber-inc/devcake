@@ -86,7 +86,7 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active work repo's token for this run). |
 | *Dev-Type secret env* | 2 | Named vars from `DevType.secret_env` (`02-domain-model.md` §6), values GUI-stored under `/data/secrets/harness/` — mission-tooling credentials (e.g. a log-platform key) referenced as `$VAR` from `mcp_setup_commands` (`08-harness-templates.md` §7). Missing value: **referenced** by a setup command ⇒ dispatch refuses (`14-security.md` §8); unreferenced ⇒ warn-and-proceed. |
 
-Real secrets (harness and forge credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §3, `09-messaging.md` §1a).
+Real secrets (harness and forge credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §4, `09-messaging.md` §1a).
 
 **Forge dialect (`forge_dialect()` in the shared entrypoint):** the descriptor-driven vars (`DEVCAKE_CLONE_USER`, `DEVCAKE_GIT_NAME`, `DEVCAKE_GIT_EMAIL`, `DEVCAKE_FORGE_CLI_ENVS`) are **required** — there are no fallbacks. App and images deploy in lockstep (`13-deployment.md` §8); a runspec missing a descriptor var means a mismatched build and crashes the clone bootstrap loudly (the v0 fallback shims were removed at crystallization, `adr/0008` addendum).
 

@@ -5,11 +5,11 @@ travels Backlog → In Progress → (labels progressing) → merged PR → Done 
 transcript + token report for every step. Exits nonzero on any violation.
 
 Run manually before releases (it spends real tokens):
-    python3 scripts/acceptance.py [--runs 2] [--forge github|gitlab]
+    python3 scripts/acceptance.py [--runs 2] [--forge github|gitlab|gitea]
 
 GitHub is the default. GitLab uses GITLAB_TOKEN and api.gitlab.com (or the
-origin of DEVCAKE_REPO_URL). Full multi-forge parity is a v0.1 roadmap item
-(ISSUES #30).
+origin of DEVCAKE_REPO_URL). Gitea verifies the bundled zero-repo forge without
+external forge credentials; every lane still uses Linear and real models.
 """
 
 import argparse
@@ -39,7 +39,7 @@ def env(name, required=True):
 
 # Tester-side credentials/targets: overridable per run (schema v3 made
 # instances plural — the gate must be able to point at any team/key/repo,
-# not just the .env seeds). Full multi-forge parity is M12 (ISSUES #30).
+# not just the .env seeds).
 KEY = env("LINEAR_API_KEY", required=False)
 TEAM = env("DEVCAKE_TEAM_KEY", required=False)
 REPO_URL = env("DEVCAKE_REPO_URL", required=False)
@@ -74,9 +74,9 @@ def forge_get(forge: str, path: str):
         return json.load(urllib.request.urlopen(req))
     if forge == "gitea":
         # the internal fallback forge — verified via GITEA_ADMIN_* (a stack
-        # bootstrap secret; no external tokens). The zero-repo mission's repo
-        # is devcake-internal/{instance}-{key} (lowercased); its merged PR is
-        # the deliverable's source.
+        # bootstrap secret; no external forge credential). The zero-repo
+        # mission's repo is devcake-internal/{instance}-{key} (lowercased);
+        # its merged PR is the deliverable's source.
         import base64
         user, pw = env("GITEA_ADMIN_USER", required=False) or "devcakeadmin", env("GITEA_ADMIN_PASSWORD")
         gitea = env("GITEA_UI_URL", required=False) or "http://localhost:3300"
@@ -172,7 +172,8 @@ if __name__ == "__main__":
     ap.add_argument("--runs", type=int, default=2)
     ap.add_argument("--forge", choices=("github", "gitlab", "gitea"),
                     default="github", help="Forge under test. 'gitea' is the "
-                    "zero-repo internal-forge lane (no external tokens)")
+                    "zero-repo internal-forge lane (no external forge "
+                    "credentials)")
     ap.add_argument("--team", default=None,
                     help="Linear team key to seed the mission in "
                          "(default: DEVCAKE_TEAM_KEY from .env)")

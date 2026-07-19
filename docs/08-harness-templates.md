@@ -1,19 +1,34 @@
 # 08 — Harness Templates
 
-> **Audience:** implementers. This document absorbs all harness churn: when a CLI changes or a model is swapped, only this doc (and the template files it specifies) change.
+> **Audience:** implementers. This document centralizes the runtime contract for
+> harness CLI churn. Model assignments normally change on a Dev Type; CLI,
+> image, credential, or artifact-shape changes also require the implementation
+> locations named in §8.
 > **Depends on:** `07-dev-runtime.md` (container contract), `02-domain-model.md` (DevType, TokenReport).
 
-A **harness template** fully describes how one model/harness pair runs inside a Dev container. Exactly three exist, hardcoded as entries in the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2) — *hardcoded but easy to edit*: adding a fourth template or changing a model is a one-file change plus an image build (§8).
+A **harness template** describes how one CLI runs inside a Dev container:
+image, credentials, invocation, artifact parsing, OAuth, and skills delivery.
+It does **not** own a fixed model. Exactly three templates exist as entries in
+the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2). Adding a
+fourth crosses the registry, config schema, image/Bake, entrypoint, tests, and
+this document (§8); changing a Dev Type's model does not add a template.
 
-| Template id | Model | Harness CLI | v0 Dev Type |
+| Template id | Harness CLI | Empty `DevType.model` resolves to | Seeded Dev Types |
 |---|---|---|---|
-| `claude-code` | Claude Fable (`claude-fable-5`) | Claude Code (`claude`) | Senior Dev |
-| `grok-build` | Grok 4.5 (`grok-4.5`) | Grok Build (`grok`) | Main Dev |
-| `codex` | gpt-5.6-sol | Codex CLI (`codex`) | *(unused in v0)* |
+| `claude-code` | Claude Code (`claude`) | CLI default | Senior Dev pins `claude-fable-5`; Junior Dev pins `claude-haiku-4-5` |
+| `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | Main Dev leaves the model empty and receives that registry default |
+| `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
-> Facts below were verified in July 2026 against official docs — and, for **Grok Build (v0.2.93)** and **Codex (image pin `@openai/codex@0.144.4`)**, against live installed CLIs including live probes of their headless output shapes. No open items remain; every invocation, flag, and extraction path in this document is verified.
+> Verification is capability- and version-specific, not blanket. Invocation,
+> headless output, plan flags, MCP syntax, and token extraction below record
+> live evidence for **Grok Build 0.2.93** and the pinned **Codex CLI 0.144.4**;
+> the skills read-set records Grok **0.2.103** (§7a). The Grok image installs
+> latest rather than a pinned artifact, so every rebuild can invalidate the
+> recorded shapes. Grok PLAN is flag-verified but not exercised end-to-end
+> (§3). Treat each statement's own version and caveat as its verification
+> boundary.
 
 ## 1. Invocation patterns
 
@@ -37,7 +52,7 @@ The entrypoint pumps the harness's stdout line-by-line instead of buffering it (
 grok -p "$PROMPT" --output-format streaming-json --always-approve
 ```
 - **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output).
-- **Behavior verified against CLI v0.2.93** (current stable at spec time). The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image. Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`) — **`text`/`thought` are token-level deltas** (re-verified live 2026-07-12; no tool-call events in the stream), so the entrypoint coalesces `text` deltas into lines for the relay (§1a) and reconstructs the result text by concatenating them; `sessionId` comes from the `end` event. **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future CLI release adds usage/cost to headless output, bump the pin and promote that to the primary strategy.
+- **Behavior verified against CLI v0.2.93** (current stable at spec time). The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image. Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`) — **`text`/`thought` are token-level deltas** (re-verified live 2026-07-12; no tool-call events in the stream), so the entrypoint coalesces `text` deltas into lines for the relay (§1a) and reconstructs the result text by concatenating them; `sessionId` comes from the `end` event. **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future observed CLI release adds usage/cost to headless output, record that version and live evidence before promoting it to the primary strategy.
 - Sessions persist under `~/.grok/sessions/{urlencoded-cwd}/{session_id}/` (verified) — the `sessionId` from the headless output locates the directory; `signals.json` there carries `contextTokensUsed`/`totalTokens`, `contextWindowTokens`, `modelsUsed` (totals only — no input/output split, no cost). The TUI `/usage` command is interactive-only and not used.
 
 ### `codex`
@@ -103,7 +118,7 @@ Implemented extraction methods (`TokenReport.extraction_method`); silence is nev
 1. **`session_json`** — structured harness output (the only path that fills real usage today):
    - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown).
    - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `output_tokens→output`; `reasoning_output_tokens` recorded in `notes`. No native cost field → `cost_usd` omitted.
-   - `grok-build` (verified v0.2.93 shapes): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`); revisit on every CLI pin bump.
+   - `grok-build` (verified v0.2.93 shapes): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`); revisit after every Grok image rebuild or observed CLI-version change.
 2. **`unavailable`** — post an explicit report when structured extraction fails. There is **no** `stdout_parse` strategy in the entrypoint, and **no** in-code price table that invents `cost_usd` from token counts.
 
 The token report message posted to the activity feed (format in `03-mission-lifecycle.md` §8) accompanies **every** step, and the same numbers ride the `dev.run` span as `devcake.tokens.*` / `devcake.cost.usd` attributes (`12-observability.md`).
@@ -149,7 +164,7 @@ Skill-store skills (`02-domain-model.md` DevType.skills) are materialized by
 the entrypoint before harness launch into the harness's **registry-declared
 skills directory** (`harness.py` `skills_dir`, snapshotted onto the Run at
 dispatch and delivered as the runspec `skills_dir` key). All three CLIs read
-the same `SKILL.md` format; the verified read-set per pinned CLI:
+the same `SKILL.md` format; the verified read-set per pinned or observed CLI:
 
 | Harness | skills_dir | Verified read locations |
 |---|---|---|

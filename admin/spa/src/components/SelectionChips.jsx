@@ -56,14 +56,15 @@ export default function SelectionChips({
         })}
         {stale.map((n) => (
           optionsUnavailable ? (
-            // catalog couldn't load — show as a normal present chip (neutral,
-            // still toggleable), never as a "deleted" red ✕ (re-audit #7)
-            <button key={n} type="button" title={staleNote} disabled={disabled}
-              onClick={() => onChange(selected.filter((x) => x !== n))}
-              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200${
-                disabled ? " cursor-not-allowed opacity-60" : ""}`}>
+            // catalog couldn't load — show as a present chip, and DISABLE it
+            // (re-audit #31 #3): while the catalog is unknown there is no
+            // option chip to re-select from, so a misclick-remove would be
+            // unrecoverable in-UI. Non-interactive preserves the selection
+            // until the catalog loads.
+            <span key={n} title={staleNote}
+              className="rounded-full border px-2.5 py-0.5 text-xs font-medium border-accent-400 bg-accent-50 text-accent-800 opacity-70 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200">
               {n}
-            </button>
+            </span>
           ) : (
             <button key={n} type="button" title={staleNote} disabled={disabled}
               onClick={() => onChange(selected.filter((x) => x !== n))}

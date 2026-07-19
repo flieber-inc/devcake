@@ -346,7 +346,15 @@ class RunManager:
             run.ended_at = utcnow()
             from ..security import redact
             run.error = redact(reason)
-            self.store.save(run)
+            # Do not RESURRECT a record a concurrent clear-runs wipe just
+            # deleted (re-audit #31 #1/#2): get()+save() with no await between
+            # is atomic under asyncio's cooperative scheduling, so this fully
+            # closes the phantom-record race for EVERY killer — watchdog,
+            # stop-run, stop-all, and clear's own drain all funnel through
+            # here. A record clear already unlinked reads None → we skip; it is
+            # already out of store.active() so nothing re-kills it.
+            if self.store.get(run.run_id) is not None:
+                self.store.save(run)
         if self.finalizer and run.mission_pmo_id:
             try:
                 await self.finalizer.restore_after_failure(run)

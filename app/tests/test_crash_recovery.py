@@ -126,6 +126,27 @@ def test_artifacts_enters_finalize_from_running(tmp_path):
     assert store.get(run.run_id).state == "finalizing"
 
 
+def test_kill_does_not_resurrect_a_concurrently_wiped_record(tmp_path):
+    """Re-audit #31 #1/#2: a kill whose record was deleted by a concurrent
+    clear-runs wipe (while kill was awaiting teardown) must NOT store.save it
+    back — that recreated a phantom terminal run after 'start fresh'. The
+    get()+save() guard in _kill_inner is atomic (no await between), so a gone
+    record stays gone for EVERY killer path."""
+    store = RunStore(tmp_path / "runs")
+    mgr = RunManager(store, FakeMessaging(), FakeExecutor())
+    run = _make_run(store, state="running", run_id="W-1")
+    # simulate the concurrent wipe: the record is gone by the time kill's
+    # teardown reaches its final save
+    store.clear()
+    assert store.get("W-1") is None
+    run_coro(mgr.kill(run, "timed_out", "watchdog timeout"))
+    assert store.get("W-1") is None                    # not resurrected
+    # a normal kill (record present) still persists the terminal state
+    live = _make_run(store, state="running", run_id="W-2")
+    run_coro(mgr.kill(live, "failed", "operator"))
+    assert store.get("W-2").state == "failed"
+
+
 def test_started_does_not_resurrect_a_killed_run(tmp_path):
     """Audit D5 #10: a run.started arriving AFTER the run was killed (its
     container was just booting when stop-all fired) must NOT flip the record

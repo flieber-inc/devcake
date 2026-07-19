@@ -255,13 +255,19 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
   ADR-0012, PR #10): depth-tagged markers, `max_decomposition_depth` +
   Traffic-control UI, strict inherited edges, scheduler family gate, lineage
   notes on canceled parents. **built** (493 tests at merge) ·
-  **⏳ live-pending** — live E2E plan on file.
+  **live-verified 2026-07-19** (sandbox chain DEV-128→DEV-130/131→DEV-132/133:
+  inherited edges across two generations of canceled blockers — the dependent's
+  gate named children, then grandchildren + a SKIP'd sibling as dead blocker,
+  and cleared on completion; depth 1/2 markers; project containment held both
+  generations; lineage notes; at-limit refusal → NEEDS-HUMAN hand-off at the
+  default limit AND after a live Traffic-control flip to 1; unlimited flip
+  accepted).
 - **Missions board** (2026-07-18, PR #11, rflpazini): Hermes-style kanban with
   steering comments + stop-run; pre-merge review fixed priority-validation
   500, stop-of-finalizing 409, `create_mission` 502. **built** · deployed live
   2026-07-18 (UI suite green).
-- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section. **built** (530 tests at merge) · **⏳ live-pending** — profile save/apply round-trip on the live stack owed.
-- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013 part 2): single-file export (source = current or a profile; sections A/B/C; scrypt+AESGCM encrypted by default, plaintext behind explicit acknowledgment; optional skill embedding; audited), stateless import that **lands as a profile** (apply remains the one world-swap path), section C as a generated ready-to-place `.env` download, `scripts/backup_gitea.sh`/`restore_gitea.sh` for full-fidelity internal-forge backups, and the Export…/Import… transfer UI. **built** (548 tests at merge) · **⏳ live-pending** — encrypted export/import round-trip + `restore_gitea.sh` drill owed; the `profiles.mjs` UI suite owed (check:ui branch has merged — unblocked).
+- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section. **built** (530 tests at merge) · **live-verified 2026-07-19** (save → drift → apply round-trip restored the drifted setting; divergence flag + last-applied breadcrumb observed; audit events confirmed).
+- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013 part 2): single-file export (source = current or a profile; sections A/B/C; scrypt+AESGCM encrypted by default, plaintext behind explicit acknowledgment; optional skill embedding; audited), stateless import that **lands as a profile** (apply remains the one world-swap path), section C as a generated ready-to-place `.env` download, `scripts/backup_gitea.sh`/`restore_gitea.sh` for full-fidelity internal-forge backups, and the Export…/Import… transfer UI. **built** (548 tests at merge) · **live-verified 2026-07-19** (encrypted export with zero plaintext token shapes → passphrase-gated preview → import landed as a profile → generated `.env`; `backup_gitea.sh`/`restore_gitea.sh` real round-trip with gitea stopped — repos and skill store intact after volume replacement). The `profiles.mjs` UI suite still owed (⏳, may trail the v0.2 tag).
 - **Activity-feed fidelity + per-mission activity repos** (2026-07-18,
   ADR-0014, PR #15): last-message-inline + full-dump flip, `MISSION.md`
   faithful mirror, per-mission `activity-*` repos swept on Clear, quoting

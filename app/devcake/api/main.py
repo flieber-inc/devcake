@@ -55,6 +55,8 @@ from ..prompts import templates as prompt_templates
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
 from .auth import credentials_configured, enforce_control_plane_auth
+from .health import build_health_payload, reset_protection_cache
+from .poll import PollRuntime
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("devcake")
@@ -141,7 +143,7 @@ def reload_connections() -> None:
     unlabeled until restart."""
     forge_runtime.rebuild(config.repos, make_forge)
     build_managers()
-    _protection_cache["ts"] = 0.0          # repos may have changed — reprobe
+    reset_protection_cache()               # repos may have changed — reprobe
 
     async def _ensure():
         for mgr in list(managers.values()):
@@ -160,231 +162,14 @@ manager.oauth_mgr = oauth_mgr
 runlog = RunLogStore()
 manager.runlog = runlog
 
-# poll-cycle snapshot served by /api/v1/missions (advisory cache — INV-1)
-missions_cache: list[dict] = []
-
-
-# PERSISTENT cross-instance ownership (v0.1 plan H1 + review finding):
-# pmo_id → owning instance name. Persistence is load-bearing — a per-cycle
-# rebuild would flip ownership of a shared mission the moment its owner has
-# one PMOTransient cycle, double-dispatching it. Released only when the
-# OWNER successfully polls and no longer sees the mission, or leaves config
-# (and never while a run for the mission is still active — audit A15).
-# Durable across restarts via OwnerStore (audit A15: in-memory-only
-# ownership reopened the duplicate-dispatch window on every restart).
-from ..adapters.files.owner_store import OwnerStore  # noqa: E402
-
-_owner_store = OwnerStore()
-_mission_owner: dict[str, str] = _owner_store.load()
-
-# instance → last poll-segment error (audit A1): a PERMANENT PMO failure
-# (revoked key, deleted team) skips only that instance's segment; this map
-# surfaces it in /health as `poll_degraded`. Cleared on a green segment.
-_poll_degraded: dict[str, str] = {}
-
-# Wall-clock UTC of the last poll cycle that finished (periodic OR manual).
-# Surfaced in /health as `last_poll_at` so the SPA can render "Last polled Ns
-# ago" honestly — a stale timestamp is a signal, not something to hide.
-_last_poll_at: datetime | None = None
-
-# Shared lock + cycle counter for both the periodic poll_loop and the manual
-# POST /api/v1/poll/run trigger. Semantics: at most one poll cycle in flight
-# at a time (concurrent list_all + missions_cache mutation would race).
-# asyncio.Lock() at module scope defers loop binding to first await (Py3.10+).
-_poll_lock: asyncio.Lock = asyncio.Lock()
-_poll_cycle_counter: int = 0
-
-
-def _next_poll_cycle_id() -> int:
-    """Advance the shared cycle counter and return the new id."""
-    global _poll_cycle_counter
-    _poll_cycle_counter += 1
-    return _poll_cycle_counter
-
-
-def _claim_missions(mgr: MissionManager, fetched: list,
-                    owner: dict[str, str]) -> list:
-    """Cross-instance dedupe on the RAW pmo_id: a Linear project can be
-    accessible to two teams, so two instances in one workspace would both
-    adopt it — duplicate decomposition, label fights. The first instance to
-    see it claims it (durably — see _mission_owner); others surface an
-    anomaly and skip. Pure function (hermetically tested)."""
-    missions = []
-    for m in fetched:
-        prior = owner.get(m.pmo_id)
-        if prior is not None and prior != mgr.instance_name:
-            mgr.anomalies[m.pmo_id] = (
-                f"{m.key} is also visible to instance '{prior}' — handled "
-                f"there (shared project?); skipped here")
-            continue
-        owner[m.pmo_id] = mgr.instance_name
-        missions.append(m)
-    return missions
-
-
-def _release_stale_ownership(polled_ok: dict[str, set]) -> None:
-    """Drop ownership entries whose owner left config, or whose owner
-    successfully polled this cycle and no longer sees the mission (done +
-    aged out of list_all, or deleted). A FAILED poll releases nothing, and
-    neither does an ACTIVE run for the mission (audit A15: releasing while
-    the ex-owner's run still executes lets another instance re-dispatch the
-    same work — the in-flight guard only sees its own pmo_ref)."""
-    in_flight = {r.mission_pmo_id for r in store.active() if r.mission_pmo_id}
-    for pmo_id, name in list(_mission_owner.items()):
-        if pmo_id in in_flight:
-            continue
-        if name not in managers:
-            del _mission_owner[pmo_id]
-        elif name in polled_ok and pmo_id not in polled_ok[name]:
-            del _mission_owner[pmo_id]
-
-
-async def _poll_instance(mgr: MissionManager,
-                         cache_rows: list[dict]) -> tuple[int, int, int, set]:
-    """One instance's poll segment: fetch + cross-instance dedupe + derive +
-    gate + sweeps + schedule + cache rows. Returns (seen, candidates,
-    dispatched, fetched_ids). Raises PMOTransient for the caller's
-    per-instance skip."""
-    fetched = await mgr.pmo.list_all(mgr.instance.team_key)
-    fetched_ids = {m.pmo_id for m in fetched}
-    missions = _claim_missions(mgr, fetched, _mission_owner)
-    run_snapshot = mgr.runs.store.all()   # one read per segment, not per mission
-    for m in missions:
-        # per-mission repo resolution (M10/M11): a transient poll artifact —
-        # dispatch re-resolves live (sticky) before anything irreversible.
-        # resolve_repo_live un-gates zero-repo missions onto the internal
-        # fallback forge (provisions a per-mission repo at intake). A Gitea
-        # outage must GATE the mission, never abort the whole poll cycle for
-        # every instance (review finding #2) — the boot promise that an
-        # outage "degrades only zero-repo missions" depends on this.
-        try:
-            m.repo, m.repo_reason = await mgr.resolve_repo_live(
-                m, all_runs=run_snapshot)
-        except Exception as e:  # noqa: BLE001 — poll guard: a forge outage gates THIS mission only (reason recorded + logged); it must never abort the whole cycle
-            m.repo, m.repo_reason = None, (
-                f"internal forge unreachable — mission gated: {str(e)[:150]}")
-            log.warning("repo resolution failed for %s: %s", m.key, e)
-    derived = [(m, derive(m, config.adoption_mode)) for m in missions]
-    # the gate is a poll artifact, computed EVERY cycle — pause freezes
-    # dispatch, never information (docs/04 §2)
-    gate = await mgr.gate_map(missions)
-    await mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
-    # intake pause (docs/11): no NEW dispatches — in-flight runs still
-    # finalize (ingress consumer) and sweeps above keep running
-    if config.intake_paused:
-        dispatched = 0
-    else:
-        dispatched = await mgr.schedule(missions, gate)
-        # .get: build_managers may drop the instance mid-cycle (hot reload) —
-        # a KeyError here would abort the WHOLE poll cycle (review finding)
-        mp = mappers.get(mgr.instance_name)
-        if mp is not None:
-            await mp.maybe_dispatch(missions)
-    mgr.rotate_grace()
-    # anomalies are advisory and per-mission: prune on the FETCHED set (not
-    # just claimed missions — a dedupe anomaly references a mission this
-    # instance never claims) once terminal or no longer visible at all
-    terminal = {m.pmo_id for m in fetched if m.status in ("done", "canceled")}
-    for k in list(mgr.anomalies):
-        if k in terminal or k not in fetched_ids:
-            del mgr.anomalies[k]
-    id_to_key = {m.pmo_id: m.key for m in missions}
-    cache_rows.extend({
-        "instance": mgr.instance_name,
-        "team": mgr.instance.team_key,
-        "key": m.key, "kind": m.pmo_kind, "title": m.title,
-        "status": m.status, "priority": m.priority,
-        "labels": sorted(m.labels), "mission_type": d.mission_type,
-        "schedulable": d.schedulable,
-        # the blocked-by gate is a scheduler concern, not a derivation row —
-        # surfaced so the admin panel shows why (ADR-0007)
-        "repo": m.repo,
-        "reason": gate.get(m.pmo_id, m.repo_reason or d.reason),
-        "blocked_by": [id_to_key.get(b, b) for b in m.blocked_by],
-        "pmo_id": m.pmo_id,
-        # surfaced for the Missions board card (Linear link + Done-column sort)
-        "url": m.url,
-        "updated_at": m.updated_at,
-    } for m, d in derived)
-    return (len(missions), sum(1 for _, d in derived if d.schedulable),
-            dispatched, fetched_ids)
-
-
-async def run_poll_cycle(cycle: int) -> None:
-    """One poll cycle (docs/04 §1): per configured instance — fetch + dedupe
-    + derive + gate + dispatch + sweeps — then the merged cache. A failing
-    instance (PMOTransient or a PERMANENT error like a revoked key — audit
-    A1) skips only ITS segment, never the whole cycle; permanent failures
-    surface in /health `poll_degraded` until a green segment clears them."""
-    with tracer.start_as_current_span("poll.cycle") as span:
-        span.set_attribute("devcake.poll.cycle", cycle)
-        try:
-            # a latched repo re-probes every cycle so a transient failure
-            # (or a rotated-back token) self-heals without an operator
-            if forge_runtime.breakers:
-                await refresh_forge_health()
-            cache_rows: list[dict] = []
-            seen, cand, disp = 0, 0, 0
-            polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids
-            owner_before = dict(_mission_owner)  # persisted iff changed below
-            for mgr in _managers_in_config_order():
-                with tracer.start_as_current_span("poll.instance") as ispan:
-                    ispan.set_attribute("devcake.instance", mgr.instance_name)
-                    try:
-                        s, c, d, ids = await _poll_instance(mgr, cache_rows)
-                        polled_ok[mgr.instance_name] = ids
-                        seen, cand, disp = seen + s, cand + c, disp + d
-                        _poll_degraded.pop(mgr.instance_name, None)
-                    except PMOTransient as e:
-                        # transient PMO trouble skips only THIS instance's
-                        # segment — the others still poll this cycle. Not
-                        # marked degraded: transient is expected weather.
-                        ispan.set_attribute("devcake.outcome", "PMO_TRANSIENT")
-                        log.warning("poll.cycle %d: instance %s skipped: %s",
-                                    cycle, mgr.instance_name, e)
-                    except Exception as e:
-                        # a PERMANENT per-instance failure (revoked key,
-                        # deleted team → RuntimeError) must not starve the
-                        # remaining instances (audit A1)
-                        ispan.set_attribute("devcake.outcome", "INSTANCE_ERROR")
-                        _poll_degraded[mgr.instance_name] = (
-                            f"{type(e).__name__}: {str(e)[:200]}")
-                        log.exception("poll.cycle %d: instance %s FAILED — "
-                                      "segment skipped", cycle, mgr.instance_name)
-            _release_stale_ownership(polled_ok)
-            if _mission_owner != owner_before:   # durable claim (audit A15)
-                _owner_store.save(_mission_owner)
-            # a skipped instance keeps its LAST snapshot in the cache
-            # (v0 behavior: PMO trouble never blanks the view)
-            cache_rows.extend(
-                row for row in missions_cache
-                if row["instance"] in managers
-                and row["instance"] not in polled_ok)
-            missions_cache[:] = cache_rows
-            span.set_attribute("devcake.missions.seen", seen)
-            span.set_attribute("devcake.missions.candidates", cand)
-            span.set_attribute("devcake.missions.dispatched", disp)
-            log.info("poll.cycle %d: %d missions, %d candidates, %d dispatched "
-                     "(%d instances)", cycle, seen, cand, disp, len(managers))
-        except Exception:
-            # a poll cycle must NEVER kill the loop — log and try again next tick
-            span.set_attribute("devcake.outcome", "cycle_error")
-            log.exception("poll.cycle %d failed", cycle)
-        finally:
-            # stamped even on cycle_error — a partial cycle IS a poll attempt;
-            # /health surfaces this as `last_poll_at` for the SPA's Missions
-            # "Last polled Ns ago" honesty (docs/11 §0)
-            global _last_poll_at
-            _last_poll_at = datetime.now(timezone.utc)
-
-
-async def poll_loop() -> None:
-    """Periodic poll driver. Shares `_poll_lock` and `_poll_cycle_counter`
-    with `POST /api/v1/poll/run` — at most one cycle in flight."""
-    while True:
-        async with _poll_lock:
-            await run_poll_cycle(_next_poll_cycle_id())
-        await asyncio.sleep(config.poll_interval_seconds)
+# The poll machinery (ownership claims, cycle driver, missions cache, loop)
+# lives in api/poll.py — constructed ONCE with live references and never
+# rebuilt on config reload (ADR-0015 Decision 2). `poll_rt.missions_cache`
+# keeps one stable list identity; /api/v1/missions serves it by reference.
+poll_rt = PollRuntime(
+    config=config, managers=managers, mappers=mappers, store=store,
+    forge_runtime=forge_runtime, refresh_forge_health=refresh_forge_health,
+    managers_in_config_order=_managers_in_config_order)
 
 
 def _refuse_insecure_passwords() -> None:
@@ -476,7 +261,7 @@ async def lifespan(app: FastAPI):
     await refresh_forge_health()
     await reconcile_runs(manager)
     tasks = [
-        asyncio.create_task(poll_loop(), name="poll_loop"),
+        asyncio.create_task(poll_rt.loop(), name="poll_loop"),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
                             name="ingress_consumer"),
         asyncio.create_task(watchdog_loop(manager), name="watchdog"),
@@ -502,152 +287,13 @@ app.middleware("http")(enforce_control_plane_auth)
 FastAPIInstrumentor.instrument_app(app)
 
 
-async def _check_redis() -> bool:
-    try:
-        r = aioredis.from_url(REDIS_URL, password=REDIS_PASSWORD or None, socket_timeout=3)
-        try:
-            return bool(await r.ping())
-        finally:
-            await r.aclose()
-    except Exception:  # noqa: BLE001 — probe contract: any failure → False; /health must never 500
-        return False
-
-
-# branch-protection probe (A2, docs/14): cached — /health is polled every 10 s
-# by the SPA, the forge API needs at most one look every few minutes
-_protection_cache: dict = {"ts": 0.0, "value": {}}
-
-
-async def _branch_protection() -> dict:
-    """{repo_name: BranchProtection|None} across every configured repo."""
-    if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
-        _protection_cache["ts"] = time.monotonic()
-        out: dict = {}
-        for name, f in forge_runtime.forges.items():
-            inst = forge_runtime.instance(name)
-            # reference-only repos: DevCake never pushes or merges there, so
-            # the unprotected-default-branch advisory would be pure noise
-            if inst is not None and inst.reference_only:
-                continue
-            try:
-                prot = await f.default_branch_protection(
-                    inst.default_branch if inst else "main")
-                out[name] = prot.model_dump() if prot else None
-            except Exception:  # noqa: BLE001 — probe contract: failure → None (advisory omitted); /health must never 500
-                out[name] = None
-        _protection_cache["value"] = out
-    return _protection_cache["value"]
-
-
-async def _check_http(url: str) -> bool:
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            return (await client.get(url)).status_code < 500
-    except Exception:  # noqa: BLE001 — probe contract: any failure → False; /health must never 500
-        return False
-
-
-# 60s-cached probe: does the OO service account actually authenticate?
-# Catches "compose up before provision_oo.py" / rotated-password drift —
-# without it, telemetry 401s silently forever (ISSUES #13 review finding).
-_oo_ingest_cache: dict = {"ts": 0.0, "result": None}
-
-
-async def _oo_ingest_check() -> dict:
-    now = time.monotonic()
-    if _oo_ingest_cache["result"] is not None and now - _oo_ingest_cache["ts"] < 60:
-        return _oo_ingest_cache["result"]
-    from ..telemetry import OO_ORG, _basic_auth
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{OO_URL}/api/{OO_ORG}/streams",
-                                 params={"type": "logs"},
-                                 headers={"Authorization": f"Basic {_basic_auth()}"})
-        result = {"ok": r.status_code == 200,
-                  "detail": "" if r.status_code == 200 else
-                  f"HTTP {r.status_code} — the OO service account cannot "
-                  f"authenticate; run scripts/provision_oo.py (ISSUES #13)"}
-    except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + detail; /health must never 500
-        result = {"ok": False, "detail": f"probe failed: {str(e)[:150]}"}
-    _oo_ingest_cache.update(ts=now, result=result)
-    return result
-
-
 @app.get("/api/v1/health")
 async def health():
-    redis_ok, dagu_ok, oo_ok = await asyncio.gather(
-        _check_redis(),
-        _check_http(f"{DAGU_URL}/api/v1/health"),
-        _check_http(f"{OO_URL}/healthz"),
-    )
-    # per-instance PMO health (schema v3): unconfigured instances show grey
-    # (ok: None), never red; the scalar `pmo` aggregate keeps the SPA's
-    # health dot working (true = every configured instance probes ok)
-    pmo_instances: dict[str, dict] = {}
-    for inst in config.pmos:
-        if not inst.configured:
-            pmo_instances[inst.name] = {"ok": None, "configured": False,
-                                        "team": ""}
-            continue
-        mgr = managers.get(inst.name)
-        try:
-            ok = bool(mgr) and (await mgr.pmo.health_probe(inst.team_key)).ok
-        except Exception:  # noqa: BLE001 — probe contract: any failure → ok:False for this instance; /health must never 500
-            ok = False
-        pmo_instances[inst.name] = {"ok": ok, "configured": True,
-                                    "team": inst.team_key}
-    configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
-    prefixed = len(managers) > 1   # advisory text carries the instance when N>1
-
-    def _merged(attr: str) -> dict:
-        out: dict = {}
-        for name, mgr in managers.items():
-            for k, v in getattr(mgr, attr).items():
-                out[k] = f"[{name}] {v}" if prefixed and isinstance(v, str) else v
-        return out
-
-    return {
-        "app": True,
-        "redis": redis_ok,
-        "dagu": dagu_ok,
-        "openobserve": oo_ok,
-        "oo_ingest": await _oo_ingest_check(),
-        "pmo": bool(configured_ok) and all(configured_ok),
-        "pmo_instances": pmo_instances,
-        "forge": forge_runtime.health,
-        # dev-type breakers + per-repo forge breakers, one map for the SPA
-        "circuit_breakers": {**shared_breakers,
-                             **{f"repo:{k}": v
-                                for k, v in forge_runtime.breakers.items()}},
-        "intake_paused": config.intake_paused,
-        # poll cadence surface for the Missions "Last polled Ns ago · next in
-        # ~Ns" indicator — INV-1 made visible, not hidden behind a spinner
-        "last_poll_at": (_last_poll_at.isoformat() if _last_poll_at else None),
-        "poll_interval_seconds": config.poll_interval_seconds,
-        "active_runs": len(store.active()),
-        "forge_protection": await _branch_protection(),
-        "anomalies": _merged("anomalies"),
-        "merge_handoffs": _merged("merge_handoffs"),
-        "needs_human": _merged("needs_human"),
-        "dependency_cycles": [
-            ([f"{name}:{k}" for k in cyc] if prefixed else cyc)
-            for name, mgr in managers.items() for cyc in mgr.cycles],
-        "blocked_reasons": _merged("blocked_reasons"),
-        # instances whose poll segment failed with a PERMANENT error (audit
-        # A1) — the other instances keep polling; this names the sick one
-        "poll_degraded": dict(_poll_degraded),
-        "internal_forge": (await internal_forge.health()
-                           if internal_forge is not None else None),
-        "mapper_degraded": " · ".join(
-            f"[{name}] {msg}" if prefixed else str(msg)
-            for name, mp in mappers.items() if (msg := mp.degraded())) or None,
-        # active templates that no longer resolve (fallback-to-default in
-        # effect) — the SPA derives a dismissable alert per entry (v0.1.1)
-        "prompt_template_warnings": (
-            prompt_templates.template_warnings(config)
-            + prompt_templates.devtype_prompt_warnings(config, dev_types)),
-        "security_warnings": _security_warnings(),
-    }
+    return await build_health_payload(
+        config=config, dev_types=dev_types, managers=managers,
+        mappers=mappers, forge_runtime=forge_runtime,
+        shared_breakers=shared_breakers, store=store,
+        internal_forge=internal_forge, poll_rt=poll_rt)
 
 
 @app.get("/api/v1/health/live")
@@ -662,7 +308,7 @@ async def list_missions():
     # `teams` maps every configured instance for group-by consumers
     return {"teams": {i.name: i.team_key for i in config.pmos if i.configured},
             "adoption_mode": config.adoption_mode,
-            "missions": missions_cache}
+            "missions": poll_rt.missions_cache}
 
 
 def _pr_url_of(run) -> str | None:
@@ -731,7 +377,7 @@ async def mission_action(pmo_id: str, body: _MissionActionBody):
     """Retry / park / unpark / resume via label swap. Returns projected labels."""
     from .mission_actions import label_action
     return await label_action(pmo_id, body.action,
-                              missions_cache=missions_cache, managers=managers)
+                              missions_cache=poll_rt.missions_cache, managers=managers)
 
 
 @app.post("/api/v1/missions/{pmo_id}/comment")
@@ -740,7 +386,7 @@ async def mission_comment(pmo_id: str, body: _SteeringBody):
     the next poll classifies it as HUMAN and resets the attempt counter."""
     from .mission_actions import post_steering
     return await post_steering(pmo_id, body.body,
-                               missions_cache=missions_cache, managers=managers)
+                               missions_cache=poll_rt.missions_cache, managers=managers)
 
 
 @app.post("/api/v1/poll/run")
@@ -757,9 +403,9 @@ async def force_poll_route():
     """
     from .mission_actions import force_poll_now
     return await force_poll_now(
-        lock=_poll_lock,
-        next_cycle_id=_next_poll_cycle_id,
-        run_cycle=run_poll_cycle)
+        lock=poll_rt.lock,
+        next_cycle_id=poll_rt.next_cycle_id,
+        run_cycle=poll_rt.run_cycle)
 
 
 @app.post("/api/v1/runs/{run_id}/stop")
@@ -807,7 +453,7 @@ async def clear_runs():
     with tracer.start_as_current_span("system.clear_runs") as span:
         result = await clear_all(store, executor, messaging, runlog,
                                  internal_forge=internal_forge)
-        missions_cache.clear()
+        poll_rt.missions_cache.clear()
         for mgr in managers.values():
             mgr._grace.clear()
             mgr._grace_next.clear()
@@ -1503,7 +1149,7 @@ async def put_secret(scope: str, instance: str, field: str, body: dict):
     secrets_store.write_connection_secret(scope, instance, field, value)
     if scope == "repo":
         forge_runtime.breakers.pop(instance, None)
-        _protection_cache["ts"] = 0.0
+        reset_protection_cache()
     # adapters capture credentials by VALUE at construction — a rotated
     # secret takes effect only through a rebuild, same as a config PUT
     reload_connections()
@@ -1516,7 +1162,7 @@ async def delete_secret(scope: str, instance: str, field: str):
     secrets_store.delete_connection_field(scope, instance, field)
     if scope == "repo":
         forge_runtime.breakers.pop(instance, None)
-        _protection_cache["ts"] = 0.0
+        reset_protection_cache()
     reload_connections()
     return {"present": False}
 

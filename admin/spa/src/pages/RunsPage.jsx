@@ -33,6 +33,8 @@ export default function RunsPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [openRun, setOpenRun] = useState(null);
   const [clearing, setClearing] = useState(false);
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [clearMsg, setClearMsg] = useState("");
   const [clearErr, setClearErr] = useState("");
 
@@ -82,6 +84,27 @@ export default function RunsPage() {
     }
   };
 
+  const doStopAll = async () => {
+    setStopping(true);
+    setClearErr("");
+    setClearMsg("");
+    try {
+      const result = await send("POST", "/system/stop-runs");
+      const n = (result.stopped || []).length;
+      const fin = (result.skipped_finalizing || []).length;
+      setClearMsg(
+        `Stopped ${n} run${n === 1 ? "" : "s"}.` +
+        (fin ? ` ${fin} finalizing run${fin === 1 ? "" : "s"} left to complete on ${fin === 1 ? "its" : "their"} own.` : "")
+      );
+      load();
+    } catch (e) {
+      setClearErr(String(e.message || e));
+    } finally {
+      setStopping(false);
+      setStopConfirmOpen(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <PageHeader title="Runs" subtitle="Dev runs executed by Dagu — click a row for its terminal"
@@ -92,6 +115,9 @@ export default function RunsPage() {
               Open Dagu <ExternalLink size={13} aria-hidden />
             </a>
             <MoreMenu label="More run actions" items={[
+              { label: "Stop all runs", danger: true,
+                desc: "Kills every in-flight Dev (each counts as a failed attempt). Finalizing runs complete on their own.",
+                onClick: () => { setStopConfirmOpen(true); setClearErr(""); } },
               { label: "Clear run history", danger: true,
                 desc: "Wipes local records, Dagu history and OpenObserve data. Cannot be undone.",
                 onClick: () => { setConfirmOpen(true); setClearErr(""); } },
@@ -218,6 +244,20 @@ export default function RunsPage() {
         </div>
       </Card>
       {openRun && <RunTerminal run={openRun} onClose={() => setOpenRun(null)} />}
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        title="Stop all in-flight runs?"
+        body={
+          "Every dispatched or running Dev is killed and its attempt counts " +
+          "as failed (the missions stay on the board and reschedule normally). " +
+          "Runs already finalizing are left to complete their bookkeeping.\n\n" +
+          "Nothing is deleted \u2014 use Clear run history for that."
+        }
+        confirmLabel="Stop all runs"
+        busy={stopping}
+        onConfirm={doStopAll}
+        onCancel={() => !stopping && setStopConfirmOpen(false)}
+      />
       <ConfirmDialog
         open={confirmOpen}
         title="Clear all run history?"

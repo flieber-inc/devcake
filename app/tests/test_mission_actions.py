@@ -371,3 +371,37 @@ def test_force_poll_now_releases_lock_when_cycle_raises():
         lock=lock, next_cycle_id=lambda: 2, run_cycle=ok_cycle))
     assert result["cycle"] == 2
     assert calls == [("bad", 1), ("ok", 2)]
+
+
+# ── 4a) stop-all endpoint (Clear-Runs hardening) ────────────────────────────
+
+class _ActiveStore(FakeStore):
+    def __init__(self, runs):
+        super().__init__({r.run_id: r for r in runs})
+        self._active = runs
+
+    def active(self):
+        return self._active
+
+
+def test_stop_all_kills_live_and_skips_finalizing():
+    """Stop-all mirrors the single-run guard: finalizing runs are SKIPPED
+    (never killed — the watchdog rule), but named in the response instead of
+    409ing the whole batch."""
+    live1 = SimpleNamespace(run_id="r-1", state="running")
+    live2 = SimpleNamespace(run_id="r-2", state="dispatched")
+    fin = SimpleNamespace(run_id="r-3", state="finalizing")
+    rm = FakeRunManager()
+    out = run(ma.stop_all_runs(run_manager=rm,
+                               run_store=_ActiveStore([live1, fin, live2])))
+    assert [k[0].run_id for k in rm.kills] == ["r-1", "r-2"]
+    assert all(k[1] == "failed" and "operator" in k[2] for k in rm.kills)
+    assert out == {"ok": True, "stopped": ["r-1", "r-2"],
+                   "skipped_finalizing": ["r-3"]}
+
+
+def test_stop_all_with_nothing_active_is_a_noop():
+    rm = FakeRunManager()
+    out = run(ma.stop_all_runs(run_manager=rm, run_store=_ActiveStore([])))
+    assert out["stopped"] == [] and out["skipped_finalizing"] == []
+    assert not rm.kills

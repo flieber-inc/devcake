@@ -235,6 +235,27 @@ async def stop_run(
     return {"ok": True, "run_id": run_id, "state": "failed"}
 
 
+async def stop_all_runs(
+    *,
+    run_manager: _RunManager,
+    run_store: _RunStore,
+) -> dict:
+    """Operator stop-everything (Clear-Runs hardening, 2026-07-18 root cause):
+    kill every dispatched/running run. Finalizing runs are SKIPPED, not 409'd —
+    their containers already exited and the watchdog's never-kill-finalizing
+    rule applies (see stop_run above); they surface in the response so the
+    operator knows what is still completing on its own."""
+    stopped: list[str] = []
+    skipped: list[str] = []
+    for run in run_store.active():
+        if getattr(run, "state", None) == "finalizing":
+            skipped.append(run.run_id)
+            continue
+        await run_manager.kill(run, "failed", "stopped by operator (stop all)")
+        stopped.append(run.run_id)
+    return {"ok": True, "stopped": stopped, "skipped_finalizing": skipped}
+
+
 # ── 5) force-poll endpoint ──────────────────────────────────────────────────
 # The most on-philosophy write we ship: forcing a poll cycle is asking the PMO
 # "what's true right now?" — INV-1 amplified, not sidestepped (docs/00 §4).

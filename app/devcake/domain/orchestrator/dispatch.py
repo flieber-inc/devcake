@@ -161,7 +161,7 @@ async def dispatch(self, mission: Mission, mtype: MissionType,
         return None
     try:
         live = await self.pmo.get(mission.ref)                 # live re-read
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any PMO failure gates this ONE mission (reason recorded + logged); escaping would abort the whole poll segment (audit A1)
         # a PMO failure here (transient or permanent) gates the ONE mission —
         # letting it escape would abort the whole poll segment (audit A1)
         self.blocked_reasons[mission.pmo_id] = (
@@ -309,7 +309,7 @@ async def _skill_payload(self, dev_type: DevType) -> list[dict]:
         return []
     try:
         payload, warnings = await self.skills.payload_for(dev_type.skills)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — skills are additive and must never refuse a run; dispatch proceeds without them (logged)
         # payload_for swallows STORE errors, but a bundled-copy read can
         # still raise — skills are additive and must never refuse a run
         log.warning("skills for %s unavailable — dispatching without them "
@@ -508,8 +508,9 @@ def _last_giveup_at(cls, pmo_id: str) -> datetime | None:
                     if e.get("pmo_id") == pmo_id \
                             and e.get("action") == "devcake_failed":
                         ts = cls._aware(datetime.fromisoformat(e["ts"]))
-                except Exception:
-                    continue  # one bad audit line must never halt scheduling
+                except Exception:  # noqa: BLE001 — one bad audit line must never halt scheduling
+                    log.debug("_last_giveup_at: skipping unparseable audit line")
+                    continue
         return ts
     except FileNotFoundError:
         return None
@@ -635,7 +636,7 @@ async def activity_payload(self, pmo_id: str, kind: str = "issue") -> dict:
         never parses vendor asset URLs."""
         try:
             data = await self.pmo.download_asset(att.url)
-        except Exception:
+        except Exception:  # noqa: BLE001 — attachment fetch degrades to an inline "unavailable" marker; the mirror build continues
             return f"[attachment unavailable: {att.url}]"
         # basename BEFORE dedupe: a slash-bearing link text ([v1/r.md](…))
         # must yield the same name in the index, the snapshot commit, and

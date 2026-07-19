@@ -267,7 +267,7 @@ async def _finalize_decomposition(self, run: Run, result: dict) -> None:
             try:
                 await self.pmo.append_description(
                     MissionRef(pmo_id, "issue"), note)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — lineage note is best-effort BY DESIGN (comment above); failure recorded in the audit, the cancel proceeds
                 self._audit(pmo_id, "lineage_note_failed", str(e)[:200])
         await self._checkpoint(run, "decomp:parent_note", _parent_note)
 

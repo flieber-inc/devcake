@@ -52,7 +52,7 @@ async def deliver_internal_zip_for_mission(self, m, pr) -> None:
         act = await self.pmo.get_activity(m.ref)
         if any(marker in self._unquoted(e.body) for e in act.entries):
             return                               # already delivered
-    except Exception:
+    except Exception:  # noqa: BLE001 — idempotency probe is advisory; failure logged and delivery proceeds (a double attach beats a lost deliverable)
         log.warning("deliverable idempotency check failed for %s — proceeding",
                     m.key)
     await _deliver_core(self, m.repo, m.key, m.pmo_id, m.pmo_kind, pr)
@@ -104,7 +104,7 @@ async def _merge_sha(forge, pr_number: int) -> str:
     try:
         raw = await forge._req("GET", f"/pulls/{pr_number}")
         return raw.get("merge_commit_sha") or "main"
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort probe per docstring: any failure falls back to zipping at the "main" ref
         return "main"
 
 
@@ -118,7 +118,7 @@ async def _build_zip(forge, files: list[PRFile], ref: str,
     for f in files:
         try:
             fetched.append((f.path, await forge.file_content(f.path, ref)))
-        except Exception:
+        except Exception:  # noqa: BLE001 — fetch failure is logged and recorded as a real omission (MANIFEST.txt); the zip build continues
             # a fetch failure is a REAL omission — count it (review finding
             # #4: else the feed note over-claims the delivered file count and
             # MANIFEST.txt never mentions it → silent data loss)

@@ -303,7 +303,7 @@ class RunManager:
         from ..telemetry import push_oo_log
         try:
             errors = await self.executor.node_errors(run.run_id)
-        except Exception:
+        except Exception:  # noqa: BLE001 — detail probe is best-effort (logged); the failure record must still ship to OpenObserve
             log.warning("no dagu node errors for %s", run.run_id, exc_info=True)
             errors = []
         record = failure_record(run, new_state, reason, errors)

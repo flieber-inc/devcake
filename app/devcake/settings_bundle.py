@@ -442,7 +442,7 @@ def unprotect_bundle(bundle: dict, passphrase: str) -> dict:
     try:
         sections = json.loads(plaintext)
         assert isinstance(sections, dict)
-    except Exception:
+    except Exception:  # noqa: BLE001 — any parse/shape failure of decrypted bytes maps to one typed 422; never leaks internals
         raise BundleError(422, "decrypted payload is not a bundle section map")
     out = {k: v for k, v in bundle.items() if k != "protected"}
     out.update(sections)

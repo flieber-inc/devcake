@@ -180,7 +180,7 @@ async def _deferred_merge_retry(self, m: Mission, pr,
         span.set_attribute("devcake.merge.verdict", str(verdict))
         try:
             await forge.merge(pr.number)
-        except Exception:
+        except Exception:  # noqa: BLE001 — a failed merge IS the signal here: a real conflict routes/hands off, anything else is logged transient and next cycle retries
             if verdict is False:
                 span.set_attribute("devcake.outcome", "conflict")
                 if not await self._maybe_route_conflict_to_execute(

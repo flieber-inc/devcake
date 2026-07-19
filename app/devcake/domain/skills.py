@@ -57,7 +57,7 @@ def parse_frontmatter(text: str) -> dict:
         end = text.index("\n---", 3)
         data = yaml.safe_load(text[3:end])
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception:  # noqa: BLE001 — lenient by contract (docstring): any broken shape yields {}; a malformed SKILL.md must never take the listing down
         return {}
 
 
@@ -152,7 +152,7 @@ class SkillService:
                     builtin=name in builtin_names))
             return skills, {"enabled": True, "ok": True, "detail": "",
                             "html_url": self.forge.skill_store_url()}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — skill store degrades to the bundled listing; failure logged + surfaced in store_status detail
             log.warning("skill store unreachable — serving bundled list: %s", e)
             return self._builtin_listing(), {
                 "enabled": True, "ok": False, "detail": str(e),
@@ -196,7 +196,7 @@ class SkillService:
         try:
             text = base64.b64decode(skill_md.get("content_b64") or "",
                                     validate=True).decode("utf-8")
-        except Exception:
+        except Exception:  # noqa: BLE001 — any decode failure maps to a typed SkillStoreError(422) refusal the API surfaces
             raise SkillStoreError(422, "SKILL.md is not valid base64/UTF-8")
         fm = parse_frontmatter(text)
         name = str(fm.get("name") or "")
@@ -240,7 +240,7 @@ class SkillService:
             try:
                 data = base64.b64decode(f.get("content_b64") or "",
                                         validate=True)
-            except Exception:
+            except Exception:  # noqa: BLE001 — any decode failure maps to a typed SkillStoreError(422) refusal the API surfaces
                 raise SkillStoreError(422, f"{rel}: not valid base64")
             if len(data) > MAX_FILE_BYTES:
                 raise SkillStoreError(422, f"{rel} exceeds the "
@@ -253,7 +253,7 @@ class SkillService:
                                        f"{MAX_TOTAL_BYTES}-byte total cap")
         try:
             existing = {t["path"] for t in await self._store_tree()}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — store I/O failure maps to a typed SkillStoreError(503) the API surfaces
             raise SkillStoreError(503, f"skill store unreachable: {e}")
         if not overwrite and (f"{name}/SKILL.md" in existing
                               or name in self._builtin_skills()):
@@ -269,7 +269,7 @@ class SkillService:
             if orphans:
                 await self.forge.delete_skill_paths(
                     sorted(orphans), f"devcake admin: prune skill {name}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — store I/O failure maps to a typed SkillStoreError(502) the API surfaces
             raise SkillStoreError(502, f"skill store write failed: {e}")
         self._invalidate()
 
@@ -286,14 +286,14 @@ class SkillService:
         try:
             paths = [t["path"] for t in await self._store_tree()
                      if t["path"].startswith(f"{name}/")]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — store I/O failure maps to a typed SkillStoreError(503) the API surfaces
             raise SkillStoreError(503, f"skill store unreachable: {e}")
         if not paths:
             raise SkillStoreError(404, f"skill {name!r} is not in the store")
         try:
             await self.forge.delete_skill_paths(
                 paths, f"devcake admin: delete skill {name}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — store I/O failure maps to a typed SkillStoreError(502) the API surfaces
             raise SkillStoreError(502, f"skill store delete failed: {e}")
         self._invalidate()
 
@@ -320,7 +320,7 @@ class SkillService:
             try:
                 store_index = {t["path"]: int(t.get("size") or 0)
                                for t in await self._store_tree()}
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — skills are additive: store failure degrades to the bundled copies, recorded in warnings
                 warnings.append(f"skill store unreachable ({e}) — "
                                 "using bundled copies")
         builtin = self._builtin_skills()
@@ -335,7 +335,7 @@ class SkillService:
                 try:
                     entry, size_used, warns = await self._collect(
                         name, sized, total, self._store_file)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — skills are additive: store read failure falls back to the bundled copy, recorded in warnings
                     warnings.append(f"skill {name!r}: store read failed ({e}) "
                                     "— trying the bundled copy")
                     entry, size_used, warns = [], 0, []

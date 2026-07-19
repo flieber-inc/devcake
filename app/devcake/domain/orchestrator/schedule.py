@@ -125,7 +125,7 @@ async def _open_blockers(self, m: Mission, by_id: dict[str, Mission],
             if bid not in memo:
                 try:
                     memo[bid] = await self.pmo.get(MissionRef(bid, "issue"))
-                except Exception:
+                except Exception:  # noqa: BLE001 — fail-safe per ADR-0007: an unreadable blocker counts as open (logged); self-heals next cycle
                     log.warning("blocker %s of %s unreadable — treated as open",
                                 bid, m.key)
                     memo[bid] = None

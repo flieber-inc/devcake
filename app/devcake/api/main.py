@@ -260,7 +260,7 @@ async def _poll_instance(mgr: MissionManager,
         try:
             m.repo, m.repo_reason = await mgr.resolve_repo_live(
                 m, all_runs=run_snapshot)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — poll guard: a forge outage gates THIS mission only (reason recorded + logged); it must never abort the whole cycle
             m.repo, m.repo_reason = None, (
                 f"internal forge unreachable — mission gated: {str(e)[:150]}")
             log.warning("repo resolution failed for %s: %s", m.key, e)
@@ -509,7 +509,7 @@ async def _check_redis() -> bool:
             return bool(await r.ping())
         finally:
             await r.aclose()
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe contract: any failure → False; /health must never 500
         return False
 
 
@@ -533,7 +533,7 @@ async def _branch_protection() -> dict:
                 prot = await f.default_branch_protection(
                     inst.default_branch if inst else "main")
                 out[name] = prot.model_dump() if prot else None
-            except Exception:
+            except Exception:  # noqa: BLE001 — probe contract: failure → None (advisory omitted); /health must never 500
                 out[name] = None
         _protection_cache["value"] = out
     return _protection_cache["value"]
@@ -543,7 +543,7 @@ async def _check_http(url: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             return (await client.get(url)).status_code < 500
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe contract: any failure → False; /health must never 500
         return False
 
 
@@ -567,7 +567,7 @@ async def _oo_ingest_check() -> dict:
                   "detail": "" if r.status_code == 200 else
                   f"HTTP {r.status_code} — the OO service account cannot "
                   f"authenticate; run scripts/provision_oo.py (ISSUES #13)"}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + detail; /health must never 500
         result = {"ok": False, "detail": f"probe failed: {str(e)[:150]}"}
     _oo_ingest_cache.update(ts=now, result=result)
     return result
@@ -592,7 +592,7 @@ async def health():
         mgr = managers.get(inst.name)
         try:
             ok = bool(mgr) and (await mgr.pmo.health_probe(inst.team_key)).ok
-        except Exception:
+        except Exception:  # noqa: BLE001 — probe contract: any failure → ok:False for this instance; /health must never 500
             ok = False
         pmo_instances[inst.name] = {"ok": ok, "configured": True,
                                     "team": inst.team_key}
@@ -834,7 +834,7 @@ async def put_config(body: dict):
     try:
         reject_stale_patch(body)
         merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
         raise HTTPException(422, str(e))
     # cross-store semantics + dry-run adapter construction (ISSUES #11) live
     # in settings_bundle — ONE implementation shared with bundle apply
@@ -1047,14 +1047,14 @@ def _open_uploaded_bundle(body: dict) -> dict:
     protected-envelope unwrap when a passphrase rides along."""
     try:
         raw = base64.b64decode(str(body.get("content_b64") or ""), validate=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 — upload-parsing contract: any decode failure is the client's 422, never a 500
         raise HTTPException(422, "content_b64 must be valid base64")
     if len(raw) > MAX_BUNDLE_BYTES:
         raise HTTPException(422, f"bundle exceeds "
                                  f"{MAX_BUNDLE_BYTES // (1024 * 1024)} MB")
     try:
         doc = yaml.safe_load(raw.decode("utf-8"))
-    except Exception:
+    except Exception:  # noqa: BLE001 — upload-parsing contract: any decode/parse failure is the client's 422, never a 500
         raise HTTPException(422, "not a readable YAML bundle")
     if not isinstance(doc, dict):
         raise HTTPException(422, "not a settings bundle")
@@ -1157,7 +1157,7 @@ async def export_summary():
     harness_n = len(secrets_store.list_harness_secrets())
     try:
         skills_n = len((await skill_service.list_skills())[0])
-    except Exception:
+    except Exception:  # noqa: BLE001 — advisory count: a skill-store outage shows 0, the export dialog must still render
         skills_n = 0
     return {"secrets": {"total": sum(by_scope.values()) + harness_n,
                         "by_scope": by_scope, "harness": harness_n,
@@ -1350,7 +1350,7 @@ async def list_dev_types():
 async def upsert_dev_type(body: dict, name: str | None = None):
     try:
         dt = DevType.model_validate(body if name is None else {**body, "name": name})
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
         raise HTTPException(422, str(e))
     dev_types[dt.name] = dt
     save_dev_type(dt)
@@ -1436,7 +1436,7 @@ async def get_assignments():
 async def put_assignments(body: dict):
     try:
         new = {k: Assignment.model_validate(v) for k, v in body.items()}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
         raise HTTPException(422, str(e))
     missing = {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"} - set(new)
     if missing:
@@ -1609,7 +1609,7 @@ async def test_pmo(name: str):
                 "labels": h.managed_labels_present,
                 "labels_expected": h.managed_labels_expected,
                 "missions_visible": len(missions)}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": str(e)[:300]}
 
 
@@ -1655,7 +1655,7 @@ async def test_forge(name: str):
                 "reference_only": inst.reference_only,
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
                 "branch_protection": protection.model_dump() if protection else None}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": str(e)[:300]}
 
 
@@ -1667,7 +1667,7 @@ async def list_internal_repos():
         return {"repos": [], "ui_url": None}
     try:
         repos = await internal_forge.list_repos()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
         raise HTTPException(502, f"internal forge unreachable: {str(e)[:200]}")
     return {"repos": [r.model_dump() for r in repos],
             "ui_url": os.environ.get("GITEA_UI_URL", "http://localhost:3300")}
@@ -1691,7 +1691,7 @@ async def create_internal_repo(body: dict):
         return await internal_forge.create_operator_repo(name)
     except ValueError as e:
         raise HTTPException(409, str(e))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
         raise HTTPException(502, f"internal forge: {str(e)[:200]}")
 
 
@@ -1759,7 +1759,7 @@ async def sync_skills():
                                  "(GITEA_ADMIN_PASSWORD unset)")
     try:
         await internal_forge.ensure_skill_store(skill_service.builtin_seed())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
         raise HTTPException(502, f"internal forge: {str(e)[:200]}")
     return {"ok": True}
 
@@ -1777,7 +1777,7 @@ async def delete_internal_repo(name: str):
                                  "to finish before clearing")
     try:
         await internal_forge.delete_repo(name)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
         raise HTTPException(502, f"delete failed: {str(e)[:200]}")
     forge_runtime.forges.pop(name, None)
     forge_runtime.instances.pop(name, None)

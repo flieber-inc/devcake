@@ -46,7 +46,7 @@ async def push_oo_log(stream: str, record: dict) -> bool:
                 json=[record])
             resp.raise_for_status()
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 — telemetry shipping is fire-and-forget; failure logged, must never break kill/finalize
         log.warning("could not ship record to OO stream %s", stream, exc_info=True)
         return False
 

@@ -156,7 +156,7 @@ class GitLabForge:
                         state = await self.pr_state(pr_number)
                         if state.merged:
                             return
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — best-effort merged check; original error re-raised
                         pass
                 raise
 
@@ -194,7 +194,7 @@ class GitLabForge:
             if e.status == 404:
                 return BranchProtection(protected=False, requires_reviews=None)
             return None
-        except Exception:
+        except Exception:  # noqa: BLE001 — probe contract: failure → None (protection unknown); never raises into the poll loop
             return None
 
     async def pr_files(self, pr_number: int) -> list[PRFile]:

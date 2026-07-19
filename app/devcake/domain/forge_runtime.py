@@ -145,7 +145,7 @@ class ForgeRuntime:
         else:
             try:
                 data = (await forge.health_probe()).model_dump()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + transient detail, never raises into the poll loop
                 # a probe that could not run says nothing about the credential
                 data = {"ok": False, "repository": inst.url if inst else "",
                         "can_push": False, "transient": True,

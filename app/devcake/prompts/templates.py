@@ -94,7 +94,7 @@ def _load(path: Path) -> dict | None:
     try:
         data = yaml.safe_load(path.read_text())
         return data if isinstance(data, dict) else None
-    except Exception:
+    except Exception:  # noqa: BLE001 — unreadable template logged and read as absent; seeded defaults still serve
         log.error("unreadable prompt template %s", path)
         return None
 

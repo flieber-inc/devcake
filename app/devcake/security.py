@@ -154,7 +154,7 @@ def _known_values() -> list[str]:
         try:
             live_paths.add(str(p))
             values.extend(_file_values(p))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — redaction-source scan must cover the rest; unreadable file reported once
             _report_unreadable(p, exc)
             continue
     for stale in set(_scan_cache) - live_paths:      # deleted files drop out

@@ -23,7 +23,10 @@ Precondition discipline:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+
+log = logging.getLogger("devcake.missions")
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Protocol
@@ -104,8 +107,8 @@ def _try_audit(mgr: Any, pmo_id: str, action: str, detail: str = "") -> None:
         return
     try:
         fn(pmo_id, action, detail)
-    except Exception:  # pragma: no cover - defensive
-        pass
+    except Exception:  # noqa: BLE001 — audit is advisory; failure is logged, never surfaced
+        log.debug("audit write failed for %s/%s", pmo_id, action, exc_info=True)
 
 
 # ── 1) label actions: retry / park / unpark / resume ────────────────────────

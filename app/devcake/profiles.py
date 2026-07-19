@@ -148,7 +148,7 @@ def list_profiles() -> list[dict]:
         try:
             doc = yaml.safe_load(p.read_text())
             assert isinstance(doc, dict)
-        except Exception:
+        except Exception:  # noqa: BLE001 — a broken profile renders as broken in the list; listing must not 500
             out.append({"name": name, "broken": True})
             continue
         cfg = doc.get("config") or {}
@@ -188,7 +188,7 @@ def _read_state() -> dict:
         return {}
     try:
         return json.loads(p.read_text())
-    except Exception:
+    except Exception:  # noqa: BLE001 — corrupt last-applied breadcrumb reads as empty; it is an advisory divergence hint only
         return {}
 
 

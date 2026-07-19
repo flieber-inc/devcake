@@ -48,7 +48,7 @@ async def _flag_out_of_pipeline_merge(self, run: Run) -> None:
             f"{run.mission_key}: PR merged outside the pipeline ({state.url})")
         log.warning("out-of-pipeline merge on %s (%s)", run.mission_key,
                     state.url)
-    except Exception:
+    except Exception:  # noqa: BLE001 — anomaly probe is best-effort; failure logged (debug), the review flow is unaffected
         log.debug("out-of-pipeline merge check failed for %s",
                   run.mission_key, exc_info=True)
 
@@ -165,7 +165,7 @@ async def _finalize_review(self, run: Run, result: dict) -> None:
                         self._audit(pmo_id, "review_approve_merged", pr_url)
                     await self._checkpoint(run, "review:done", _done)
                     await self.deliver_internal_zip(run, pr)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — every merge failure, whatever its type, must enter the re-probe → conflict-route → merge-failed recovery ladder; escaping would strand the mission mid-REVIEW
                     # Capture for nested async defs (static F821 + safe if
                     # await order changes later); not a known production 500.
                     merge_err = e

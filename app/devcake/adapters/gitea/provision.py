@@ -145,7 +145,7 @@ class GiteaProvisioner:
         try:
             toks = await self._req("GET", f"/users/{user}/tokens",
                                    tolerate=(404,)) or []
-        except Exception:
+        except Exception:  # noqa: BLE001 — probe contract: failure → False → token treated as dead and re-minted; never raises into boot provisioning
             return False
         return any(t.get("name") == name
                    and t.get("token_last_eight") == token[-8:] for t in toks)
@@ -525,7 +525,7 @@ class GiteaProvisioner:
                 r = await client.get(
                     f"{self.url}/api/v1/repos/{ORG}/{repo}",
                     headers={"Authorization": f"token {token}"})
-        except Exception:
+        except Exception:  # noqa: BLE001 — tri-state probe contract (A13): network failure → None; caller must not re-mint on None
             return None
         if r.status_code == 200:
             return True
@@ -573,7 +573,7 @@ class GiteaProvisioner:
                 return {"ok": False, "ui_url": self.public_url,
                         "detail": "org not provisioned yet (boot pending?)"}
             return {"ok": True, "detail": "", "ui_url": self.public_url}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — health probe contract: any failure → {"ok": False} payload; health must never raise
             return {"ok": False, "detail": str(e)[:200],
                     "ui_url": self.public_url}
 
@@ -592,7 +592,7 @@ class GiteaProvisioner:
             return None
         try:
             return json.loads(path.read_text())
-        except Exception:
+        except Exception:  # noqa: BLE001 — unreadable secret reads as absent (logged); provisioning re-mints from absence
             log.error("unreadable internal-forge secret %s", path)
             return None
 

@@ -201,6 +201,25 @@ def clone_error_class(stderr: str) -> str:
     return "DEV_FORGE_AUTH" if any(m in lowered for m in auth_markers) else "DEV_FORGE"
 
 
+HARNESS_AUTH_MARKERS = (
+    # generic credential wording (any harness)
+    "authentication", "unauthorized", "log in",
+    # grok CLI revoked/expired-session wording — without these a revoked grok
+    # cred exits 10 (DEV_CRASH, three burned attempts) instead of 12 (DEV_AUTH
+    # breaker trip)
+    "not signed in", "please sign in", "signed out", "grok login",
+)
+
+
+def classify_harness_failure(err_text: str) -> int:
+    """Exit code for a nonzero harness exit: 12 (DEV_AUTH) only on credential
+    wording, else 10 (DEV_CRASH). Markers are precise phrases on purpose — a
+    false 12 pauses the whole Dev Type until a human re-uploads credentials;
+    a false 10 merely burns one attempt (docs/15 §4)."""
+    lowered = err_text.lower()
+    return 12 if any(m in lowered for m in HARNESS_AUTH_MARKERS) else 10
+
+
 # ── live output relay (docs/08 §4, docs/09 §2) ──────────────────────────────
 # The harness's stdout is pumped line-by-line: the raw line is accumulated for
 # end-of-run parsing, and a condensed human-readable rendering is (a) printed
@@ -897,9 +916,7 @@ def main() -> None:
 
     if harness_exit != 0:
         err = err_text[-1500:]
-        auth_fail = "authentication" in err.lower() or "unauthorized" in err.lower() \
-            or "log in" in err.lower()
-        code = 12 if auth_fail else 10
+        code = classify_harness_failure(err)
         send_artifacts({"result": None, "exit_code": code,
                         "transcript_md": with_session(
                             f"harness exited {harness_exit}\n\n```\n{err}\n```", dump),

@@ -149,7 +149,7 @@ def _attachment_cap(self) -> int:
     """The PMO's attachment size cap (deliverable zip bound)."""
     try:
         return self.pmo.capabilities().attachment_max_bytes
-    except Exception:
+    except Exception:  # noqa: BLE001 — capability probe degrades to the conservative 25 MiB default cap; the zip builder still bounds the payload
         return 25 * 1024 * 1024
 
 

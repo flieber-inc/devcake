@@ -102,7 +102,9 @@ class Messaging:
             try:
                 if json.loads(fields.get("m", "{}")).get("kind") == "runspec.result":
                     await self.redis.xdel(stream, entry_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort secret-entry sweep; skip is logged
+                log.warning("delete_runspec_result: skipping unparseable entry %s on %s",
+                            entry_id, stream)
                 continue
 
     async def delete_reply_stream(self, run_id: str) -> None:
@@ -170,7 +172,8 @@ class Messaging:
                 try:
                     envelope = json.loads((fields or {}).get("m", "{}"))
                     run_id = str(envelope.get("run_id", ""))
-                except Exception:
+                except Exception:  # noqa: BLE001 — scan must finish; skip is logged
+                    log.warning("ingress run-id scan: skipping unparseable entry %s", _entry_id)
                     continue
                 if run_id:
                     out.add(run_id)
@@ -229,7 +232,7 @@ class Messaging:
             envelope = json.loads(fields.get("m", "{}"))
             if not isinstance(envelope, dict):
                 envelope = {}
-        except Exception:
+        except Exception:  # noqa: BLE001 — a malformed body must still be dead-letterable; empty envelope, poison path proceeds
             envelope = {}
         key = self._chunk_identity(envelope)
         assembly = self._chunks.get(key) if key else None

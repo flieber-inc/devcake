@@ -5,8 +5,12 @@ target-version = "py312"
 line-length = 100
 
 [lint]
-# Narrow: syntax / undefined names only (caught the review.py merge_err capture).
-select = ["E9", "F63", "F7", "F82"]
+# Narrow: syntax / undefined names only (caught the review.py merge_err capture),
+# plus BLE001 (blind except). Policy (docs/15 §7): every production
+# `except Exception` is narrowed or carries `# noqa: BLE001` with a one-line
+# justification. Silent swallows (bare pass/continue, no log) are never OK.
+select = ["E9", "F63", "F7", "F82", "BLE001"]
 
 [lint.per-file-ignores]
-"tests/*" = []
+# Test code legitimately catches broadly.
+"tests/*" = ["BLE001"]

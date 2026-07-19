@@ -67,8 +67,8 @@ class RunStore:
                     raw["spec_env"] = {k: v for k, v in env.items()
                                        if not self._sensitive_env_name(k)}
                 self._write_text(path, json.dumps(raw, indent=2, default=str))
-        except Exception:
-            pass  # not valid JSON: preserve the bytes under 0600
+        except Exception:  # noqa: BLE001 — not valid JSON: preserve the bytes under 0600
+            log.debug("quarantine: %s not parseable; preserving raw bytes", path.name)
         qdir = self.root / "quarantine"
         qdir.mkdir(mode=0o700, exist_ok=True)
         dest = qdir / path.name
@@ -87,7 +87,7 @@ class RunStore:
         for p in sorted(self.root.glob("*.json")):
             try:
                 runs.append(Run.model_validate_json(p.read_text()))
-            except Exception:
+            except Exception:  # noqa: BLE001 — corrupt run JSON is skipped, never crashes the listing; the boot sweep quarantines it
                 continue  # unreadable file: skip, never crash the loop
         return runs
 
@@ -110,7 +110,7 @@ class RunStore:
                 run = Run.model_validate_json(path.read_text())
                 if run.schema_version < 2:
                     raise ValueError("pre-v2 run record (may carry credentials)")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — any parse/validation failure quarantines the record rather than blocking boot
                 self._quarantine(path, str(e))
                 moved.append(path.stem)
         return moved

@@ -151,7 +151,7 @@ class GitHubForge:
         try:
             state = await self.pr_state(pr_number)
             return bool(state.merged)
-        except Exception:
+        except Exception:  # noqa: BLE001 — probe contract: failure → False, caller re-raises the original merge error
             return False
 
     async def mergeable(self, pr_number: int) -> Optional[bool]:

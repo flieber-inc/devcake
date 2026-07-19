@@ -35,7 +35,7 @@ class OwnerStore:
         try:
             data = json.loads(self.path.read_text())
             return {str(k): str(v) for k, v in data.items()}
-        except Exception:
+        except Exception:  # noqa: BLE001 — unreadable owner store starts empty (logged); ownership is advisory
             log.error("unreadable owner store %s — starting empty (a shared "
                       "mission may need its duplicate-claim anomaly resolved "
                       "by hand)", self.path)

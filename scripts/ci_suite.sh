@@ -26,6 +26,10 @@ python3 scripts/check_image_pins.py
 echo "── bake app-test (prod image has no pytest)"
 docker buildx bake -f docker-bake.hcl app-test
 
+echo "── ruff (syntax / undefined names / blanket-except policy, docs/15 §7)"
+docker run --rm -e RUFF_CACHE_DIR=/tmp/ruff-cache -w /srv \
+  "devcake/app-test:${DEVCAKE_TAG:-latest}" ruff check devcake tests
+
 echo "── unit + live-redis tests (INV-1..6 coverage) via app-test image"
 # Same Docker network as compose so redis://redis resolves; prod app stays lean.
 # Mount images/common for test_entrypoint_render (same path as compose: /srv/images/common).

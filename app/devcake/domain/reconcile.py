@@ -33,7 +33,7 @@ async def reconcile_runs(manager) -> None:
                     or label in ("failed", "aborted", "error", "cancelled"):
                 try:
                     node_errors = await executor.node_errors(r.run_id) if status else []
-                except Exception:
+                except Exception:  # noqa: BLE001 — error-detail probe is optional enrichment; empty detail is the safe default, the orphan kill proceeds
                     node_errors = []
                 await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
                 detail = " ".join(str(item.get("error") or "") for item in node_errors)

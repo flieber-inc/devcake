@@ -124,13 +124,13 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
         try:
             await r.delete(key)
             reply_deleted += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — clear-runs teardown is best-effort per key; failure logged, sweep continues
             log.warning("redis delete %s: %s", key, e)
     # trim ingress rather than drop it (keeps consumer group)
     try:
         await r.xtrim(INGRESS, maxlen=0, approximate=False)
         ingress_trimmed = True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — best-effort teardown; failure logged and recorded as ingress_trimmed=False, sweep continues
         log.warning("redis xtrim ingress: %s", e)
         ingress_trimmed = False
     # revoke any leftover per-run ACL users (dev-*)
@@ -141,7 +141,7 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
             if name.startswith("dev-"):
                 await r.execute_command("ACL", "DELUSER", name)
                 users_deleted += 1
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — clear-runs teardown is best-effort per subsystem; failure logged, sweep continues
         log.warning("redis ACL cleanup: %s", e)
     # in-process chunk reassembly
     messaging._chunks.clear()

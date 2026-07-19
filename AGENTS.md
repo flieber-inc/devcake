@@ -95,7 +95,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 - Typing domain code against concrete `DaguExecutor` / `Messaging` / `RunStore` instead of ports
 - Duplicating the ACL → digest → save → start spine outside `RunBootstrap`
 - Giant untested functions in `orchestrator.py` without a public-seam test
-- `except Exception: pass` that swallows real failures without logging
+- `except Exception: pass` that swallows real failures without logging — lint-enforced: ruff `BLE001`; every blanket catch is narrowed or carries `# noqa: BLE001 — <justification>` naming its contract (docs/15 §7)
 - Mutating production modules only “to make the test pass” by weakening invariants
 
 ## Docker images: Bake only

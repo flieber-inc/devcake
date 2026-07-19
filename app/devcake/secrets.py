@@ -80,7 +80,7 @@ def _read(path: Path) -> dict:
         return {}
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception:  # noqa: BLE001 — lenient-read contract: corrupt file reads as absent (logged); redaction scanner alarms separately
         log.error("unreadable secret file %s", path)
         return {}
 

@@ -198,7 +198,7 @@ async def _transition(self, run: Run, result: dict, plan_md: str | None) -> None
                     await self.pmo.post_feed(
                         MissionRef(pmo_id, "project"),
                         redact(baton) + "\n\n" + COMMENT_SENTINEL)
-                except Exception:
+                except Exception:  # noqa: BLE001 — project-update mirror is best-effort; failure logged, the hand-off is already recorded on the feed + audit
                     log.warning("project-update hand-off failed for %s — "
                                 "summary lives in the audit log only",
                                 run.mission_key, exc_info=True)

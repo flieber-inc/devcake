@@ -120,11 +120,13 @@ entrypoint start
   │ 4b. install skill-store skills from the runspec `skills` field → the
   │      harness's skills dir from runspec `skills_dir` (home-relative;
   │      default ~/.claude/skills — never into the repo clone, the Dev would
-  │      commit them); path-traversal-safe, per-file failures non-fatal
+  │      commit them); path-traversal-safe, per-file failures non-fatal;
+  │      consult is optional unless the prompt soft-forces Required skills
   │ 5. run mcp_setup_commands — stdin closed, own process group, 300 s cap per
   │      command; first failure/timeout → run.artifacts {exit_code: 14,
   │      DEV_MCP_SETUP, command + stderr tail} then exit 14
-  │ 6. launch harness: identifying prompt + mission-type playbook prompt (03-mission-lifecycle.md §7)
+  │ 6. launch harness: identifying prompt + mission-type playbook prompt
+  │      (+ optional required-skills soft-force block — 03 §7)
   │      • heartbeat sidecar emits `run.heartbeat` every 30 s throughout
   │      • the live log announces harness start and, while user-visible output is
   │        absent, emits one liveness notice per 60 s (hidden reasoning stays hidden)

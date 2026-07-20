@@ -249,29 +249,29 @@ def test_devtype_prompt_store_seed_resolve_roundtrip(monkeypatch, tmp_path):
     trio, resolution falls back Development → the stored field."""
     from devcake.config import DevType
     t = _tpl(monkeypatch, tmp_path)
-    dts = {"senior-dev": DevType(name="senior-dev", harness_template="claude-code",
-                                 identifying_prompt="You are senior."),
+    dts = {"judgment": DevType(name="judgment", harness_template="claude-code",
+                               identifying_prompt="You are judgment."),
            "customdev": DevType(name="customdev", harness_template="codex",
                                 identifying_prompt="Custom prefix.")}
     t.seed_devtype_prompts(dts)
     listing = t.list_devtype_prompts(dts)
-    assert {e["name"] for e in listing["senior-dev"]} == {"Development",
-                                                          "Customer Success"}
+    assert {e["name"] for e in listing["judgment"]} == {"Development",
+                                                        "Customer Success"}
     assert {e["name"] for e in listing["customdev"]} == {"Development"}
     # seeded once from live prompt; NOT re-canonicalized on reseed
-    t.save_devtype_prompt("senior-dev", "Development", "Edited by operator.")
+    t.save_devtype_prompt("judgment", "Development", "Edited by operator.")
     t.seed_devtype_prompts(dts)
-    assert t.resolve_devtype_prompt("senior-dev", None, "fb")[0] == "Edited by operator."
+    assert t.resolve_devtype_prompt("judgment", None, "fb")[0] == "Edited by operator."
     # CS resolves; a ghost name falls back to Development with a warning
-    text, warn = t.resolve_devtype_prompt("senior-dev", "Customer Success", "fb")
+    text, warn = t.resolve_devtype_prompt("judgment", "Customer Success", "fb")
     assert "customer-success" in text and warn is None
-    text, warn = t.resolve_devtype_prompt("senior-dev", "ghost", "fb")
+    text, warn = t.resolve_devtype_prompt("judgment", "ghost", "fb")
     assert text == "Edited by operator." and "ghost" in warn
     # unknown dev type dir → straight to the stored-field fallback
     assert t.resolve_devtype_prompt("nodir", "Development", "fb")[0] == "fb"
     from devcake.config import AppConfig
     cfg = AppConfig()
-    cfg.active_devtype_prompts = {"senior-dev": "ghost"}
+    cfg.active_devtype_prompts = {"judgment": "ghost"}
     assert len(t.devtype_prompt_warnings(cfg, dts)) == 1
 
 
@@ -303,6 +303,53 @@ def test_rename_dev_type_moves_templates_and_refs(monkeypatch, tmp_path):
         app_main.dev_types.pop("newdev", None)
         app_main.config.assignments["EXECUTE"].dev_type = "main-dev"
         app_main.config.active_devtype_prompts.pop("newdev", None)
+
+
+def test_remove_dev_type_clears_active_prompt_and_sidecar_dirs(monkeypatch, tmp_path):
+    """Deleting a Dev Type must drop active_devtype_prompts keys and remove
+    its prompt-template + credential dirs — otherwise Workflow Switcher /
+    PUT /config 422s on deep_merge-preserved ghosts (2026-07-19)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import config as config_mod
+    from devcake.api import devtypes_service
+    from devcake.config import AppConfig, DevType
+
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        tmp_path / "config" / "config.yaml")
+    saved: list = []
+    monkeypatch.setattr(devtypes_service, "save_config",
+                        lambda c: saved.append(dict(c.active_devtype_prompts)))
+    monkeypatch.setattr(devtypes_service, "delete_dev_type",
+                        lambda n: (tmp_path / "config" / "dev_types"
+                                   / f"{n}.yaml").unlink(missing_ok=True))
+
+    dt = DevType(name="junior-dev", harness_template="codex",
+                 identifying_prompt="junior")
+    dts = {"junior-dev": dt, "judgment": DevType(
+        name="judgment", harness_template="claude-code")}
+    cfg = AppConfig()
+    cfg.assignments = {mt: config_mod.Assignment(dev_type="judgment")
+                       for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")}
+    cfg.active_devtype_prompts = {
+        "junior-dev": "Customer Success",
+        "judgment": "Development",
+    }
+    (tmp_path / "config" / "dev_types").mkdir(parents=True)
+    prompts = tmp_path / "config" / "devtype_prompt_templates" / "junior-dev"
+    prompts.mkdir(parents=True)
+    (prompts / "Development.yaml").write_text("template: x\n")
+    secrets = tmp_path / "secrets" / "junior-dev"
+    secrets.mkdir(parents=True)
+    (secrets / "creds.json").write_text("{}")
+
+    out = run_coro(devtypes_service.remove_dev_type(
+        "junior-dev", config=cfg, dev_types=dts))
+    assert out == {"deleted": "junior-dev"}
+    assert "junior-dev" not in dts
+    assert cfg.active_devtype_prompts == {"judgment": "Development"}
+    assert saved and saved[-1] == {"judgment": "Development"}
+    assert not prompts.exists()
+    assert not secrets.exists()
 
 
 def test_template_warning_for_stale_executed_trivially(monkeypatch, tmp_path):

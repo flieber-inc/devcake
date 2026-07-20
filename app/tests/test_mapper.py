@@ -92,7 +92,7 @@ def test_config_defaults():
     assert cfg.intake_paused is False
     assert cfg.relations_mapper.enabled is False           # manual-only by default
     assert cfg.relations_mapper.interval_minutes == 60
-    assert cfg.relations_mapper.dev_type == "junior-dev"   # seeded cheap vehicle
+    assert cfg.relations_mapper.dev_type == "mapper"   # seeded cheap vehicle
     assert cfg.auto_resolve_merge_conflicts is True        # docs/03 §4.1
     assert cfg.merge_retry_window_minutes == 30
     # roundtrips through dump/validate (the /api/v1/config PUT path)
@@ -106,12 +106,12 @@ def test_deep_merge_preserves_nested_siblings():
     base = AppConfig().model_dump()
     merged = deep_merge(base, {"relations_mapper": {"enabled": True}})
     assert merged["relations_mapper"]["enabled"] is True
-    assert merged["relations_mapper"]["dev_type"] == "junior-dev"  # sibling survived
+    assert merged["relations_mapper"]["dev_type"] == "mapper"  # sibling survived
 
 
 # ── MapperService cadence + degradation ──────────────────────────────────────
 
-def make_service(tmp_path, enabled=True, dev_type="junior-dev"):
+def make_service(tmp_path, enabled=True, dev_type="mapper"):
     cfg = AppConfig()
     cfg.relations_mapper.enabled = enabled
     cfg.relations_mapper.dev_type = dev_type
@@ -125,7 +125,7 @@ def make_service(tmp_path, enabled=True, dev_type="junior-dev"):
                    dev_type=dt.name, seq=len(dispatched))
 
     mgr.dispatch_mapper = fake_dispatch
-    svc = MapperService(cfg, {"junior-dev": DevType(name="junior-dev",
+    svc = MapperService(cfg, {"mapper": DevType(name="mapper",
                                                     harness_template="claude-code")},
                         mgr)
     return svc, mgr, dispatched
@@ -133,7 +133,7 @@ def make_service(tmp_path, enabled=True, dev_type="junior-dev"):
 
 def mapper_run(n, state):
     return Run(run_id=f"TEAM-{n}-MAPPER-{'X' * 6}", mission_key="TEAM",
-               mission_type="MAPPER", dev_type="junior-dev", seq=n, state=state)
+               mission_type="MAPPER", dev_type="mapper", seq=n, state=state)
 
 
 def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
@@ -147,9 +147,9 @@ def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
     assert dispatched == []                        # interval not elapsed
     svc._last_at = time.monotonic() - 10**6
     run_coro(svc.maybe_dispatch([]))
-    assert dispatched == ["junior-dev"]            # elapsed → dispatched
+    assert dispatched == ["mapper"]            # elapsed → dispatched
     run_coro(svc.maybe_dispatch([]))
-    assert dispatched == ["junior-dev"]            # watermark advanced
+    assert dispatched == ["mapper"]            # watermark advanced
 
 
 def test_watermark_not_advanced_on_dispatch_failure(tmp_path):
@@ -198,8 +198,8 @@ def test_run_now_gates_on_missing_referenced_secret_env(tmp_path, monkeypatch):
     MapperUnconfigured naming the var; storing the value lifts it."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     svc, mgr, dispatched = make_service(tmp_path)
-    svc.dev_types["junior-dev"] = DevType(
-        name="junior-dev", harness_template="claude-code",
+    svc.dev_types["mapper"] = DevType(
+        name="mapper", harness_template="claude-code",
         secret_env=["DD_API_KEY"],
         mcp_setup_commands=["claude mcp add logs -e K=$DD_API_KEY -- x"])
     with pytest.raises(MapperUnconfigured, match="DD_API_KEY"):
@@ -208,7 +208,7 @@ def test_run_now_gates_on_missing_referenced_secret_env(tmp_path, monkeypatch):
     from devcake import secrets as s
     s.write_harness_secret("DD_API_KEY", "k")
     run_coro(svc.run_now())
-    assert dispatched == ["junior-dev"]
+    assert dispatched == ["mapper"]
 
 
 def test_activity_payload_marks_provenance(tmp_path):

@@ -55,6 +55,15 @@ async def list_skills(*, skill_service):
     return {"skills": [s.model_dump() for s in skills], "store": store_status}
 
 
+async def get_skill(name: str, *, skill_service):
+    """Full skill content for the admin View dialog (store-first, bundled
+    fallback). 404 unknown, 422 bad name."""
+    try:
+        return await skill_service.get_skill(name)
+    except SkillStoreError as e:
+        raise HTTPException(e.status, str(e))
+
+
 async def create_skill(body: dict, *, skill_service):
     """'Add skill' form (docs/11): name + trigger description + markdown
     body. Frontmatter is generated app-side — the operator never touches

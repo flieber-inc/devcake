@@ -74,7 +74,7 @@ export default function TrafficSection() {
           <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
             <SettingRow label="Dev Type"
               desc="Which Dev Type runs the mapper."
-              help="The seeded junior-dev (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
+              help="The seeded mapper (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
               <Select className="w-44" value={rm.dev_type || ""}
                 aria-label="Relations Mapper Dev Type"
                 onChange={(e) => {

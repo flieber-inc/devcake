@@ -719,6 +719,12 @@ async def list_skills():
     return await internal_repos_service.list_skills(skill_service=skill_service)
 
 
+@app.get("/api/v1/skills/{name}")
+async def get_skill(name: str):
+    return await internal_repos_service.get_skill(
+        name, skill_service=skill_service)
+
+
 @app.post("/api/v1/skills")
 async def create_skill(body: dict):
     return await internal_repos_service.create_skill(

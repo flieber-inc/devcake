@@ -66,9 +66,11 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
             traceparent=traceparent,
             spec_env=spec_env,
         )
-        run.spec_prompt = mapper_prompt(dispatch._identifying_prompt(mgr, dev_type), eligible)
         run.spec_skills = await dispatch._skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
+        run.spec_prompt = dispatch.append_required_skills(
+            mapper_prompt(dispatch._identifying_prompt(mgr, dev_type), eligible),
+            dev_type.skills_required, run.spec_skills)
         await mgr.runs.bootstrap.launch(
             run, image=HARNESSES[dev_type.harness_template].image)
         log.info("dispatched mapper %s (dev=%s, %d missions in prompt)",

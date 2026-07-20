@@ -288,6 +288,12 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
   faithful mirror, per-mission `activity-*` repos swept on Clear, quoting
   quarantine, `executed_trivially` removed. **live-verified 2026-07-18**
   (missions DEV-126/DEV-127 on the live sandbox).
+- **Skills philosophy + prompt assembly (ADR-0016, 2026-07-20):** three-layer
+  composition (identifying prompt + mission playbook + optional Required
+  soft-force block); skills are domain-only, additive, consult-optional by
+  default; `skills_required` + tri-state Dev Type chips; role Dev Types
+  (`judgment` / `implementer` / `mapper`); builtin skill catalog overhaul;
+  admin View. Normative ADR + `app/devcake/skills/README.md` + docs 02/03/08/11/14.
 - **Missions "Poll now"** (2026-07-18, PR #14, rflpazini): INV-1-aligned poll
   CTA; "New mission" dropped from the board. **live-verified 2026-07-18**.
 - **Clear-runs concurrency follow-up** (post independent review of #30–#32):

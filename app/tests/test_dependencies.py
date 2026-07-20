@@ -35,8 +35,9 @@ def make_mgr(tmp_path, pmo):
         tmp_path, pmo=pmo,
         forge=SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')),
         dev_types={
-            "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
-            "main-dev": DevType(name="main-dev", harness_template="grok-build"),
+            "judgment": DevType(name="judgment", harness_template="claude-code"),
+            "implementer": DevType(name="implementer", harness_template="grok-build"),
+            "mapper": DevType(name="mapper", harness_template="claude-code"),
         },
         noop_audit=True,
     )
@@ -208,6 +209,6 @@ def test_dispatch_recheck_aborts_on_live_blocker(tmp_path):
     pmo = DepPMO(by_id={"b2": live, "b1": m("b1", "T-1")})   # blocker still open
     mgr, _ = make_mgr(tmp_path, pmo)
     del mgr.dispatch                                # use the real dispatch
-    dt = mgr.dev_types["senior-dev"]
+    dt = mgr.dev_types["judgment"]
     run = run_coro(mgr.dispatch(live, MissionType.ONBOARD, dt))
     assert run is None                              # aborted before any side effect

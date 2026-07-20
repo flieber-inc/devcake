@@ -193,10 +193,10 @@ class RelationsMapper(BaseModel):
     """Dev run that maps missing blocked-by relations (ADR-0007). Manual-only
     by default (enabled=False → the admin "Run now" button); the periodic
     service is opt-in. dev_type must name an existing Dev Type whenever
-    enabled — the seeded junior-dev (cheap model) is the default vehicle."""
+    enabled — the seeded mapper (cheap model) is the default vehicle."""
     enabled: bool = False
     interval_minutes: int = Field(60, ge=1)
-    dev_type: str | None = "junior-dev"
+    dev_type: str | None = "mapper"
 
 
 class DevType(BaseModel):
@@ -215,8 +215,11 @@ class DevType(BaseModel):
     mcp_setup_commands: list[str] = Field(default_factory=list)
     # Skill-store skills installed to the harness's registry-declared skills
     # dir before the harness starts (harness.py skills_dir; a harness
-    # without one skips them with a warning)
+    # without one skips them with a warning). Selected = Available
+    # (consult-optional); skills_required is a subset that also gets a
+    # soft-force "must consult" prompt append (docs/02 §6).
     skills: list[str] = Field(default_factory=list)
+    skills_required: list[str] = Field(default_factory=list)
     # Named secret env vars delivered to this Dev Type's runs: NAMES only —
     # values are GUI-stored under /data/secrets/harness/ (ADR-0011) and read
     # at runspec time, so mcp_setup_commands can reference e.g. $DD_API_KEY
@@ -225,18 +228,37 @@ class DevType(BaseModel):
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
 
-    @field_validator("skills")
-    @classmethod
-    def _skill_names_valid(cls, v):
+    @staticmethod
+    def _dedupe_skill_names(v: list[str], *, field: str) -> list[str]:
         out: list[str] = []
         for name in v:
             if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
                 raise ValueError(
-                    f"skill name {name!r}: lowercase alnum with - or _ "
+                    f"{field} name {name!r}: lowercase alnum with - or _ "
                     "(≤64 chars), starting alphanumeric")
             if name not in out:
                 out.append(name)
         return out
+
+    @field_validator("skills")
+    @classmethod
+    def _skill_names_valid(cls, v):
+        return cls._dedupe_skill_names(v, field="skill")
+
+    @field_validator("skills_required")
+    @classmethod
+    def _skill_required_names_valid(cls, v):
+        return cls._dedupe_skill_names(v, field="skills_required")
+
+    @model_validator(mode="after")
+    def _skills_required_subset(self):
+        have = set(self.skills)
+        missing = [n for n in self.skills_required if n not in have]
+        if missing:
+            raise ValueError(
+                f"skills_required must be a subset of skills; not installed: "
+                f"{', '.join(missing)}")
+        return self
 
     @field_validator("secret_env")
     @classmethod
@@ -263,43 +285,46 @@ class DevType(BaseModel):
 
 
 DEFAULT_ASSIGNMENTS = {
-    "ONBOARD": Assignment(dev_type="senior-dev", extra_cli_args="--max-turns 15"),
-    "PLAN": Assignment(dev_type="senior-dev"),
-    "EXECUTE": Assignment(dev_type="main-dev"),
-    "REVIEW": Assignment(dev_type="senior-dev"),
+    "ONBOARD": Assignment(dev_type="judgment", extra_cli_args="--max-turns 15"),
+    "PLAN": Assignment(dev_type="judgment"),
+    "EXECUTE": Assignment(dev_type="implementer"),
+    "REVIEW": Assignment(dev_type="judgment"),
 }
 
 # docs/03 §7 — canonical identifying prompts (seed data; admin-editable)
-SENIOR_PROMPT = (
-    "You are **Senior Dev**, DevCake's judgment-heavy engineer. You assess, plan, and "
+JUDGMENT_PROMPT = (
+    "You are **Judgment**, DevCake's judgment-heavy engineer. You assess, plan, and "
     "review software work with the skepticism of a staff engineer who has been burned "
-    "before. You are precise about scope: you do exactly what your current mission type "
-    "asks — no more. You never invent requirements, you flag what you cannot verify, and "
-    "you write conclusions that a teammate can act on without asking follow-up questions."
+    "before. You are precise about scope: you do exactly what your current mission "
+    "playbook asks — no more. You never invent requirements, you flag what you cannot "
+    "verify, and you write conclusions that a teammate can act on without asking "
+    "follow-up questions."
 )
-MAIN_PROMPT = (
-    "You are **Main Dev**, DevCake's implementation engineer. You turn plans into working, "
-    "tested code. You follow the plan you are given; where reality contradicts the plan, "
-    "you implement the smallest sound deviation and document it prominently in your "
-    "summary. You match the conventions of the codebase you are in, you run the tests, "
-    "and you never commit until the work is complete."
+IMPLEMENTER_PROMPT = (
+    "You are **Implementer**, DevCake's implementation engineer. You turn plans into "
+    "working, tested code. You follow the plan you are given; where reality contradicts "
+    "the plan, you implement the smallest sound deviation and document it prominently "
+    "in your summary. You match the conventions of the codebase you are in, you run "
+    "the tests, and you never commit until the work is complete. Do exactly what your "
+    "current mission playbook asks."
 )
-JUNIOR_PROMPT = (
-    "You are **Junior Dev**, DevCake's fast, literal assistant. You do exactly the narrow "
-    "task you are given — no more. You never improvise scope, you follow output formats "
-    "to the letter, and when you are unsure you say so instead of guessing."
+MAPPER_PROMPT = (
+    "You are **Mapper**, DevCake's fast, literal assistant for narrow structured "
+    "tasks. You do exactly the task you are given — no more. You never improvise "
+    "scope, you follow output formats to the letter, and when you are unsure you say "
+    "so instead of guessing. Do exactly what your current mission playbook asks."
 )
 
 DEFAULT_DEV_TYPES = [
-    DevType(name="senior-dev", harness_template="claude-code",
-            identifying_prompt=SENIOR_PROMPT, max_concurrency=2,
-            model="claude-fable-5"),  # founder decision 2026-07-12: Senior Dev judgment runs on Fable
-    DevType(name="main-dev", harness_template="grok-build",
-            identifying_prompt=MAIN_PROMPT, max_concurrency=2),
+    DevType(name="judgment", harness_template="claude-code",
+            identifying_prompt=JUDGMENT_PROMPT, max_concurrency=2,
+            model="claude-fable-5"),  # founder decision 2026-07-12: judgment runs on Fable
+    DevType(name="implementer", harness_template="grok-build",
+            identifying_prompt=IMPLEMENTER_PROMPT, max_concurrency=2),
     # cheap, literal worker for narrow structured tasks — the Relations Mapper's
-    # default vehicle (ADR-0007 addendum); same harness/credentials as senior-dev
-    DevType(name="junior-dev", harness_template="claude-code",
-            identifying_prompt=JUNIOR_PROMPT, max_concurrency=1,
+    # default vehicle (ADR-0007 addendum); same harness/credentials as judgment
+    DevType(name="mapper", harness_template="claude-code",
+            identifying_prompt=MAPPER_PROMPT, max_concurrency=1,
             model="claude-haiku-4-5"),
 ]
 

@@ -20,6 +20,7 @@ def _dt(**kw):
 
 def test_devtype_skills_default_empty():
     assert _dt().skills == []
+    assert _dt().skills_required == []
 
 
 def test_devtype_skills_accepts_valid_names_and_dedupes():
@@ -33,6 +34,45 @@ def test_devtype_skills_accepts_valid_names_and_dedupes():
 def test_devtype_skills_rejects_bad_names(bad):
     with pytest.raises(ValueError):
         _dt(skills=[bad])
+
+
+def test_devtype_skills_required_subset_of_skills():
+    dt = _dt(skills=["tdd", "pr-hygiene"], skills_required=["pr-hygiene", "tdd"])
+    assert dt.skills_required == ["pr-hygiene", "tdd"]
+
+
+def test_devtype_skills_required_rejects_not_in_skills():
+    with pytest.raises(ValueError, match="skills_required"):
+        _dt(skills=["tdd"], skills_required=["pr-hygiene"])
+
+
+def test_devtype_skills_required_dedupes_and_validates_names():
+    dt = _dt(skills=["tdd", "pr-hygiene"],
+             skills_required=["tdd", "tdd", "pr-hygiene"])
+    assert dt.skills_required == ["tdd", "pr-hygiene"]
+    with pytest.raises(ValueError):
+        _dt(skills=["tdd"], skills_required=["UPPER"])
+
+
+def test_required_skills_block_empty_when_none():
+    from devcake.domain.orchestrator.dispatch import append_required_skills
+    assert append_required_skills("base prompt", [], []) == "base prompt"
+    assert append_required_skills(
+        "base prompt", ["tdd"], [{"name": "other", "files": []}]) == "base prompt"
+
+
+def test_required_skills_block_lists_shipped_required_only():
+    from devcake.domain.orchestrator.dispatch import append_required_skills
+    out = append_required_skills(
+        "base prompt",
+        ["tdd", "pr-hygiene", "missing"],
+        [{"name": "pr-hygiene", "files": []}, {"name": "tdd", "files": []}],
+    )
+    assert out.startswith("base prompt\n\n### Required skills\n")
+    assert "`tdd`" in out and "`pr-hygiene`" in out
+    assert "missing" not in out
+    # order follows skills_required, not payload order
+    assert out.index("`tdd`") < out.index("`pr-hygiene`")
 
 
 # ── frontmatter (lenient: broken YAML must never raise) ──────────────────────
@@ -82,6 +122,30 @@ def test_builtin_seed_lists_every_file_b64(tmp_path):
                      "pr-hygiene/SKILL.md", "README.md"}
     tdd = next(f for f in seed if f["path"] == "tdd/SKILL.md")
     assert b"Test-first" in base64.b64decode(tdd["content_b64"])
+
+
+def test_get_skill_builtin_returns_files_and_description(tmp_path):
+    from devcake.domain.skills import SkillService
+    svc = SkillService(builtin_dir=_builtin_tree(tmp_path))
+    detail = _run(svc.get_skill("tdd"))
+    assert detail["name"] == "tdd"
+    assert detail["description"] == "Test-first discipline"
+    assert detail["source"] == "builtin" and detail["builtin"] is True
+    paths = {f["path"] for f in detail["files"]}
+    assert paths == {"SKILL.md", "reference.md"}
+    skill_md = next(f for f in detail["files"] if f["path"] == "SKILL.md")
+    assert "# TDD" in skill_md["content"]
+
+
+def test_get_skill_missing_and_bad_name(tmp_path):
+    from devcake.domain.skills import SkillService, SkillStoreError
+    svc = SkillService(builtin_dir=_builtin_tree(tmp_path))
+    with pytest.raises(SkillStoreError) as e:
+        _run(svc.get_skill("nope"))
+    assert e.value.status == 404
+    with pytest.raises(SkillStoreError) as e:
+        _run(svc.get_skill("UPPER"))
+    assert e.value.status == 422
 
 
 def test_list_skills_builtin_fallback_without_forge(tmp_path):

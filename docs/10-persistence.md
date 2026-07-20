@@ -92,16 +92,16 @@ repos:                               # 0..N (empty = every mission routes to the
 
 assignments:                         # every Mission Type must be assigned to exactly one Dev Type.
   ONBOARD:                           #   extra_cli_args are appended verbatim to the harness invocation —
-    dev_type: senior-dev             #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
+    dev_type: judgment               #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
     extra_cli_args: "--max-turns 15" # seeded default: bounded-effort triage for claude-code; edit/clear freely
   PLAN:
-    dev_type: senior-dev
+    dev_type: judgment
     extra_cli_args: ""
   EXECUTE:
-    dev_type: main-dev
+    dev_type: implementer
     extra_cli_args: ""
   REVIEW:
-    dev_type: senior-dev
+    dev_type: judgment
     extra_cli_args: ""
 
 concurrency:
@@ -121,7 +121,7 @@ max_decomposition_depth: 2           # 0 = unlimited; ADR-0012 / 03 §1.3
 relations_mapper:                    # ADR-0007: manual-only by default; periodic service is opt-in
   enabled: false
   interval_minutes: 60
-  dev_type: junior-dev
+  dev_type: mapper
 active_prompt_templates: {}          # per-Mission-Type template name; missing ⇒ "default"
 active_devtype_prompts: {}           # per-Dev-Type identifying-prompt name; missing ⇒ "Development"
 dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts ("id:signature")

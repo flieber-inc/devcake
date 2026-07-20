@@ -1,6 +1,11 @@
 ---
 name: pr-hygiene
-description: Commit and pull-request discipline — scoped commits, honest messages, reviewable PRs. Use when committing work, opening or updating a pull request, or writing a PR description.
+description: >-
+  Commit and pull-request discipline — one intent per PR, honest scoped
+  commits, reviewable descriptions, no force-push of shared branches, no
+  tooling junk in the tree. Use when committing work, opening or updating a
+  pull/merge request, or writing a PR description. Companion:
+  verification-before-completion before you claim the branch is ready.
 metadata:
   source: original (devcake)
   author: devcake
@@ -8,52 +13,68 @@ metadata:
 
 # PR hygiene
 
-A pull request is a unit of review, not a dumping ground. Everything below
-optimizes for one thing: a reviewer (human or AI) can verify your change is
-correct without asking you follow-up questions.
+A pull request is a unit of review, not a dumping ground. Optimize for one
+thing: a reviewer (human or AI) can verify the change without follow-up
+questions you could have answered in the description.
 
 ## Scope
 
-- One PR = one intent. If your branch fixes a bug AND refactors an unrelated
-  module, split it. Mixed-intent PRs get worse reviews of both halves.
-- Never widen scope mid-branch. Found an unrelated problem? Note it in the PR
-  description under "Out of scope / follow-ups" instead of fixing it here.
-- Drive-by edits (formatting churn, renames, comment rewrites in files you
-  didn't otherwise touch) are scope creep. Revert them unless they were the
-  task.
+- **One PR = one intent.** Bug fix plus unrelated refactor → split. Mixed
+  intent gets worse reviews of both halves.
+- **Never widen scope mid-branch.** Unrelated problems go under “Out of scope
+  / follow-ups,” not into this diff.
+- **No drive-by edits** (formatting churn, renames, comment rewrites in files
+  you did not otherwise touch) unless that *was* the task.
 
 ## Commits
 
-- Commit only work that is complete and tested. A commit is a checkpoint you
-  would be comfortable shipping, not a save button.
-- Message format: an imperative summary line under ~72 chars that states the
-  change and, where it fits, the why: `fix(poll): skip archived missions —
-  label reads 404 on them`. Body paragraphs only for what the diff cannot
-  say: constraints, rejected alternatives, migration notes.
-- Never write a message that overstates the change ("fix all flaky tests")
-  or hides part of it (a "docs" commit that also edits runtime code).
-- Do not commit generated artifacts, credentials, editor configs, or files
-  materialized into your workspace by tooling (agent scratch files, local
-  skills, virtualenvs). Check `git status` for strangers before every commit.
+- Commit only work that is complete enough to stand as a checkpoint you would
+  be comfortable explaining. Prefer logical commits over a single megadump when
+  the history helps review; never use commits as a panic save of broken state
+  you intend to leave behind.
+- **Message:** imperative summary under ~72 chars stating the change and, where
+  it fits, the why. Body only for what the diff cannot say: constraints,
+  rejected alternatives, migration notes.
+- Never overstate (“fix all flaky tests”) or hide runtime changes under a
+  “docs” subject.
+- **Do not commit:** generated artifacts, credentials, editor configs, local
+  virtualenvs, agent scratch files, or skill trees that tooling materialised
+  outside the product’s source contract. Check `git status` for strangers
+  before every commit.
 
-## The PR description
+## Branch and remote
 
-Structure it as claim → evidence:
+- Follow the branch naming and push rules the mission playbook and forge
+  instructions already give you. Do **not** force-push shared mission branches.
+- Prefer updating an existing PR for the same branch over opening duplicates.
+- If the remote rejects the push, capture the error; do not invent workarounds
+  that bypass protection.
 
-1. **What & why** — two or three sentences: the problem, the change, the
-   user-visible effect. Link the ticket/mission.
-2. **How it works** — only what a reviewer can't infer from the diff:
-   design choices, invariants preserved, edge cases handled.
-3. **Evidence** — what you ran and what you saw: test suite output summary,
-   a manual run, screenshots for UI. "Should work" is not evidence; paste
-   what happened. Name anything NOT verified and why.
-4. **Out of scope / follow-ups** — anything you deliberately did not do.
+## PR description
 
-## Before requesting review
+Include:
 
-- Re-read your own diff hunk by hunk as if you were the reviewer. Remove
-  leftover debug output, TODOs you meant to resolve, and commented-out code.
-- Run the project's test suite and linters; the PR that arrives red wastes
-  everyone's first round.
-- Confirm the branch is current with its target; resolve conflicts yourself
-  rather than shipping them to the reviewer.
+1. **Intent** — one or two sentences on what this PR does and why.
+2. **Plan link / context** — mission key, plan summary, or “deviation from
+   plan” if reality forced a change (state the deviation prominently).
+3. **How to verify** — commands or checks a reviewer can run (fresh evidence;
+   see `verification-before-completion` if available).
+4. **Risk / rollout** — migrations, flags, backward compatibility.
+5. **Out of scope** — explicit non-goals.
+
+Title: concise, matches intent; include the mission key when the playbook or
+forge template requires it.
+
+## Anti-patterns
+
+- Force-push to rewrite published history on a shared branch
+- PR body that only says “fixes stuff” or pastes a raw commit dump
+- Secrets or `.env` in the diff
+- “Also reformatted the repo” as a side effect
+- Opening a second PR for the same branch when one already exists
+
+## Companion routing
+
+- Not yet proven green → `verification-before-completion`
+- Defect not understood → `systematic-debugging`
+- Implementation under construction → `test-driven-development`

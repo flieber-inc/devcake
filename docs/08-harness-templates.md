@@ -15,8 +15,8 @@ this document (§8); changing a Dev Type's model does not add a template.
 
 | Template id | Harness CLI | Empty `DevType.model` resolves to | Seeded Dev Types |
 |---|---|---|---|
-| `claude-code` | Claude Code (`claude`) | CLI default | Senior Dev pins `claude-fable-5`; Junior Dev pins `claude-haiku-4-5` |
-| `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | Main Dev leaves the model empty and receives that registry default |
+| `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `mapper` pins `claude-haiku-4-5` |
+| `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
@@ -160,11 +160,12 @@ Mechanics: commands run before harness launch as uid 1000 with stdin closed, a 3
 
 ## 7a. Skills (all harnesses; registry-driven skills dir)
 
-Skill-store skills (`02-domain-model.md` DevType.skills) are materialized by
-the entrypoint before harness launch into the harness's **registry-declared
-skills directory** (`harness.py` `skills_dir`, snapshotted onto the Run at
-dispatch and delivered as the runspec `skills_dir` key). All three CLIs read
-the same `SKILL.md` format; the verified read-set per pinned or observed CLI:
+Skill-store skills (`02-domain-model.md` `DevType.skills` / `skills_required`)
+are materialized by the entrypoint before harness launch into the harness's
+**registry-declared skills directory** (`harness.py` `skills_dir`, snapshotted
+onto the Run at dispatch and delivered as the runspec `skills_dir` key). All
+three CLIs read the same `SKILL.md` format; the verified read-set per pinned
+or observed CLI:
 
 | Harness | skills_dir | Verified read locations |
 |---|---|---|
@@ -176,9 +177,16 @@ One canonical dir per harness, deliberately: grok reads BOTH `.agents` and
 `.claude` dirs, so writing skills to two locations would double-list every
 skill in the agent's own discovery — do not add a compat double-write. A
 harness whose registry entry declares no `skills_dir` skips skills at
-dispatch with a warning (and the admin UI disables the selector); skill
-*invocation* is model-driven (description matching), so how eagerly each
-harness reaches for a skill varies — the delivery contract is identical.
+dispatch with a warning (and the admin UI disables the selector).
+
+**Consult-optional by default (ADR-0016):** skill *invocation* is model-driven
+(description matching). Installing a skill makes it **Available** as a
+resource — DevCake must run with zero skills selected. **Required** skills
+(`DevType.skills_required`, a subset of `skills`) also get a short soft-force
+append on the composed prompt (“must consult these skills”). That is
+**instructional only** — harnesses do not hard-enforce skill load; honesty
+in the admin UI matches this contract. Skills are domain modules, never
+mission-step scripts (`app/devcake/skills/README.md`).
 
 ## 8. Adding or changing a template (checklist)
 

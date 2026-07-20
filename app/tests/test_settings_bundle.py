@@ -244,6 +244,85 @@ def test_cross_ref_violations_are_422(monkeypatch, tmp_path):
     assert "nowhere" in str(e.value)
 
 
+def test_serialize_drops_orphan_active_devtype_prompts(monkeypatch, tmp_path):
+    """Export/profile snapshots must not freeze orphan active_devtype_prompts
+    keys for deleted Dev Types (would make re-apply 422 forever)."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.active_devtype_prompts = {
+        "senior-dev": "Customer Success",
+        "junior-dev": "Customer Success",   # not in dts
+        "ghost": "Development",
+    }
+    bundle = sb.serialize_current(cfg, dts, include_secrets=False)
+    active = bundle["config"]["app"]["active_devtype_prompts"]
+    assert active == {"senior-dev": "Customer Success"}
+    # live config is not mutated by serialize
+    assert "junior-dev" in cfg.active_devtype_prompts
+
+
+def test_orphan_active_devtype_prompts_pruned_not_422(monkeypatch, tmp_path):
+    """Defense in depth: unknown active_devtype_prompts keys are dropped with
+    a warning — never a hard 422 — so Workflow Switcher save / profile apply
+    heal after a prior incomplete Dev Type delete."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=False)
+    # inject an orphan the way a broken live config would export if serialize
+    # had not filtered (hand-crafted / pre-fix snapshot)
+    bundle["config"]["app"]["active_devtype_prompts"] = {
+        "senior-dev": "Customer Success",
+        "junior-dev": "Customer Success",
+    }
+    parsed = sb.validate_bundle(bundle)
+    assert parsed["config"].active_devtype_prompts == {
+        "senior-dev": "Customer Success"}
+    assert any("junior-dev" in w for w in parsed["warnings"])
+
+    live = config_mod.AppConfig()
+    live_dts: dict = {}
+    result = sb.apply_bundle(bundle, config=live, dev_types=live_dts,
+                             reload=lambda: None)
+    assert live.active_devtype_prompts == {"senior-dev": "Customer Success"}
+    assert any("junior-dev" in w for w in result["warnings"])
+
+
+def test_config_put_prunes_orphan_active_devtype_prompts_after_deep_merge(
+        monkeypatch, tmp_path):
+    """deep_merge cannot delete dict keys — PUT /config must still prune
+    ghosts left behind when Dev Types were deleted."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import config as config_mod
+    from devcake.api import config_service
+    from devcake.config import AppConfig, DevType, Assignment
+
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        tmp_path / "config" / "config.yaml")
+    (tmp_path / "config").mkdir(parents=True)
+
+    cfg = AppConfig(
+        assignments={mt: Assignment(dev_type="judgment")
+                     for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")},
+        active_devtype_prompts={
+            "judgment": "Development",
+            "junior-dev": "Customer Success",
+        },
+    )
+    dts = {"judgment": DevType(name="judgment",
+                               harness_template="claude-code")}
+    # SPA only patches a live key; deep_merge would preserve junior-dev
+    body = {"schema_version": 4,
+            "active_devtype_prompts": {"judgment": "Customer Success"}}
+
+    out = __import__("asyncio").new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types=dts, managers={},
+            reload=lambda: None))
+    assert out["active_devtype_prompts"] == {
+        "judgment": "Customer Success"}
+    assert cfg.active_devtype_prompts == {"judgment": "Customer Success"}
+
+
 def test_validation_errors_never_echo_secret_values(monkeypatch, tmp_path):
     """The leak vector (ADR-0013 hardening): pydantic embeds input values in
     its message; a malformed secrets section must not echo one."""

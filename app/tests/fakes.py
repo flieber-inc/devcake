@@ -151,7 +151,10 @@ def make_mission_manager(
     cfg = config if config is not None else AppConfig()
     inst = instance if instance is not None else DEFAULT_INSTANCE
     dts = dev_types if dev_types is not None else {
-        "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
+        "judgment": DevType(name="judgment", harness_template="claude-code"),
+        "implementer": DevType(name="implementer", harness_template="grok-build"),
+        "mapper": DevType(name="mapper", harness_template="claude-code",
+                          model="claude-haiku-4-5"),
     }
     fr = forge_runtime if forge_runtime is not None else FakeForgeRuntime(forge)
     msg = messaging if messaging is not None else NullMessaging()

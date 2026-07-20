@@ -146,6 +146,12 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
     if include_config:
         app = config.model_dump()
         app.pop("dismissed_alerts", None)
+        # Drop orphan active_devtype_prompts keys for deleted Dev Types so
+        # export/profile snapshots stay applyable (do not mutate live config).
+        live_dts = set(dev_types)
+        app["active_devtype_prompts"] = {
+            k: v for k, v in (app.get("active_devtype_prompts") or {}).items()
+            if k in live_dts}
         operator_templates: dict[str, dict[str, str]] = {}
         for mt, entries in prompt_templates.list_templates().items():
             operator_templates[mt] = {e["name"]: e["template"]
@@ -297,7 +303,12 @@ def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
                 template_exists=lambda mt, name:
                     name in prompt_templates._builtins() or name == "default"
                     or name in templates.get(mt, {}),
-                check_assignments=True)
+                check_assignments=True,
+                warnings=warnings)
+        else:
+            # rollback path: still drop impossible active_devtype_prompts
+            # keys so a restored world does not re-poison PUT /config
+            prune_stale_active_devtype_prompts(cfg, set(dts))
         out.update(config=cfg, dev_types=dts, prompt_templates=templates,
                    devtype_prompts=dev_prompts)
 
@@ -505,15 +516,39 @@ def generate_env_file(setup_env: dict) -> str:
 
 # ── choke points shared with PUT /config (extracted from api.main) ───────────
 
+def prune_stale_active_devtype_prompts(cfg: AppConfig,
+                                       dev_type_names: set[str]) -> list[str]:
+    """Drop active_devtype_prompts keys for Dev Types that no longer exist.
+
+    Missing key ⇒ "Development" at resolve time, so pruning is safe. deep_merge
+    cannot delete dict keys on a partial PUT, and remove_dev_type historically
+    left orphans — callers heal here instead of 422. Mutates cfg in place;
+    returns human-readable warnings for any dropped key.
+    """
+    active = cfg.active_devtype_prompts or {}
+    stale = sorted(n for n in list(active) if n not in dev_type_names)
+    for name in stale:
+        active.pop(name, None)
+    cfg.active_devtype_prompts = active
+    return [f"active_devtype_prompts: dropped unknown Dev Type {n!r}"
+            for n in stale]
+
+
 def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
                               template_exists: Callable[[str, str], bool],
-                              *, check_assignments: bool = False) -> None:
+                              *, check_assignments: bool = False,
+                              warnings: list[str] | None = None) -> None:
     """Cross-store checks shared by PUT /config and bundle apply.
     template_exists decides against the caller's template universe — disk
     for the PUT, bundle ∪ builtins for an apply. check_assignments is
     apply-only: the PUT keeps today's split where PUT /assignments owns that
     validation (the SPA saves assignments separately, possibly before a new
-    Dev Type lands)."""
+    Dev Type lands).
+
+    Stale active_devtype_prompts keys are pruned (with optional warnings),
+    never hard-422 — delete/rename/export paths must stay healable after an
+    incomplete Dev Type removal.
+    """
     rm = cfg.relations_mapper
     if rm.enabled and (not rm.dev_type or rm.dev_type not in dev_type_names):
         raise BundleError(422, "relations_mapper.dev_type must name an "
@@ -525,10 +560,12 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
         if not template_exists(mt, name):
             raise BundleError(422, f"active_prompt_templates: no stored "
                                    f"template {mt}/{name}")
-    for dt_name in (cfg.active_devtype_prompts or {}):
-        if dt_name not in dev_type_names:
-            raise BundleError(422, f"active_devtype_prompts: unknown "
-                                   f"Dev Type {dt_name!r}")
+    dropped = prune_stale_active_devtype_prompts(cfg, dev_type_names)
+    if warnings is not None:
+        warnings.extend(dropped)
+    elif dropped:
+        for msg in dropped:
+            log.warning(msg)
     if check_assignments:
         for mt, a in (cfg.assignments or {}).items():
             if a.dev_type and a.dev_type not in dev_type_names:

@@ -8,7 +8,7 @@ import Button from "./Button.jsx";
 import { ConfirmDialog, Modal, PromptDialog } from "./Modal.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import MoreMenu from "./MoreMenu.jsx";
-import SelectionChips from "./SelectionChips.jsx";
+import SkillModeChips from "./SkillModeChips.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // ── OAuth wizard (docs/16 M6): device-code flow driven from the UI ──────────
@@ -218,11 +218,12 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
           ))}
         </InstantZone>
       )}
-      <SelectionChips label="Skills"
-        help={`Skill-store skills installed to ~/${h.skills_dir || ".claude/skills"} inside the Dev container before the agent starts. The catalog lives in the Skills section.`}
+      <SkillModeChips
+        help={`Domain skills from the Skills section, installed to ~/${h.skills_dir || ".claude/skills"} before the agent starts. Available = consult-optional (description match). Required = same install plus a soft-force “must consult” line in the prompt (not kernel-enforced). Skills are additive domain modules — not mission-step scripts.`}
         options={(skillsCatalog?.skills || []).map((s) => ({
           name: s.name, title: s.description || undefined }))}
-        selected={d.skills || []}
+        available={d.skills || []}
+        required={d.skills_required || []}
         disabled={!h.skills_dir}
         disabledNote={`The ${d.harness_template} harness does not support skill-store skills${
           !h.skills_dir && (d.skills || []).length
@@ -235,13 +236,9 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
         staleNote={catalogErr
           ? "skill catalog unavailable — cannot confirm this is in the store"
           : "not in the skill store — skipped at dispatch; click to remove"}
-        onChange={(next) => {
-          // write back in CATALOG order (unknown names last): uncheck-then-
-          // recheck must not surface a reorder-only dirty diff (diffLeaves
-          // compares arrays order-sensitively); skill order has no meaning
-          const cat = (skillsCatalog?.skills || []).map((c) => c.name);
-          set("skills", [...cat.filter((n) => next.includes(n)),
-                         ...next.filter((n) => !cat.includes(n))]);
+        onChange={({ skills, skills_required }) => {
+          set("skills", skills);
+          set("skills_required", skills_required);
         }} />
       <InstantZone className="text-xs" note="credentials store immediately">
         <div className="flex items-center justify-between">
@@ -321,7 +318,7 @@ function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
     <Modal onClose={busy ? undefined : onClose}>
       <h4 className="mb-3 text-base font-semibold tracking-tight">New Dev Type</h4>
       <div className="space-y-3">
-        <Field label="Name" hint="lowercase letters/digits/dashes — e.g. senior-dev">
+        <Field label="Name" hint="lowercase letters/digits/dashes — e.g. judgment">
           <Input value={name} onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && name.trim() && !busy && create()} />
         </Field>

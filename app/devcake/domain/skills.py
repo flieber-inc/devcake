@@ -15,8 +15,10 @@ the shared control-plane process (review finding, 2026-07-17).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import re
 import time
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -138,18 +140,23 @@ class SkillService:
         try:
             paths = {t["path"] for t in await self._store_tree()}
             builtin_names = set(self._builtin_skills())
-            skills = []
-            for name in sorted({p.split("/", 1)[0] for p in paths if "/" in p}):
-                if f"{name}/SKILL.md" not in paths:
-                    continue
+            names = sorted(
+                n for n in {p.split("/", 1)[0] for p in paths if "/" in p}
+                if f"{n}/SKILL.md" in paths)
+
+            async def _one(name: str) -> SkillInfo:
+                # parallel per skill: sequential Gitea file GETs were the
+                # catalog's load-time cost when many skills live in the store
                 text = (await self._store_file(f"{name}/SKILL.md")
                         ).decode("utf-8", errors="replace")
-                skills.append(SkillInfo(
+                return SkillInfo(
                     name=name,
                     description=str(parse_frontmatter(text).get("description", "")),
                     source="store",
                     files=sum(1 for p in paths if p.startswith(f"{name}/")),
-                    builtin=name in builtin_names))
+                    builtin=name in builtin_names)
+
+            skills = list(await asyncio.gather(*(_one(n) for n in names)))
             return skills, {"enabled": True, "ok": True, "detail": "",
                             "html_url": self.forge.skill_store_url()}
         except Exception as e:  # noqa: BLE001 — skill store degrades to the bundled listing; failure logged + surfaced in store_status detail
@@ -168,6 +175,63 @@ class SkillService:
                 description=str(parse_frontmatter(text).get("description", "")),
                 source="builtin", files=len(files), builtin=True))
         return out
+
+    async def get_skill(self, name: str) -> dict:
+        """Admin View: full skill tree as UTF-8 text files (store-first when
+        the forge is up, bundled fallback). Raises SkillStoreError 404/422.
+        Paths are relative to the skill dir (SKILL.md, not name/SKILL.md)."""
+        if not re.fullmatch(SKILL_NAME_RE, name or ""):
+            raise SkillStoreError(
+                422, f"invalid skill name {name!r}")
+        builtin = self._builtin_skills()
+        if self.forge is not None:
+            try:
+                tree = await self._store_tree()
+                paths = sorted(
+                    t["path"] for t in tree
+                    if t["path"].startswith(f"{name}/"))
+                if f"{name}/SKILL.md" in paths:
+                    blobs = await asyncio.gather(
+                        *(self._store_file(p) for p in paths))
+                    files = [{
+                        "path": p[len(name) + 1:],
+                        "content": data.decode("utf-8", errors="replace"),
+                    } for p, data in zip(paths, blobs, strict=True)]
+                    skill_md = next(
+                        f["content"] for f in files if f["path"] == "SKILL.md")
+                    return {
+                        "name": name,
+                        "description": str(
+                            parse_frontmatter(skill_md).get("description", "")),
+                        "source": "store",
+                        "builtin": name in builtin,
+                        "files": files,
+                    }
+            except SkillStoreError:
+                raise
+            except Exception as e:  # noqa: BLE001 — store failure degrades to bundled copy for View, same as list_skills
+                log.warning("skill store unreachable for get_skill %s — "
+                            "trying bundled: %s", name, e)
+        if name in builtin:
+            files = []
+            root = self.builtin_dir / name
+            for p in builtin[name]:
+                rel = p.relative_to(root).as_posix()
+                files.append({
+                    "path": rel,
+                    "content": p.read_text(encoding="utf-8", errors="replace"),
+                })
+            skill_md = next(
+                f["content"] for f in files if f["path"] == "SKILL.md")
+            return {
+                "name": name,
+                "description": str(
+                    parse_frontmatter(skill_md).get("description", "")),
+                "source": "builtin",
+                "builtin": True,
+                "files": files,
+            }
+        raise SkillStoreError(404, f"skill {name!r} not found")
 
     # ── authoring (admin UI: create / import / delete — docs/11) ────────────
 

@@ -159,6 +159,15 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
 
 
 async def remove_dev_type(name: str, *, config, dev_types):
+    """Delete a Dev Type and every config/file reference that would otherwise
+    poison later saves (active_devtype_prompts deep_merge ghosts, leftover
+    prompt-template and credential dirs). Mirrors rename_dev_type's
+    reference hygiene; DELETE still refuses while assigned / mapper-bound."""
+    import shutil
+    from pathlib import Path as _P
+
+    if name not in dev_types:
+        raise HTTPException(404, f"no Dev Type named {name!r}")
     if any(a.dev_type == name for a in config.assignments.values()):
         raise HTTPException(409, f"{name} is assigned to a mission type")
     if config.relations_mapper.dev_type == name:
@@ -166,6 +175,14 @@ async def remove_dev_type(name: str, *, config, dev_types):
                                  "repoint or disable the mapper first")
     dev_types.pop(name, None)
     delete_dev_type(name)
+    data = _P(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
+    for sub in ("secrets", "config/devtype_prompt_templates"):
+        target = data / sub / name
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    if name in config.active_devtype_prompts:
+        config.active_devtype_prompts.pop(name, None)
+        save_config(config)
     return {"deleted": name}
 
 

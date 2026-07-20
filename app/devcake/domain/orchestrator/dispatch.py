@@ -280,9 +280,10 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             traceparent=traceparent,
             spec_env=spec_env,
         )
-        run.spec_prompt = prompt
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
+        run.spec_prompt = append_required_skills(
+            prompt, dev_type.skills_required, run.spec_skills)
         run.branch = mission_branch(mgr.instance_name, mission.key)
         run.stage_label_at_dispatch = _stage_of(live)
         run.mission_pmo_id = mission.pmo_id
@@ -319,6 +320,28 @@ async def _skill_payload(mgr, dev_type: DevType) -> list[dict]:
     for w in warnings:
         log.warning("skills for %s: %s", dev_type.name, w)
     return payload
+
+
+def append_required_skills(prompt: str, skills_required: list[str],
+                           shipped: list[dict]) -> str:
+    """Soft-force append: instruct the Dev to consult skills that were both
+    marked Required on the Dev Type AND actually shipped in the runspec
+    payload. Instructional only — harnesses do not hard-enforce skill load.
+    Order follows skills_required; missing/cap-dropped skills are omitted."""
+    if not skills_required:
+        return prompt
+    have = {s.get("name") for s in shipped or [] if s.get("name")}
+    names = [n for n in skills_required if n in have]
+    if not names:
+        return prompt
+    lines = "\n".join(f"- `{n}`" for n in names)
+    return (
+        f"{prompt}\n\n### Required skills\n"
+        "You must consult the following skill(s) before acting on this mission "
+        "(they are installed in your harness skills directory; open each "
+        "skill's SKILL.md and apply what is relevant — do not skip them):\n"
+        f"{lines}"
+    )
 
 
 def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,

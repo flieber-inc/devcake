@@ -72,7 +72,7 @@ Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
 ## Step 3 — Log Grok in (one time)
 
-On Configuration → Dev Types, **main-dev** → **Connect via OAuth…** — dialog shows URL + code.
+On Configuration → Dev Types, **implementer** → **Connect via OAuth…** — dialog shows URL + code.
 (Or `./scripts/grok_login.sh`.) Session is DevCake's own.
 
 ## Step 3b — Supply-chain checklist (before you create the mission)

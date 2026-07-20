@@ -152,14 +152,15 @@ Persisted as one YAML file per Dev Type at `/data/config/dev_types/{name}.yaml` 
 
 | Field | Type | Notes |
 |---|---|---|
-| `name` | `str` | e.g. `senior-dev`, `main-dev` (kebab-case slug; display name derived). |
+| `name` | `str` | e.g. `judgment`, `implementer`, `mapper` (kebab-case slug; display name derived). |
 | `harness_template` | `"claude-code" \| "grok-build" \| "codex"` | **Authoritative** (2026-07-12 rework): the Docker image, credential requirements, and OAuth flow all derive from it via the harness registry (`app/devcake/harness.py`, `08-harness-templates.md` §2/§4). Changing it in the admin panel changes what actually runs. |
-| `identifying_prompt` | `str` | Always delivered to the harness at the start of every run, before the playbook prompt. |
+| `identifying_prompt` | `str` | Always delivered to the harness at the start of every run, before the playbook prompt. Short persona/workflow framing only — not step machinery. |
 | `mcp_setup_commands` | `list[str]` | Shell commands run by the Dev entrypoint before harness launch — the MCP-plugin install/register lines (`08-harness-templates.md` §7). Delivered as a top-level runspec key, live-read at `runspec.get` (like the secret half — an edit applies to the next run without redispatch). Failure or 300 s per-command timeout ⇒ exit code 14, `DEV_MCP_SETUP` (`15-errors-and-retries.md` §1). |
-| `skills` | `list[str]` | Skill-store skills installed in the Dev container before harness launch, into the harness's registry-declared skills directory (`harness.py` `skills_dir`: claude-code → `~/.claude/skills`; grok-build/codex → `~/.agents/skills` — `08-harness-templates.md` §7a). A harness with no `skills_dir` skips them with a warning. Names validated (`^[a-z0-9][a-z0-9_-]{0,63}$`), deduped preserving order. A selected-but-missing skill is skipped with a warning, never a refused run. |
+| `skills` | `list[str]` | Skill-store skills **installed** (Available) in the Dev container before harness launch, into the harness's registry-declared skills directory (`harness.py` `skills_dir`: claude-code → `~/.claude/skills`; grok-build/codex → `~/.agents/skills` — `08-harness-templates.md` §7a). Consult is **optional** by default (model description-match). A harness with no `skills_dir` skips them with a warning. Names validated (`^[a-z0-9][a-z0-9_-]{0,63}$`), deduped preserving order. A selected-but-missing skill is skipped with a warning, never a refused run. Skills are **domain modules** (additive, not mission-step scripts) — **ADR-0016**, `app/devcake/skills/README.md`. |
+| `skills_required` | `list[str]` | Subset of `skills`. Soft-force: after the playbook, the composed prompt appends a “must consult these skills” block listing names that actually shipped in the runspec payload. **Instructional only** — harnesses do not hard-enforce skill load (**ADR-0016**). Default `[]`. Validator: every name must appear in `skills`. |
 | `secret_env` | `list[str]` | **Names** of GUI-stored secrets (`/data/secrets/harness/{VAR}.json`) delivered into the run's env — mission-tooling credentials referenced as `$VAR` from `mcp_setup_commands` (e.g. `DD_API_KEY` for a log-platform plugin). UPPER_SNAKE_CASE, ≤64 chars; reserved names refused (`PATH`/`HOME`, `REDIS_*`, `TRACEPARENT`, the forge CLI tokens `GH_TOKEN`/`GITLAB_TOKEN`/`GITEA_SERVER_TOKEN`, and the `DEVCAKE_*`/`OTEL_*`/`GIT_*` prefixes — they would shadow the protocol env). Missing value: **referenced** by a setup command ⇒ dispatch gate (`14-security.md` §8); unreferenced ⇒ warn-and-proceed. Global store: one stored value serves any number of Dev Types. |
 | `max_concurrency` | `int` | Per-type cap (see `04-orchestrator.md` §3). |
-| `model` | `str` | Pins the harness model (added 2026-07-12 after Claude Code silently defaulted to Sonnet). Delivered via runspec as `DEVCAKE_MODEL`; the entrypoint maps it to the harness flag (`claude --model` / `codex -m` / `grok --model`). Empty = harness default. Seed: `senior-dev` = `claude-fable-5`. Per-assignment `extra_cli_args` can still override (appended after the pin). |
+| `model` | `str` | Pins the harness model (added 2026-07-12 after Claude Code silently defaulted to Sonnet). Delivered via runspec as `DEVCAKE_MODEL`; the entrypoint maps it to the harness flag (`claude --model` / `codex -m` / `grok --model`). Empty = harness default. Seed: `judgment` = `claude-fable-5`. Per-assignment `extra_cli_args` can still override (appended after the pin). |
 
 There is deliberately **no stored `docker_image` or credential config**: requirements are per-harness (registry), while secret *material* stays per Dev Type under `/data/secrets/{name}/` — so two Dev Types on the same harness can hold different accounts. Legacy YAML keys (`docker_image`, `credential_env`, `credential_files`) are ignored on load and dropped on the next save.
 
@@ -167,9 +168,11 @@ There is deliberately **no stored `docker_image` or credential config**: require
 
 | Dev Type | Template | Mission Types |
 |---|---|---|
-| `senior-dev` ("Senior Dev") | `claude-code` (Claude Fable) | ONBOARD, PLAN, REVIEW |
-| `main-dev` ("Main Dev") | `grok-build` (Grok 4.5) | EXECUTE |
-| `junior-dev` ("Junior Dev") | `claude-code` (`claude-haiku-4-5`) | Relations Mapper (default vehicle; assignable anywhere) |
+| `judgment` | `claude-code` (Claude Fable) | ONBOARD, PLAN, REVIEW |
+| `implementer` | `grok-build` (Grok 4.5) | EXECUTE |
+| `mapper` | `claude-code` (`claude-haiku-4-5`) | Relations Mapper (default vehicle; assignable anywhere) |
+
+Dev Types are **vehicles** (harness, model, concurrency, skill chips), not seniority ranks. Mission-step contracts live in playbooks; domain knowledge lives in skills (**ADR-0016**).
 
 Default Dev Types are **re-seeded by name** whenever their YAML is missing (boot-time top-up) — customize a default by editing it, not deleting it; a deleted default returns on the next boot.
 
@@ -239,9 +242,9 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
 | `intake_paused` | `bool` (default `false`) | Operator switch (`11-admin-panel.md` §0): while true, no NEW runs dispatch (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
 | `max_decomposition_depth` | `int` ≥ 0 (default 2) | How many generations of ONBOARD decomposition are allowed below a root (`adr/0012`). `0` = unlimited — the ONBOARD Dev decides (`03-mission-lifecycle.md` §1.3). |
-| `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`junior-dev`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
+| `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`mapper`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
 | `active_prompt_templates` | `dict[str, str]` (default `{}`) | Per-Mission-Type active prompt template name; missing key ⇒ built-in `"default"`. |
-| `active_devtype_prompts` | `dict[str, str]` (default `{}`) | Per-Dev-Type active identifying-prompt template name; missing key ⇒ `"Development"` (the seeded original). |
+| `active_devtype_prompts` | `dict[str, str]` (default `{}`) | Per-Dev-Type active identifying-prompt template name; missing key ⇒ `"Development"` (the seeded original). Keys for deleted Dev Types are dropped on DELETE, stripped from export/profile snapshots, and pruned (with a warning) on PUT `/config` and bundle apply — never a hard 422, because `deep_merge` cannot remove dict keys from a partial SPA patch. |
 | `dismissed_alerts` | `list[str]` (default `[]`) | Admin-UI state: dismissed advisory alerts as `"id:signature"` strings. A list (not a dict) on purpose — `deep_merge` can't delete dict keys, so the UI un-dismisses by PUTting the whole replacement list. |
 
 ## 10. TokenReport

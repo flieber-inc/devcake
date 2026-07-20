@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Eye, Plus, Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import { Section } from "./Card.jsx";
 import { Field, Input, Textarea } from "./Field.jsx";
@@ -134,6 +134,91 @@ function AddSkillDialog({ onClose, onSaved }) {
   );
 }
 
+// Read-only skill viewer: store-first content (or bundled) for operators who
+// need to inspect a skill without opening Gitea. Multi-file skills get tabs.
+function ViewSkillDialog({ name, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [err, setErr] = useState("");
+  const [file, setFile] = useState("SKILL.md");
+
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null); setErr(""); setFile("SKILL.md");
+    get(`/skills/${encodeURIComponent(name)}`)
+      .then((r) => {
+        if (cancelled) return;
+        setDetail(r);
+        const paths = (r.files || []).map((f) => f.path);
+        setFile(paths.includes("SKILL.md") ? "SKILL.md" : (paths[0] || ""));
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(String(e.message || e).replace(/^\d+ /, ""));
+      });
+    return () => { cancelled = true; };
+  }, [name]);
+
+  const content = detail?.files?.find((f) => f.path === file)?.content ?? "";
+
+  return (
+    <Modal className="max-w-3xl" onClose={onClose}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="font-mono text-base font-semibold tracking-tight">
+            {name}
+          </h4>
+          {detail && (
+            <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+              {detail.description || "(no description)"}
+            </p>
+          )}
+        </div>
+        {detail && (
+          <span className={"shrink-0 rounded px-1.5 py-0.5 text-xs "
+            + (detail.source === "store"
+              ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+              : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+            {detail.source === "store" ? "store" : "bundled"}
+            {detail.builtin ? " · built-in" : ""}
+          </span>
+        )}
+      </div>
+      {err && (
+        <p className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
+          {err}
+        </p>
+      )}
+      {!err && !detail && (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…</p>
+      )}
+      {detail && (
+        <>
+          {(detail.files || []).length > 1 && (
+            <div className="mb-2 flex flex-wrap gap-1">
+              {detail.files.map((f) => (
+                <button key={f.path} type="button"
+                  onClick={() => setFile(f.path)}
+                  className={`rounded-md border px-2 py-0.5 font-mono text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
+                    file === f.path
+                      ? "border-accent-400 bg-accent-50 text-accent-800 dark:border-accent-700 dark:bg-accent-950/70 dark:text-accent-200"
+                      : "border-neutral-300 text-neutral-500 hover:bg-stone-100 dark:border-neutral-700 dark:hover:bg-neutral-800"
+                  }`}>
+                  {f.path}
+                </button>
+              ))}
+            </div>
+          )}
+          <pre className="max-h-[60vh] overflow-auto rounded-md border border-neutral-200 bg-stone-50 p-3 font-mono text-xs leading-relaxed text-neutral-800 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200">
+            {content}
+          </pre>
+        </>
+      )}
+      <div className="mt-5 flex justify-end">
+        <Button kind="ghost" onClick={onClose}>Close</Button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function SkillsSection({ setPageErr }) {
   const [confirm, setConfirm] = useState(null); // delete confirms
   // skill store catalog (v1): store-listed when Gitea is up, bundled
@@ -160,12 +245,13 @@ export default function SkillsSection({ setPageErr }) {
     }
   };
   const [addSkill, setAddSkill] = useState(false);
+  const [viewSkill, setViewSkill] = useState(null);
 
   return (
     <>
       <Section id="skills" title="Skills"
         description="Reusable expertise installed into the agent session."
-        help="Skill-store skills Devs can use. Select them per Dev Type in the Dev Types section."
+        help="Domain skill modules Devs may consult. Attach per Dev Type as Available (optional) or Required (soft-force prompt). Skills must be domain-specific and additive — never mission-step scripts."
         actions={skillsCatalog.store?.enabled && (
           <>
             <Button icon={Plus} onClick={() => setAddSkill(true)}>
@@ -248,31 +334,58 @@ export default function SkillsSection({ setPageErr }) {
                       </span>
                     </td>
                     <td className="py-2.5 text-right">
-                      {/* built-ins re-seed at boot — only operator skills delete */}
-                      {skillsCatalog.store?.enabled && !s.builtin && (
+                      {/* Fixed action pair on every row so the column never
+                          shifts: View is always live; Delete is always the
+                          same control when the store is editable — disabled
+                          for built-ins (they re-seed; deselect on Dev Types).
+                          Retired names still in the store are not builtins
+                          and stay deletable so operators can clean them. */}
+                      <div className="flex items-center justify-end gap-1">
                         <button type="button"
-                          title={`Delete skill ${s.name}`}
-                          aria-label={`Delete skill ${s.name}`}
-                          className="rounded text-neutral-500 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-red-400"
-                          onClick={() => setConfirm({
-                            title: `Delete skill ${s.name}?`,
-                            body: "Removed from the skill store. Dev Types that "
-                              + "selected it keep the name (⚠) but the skill is "
-                              + "skipped at dispatch until re-added.",
-                            confirmLabel: "Delete",
-                            action: async () => {
-                              try {
-                                await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
-                                await loadSkills();
-                              } catch (e) {
-                                setPageErr(`skill delete failed: ${String(e.message || e)}`);
-                              }
-                              setConfirm(null);
-                            },
-                          })}>
-                          <Trash2 className="h-4 w-4" />
+                          title={`View skill ${s.name}`}
+                          aria-label={`View skill ${s.name}`}
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium text-neutral-600 hover:bg-stone-100 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+                          onClick={() => setViewSkill(s.name)}>
+                          <Eye className="h-3.5 w-3.5" aria-hidden />
+                          View
                         </button>
-                      )}
+                        {skillsCatalog.store?.enabled && (
+                          <button type="button"
+                            disabled={s.builtin}
+                            title={s.builtin
+                              ? `${s.name} is a built-in skill — it re-seeds at boot. Deselect it on Dev Types instead of deleting.`
+                              : `Delete skill ${s.name}`}
+                            aria-label={s.builtin
+                              ? `${s.name} cannot be deleted (built-in)`
+                              : `Delete skill ${s.name}`}
+                            className={`rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
+                              s.builtin
+                                ? "cursor-not-allowed text-neutral-300 dark:text-neutral-700"
+                                : "text-neutral-500 hover:text-red-600 dark:text-neutral-400 dark:hover:text-red-400"
+                            }`}
+                            onClick={() => {
+                              if (s.builtin) return;
+                              setConfirm({
+                                title: `Delete skill ${s.name}?`,
+                                body: "Removed from the skill store. Dev Types that "
+                                  + "selected it keep the name (⚠) but the skill is "
+                                  + "skipped at dispatch until re-added.",
+                                confirmLabel: "Delete",
+                                action: async () => {
+                                  try {
+                                    await send("DELETE", `/skills/${encodeURIComponent(s.name)}`);
+                                    await loadSkills();
+                                  } catch (e) {
+                                    setPageErr(`skill delete failed: ${String(e.message || e)}`);
+                                  }
+                                  setConfirm(null);
+                                },
+                              });
+                            }}>
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -287,6 +400,10 @@ export default function SkillsSection({ setPageErr }) {
         onCancel={() => setConfirm(null)} />
       {addSkill && <AddSkillDialog
         onClose={() => setAddSkill(false)} onSaved={loadSkills} />}
+      {viewSkill && (
+        <ViewSkillDialog name={viewSkill}
+          onClose={() => setViewSkill(null)} />
+      )}
     </>
   );
 }

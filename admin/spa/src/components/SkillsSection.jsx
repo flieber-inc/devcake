@@ -6,7 +6,13 @@ import { Field, Input, Textarea } from "./Field.jsx";
 import Button from "./Button.jsx";
 import { ConfirmDialog, Modal } from "./Modal.jsx";
 import MoreMenu from "./MoreMenu.jsx";
+import MarkdownBody, {
+  MarkdownModeToggle,
+  MarkdownSourcePre,
+  MarkdownViewShell,
+} from "./MarkdownBody.jsx";
 import { fileToB64 } from "../lib/files.js";
+import { isMarkdownPath, stripYamlFrontmatter } from "../lib/markdown.js";
 
 // ── skill authoring (docs/11 Skills section) ─────────────────────────────────
 
@@ -136,14 +142,16 @@ function AddSkillDialog({ onClose, onSaved }) {
 
 // Read-only skill viewer: store-first content (or bundled) for operators who
 // need to inspect a skill without opening Gitea. Multi-file skills get tabs.
+// .md files: Rendered Markdown (frontmatter stripped) + Source (stored bytes).
 function ViewSkillDialog({ name, onClose }) {
   const [detail, setDetail] = useState(null);
   const [err, setErr] = useState("");
   const [file, setFile] = useState("SKILL.md");
+  const [mode, setMode] = useState("rendered"); // rendered | source
 
   useEffect(() => {
     let cancelled = false;
-    setDetail(null); setErr(""); setFile("SKILL.md");
+    setDetail(null); setErr(""); setFile("SKILL.md"); setMode("rendered");
     get(`/skills/${encodeURIComponent(name)}`)
       .then((r) => {
         if (cancelled) return;
@@ -158,6 +166,9 @@ function ViewSkillDialog({ name, onClose }) {
   }, [name]);
 
   const content = detail?.files?.find((f) => f.path === file)?.content ?? "";
+  const md = isMarkdownPath(file);
+  // non-md tabs always show raw source; toggle only applies to markdown files
+  const showRendered = md && mode === "rendered";
 
   return (
     <Modal className="max-w-3xl" onClose={onClose}>
@@ -172,15 +183,20 @@ function ViewSkillDialog({ name, onClose }) {
             </p>
           )}
         </div>
-        {detail && (
-          <span className={"shrink-0 rounded px-1.5 py-0.5 text-xs "
-            + (detail.source === "store"
-              ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
-              : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
-            {detail.source === "store" ? "store" : "bundled"}
-            {detail.builtin ? " · built-in" : ""}
-          </span>
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          {detail && (
+            <span className={"rounded px-1.5 py-0.5 text-xs "
+              + (detail.source === "store"
+                ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
+                : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
+              {detail.source === "store" ? "store" : "bundled"}
+              {detail.builtin ? " · built-in" : ""}
+            </span>
+          )}
+          {detail && md && (
+            <MarkdownModeToggle mode={mode} onChange={setMode} />
+          )}
+        </div>
       </div>
       {err && (
         <p className="mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300">
@@ -207,9 +223,13 @@ function ViewSkillDialog({ name, onClose }) {
               ))}
             </div>
           )}
-          <pre className="max-h-[60vh] overflow-auto rounded-md border border-neutral-200 bg-stone-50 p-3 font-mono text-xs leading-relaxed text-neutral-800 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200">
-            {content}
-          </pre>
+          <MarkdownViewShell>
+            {showRendered ? (
+              <MarkdownBody>{stripYamlFrontmatter(content)}</MarkdownBody>
+            ) : (
+              <MarkdownSourcePre>{content}</MarkdownSourcePre>
+            )}
+          </MarkdownViewShell>
         </>
       )}
       <div className="mt-5 flex justify-end">

@@ -6,6 +6,12 @@ import { ConfirmDialog, Modal } from "./Modal.jsx";
 import { Field, Input, Select, Textarea } from "./Field.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import SettingRow from "./SettingRow.jsx";
+import MarkdownBody, {
+  MarkdownModeToggle,
+  MarkdownSourcePre,
+  MarkdownViewShell,
+} from "./MarkdownBody.jsx";
+import { stripYamlFrontmatter } from "../lib/markdown.js";
 
 // Per-Mission-Type prompt templates (v0.1.1). Template bodies create/edit/
 // delete IMMEDIATELY (the dev-type precedent — the modal has its own explicit
@@ -79,6 +85,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
   const [modal, setModal] = useState(null); // {mt, kind, initial?}
   const [confirm, setConfirm] = useState(null);
   const [viewing, setViewing] = useState(null); // {mt, entry}
+  const [viewMode, setViewMode] = useState("rendered"); // rendered | source
   const [workflow, setWorkflow] = useState("");
   const [switchNote, setSwitchNote] = useState("");
   const [err, setErr] = useState("");
@@ -217,7 +224,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                     <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
                     {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
                     <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                      onClick={() => setViewing({ mt, entry: t })}>View</button>
+                      onClick={() => { setViewMode("rendered"); setViewing({ mt, entry: t }); }}>View</button>
                     {!t.builtin && (
                       <>
                         <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
@@ -276,7 +283,7 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
                     <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
                     {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
                     <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                      onClick={() => setViewing({ mt: n, entry: t })}>View</button>
+                      onClick={() => { setViewMode("rendered"); setViewing({ mt: n, entry: t }); }}>View</button>
                     <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
                       onClick={() => setModal({ mt: n, kind: "dev", initial: t })}>Edit</button>
                     {t.name !== active && (
@@ -298,12 +305,21 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
       )}
       {viewing && (
         <Modal className="max-w-3xl" onClose={() => setViewing(null)}>
-          <h4 className="mb-2 text-base font-semibold tracking-tight">
-            {viewing.mt} · {viewing.entry.name}
-          </h4>
-          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded bg-neutral-50 p-3 font-mono text-xs dark:bg-neutral-950">
-            {viewing.entry.template}
-          </pre>
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <h4 className="text-base font-semibold tracking-tight">
+              {viewing.mt} · {viewing.entry.name}
+            </h4>
+            <MarkdownModeToggle mode={viewMode} onChange={setViewMode} />
+          </div>
+          <MarkdownViewShell>
+            {viewMode === "rendered" ? (
+              <MarkdownBody>
+                {stripYamlFrontmatter(viewing.entry.template || "")}
+              </MarkdownBody>
+            ) : (
+              <MarkdownSourcePre>{viewing.entry.template}</MarkdownSourcePre>
+            )}
+          </MarkdownViewShell>
           <div className="mt-3 flex justify-end">
             <Button kind="ghost" onClick={() => setViewing(null)}>Close</Button>
           </div>

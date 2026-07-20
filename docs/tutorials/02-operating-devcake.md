@@ -58,11 +58,13 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** (Repositories page, not Configuration) — off (default): every merge is yours; `DEVCAKE-MERGE` is the
-  handoff point. On: after REVIEW approves, PRs merge themselves and missions go straight to
-  Done. Enable only with **branch protection**, a clear review setup, and eyes
-  open (`14` §2 zone C). Independent REVIEW Dev Type is **recommended**, not
-  enforced.
+- **`auto_merge`** (Repositories page, not Configuration) — off (default): the
+  **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
+  On: after REVIEW approves, the **app** merges and missions go straight to
+  Done. Off does **not** strip merge rights from Dev tokens — **branch
+  protection** does that (`14` §2 zone C). Enable only with protection, a clear
+  review setup, and eyes open. Independent REVIEW Dev Type is **recommended**,
+  not enforced.
 
 ## Config profiles — save and switch whole setups
 

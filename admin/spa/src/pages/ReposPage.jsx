@@ -338,9 +338,9 @@ export default function ReposPage() {
         <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
           <SettingRow label="Auto-merge"
             desc={cfg.auto_merge
-              ? "ON — approved PRs merge themselves (squash)."
-              : "OFF — every merge is yours (DEVCAKE-MERGE handoff)."}
-            help="ON: after DevCake's REVIEW step approves a PR, it merges itself (squash). OFF: DevCake stops at DEVCAKE-MERGE and waits for you to merge.">
+              ? "ON — the app merges approved PRs (squash)."
+              : "OFF — app will not merge (DEVCAKE-MERGE handoff)."}
+            help="ON: after REVIEW approves, the app squash-merges. OFF: the app stops at DEVCAKE-MERGE and does not call merge — protect the default branch so Devs (who still hold write tokens) cannot merge either.">
             <Toggle on={cfg.auto_merge} label="Auto-merge"
               onClick={() =>
                 cfg.auto_merge

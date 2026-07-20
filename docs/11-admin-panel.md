@@ -110,7 +110,7 @@ Hermes-style kanban of the current poll snapshot (`GET /api/v1/missions`): cards
 Operator-facing repository inventory: external `RepoInstance` cards (forge, URL, secret presence, connection test via `POST /api/v1/connections/forge/{name}/test`) plus bundled internal Gitea operator repos when `internal_forge` is live. This is where repository identity lives — **not** under Configuration.
 
 Also hosts the merge posture toggles (drafted with the rest of config):
-- **`auto_merge`** — default OFF; enabling shows a confirm dialog whose body matches `AUTO_MERGE_COPY` (`lib/configLabels.js`): *"DevCake will merge its own pull requests to the default branch without human intervention (after its REVIEW step approves). Without a reviewer token, merges proceed without a formal approval on the forge. Missions already parked at DEVCAKE-MERGE are picked back up…"* Only enable with branch protection + eyes open (`14` zone C).
+- **`auto_merge`** — default OFF; enabling shows a confirm dialog whose body matches `AUTO_MERGE_COPY` (`lib/configLabels.js`): the **app** will merge after REVIEW approve; without a reviewer token, merges proceed without a formal forge approval; parked `DEVCAKE-MERGE` missions are re-armed; and the copy states that the toggle **gates the app only** — branch protection stops agents from merging. Only enable with branch protection + eyes open (`14` §2 zone C).
 - **`auto_resolve_merge_conflicts`** — default ON; dimmed while `auto_merge` is OFF. Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
 - **`merge_retry_window_minutes`** — default 30, min 0; dimmed while `auto_merge` is OFF.
 

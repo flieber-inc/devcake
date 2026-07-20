@@ -18,8 +18,9 @@ handles configuration and operations.
 
 > Anyone who can write tickets on the configured team (or land content in a
 > configured repo) can influence agents that hold forge and model credentials.
-> You own branch protection, team membership, and whether auto-merge is on.
-> Full contract: [`docs/14-security.md`](docs/14-security.md).
+> You own branch protection (what stops Devs from merging), team membership,
+> and whether the **app** may auto-merge after REVIEW. Full contract:
+> [`docs/14-security.md`](docs/14-security.md).
 
 Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning.md)
 (*name is provisional* — §6).
@@ -69,8 +70,11 @@ What you own as the operator — once at setup, and recurring — fits on one pa
 
 Independent AI review (a different Dev Type for REVIEW than EXECUTE) is
 **recommended configuration**, warned when shared — not a hard product
-invariant. The supply-chain gate that actually holds is **yours**: protect the
-default branch; keep auto-merge off until you mean it.
+invariant. The supply-chain gate that actually holds is **yours**: **protect
+the default branch** (that is what stops a Dev token from merging). Keep
+auto-merge off until you mean the **app** to merge after REVIEW — off does not
+strip merge capability from agents ([`docs/14-security.md`](docs/14-security.md)
+§2 zone C).
 
 ---
 
@@ -79,7 +83,9 @@ default branch; keep auto-merge off until you mean it.
 1. Write a ticket; add `DEVCAKE` (opt-in mode) — or adopt a whole team deliberately.
 2. Labels advance: ONBOARD → PLAN → EXECUTE → REVIEW as work completes.
 3. A PR opens on `devcake/…` (or the internal forge equivalent).
-4. With auto-merge **off** (default): `DEVCAKE-MERGE` until **you** merge; then Done.
+4. With auto-merge **off** (default): the **app** parks at `DEVCAKE-MERGE` until
+   the PR is merged (normally by you); then Done. Protect the default branch so
+   Devs cannot merge on their own.
 5. Steer with comments and label swaps; stop everything with `DEVCAKE-SKIP`.
 
 Details and interventions: [Tutorial 2](docs/tutorials/02-operating-devcake.md).

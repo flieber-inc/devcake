@@ -16,10 +16,12 @@ auth, Dagu (with host `docker.sock`), and the `/data` secrets volume — is
 **Multi-tenant least-privilege SaaS is an explicit non-goal.** Capable defaults
 (agents that can code, push branches, and reach the network) are intentional.
 The primary defense against supply-chain damage is **outside the agent**: forge
-branch protection, who is on the Linear team, human merge (`auto_merge` off by
-default), and optional tighter credentials (read-only PAT, independent REVIEW
-Dev Type). The app **warns** on weak posture; it does not nanny-gate most of
-those choices. See §8.
+**branch protection** (the control that actually stops a Dev token from landing
+on the default branch), who is on the Linear team, the app-side **`auto_merge`
+default off** (the control plane will not merge for you — it does **not** strip
+merge capability from the Dev; see §2 zone C), and optional tighter credentials
+(read-only PAT, independent REVIEW Dev Type). The app **warns** on weak posture;
+it does not nanny-gate most of those choices. See §8.
 
 If that contract is wrong for your environment, do not run DevCake there.
 
@@ -79,10 +81,33 @@ LLM, and not by pretending tickets are sterile.
 | Branch protection on the default branch (PR + reviews; Dev token cannot bypass) | **Operator** | Detects/warns unprotected branch; out-of-pipeline merge tripwire |
 | Who can write issues/comments on the configured team | **Operator** | Single-team scope only (`05-pmo-adapter.md`) |
 | Who can push to the repo the agent clones | **Operator** | — |
-| `auto_merge` off (human merges) | **Operator** (default off) | Confirm dialog when enabling |
+| `auto_merge` off (**app** does not merge) | **Operator** (default off) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
 | Read-only forge PAT for non-EXECUTE stages | **Operator** (recommended) | Dismissable `forge-write-token` warning if missing |
 | Independent REVIEW Dev Type (different model/role than EXECUTE) | **Operator** (recommended) | API/UI warning if shared — not a hard 422 |
 | LEGAL_OUTCOMES + INV-4 (Dev never writes PMO; forged outcomes cannot approve own work via app deputy path) | **Product (hard)** | Enforced |
+
+#### `auto_merge` gates the app, not the Dev (normative)
+
+Two different actors can merge a PR. Do not conflate them:
+
+| Actor | When `auto_merge` is **OFF** (default) | When `auto_merge` is **ON** |
+|---|---|---|
+| **App** (finalization / merge sweep via `ForgePort`) | Does **not** call `merge`. REVIEW-approve parks at `DEVCAKE-MERGE` until a real merge is observed. | Squash-merges after REVIEW approve; Done only after a real merge (`03` §4.1, `06` §5). |
+| **Dev** (container with write forge token + `gh`/`glab`/API) | Still holds credentials that can open PRs **and**, on most forges, merge them if branch protection allows. Playbooks instruct create-PR only — **guidance, not kernel enforcement**. | Same residual capability. |
+
+What is **hard** when `auto_merge` is off:
+
+- The control plane will not merge for you.
+- Agents cannot make the app merge by forging `result.json` (`LEGAL_OUTCOMES` + INV-4).
+
+What is **not** hard from the toggle alone:
+
+- Stripping merge rights from the Dev token (token scopes often cannot separate “push feature branch” from “merge to default branch” — `13` §8a, `adr/0007`).
+- Preventing a prompt-injected or misbehaving agent from calling `gh pr merge` / the forge merge API.
+- That stop is **forge branch protection** (require PR + reviews; Dev account must not bypass). Unprotected default branch → advisory only; dispatch is not blocked (`§8`).
+- Out-of-pipeline merge is a **detection tripwire** (feed + audit + health), not a block or rollback (`15-errors-and-retries.md`).
+
+**Do not claim** “auto-merge off means no agent can land on the default branch.” Claim: “auto-merge off means DevCake’s app will not merge; protect the default branch so the Dev token cannot either.”
 
 ---
 
@@ -104,26 +129,35 @@ agent work out.” Users are adults; the job of the docs and product is to
 - Steer the model’s plan, code, PR description, and review text.
 - With the **write** forge token in-container: push branches, open/alter PRs
   (playbooks say not to force-push main — guidance, not kernel enforcement).
+- **Even with `auto_merge` off:** the same write token + forge CLI (`gh` /
+  `glab` / API) can **merge** a PR if forge branch protection does not forbid
+  it (§2 zone C). Off only stops the **app** from merging.
 - If **no RO PAT** is configured: **every** stage (ONBOARD/PLAN/REVIEW/MAPPER)
-  gets the same write-capable token as EXECUTE — a non-EXECUTE Dev can push.
+  gets the same write-capable token as EXECUTE — a non-EXECUTE Dev can push
+  (and, without protection, may merge).
 - Exfiltrate env secrets over **open egress** (redaction does not cover Dev
   sockets — §7).
-- With `auto_merge` **on** and weak forge protection: path to default branch
-  depends on forge rules and reviewer token setup (`06-forge-adapter.md`).
+- With `auto_merge` **on** and weak forge protection: the **app** also merges
+  after REVIEW approve — path to default branch depends on forge rules and
+  reviewer token setup (`06-forge-adapter.md`).
 
 ### What the app actually enforces (not “the model behaved”)
 
 - Single-team scoping — nothing outside the configured team key is polled.
 - Devs never call the PMO (INV-4); app finalization is the only PMO writer.
 - **`LEGAL_OUTCOMES`** (`03-mission-lifecycle.md` §6): e.g. EXECUTE claiming
-  `reviewed` is refused; parked with `DEVCAKE-SKIP`, never acted on.
-- `auto_merge` defaults **off**.
+  `reviewed` is refused; parked with `DEVCAKE-SKIP`, never acted on — so an
+  agent cannot make the app merge by forging outcomes.
+- **`auto_merge` defaults off** (and enable is a confirm dialog): the **app**
+  will not call `forge.merge` until the operator opts in. This is **not** a
+  hard gate on Dev-side merge capability (§2 zone C).
 - Traces + audit log of PMO writes (`12-observability.md`, `10-persistence.md`).
 - Out-of-pipeline merge **detection** when a PR is merged while the mission is
-  still mid-pipeline (`15-errors-and-retries.md`).
+  still mid-pipeline (`15-errors-and-retries.md`) — loud signal, not a block.
 
 These close **app-as-deputy** and **forged-result** paths. They do **not** stop
-a capable agent from pushing bad code to a feature branch or exfiltrating tokens.
+a capable agent from pushing bad code to a feature branch, **merging a PR when
+branch protection is weak or absent**, or exfiltrating tokens.
 
 ---
 
@@ -263,9 +297,9 @@ for **app-mediated** posts to Linear/forges, not a substitute for zone C.
 | Unprotected default branch | **Advisory** via `/health` `forge_protection` (SPA alert) — **not** in the `security_warnings` list | Operator must fix forge-side |
 | EXECUTE and REVIEW share Dev Type | **Warning** (SPA) | Independent review recommended, not enforced |
 | `secret_env` value missing **and** referenced by an mcp_setup_command | **Gate** (dispatch refused) | `blocked_reasons`/health names the var; self-heals the poll cycle after the value is pasted. Declared-but-unreferenced = warning only (log + ✗ on the Config card) |
-| `auto_merge` enable | Confirm dialog | Operator accepts merge without human PR click |
+| `auto_merge` enable | Confirm dialog | Operator accepts **app**-driven merge after REVIEW (not a Dev sandbox) |
 | `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |
-| Out-of-pipeline merge | **Hard detection** | Comment + audit + health |
+| Out-of-pipeline merge | **Hard detection** | Comment + audit + health — does not prevent the merge |
 | INV-4 (Dev → PMO) | **Hard** | Architecture |
 
 Dismissing a warning is an **explicit acceptance** of that residual risk. Prefer
@@ -281,8 +315,11 @@ dismiss.
    admin/Dagu/OO to the public internet.
 3. **Sandbox PMO team** (or tightly controlled membership) — ticket writers =
    agent trust.
-4. **Branch protection** on the default branch; Dev token must not bypass.
-5. Leave **`auto_merge` off** until you understand forge approval + reviewer token.
+4. **Branch protection** on the default branch; Dev token must not bypass —
+   this is what stops a Dev from merging, not the auto-merge toggle alone
+   (§2 zone C, `13` §8a).
+5. Leave **`auto_merge` off** until you understand forge approval + reviewer
+   token (off = app will not merge; protect the branch so Devs cannot either).
 6. Prefer a **read-only forge PAT** for non-EXECUTE and a **different** Dev Type
    for REVIEW than EXECUTE.
 7. Strong bootstrap passwords in `.env` (empty/`change-me*` refuse boot unless
@@ -314,8 +351,8 @@ Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 
 | Risk | Blast radius | Owns |
 |---|---|---|
-| Prompt injection via ticket/repo | Bad PR content; push; secret exfil | Design + operator (team/repo ACL) |
-| Write token on non-EXECUTE | Push from “read” stages | Operator (RO PAT) |
+| Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) |
+| Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) |
 | Open egress | Exfil of env | Design |
 | No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) |
 | Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) |
@@ -324,8 +361,9 @@ Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 
 | Risk | Blast radius | Owns |
 |---|---|---|
-| Unprotected default branch | Direct or weak path to main | **Operator** |
-| `auto_merge` + weak review | Merged bad code | Operator |
+| Unprotected default branch | Direct or weak path to main (agent **or** app) | **Operator** |
+| Relying on `auto_merge` off alone | Agent still holds write token + CLI | **Operator** (must also protect branch) |
+| `auto_merge` **on** + weak review / no reviewer token | App merges after REVIEW without formal forge approval | Operator |
 | Shared EXECUTE/REVIEW identity | Weaker second look | Operator |
 
 ---

@@ -2,11 +2,13 @@
 // drives the Save review dialog. Labels mirror the Field labels on the page.
 
 export const AUTO_MERGE_COPY =
-  "DevCake will merge its own pull requests to the default branch without " +
-  "human intervention (after its REVIEW step approves). Without a reviewer " +
-  "token, merges proceed without a formal approval on the forge. Missions " +
-  "already parked at DEVCAKE-MERGE are picked back up: DevCake reopens " +
-  "their merge window and merges them as they become ready.";
+  "DevCake's app will merge its own pull requests to the default branch " +
+  "without a human PR click (after its REVIEW step approves). Without a " +
+  "reviewer token, merges proceed without a formal approval on the forge. " +
+  "Missions already parked at DEVCAKE-MERGE are picked back up: DevCake " +
+  "reopens their merge window and merges them as they become ready. " +
+  "This toggle gates the app only — Devs still hold write forge tokens; " +
+  "branch protection is what stops an agent from merging.";
 
 export const ADOPTION_COPY =
   "DevCake will adopt EVERY non-completed Issue and Project in this team — " +

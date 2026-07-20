@@ -270,9 +270,11 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 Dev containers hold the forge token, and token scoping cannot separate "push a
 feature branch" from "merge to the default branch" (both are often
-`contents: write`). **You** must protect **the branch named
-`default_branch` on the `repos:` entry** before production-ish use. The app
-**warns** when unprotected; it does not hard-block dispatch (`14` §8).
+`contents: write`). **`auto_merge` off only stops the app from merging** — it
+does not change what the Dev token can do (`14` §2 zone C). **You** must protect
+**the branch named `default_branch` on the `repos:` entry** before
+production-ish use. The app **warns** when unprotected; it does not hard-block
+dispatch (`14` §8).
 
 - **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW can file a formal approval so `auto_merge` still works if you enable it.
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.

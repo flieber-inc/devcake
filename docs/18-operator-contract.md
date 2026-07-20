@@ -70,10 +70,13 @@ The app warns; **you** gate (`14` §8):
 
 - **Branch protection** on every work repo's default branch — the forge
   enforces; the app only surfaces an advisory ([`13`](13-deployment.md) §8a).
+  This is what stops a **Dev** from merging; `auto_merge` does not.
 - **Team membership** — every ticket writer steers agents that hold your
   credentials (`14` §0).
-- **Auto-merge** — off by default; turning it on is a judgment call the app
-  will never make for you.
+- **Auto-merge** — off by default: the **app** will not merge PRs for you;
+  turning it on is a judgment call the app will never make for you. Off is
+  **not** a guarantee that no agent can merge — Devs still hold write tokens
+  and forge CLIs (`14` §2 zone C).
 - **REVIEW separation** — a different Dev Type for REVIEW than EXECUTE is
   recommended configuration; the app warns when shared, nothing more.
 

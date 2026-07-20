@@ -68,7 +68,7 @@ Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE
 
 **Mapper degradation:** 3 consecutive dead MAPPER runs ⇒ the periodic service backs off (`mapper_degraded` in `/health` + the admin card); "Run now" remains available and a successful run clears it. Store-derived — restart-safe, no counters to reset.
 
-**`out_of_pipeline_merge` (anomaly, not an error):** a mission's PR found merged while the mission is still mid-pipeline (EXECUTE/REVIEW). Detection tripwire only (docs/14 §2): comment + audit + health banner; a human decides — they may have merged early themselves.
+**`out_of_pipeline_merge` (anomaly, not an error):** a mission's PR found merged while the mission is still mid-pipeline (EXECUTE/REVIEW). Detection tripwire only (docs/14 §2 zone C): comment + audit + health banner — **does not prevent or reverse the merge**. A human may have merged early, or a Dev with a write token may have merged if branch protection allowed it (`auto_merge` off only stops the **app**).
 
 **Blocked-on-a-dead-blocker deadlock:** a Mission whose blocker carries `DEVCAKE-FAILED`/`DEVCAKE-SKIP` stays parked indefinitely (the prerequisite will not complete autonomously). This is surfaced in `/api/v1/missions` reason strings (`04-orchestrator.md` §2); recovery is human — fix the blocker or delete the relation.
 

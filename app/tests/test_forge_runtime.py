@@ -60,18 +60,79 @@ def test_rebuild_still_drops_removed_external_repos():
 
 
 def test_deleted_internal_repo_stays_deleted_across_rebuild():
-    """The admin Clear endpoint pops forges/instances/internal — a later
-    rebuild must not resurrect the entry from a stale carry-over."""
+    """Admin Clear (unregister) drops all five maps; a later rebuild must not
+    resurrect the entry from a stale carry-over (audit A3 carry-over only
+    applies to names still in `internal`)."""
+    name = "linear-t-1"
     rt = ForgeRuntime()
-    rt.register_internal("linear-t-1", _internal_inst("linear-t-1"), object())
+    rt.register_internal(name, _internal_inst(name), object())
+    # latched state as after a 404 probe on a ghost Gitea repo
+    rt.health[name] = {
+        "ok": False, "transient": False,
+        "detail": "repository access failed (HTTP 404)",
+    }
+    rt.latch(name, "repository access failed (HTTP 404)")
+    assert name in rt.breakers and name in rt.health
+
     # what DELETE /api/v1/internal-repos/{name} does:
-    rt.forges.pop("linear-t-1", None)
-    rt.instances.pop("linear-t-1", None)
-    rt.internal.discard("linear-t-1")
+    rt.unregister(name)
+
+    assert rt.get(name) is None
+    assert rt.instance(name) is None
+    assert name not in rt.internal
+    assert name not in rt.health
+    assert name not in rt.breakers
 
     rt.rebuild([_ext()], lambda inst: object())
-    assert rt.get("linear-t-1") is None
-    assert "linear-t-1" not in rt.internal
+    assert rt.get(name) is None
+    assert name not in rt.internal
+    assert name not in rt.health
+    assert name not in rt.breakers
+
+
+def test_delete_internal_repo_service_clears_health_and_breakers():
+    """Service seam: DELETE Clear must go through unregister so health and
+    breakers do not stick after Gitea/secret cleanup. A regression that only
+    pops forges/instances/internal leaves the SPA circuit_breakers alert
+    until process restart — this test fails that incomplete Clear."""
+    from types import SimpleNamespace
+
+    from devcake.api.internal_repos_service import delete_internal_repo
+
+    name = "linear2-dev-137"
+    rt = ForgeRuntime()
+    rt.register_internal(name, _internal_inst(name), object())
+    rt.health[name] = {
+        "ok": False, "transient": False,
+        "detail": "repository access failed (HTTP 404); the token needs "
+                  "write:repository scope and repo access",
+    }
+    rt.latch(name, rt.health[name]["detail"])
+
+    deleted: list[str] = []
+
+    class _Forge:
+        async def delete_repo(self, repo_name: str) -> None:
+            deleted.append(repo_name)
+
+    store = SimpleNamespace(active=lambda: [])
+    out = run_coro(delete_internal_repo(
+        name, internal_forge=_Forge(), store=store, forge_runtime=rt))
+
+    assert out == {"deleted": name}
+    assert deleted == [name]
+    assert rt.get(name) is None
+    assert rt.instance(name) is None
+    assert name not in rt.internal
+    assert name not in rt.health
+    assert name not in rt.breakers
+
+    # config/secret rebuild must not resurrect (internals only carry names
+    # still in `internal`)
+    rt.rebuild([_ext()], lambda inst: object())
+    assert name not in rt.forges
+    assert name not in rt.health
+    assert name not in rt.breakers
 
 
 # ── reference-only repos (founder decision 2026-07-15, round 2) ──────────────

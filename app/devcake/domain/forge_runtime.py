@@ -49,7 +49,8 @@ class ForgeRuntime:
         PUT/DELETE lands here, and wiping them failed in-flight zero-repo
         runspecs (Dev exit 20, burned attempt) and REVIEW finalizes for up
         to a poll cycle. Internal entries leave ONLY via the admin delete
-        endpoint, which pops all three maps plus the `internal` name set."""
+        endpoint (`unregister`), which pops forges/instances/internal plus
+        health and breakers so Clear does not leave a latched ghost."""
         live: dict[str, "ForgePort"] = {}
         insts: dict[str, "RepoInstance"] = {}
         for inst in repos:
@@ -80,6 +81,19 @@ class ForgeRuntime:
         self.instances[name] = inst
         self.forges[name] = forge
         self.internal.add(name)
+
+    def unregister(self, name: str) -> None:
+        """Drop a repo from every runtime map (admin Clear of an internal
+        forge repo). Idempotent — missing names are ignored. Must pop
+        health and breakers too: rebuild only drops those for names not in
+        `live`, and internals are carried across rebuilds, so a Clear that
+        only popped forges/instances/internal left latched breakers and
+        stale health until process restart."""
+        self.forges.pop(name, None)
+        self.instances.pop(name, None)
+        self.internal.discard(name)
+        self.health.pop(name, None)
+        self.breakers.pop(name, None)
 
     def get(self, name: str) -> "ForgePort | None":
         """None = the repo is not (or no longer) configured — the caller's

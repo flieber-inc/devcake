@@ -135,7 +135,5 @@ async def delete_internal_repo(name: str, *, internal_forge, store,
         await internal_forge.delete_repo(name)
     except Exception as e:  # noqa: BLE001 — upstream-error contract: any forge failure surfaces as 502 with detail, never a raw 500
         raise HTTPException(502, f"delete failed: {str(e)[:200]}")
-    forge_runtime.forges.pop(name, None)
-    forge_runtime.instances.pop(name, None)
-    forge_runtime.internal.discard(name)
+    forge_runtime.unregister(name)
     return {"deleted": name}

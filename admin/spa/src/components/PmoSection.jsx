@@ -76,6 +76,9 @@ export default function PmoSection({ newNamesState }) {
         help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
         {cfg.pmos.map((inst, idx) => {
           const tr = testResult[`pmo:${inst.name}`];
+          const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
+            || { needs_api_base: false, team_key_label: "Team key",
+                 team_key_help: "", api_base_help: "" };
           return (
             <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -114,10 +117,32 @@ export default function PmoSection({ newNamesState }) {
                       ✗ {dr.errors[`cfg.pmos.${idx}.name`]}
                     </span>
                   )}</Field>
-                <Field label="Team key"
-                  help="The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.">
+                <Field label="System"
+                  help="PMO product this instance talks to. Driven by the adapter registry — adding an adapter does not require SPA edits.">
+                  <select
+                    className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+                    value={inst.system || "linear"}
+                    onChange={(e) => setField(`cfg.pmos.${idx}.system`, e.target.value)}
+                    aria-label="PMO system"
+                  >
+                    {(registry.pmo_systems || []).map((s) => (
+                      <option key={s.id} value={s.id}>{s.display_name}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label={sysMeta.team_key_label || "Team key"}
+                  help={sysMeta.team_key_help || ""}>
                   <Input value={inst.team_key}
                   onChange={(e) => setField(`cfg.pmos.${idx}.team_key`, e.target.value)} /></Field>
+                {sysMeta.needs_api_base && (
+                  <Field label="API base"
+                    help={sysMeta.api_base_help || "Origin of the PMO API reachable from the app container."}>
+                    <Input value={inst.api_base || ""}
+                      placeholder="http://gitea:3000"
+                      onChange={(e) => setField(`cfg.pmos.${idx}.api_base`,
+                        e.target.value.trim() || null)} />
+                  </Field>
+                )}
                 <SecretField label="API key"
                   help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
                   refKey={`pmo:${inst.name}:api_key`} paste
@@ -155,8 +180,9 @@ export default function PmoSection({ newNamesState }) {
         <Button kind="ghost" onClick={() => {
           const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
           newPmoNames.track(name);
+          const defaultSystem = (registry.pmo_systems || [])[0]?.id || "linear";
           setField("cfg.pmos", [...cfg.pmos,
-            { name, system: "linear",
+            { name, system: defaultSystem,
               team_key: "", api_base: null, repos: [],
               reference_repos: [] }]);
         }}>

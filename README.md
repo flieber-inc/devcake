@@ -29,7 +29,7 @@ Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning
 
 ## Who this is for
 
-- Teams already running work on a **PMO board** (Linear in-tree today)
+- Teams already running work on a **PMO board** (Linear and Gitea Issues in-tree)
 - A **single operator** who will **self-host on a dedicated machine** (Docker,
   Bake, your forge, your models) — not multi-tenant SaaS
 - People who want **receipts** (transcripts, costs, traces) more than a chat copilot
@@ -95,7 +95,7 @@ Details and interventions: [Tutorial 2](docs/tutorials/02-operating-devcake.md).
 ## Architecture (one screen)
 
 ```
-PMO (Linear) ──poll / labels──► app (orchestrator)
+PMO (Linear / Gitea Issues) ──poll / labels──► app (orchestrator)
                                     │ RunBootstrap → Dagu
                                     ▼
                          docker.sock ──► Dev containers

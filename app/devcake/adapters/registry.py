@@ -12,12 +12,20 @@ from ..ports.pmo import PMOPort
 class PMOSystemInfo(BaseModel):
     """Registry metadata for one PMO system. The secret_* fields feed
     security.redact (docs/14 §5) and the admin SPA's paste guard — every
-    registered system contributes its token shapes, configured or not."""
+    registered system contributes its token shapes, configured or not.
+    SPA field labels (team_key_*, needs_api_base) keep the Config form
+    system-agnostic so adding an adapter never hardcodes Linear copy."""
     id: str
     display_name: str
     secret_env_vars: list[str]
     token_patterns: list[str]           # regex sources for redaction
     secret_shape_prefixes: list[str]    # SPA paste-guard prefixes
+    needs_api_base: bool = False
+    team_key_label: str = "Team key"
+    team_key_help: str = (
+        "The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). "
+        "This instance watches only this team. Empty = instance stays idle.")
+    api_base_help: str = ""
 
 
 PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
@@ -28,6 +36,27 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         token_patterns=[r"\blin_api_[A-Za-z0-9]{20,}\b",
                         r"\blin_oauth_[A-Za-z0-9]{20,}\b"],
         secret_shape_prefixes=["lin_api_", "lin_oauth_"],
+    ),
+    # Separate package/id from forge `gitea` so the F1 import tripwire and
+    # ForgePort stay cleanly separated (PMOPort only — docs/05 forge-issue).
+    "gitea_issues": PMOSystemInfo(
+        id="gitea_issues",
+        display_name="Gitea Issues",
+        secret_env_vars=["GITEA_TOKEN", "GITEA_SERVER_TOKEN"],
+        # 40-hex tokens collide with git SHAs — value registration only
+        # (same posture as the Gitea forge adapter, ADR-0010).
+        token_patterns=[],
+        secret_shape_prefixes=[],
+        needs_api_base=True,
+        team_key_label="Issues repo",
+        team_key_help=(
+            "owner/repo of the dedicated issues board this instance watches "
+            "(e.g. devcake-pmo/missions). Not a per-mission work repo. "
+            "Empty = instance stays idle."),
+        api_base_help=(
+            "Gitea origin reachable from the app container. Bundled stack: "
+            "http://gitea:3000 (browser UI is http://localhost:3300). "
+            "External: https://gitea.example.com"),
     ),
 }
 
@@ -40,6 +69,13 @@ def make_pmo(inst) -> PMOPort:
     if inst.system == "linear":
         from .linear import LinearAdapter
         return LinearAdapter(inst.api_key, instance=inst.name)
+    if inst.system == "gitea_issues":
+        from .gitea_issues import GiteaIssuesAdapter
+        from ..security import register_runtime_secret
+        if inst.api_key:
+            register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
+        return GiteaIssuesAdapter(
+            inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
     raise AssertionError("unreachable")  # registry and constructors in sync
 
 

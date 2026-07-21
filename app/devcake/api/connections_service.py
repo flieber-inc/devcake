@@ -125,8 +125,17 @@ async def connections_registry():
     from ..adapters.registry import PMO_SYSTEMS, forges
     forge_descriptors = forges()
     return {
-        "pmo_systems": [{"id": s.id, "display_name": s.display_name}
-                        for s in PMO_SYSTEMS.values()],
+        "pmo_systems": [
+            {
+                "id": s.id,
+                "display_name": s.display_name,
+                "needs_api_base": s.needs_api_base,
+                "team_key_label": s.team_key_label,
+                "team_key_help": s.team_key_help,
+                "api_base_help": s.api_base_help,
+            }
+            for s in PMO_SYSTEMS.values()
+        ],
         "forges": [{"id": d.id, "display_name": d.display_name}
                    for d in forge_descriptors.values()],
         "secret_shape_prefixes": sorted(

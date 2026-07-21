@@ -67,6 +67,7 @@ app/devcake/
     registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), make_internal_forge(),
                    #   forges() — the ONE place that knows which adapters exist
     linear/        #   PMOPort impl (05)
+    gitea_issues/  #   PMOPort impl — forge-issue family (05 §9; not ForgePort)
     github/ gitlab/ gitea/  # ForgePort impls + Gitea provisioner (06, ADR-0010)
     dagu/          #   ExecutorPort impl
     files/         #   StatePort impl (+ runlog.py, owner_store.py) (10)

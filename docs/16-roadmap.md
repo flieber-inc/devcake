@@ -310,7 +310,7 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 ### Deferred (post-v0.2)
 
 - **Webhook ingestion** — a PMO `watch()`/webhook `ChangeEvent` seam replacing polling (+ tunnel guide). Deliberately sequenced *after* F2: the multi-PMO port reshapes the exact surface the seam attaches to. Top candidate once v0.1 ships — multi-PMO instances multiply polling cost.
-- **Additional PMO adapters** (GitHub Issues, GitLab, Monday) + the **markdown-fidelity adapter refactor** (ISSUES #35) — deliberately fenced out of v0.1 (founder decision 2026-07-14): v0.1 completes the port; adapters ride on it afterward. First-wave candidate alongside webhooks.
+- **Additional PMO adapters** (GitHub Issues, GitLab Issues, Monday) + the **markdown-fidelity adapter refactor** (ISSUES #35). **Gitea Issues** (`gitea_issues`) shipped as the first forge-issue family member (local board on bundled or external Gitea; pure `PMOPort`, not `ForgePort`). GitHub/GitLab Issues should copy that profile.
 - **N repos per mission** — cross-repo missions (one PR per repo, set-approval semantics, merge ordering) are a distributed-atomicity project of their own; v0.1 caps per-mission resolution at 0-or-1.
 - **Per-run scoped forge tokens** & the rest of `14` §7 — natural companion to F4's per-mission repo tokens; revisit once that machinery exists.
 - **Network egress allowlists / reduced sandbox-bypass** for non-EXECUTE stages (ISSUES #16).

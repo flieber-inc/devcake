@@ -32,8 +32,8 @@ The following are explicitly **out of scope** (see also `14-security.md` and
   **0..N** PMO instances and repos *per stack* are in scope (multi-connection).
 - Human-in-the-loop approval steps *inside* DevCake (approval happens in the PMO
   System and the forge).
-- PMO systems other than Linear in-tree (adapters are pluggable; Linear is
-  implemented). Markdown-fidelity markers are a port requirement
+- PMO systems beyond the in-tree set (Linear + Gitea Issues; adapters are
+  pluggable). Markdown-fidelity markers are a port requirement
   (`ports/pmo.py`) — multi-PMO is not adapter-only for ADF/rich-text systems.
 - Hosted multi-tenant SaaS.
 
@@ -58,7 +58,7 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 | **Dev** | An ephemeral Docker container running a Dev Type's selected model through its harness CLI to perform one Mission Step, then exit. |
 | **Dev Type** | A named configuration: harness template + model selection + identifying prompt + MCP servers + credentials + concurrency cap + optional domain skills. v0 seeds three role vehicles: **judgment** (Claude Fable / Claude Code — ONBOARD/PLAN/REVIEW), **implementer** (Grok 4.5 / Grok Build — EXECUTE), and **mapper** (Claude Haiku / Claude Code — Relations Mapper default). The model belongs to the Dev Type; multiple Dev Types may share one harness. |
 | **Harness Template** | One of three registry-backed runtime adapters: `claude-code`, `grok-build`, or `codex`. A template selects the CLI image, credential/OAuth contract, invocation and artifact parsing, and skills directory — not a fixed model. `DevType.model` selects the model; empty uses the registry or CLI default. Specified in `08-harness-templates.md`. |
-| **PMO System** | The external project-management system holding the Missions. Adapters are pluggable (registered in `adapters/registry.py`); v0: Linear is the one implemented. A stack may configure **0..N** PMO instances; **each instance is scoped to exactly one team**. Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
+| **PMO System** | The external project-management system holding the Missions. Adapters are pluggable (registered in `adapters/registry.py`); in-tree: **Linear** and **Gitea Issues**. A stack may configure **0..N** PMO instances; **each instance is scoped to exactly one team** (Linear team key, or Gitea `owner/repo` board). Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
 | **Forge** | The code-hosting platform holding the configured repository: GitHub, GitLab, or Gitea (including the bundled internal Gitea for zero-repo missions). Accessed only through the `ForgePort` adapter (`06-forge-adapter.md`). |
 | **Run** | The locally persisted record of one Mission Step attempt: telemetry, timing, outcome, token report. Advisory data only — never authoritative (see INV-1). |
 | **Activity feed** | The Mission's chronological record inside the PMO System: description, comments, attachments, status changes. Rendered into `ACTIVITY.md` for each Dev run. |
@@ -150,7 +150,7 @@ Operating duties — once at setup and recurring — live in
 | `02-domain-model.md` | Entities, fields, Mission Type derivation, label set, state machine |
 | `03-mission-lifecycle.md` | The four Mission Type playbooks, `result.json`, canonical prompts |
 | `04-orchestrator.md` | Poll loop, scheduling, no-lock atomicity, crash recovery |
-| `05-pmo-adapter.md` | `PMOPort` + Linear adapter |
+| `05-pmo-adapter.md` | `PMOPort` + Linear + Gitea Issues adapters |
 | `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab/Gitea adapters, PR/branch conventions |
 | `07-dev-runtime.md` | Dev container contract: filesystem, env, exit codes, lifecycle |
 | `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup |

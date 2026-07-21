@@ -157,14 +157,23 @@ def test_repo_url_shape_validated():
 
 
 def test_make_pmo_dispatches_from_registry():
+    from devcake.adapters.gitea_issues import GiteaIssuesAdapter
     from devcake.adapters.linear import LinearAdapter
     from devcake.adapters.registry import PMO_SYSTEMS, make_pmo
     cfg = AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")])
     assert isinstance(make_pmo(cfg.pmos[0]), LinearAdapter)
-    assert set(PMO_SYSTEMS) == {"linear"}
+    # both in-tree PMO systems (Linear + forge-issue Gitea Issues)
+    assert set(PMO_SYSTEMS) == {"linear", "gitea_issues"}
     info = PMO_SYSTEMS["linear"]
     # api_key_env_default removed at v4 (secrets are GUI-stored, not env-named)
     assert info.secret_env_vars and info.token_patterns and info.secret_shape_prefixes
+    gitea = PMO_SYSTEMS["gitea_issues"]
+    assert gitea.needs_api_base is True
+    assert gitea.token_patterns == []  # 40-hex tokens — value registration only
+    gi = AppConfig(pmos=[PMOInstance(
+        name="gitea", system="gitea_issues", team_key="org/board",
+        api_base="http://gitea:3000")])
+    assert isinstance(make_pmo(gi.pmos[0]), GiteaIssuesAdapter)
 
 
 def test_stale_put_bodies_rejected_not_dropped():

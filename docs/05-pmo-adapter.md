@@ -1,9 +1,9 @@
-# 05 — PMO Adapter: `PMOPort` and the Linear Implementation
+# 05 — PMO Adapter: `PMOPort`, Linear, and Gitea Issues
 
-> **Audience:** implementers of the Linear adapter now; implementers of GitHub Issues / GitLab / Monday adapters later.
+> **Audience:** implementers of PMO adapters (Linear, Gitea Issues; later GitHub/GitLab Issues).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
-The domain core never sees Linear types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. The Linear adapter (`app/devcake/adapters/linear/adapter.py`) is the only v0 implementation; the port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
+The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`) and **Gitea Issues** (`adapters/gitea_issues/` — a pure `PMOPort`, **not** `ForgePort`). The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
 ## 0. The PMO capability contract (normative — any candidate system)
 
@@ -195,22 +195,98 @@ Two batteries. Every future `PMOPort` implementation reuses both shapes: the off
 - **`health_probe` counting** — managed labels counted by `ALL_LABELS` intersection: a `DEVCAKE-CUSTOM-EXTRA` label must NOT count; `managed_labels_expected == len(ALL_LABELS)`.
 - **Transient typing** — a 429 surfaces as `PMOTransient` from the port.
 
-**Live (`scripts/contract_tests_pmo.py`, against the sandbox team — M2 exit criterion):** runs inside the app container (`docker compose exec -T app python - < scripts/contract_tests_pmo.py`); creates temp issues prefixed `[CONTRACT]` and deletes them afterwards. The battery's `_team`/`_gql` calls are **adapter-internal fixture plumbing only** (issue create/delete has no port method and should not grow one for tests' sake) — commented as such in the script; only port methods are contract-tested.
+**Live (`scripts/contract_tests_pmo.py` — acceptance gate for every `PMOPort`):** runs inside the app container:
+
+```bash
+docker compose exec -T app python - < scripts/contract_tests_pmo.py
+# optional: DEVCAKE_CONTRACT_INSTANCE=<name>
+```
+
+**System-agnostic:** the adapter is built with `make_pmo(inst)` from the registry (or a **direct harness** for Gitea Issues without GUI secrets — `DEVCAKE_CONTRACT_SYSTEM=gitea_issues`, `DEVCAKE_CONTRACT_API_BASE`, `DEVCAKE_CONTRACT_TEAM=owner/repo`, `DEVCAKE_CONTRACT_TOKEN`). Temp issues are created with **`create_mission`** and cleaned with **`cancel_mission`** — port methods only (no private GraphQL). Profile-aware rows (2, 3, 10) branch on `capabilities().projects_supported` so Linear (full status + projects) and forge-issue systems (open→backlog, issue-only, priority always medium) share one script.
 
 | # | Scenario |
 |---|---|
 | 1 | `list_missions` returns only the configured team's items, excluding terminal ones |
-| 2 | Status normalization round-trips for every state type |
-| 3 | Priority normalization incl. the unset→`medium` default |
+| 2 | Status normalization round-trips (Linear: all four; forge-issue: open→backlog, done/canceled closed variants) |
+| 3 | Priority: Linear urgent + medium; forge-issue always medium |
 | 4 | `swap_labels` removes+adds in one observable step; no intermediate two-stage-label state visible to a subsequent `get` |
 | 5 | `ensure_labels` is idempotent and case-insensitive |
 | 5b | `health_probe` reports ok + the full managed set present — the public replacement for `_team` reach-ins |
 | 8 | `get_activity` ordering is chronological and attachments are extracted with fetchable URLs |
 | 9 | Rate-limit (429/RATELIMITED) surfaces as `PMOTransient` |
-| 10 | Project normalization: statuses, priority, labels; `capabilities()` truthful |
+| 10 | Linear: project normalized + capabilities; forge-issue: issue-only capabilities truthful |
+| 11 | `cancel_mission` terminal + idempotent |
+| 12 | `post_feed` marker/markdown fidelity (`` `devcake:v1` ``) |
+| 13 | Attachment upload/download round-trip |
+| 14 | `create_relation` + `blocked_by` (duplicate-tolerant) when `relations_supported` |
 
-The numbering is historical and stable (test files reference rows by number). The gaps are covered elsewhere: row 6 (attachment-first feed policy, > 2048-char externalization, inline fallback) is orchestrator policy, tested in `app/tests/test_transitions.py`; row 7 (`create_mission` labeling/priority/team scoping) is exercised through the decomposition tests; rows 11/12 (`inverseRelations`→`blocked_by` parsing; `issueRelationCreate` payload + duplicate tolerance) run hermetically on `MockTransport` in `app/tests/test_linear_relations.py`.
+The numbering is historical and stable (test files reference rows by number). The gaps are covered elsewhere: row 6 (attachment-first feed policy, > 2048-char externalization, inline fallback) is orchestrator policy, tested in `app/tests/test_transitions.py`; row 7 (`create_mission` labeling/priority/team scoping) is exercised through the decomposition tests; Linear-specific relation GraphQL parsing also has hermetic coverage in `app/tests/test_linear_relations.py`.
 
 ## 8. Webhook readiness
 
 A push-based `watch()` seam was designed but never implemented; it is recorded as future work in `16-roadmap.md`. v0 polls every 30–60 s, well within rate limits.
+
+## 9. Gitea Issues adapter (forge-issue family)
+
+First **forge-issue** PMO: issue trackers that are not Linear-style product PMOs. System id **`gitea_issues`** (package `adapters/gitea_issues/`) is deliberately distinct from forge id **`gitea`** so the F1 import tripwire and hexagonal boundaries stay clean — **never** subclass or wrap `GiteaForge` / `InternalForgePort`.
+
+### 9.1 Connection
+
+| Config field | Meaning |
+|---|---|
+| `system` | `gitea_issues` |
+| `api_base` | Gitea origin reachable **from the app container**. Bundled stack: `http://gitea:3000`. Browser UI remains `http://localhost:3300` (`ROOT_URL`). External: `https://gitea.example.com`. |
+| `team_key` | Exactly `owner/repo` of a **dedicated issues board** (e.g. `devcake-pmo/missions`). Not a per-mission internal-forge work repo. |
+| `api_key` | PAT with issue (and label) write on that repo. GUI-stored; **empty `token_patterns`** (40-hex tokens collide with git SHAs — value registration only, same posture as the Gitea forge). |
+
+Internal vs external is **only** `api_base` + token + board path — one system, not two registry entries. Credential separation is mandatory: PMO PAT ≠ forge write tokens ≠ `GITEA_ADMIN_*`.
+
+### 9.2 Normalization (forge-issue profile)
+
+| Gitea | Normalized |
+|---|---|
+| `state=open` | `backlog` always (no vendor `in_progress`; stages ride `DEVCAKE-*` labels) |
+| `state=closed` without cancel footer | `done` |
+| `state=closed` with `` `devcake:canceled:v1` `` in body | `canceled` |
+| priority | always `medium` (no issue priority field) |
+| `pmo_id` | issue **index** (`number`) as string — repo-scoped; API paths use index |
+| `key` | `{owner}/{repo}#{number}` |
+| `pmo_kind` | always `issue` (`projects_supported=False`) |
+
+`cancel_mission` closes the issue and appends the cancel footer (idempotent). Closing an issue that still has **open blockers** 412s on Gitea 1.24 — the adapter **clears dependencies first** then closes (scheduler already consumed them).
+
+### 9.3 Relations, labels, feed, attachments
+
+- **Relations:** `POST/GET/DELETE …/issues/{index}/dependencies` with `IssueMeta{owner,repo,index}`. `create_relation(blocker, blocked)` makes `blocked` depend on `blocker`. Duplicate create returns 500 “does already exist” → treated as success. `ensure_labels` enables `internal_tracker.enable_issue_dependencies` on the board (off by default on new repos).
+- **Labels:** repo labels; `PUT …/issues/{index}/labels` replaces the full set (`native_label_swap_atomic=True`). Managed set ensured uppercase.
+- **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified).
+- **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** (`localhost:3300`); the adapter rewrites the host to `api_base` so the app container can download.
+
+### 9.4 Operator setup (bundled Gitea)
+
+1. UI `http://localhost:3300` → create org/repo e.g. `devcake-pmo/missions` (empty git repo is fine).
+2. Mint a PAT with issue write on that repo.
+3. Admin → Configuration → PMO → system **Gitea Issues**, api base `http://gitea:3000`, issues repo `devcake-pmo/missions`, paste PAT → Save → Test connection (expect 10/10 managed labels).
+4. Label an issue `DEVCAKE` (opt-in) and poll.
+
+Work forge remains independent (GitHub/GitLab/Gitea repo cards, or empty → per-mission internal forge).
+
+### 9.5 Live contract battery
+
+**Wired into `scripts/ci_suite.sh`** (after the forge battery). Default lane with no env extras: if `GITEA_ADMIN_*` is present (app container), auto-provision a scratch `owner/pmo-contract-*` board, run all scenarios, delete the board + token. Zero external tokens — same posture as `contract_tests_forge.py`.
+
+```bash
+# CI / local full suite (auto gitea_issues lane)
+docker compose exec -T app python - < scripts/contract_tests_pmo.py
+
+# Or pin a configured instance / direct PAT board:
+#   DEVCAKE_CONTRACT_INSTANCE=…  or  DEVCAKE_CONTRACT_SYSTEM=gitea_issues + TEAM/TOKEN/API_BASE
+```
+
+Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same script against a Linear config instance uses the Linear profile rows (projects + urgent priority).
+
+**GHA `ci.yml` note:** the minimal dispatch compose has no Gitea, so the PMO live battery stays in **local `ci_suite.sh`** (full stack), not the PR-minimal job — same as the forge contract battery today.
+
+### 9.6 Path to GitHub / GitLab Issues
+
+Same forge-issue profile (issue-only, label stages, open→backlog, markdown comments, dependency/links). New package per vendor; do **not** grow a shared Issues Port until a second forge-issue adapter exists. Live gate: same `scripts/contract_tests_pmo.py` once the system is registered.

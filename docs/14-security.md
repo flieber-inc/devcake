@@ -109,6 +109,43 @@ What is **not** hard from the toggle alone:
 
 **Do not claim** “auto-merge off means no agent can land on the default branch.” Claim: “auto-merge off means DevCake’s app will not merge; protect the default branch so the Dev token cannot either.”
 
+#### Who holds which forge token (normative)
+
+| Secret (Repositories GUI) | Injected into Devs? | Used by the app for |
+|---|---|---|
+| **Write / access** (`token`) | **EXECUTE** always; other stages only if no RO PAT is set | PR comments, state, and **squash-merge** when `auto_merge` is on |
+| **Read-only** (`token_ro`, recommended) | Non-EXECUTE stages (ONBOARD / PLAN / REVIEW / MAPPER) | — (clone/read only in-container) |
+| **Reviewer** (`reviewer_token`, optional) | **Never** — app-side only | **Formal** PR/MR approval (`ForgePort.approve`) after REVIEW Dev returns approve |
+
+REVIEW’s job is judgment (`result.json`). Formal forge approval and merge are **app** side effects, never something the REVIEW container is handed credentials to do with the reviewer token.
+
+#### Branch protection (what it is)
+
+**Branch protection** is a **forge-enforced** policy on a branch name (your
+repo’s `default_branch` — usually `main`). It is configured in GitHub / GitLab /
+Gitea, not in DevCake. Typical rules: no direct push to that branch; changes
+must arrive via PR/MR; merge requires ≥1 formal approval and/or green checks;
+the Dev token’s account must **not** be on a bypass list.
+
+Token scopes on most forges **cannot** grant “push feature branches + open PRs”
+without also granting the API capability to merge when protection allows.
+Protection is therefore the real containment for zone C; DevCake only **warns**
+when the default branch looks unprotected (`13` §8a, `/health`).
+
+#### End-to-end merge path (operator mental model)
+
+With write + RO + reviewer tokens and default-branch protection:
+
+1. **EXECUTE** (write token) → push feature branch, open PR.
+2. **REVIEW** Dev (RO token if set) → approve or reject in `result.json` only.
+3. **App** on approve → PR comment; formal approval with **reviewer** token
+   (satisfies “require reviews” without self-approval on GitHub/Gitea).
+4. **`auto_merge` off:** park `DEVCAKE-MERGE`; human merges; sweep → Done.  
+   **`auto_merge` on:** app merges with the **write** token, then Done.
+
+Without protection, step 1’s write token can often merge out of band; that is
+detected as an out-of-pipeline-merge **tripwire**, not prevented (`15`).
+
 ---
 
 ## 3. Prompt injection (design choice, not a bug)

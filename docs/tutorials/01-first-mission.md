@@ -80,11 +80,16 @@ On Configuration → Dev Types, **implementer** → **Connect via OAuth…** —
 | Check | Why |
 |---|---|
 | Sandbox Linear team (or tight membership) | Ticket writers = agent trust |
-| Branch protection on default branch | Primary containment (`14` zone C) |
-| `auto_merge` still **off** | You merge; Done only after merge |
-| RO forge token set (optional but recommended) | Non-EXECUTE stages shouldn't get write |
-| EXECUTE ≠ REVIEW Dev Type (recommended) | Independent second look |
+| **Branch protection** on default branch (forge UI: require PR + ≥1 approval; Dev account cannot bypass) | Primary containment — forge enforces merges, not `auto_merge` (`14` zone C, `13` §8a) |
+| `auto_merge` still **off** | App will not merge; you merge; Done only after a real merge |
+| Write token set; **RO** forge token set (recommended) | EXECUTE pushes/opens PR; non-EXECUTE should not hold write |
+| **Reviewer** token from a different account (optional) | App-only formal forge approval — never given to a Dev; useful if you later enable auto-merge under protection |
+| EXECUTE ≠ REVIEW Dev Type (recommended) | Independent second look (judgment only — not forge approval) |
 | Health `security_warnings` read, not dismissed unread | Advisory posture (`14` §8) |
+
+Mental model: EXECUTE opens the PR → REVIEW Dev judges → app may formally
+approve with the reviewer token → with auto-merge **off**, **you** merge on the
+forge. Full walkthrough: README “How forge merges are controlled” · `14` §2.
 
 Full list: `14-security.md` §9.
 

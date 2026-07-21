@@ -268,15 +268,31 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ### 8a. Protect the default branch (operator supply-chain control — docs/14 §2 zone C)
 
-Dev containers hold the forge token, and token scoping cannot separate "push a
-feature branch" from "merge to the default branch" (both are often
-`contents: write`). **`auto_merge` off only stops the app from merging** — it
-does not change what the Dev token can do (`14` §2 zone C). **You** must protect
-**the branch named `default_branch` on the `repos:` entry** before
-production-ish use. The app **warns** when unprotected; it does not hard-block
-dispatch (`14` §8).
+**Branch protection** is a policy you set **on the forge** (GitHub / GitLab /
+Gitea) for a branch name — in DevCake, the repo’s `default_branch` (usually
+`main`). The forge refuses direct pushes and merges that do not meet your rules
+(PR required, ≥1 approval, checks, no force-push, no bypass for the Dev
+account). DevCake does not implement those rules; it only **warns** when the
+branch looks unprotected and does not hard-block dispatch (`14` §8).
 
-- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev token's account a bypass. With a reviewer token configured, DevCake's REVIEW can file a formal approval so `auto_merge` still works if you enable it.
+Why it is mandatory for production-ish use: Dev containers hold a write-capable
+forge token, and token scoping cannot separate “push a feature branch” from
+“merge to the default branch” (both are often `contents: write`). **`auto_merge`
+off only stops the app from merging** — it does not change what the Dev token
+can do (`14` §2 zone C). Full actor/token walkthrough: `14` §2 and the README
+“How forge merges are controlled.”
+
+Recommended operator setup:
+
+1. **Protect `default_branch`** on every work repo.
+2. **Write token** for EXECUTE (push + open PR); app reuses it for merge if
+   `auto_merge` is later enabled.
+3. **RO token** for non-EXECUTE (recommended).
+4. **Reviewer token** from a **different** account (app-only): formal approval
+   so “require ≥1 approval” can pass without self-approval.
+5. Leave **`auto_merge` off** until you want the app to squash-merge after REVIEW.
+
+- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so `auto_merge` can still work if you enable it.
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 Forge connection test and `/health` surface protection state; amber warning when unprotected.

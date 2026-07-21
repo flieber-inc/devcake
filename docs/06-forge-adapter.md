@@ -131,9 +131,17 @@ GitHub and Gitea forbid approving a PR with the account that opened it (`self_ap
 
 ### Token posture (operator)
 
-- **Write token** is required for EXECUTE (push + open PR).
-- **Read-only PAT** for non-EXECUTE stages is **recommended**; if unset, every stage receives the write token and health shows dismissable `forge-write-token:{repo}` (`14` §8).
-- **Reviewer token** enables formal PR approval for auto-merge paths.
+| Secret | Who receives it | Role |
+|---|---|---|
+| **Write / access** (`token`) | EXECUTE Dev (always); non-EXECUTE only if `token_ro` is unset; **app** always has it for forge side effects | Push feature branch, open/update PR; app **squash-merge** when `auto_merge` is on |
+| **Read-only** (`token_ro`) | Non-EXECUTE stages when set (recommended) | Clone/read only — health warns `forge-write-token:{repo}` if missing (`14` §8) |
+| **Reviewer** (`reviewer_token`) | **App only** — never injected into a Dev container | Formal PR/MR approval after REVIEW Dev returns approve; enables protected-branch auto-merge without self-approval |
+
+Do not conflate REVIEW Dev judgment with forge approval: the Dev returns
+`result.json`; the app calls `approve()` with the reviewer token (or skips
+formal approval and posts `APPROVED-BY-DEVCAKE` when no reviewer token is set).
+Merge — when enabled — always uses the **write** token, never the reviewer token
+(`14` §2 zone C).
 
 ## 5. `auto_merge` and the merge-before-Done rule
 

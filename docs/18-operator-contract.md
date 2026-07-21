@@ -68,9 +68,15 @@ or accepted that the old artifacts must now be guarded like the old secret.
 
 The app warns; **you** gate (`14` §8):
 
-- **Branch protection** on every work repo's default branch — the forge
-  enforces; the app only surfaces an advisory ([`13`](13-deployment.md) §8a).
-  This is what stops a **Dev** from merging; `auto_merge` does not.
+- **Branch protection** on every work repo's default branch — a **forge**
+  policy (require PR + reviews; Dev write account cannot bypass). The app only
+  surfaces an advisory ([`13`](13-deployment.md) §8a). This is what stops a
+  **Dev** from merging; `auto_merge` does not. Token scopes usually cannot
+  separate push-branch from merge — see [`14`](14-security.md) §2.
+- **Forge token split** — write for EXECUTE (and app merge when enabled); RO
+  for non-EXECUTE (recommended); reviewer token **app-only** for formal PR
+  approval. The REVIEW Dev judges; it never receives the reviewer token
+  ([`06`](06-forge-adapter.md) §4).
 - **Team membership** — every ticket writer steers agents that hold your
   credentials (`14` §0).
 - **Auto-merge** — off by default: the **app** will not merge PRs for you;

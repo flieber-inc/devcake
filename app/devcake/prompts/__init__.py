@@ -25,14 +25,14 @@ from ..ports.forge import mission_branch
 PLAYBOOK_VARS: dict[str, tuple[str, ...]] = {
     "ONBOARD": ("key", "priority", "url", "title", "branch", "description",
                 "project_note", "repo_options", "reference_repos",
-                "decomposition_rule"),
+                "blocker_repos", "decomposition_rule"),
     "PLAN": ("key", "priority", "url", "title", "description",
-             "reference_repos"),
+             "reference_repos", "blocker_repos"),
     "EXECUTE": ("key", "priority", "url", "title", "repo_name",
                 "pr_instructions", "default", "branch", "description",
-                "reference_repos"),
+                "reference_repos", "blocker_repos"),
     "REVIEW": ("key", "priority", "url", "title", "branch", "description",
-               "reference_repos"),
+               "reference_repos", "blocker_repos"),
 }
 
 _VAR = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -78,7 +78,7 @@ the EXECUTE step, from the plan you attach.
 
 {description}
 
-{project_note}{repo_options}{reference_repos}### Classify (docs rubric)
+{project_note}{repo_options}{reference_repos}{blocker_repos}### Classify (docs rubric)
 - `trivial` — you are CERTAIN you can complete it now: localized (≤ ~2 files), zero
   design ambiguity, obvious verification. Rare.
 - `normal` — a definable piece of work that needs a plan first. **Most missions.**
@@ -172,10 +172,12 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
                    playbook: str | None = None,
                    repo_options: str = "",
                    reference_repos: str = "",
+                   blocker_repos: str = "",
                    decomposition_rule: str = "") -> str:
     """repo_options: the multi-repo triage section (item 2 full scope) —
     dispatch builds it from the instance's repo set; empty for single-repo
     and zero-repo instances (renders to nothing, like project_note).
+    blocker_repos: done blockers' RO work mounts (empty when none).
     decomposition_rule: the per-mission depth line (ADR-0012) — dispatch
     computes it via _decomposition_rule; empty renders to nothing."""
     text = render_playbook(
@@ -187,6 +189,7 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "project_note": PROJECT_NOTE if mission.pmo_kind == "project" else "",
          "repo_options": repo_options,
          "reference_repos": reference_repos,
+         "blocker_repos": blocker_repos,
          "decomposition_rule": decomposition_rule})
     return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
@@ -208,18 +211,20 @@ strategy, and acceptance checks. Study /workspace/repo, the brief in
 - Title: **{title}**
 
 {description}
-{reference_repos}"""
+{reference_repos}{blocker_repos}"""
 
 
 def plan_prompt(identifying_prompt: str, mission: Mission,
                 playbook: str | None = None,
-                reference_repos: str = "") -> str:
+                reference_repos: str = "",
+                blocker_repos: str = "") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["PLAN"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
          "title": mission.title,
          "description": mission.description or "(no description)",
-         "reference_repos": reference_repos})
+         "reference_repos": reference_repos,
+         "blocker_repos": blocker_repos})
     return identifying_prompt + "\n" + text + HUMAN_COMMENTS_NOTE
 
 
@@ -259,13 +264,14 @@ conflicts, and push — do NOT redo or extend the mission's implementation.
 - Title: **{title}**
 
 {description}
-{reference_repos}"""
+{reference_repos}{blocker_repos}"""
 
 
 def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
                    pr_instructions: str, default_branch: str = "main",
                    playbook: str | None = None,
-                   reference_repos: str = "") -> str:
+                   reference_repos: str = "",
+                   blocker_repos: str = "") -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
     (docs/06) — placeholders: {key} {title} {default} {branch}. It is
     code-owned, so it keeps str.format; its rendered result becomes the
@@ -279,7 +285,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "title": mission.title, "repo_name": repo_name,
          "pr_instructions": pr, "default": default_branch, "branch": branch,
          "description": mission.description or "(no description)",
-         "reference_repos": reference_repos})
+         "reference_repos": reference_repos,
+         "blocker_repos": blocker_repos})
     return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 
@@ -313,19 +320,21 @@ approval must be EARNED by the evidence you gather.
 - Title: **{title}**
 
 {description}
-{reference_repos}"""
+{reference_repos}{blocker_repos}"""
 
 
 def review_prompt(identifying_prompt: str, mission: Mission,
                   playbook: str | None = None,
-                  reference_repos: str = "") -> str:
+                  reference_repos: str = "",
+                  blocker_repos: str = "") -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["REVIEW"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
          "title": mission.title,
          "branch": mission_branch(mission.instance, mission.key),
          "description": mission.description or "(no description)",
-         "reference_repos": reference_repos})
+         "reference_repos": reference_repos,
+         "blocker_repos": blocker_repos})
     return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
 
 

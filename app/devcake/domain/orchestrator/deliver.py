@@ -1,14 +1,14 @@
-"""Deliverable packaging for internal-forge missions (docs/16 M11, F4).
+"""Deliverable packaging: zip the merged PR change set onto the PMO feed.
 
-The internal fallback forge may be invisible to the end-user, so a mission
-that completes there must still deliver: on the REVIEW-approved merge, the
-changed files are zipped and attached to the PMO activity feed — the PMO
-stays the one place the user looks (attachment-first policy, docs/05 §4).
+Internal/zero-repo missions ALWAYS deliver (docs/16 M11, F4, ADR-0010) —
+the internal forge may be invisible, so the PMO is the one place the user
+looks. Configured (external) work repos deliver only when the operator
+enables AppConfig.attach_merged_changeset_to_pmo (default off: the forge
+PR is the canonical eng artifact).
 
-Fired AFTER the Done checkpoint from all three merge sites, gated on the
-mission's repo being internal, guarded by its own idempotency key so
-redelivery never double-posts. A packaging failure NEVER un-Dones the
-mission — it posts a warning pointing at the internal PR instead.
+Fired AFTER the Done checkpoint from all three merge sites, guarded by
+its own idempotency key so redelivery never double-posts. A packaging
+failure NEVER un-Dones the mission — it posts a warning instead.
 """
 
 from __future__ import annotations
@@ -38,15 +38,26 @@ async def deliver_internal_zip(mgr, run, pr) -> None:
         mgr.runs.store.save(run)
 
 
+def _should_deliver_zip(mgr, repo_ref: str | None) -> bool:
+    """Internal repos always; configured repos only when the operator opt-in
+    is on (AppConfig.attach_merged_changeset_to_pmo). None/empty never
+    delivers — merge sweep only calls this with a resolved m.repo."""
+    if not repo_ref:
+        return False
+    if repo_ref in mgr.forges.internal:
+        return True
+    return bool(getattr(mgr.config, "attach_merged_changeset_to_pmo", False))
+
+
 async def deliver_internal_zip_for_mission(mgr, m, pr) -> None:
-    """Merge-sweep-path delivery (auto-merge OFF, human merged in Gitea). The
+    """Merge-sweep-path delivery (auto-merge OFF, human merged). The
     Done label-swap that precedes this call normally removes the mission from
     future sweep candidates, so it fires once — but a crash between the swap
     and this call, or a redelivery, could re-enter. Guard durably against a
     double-attach by checking the feed for the deliverable's own filename
     (review finding #9). Scans _unquoted bodies only (ADR-0014 D2): a quoted
     mention of the zip name must never suppress a real delivery."""
-    if m.repo not in mgr.forges.internal:
+    if not _should_deliver_zip(mgr, m.repo):
         return
     marker = f"{m.key}-deliverable.zip"
     try:
@@ -64,10 +75,12 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
     """Zip the merged change set → PMO feed attachment. Returns True on a
     successful delivery (caller may then record its idempotency marker).
     Best-effort: a failure NEVER un-Dones the mission."""
-    if repo_ref not in mgr.forges.internal:
-        return False                             # external repo — nothing to do
+    if not _should_deliver_zip(mgr, repo_ref):
+        return False
     try:
         forge = mgr.forges.get(repo_ref)
+        if forge is None:
+            return False
         state = await forge.pr_state(pr.number)
         merge_sha = getattr(pr, "merge_commit_sha", None) or await _merge_sha(
             forge, pr.number)
@@ -77,12 +90,16 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         zip_bytes, omitted = await _build_zip(forge, files, merge_sha, cap)
         name = f"{mission_key}-deliverable.zip"
         url = await mgr.pmo.upload_attachment(pmo_id, name, zip_bytes)
+        is_internal = repo_ref in mgr.forges.internal
         note = (f"📦 Deliverable attached: {len(files) - len(omitted)} file(s) "
                 f"from the approved merge — [{name}]({url}).")
+        if not is_internal:
+            note += (f" Snapshot of the merged change set; the forge PR is "
+                     f"canonical: {state.url}.")
         if omitted:
             note += (f" {len(omitted)} file(s) omitted (too large, or a fetch "
                      f"error — see MANIFEST.txt in the zip); the full change "
-                     f"set is in the internal PR {state.url}.")
+                     f"set is in the PR {state.url}.")
         await mgr._feed(pmo_id, pmo_kind, note)
         log.info("delivered %s: %s (%d files)", mission_key, name, len(files))
         return True
@@ -93,7 +110,7 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
             await mgr._feed(
                 pmo_id, pmo_kind,
                 "⚠️ Deliverable packaging failed — the merged files remain "
-                f"available in the internal repository ({repo_ref}).")
+                f"available in the repository ({repo_ref}).")
         except Exception:
             log.exception("could not post the delivery-failure notice")
         return False

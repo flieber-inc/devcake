@@ -90,6 +90,121 @@ def decomposition_rule(mgr, live: Mission) -> str:
         depth=markers.decomposition_depth(live), limit=limit)
 
 
+MAX_BLOCKER_WORK_EXTRAS = 8
+
+
+async def resolve_blocker_work(
+        mgr, mission: Mission, primary_repo: str,
+        all_runs: list | None = None, *,
+        max_extras: int = MAX_BLOCKER_WORK_EXTRAS,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Direct done-blockers' work repos for RO mounts.
+
+    → (entries, skip_reasons). Entries are `[{repo_ref, mission_key}]`,
+    deduped by repo_ref, excluding the mission's own primary work repo.
+    Only `status == "done"` blockers mount; canceled/open/unreadable are
+    skipped with a reason. Repo_ref comes from the blocker's latest run
+    with a non-empty repo_ref (no re-provision of cleared internals).
+    """
+    entries: list[dict[str, str]] = []
+    skip: list[str] = []
+    if not getattr(mission, "blocked_by", None):
+        return entries, skip
+    if all_runs is None:
+        all_runs = mgr.runs.store.all()
+    # Instance-scope + mission-only (mirror resolve_repo history): MAPPER/hello
+    # never carry a mission work repo; cross-instance pmo_id collisions are
+    # belt-and-braces (Linear UUIDs are already unique — docs/04).
+    by_mid: dict[str, list] = {}
+    for r in all_runs:
+        if not getattr(r, "mission_pmo_id", None) or not getattr(r, "repo_ref", None):
+            continue
+        if r.mission_type in ("MAPPER", "HELLO", "OAUTH"):
+            continue
+        if not mgr._run_is_ours(r):
+            continue
+        # legacy default "main" is not a real resolved work repo name on the
+        # sticky path (configured names are operator-chosen; internal names
+        # are {instance}-{key}); skip the synthetic default so a pre-v3
+        # record cannot invent a mount target.
+        if r.repo_ref == "main" and r.repo_ref not in mgr.forges.instances:
+            continue
+        by_mid.setdefault(r.mission_pmo_id, []).append(r)
+
+    for bid in mission.blocked_by:
+        try:
+            b = await mgr.pmo.get(MissionRef(bid, "issue"))
+        except Exception:  # noqa: BLE001 — skip one unreadable blocker; dispatch already cleared open-blocker gate
+            skip.append(f"{bid}: unreadable")
+            continue
+        if b.status != "done":
+            if b.status == "canceled":
+                skip.append(f"{b.key}: canceled — no work tree")
+            else:
+                skip.append(f"{b.key}: not done ({b.status})")
+            continue
+        runs = by_mid.get(bid) or []
+        runs_sorted = sorted(
+            runs,
+            key=lambda r: getattr(r, "created_at", None) or datetime.min.replace(
+                tzinfo=timezone.utc),
+            reverse=True)
+        repo_ref = next((r.repo_ref for r in runs_sorted if r.repo_ref), None)
+        if not repo_ref:
+            skip.append(f"{b.key}: no prior work repo")
+            continue
+        if repo_ref == primary_repo:
+            continue
+        entries.append({"repo_ref": repo_ref, "mission_key": b.key})
+
+    seen: set[str] = set()
+    deduped: list[dict[str, str]] = []
+    for e in entries:
+        if e["repo_ref"] in seen:
+            continue
+        seen.add(e["repo_ref"])
+        deduped.append(e)
+    if len(deduped) > max_extras:
+        overflow = deduped[max_extras:]
+        deduped = deduped[:max_extras]
+        skip.append("cap %d: skipped %s" % (
+            max_extras, ", ".join(e["mission_key"] for e in overflow)))
+    return deduped, skip
+
+
+def _blocker_repos_note(mgr, entries: list[dict[str, str]],
+                        skip_reasons: list[str]) -> str:
+    """Prompt section naming RO blocker work clones (empty when none)."""
+    if not entries and not skip_reasons:
+        return ""
+    lines = []
+    for e in entries:
+        name = e["repo_ref"]
+        url = None
+        if mgr.internal_forge is not None:
+            creds = mgr.internal_forge.mission_credentials(name)
+            if creds is not None:
+                url = creds.clone_url
+        if url is None:
+            inst = mgr.forges.instance(name)
+            if inst is not None:
+                url = inst.url
+        slug = (url or name).rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        lines.append(
+            f"- `{e['mission_key']}` (`{name}`) → /workspace/repo/{slug}/")
+    body = (
+        "\n### Completed blocker work (read-only)\n"
+        "Shallow clones of work repositories from missions that block this "
+        "one and are done. Read freely; NEVER modify, commit, or open PRs "
+        "here. Your write target remains the primary work repository only.\n"
+    )
+    if lines:
+        body += "\n" + "\n".join(lines) + "\n"
+    if skip_reasons:
+        body += "\n" + "\n".join(f"(skipped: {r})" for r in skip_reasons) + "\n"
+    return body + "\n"
+
+
 def _onboard_repo_options(mgr, primary: str) -> str:
     """The multi-repo triage section for ONBOARD prompts (item 2 full scope,
     founder decision 2026-07-15): empty unless the instance's repo SET has
@@ -220,6 +335,12 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # repo records what this Dev actually receives. NEVER gates dispatch.
     await _push_activity_repo(mgr, live, mtype, seq)
 
+    # RO mounts of done blockers' work repos (snapshot for runspec + prompt)
+    all_runs = mgr.runs.store.all()
+    blocker_entries, blocker_skips = await resolve_blocker_work(
+        mgr, live, repo_name, all_runs)
+    blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips)
+
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)
         span.set_attribute("devcake.mission.key", mission.key)
@@ -252,19 +373,23 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
                 ident, live, playbook=_pb("ONBOARD"),
                 repo_options=_onboard_repo_options(mgr, repo_name),
                 reference_repos=ref_note,
+                blocker_repos=blocker_note,
                 decomposition_rule=decomposition_rule(mgr, live)),
             MissionType.PLAN: lambda: plan_prompt(
                 ident, live, playbook=_pb("PLAN"),
-                reference_repos=ref_note),
+                reference_repos=ref_note,
+                blocker_repos=blocker_note),
             MissionType.EXECUTE: lambda: execute_prompt(
                 ident, live, repo_slug,
                 pr_instructions=forge.descriptor.pr_instructions,
                 default_branch=repo.default_branch,
                 playbook=_pb("EXECUTE"),
-                reference_repos=ref_note),
+                reference_repos=ref_note,
+                blocker_repos=blocker_note),
             MissionType.REVIEW: lambda: review_prompt(
                 ident, live, playbook=_pb("REVIEW"),
-                reference_repos=ref_note),
+                reference_repos=ref_note,
+                blocker_repos=blocker_note),
         }[mtype]()
 
         spec_env = _protocol_spec_env(mgr, 
@@ -279,6 +404,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             timeout_seconds=mgr.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
             spec_env=spec_env,
+            blocker_work=list(blocker_entries),
         )
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
@@ -436,11 +562,15 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
 def _extra_repos_for(mgr, run: Run) -> list[dict]:
     """Read-only sibling clones for a run, built at request time (nothing
     secret at rest); read tokens preferred, write fallback (same rule as
-    the primary token). Two sources:
-    - the routing set's OTHER repos: ONBOARD only (multi-repo triage,
-      item 2 full scope)
-    - the instance's REFERENCE repos: EVERY mission stage (consultation
-      material — docs sources, style guides; founder request 2026-07-15)"""
+    the primary token). Three sources:
+    - the routing set's OTHER repos: ONBOARD only (multi-repo triage)
+    - the instance's REFERENCE repos: EVERY mission stage
+    - done blockers' work repos snapshotted on run.blocker_work (pipeline
+      continuity — internal uses mission token_read; configured uses RO)
+
+    Tokens that resolve empty are omitted (a clone with no credential is
+    never useful and would only burn a non-fatal failure note).
+    """
     wanted: list[str] = []
     if run.mission_type == "ONBOARD":
         wanted += list(mgr.instance.repos or [])
@@ -455,9 +585,40 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
         forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
             continue         # removed mid-flight — proceed on what remains
+        token = inst_x.token_ro or inst_x.token
+        if not token:
+            continue
         extras.append({"name": name, "url": inst_x.url,
                        "clone_user": forge_x.descriptor.clone_user,
-                       "token": inst_x.token_ro or inst_x.token})
+                       "token": token})
+    if run.mission_type in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW"):
+        for bw in run.blocker_work or []:
+            name = bw.get("repo_ref") or ""
+            if not name or name in seen:
+                continue
+            # internal mission work repo: token_read from stored credentials
+            if mgr.internal_forge is not None:
+                creds = mgr.internal_forge.mission_credentials(name)
+                if creds is not None and creds.token_read:
+                    # Gitea ignores userinfo in the clone URL (descriptor
+                    # clone_user is "devcake"); askpass carries token_read.
+                    extras.append({
+                        "name": name, "url": creds.clone_url,
+                        "clone_user": creds.username or "devcake",
+                        "token": creds.token_read})
+                    seen.add(name)
+                    continue
+            inst_x = mgr.forges.instance(name)
+            forge_x = mgr.forges.get(name)
+            if inst_x is None or forge_x is None:
+                continue     # cleared / vanished — non-fatal omit
+            token = inst_x.token_ro or inst_x.token
+            if not token:
+                continue
+            extras.append({"name": name, "url": inst_x.url,
+                           "clone_user": forge_x.descriptor.clone_user,
+                           "token": token})
+            seen.add(name)
     return extras
 
 
@@ -506,14 +667,93 @@ def _derive_seq(activity) -> int:
 
 
 def _unique_name(name: str, used: set[str]) -> str:
-    """docs/07 §2 collision rule: later duplicates get -2, -3, … suffixes."""
-    stem, dot, ext = name.rpartition(".")
+    """docs/07 §2 collision rule: later duplicates get -2, -3, … suffixes.
+    `name` may be a safe relative path (`stem/dir/file.md`); the suffix is
+    applied to the final path segment only."""
+    if "/" in name:
+        parent, base = name.rsplit("/", 1)
+        prefix = parent + "/"
+    else:
+        base, prefix = name, ""
+    stem, dot, ext = base.rpartition(".")
     cand, i = name, 1
     while cand in used:
         i += 1
-        cand = f"{stem}-{i}.{ext}" if dot else f"{name}-{i}"
+        suffixed = (f"{stem}-{i}.{ext}" if dot else f"{base}-{i}")
+        cand = f"{prefix}{suffixed}"
     used.add(cand)
     return cand
+
+
+def safe_activity_relpath(path: str) -> str | None:
+    """Normalize a feed-controllable relative path for the activity folder.
+    Rejects empty, absolute, `..`, and over-deep/long names (zip-slip)."""
+    if not path or not isinstance(path, str):
+        return None
+    raw = path.replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or raw.startswith("~"):
+        return None
+    parts = [p for p in raw.split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return None
+    if len(parts) > 20 or any(len(p) > 200 for p in parts):
+        return None
+    return "/".join(parts)
+
+
+def expand_zip_attachment(zip_name: str, data: bytes, *,
+                          max_bytes: int,
+                          max_files: int = 500) -> list[tuple[str, bytes]]:
+    """Extract zip members under `{stem}/…`. Best-effort: corrupt/oversize/
+    slip members are skipped; never raises into the payload builder."""
+    import io
+    import zipfile
+    from pathlib import PurePosixPath
+
+    stem = PurePosixPath(zip_name.replace("\\", "/")).name
+    if stem.lower().endswith(".zip"):
+        stem = stem[:-4]
+    stem = stem or "archive"
+    # stem itself must be a single safe segment
+    if safe_activity_relpath(stem) is None or "/" in stem:
+        stem = "archive"
+    out: list[tuple[str, bytes]] = []
+    used = 0
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except (zipfile.BadZipFile, OSError):
+        return []
+    try:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            if len(out) >= max_files:
+                break
+            member = safe_activity_relpath(info.filename)
+            if member is None:
+                continue
+            full = safe_activity_relpath(f"{stem}/{member}")
+            if full is None:
+                continue
+            # Pre-check declared uncompressed size before read — a zip bomb
+            # must not force a multi-GB decompress into memory first. The
+            # header can lie; the post-read check below is the hard stop.
+            declared = getattr(info, "file_size", 0) or 0
+            if declared < 0:
+                continue
+            if declared and used + declared > max_bytes:
+                break
+            try:
+                content = zf.read(info)
+            except Exception:  # noqa: BLE001 — one bad member must not abort the rest
+                continue
+            if used + len(content) > max_bytes:
+                break
+            used += len(content)
+            out.append((full, content))
+    finally:
+        zf.close()
+    return out
 
 
 def _aware(ts: datetime) -> datetime:
@@ -588,8 +828,10 @@ async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> 
 
 
 def _activity_snapshot_files(payload: dict) -> list[dict]:
-    """Activity payload → the flat file list a snapshot commit mirrors
-    (identical layout to the Dev's /workspace/activity)."""
+    """Activity payload → the file list a snapshot commit mirrors
+    (identical layout to the Dev's /workspace/activity). Attachment paths
+    may be nested (zip extracts under `{stem}/…`); only safe relative
+    paths are kept."""
     files = []
     if payload.get("mission_md"):
         files.append({"path": "MISSION.md", "content_b64": base64.b64encode(
@@ -597,8 +839,13 @@ def _activity_snapshot_files(payload: dict) -> list[dict]:
     files.append({"path": "ACTIVITY.md", "content_b64": base64.b64encode(
         payload.get("activity_md", "").encode()).decode()})
     for a in payload.get("attachments", []):
-        files.append({"path": Path(a["filename"]).name,
-                      "content_b64": a["content_b64"]})
+        raw = a.get("filename") or "attachment.bin"
+        rel = safe_activity_relpath(raw)
+        if rel is None:
+            rel = Path(str(raw).replace("\\", "/")).name or "attachment.bin"
+            if rel in (".", ".."):
+                rel = "attachment.bin"
+        files.append({"path": rel, "content_b64": a["content_b64"]})
     return files
 
 
@@ -657,7 +904,8 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
     async def _materialize(att):
         """Download one file attachment into the folder; return its index
         line. The adapter resolves names (AttachmentRef.name) — the domain
-        never parses vendor asset URLs."""
+        never parses vendor asset URLs. `.zip` attachments are kept whole
+        and also extracted under `{stem}/` (zip-slip hardened, size-capped)."""
         try:
             data = await mgr.pmo.download_asset(att.url)
         except Exception:  # noqa: BLE001 — attachment fetch degrades to an inline "unavailable" marker; the mirror build continues
@@ -671,6 +919,21 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
         fname = _unique_name(raw or "attachment.bin", used)
         attachments.append({"filename": fname,
                             "content_b64": base64.b64encode(data).decode()})
+        if fname.lower().endswith(".zip"):
+            try:
+                cap = mgr._attachment_cap()
+            except Exception:  # noqa: BLE001 — expand is advisory; fall back to a fixed budget
+                cap = 50 * 1024 * 1024
+            for rel, content in expand_zip_attachment(
+                    fname, data, max_bytes=cap):
+                # reserve the path so later attachments cannot collide
+                if rel in used:
+                    rel = _unique_name(rel, used)
+                else:
+                    used.add(rel)
+                attachments.append({
+                    "filename": rel,
+                    "content_b64": base64.b64encode(content).decode()})
         return f"[attachment: {fname}]"
 
     mission_lines = []

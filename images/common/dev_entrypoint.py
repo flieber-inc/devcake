@@ -513,19 +513,47 @@ def codex_text_dump(out: str) -> str:
     return "\n\n".join(blocks)
 
 
+def _safe_activity_relpath(path: str):
+    """Mirror of the app's safe_activity_relpath: reject zip-slip / absolute
+    / empty paths. Returns a posix-relative string or None."""
+    if not path or not isinstance(path, str):
+        return None
+    raw = path.replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or raw.startswith("~"):
+        return None
+    parts = [p for p in raw.split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return None
+    if len(parts) > 20 or any(len(p) > 200 for p in parts):
+        return None
+    return "/".join(parts)
+
+
 def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
     """ADR-0014 D3: materialize the activity payload into the folder —
     MISSION.md (when the app sent one; old apps don't), ACTIVITY.md, and
-    every attachment under its basename (path components stripped)."""
+    every attachment. Paths may be nested (zip extracts under `{stem}/`);
+    unsafe / escaping paths fall back to a basename or `attachment.bin`."""
     dest.mkdir(parents=True, exist_ok=True)
+    dest_res = dest.resolve()
     if act.get("mission_md"):
         (dest / "MISSION.md").write_text(act["mission_md"])
     (dest / "ACTIVITY.md").write_text(act.get("activity_md", ""))
     for a in act.get("attachments", []):
-        name = pathlib.Path(a["filename"]).name
-        if not name or name in (".", ".."):   # feed-controllable input —
-            name = "attachment.bin"           # never resolve to a directory
-        (dest / name).write_bytes(base64.b64decode(a["content_b64"]))
+        raw = a.get("filename") or "attachment.bin"
+        rel = _safe_activity_relpath(raw)
+        if rel is None:
+            rel = pathlib.Path(str(raw).replace("\\", "/")).name
+            if not rel or rel in (".", ".."):
+                rel = "attachment.bin"
+        target = (dest / rel).resolve()
+        # zip-slip: must stay under dest
+        try:
+            target.relative_to(dest_res)
+        except ValueError:
+            target = dest_res / "attachment.bin"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(a["content_b64"]))
 
 
 def clone_activity_repo(activity, dest, runner=None):

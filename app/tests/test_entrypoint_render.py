@@ -334,8 +334,8 @@ def test_assemble_transcript_full_dump_shape():
 
 def test_write_activity_payload_writes_folder(tmp_path):
     # ADR-0014 D3: MISSION.md written when the app sent one; an OLD app's
-    # payload (no mission_md) writes no MISSION.md; filenames basename-
-    # sanitized as before
+    # payload (no mission_md) writes no MISSION.md; slip paths basename-
+    # fallback; nested zip-extract paths mkdir parents
     import base64
     act = {"mission_md": "# T-1: brief", "activity_md": "# feed",
            "attachments": [{"filename": "../evil/report.md",
@@ -356,6 +356,14 @@ def test_write_activity_payload_writes_folder(tmp_path):
         {"filename": "..", "content_b64": base64.b64encode(b"w").decode()}]}
     ep.write_activity_payload(weird, tmp_path / "weird")
     assert (tmp_path / "weird" / "attachment.bin").read_bytes() == b"w"
+
+    # nested zip-extract paths
+    nested = {"activity_md": "", "attachments": [
+        {"filename": "T-1-deliverable/REPORT.md",
+         "content_b64": base64.b64encode(b"# r").decode()}]}
+    ep.write_activity_payload(nested, tmp_path / "nested")
+    assert (tmp_path / "nested" / "T-1-deliverable" / "REPORT.md"
+            ).read_bytes() == b"# r"
 
 
 def test_with_session_appends_dump_only_when_present():

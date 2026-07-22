@@ -21,7 +21,8 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
     {attachment files}   # every attachment from the feed — including prior steps' full
                          #   session transcripts {seq}_{TYPE}.md — downloaded under its
                          #   original name; collisions get the suffix rule below (seeded
-                         #   against ACTIVITY.md and MISSION.md)
+                         #   against ACTIVITY.md and MISSION.md). `.zip` attachments are
+                         #   also extracted under `{stem}/…` (zip-slip hardened, size-capped)
   out/
     result.json          # REQUIRED structured outcome (schema: 03-mission-lifecycle.md §6)
     PLAN.md              # PLAN runs only: the produced plan
@@ -53,7 +54,7 @@ are authoritative. Entries marked 🤖 DevCake are DevCake's own records.
 
 **Provenance markers (added with adr/0007):** each entry is classified by the comment-provenance sentinel (`03-mission-lifecycle.md` §8a) — a body ending in `` `devcake:v1` `` is DevCake's; everything else is a human's. The classification is never based on `author`, which is unreliable when DevCake posts with the operator's own PMO credentials. Every playbook instructs the Dev to read 🧑 HUMAN entries before starting and to let the most recent human comment win on conflict.
 
-The mirror is strictly chronological and complete — *all* the current activity of the Mission; nothing is omitted or previewed (`get_activity(full=True)` walks the entire history — `05-pmo-adapter.md` §3). Attachments (notably prior DevCake full-session transcripts `N_TYPE.md`, plans, and review reports) are downloaded into `activity/` under their original filenames (name-collision suffix `-2`, `-3`, … — implemented app-side in `activity_payload`, deduping downloaded attachments against each other and against `ACTIVITY.md`/`MISSION.md`).
+The mirror is strictly chronological and complete — *all* the current activity of the Mission; nothing is omitted or previewed (`get_activity(full=True)` walks the entire history — `05-pmo-adapter.md` §3). Attachments (notably prior DevCake full-session transcripts `N_TYPE.md`, plans, and review reports) are downloaded into `activity/` under their original filenames (name-collision suffix `-2`, `-3`, … — implemented app-side in `activity_payload`, deduping downloaded attachments against each other and against `ACTIVITY.md`/`MISSION.md`). Every `.zip` attachment is kept as the zip **and** expanded under a same-named stem folder (`{name without .zip}/…`) so Devs can read deliverables without unpacking tools; path members are zip-slip hardened and extraction is size-capped (best-effort — corrupt or oversize members are skipped, the zip itself remains).
 
 ## 3. Environment contract (normative)
 

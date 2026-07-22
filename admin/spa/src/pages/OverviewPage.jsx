@@ -148,10 +148,17 @@ function OvenStrip({ runs }) {
   );
 }
 
+// Fixed dismiss key for the setup checklist's internal-forge path (persisted
+// via config.dismissed_alerts — same instant PUT as advisory alert dismiss).
+export const SETUP_INTERNAL_FORGE_KEY = "setup-checklist:internal-forge";
+
 // First-run checklist ("Let's get baking"): three steps to the first adopted
 // mission, checked from data the app already has. Retires itself the moment
 // everything passes — it never nags a configured system.
-function SetupChecklist() {
+//
+// The repo step is satisfied by an external work-repo token, a healthy
+// internal forge (zero-repo path), or an explicit operator dismiss.
+function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) {
   const [checks, setChecks] = useState(null); // {pmoOk, repoOk, devOk}
   useEffect(() => {
     (async () => {
@@ -180,10 +187,31 @@ function SetupChecklist() {
       } catch { setChecks(null); }
     })();
   }, []);
-  if (!checks || (checks.pmoOk && checks.repoOk && checks.devOk)) return null;
+  if (!checks) return null;
+  const internalForgeOk = Boolean(health?.internal_forge?.ok);
+  const dismissedInternal = dismissedKeys.includes(SETUP_INTERNAL_FORGE_KEY);
+  const repoStepOk = checks.repoOk || internalForgeOk || dismissedInternal;
+  if (checks.pmoOk && repoStepOk && checks.devOk) return null;
+  const repoNote = checks.repoOk
+    ? null
+    : internalForgeOk
+      ? "(internal forge)"
+      : dismissedInternal
+        ? "(using internal forge)"
+        : null;
   const steps = [
     { ok: checks.pmoOk, text: "Connect a PMO and store its API key", href: "#/config/pmo", go: "Configuration" },
-    { ok: checks.repoOk, text: "Add a repository and store its Access token", href: "#/repos", go: "Repositories" },
+    {
+      ok: repoStepOk,
+      text: "Add a repository and store its Access token — or use the internal forge",
+      href: "#/repos",
+      go: "Repositories",
+      note: repoNote,
+      // secondary dismiss when the step is still open
+      dismiss: !repoStepOk && onDismissInternalForge
+        ? { label: "I'll work with the internal forge", onClick: onDismissInternalForge }
+        : null,
+    },
     { ok: checks.devOk, text: "Give a Dev Type credentials", href: "#/config/dev-types", go: "Dev Types" },
   ];
   const done = steps.filter((s) => s.ok).length;
@@ -210,7 +238,7 @@ function SetupChecklist() {
           </p>
           <ul className="mt-3 divide-y divide-neutral-100 dark:divide-neutral-800">
             {steps.map((s) => (
-              <li key={s.text} className="flex items-center gap-3 py-2 text-sm">
+              <li key={s.text} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
                 <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs ${
                   s.ok
                     ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
@@ -218,14 +246,28 @@ function SetupChecklist() {
                 }`}>
                   {s.ok ? "✓" : ""}
                 </span>
-                <span className={s.ok ? "text-neutral-500 line-through decoration-neutral-300 dark:text-neutral-400 dark:decoration-neutral-700" : ""}>
+                <span className={`min-w-0 flex-1 ${s.ok ? "text-neutral-500 line-through decoration-neutral-300 dark:text-neutral-400 dark:decoration-neutral-700" : ""}`}>
                   {s.text}
+                  {s.note && (
+                    <span className="ml-1.5 text-xs font-normal no-underline text-neutral-400 dark:text-neutral-500">
+                      {s.note}
+                    </span>
+                  )}
                 </span>
                 {!s.ok && (
-                  <a href={s.href}
-                    className="ml-auto shrink-0 text-xs font-semibold text-accent-700 hover:underline dark:text-accent-300">
-                    {s.go} →
-                  </a>
+                  <span className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                    {s.dismiss && (
+                      <button type="button" onClick={s.dismiss.onClick}
+                        title="Missions without a work-repo set use the bundled Gitea; deliverables attach to the PMO."
+                        className="text-xs font-medium text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200">
+                        {s.dismiss.label}
+                      </button>
+                    )}
+                    <a href={s.href}
+                      className="text-xs font-semibold text-accent-700 hover:underline dark:text-accent-300">
+                      {s.go} →
+                    </a>
+                  </span>
                 )}
               </li>
             ))}
@@ -296,6 +338,7 @@ function NeedsHumanPanel({ merge, attention }) {
 
 export default function OverviewPage({
   health, alerts, dismissedAlerts = [], onDismissAlert, onRestoreAlert,
+  dismissedKeys = [], onDismissInternalForge,
 }) {
   const [recent, setRecent] = useState(null);
   const [devTypes, setDevTypes] = useState(null);
@@ -321,7 +364,9 @@ export default function OverviewPage({
         criticalCount={alerts.filter((a) => a.severity === "critical").length}
         runsTotal={recent?.total} />
 
-      <SetupChecklist />
+      <SetupChecklist health={health}
+        dismissedKeys={dismissedKeys}
+        onDismissInternalForge={onDismissInternalForge} />
 
       {(alerts.length > 0 || dismissedAlerts.length > 0) && (
         <div className="space-y-2">

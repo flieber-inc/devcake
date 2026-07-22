@@ -31,7 +31,7 @@ whether it is one deliverable or several.
 
 {description}
 
-{project_note}{repo_options}{reference_repos}### Classify
+{project_note}{repo_options}{reference_repos}{blocker_repos}### Classify
 - `trivial` — you are CERTAIN you can resolve it now with a single short
   deliverable (e.g. a direct answer draft) and zero ambiguity. Rare.
 - `normal` — needs a worked deliverable (response draft, runbook update,
@@ -75,7 +75,7 @@ in /workspace/activity/MISSION.md, and the issue history in
 - Title: **{title}**
 
 {description}
-{reference_repos}""",
+{reference_repos}{blocker_repos}""",
     "EXECUTE": """
 ## Your current mission type: EXECUTE (produce the deliverable)
 
@@ -111,7 +111,7 @@ job is to sync `{branch}` with the default branch and resolve conflicts.
 - Title: **{title}**
 
 {description}
-{reference_repos}""",
+{reference_repos}{blocker_repos}""",
     "REVIEW": """
 ## Your current mission type: REVIEW (deliverable quality review)
 
@@ -144,7 +144,7 @@ reaches a customer. Rubber-stamping is forbidden — approval must be EARNED.
 - Title: **{title}**
 
 {description}
-{reference_repos}""",
+{reference_repos}{blocker_repos}""",
 }
 
 # identifying prompts for the SEEDED Dev Types (operator-created dev types

@@ -37,6 +37,10 @@ class Run(BaseModel):
     dev_type: str
     seq: int
     attempt_of_step: int = 1
+    # Done direct blockers' work repos (non-secret snapshot at dispatch):
+    # [{repo_ref, mission_key}] — tokens are attached at runspec time.
+    # Empty on legacy / MAPPER / no-blocker runs.
+    blocker_work: list[dict[str, str]] = Field(default_factory=list)
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on

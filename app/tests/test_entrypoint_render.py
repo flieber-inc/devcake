@@ -334,8 +334,8 @@ def test_assemble_transcript_full_dump_shape():
 
 def test_write_activity_payload_writes_folder(tmp_path):
     # ADR-0014 D3: MISSION.md written when the app sent one; an OLD app's
-    # payload (no mission_md) writes no MISSION.md; filenames basename-
-    # sanitized as before
+    # payload (no mission_md) writes no MISSION.md; slip paths basename-
+    # fallback; nested zip-extract paths mkdir parents
     import base64
     act = {"mission_md": "# T-1: brief", "activity_md": "# feed",
            "attachments": [{"filename": "../evil/report.md",
@@ -356,6 +356,31 @@ def test_write_activity_payload_writes_folder(tmp_path):
         {"filename": "..", "content_b64": base64.b64encode(b"w").decode()}]}
     ep.write_activity_payload(weird, tmp_path / "weird")
     assert (tmp_path / "weird" / "attachment.bin").read_bytes() == b"w"
+
+    # nested zip-extract paths
+    nested = {"activity_md": "", "attachments": [
+        {"filename": "T-1-deliverable/REPORT.md",
+         "content_b64": base64.b64encode(b"# r").decode()}]}
+    ep.write_activity_payload(nested, tmp_path / "nested")
+    assert (tmp_path / "nested" / "T-1-deliverable" / "REPORT.md"
+            ).read_bytes() == b"# r"
+
+    # file-vs-dir collision (an OLD app can still send both): never raises —
+    # the conflicting write flattens to a `conflict-…` fallback name
+    clash = {"activity_md": "", "attachments": [
+        {"filename": "report/a.md",
+         "content_b64": base64.b64encode(b"n").decode()},
+        {"filename": "report",
+         "content_b64": base64.b64encode(b"f").decode()}]}
+    ep.write_activity_payload(clash, tmp_path / "clash")
+    assert (tmp_path / "clash" / "report" / "a.md").read_bytes() == b"n"
+    assert (tmp_path / "clash" / "conflict-report").read_bytes() == b"f"
+    # reverse order: the nested member is the one that flattens
+    clash2 = {"activity_md": "",
+              "attachments": list(reversed(clash["attachments"]))}
+    ep.write_activity_payload(clash2, tmp_path / "clash2")
+    assert (tmp_path / "clash2" / "report").read_bytes() == b"f"
+    assert (tmp_path / "clash2" / "conflict-report__a.md").read_bytes() == b"n"
 
 
 def test_with_session_appends_dump_only_when_present():

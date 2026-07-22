@@ -352,6 +352,12 @@ class AppConfig(BaseModel):
     # merge_retry_window_minutes before the human hand-off (0 = immediately)
     auto_resolve_merge_conflicts: bool = True
     merge_retry_window_minutes: int = Field(30, ge=0)
+    # After a REVIEW-approved merge, also zip the PR change set onto the PMO
+    # feed for CONFIGURED (external) work repos. Internal/zero-repo missions
+    # always zip (ADR-0010) regardless of this flag. Default OFF: the forge
+    # PR is the canonical artifact for eng repos; zips are merge-time
+    # snapshots (can omit large files, dual-truth vs main, secrets risk).
+    attach_merged_changeset_to_pmo: bool = False
     # operator switch: no NEW runs dispatch while paused; in-flight runs finish
     # and sweeps keep running (docs/11)
     intake_paused: bool = False

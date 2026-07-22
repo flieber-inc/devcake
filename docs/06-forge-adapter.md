@@ -46,7 +46,7 @@ All adapters raise the same `ForgeError` (with a `status` attribute carrying the
 
 Normalized DTOs (pydantic models in `ports/forge.py`):
 
-- `PullRequest` — `{number, url, state: "open"|"closed", merged: bool}`. GitLab's `iid` maps to `number`; MR state `"merged"` normalizes to `state="closed"` + `merged=True`; GitHub *list* payloads carry `merged_at` (not `merged`), so the adapter derives `merged` from it.
+- `PullRequest` — `{number, url, state: "open"|"closed", merged: bool, merge_commit_sha: str|None}`. GitLab's `iid` maps to `number`; MR state `"merged"` normalizes to `state="closed"` + `merged=True`; GitHub *list* payloads carry `merged_at` (not `merged`), so the adapter derives `merged` from it. `merge_commit_sha` is populated on `pr_state` reads (GitLab squash merges map `squash_commit_sha` onto it) — it pins the deliverable zip to the actual merge commit instead of the moving default branch.
 - `BranchProtection` — `{protected: bool, requires_reviews: bool|None}` (`None` = couldn't determine).
 - `PRFile` — `{path, status, additions, deletions}` for deliverable packaging.
 - `ForgeHealth` — `{ok, repository, can_push, can_read, transient, detail}` from `health_probe`.

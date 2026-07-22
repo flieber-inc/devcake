@@ -35,6 +35,9 @@ const EXACT = {
     group: "Repository", label: "Auto-resolve merge conflicts", format: onOff,
   },
   "cfg.merge_retry_window_minutes": { group: "Repository", label: "Merge retry window (min)" },
+  "cfg.attach_merged_changeset_to_pmo": {
+    group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
+  },
   "cfg.relations_mapper.dev_type": { group: "Traffic control", label: "Mapper Dev Type", format: orEmpty },
   "cfg.relations_mapper.interval_minutes": { group: "Traffic control", label: "Mapper interval (minutes)" },
   "cfg.relations_mapper.enabled": { group: "Traffic control", label: "Mapper periodic service", format: onOff },

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { TriangleAlert, OctagonAlert } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
-import OverviewPage from "./pages/OverviewPage.jsx";
+import OverviewPage, { SETUP_INTERNAL_FORGE_KEY } from "./pages/OverviewPage.jsx";
 import ConfigPage from "./pages/ConfigPage.jsx";
 import ReposPage from "./pages/ReposPage.jsx";
 import RunsPage from "./pages/RunsPage.jsx";
@@ -195,6 +195,11 @@ export default function App() {
                 dismissedAlerts={dismissedAlerts}
                 onDismissAlert={dismissAlert}
                 onRestoreAlert={restoreAlert}
+                dismissedKeys={dismissed}
+                onDismissInternalForge={() => {
+                  if (dismissed.includes(SETUP_INTERNAL_FORGE_KEY)) return;
+                  persistDismissed([...dismissed, SETUP_INTERNAL_FORGE_KEY]);
+                }}
               />
             )}
             {page === "config" && <ConfigPage section={section} />}

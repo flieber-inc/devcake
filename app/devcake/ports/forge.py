@@ -61,6 +61,10 @@ class PullRequest(BaseModel):
     url: str
     state: Literal["open", "closed"]
     merged: bool = False
+    # the merge commit once merged (deliverable zip ref); None before the
+    # merge or when the vendor omits it — callers fall back to a direct
+    # PR read, then to the default branch (deliver._merge_sha)
+    merge_commit_sha: Optional[str] = None
 
 
 class BranchProtection(BaseModel):

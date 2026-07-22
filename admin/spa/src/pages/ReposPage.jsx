@@ -371,6 +371,21 @@ export default function ReposPage() {
                   Math.max(0, Number(e.target.value)))} />
             </SettingRow>
           </div>
+          <SettingRow label="Also attach merged change set to PMO"
+            desc={cfg.attach_merged_changeset_to_pmo
+              ? "ON — after merge, zip PR files onto the PMO feed (configured repos too)."
+              : "OFF (recommended for eng repos) — only zero-repo / internal missions attach a zip."}
+            help={"Zero-repo missions always attach a deliverable zip; this toggle only affects "
+              + "configured work repos. Leave OFF for normal software work: the forge PR is "
+              + "the canonical artifact. When ON, DevCake posts a merge-time file snapshot to "
+              + "the PMO (can omit large files under the attachment size cap; may go stale vs "
+              + "main; repo file bytes become visible to the PMO team). This does not pass work "
+              + "into other missions' workspaces — dependency edges and blocker clones do that."}>
+            <Toggle on={!!cfg.attach_merged_changeset_to_pmo}
+              label="Also attach merged change set to PMO"
+              onClick={() => setField("cfg.attach_merged_changeset_to_pmo",
+                !cfg.attach_merged_changeset_to_pmo)} />
+          </SettingRow>
         </div>
       </Section>
 

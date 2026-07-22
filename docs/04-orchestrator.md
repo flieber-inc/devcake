@@ -90,11 +90,13 @@ def dispatch(mission, dev_type):                   # MissionManager — mission 
               seq=derive_seq(live),                # 02-domain-model.md §8
               stage_label_at_dispatch=stage_label(live),
               spec_env=protocol_spec_env(...), ...)
-    run.spec_prompt = resolve_prompt(mission, dev_type)
+    run.spec_prompt = resolve_prompt(mission, dev_type)  # includes {blocker_repos}
+    run.blocker_work = resolve_blocker_work(...)         # ADR-0017: done blockers' repo_refs
     bootstrap.launch(run, image=harness_image(dev_type))
     # launch = ACL user → durable Run file BEFORE the Dagu trigger; the image
     # param is a plain tag (e.g. devcake/dev-claude-code:latest — no digest
     # pinning; 13-deployment.md §6), and Dagu receives only non-secret params
+    # runspec later attaches RO tokens for blocker_work as extra_repos
     if live.status == "backlog":
         pmo.set_status(mission.ref, "in_progress")      # (3) reflect pull in PMO
         audit_log.append(...)                      # feeds the grace cycle (§2)

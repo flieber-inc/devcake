@@ -261,6 +261,7 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 
 ### Shipped post-v0.1
 
+- **Pipeline handoff + PMO zip opt-in + setup/activity polish** (2026-07-21, ADR-0017): optional `attach_merged_changeset_to_pmo` (default off) for configured repos; always-on RO mounts of **done** direct blockers’ work repos (`Run.blocker_work` + `{blocker_repos}`); Overview setup accepts healthy internal forge or “I’ll work with the internal forge”; activity `.zip` attachments extracted under `{stem}/`. **built** · unit suite green · bake app/admin/images.
 - **MCP plugins — core ports** (2026-07-17, PR #6): `DevType.secret_env` +
   live `mcp_setup_commands` runspec wire, referenced-missing-secret dispatch
   gate, exit-14 `DEV_MCP_SETUP` reporting, `tutorials/03-mcp-plugins.md`;

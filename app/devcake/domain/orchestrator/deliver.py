@@ -82,8 +82,12 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         if forge is None:
             return False
         state = await forge.pr_state(pr.number)
-        merge_sha = getattr(pr, "merge_commit_sha", None) or await _merge_sha(
-            forge, pr.number)
+        # the fresh pr_state read is the best source (all adapters normalize
+        # it onto the DTO now); the raw-payload probe is a legacy fallback —
+        # on GitLab it always misses (no /pulls route) and zips at "main"
+        merge_sha = (state.merge_commit_sha
+                     or getattr(pr, "merge_commit_sha", None)
+                     or await _merge_sha(forge, pr.number))
         files = [f for f in await forge.pr_files(pr.number)
                  if f.status != "removed"]
         cap = mgr._attachment_cap()

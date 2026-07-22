@@ -249,7 +249,9 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
                 <span className={`min-w-0 flex-1 ${s.ok ? "text-neutral-500 line-through decoration-neutral-300 dark:text-neutral-400 dark:decoration-neutral-700" : ""}`}>
                   {s.text}
                   {s.note && (
-                    <span className="ml-1.5 text-xs font-normal no-underline text-neutral-400 dark:text-neutral-500">
+                    /* inline-block: escapes the parent's line-through
+                       (decorations propagate through inline boxes only) */
+                    <span className="ml-1.5 inline-block text-xs font-normal text-neutral-400 dark:text-neutral-500">
                       {s.note}
                     </span>
                   )}

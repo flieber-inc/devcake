@@ -172,7 +172,8 @@ class GitHubForge:
     async def pr_state(self, pr_number: int) -> PullRequest:
         pr = await self._req("GET", f"/pulls/{pr_number}")
         return PullRequest(number=pr["number"], url=pr["html_url"],
-                           state=pr["state"], merged=bool(pr.get("merged")))
+                           state=pr["state"], merged=bool(pr.get("merged")),
+                           merge_commit_sha=pr.get("merge_commit_sha"))
 
     async def default_branch_protection(
             self, branch: str = "main") -> Optional[BranchProtection]:

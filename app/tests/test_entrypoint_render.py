@@ -365,6 +365,23 @@ def test_write_activity_payload_writes_folder(tmp_path):
     assert (tmp_path / "nested" / "T-1-deliverable" / "REPORT.md"
             ).read_bytes() == b"# r"
 
+    # file-vs-dir collision (an OLD app can still send both): never raises —
+    # the conflicting write flattens to a `conflict-…` fallback name
+    clash = {"activity_md": "", "attachments": [
+        {"filename": "report/a.md",
+         "content_b64": base64.b64encode(b"n").decode()},
+        {"filename": "report",
+         "content_b64": base64.b64encode(b"f").decode()}]}
+    ep.write_activity_payload(clash, tmp_path / "clash")
+    assert (tmp_path / "clash" / "report" / "a.md").read_bytes() == b"n"
+    assert (tmp_path / "clash" / "conflict-report").read_bytes() == b"f"
+    # reverse order: the nested member is the one that flattens
+    clash2 = {"activity_md": "",
+              "attachments": list(reversed(clash["attachments"]))}
+    ep.write_activity_payload(clash2, tmp_path / "clash2")
+    assert (tmp_path / "clash2" / "report").read_bytes() == b"f"
+    assert (tmp_path / "clash2" / "conflict-report__a.md").read_bytes() == b"n"
+
 
 def test_with_session_appends_dump_only_when_present():
     assert ep.with_session("err", "DUMP") == \

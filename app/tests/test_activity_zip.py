@@ -62,6 +62,31 @@ def test_expand_zip_attachment_happy_and_caps():
     assert out4 == []
 
 
+def test_expand_zip_attachment_drops_tree_conflicts():
+    """A crafted zip holding both `x` and `x/y` (or duplicate names) must
+    yield one valid file tree — a file and a directory sharing a name is
+    unrepresentable in git and crashed the entrypoint's mkdir/write."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("x", b"file")
+        z.writestr("x/y", b"nested")      # conflicts with the file `x`
+        z.writestr("dup.txt", b"one")
+        z.writestr("dup.txt", b"two")     # duplicate member name
+    out = dispatch.expand_zip_attachment("p.zip", buf.getvalue(),
+                                         max_bytes=1024)
+    assert [p for p, _ in out] == ["p/x", "p/dup.txt"]
+
+
+def test_unique_name_respects_extraction_dirs():
+    """A flat attachment named like an existing extraction DIRECTORY gets
+    the suffix rule — file-vs-dir is a tree conflict, not a coexistence."""
+    used = {"ACTIVITY.md", "report/a.md"}
+    assert dispatch._unique_name("report", used) == "report-2"
+    assert dispatch._tree_conflict("report", {"report/a.md"})
+    assert dispatch._tree_conflict("report/a.md/x", {"report/a.md"})
+    assert not dispatch._tree_conflict("report-3", {"report/a.md"})
+
+
 def test_activity_payload_expands_zip(tmp_path):
     from test_mapper import m as mission_m, make_mgr, _returns
 
@@ -103,5 +128,44 @@ def test_activity_snapshot_keeps_nested_paths():
     paths = {f["path"] for f in files}
     assert "T-1-deliverable/REPORT.md" in paths
     assert "T-1-deliverable.zip" in paths
-    # must NOT collapse nested to basename-only
-    assert "REPORT.md" not in paths or "T-1-deliverable/REPORT.md" in paths
+    assert "REPORT.md" not in paths       # never collapsed to basename
+
+
+def _no_tree_conflicts(names: list[str]) -> bool:
+    seen: set[str] = set()
+    for n in names:
+        if dispatch._tree_conflict(n, seen):
+            return False
+        seen.add(n)
+    return True
+
+
+def test_zip_stem_never_collides_with_flat_attachment(tmp_path):
+    """A feed attachment named exactly like a zip's stem (either order) must
+    not produce a file-vs-dir pair in the payload — the extraction remaps
+    to `{stem}-2/…` (zip first) or the flat name gets `-2` (zip second)."""
+    from test_mapper import m as mission_m, make_mgr
+
+    zdata = _zip_bytes({"a.md": b"z"})
+    flat_url = "https://uploads.linear.app/flat"
+    zip_url = "https://uploads.linear.app/report.zip"
+
+    async def dl(url):
+        return {flat_url: b"flat-bytes", zip_url: zdata}[url]
+
+    for order in (("report", "report.zip"), ("report.zip", "report")):
+        atts = [AttachmentRef(url=flat_url if n == "report" else zip_url,
+                              name=n) for n in order]
+        entries = [ActivityEntry(ts=NOW, author="h", kind="comment",
+                                 body="files", attachments=atts)]
+        mission = mission_m("i1", "T-1")
+        pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+        pmo.download_asset = dl
+        mgr = make_mgr(tmp_path, pmo)
+        payload = run_coro(mgr.activity_payload("i1"))
+        names = [a["filename"] for a in payload["attachments"]]
+        assert _no_tree_conflicts(names), f"conflict in {names} ({order})"
+        if order[0] == "report":          # flat won the stem → dir remapped
+            assert "report-2/a.md" in names
+        else:                             # dir won the stem → flat suffixed
+            assert "report/a.md" in names and "report-2" in names

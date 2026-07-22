@@ -15,11 +15,11 @@ Default off: eng monorepos, dual source of truth vs `main`, attachment size caps
 
 At dispatch, resolve **direct** `blocked_by` missions with status **`done`**, take each blocker’s latest run `repo_ref` (if any), skip the dependent’s primary repo, cap at 8, snapshot as non-secret `Run.blocker_work`. At runspec time, append those repos to `extra_repos` with RO tokens (internal: `mission_credentials.token_read`; configured: `token_ro or token`). Prompt section `{blocker_repos}` lists paths under `/workspace/repo/{slug}/` and forbids writes.
 
-Canceled blockers do not mount. Missing credentials omit silently (clone non-fatal). Does **not** rebind the dependent’s RW work repo (one branch / one PR / sticky routing intact).
+Canceled blockers do not mount. A blocker repo with **no read credential at dispatch time** (cleared internal repo, removed instance) is listed as *skipped* in `{blocker_repos}` — the prompt never names a mount the runspec would omit; extant pipelines can be weeks old, so this is the common staleness case. A clear that lands *between* dispatch and runspec still omits silently (clone non-fatal). Does **not** rebind the dependent’s RW work repo (one branch / one PR / sticky routing intact).
 
 ### 3 — Related but separate: activity zip extract + setup checklist
 
-- Every activity `.zip` attachment is kept **and** extracted under `{stem}/` (zip-slip hardened) so same-mission Devs can read deliverables without tools.
+- Every activity `.zip` attachment is kept **and** extracted under `{stem}/` (zip-slip hardened) so same-mission Devs can read deliverables without tools. The payload always stays **one valid file tree** — a file and a directory must never share a name (unrepresentable in the snapshot's git tree; crashes the entrypoint's mkdir/write): zip members that conflict with an already-extracted member are dropped, an extraction dir colliding with an existing flat attachment remaps wholesale to `{stem}-2/…`, and a flat attachment named like an existing extraction dir takes the `-2` suffix. The entrypoint additionally survives a colliding payload from an old app by flattening the conflicting file to `conflict-{path}`.
 - Overview setup checklist treats a healthy internal forge (or an explicit “I’ll work with the internal forge” dismiss) as satisfying the repository step.
 
 ## Alternatives considered

@@ -219,7 +219,8 @@ class GiteaForge:
         pr = await self._req("GET", f"/pulls/{pr_number}")
         return PullRequest(number=pr["number"], url=pr["html_url"],
                            state="closed" if pr["state"] == "closed" else "open",
-                           merged=bool(pr.get("merged")))
+                           merged=bool(pr.get("merged")),
+                           merge_commit_sha=pr.get("merge_commit_sha"))
 
     async def default_branch_protection(
             self, branch: str = "main") -> Optional[BranchProtection]:

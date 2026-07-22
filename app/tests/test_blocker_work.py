@@ -50,11 +50,25 @@ class BlockerPMO:
         return m
 
 
+class _ROInternal:
+    """mission_credentials for ANY repo name — every blocker mountable
+    (resolve_blocker_work checks mountability at dispatch time)."""
+
+    def mission_credentials(self, name):
+        from devcake.ports.internal_forge import MissionRepoCredentials
+        return MissionRepoCredentials(
+            repo_name=name,
+            clone_url=f"http://gitea:3000/devcake-internal/{name}.git",
+            username=f"svc-{name}",
+            token_write="w", token_read="r")
+
+
 def test_resolve_blocker_work_done_different_repo(tmp_path):
     a = _mission("a", "T-A", status="done")
     b = _mission("b", "T-B", blocked_by=["a"])
     runs = [_run("a", "T-A", "linear-t-a")]
-    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
+    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}),
+                               internal_forge=_ROInternal())
     entries, skips = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "linear-t-b", runs))
     assert entries == [{"repo_ref": "linear-t-a", "mission_key": "T-A"}]
@@ -70,7 +84,8 @@ def test_resolve_blocker_work_ignores_mapper_and_foreign_instance(tmp_path):
     foreign.pmo_ref = "other-instance"
     good = _run("a", "T-A", "linear-t-a")
     good.pmo_ref = "linear"
-    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
+    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}),
+                               internal_forge=_ROInternal())
     # manager instance name defaults to linear
     entries, _ = run_coro(
         dispatch.resolve_blocker_work(
@@ -116,11 +131,27 @@ def test_resolve_blocker_work_cap(tmp_path):
     b = _mission("z", "T-Z", blocked_by=list("abcdefghi"))
     runs = [_run(_id, f"T-{_id}", f"repo-{_id}") for _id in "abcdefghi"]
     mgr = make_mission_manager(
-        tmp_path, pmo=BlockerPMO({**blockers, "z": b}))
+        tmp_path, pmo=BlockerPMO({**blockers, "z": b}),
+        internal_forge=_ROInternal())
     entries, skips = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", runs, max_extras=8))
     assert len(entries) == 8
     assert any(s.startswith("cap 8:") for s in skips)
+
+
+def test_resolve_blocker_work_unmountable_skipped(tmp_path):
+    """A done blocker whose work repo has no read credential TODAY (cleared
+    internal repo, removed instance) is a skip with a reason — the prompt
+    must never list a mount runspec would silently omit."""
+    a = _mission("a", "T-A", status="done")
+    b = _mission("b", "T-B", blocked_by=["a"])
+    runs = [_run("a", "T-A", "linear-t-a")]
+    # no internal forge, no configured instance → nothing to mount with
+    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
+    entries, skips = run_coro(
+        dispatch.resolve_blocker_work(mgr, b, "primary", runs))
+    assert entries == []
+    assert any("unavailable" in s for s in skips)
 
 
 def test_blocker_repos_note_lists_paths(tmp_path):
@@ -181,6 +212,34 @@ def test_extra_repos_includes_blocker_work_internal(tmp_path, monkeypatch):
                  blocker_work=[{"repo_ref": "linear-t-a", "mission_key": "T-A"}])
     assert "linear-t-a" not in [
         x["name"] for x in dispatch._extra_repos_for(mgr, mapper)]
+
+
+def test_extra_repos_includes_blocker_work_configured(tmp_path, monkeypatch):
+    """The CONFIGURED-repo blocker branch: instance + forge must resolve and
+    the read token is preferred over the write token."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.domain.forge_runtime import ForgeRuntime
+    from devcake.adapters.registry import make_forge
+    from devcake import secrets as s
+    s.write_connection_secret("repo", "alpha", "token", "alpha-tok")
+    s.write_connection_secret("repo", "beta", "token", "beta-write")
+    s.write_connection_secret("repo", "beta", "token_ro", "beta-read")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="alpha", url="https://github.com/o/a"),
+                RepoInstance(name="beta", url="https://github.com/o/b")],
+               make_forge)
+    mgr = make_mission_manager(tmp_path)
+    mgr.forges = rt
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["alpha"])
+
+    run = Run(run_id="LINEAR-T-B-1-EXECUTE-AAAAAA", mission_key="T-B",
+              mission_type="EXECUTE", dev_type="judgment", seq=1,
+              repo_ref="alpha", pmo_ref="linear",
+              blocker_work=[{"repo_ref": "beta", "mission_key": "T-A"}])
+    extras = dispatch._extra_repos_for(mgr, run)
+    item = next(x for x in extras if x["name"] == "beta")
+    assert item["token"] == "beta-read"          # RO preferred over write
+    assert item["url"] == "https://github.com/o/b"
 
 
 def test_prompt_includes_blocker_section():

@@ -121,11 +121,14 @@ class GitLabForge:
 
     @staticmethod
     def _to_pr(mr: dict) -> PullRequest:
-        # MR state "merged" normalizes to closed+merged (port contract)
+        # MR state "merged" normalizes to closed+merged (port contract);
+        # squash merges carry the sha on squash_commit_sha instead
         return PullRequest(number=mr["iid"], url=mr["web_url"],
                            state="closed" if mr["state"] in ("closed", "merged")
                                  else "open",
-                           merged=mr["state"] == "merged")
+                           merged=mr["state"] == "merged",
+                           merge_commit_sha=mr.get("merge_commit_sha")
+                                            or mr.get("squash_commit_sha"))
 
     async def post_pr_comment(self, pr_number: int, markdown: str) -> None:
         from ...security import redact

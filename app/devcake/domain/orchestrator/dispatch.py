@@ -93,6 +93,21 @@ def decomposition_rule(mgr, live: Mission) -> str:
 MAX_BLOCKER_WORK_EXTRAS = 8
 
 
+def _blocker_mount_ok(mgr, name: str) -> bool:
+    """Mirror of `_extra_repos_for`'s blocker branch: True when a read
+    credential exists for `name` right now. A dispatch-time snapshot only —
+    a clear between dispatch and runspec still omits silently at runspec
+    (non-fatal); this check keeps the PROMPT from listing a mount that is
+    already known to be gone (cleared internal repo, removed instance)."""
+    if mgr.internal_forge is not None:
+        creds = mgr.internal_forge.mission_credentials(name)
+        if creds is not None and creds.token_read:
+            return True
+    inst = mgr.forges.instance(name)
+    return (inst is not None and mgr.forges.get(name) is not None
+            and bool(inst.token_ro or inst.token))
+
+
 async def resolve_blocker_work(
         mgr, mission: Mission, primary_repo: str,
         all_runs: list | None = None, *,
@@ -104,7 +119,9 @@ async def resolve_blocker_work(
     deduped by repo_ref, excluding the mission's own primary work repo.
     Only `status == "done"` blockers mount; canceled/open/unreadable are
     skipped with a reason. Repo_ref comes from the blocker's latest run
-    with a non-empty repo_ref (no re-provision of cleared internals).
+    with a non-empty repo_ref (no re-provision of cleared internals), and
+    must be mountable NOW (`_blocker_mount_ok`) — extant pipelines can be
+    weeks old, so a cleared work repo is a skip, not a phantom mount.
     """
     entries: list[dict[str, str]] = []
     skip: list[str] = []
@@ -154,6 +171,10 @@ async def resolve_blocker_work(
             skip.append(f"{b.key}: no prior work repo")
             continue
         if repo_ref == primary_repo:
+            continue
+        if not _blocker_mount_ok(mgr, repo_ref):
+            skip.append(f"{b.key}: work repo {repo_ref} unavailable "
+                        "(cleared, or no read credential)")
             continue
         entries.append({"repo_ref": repo_ref, "mission_key": b.key})
 
@@ -666,21 +687,32 @@ def _derive_seq(activity) -> int:
     return (max(steps) + 1) if steps else 1
 
 
+def _tree_conflict(cand: str, used: set[str]) -> bool:
+    """True when `cand` cannot coexist with `used` as one file tree: exact
+    duplicate, `cand` names a file where used paths already form a directory,
+    or an ancestor directory of `cand` is already a file. A file and a
+    directory sharing a name is unrepresentable in a git tree and crashes
+    the entrypoint's mkdir/write."""
+    if cand in used:
+        return True
+    pre = cand + "/"
+    if any(u.startswith(pre) for u in used):
+        return True
+    parts = cand.split("/")
+    return any("/".join(parts[:i]) in used for i in range(1, len(parts)))
+
+
 def _unique_name(name: str, used: set[str]) -> str:
     """docs/07 §2 collision rule: later duplicates get -2, -3, … suffixes.
-    `name` may be a safe relative path (`stem/dir/file.md`); the suffix is
-    applied to the final path segment only."""
-    if "/" in name:
-        parent, base = name.rsplit("/", 1)
-        prefix = parent + "/"
-    else:
-        base, prefix = name, ""
-    stem, dot, ext = base.rpartition(".")
+    A flat name also conflicts with an existing extraction DIRECTORY of the
+    same name (file-vs-dir is unrepresentable — `_tree_conflict`); the
+    suffix rule resolves that identically. Callers pass flat (basenamed)
+    names; extraction paths are reserved directly by the expansion loop."""
+    stem, dot, ext = name.rpartition(".")
     cand, i = name, 1
-    while cand in used:
+    while cand in used or any(u.startswith(cand + "/") for u in used):
         i += 1
-        suffixed = (f"{stem}-{i}.{ext}" if dot else f"{base}-{i}")
-        cand = f"{prefix}{suffixed}"
+        cand = f"{stem}-{i}.{ext}" if dot else f"{name}-{i}"
     used.add(cand)
     return cand
 
@@ -718,6 +750,7 @@ def expand_zip_attachment(zip_name: str, data: bytes, *,
     if safe_activity_relpath(stem) is None or "/" in stem:
         stem = "archive"
     out: list[tuple[str, bytes]] = []
+    emitted: set[str] = set()
     used = 0
     try:
         zf = zipfile.ZipFile(io.BytesIO(data))
@@ -735,6 +768,11 @@ def expand_zip_attachment(zip_name: str, data: bytes, *,
             full = safe_activity_relpath(f"{stem}/{member}")
             if full is None:
                 continue
+            # a crafted zip can hold both `x` and `x/y` (or duplicate
+            # names) — later members that conflict with an already-emitted
+            # path are dropped, keeping the extraction one valid file tree
+            if _tree_conflict(full, emitted):
+                continue
             # Pre-check declared uncompressed size before read — a zip bomb
             # must not force a multi-GB decompress into memory first. The
             # header can lie; the post-read check below is the hard stop.
@@ -750,6 +788,7 @@ def expand_zip_attachment(zip_name: str, data: bytes, *,
             if used + len(content) > max_bytes:
                 break
             used += len(content)
+            emitted.add(full)
             out.append((full, content))
     finally:
         zf.close()
@@ -924,16 +963,25 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
                 cap = mgr._attachment_cap()
             except Exception:  # noqa: BLE001 — expand is advisory; fall back to a fixed budget
                 cap = 50 * 1024 * 1024
-            for rel, content in expand_zip_attachment(
-                    fname, data, max_bytes=cap):
-                # reserve the path so later attachments cannot collide
-                if rel in used:
-                    rel = _unique_name(rel, used)
-                else:
-                    used.add(rel)
-                attachments.append({
-                    "filename": rel,
-                    "content_b64": base64.b64encode(content).decode()})
+            pairs = expand_zip_attachment(fname, data, max_bytes=cap)
+            if pairs:
+                # the extraction dir must not collide with an existing flat
+                # name (file-vs-dir: unrepresentable in the snapshot's git
+                # tree, and a crash in the entrypoint's mkdir) — remap the
+                # whole extraction to `{stem}-2/…`, `-3/…` when it would
+                stem = pairs[0][0].split("/", 1)[0]
+                final, i = stem, 1
+                while _tree_conflict(final, used):
+                    i += 1
+                    final = f"{stem}-{i}"
+                for rel, content in pairs:
+                    rel = final + rel[len(stem):]
+                    if rel in used:      # unreachable once stems are unique
+                        continue
+                    used.add(rel)        # later attachments cannot collide
+                    attachments.append({
+                        "filename": rel,
+                        "content_b64": base64.b64encode(content).decode()})
         return f"[attachment: {fname}]"
 
     mission_lines = []

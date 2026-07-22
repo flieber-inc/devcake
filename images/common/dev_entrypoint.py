@@ -552,8 +552,21 @@ def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
             target.relative_to(dest_res)
         except ValueError:
             target = dest_res / "attachment.bin"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(base64.b64decode(a["content_b64"]))
+        data = base64.b64decode(a["content_b64"])
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        except OSError:
+            # file-vs-directory collision (an old app can still send a flat
+            # name and a same-named extraction dir) or any other tree
+            # conflict: flatten — the mirror is advisory and must never
+            # kill the run
+            try:
+                (dest_res / ("conflict-" + rel.replace("/", "__"))
+                 ).write_bytes(data)
+            except OSError:
+                print(f"activity attachment skipped (unwritable): {rel}",
+                      file=sys.stderr)
 
 
 def clone_activity_repo(activity, dest, runner=None):

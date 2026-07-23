@@ -18,7 +18,7 @@ observability gap.
 ## 1. Pipeline
 
 - The **app** exports OTLP HTTP directly to OpenObserve; **Dev entrypoints export to the inserted `otel-collector`** (`http://otel-collector:4318/v1/traces` on `devcake_runtime`, M8/ISSUES #13), **unauthenticated** — the collector alone holds the OO credentials and forwards to `http://openobserve:5080/api/{org}/v1/traces` (`otel/collector-config.yaml`). Devs carry no OO credentials at all; there is no `OTEL_EXPORTER_OTLP_BASIC` anywhere. The app deliberately does NOT route through the collector (a sick collector must never blind the control plane). **Residual (dedicated-host posture):** a Dev can forge or flood spans on this host — OO alerts are **ops** signals, not a security boundary (`14-security.md` §10).
-- App auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance), derived from the `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD` service account (`telemetry/__init__.py`); root creds are used only for admin ops (stream deletion `api/clear.py`, `scripts/provision_oo.py` — which also creates the ingest user, role `service_account`).
+- App auth is a Basic header built **in code**, never via `OTEL_*` env vars (no percent-encoding dance), derived from the `OO_INGEST_EMAIL`/`OO_INGEST_PASSWORD` service account (`telemetry/__init__.py`); root creds are used only for admin ops (stream deletion `api/clear.py`, boot-time ingest provision, and `scripts/provision_oo.py` for dashboard/alerts). **Boot auto-provisions** the ingest user (`telemetry/oo_provision.py`, role `service_account`) from `OO_INGEST_*` + root — fail-loud with retries so a filled `.env` + `compose up` is enough; no host-side script for connectivity.
 - Container **stdout** of compose services that use the fluentd logging driver (incl. `dagu`, `redis`, **`gitea`**, and others wired in `docker-compose.yml`) is shipped to OpenObserve via fluent-bit (`13-deployment.md` §7) so non-instrumented services remain searchable.
 - `service.name`: the app OTLP resource is **`devcake-app`** (`telemetry/__init__.py`). Dev entrypoints (shared + hello) set **`devcake-dev`**. There is no `devcake-admin` service name in OTel (admin is nginx + static SPA). The run's `dev_type` is a span attribute, not the service name.
 
@@ -89,11 +89,15 @@ attributes — OpenObserve is the cost dashboard.
 
 ## 5. Pre-provisioned dashboard + alerts (`scripts/provision_oo.py`, idempotent)
 
-One **DevCake** dashboard, all panels SQL over the traces stream: **Cost per
-hour (USD, by dev type)** · **Dev runs by outcome (daily)** · **Failure
-signals (kills, give-ups)**. With `OO_ALERT_WEBHOOK` set in `.env`, the script
-also provisions the alert set of `15-errors-and-retries.md` §6 against the
-same stream. The admin panel's Logs page deep-links here (`11-admin-panel.md` §5).
+The **ingest service account** is created/resynced at **app boot** (not by
+this script — see §1). The host-side script remains for the **DevCake**
+dashboard and optional alerts: all panels SQL over the traces stream —
+**Cost per hour (USD, by dev type)** · **Dev runs by outcome (daily)** ·
+**Failure signals (kills, give-ups)**. With `OO_ALERT_WEBHOOK` set in `.env`,
+the script also provisions the alert set of `15-errors-and-retries.md` §6
+against the same stream. The admin panel's Logs page deep-links here
+(`11-admin-panel.md` §5). Safe to re-run; still ensures the ingest user if
+you want a host-side check without restarting the app.
 
 ## 6. Run-failure log stream (`run_failures`) — the executor's dying words
 

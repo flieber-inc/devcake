@@ -37,17 +37,21 @@ def req(method, path, body=None, auth=None):
 
 def ensure_ingest_user():
     """Idempotently create the OO service account the stack authenticates
-    with (collector, fluentbit, app push_oo_log) — ISSUES #13. Live-verified
-    on OO v0.91.1: accepted roles are `admin` and `service_account` ("member"
-    is refused: "Custom roles not allowed"); passwords need upper+lower+digit+
-    special. NOTE (docs/14 §2 Zone B): OSS OpenObserve role separation is advisory —
-    the real boundary is that Dev containers hold no OO credentials at all.
+    with (collector, fluentbit, app push_oo_log) — ISSUES #13.
 
-    Fail-loud contract: any failure exits non-zero — a missing/broken service
-    account means EVERY telemetry write 401s silently (the app's /health
-    `oo_ingest` probe is the runtime counterpart of this check). If the user
-    exists but the .env password no longer matches (rotation), the password
-    is resynced from .env."""
+    Primary path: app boot runs the same logic
+    (``devcake.telemetry.oo_provision.ensure_oo_ingest_user``) so a filled
+    .env + compose up is enough. This host-side copy remains for operators
+    who want to repair credentials without restarting the app, and for the
+    dashboard/alerts steps below.
+
+    Live-verified on OO v0.91.1: accepted roles are `admin` and
+    `service_account` ("member" is refused: "Custom roles not allowed");
+    passwords need upper+lower+digit+special. NOTE (docs/14 §2 Zone B): OSS
+    OpenObserve role separation is advisory — the real boundary is that Dev
+    containers hold no OO credentials at all.
+
+    Fail-loud contract: any failure exits non-zero."""
     email = env("OO_INGEST_EMAIL", "")
     password = env("OO_INGEST_PASSWORD", "")
     if not email.strip() or not password.strip():

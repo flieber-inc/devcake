@@ -262,7 +262,7 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → strong bootstrap passwords + `DOCKER_GID` → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → **Configuration** (PMO + model/harness secrets, Dev Types) and **Repositories** (`#/repos`: forge tokens + merge posture) → connection tests → done. Labels bootstrap on startup. Then `14` §9 checklist before first EXECUTE.
+- **First run:** `cp .env.example .env` → strong bootstrap passwords + `DOCKER_GID` → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → **Configuration** (PMO + model/harness secrets, Dev Types) and **Repositories** (`#/repos`: forge tokens + merge posture) → connection tests → done. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 

@@ -166,8 +166,8 @@ cp .env.example .env
 
 docker buildx bake all    # builds all DevCake images (compose never does)
 docker compose up -d      # control ports bind 127.0.0.1
-# If OpenObserve ingest is not yet provisioned:
-#   python3 scripts/provision_oo.py
+# App boot auto-creates the OpenObserve ingest user from OO_INGEST_*.
+# Optional dashboard + alerts: python3 scripts/provision_oo.py
 
 open http://localhost:8080   # basic auth → Config → secrets + connection tests
 ```

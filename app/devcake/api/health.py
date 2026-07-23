@@ -74,8 +74,9 @@ async def _check_http(url: str) -> bool:
 
 
 # 60s-cached probe: does the OO service account actually authenticate?
-# Catches "compose up before provision_oo.py" / rotated-password drift —
-# without it, telemetry 401s silently forever (ISSUES #13 review finding).
+# Boot auto-provisions the user (telemetry.oo_provision); this catches
+# mid-runtime OO wipe / credential drift so ops see a red ingest path
+# without waiting for a restart (ISSUES #13).
 _oo_ingest_cache: dict = {"ts": 0.0, "result": None}
 
 
@@ -92,7 +93,8 @@ async def _oo_ingest_check() -> dict:
         result = {"ok": r.status_code == 200,
                   "detail": "" if r.status_code == 200 else
                   f"HTTP {r.status_code} — the OO service account cannot "
-                  f"authenticate; run scripts/provision_oo.py (ISSUES #13)"}
+                  f"authenticate; restart app (boot re-provisions) or check "
+                  f"OO_INGEST_* / OO_ROOT_* (ISSUES #13)"}
     except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + detail; /health must never 500
         result = {"ok": False, "detail": f"probe failed: {str(e)[:150]}"}
     _oo_ingest_cache.update(ts=now, result=result)

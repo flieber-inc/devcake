@@ -33,7 +33,9 @@ anymore — those are v3 and were removed at v4.
 docker volume rm devcake_devcake_data          # DESTRUCTIVE — the operator drill
 docker buildx bake all
 docker compose up -d
-python3 scripts/provision_oo.py                # creates the OO ingest user (once)
+# App boot creates the OO ingest user from OO_INGEST_* (fail-loud).
+# Optional: dashboard + alerts (docs/12 §5):
+#   python3 scripts/provision_oo.py
 ```
 
 Open `http://localhost:8080` (admin basic auth). `/health` should show `app`,

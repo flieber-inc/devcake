@@ -54,6 +54,7 @@ from ..ports.forge import mission_branch
 from ..prompts import templates as prompt_templates
 from ..ports.pmo import PMOTransient
 from ..telemetry import OO_URL, setup_telemetry
+from ..telemetry.oo_provision import ensure_oo_ingest_user_at_boot
 from .auth import credentials_configured, enforce_control_plane_auth
 from . import (connections_service, devtypes_service, internal_repos_service,
                profiles_service, settings_transfer)
@@ -205,8 +206,9 @@ def _refuse_insecure_passwords() -> None:
     if not os.environ.get("OO_INGEST_EMAIL", "").strip():
         raise RuntimeError(
             "OO_INGEST_EMAIL must be set (the OO service account — ISSUES #13). "
-            "Set it in .env alongside OO_INGEST_PASSWORD, then run "
-            "scripts/provision_oo.py once.")
+            "Set it in .env alongside OO_INGEST_PASSWORD; app boot creates the "
+            "user in OpenObserve (scripts/provision_oo.py still provisions "
+            "dashboard/alerts).")
 
 
 def _security_warnings() -> list[dict]:
@@ -227,6 +229,11 @@ async def lifespan(app: FastAPI):
              os.environ.get("DEVCAKE_TAG", "latest"))
     for warn in _security_warnings():   # loud at boot; dismissable in the SPA
         log.warning("%s — %s", warn["title"], warn["body"])
+    # OpenObserve ingest service account (ISSUES #13): non-negotiable.
+    # Compose only seeds root; boot creates/resyncs OO_INGEST_* so telemetry
+    # never 401s after a fresh volume. Retries while OO is still starting.
+    status = await ensure_oo_ingest_user_at_boot()
+    log.info("openobserve: ingest user %s", status)
     # corrupt run records must never wedge boot; a quarantined record is
     # FORGOTTEN, so best-effort teardown of anything it may have left live
     # (container, per-run ACL user, reply stream) — the run id is the handle

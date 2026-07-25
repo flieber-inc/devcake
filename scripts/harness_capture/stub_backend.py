@@ -55,11 +55,17 @@ SCENARIOS = (
     "whitespace",    # 200 with only whitespace text
     "refusal",       # a genuine refusal: MUST NOT be called a fault
     "tool_only",     # one tool call, no final text: MUST NOT be called a fault
-    "loop",          # always a tool call — drives turn-cap exhaustion
+    "loop",          # always the SAME tool call — grok self-stops on it (below)
+    "loop_varying",  # the same, but the ARGUMENTS move — see `vary` for why
     "http_400", "http_401", "http_429", "http_500",
     "truncated",     # headers, one event, then hang up mid-stream
     "no_route",      # 404 the protocol route (a backend lacking /v1/responses)
 )
+
+# The two lanes that never stop answering with a tool call. They differ ONLY in
+# whether the arguments repeat, and that difference decides whether grok runs
+# 16 turns or thousands — see `vary`.
+LOOP_SCENARIOS = ("loop", "loop_varying")
 
 STATE = {"default": "healthy", "requests": 0, "by_scenario": {}, "tools_seen": [],
          "markers": []}
@@ -119,6 +125,57 @@ def pick_tool(body: dict, protocol: str):
     return None, {}
 
 
+def tool_results_so_far(body: dict) -> int:
+    """How many tool RESULTS this request carries — i.e. which follow-up turn
+    this is.
+
+    Stateless sequencing derived from the request itself, exactly as a real
+    model's next turn is, so parallel captures stay independent. Two callers:
+    `tool_result_present` (turn 1 vs turn 2, see below) and `loop_varying`,
+    which needs a number rather than a boolean.
+    """
+    n = 0
+    for item in body.get("input") or []:               # OpenAI Responses
+        if isinstance(item, dict) and str(item.get("type") or "").endswith(
+                "_call_output"):
+            n += 1
+    for msg in body.get("messages") or []:             # Anthropic / OpenAI Chat
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "tool":
+            n += 1
+            continue
+        content = msg.get("content")
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                n += 1
+    return n
+
+
+def vary(args: dict, body: dict) -> dict:
+    """The same tool call, made distinguishable from the previous one.
+
+    `loop` answers every turn with BYTE-IDENTICAL arguments, and grok 0.2.112
+    treats that as a stall rather than as work: it injects `You appear to be
+    running empty commands to stay active … End your turn` into every tool
+    result and ends the run itself after 16 model calls, with `EndTurn` and exit
+    0. That made `loop` unable to drive grok past 16 turns at all — so the rig
+    could not exercise a `--max-turns` above 16, and the 16 looked like a cap it
+    was not. Varying one argument is the whole difference: the same lane then
+    runs unbounded (measured: ~2,900 model calls in 300 s, still going when the
+    rig killed it).
+    """
+    return {k: (f"{v} {tool_results_so_far(body)}" if isinstance(v, str) else v)
+            for k, v in args.items()}
+
+
+def tool_call_for(scenario: str, body: dict, protocol: str):
+    """The tool call this scenario answers with, if any — `pick_tool` plus the
+    one scenario that needs its arguments to move."""
+    name, args = pick_tool(body, protocol)
+    return name, (vary(args, body) if scenario == "loop_varying" else args)
+
+
 def tool_result_present(body: dict) -> bool:
     """True when this request already carries a tool RESULT — i.e. it is a
     follow-up turn.
@@ -130,22 +187,10 @@ def tool_result_present(body: dict) -> bool:
     produced a killed process instead of the conservatism evidence the scenario
     exists for. Derived from the request itself, exactly as a real model's next
     turn is — no server-side state, so parallel captures stay independent.
-    `loop` deliberately does NOT consult this: exhausting a turn cap is its job.
+    The `loop*` scenarios deliberately do NOT consult this: running until
+    something else stops the harness is their job.
     """
-    for item in body.get("input") or []:               # OpenAI Responses
-        if isinstance(item, dict) and str(item.get("type") or "").endswith(
-                "_call_output"):
-            return True
-    for msg in body.get("messages") or []:             # Anthropic / OpenAI Chat
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") == "tool":
-            return True
-        content = msg.get("content")
-        for block in content if isinstance(content, list) else []:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                return True
-    return False
+    return tool_results_so_far(body) > 0
 
 
 def note_tools(body: dict) -> None:
@@ -278,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
     # ── OpenAI Responses (codex) ─────────────────────────────────────────────
     def _responses(self, scenario: str, body: dict):
         rid = f"resp_{uuid.uuid4().hex[:12]}"
-        name, args = pick_tool(body, "responses")
+        name, args = tool_call_for(scenario, body, "responses")
         items = []
         if scenario == "healthy":
             items = [{"type": "message", "id": "msg_1", "role": "assistant",
@@ -294,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
                       "status": "completed",
                       "content": [{"type": "output_text",
                                    "text": "I can't help with that."}]}]
-        elif scenario == "loop" and name:
+        elif scenario in LOOP_SCENARIOS and name:
             items = [{"type": "function_call", "id": "fc_1", "call_id": "call_1",
                       "name": name, "arguments": json.dumps(args),
                       "status": "completed"}]
@@ -332,7 +377,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── Anthropic Messages (claude, grok api_backend=messages) ───────────────
     def _messages(self, scenario: str, body: dict):
-        name, args = pick_tool(body, "messages")
+        name, args = tool_call_for(scenario, body, "messages")
         blocks, stop = [], "end_turn"
         if scenario == "healthy":
             blocks = [{"type": "text", "text": "Done. " + "Detail. " * 60}]
@@ -340,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
             blocks = [{"type": "text", "text": "  \n "}]
         elif scenario == "refusal":
             blocks = [{"type": "text", "text": "I can't help with that."}]
-        elif scenario == "loop" and name or (
+        elif (scenario in LOOP_SCENARIOS and name) or (
                 scenario == "tool_only" and name and not tool_result_present(body)):
             blocks = [{"type": "tool_use", "id": "tu_1", "name": name, "input": args}]
             stop = "tool_use"
@@ -378,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── OpenAI Chat Completions (grok default) ───────────────────────────────
     def _chat(self, scenario: str, body: dict):
-        name, args = pick_tool(body, "chat")
+        name, args = tool_call_for(scenario, body, "chat")
         msg = {"role": "assistant", "content": None}
         finish = "stop"
         if scenario == "healthy":
@@ -387,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
             msg["content"] = "  \n "
         elif scenario == "refusal":
             msg["content"] = "I can't help with that."
-        elif scenario == "loop" and name or (
+        elif (scenario in LOOP_SCENARIOS and name) or (
                 scenario == "tool_only" and name and not tool_result_present(body)):
             msg["tool_calls"] = [{"id": "call_1", "type": "function",
                                   "function": {"name": name,
@@ -407,11 +452,17 @@ class Handler(BaseHTTPRequestHandler):
             delta["content"] = msg["content"]
         if msg.get("tool_calls"):
             delta["tool_calls"] = msg["tool_calls"]
+        # `created` and `model` are REQUIRED on every chunk, not just on the
+        # non-streaming payload: grok 0.2.112 hard-fails the stream with
+        # `serialization error: missing field 'created'` without them, which
+        # makes every grok scenario unreproducible from the committed stub.
+        head = {"id": "chatcmpl_stub", "object": "chat.completion.chunk",
+                "created": payload["created"], "model": payload["model"]}
         chunks = [
-            sse(("chunk", {"id": "chatcmpl_stub", "object": "chat.completion.chunk",
+            sse(("chunk", {**head,
                            "choices": [{"index": 0, "delta": delta,
                                         "finish_reason": None}]})),
-            sse(("chunk", {"id": "chatcmpl_stub", "object": "chat.completion.chunk",
+            sse(("chunk", {**head,
                            "choices": [{"index": 0, "delta": {},
                                         "finish_reason": finish}],
                            "usage": payload["usage"]})),

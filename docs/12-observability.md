@@ -60,7 +60,7 @@ Deliberately span-free besides heartbeats: the watchdog's quiet 10 s scan (its
 devcake.mission.id          devcake.mission.key        devcake.mission.type
 devcake.dev_type            devcake.harness
 devcake.run.id              devcake.run.seq            devcake.run.attempt
-devcake.tokens.input        devcake.tokens.output
+devcake.tokens.input        devcake.tokens.output      devcake.tokens.total
 devcake.tokens.cache_read   devcake.tokens.cache_write
 devcake.cost.usd            devcake.outcome            (result.json outcome | error class)
 ```
@@ -87,6 +87,14 @@ Canonical queries (the shapes `scripts/provision_oo.py` installs):
 Token/cost numbers are reported **twice by design**: human-facing in the
 activity-feed report (INV-5) and machine-facing as `run.finalize` span
 attributes — OpenObserve is the cost dashboard.
+
+**`devcake.cost.usd` is a claude-code-only attribute.** It is set solely from a
+natively reported figure, and neither `codex` 0.144.4 nor `grok` 0.2.112 emits a
+cost field of any kind (`08-harness-templates.md` §5) — no price table invents
+one, and a missing cost is written as **null, never 0**, so a cost query returns
+claude runs only rather than silently averaging in free-looking runs. The
+cross-harness quantity is `devcake.tokens.*`: grok fills the full split plus
+`total` from its `end` event, codex the split with no total.
 
 ## 5. Pre-provisioned dashboard + alerts (`scripts/provision_oo.py`, idempotent)
 

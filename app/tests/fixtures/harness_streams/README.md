@@ -213,8 +213,12 @@ capture above. docs/08 records "Neither contains usage/cost fields in this versi
 `contextWindowTokens`, `modelsUsed`, `turnCount` and much more, so grok token extraction is not
 broken. It is written only for sessions that end cleanly: it is present for `grok_healthy`,
 `grok_whitespace`, `grok_refusal` and `grok_tool_only`, and **absent** for `grok_turn_budget`,
-`grok_http_429` and every other failed run — those report `extraction_method: "unavailable"`. Note
-also that `signals.turnCount` is **1** for the run whose `end` event reported `num_turns:16`.
+`grok_http_429` and every other failed run — which is why those reported `extraction_method:
+"unavailable"` at capture time. Since then the `end` event is the primary source and `signals.json`
+the fallback (docs/08 §5), so a failed run that still emits `end` (`grok_turn_budget`) now reports
+`end_event`, and only the runs with no `end` event at all (`grok_empty`, `grok_http_401/429/500`,
+`grok_truncated`, `grok_json_blob`) fall through to `unavailable`. Note also that
+`signals.turnCount` is **1** for the run whose `end` event reported `num_turns:16`.
 
 ### The `--output-format json` blob branch is unreachable
 

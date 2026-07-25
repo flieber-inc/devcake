@@ -520,6 +520,89 @@ def grok_stream_parse(out: str):
     return ("".join(texts), sid) if saw else None
 
 
+def grok_end_event(out: str):
+    """Last {"type":"end"} event in a grok streaming-json transcript, or None.
+
+    The sibling of `claude_result_event`. At 0.2.112 this event carries the
+    whole token report inline — `usage`, `num_turns`, `modelUsage` (docs/08 §1,
+    measured across every `grok_*` capture that reaches a terminal turn) — so
+    the report needs neither a session id nor a filesystem read."""
+    found = None
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one unparseable line must never cost the whole report
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "end":
+            found = ev
+    return found
+
+
+def grok_end_report(ev):
+    """TokenReport from grok's terminal event, or None when it carries no usage.
+
+    Takes the streaming `end` event and the `--output-format json` blob alike:
+    both carry the same `{usage, num_turns, modelUsage}` keys (docs/08 §1).
+
+    Every read is guarded (`_dict`): this is model-adjacent nested data reached
+    on the failure path too, and a token report must never abort the artifact
+    path — the caller falls back, and INV-5 posts "unavailable" at worst.
+
+    NO COST. grok emits no `total_cost_usd` and no cost field of any kind at
+    0.2.112 (measured across all eleven captures), so `cost_usd` stays None. A
+    0.0 here would read as "this run was free" in the feed report and would be
+    aggregated as real spend in `devcake.cost.usd` (docs/12 §4).
+
+    The captured token *values* came from a stub backend; the presence and key
+    names of these fields are the CLI's (fixtures README)."""
+    ev = _dict(ev)
+    usage = _dict(ev.get("usage"))
+    if not usage:
+        return None                     # nothing measured — let the caller fall back
+    mu = _dict(ev.get("modelUsage"))
+    # dominant model, as the claude arm picks it — but grok's inner keys are
+    # camelCase (`outputTokens`) and carry no per-model cost to rank by first
+    models = sorted(mu, key=lambda k: _dict(mu[k]).get("outputTokens") or 0,
+                    reverse=True)
+    return {
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+        "total_tokens": usage.get("total_tokens"),
+        "cost_usd": None,               # never 0 — see above
+        "model": models[0] if models else "grok",
+        "extraction_method": "end_event",
+        "num_turns": ev.get("num_turns"),
+        "notes": f"reasoning_tokens={usage.get('reasoning_tokens')}",
+    }
+
+
+def grok_signals_report(session_id: str, home=None):
+    """TokenReport from `signals.json` in grok's session directory, or None.
+
+    The 0.2.93-verified path, kept as the FALLBACK for a stream with no usable
+    `end` event. Its survival at 0.2.112 is a capture-campaign note with no
+    committed fixture (docs/08 §1), so this asserts nothing either way: it
+    reports what it finds on disk, or nothing. Totals only — no input/output
+    split, no cost."""
+    if not session_id:
+        return None                     # an `error` event carries no sessionId
+    root = home if home is not None else pathlib.Path.home()
+    sig = None
+    for p in root.glob(f".grok/sessions/*/{session_id}/signals.json"):
+        sig = json.loads(p.read_text())
+    sig = _dict(sig)
+    if not sig:
+        return None
+    models = sig.get("modelsUsed")
+    return {
+        "total_tokens": sig.get("contextTokensUsed") or sig.get("totalTokens"),
+        "model": models[0] if isinstance(models, list) and models else "grok",
+        "extraction_method": "session_json",
+        "num_turns": sig.get("turnCount"),
+    }
+
+
 def claude_text_dump(out: str) -> str:
     """ADR-0014 D1: every assistant-visible text block, in order, UNTRUNCATED.
     Thinking blocks, tool calls, and subagent messages (parent_tool_use_id —
@@ -1595,29 +1678,41 @@ def main() -> None:
         except Exception:
             result_text = out[-4000:]
     elif harness == "grok-build":
+        sid, terminal = "", None    # `terminal`: the event carrying usage/turns
         try:
             parsed = grok_stream_parse(out)
             if parsed is not None:
                 result_text, sid = parsed
+                terminal = grok_end_event(out)
             else:  # EXTRA_ARGS overrode the format back to a plain json blob
                 j = json.loads(out)
                 result_text = j.get("text") or ""
                 sid = j.get("sessionId") or ""
-            sig = None
-            for p in pathlib.Path.home().glob(f".grok/sessions/*/{sid}/signals.json"):
-                sig = json.loads(p.read_text())
-            if sig:
-                token_report = {
-                    "total_tokens": sig.get("contextTokensUsed") or sig.get("totalTokens"),
-                    "model": (sig.get("modelsUsed") or ["grok"])[0],
-                    "extraction_method": "session_json",
-                    "num_turns": sig.get("turnCount"),
-                }
-            exp = subprocess.run(["grok", "export", sid], capture_output=True, text=True)
-            if exp.returncode == 0 and exp.stdout.strip():
-                transcript_body = exp.stdout
+                terminal = j       # same {usage, num_turns, modelUsage} keys
         except Exception:
             result_text = out[-4000:]
+        # Token report — its own guard, because a failure here must cost only
+        # the report (INV-5 then posts "unavailable"), never the result text or
+        # the transcript. The `end` event is PREFERRED: at 0.2.112 it carries
+        # the full split inline, needing no session id and no filesystem read
+        # (docs/08 §5). `signals.json` stays as the fallback — its survival at
+        # this version is an uncommitted campaign note, so dropping it would be
+        # as much of a guess as relying on it.
+        try:
+            token_report = (grok_end_report(terminal)
+                            or grok_signals_report(sid) or token_report)
+        except Exception:  # noqa: BLE001 — the artifact path outranks its own token report
+            print("token extraction failed; reporting unavailable", file=sys.stderr)
+        try:
+            # no sessionId ⇒ nothing to export: an `error` event never carries
+            # one, and the export is the only grok dump source (docs/08 §6)
+            exp = (subprocess.run(["grok", "export", sid], capture_output=True,
+                                  text=True) if sid else None)
+            if exp is not None and exp.returncode == 0 and exp.stdout.strip():
+                transcript_body = exp.stdout
+        except Exception:  # noqa: BLE001 — no export ⇒ no dump; the fault predicate handles an empty one
+            print("grok export failed; transcript falls back to the agent report",
+                  file=sys.stderr)
     else:
         try:
             # stream-json: the final result event carries the exact fields of

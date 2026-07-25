@@ -408,12 +408,27 @@ def render_codex(raw: str):
                f"out={u.get('output_tokens', '?')}"
     if kind == "error":
         return f"[codex] error: {str(ev.get('message', ''))[:200]}"
+    if kind == "turn.failed":
+        # THE terminal event of every captured codex failure — `… → error →
+        # turn.failed` (test_harness_captures: all eight failure rows) — so the
+        # last thing an operator sees before the run dies rendered as nothing.
+        # The message repeats the preceding `error` event verbatim in every
+        # capture; it is echoed anyway because the two are separate events and
+        # nothing guarantees the first one rendered.
+        msg = _one_line(_dict(ev.get("error")).get("message") or "", 200)
+        return f"[codex] turn failed: {msg}" if msg else "[codex] turn failed"
     return None
 
 
 class GrokCoalescer:
     """grok streaming-json emits token-level {"type":"text","data":…} deltas
-    (verified live on 0.2.93) — coalesce them into lines; thoughts skipped."""
+    (verified live on 0.2.93) — coalesce them into lines; thoughts skipped.
+
+    The type values present across the eleven 0.2.112 captures are exactly
+    {`text`, `end`, `max_turns_reached`, `error`} (docs/08 §1; `thought` is a
+    0.2.93 record and unverified at 0.2.112). The last three each decide a
+    run's fate, so each of them renders a line.
+    """
 
     def __init__(self) -> None:
         self.buf = ""
@@ -439,7 +454,25 @@ class GrokCoalescer:
             self.buf = ""
             done = f"[grok] done: {ev.get('stopReason', '?')}"
             return f"{tail}\n{done}" if tail else done
-        return None  # thought deltas: noise
+        if kind == "error":
+            # grok's terminal verdict, and the ONLY event a failed run emits:
+            # `error` and `end` never co-occur across the eleven captures. It is
+            # what `grok_run_fault` fires terminal_error on, so it must not be
+            # invisible in the transcript. Flushes `self.buf` exactly like the
+            # `end` arm — otherwise the partial last line of a streaming answer
+            # is drained by the pump's `finish()` and lands AFTER the error,
+            # which is the one place its ordering carries meaning.
+            tail = self.buf.strip()
+            self.buf = ""
+            msg = _one_line(ev.get("message") or "", 200)
+            line = f"[grok] error: {msg}" if msg else "[grok] error"
+            return f"{tail}\n{line}" if tail else line
+        if kind == "max_turns_reached":
+            # bare `{"type":"max_turns_reached"}` (grok_turn_budget) — the event
+            # `grok_run_fault` reads for exit 16. No flush here: `end` with
+            # stopReason "Cancelled" follows it in the capture and flushes.
+            return "[grok] turn cap reached (--max-turns)"
+        return None  # unrecognized event types: noise
 
     def finish(self):
         tail, self.buf = self.buf.strip(), ""

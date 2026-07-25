@@ -59,6 +59,8 @@ Field lessons folded into docs 04/07/14/15: Claude Code refuses `--dangerously-s
 
 **Goal:** code flows. **Implements:** `03` §§2–3, `06` (GitHub), `08` (`grok-build` template — invocation, auto-approval, plan mode, MCP syntax, and the `signals.json` token-totals extraction all verified on the observed CLI v0.2.93; the installer itself was and remains unpinned).
 
+> **Version note (2026-07-25):** the v0.2.93 statements in this section are what M4 verified *then*, and stand as milestone history. They are no longer the current picture — grok was re-captured at **0.2.112**, where the `end` event carries a full input/output usage split inline, so `signals.json` is no longer the only token source (and its own survival at 0.2.112 is itself unverified). `08-harness-templates.md` §1/§5 is the current record; read it before relying on any grok shape stated here.
+
 Exit criteria — **all verified 2026-07-11 against live Linear + GitHub + live Grok/Claude runs (M4 complete)**:
 - [x] DEV-18 ran the full chain autonomously: PLAN (Claude plan mode; entrypoint materializes `PLAN.md` + `result.json`, since plan mode is read-only) → plan uploaded → `DEVCAKE-EXECUTE` → Main Dev (Grok Build, OAuth subscription session) implemented on `devcake/DEV-18`, opened PR#3 → `DEVCAKE-REVIEW` + PR link posted. DEV-17 ran the direct-EXECUTE variant (opportunistic plan from M3) → PR#2 with a 23-test pytest suite.
 - [x] Token reports for both harnesses: Claude full usage+cost (`session_json`); Grok totals via `signals.json` (`total: 22006` / `26892` posted to the feed).

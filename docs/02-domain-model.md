@@ -258,8 +258,8 @@ Produced once per Dev run by the harness template's extraction strategy (`08-har
 | `output_tokens` | `int \| None` | |
 | `cache_read_tokens` | `int \| None` | |
 | `cache_write_tokens` | `int \| None` | |
-| `total_tokens` | `int \| None` | For harnesses that only expose a total (Grok v0.2.93 `contextTokensUsed`); filled alongside or instead of the split. Tokens are the primary cost signal; billed cost is best-effort on top. |
-| `cost_usd` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed. |
+| `total_tokens` | `int \| None` | For harnesses that only expose a total; filled alongside or instead of the split. The implemented Grok extraction is one — `signals.json` `contextTokensUsed` (verified **v0.2.93**) — but that is a version-scoped fact, not a property of the harness: at **Grok 0.2.112** the `end` event carries a full split inline (`usage {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}`, plus `num_turns` and `modelUsage`), captured 2026-07-25 (`08-harness-templates.md` §1/§5). Field names and their presence are CLI evidence; the captured numbers came from a stub backend and are not. Tokens are the primary cost signal; billed cost is best-effort on top. |
+| `cost_usd` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed — and neither `codex` 0.144.4 nor `grok` 0.2.112 emits any cost field, so it stays null for both. |
 | `model` | `str` | |
 | `extraction_method` | `"session_json" \| "unavailable"` | The entrypoint records which path filled the report; silence is never acceptable (INV-5). |
 | `notes` | `str \| None` | e.g. which fallback triggered. |

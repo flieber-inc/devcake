@@ -18,7 +18,7 @@
 | `DEV_AUTH` | exit 12 — harness credential wording per the §4 marker contract | circuit breaker (§4) — **not** a counted attempt |
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
-| `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap | counted attempt; deterministic, so never correlated and never excused |
+| `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` only** today (`07-dev-runtime.md` §4): grok-build stops on the cap but is classified `DEV_CRASH`, and codex 0.144.4 has no turn cap at all | counted attempt; deterministic, so never correlated and never excused |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — a **fleet-wide** exit-11 cascade is usually a model that stopped tool-calling against a shared backend (`08-harness-templates.md` §8, measured 2026-07-25), and §4a's brake keys on exit 15, so it does not cover this |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
@@ -39,7 +39,7 @@
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
 | `DEV_HARNESS_FAULT` | yes — same | **yes**, unless correlated (§4a) | scheduler | `dev_backend_degraded` in `/health` + SPA warning while throttled |
-| `DEV_TURN_BUDGET` | yes — but retrying the same cap cannot help; raise `--max-turns` or assign a stronger Dev Type | **yes** | scheduler | `run.error` names the cap and where to change it |
+| `DEV_TURN_BUDGET` | yes — but retrying the same cap cannot help; raise `--max-turns` (claude-code and grok-build take it; **codex has none** — §2a) or assign a stronger Dev Type | **yes** | scheduler | `run.error` names the cap and where to change it |
 | `DEV_FORGE` | yes — a forge outage should not burn missions | **no** while the step has excusals (§4a), **yes** once spent | scheduler | after the cap: `DEVCAKE-FAILED` |
 | `DEV_AUTH` | no — pointless until creds fixed | **no** | — | circuit breaker (§4) + SPA/health alert |
 | `DEV_FORGE_AUTH` | no — pointless until repository access is fixed | **no** | — | per-repo forge breaker + actionable connection-test error |
@@ -47,6 +47,27 @@
 | `EXTERNAL_TRANSITION` | n/a | no | — | explanatory PMO comment; run's artifacts already posted |
 
 Retries of Dev work are never in-place: a failed attempt ends the container; the Mission's label never advanced (INV-3), so the next poll cycle re-derives and re-dispatches with `attempt_of_step + 1`.
+
+## 2a. "Raise `--max-turns`" is not universal advice
+
+The turn-cap remedy above assumes a harness that has a turn cap. Measured
+2026-07-25 (`08-harness-templates.md` §1b, `07-dev-runtime.md` §4):
+
+| Harness | Cap flag | Reaches exit 16? |
+|---|---|---|
+| `claude-code` | `--max-turns <N>` | **yes** — `subtype:"error_max_turns"` is the predicate's only turn-budget arm |
+| `grok-build` (0.2.112) | `--max-turns <N>` | **no, today** — it emits `max_turns_reached` + `end` `stopReason:"Cancelled"` and exits 1, but no grok arm reads those events, so the run lands on `DEV_CRASH` (exit 10) |
+| `codex` (0.144.4) | **none** | **no** — no `--max-turns` equivalent and no config key for one, so the class is unreachable |
+
+Consequences for the operator. On a **claude-code** Dev, raising `--max-turns` in
+that Mission Type's extra CLI args (`11-admin-panel.md` §3) is the literal remedy
+the `run.error` names. On a **grok-build** Dev the same edit does change the cap,
+but exhaustion arrives as `DEV_CRASH`, so the operator will be reading a crash,
+not a budget message. On a **codex** Dev there is nothing to raise: an unbounded
+run is stopped only by `dev_timeout_minutes` (a global setting) and reported
+`DEV_TIMEOUT` — so the levers are a smaller task, a different Dev Type, or
+accepting the timeout as the bound. Do not go looking for a codex turn flag; at
+0.144.4 there is not one.
 
 ## 3. `DEVCAKE-FAILED` semantics
 

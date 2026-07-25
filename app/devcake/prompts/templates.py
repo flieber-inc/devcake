@@ -187,6 +187,23 @@ def template_warnings(config) -> list[str]:
             f"ONBOARD template '{active}' still instructs the removed "
             "executed_trivially outcome — its runs will park with "
             "DEVCAKE-SKIP; re-save it from the current default")
+    # ADR-0018: an EXECUTE/PLAN-family template saved before 2026-07-24 still
+    # carries the unqualified binding rule "Work ONLY inside /workspace/repo/…"
+    # alongside the rule ordering a write to /workspace/out/result.json. Strong
+    # models read past the contradiction; weaker ones resolve it by writing a
+    # cwd-relative result.json inside the clone, which fails the run as
+    # DEV_BAD_OUTPUT and can be swept into the PR by commit-at-end. Built-ins
+    # are re-canonicalized at boot, so only operator copies can be stale.
+    for mt in PLAYBOOK_VARS:
+        active = _canon((config.active_prompt_templates or {}).get(mt))
+        text, _ = resolve_playbook(mt, active)
+        if "Work ONLY inside" in text:
+            warns.append(
+                f"{mt} template '{active}' still carries the unqualified "
+                f"\"Work ONLY inside /workspace/repo/…\" rule, which contradicts "
+                f"the /workspace/out/result.json rule — Devs may write "
+                f"result.json into the repository and fail the run. Re-save it "
+                f"from the current default.")
     if getattr(config, "max_decomposition_depth", 1) != 1:
         active = _canon((config.active_prompt_templates or {}).get("ONBOARD"))
         text, _ = resolve_playbook("ONBOARD", active)

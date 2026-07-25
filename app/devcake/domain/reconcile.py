@@ -61,9 +61,14 @@ async def reconcile_runs(manager) -> None:
                     node_errors = []
                 await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
                 detail = " ".join(str(item.get("error") or "") for item in node_errors)
-                # enrich the classified pre-harness exits (13 clone/forge,
-                # 14 MCP setup) when the app was down at container death
-                exit_m = re.search(r"exit status (13|14)", detail.lower())
+                # enrich the classified exits (13 clone/forge, 14 MCP setup,
+                # 15 harness fault, 16 turn budget) when the app was down at
+                # container death. Dagu's node-error string is the only
+                # post-mortem source, so it can recover the numeric code but
+                # never the structured `error_class` — dev_failure_error's 15
+                # arm therefore labels the orphan and lets it contribute
+                # evidence, but never excuses its attempt (ADR-0018).
+                exit_m = re.search(r"exit status (13|14|15|16)", detail.lower())
                 if finalizer and exit_m:
                     r.error = finalizer.dev_failure_error(
                         r, {"exit_code": int(exit_m.group(1)),

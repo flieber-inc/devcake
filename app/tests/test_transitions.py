@@ -14,6 +14,7 @@ from devcake.domain.orchestrator import decomposition, review, transitions
 from devcake.domain.model import Activity, ActivityEntry, Mission
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
+from devcake.domain import backend_health
 from devcake.domain.orchestrator import dispatch, feed, sweeps
 
 
@@ -448,7 +449,8 @@ def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
         "error_detail": "fatal: unable to access 'https://forge/team-403/repo/': timeout",
     })
     assert error.startswith("DEV_FORGE")
-    assert "forge" not in mgr.breakers
+    assert run.error_class == "DEV_FORGE"      # and not the exempt class
+    assert "forge" not in mgr.breakers and not mgr.forges.breakers
 
 
 def test_mcp_setup_artifact_maps_to_dev_mcp_setup(tmp_path):
@@ -1434,3 +1436,300 @@ def test_executed_feed_uses_descriptor_pr_noun(tmp_path):
                              None))
     assert any("merge request" in c for c in fake.comments)
     assert not any("pull request" in c for c in fake.comments)
+
+
+# ── ADR-0018: structured error classes and correlated-failure accounting ─────
+
+def _save_failed(store, run_id, *, error_class, mission="p1", mtype="EXECUTE",
+                 dev_type="senior-dev", counted=True, state="failed"):
+    r = Run(run_id=run_id, mission_key="T-1", mission_pmo_id=mission,
+            mission_type=mtype, dev_type=dev_type, seq=1, state=state,
+            error_class=error_class, attempt_counted=counted,
+            error=f"{error_class}: boom")
+    store.save(r)
+    return r
+
+
+@pytest.mark.parametrize("payload,expected_class", [
+    ({"exit_code": 10}, "DEV_CRASH"),
+    ({"exit_code": 20}, "DEV_CRASH"),
+    ({"exit_code": 11}, "DEV_BAD_OUTPUT"),
+    ({"exit_code": 13}, "DEV_FORGE"),
+    ({"exit_code": 14}, "DEV_MCP_SETUP"),
+    ({"exit_code": 16}, "DEV_TURN_BUDGET"),
+])
+def test_every_exit_code_stamps_a_structured_class(tmp_path, payload, expected_class):
+    """Stamping only the NEW codes would leave the others at error_class == ""
+    in the legacy branch, where DEV_FORGE matches nothing and keeps counting —
+    silently not delivering the uncounted-DEV_FORGE decision."""
+    mgr, _fake, _store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, payload)
+    assert run.error_class == expected_class
+
+
+def test_exit_15_stamps_harness_fault_and_trips_no_breaker(tmp_path):
+    mgr, _fake, _store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {
+        "exit_code": 15, "error_class": "DEV_HARNESS_FAULT",
+        "error_detail": "claude returned no assistant output at all"})
+    assert error.startswith("DEV_HARNESS_FAULT")
+    assert run.error_class == "DEV_HARNESS_FAULT"
+    # NOT a circuit breaker: it throttles and self-heals, so it must never
+    # latch the dev-type or per-repo maps
+    assert not mgr.breakers and not mgr.forges.breakers
+
+
+def test_turn_budget_always_counts_even_while_degraded(tmp_path):
+    """Turn exhaustion is deterministic — retrying the same cap cannot help, so
+    it is never excused and never contributes correlation evidence."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    _save_failed(store, "T-1-1-EXECUTE-OLD1", error_class="DEV_HARNESS_FAULT",
+                 mission="p2")
+    _save_failed(store, "T-1-1-EXECUTE-OLD2", error_class="DEV_HARNESS_FAULT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 16, "error_class": "DEV_TURN_BUDGET"})
+    assert run.error_class == "DEV_TURN_BUDGET"
+    assert run.attempt_counted is True
+
+
+def test_solitary_backend_fault_counts(tmp_path):
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    _save_failed(store, "T-1-1-EXECUTE-OLD1", error_class="DEV_HARNESS_FAULT")
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 15,
+                                "error_class": "DEV_HARNESS_FAULT"})
+    assert run.attempt_counted is True
+
+
+def test_solitary_backend_fault_counts_with_excusals_spent(tmp_path):
+    """The missing truth-table row: solitary (backend_correlated None) AND the
+    step's excusals spent. Both terms of the accounting `or` are true here, so
+    the failure counts — the exhausted budget must never flip a solitary
+    failure back to excused (that inversion is what an `and` would produce)."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-EXECUTE-EX{i}", error_class="DEV_HARNESS_FAULT",
+                     counted=False)
+    run = _run("EXECUTE", None)
+    assert backend_health.backend_correlated(store.all(), "senior-dev") is None
+    assert backend_health.excusals_left(store.all(), run) is False
+    mgr.dev_failure_error(run, {"exit_code": 15,
+                                "error_class": "DEV_HARNESS_FAULT"})
+    assert run.attempt_counted is True
+
+
+def test_correlated_backend_fault_does_not_count(tmp_path):
+    """Evidence across ≥2 distinct missions means the backend, not the mission."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_HARNESS_FAULT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_HARNESS_FAULT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 15,
+                                "error_class": "DEV_HARNESS_FAULT"})
+    assert run.attempt_counted is False
+
+
+def test_correlated_fault_counts_again_once_excusals_are_spent(tmp_path):
+    """THE escape hatch. The evidence IS the faults, so without a per-step cap
+    an armed detector excuses every later fault forever — a permanently bad
+    model id would retry with no give-up at all."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_HARNESS_FAULT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_HARNESS_FAULT",
+                 mission="p3")
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-EXECUTE-EX{i}", error_class="DEV_HARNESS_FAULT",
+                     counted=False)
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 15,
+                                "error_class": "DEV_HARNESS_FAULT"})
+    assert run.attempt_counted is True, "exhausted excusals must start counting"
+
+
+def test_orphan_payload_without_a_structured_class_is_never_excused(tmp_path):
+    """reconcile can recover the numeric code from Dagu's node error but never
+    error_class, so an orphan earns the label and contributes evidence — it is
+    just never itself excused. The skew-safe direction."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_HARNESS_FAULT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_HARNESS_FAULT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 15})       # numeric only
+    assert run.error_class == "DEV_HARNESS_FAULT"
+    assert run.attempt_counted is True
+
+
+def test_dev_forge_no_longer_counts_toward_attempts(tmp_path):
+    """The old marker tuple carried a dead "dev failure artifact (exit 13)"
+    entry that never matched, so plain forge failures burned attempts in
+    contradiction of docs/15 §2."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    run = _run("EXECUTE", None)
+    run.state = "failed"
+    run.error = mgr.dev_failure_error(run, {"exit_code": 13,
+                                            "error_detail": "could not resolve host"})
+    store.save(run)
+    assert run.error_class == "DEV_FORGE"
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", None) == 1
+
+
+def test_dev_forge_is_never_unconditionally_uncounted():
+    """Deviation guard. Adding DEV_FORGE to UNCOUNTED_CLASSES makes the excusal
+    cap in dev_failure_error DEAD CODE — `counts_toward_attempts` short-circuits
+    on the class before it ever reads `attempt_counted`. Plain exit 13 latches no
+    breaker, so the mission would be re-dispatched every poll interval forever on
+    a bad branch name, a DNS failure or a 500: the unbounded livelock that
+    `excusals_left` exists to bound. Uncounted-but-bounded is the shipped rule."""
+    assert "DEV_FORGE" not in dispatch.UNCOUNTED_CLASSES, (
+        "DEV_FORGE in UNCOUNTED_CLASSES makes dev_failure_error's excusal cap "
+        "dead code (counts_toward_attempts never reads attempt_counted for an "
+        "uncounted CLASS) and restores an unbounded livelock: plain exit 13 "
+        "latches no breaker, so the step re-dispatches every poll interval "
+        "forever with no give-up")
+
+
+def test_marker_only_auth_wording_is_bounded_dev_forge(tmp_path):
+    """App-side mirror of the container's incidental-403 conservatism. Auth
+    WORDING without the structured class (a push rate limit, or any pre-taxonomy
+    image that sends no error_class at all) used to be stamped DEV_FORGE_AUTH:
+    unconditionally uncounted via UNCOUNTED_CLASSES, with the breaker latch
+    reserved for the structured arm — i.e. uncounted, breaker-less, retried
+    FOREVER. It now takes the excusal-bounded DEV_FORGE path."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {
+        "exit_code": 13,
+        "error_detail": "remote: HTTP 403 rate limit exceeded — retry the push"})
+    assert run.error_class == "DEV_FORGE"
+    assert error.startswith("DEV_FORGE:")          # legacy prefix match holds
+    assert "403" in error                          # the evidence is still visible
+    assert not mgr.forges.breakers and not mgr.breakers
+    assert run.attempt_counted is False            # excused while bounded…
+
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-EXECUTE-FG{i}", error_class="DEV_FORGE",
+                     counted=False)
+    again = _run("EXECUTE", None)
+    mgr.dev_failure_error(again, {"exit_code": 13,
+                                  "error_detail": "fatal: Authentication failed"})
+    assert again.error_class == "DEV_FORGE"
+    assert again.attempt_counted is True           # …and the bound is real
+    assert not mgr.forges.breakers
+
+
+def test_excusal_budgets_do_not_bleed_between_classes(tmp_path):
+    """One spent budget must not silently spend the other: they are separate
+    per-(mission, mission_type, class) allowances, so a forge outage cannot eat
+    the backend-fault escape hatch (or the reverse)."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-EXECUTE-HF{i}", error_class="DEV_HARNESS_FAULT",
+                     counted=False)
+    run = _run("EXECUTE", None)
+    runs = store.all()
+    assert backend_health.excusals_left(runs, run) is False           # spent
+    assert backend_health.excusals_left(
+        runs, run, error_class="DEV_FORGE") is True                   # untouched
+    mgr.dev_failure_error(run, {"exit_code": 13,
+                                "error_detail": "could not resolve host"})
+    assert run.attempt_counted is False    # exit 13 still has its own allowance
+
+    # …and the mirror, on a step whose DEV_FORGE budget is the spent one
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-ONBOARD-FG{i}", error_class="DEV_FORGE",
+                     mtype="ONBOARD", counted=False)
+    onboard = _run("ONBOARD", None)
+    runs = store.all()
+    assert backend_health.excusals_left(
+        runs, onboard, error_class="DEV_FORGE") is False
+    assert backend_health.excusals_left(runs, onboard) is True
+
+
+def test_attempt_matching_is_exact_not_substring(tmp_path):
+    """Injection regression: decomposition.py raises with the Dev's blocked_by
+    list VERBATIM and finalize wraps it into run.error, so a Dev emitting
+    blocked_by: ["DEV_AUTH"] must not make its own failures stop counting."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    run = _run("EXECUTE", None)
+    run.state = "failed"
+    run.error_class = "DEV_BAD_OUTPUT"
+    run.error = ("DEV_BAD_OUTPUT: decomposition part 1: blocked_by must be "
+                 "1-based indexes of EARLIER parts, got ['DEV_AUTH']")
+    store.save(run)
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", None) == 2   # counted
+
+
+def test_legacy_records_without_a_class_still_honour_uncounted_prefixes(tmp_path):
+    """Pre-upgrade records have error_class == "" and fall back to a PREFIX
+    match — injected text can only ever land in the tail."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    run = _run("EXECUTE", None)
+    run.state = "failed"
+    run.error_class = ""
+    run.error = "DEV_AUTH (does not count toward attempts; breaker tripped)"
+    store.save(run)
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", None) == 1
+
+    other = _run("EXECUTE", None)
+    other.run_id = "T-1-2-EXECUTE-BBBBBB"
+    other.state = "failed"
+    other.error_class = ""
+    other.error = "DEV_BAD_OUTPUT: the Dev mentioned DEV_AUTH in its output"
+    store.save(other)
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", None) == 2   # tail ignored
+
+
+# ── ADR-0018 §8: the kill chokepoint classifies, callers never enumerate ─────
+
+def _killable(store, run_id):
+    run = _run("EXECUTE", None)
+    run.run_id = run_id
+    run.state = "running"
+    store.save(run)
+    return run
+
+
+@pytest.mark.parametrize("new_state,expected", [
+    ("timed_out", "DEV_TIMEOUT"),
+    ("orphaned", "DEV_ORPHANED"),
+    ("failed", "DEV_KILLED"),
+    ("evicted", "DEV_KILLED"),      # a state nobody remembers to add to the map
+])
+def test_kill_stamps_the_class_for_its_target_state(tmp_path, new_state, expected):
+    """Two drafts of the plan tried to ENUMERATE the seven kill sites and both
+    were wrong, so `_kill_inner` classifies from a state-keyed map with a
+    DEV_KILLED catch-all: no kill path can leave a run unclassified and fall
+    back to `attempt_number`'s legacy error-prefix matching."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+
+    async def _no_ship(*a, **k):        # keep the OO shipping side effect out
+        pass
+    mgr.runs._ship_failure = _no_ship   # type: ignore[method-assign]
+    run = _killable(store, f"T-1-1-EXECUTE-K{new_state[:5].upper()}")
+    run_coro(mgr.runs.kill(run, new_state, "watchdog: no heartbeat"))
+    # asserted on the record kill mutated: the catch-all case deliberately uses
+    # a state outside RunState, which the store's re-read would reject
+    assert run.state == new_state
+    assert run.error_class == expected
+
+
+def test_explicit_error_class_wins_over_the_state_default(tmp_path):
+    """The operator stops (clear-runs, stop-run, stop-all) pass their own class:
+    a deliberate stop must not read as DEV_KILLED in the taxonomy."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+
+    async def _no_ship(*a, **k):
+        pass
+    mgr.runs._ship_failure = _no_ship   # type: ignore[method-assign]
+    run = _killable(store, "T-1-1-EXECUTE-OPSTOP")
+    run_coro(mgr.runs.kill(run, "failed", "stopped by operator (stop all)",
+                           error_class="DEV_OPERATOR_STOP"))
+    assert store.get(run.run_id).error_class == "DEV_OPERATOR_STOP"

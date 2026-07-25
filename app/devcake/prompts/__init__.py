@@ -243,7 +243,11 @@ job is to sync `{branch}` with the default branch, resolve the merge
 conflicts, and push — do NOT redo or extend the mission's implementation.
 
 ### Binding rules (violations fail the run)
-1. Work ONLY inside /workspace/repo/{repo_name}/.
+1. Make ALL code changes inside /workspace/repo/{repo_name}/ and nowhere else —
+   never modify another repository. This rule is about the code you change; it
+   does NOT restrict where your outputs go. /workspace/out/ is outside every
+   repository and is the required destination for result.json (rule 7) and
+   PLAN.md. Never write result.json into the repository.
 2. Branch: `{branch}`. If it exists on the remote, check it out and
    continue on it (`git fetch origin {branch} && git checkout {branch}`);
    otherwise create it from the default branch. NEVER force-push.

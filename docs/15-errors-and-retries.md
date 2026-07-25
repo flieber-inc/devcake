@@ -16,7 +16,9 @@
 | `DEV_MCP_SETUP` | exit 14: an `mcp_setup_commands` entry failed or hit the 300 s per-command cap; `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | app watchdog kill via Dagu stop → Run `timed_out` (not an entrypoint exit code) | counted attempt |
 | `DEV_AUTH` | exit 12 — harness credential wording per the §4 marker contract | circuit breaker (§4) — **not** a counted attempt |
-| `DEV_FORGE_AUTH` | exit 13 with forge auth/permission evidence | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
+| `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
+| `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
+| `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap | counted attempt; deterministic, so never correlated and never excused |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
@@ -36,6 +38,9 @@
 | `DEV_MCP_SETUP` | yes — same (a transient install/network failure deserves retries; the deterministic missing-secret case never dispatches at all, `14` §8) | **yes** | scheduler | same |
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
+| `DEV_HARNESS_FAULT` | yes — same | **yes**, unless correlated (§4a) | scheduler | `dev_backend_degraded` in `/health` + SPA warning while throttled |
+| `DEV_TURN_BUDGET` | yes — but retrying the same cap cannot help; raise `--max-turns` or assign a stronger Dev Type | **yes** | scheduler | `run.error` names the cap and where to change it |
+| `DEV_FORGE` | yes — a forge outage should not burn missions | **no** while the step has excusals (§4a), **yes** once spent | scheduler | after the cap: `DEVCAKE-FAILED` |
 | `DEV_AUTH` | no — pointless until creds fixed | **no** | — | circuit breaker (§4) + SPA/health alert |
 | `DEV_FORGE_AUTH` | no — pointless until repository access is fixed | **no** | — | per-repo forge breaker + actionable connection-test error |
 | `LABEL_CONFLICT` | n/a — skipped until resolved | no | — | derivation unschedulable reason only (`gate_map` / `GET /api/v1/missions`); **no** PMO comment, **no** metric |
@@ -72,6 +77,60 @@ Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE
 
 **Blocked-on-a-dead-blocker deadlock:** a Mission whose blocker carries `DEVCAKE-FAILED`/`DEVCAKE-SKIP` stays parked indefinitely (the prerequisite will not complete autonomously). This is surfaced in `/api/v1/missions` reason strings (`04-orchestrator.md` §2); recovery is human — fix the blocker or delete the relation.
 
+## 4a. Model-backend degradation (ADR-0018) — NOT a circuit breaker
+
+A shared model backend that degrades makes every Dev container fail at once and
+identically. `DEV_HARNESS_FAULT` therefore has a brake, but a **different kind**
+from §4's: store-derived, self-healing, and never latched.
+
+**Detection** is derived from the run store in the `mapper_service.degraded()`
+idiom — no counters, restart-safe. Two predicates, because throttling and
+accounting are different questions:
+
+| predicate | condition (recent terminal runs of a dev type) | effect |
+|---|---|---|
+| `backend_correlated` | ≥2 `DEV_HARNESS_FAULT` spanning ≥2 distinct missions, in the last **3 terminal runs** | may EXCUSE the attempt |
+| `backend_degraded` | the above, **or** 3 consecutive faults on one mission among that type's last 3 **mission-bearing** runs (its own selection — a PMO-less Relations Mapper run interleaved in the window must not disarm the arm) | THROTTLES to one probe run |
+
+**Throttled, not stopped.** A degraded Dev Type dispatches at most one run at a
+time. That probe *is* the half-open: it is what lets the condition clear itself,
+which is why there is no timer and no operator "retry" control. Successes are
+included in the detection window on purpose — evicting fault evidence is the
+clearing mechanism, and two green runs clear it.
+
+**Escape hatches (both required).** The evidence *is* the faults, so an armed
+detector would otherwise excuse every later fault, re-arm the window, and retry a
+permanently bad model id forever with no give-up:
+
+1. A given (mission, mission type) step may be excused at most **3** times; after
+   that its failures count and it reaches `DEVCAKE-FAILED` normally. The same
+   bound covers `DEV_FORGE`, which latches no breaker and would otherwise
+   re-dispatch forever on a bad branch name or a DNS failure.
+2. `DEV_TURN_BUDGET` is a separate class precisely so it can never be correlated:
+   turn exhaustion is deterministic, and a fleet that all hit the same cap must
+   not be excused into an unbounded retry against a wall that will never move.
+
+**Surface:** `dev_backend_degraded` in `/health` (dev_type → reason), shaped like
+`poll_degraded` and deliberately OUTSIDE `circuit_breakers` — the SPA renders
+that map as one alert whose remediation says "refresh the credential", which is
+actively wrong here. The SPA alert is a **warning**, not critical, and says
+explicitly that no credential change is needed. Span: `dev.backend_degraded`, on
+transition into degradation only (never `breaker.trip`, which alerts mean "a
+human must fix a credential").
+
+**Who this protects.** Strongest for multi-mission fleets. A deployment running
+one mission per Dev Type can never satisfy the ≥2-mission rule, so it gets
+throttling only — its failures still count. Dev Types already at
+`max_concurrency: 1` see no throttling effect at all. The brake is per-Dev-Type
+while the fault is per-backend; DevCake has no first-class backend concept.
+
+**Clear-runs resets it**, unlike §4's auth breakers: this condition *is* run
+history, so "start fresh" legitimately forgets it, and it re-derives within two
+correlated failures. Each cycle's recomputation also **intersects the map with
+the live Dev Type registry**: renaming or deleting a Dev Type would otherwise
+leave a permanent entry, since no future run can supply the two greens that
+clear it (and the renamed Type would inherit no evidence at all).
+
 ## 4. `DEV_AUTH` circuit breaker
 
 Exit 12 trips a **per-Dev-Type breaker** (`circuit_breakers` in `/health`, SPA alert): all scheduling for that Dev Type pauses (its Missions stay queued, unharmed). **Clear by rewriting credentials** — a credential/secret write for that Dev Type (or a successful OAuth completion) removes the breaker entry. There is no interactive "retry" control on the health strip, and half-open is not a manual probe: the write itself is the reset. Rationale: auth failures burn nothing but fail everything — retrying without new credentials is pure waste.
@@ -79,6 +138,8 @@ Exit 12 trips a **per-Dev-Type breaker** (`circuit_breakers` in `/health`, SPA a
 **Harness-auth marker contract** (the Dev entrypoint's `classify_harness_failure` / `HARNESS_AUTH_MARKERS`, mirrored by `test_entrypoint_classify.py`): a nonzero harness exit maps to 12 only when the stderr tail matches a **word-boundary** regex for credential wording — currently `authentication`, `unauthorized`, `log in`, plus the grok distinctive phrases `not signed in` and `grok login`. **Deliberately dropped** (would false-trip on generic SSO/proxy stderr; those map to exit 10): `signed out`, `please sign in`. Bare `login` / `sign in` are also absent. A false 12 pauses the entire Dev Type until credentials are rewritten; a false 10 merely burns one attempt — when extending the list, err toward 10 and keep `\b` anchoring.
 
 Exit 13 trips a **per-repo forge breaker** (`repo:{name}` in `circuit_breakers`) only when the Dev's clone-failure classification is the structured `DEV_FORGE_AUTH` class, which itself requires git's credential wording ("returned error: 403/401", "Authentication failed", "could not read Username", …) — a bare "403" in stderr (rate limit, URL fragment) never halts dispatch. A latched breaker on repo A never stops missions on repo B. Probes latch the breaker only on **definitive** credential/permission failures (HTTP 401/403/404; a GitHub rate-limit 403 is exempt): 5xx/network/probe errors are marked *transient* and neither latch nor clear it. While the breaker is latched, the poll loop re-probes every cycle — a false latch or a restored token self-heals within one poll interval, while a genuinely revoked token stays latched (and alerted) until fixed. Startup and the Forge connection test run the same probe and require push permission, so a private repository omitted from a fine-grained PAT is rejected before another Dev starts on that repo.
+
+The app stamps the `DEV_FORGE_AUTH` **class** on exactly the same evidence as the latch: the Dev's structured `error_class`, never the wording of the failure detail. Auth wording without that class — a push rate-limited with "HTTP 403", or any pre-taxonomy image that sends no `error_class` at all — is plain `DEV_FORGE`, i.e. excusal-bounded (§4a) instead of exempt. The pairing is the whole safety argument: `DEV_FORGE_AUTH` is uncounted with **no** cap (§2), which is bounded only because it always latches the breaker, so stamping the class on marker evidence alone produced uncounted, breaker-less retries forever. A genuine credential failure that arrives without the structured class (an orphan enriched from Dagu's exit code, a lockstep skew) therefore degrades to a terminating path — `DEVCAKE-FAILED` once the excusals are spent — rather than a livelock.
 
 ## 5. Poison messages
 
@@ -92,7 +153,7 @@ there is no metrics pipeline in v0 (`12-observability.md` §4):
 
 1. any give-up — `mission.give_up` spans in a 5-min window;
 1a. any needs-human hand-off — `audit.event` spans with `devcake.audit.action = devcake_needs_human` (the audit log is span-mirrored precisely so this alert can fire);
-2. tripped breaker (DEV_AUTH or forge) — `breaker.trip` spans;
+2. tripped breaker (DEV_AUTH or forge) — and, separately, `dev.backend_degraded` spans for model-backend throttling (§4a, NOT a breaker) — `breaker.trip` spans;
 3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min — `poll.cycle` outcome attribute plus `forge.probe_transient` spans;
 4. poison message — `ingress.poison` spans;
 5. daily cost threshold — SUM of `devcake.cost.usd` over `run.finalize` spans (`OO_DAILY_COST_ALERT_USD`, default 50).

@@ -85,6 +85,11 @@ manager = RunManager(store, messaging, executor)
 # (credentials are DevCake-global), and ONE ForgeRuntime (repos belong to
 # the deployment — missions from any instance can route to any repo).
 shared_breakers: dict[str, str] = {}
+# dev_type → reason (ADR-0018). Same injected-shared-dict idiom as
+# shared_breakers, but a DIFFERENT thing: it throttles a dev type to one probe
+# run when its model backend looks sick, and clears itself when runs succeed.
+# PollRuntime is the sole writer; managers only read it.
+shared_backend_degraded: dict[str, str] = {}
 managers: dict[str, MissionManager] = {}
 mappers: dict[str, MapperService] = {}
 forge_runtime = ForgeRuntime()
@@ -116,7 +121,8 @@ def build_managers() -> None:
             managers[name] = MissionManager(
                 config, dev_types, p, forge_runtime, manager, messaging,
                 instance=inst, breakers=shared_breakers,
-                internal_forge=internal_forge, skills=skill_service)
+                internal_forge=internal_forge, skills=skill_service,
+                backend_degraded=shared_backend_degraded)
             mappers[name] = MapperService(config, dev_types, managers[name])
 
 
@@ -173,7 +179,8 @@ manager.runlog = runlog
 poll_rt = PollRuntime(
     config=config, managers=managers, mappers=mappers, store=store,
     forge_runtime=forge_runtime, refresh_forge_health=refresh_forge_health,
-    managers_in_config_order=_managers_in_config_order)
+    managers_in_config_order=_managers_in_config_order,
+    backend_degraded=shared_backend_degraded)
 
 
 def _refuse_insecure_passwords() -> None:
@@ -303,7 +310,8 @@ async def health():
         config=config, dev_types=dev_types, managers=managers,
         mappers=mappers, forge_runtime=forge_runtime,
         shared_breakers=shared_breakers, store=store,
-        internal_forge=internal_forge, poll_rt=poll_rt)
+        internal_forge=internal_forge, poll_rt=poll_rt,
+        backend_degraded=shared_backend_degraded)
 
 
 @app.get("/api/v1/health/live")
@@ -343,7 +351,8 @@ async def list_runs(limit: int = 25, offset: int = 0, mission_key: str | None = 
     for r in runs[offset:offset + limit]:
         row = r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
                                     "seq", "state", "created_at", "started_at",
-                                    "ended_at", "error", "verdict"})
+                                    "ended_at", "error", "error_class",
+                                    "attempt_counted", "verdict"})
         row["pr_url"] = _pr_url_of(r)
         page.append(row)
     return {"total": total, "offset": offset, "limit": limit, "runs": page}
@@ -360,6 +369,9 @@ async def get_run(run_id: str):
         "attempt_of_step", "stage_label_at_dispatch", "state", "created_at",
         "started_at", "ended_at", "last_heartbeat", "timeout_seconds",
         "finalized_steps", "artifact_bytes", "error",
+        # ADR-0018 — without these an excused run shows no reason it did not
+        # burn an attempt, which is the difference between diagnosable and not
+        "error_class", "attempt_counted",
         "verdict",
     })
     body["pr_url"] = _pr_url_of(run)
@@ -489,6 +501,10 @@ async def clear_runs():
         for mgr in managers.values():
             mgr._grace.clear()
             mgr._grace_next.clear()
+        # ADR-0018: the backend-degraded map IS run history, so "start fresh"
+        # legitimately forgets it — and clearing it now avoids throttling with
+        # zero evidence until the next poll cycle recomputes.
+        shared_backend_degraded.clear()
         # auth breakers stay — they reflect live credential health, not run history
         span.set_attribute("devcake.clear.runs_deleted",
                            int((result.get("local") or {}).get("runs_deleted") or 0))

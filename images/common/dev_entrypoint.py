@@ -14,6 +14,7 @@ import pathlib
 import re as _re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -215,6 +216,25 @@ HARNESS_AUTH_MARKERS = tuple(_re.compile(r"\b" + p + r"\b") for p in (
     # two a revoked grok cred exits 10 (three burned attempts) not 12.
     "not signed in", r"grok login",
 ))
+
+
+# ADR-0018 §1.4 — the DISTINCTIVE subset of HARNESS_AUTH_MARKERS. Exit 12
+# latches a per-Dev-Type breaker and pauses every mission for that Dev Type, so
+# when the fault predicate has already explained a failure, only unambiguous
+# credential evidence may override it. Bare "authentication"/"unauthorized" are
+# excluded: OpenAI-compatible gateways emit them for ordinary rejections.
+DISTINCTIVE_AUTH_MARKERS = tuple(_re.compile(r"\b" + p + r"\b") for p in (
+    "not signed in", r"grok login",
+))
+
+
+def auth_evidence_is_distinctive(err_text: str, api_error_status=None) -> bool:
+    """True when the credential evidence is strong enough to justify exit 12
+    over a harness fault. A structured 401/403 beats any stderr wording."""
+    if api_error_status in (401, 403):
+        return True
+    lowered = (err_text or "").lower()
+    return any(rx.search(lowered) for rx in DISTINCTIVE_AUTH_MARKERS)
 
 
 def classify_harness_failure(err_text: str) -> int:
@@ -511,6 +531,426 @@ def codex_text_dump(out: str) -> str:
             if isinstance(text, str) and text.strip():
                 blocks.append(text.strip("\n"))
     return "\n\n".join(blocks)
+
+
+# ── harness fault detection (ADR-0018) ───────────────────────────────────────
+# Until ADR-0018 the ONLY failure signal here was the process exit status, and
+# `classify_harness_failure` read stderr — which these CLIs leave empty on
+# failure (measured: 349 bytes of unrelated warnings). Every in-band signal was
+# parsed for the token report and then discarded, so a shared backend fault (a
+# saturated inference server answering 200 with nothing) was laundered into
+# exit 11 "the Dev wrote bad output" on every container at once.
+
+FAULT_TURN_BUDGET = "turn_budget"            # deterministic — never a shared fault
+FAULT_TERMINAL_ERROR = "terminal_error"
+FAULT_EMPTY_COMPLETION = "empty_completion"
+FAULT_NO_TERMINAL_EVENT = "no_terminal_event"
+FAULT_DETAIL_MAX = 400
+
+# Bad-value allowlist, never a good-value denylist: the terminal_reason enum is
+# not fully known, so an unrecognized value must stay "not a fault".
+CLAUDE_FAULT_TERMINAL_REASONS = frozenset({"api_error"})
+# Empty by design: grok's stopReason enum is unverified, so it only ever
+# annotates the detail — it must never decide (a refusal must not be a fault).
+GROK_FAULT_STOP_REASONS = frozenset()
+
+
+def _one_line(text: str, limit: int = FAULT_DETAIL_MAX) -> str:
+    return " ".join(str(text).split())[:limit]
+
+
+def _fault(reason: str, summary: str, evidence: str = "") -> dict:
+    return {"reason": reason,
+            "detail": _one_line(f"{summary} {evidence}" if evidence else summary)}
+
+
+def _claude_activity(out: str) -> tuple:
+    """(non-blank assistant text blocks, tool_use blocks) across the stream.
+
+    THE substance signal, and it is deliberately structural rather than numeric.
+    Token counts cannot tell "the backend returned nothing" from "the agent
+    worked for fifteen turns": in the committed fixtures `usage.output_tokens`
+    is 0 for BOTH (app/tests/fixtures/harness_streams/README.md), and
+    `modelUsage` is non-zero even for an empty completion because the stop token
+    costs tokens. Block counts separate them cleanly — and they also classify a
+    whitespace-only completion correctly, which no token threshold can.
+
+    Subagent blocks (`parent_tool_use_id`) are counted here, unlike in
+    `claude_text_dump`: the question is "did anything happen at all", and
+    counting more can only make the predicate MORE conservative.
+    """
+    texts = tools = 0
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one unparseable line must never decide a run's fate
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+            continue
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                tools += 1
+            elif block.get("type") == "text" and str(block.get("text") or "").strip():
+                texts += 1
+    return texts, tools
+
+
+def _dict(value) -> dict:
+    """Defensive accessor for model-controlled nested shapes. `x or {}` rescues
+    null/[]/{} but NOT a truthy non-dict, and a `usage: "none"` would then
+    AttributeError out of the predicate — aborting fault detection for every
+    run, including ones that were about to be judged healthy."""
+    return value if isinstance(value, dict) else {}
+
+
+def _claude_evidence(ev: dict, out: str, activity=None) -> str:
+    usage = _dict(ev.get("usage"))
+    mu = _dict(ev.get("modelUsage"))
+    mu_out = sum(v.get("outputTokens") or 0 for v in mu.values() if isinstance(v, dict))
+    texts, tools = activity if activity is not None else _claude_activity(out)
+    return (f"(is_error={ev.get('is_error')} subtype={ev.get('subtype')!r} "
+            f"terminal_reason={ev.get('terminal_reason')!r} "
+            f"api_error_status={ev.get('api_error_status')} "
+            f"num_turns={ev.get('num_turns')} duration_ms={ev.get('duration_ms')} "
+            f"output_tokens={usage.get('output_tokens')} model_output_tokens={mu_out} "
+            f"text_blocks={texts} tool_calls={tools})")
+
+
+def claude_run_fault(out: str, harness_exit: int, *, dump: str = "",
+                     result_event=None):
+    """Claude Code: fault dict or None. Conservative by construction — a model
+    REFUSAL is an ordinary assistant turn and must never be called a fault."""
+    ev = result_event if result_event is not None else claude_result_event(out)
+    if ev is None:                      # EXTRA_ARGS may override back to a blob
+        try:
+            blob = json.loads(out)
+        except Exception:  # noqa: BLE001 — not JSON at all; that IS the no-terminal-event case
+            blob = None
+        # Must LOOK like a result blob. A stream truncated after a single
+        # assistant event also parses as a dict, and treating that as the
+        # terminal event would silently mask a truncated run.
+        if isinstance(blob, dict) and any(
+                k in blob for k in ("result", "subtype", "usage", "total_cost_usd")):
+            ev = blob
+    if ev is None:
+        return _fault(FAULT_NO_TERMINAL_EVENT,
+                      "claude stream ended without a result event",
+                      f"(harness_exit={harness_exit} stdout={len(out)}B/"
+                      f"{len(out.splitlines())}L)")
+
+    subtype = str(ev.get("subtype") or "")
+    terminal = str(ev.get("terminal_reason") or "")
+    activity = _claude_activity(out)          # parsed ONCE — `out` can be tens
+    evidence = _claude_evidence(ev, out, activity)   # of MB on the failure path
+
+    # 1 — turn budget FIRST: it is deterministic, so it must never fall through
+    # into terminal_error and become correlation-eligible. A fleet hitting the
+    # same cap is not a transient shared fault, and retrying cannot help.
+    if terminal == "max_turns" or subtype == "error_max_turns":
+        return _fault(FAULT_TURN_BUDGET,
+                      f"claude stopped at the configured turn cap after "
+                      f"{ev.get('num_turns', '?')} turns — raise --max-turns on this "
+                      f"Mission Type's assignment in Config -> Assignments, or assign "
+                      f"a stronger Dev Type", evidence)
+
+    # 2 — the CLI's own terminal verdict. `subtype` is only ever matched on the
+    # "error" PREFIX: `subtype:"success"` was measured ALONGSIDE `is_error:true`
+    # on a hard 400, so a positive match on "success" proves nothing.
+    # `api_error_status` is a VALUE test, not a presence test: the healthy
+    # incident capture carries the field as null, and a future CLI version could
+    # report a benign status. 401/403 still reach exit 12, not 15 —
+    # classify_nonzero_exit reads the status itself, not this verdict.
+    status = ev.get("api_error_status")
+    if (ev.get("is_error") or (isinstance(status, int) and status >= 400)
+            or subtype.startswith("error") or terminal in CLAUDE_FAULT_TERMINAL_REASONS):
+        return _fault(FAULT_TERMINAL_ERROR,
+                      f"claude reported a terminal error: "
+                      f"{str(ev.get('result') or terminal or subtype)[:120]}", evidence)
+
+    # 3 — the incident: a clean, well-formed "success" carrying nothing at all.
+    texts, tools = activity
+    if (not str(ev.get("result") or "").strip() and not (dump or "").strip()
+            and texts == 0 and tools == 0):
+        return _fault(FAULT_EMPTY_COMPLETION,
+                      "claude returned no assistant output at all (no text, no tool "
+                      "calls) and an empty final message", evidence)
+    return None
+
+
+def codex_run_fault(out: str, harness_exit: int, *, last_message: str = ""):
+    """Codex: fault dict or None. `last_message` MUST be the raw `-o` file
+    content — never `result_text`, which the caller overwrites with a stdout
+    tail on any parse failure."""
+    completed = error_msg = None
+    messages = items = 0
+    out_tokens = None
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — skip unparseable lines; terminal-event checks below still apply
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = str(ev.get("type") or "")
+        if kind == "turn.completed":
+            completed = ev
+            out_tokens = _dict(ev.get("usage")).get("output_tokens")
+        elif kind == "error":
+            error_msg = str(ev.get("message") or "")[:120]
+        elif kind.startswith("turn.") and kind not in ("turn.started", "turn.completed"):
+            # `turn.failed` is codex's documented failed-turn shape but is
+            # UNVERIFIED here (no capture yet) — treat any unrecognized terminal
+            # turn.* event as a failure rather than guessing its payload.
+            error_msg = error_msg or f"unrecognized terminal event {kind!r}"
+        elif kind == "item.completed":
+            item = _dict(ev.get("item"))
+            if (item.get("item_type") or item.get("type")) == "agent_message":
+                messages += 1
+            elif item:
+                # command_execution / file_change / patch_apply / mcp_tool_call:
+                # the codex analogue of claude's tool_use blocks. A run that did
+                # fifteen of these DID work, whatever its token counters say.
+                items += 1
+    tail = (f"(harness_exit={harness_exit} output_tokens={out_tokens} "
+            f"agent_messages={messages} tool_items={items})")
+    # `turn.completed` IS codex's success signal, so its presence settles the
+    # question regardless of where an `error` event sits in the stream: an
+    # error before it was superseded, and one after it is post-hoc noise
+    # ("failed to persist rollout file") that did not stop the agent working.
+    # Only a stream with NO completed turn is a failure — and then the error
+    # message, when there is one, is the more useful classification.
+    if completed is None:
+        if error_msg is not None:
+            return _fault(FAULT_TERMINAL_ERROR,
+                          f"codex reported an error and never completed a turn: "
+                          f"{error_msg}", tail)
+        return _fault(FAULT_NO_TERMINAL_EVENT,
+                      "codex stream ended without a turn.completed event", tail)
+    # Structural, like the claude arm — deliberately NOT a token threshold
+    # (fixtures README: output_tokens is 0 for both "did nothing" and "worked
+    # for fifteen turns").
+    if not messages and not items and not (last_message or "").strip():
+        return _fault(FAULT_EMPTY_COMPLETION,
+                      "codex completed a turn with no agent message, no tool "
+                      "activity and an empty last-message file", tail)
+    return None
+
+
+def grok_run_fault(out: str, harness_exit: int, *, dump: str = ""):
+    """Grok: fault dict or None. `stopReason` only ever annotates — its enum is
+    unverified, and calling a refusal a fault is the one mistake that must not
+    happen.
+
+    grok's streaming-json carries no tool-call events (docs/08 §1, verified
+    0.2.93), so there is no direct analogue of claude's `tool_use` count. The
+    two available activity signals are `thought` deltas and the `grok export`
+    session transcript that main() passes in as `dump` — a run that thought, or
+    that produced a transcript, DID something even if it emitted no text.
+    """
+    stop, thoughts = "", 0
+    parsed = grok_stream_parse(out)
+    if parsed is None:
+        try:
+            blob = json.loads(out)
+        except Exception:  # noqa: BLE001 — neither grok stream events nor a blob: no terminal event
+            blob = None
+        if not isinstance(blob, dict):
+            return _fault(FAULT_NO_TERMINAL_EVENT,
+                          "grok stream ended without an end event",
+                          f"(harness_exit={harness_exit} stdout={len(out)}B)")
+        text, stop = str(blob.get("text") or ""), str(blob.get("stopReason") or "")
+    else:
+        text, _sid = parsed
+        for line in out.splitlines():
+            try:
+                ev = json.loads(line)
+            except Exception:  # noqa: BLE001 — annotation only; a bad line cannot change the verdict
+                continue
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") == "end":
+                stop = str(ev.get("stopReason") or "")
+            elif ev.get("type") == "thought":
+                thoughts += 1
+    tail = (f"(harness_exit={harness_exit} stopReason={stop!r} stdout={len(out)}B "
+            f"thoughts={thoughts} transcript={len(dump or '')}B)")
+    if stop and stop in GROK_FAULT_STOP_REASONS:      # empty set today, by design
+        return _fault(FAULT_TERMINAL_ERROR, f"grok stopped with {stop!r}", tail)
+    if not text.strip() and not thoughts and not (dump or "").strip():
+        return _fault(FAULT_EMPTY_COMPLETION,
+                      "grok produced nothing at all — no text deltas, no thoughts "
+                      "and no session transcript", tail)
+    return None
+
+
+def harness_fault(harness: str, out: str, harness_exit: int, *, dump: str = "",
+                  last_message: str = ""):
+    """Did the harness actually work? Fault dict or None. An unknown harness
+    name falls through to the claude predicate, mirroring main()'s renderer
+    dispatch."""
+    if harness == "codex":
+        return codex_run_fault(out, harness_exit, last_message=last_message)
+    if harness == "grok-build":
+        # `dump` is the `grok export` transcript for this harness — forwarding
+        # it is what keeps a silent-but-productive run from reading as empty.
+        return grok_run_fault(out, harness_exit, dump=dump)
+    return claude_run_fault(out, harness_exit, dump=dump)
+
+
+def classify_nonzero_exit(err_text: str, fault, api_error_status=None) -> tuple:
+    """(exit code, error_class) for a nonzero harness exit — ADR-0018 §3.
+
+    Pure so the COMPOSED rule is testable; main() only renders the transcript.
+    Order: turn_budget → distinctive auth → predicate → generic auth → crash.
+
+    Both auth arms matter. DISTINCTIVE evidence (a structured 401/403, or the
+    `not signed in` / `grok login` wording) outranks the predicate: a revoked
+    credential answers 401 with an EMPTY stderr and a result event that also
+    trips `terminal_error`, so gating 12 on stderr alone routed it to 15 and
+    never told the operator to refresh the key. A GENERIC marker (bare
+    "authentication"/"unauthorized", which OpenAI-compatible gateways emit on
+    ordinary rejections) only wins when the predicate found nothing — otherwise
+    a backend fault would latch the per-Dev-Type breaker.
+    """
+    if fault and fault["reason"] == FAULT_TURN_BUDGET:
+        return 16, "DEV_TURN_BUDGET"
+    if auth_evidence_is_distinctive(err_text, api_error_status):
+        return 12, "DEV_AUTH"
+    if fault:
+        return 15, "DEV_HARNESS_FAULT"
+    if classify_harness_failure(err_text) == 12:
+        return 12, "DEV_AUTH"
+    return 10, "DEV_CRASH"
+
+
+# ── failure evidence and result recovery (ADR-0018) ──────────────────────────
+
+FORENSIC_MAX_ENTRIES = 20
+FORENSIC_STDERR_TAIL = 500
+# An entry-count cap alone does not bound the payload: json.dumps escapes each
+# non-ASCII character to \uXXXX, so 20 accented 100-char names serialize to ~12 KB.
+# Budget the total instead.
+FORENSIC_LISTING_BUDGET = 800
+
+
+def workspace_forensics(out_dir, harness_exit, out_bytes=0, out_lines_n=0,
+                        stderr_tail="") -> dict:
+    """Cheap, bounded post-mortem shipped on EVERY failure artifact: three
+    syscalls, no recursion, under ~1 KB. Answers what a human previously could
+    not answer from the mission feed alone — did the harness die on a signal,
+    was anything written, was the directory writable, was the disk full, and
+    was the channel we classify on (stderr) empty."""
+    info = {"harness_exit": harness_exit,
+            "stdout_bytes": out_bytes, "stdout_lines": out_lines_n,
+            "stderr_bytes": len(stderr_tail or "")}
+    listing, err = [], None
+    try:
+        with os.scandir(out_dir) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        spent = 0
+        for i, entry in enumerate(entries):
+            if i >= FORENSIC_MAX_ENTRIES or spent >= FORENSIC_LISTING_BUDGET:
+                listing.append(f"+{len(entries) - i} more")
+                break
+            try:
+                row = f"{entry.name[:100]}:{entry.stat().st_size}"
+            except OSError as e:
+                row = f"{entry.name[:100]}:?({e.errno})"
+            listing.append(row)
+            spent += len(json.dumps(row))      # escaped length, not raw length
+    except OSError as e:
+        err = f"{getattr(e, 'errno', '?')}: {e.strerror or e}"
+    info["out_listing"] = listing
+    info["out_error"] = err
+    info["out_writable"] = bool(os.access(str(out_dir), os.W_OK))
+    try:
+        info["workspace_free_mb"] = shutil.disk_usage(str(WORKSPACE)).free // (1024 * 1024)
+    except OSError:
+        info["workspace_free_mb"] = None
+    if stderr_tail:
+        info["stderr_tail"] = _one_line(stderr_tail, FORENSIC_STDERR_TAIL)
+    return info
+
+
+def bad_output_reason(exc: BaseException) -> str:
+    """Split the single blanket `except` on the result.json read into causes a
+    human can act on. FileNotFoundError is tested before OSError (it is a
+    subclass), JSONDecodeError before the generic fallback."""
+    if isinstance(exc, FileNotFoundError):
+        return "missing"
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid_json"
+    if isinstance(exc, AssertionError):
+        return "illegal_outcome" if "outcome" in str(exc) else "bad_summary"
+    if isinstance(exc, OSError):
+        return "unreadable"
+    return "invalid"
+
+
+def _git_tracked(workdir, path, runner=None) -> bool:
+    """True when `path` is tracked by the repo clone's git index. EXECUTE tells
+    the Dev to commit at the end, so a stray result.json in the work tree may
+    already have been swept into the PR — a different question from "was it
+    written during this run", which the mtime gate answers."""
+    runner = runner or subprocess.run
+    try:
+        rel = pathlib.Path(path).relative_to(workdir)
+    except ValueError:
+        return False
+    try:
+        r = runner(["git", "-C", str(workdir), "ls-files", "--error-unmatch", str(rel)],
+                   capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001 — advisory annotation; a missing git must never fail a run
+        return False
+    return r.returncode == 0
+
+
+def find_result_json(workspace, workdir, started_at: float, runner=None):
+    """(path, note) — the canonical path first, then a FIXED candidate list.
+
+    Deliberately no traversal: there is no depth parameter to get wrong and no
+    way to enumerate the repo tree. A non-canonical hit is reported only when
+    its mtime is at or after harness start, so a result.json that was already
+    in the clone (a fixture, a project's own artifact) can never be adopted."""
+    workspace, workdir = pathlib.Path(workspace), pathlib.Path(workdir)
+    canonical = workspace / "out" / "result.json"
+    try:
+        # NOT `canonical.exists()`: on Python 3.12 (the pinned image base) that
+        # swallows only ENOENT/ENOTDIR/EBADF/ELOOP and lets EACCES propagate —
+        # an unreadable out/ would raise straight out of the recovery helper
+        # that exists to enrich the failure path.
+        if canonical.is_file():
+            return canonical, ""
+    except OSError:
+        return canonical, ""            # unreadable: let the caller's read report it
+    for cand in (workspace / "result.json", workspace / "repo" / "result.json",
+                 workdir / "result.json", workdir / "out" / "result.json"):
+        try:
+            if cand.is_symlink():
+                # `stat()` follows links, so both the freshness gate and the
+                # content would come from the TARGET — a symlink is a way out of
+                # the fixed candidate list and out of the workspace entirely.
+                continue
+            st = cand.stat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue                    # a directory named result.json is not one
+        if st.st_mtime < started_at:
+            continue                    # predates the harness — not this run's
+        ts = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
+        note = (f"[devcake] result.json is not at /workspace/out/result.json — found "
+                f"one at {cand} (mtime {ts}). The playbook requires the canonical "
+                f"path; fix the prompt.")
+        if _git_tracked(workdir, cand, runner=runner):
+            note += (" This file is ALSO tracked by git — check the PR for a stray "
+                     "result.json.")
+        return cand, note
+    return None, ""
 
 
 def _safe_activity_relpath(path: str):
@@ -848,6 +1288,9 @@ def main() -> None:
         span.set_attribute("devcake.dev_type", env.get("DEVCAKE_DEV_TYPE", ""))
         span.set_attribute("devcake.harness", harness)
         with tracer.start_as_current_span("harness.exec"):
+            # the freshness gate for misplaced-result recovery: anything older
+            # than this was in the clone before the harness ran (ADR-0018)
+            harness_started_at = time.time()
             proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, bufsize=1)
             relay.add(f"[devcake] {harness} started; waiting for model output",
@@ -870,14 +1313,24 @@ def main() -> None:
         span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
     provider.force_flush()
     out, err_text = "".join(out_lines), "".join(err_lines)
+    out_bytes, out_lines_n = len(out), len(out_lines)
+    # The list holds the same bytes as `out` PLUS per-line object overhead and a
+    # pointer array — the larger of the two live copies, and this is the moment
+    # the artifact path starts allocating. The pumps were joined above.
+    out_lines.clear()
+    err_lines.clear()
 
     # ── token extraction + result text (docs/08 §5) ──────────────────────────
     token_report = {"extraction_method": "unavailable", "model": harness}
     result_text, transcript_body = "", ""
+    codex_last = ""      # RAW `-o` content: result_text is overwritten with a
+    #                      stdout tail on any parse failure, so the fault
+    #                      predicate must not read it (fixtures README)
     if harness == "codex":
         try:
             last = WORKSPACE / "out" / "last_message.txt"
-            result_text = last.read_text() if last.exists() else ""
+            codex_last = last.read_text() if last.exists() else ""
+            result_text = codex_last
             for line in out.splitlines():           # JSONL events (verified 0.144.1)
                 try:
                     ev = json.loads(line)
@@ -961,28 +1414,75 @@ def main() -> None:
     except Exception:
         dump = ""
 
-    if harness_exit != 0:
-        err = err_text[-1500:]
-        code = classify_harness_failure(err)
-        send_artifacts({"result": None, "exit_code": code,
-                        "transcript_md": with_session(
-                            f"harness exited {harness_exit}\n\n```\n{err}\n```", dump),
-                        "token_report": token_report})
+    # ── harness verdict (ADR-0018) ───────────────────────────────────────────
+    # Did the harness actually work? The process exit status alone cannot say:
+    # a saturated backend answering 200-with-nothing exits 0, and stderr — the
+    # channel classify_harness_failure reads — is empty on every failure we
+    # measured. Compute this BEFORE `out` is released.
+    fault = harness_fault(harness, out, harness_exit, dump=dump,
+                          last_message=codex_last)
+    api_status = None
+    if harness not in ("codex", "grok-build"):
+        _ev = claude_result_event(out)
+        api_status = _dict(_ev).get("api_error_status") if _ev else None
+    forensics = workspace_forensics(WORKSPACE / "out", harness_exit, out_bytes,
+                                    out_lines_n, err_text[-FORENSIC_STDERR_TAIL:])
+    # `out` is not read again below; releasing the joined copy here keeps the
+    # peak off the artifact path, where the payload is serialized repeatedly.
+    out = ""
+
+    def fail(code: int, error_class: str, detail: str, transcript: str,
+             **extra) -> None:
+        payload = {"result": None, "exit_code": code, "error_class": error_class,
+                   "error_detail": _one_line(detail, 500), "evidence": forensics,
+                   "transcript_md": with_session(
+                       f"{transcript}\n\n```json\n"
+                       f"{json.dumps(forensics, indent=2)}\n```", dump),
+                   "token_report": token_report}
+        payload.update(extra)
+        send_artifacts(payload)
         stop.set()
         sys.exit(code)
+
+    if harness_exit != 0:
+        err = err_text[-1500:]
+        # the whole rule lives in the pure helper (docs/15 §4 asymmetry: a false
+        # 12 pauses an entire Dev Type) — this only renders it
+        code, error_class = classify_nonzero_exit(err, fault, api_status)
+        if code == 16:
+            fail(16, error_class, fault["detail"],
+                 f"harness exited {harness_exit} — turn budget exhausted\n\n"
+                 f"{fault['detail']}\n\n```\n{err}\n```")
+        if code == 12:
+            # a revoked credential leaves stderr EMPTY, so the in-band status is
+            # the only detail there is to name
+            fail(12, error_class, err or f"api_error_status={api_status}",
+                 f"harness exited {harness_exit}\n\n```\n{err}\n```")
+        if code == 15:
+            fail(15, error_class, fault["detail"],
+                 f"harness exited {harness_exit} — {fault['reason']}\n\n"
+                 f"{fault['detail']}\n\n```\n{err}\n```")
+        fail(10, error_class, err or f"harness exited {harness_exit}",
+             f"harness exited {harness_exit}\n\n```\n{err}\n```")
 
     # ── result.json (docs/03 §6) ─────────────────────────────────────────────
     # Plan mode is read-only — the harness cannot write files, so the entrypoint
     # materializes PLAN.md and result.json from the returned plan text (docs/08 §3)
     if plan_mode:
+        # The fault check runs BEFORE materialization: plan mode's result.json
+        # is synthesized from `result_text`, so a backend that returned junk
+        # would otherwise be laundered into a "planned" outcome.
+        if fault:
+            code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
+            cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
+            fail(code, cls, fault["detail"],
+                 f"plan mode: {fault['reason']}\n\n{fault['detail']}")
         if len((result_text or "").strip()) < 200:  # a real plan is never this short
-            send_artifacts({"result": None, "exit_code": 11,
-                            "transcript_md": with_session(
-                                f"plan mode returned no usable plan "
-                                f"({len(result_text or '')} chars):\n\n{result_text}", dump),
-                            "token_report": token_report})
-            stop.set()
-            sys.exit(11)  # DEV_BAD_OUTPUT — fail the attempt, never advance an empty plan
+            fail(11, "DEV_BAD_OUTPUT",
+                 f"plan mode returned {len(result_text or '')} chars",
+                 f"plan mode returned no usable plan "
+                 f"({len(result_text or '')} chars):\n\n{result_text}",
+                 bad_output_reason="empty_plan")
         (WORKSPACE / "out" / "PLAN.md").write_text(result_text)
         (WORKSPACE / "out" / "result.json").write_text(json.dumps({
             "schema_version": 1, "outcome": "planned",
@@ -999,18 +1499,59 @@ def main() -> None:
     }
     legal = legal_outcomes.get(env.get("DEVCAKE_MISSION_TYPE", ""),
                                set().union(*legal_outcomes.values()))
+    def load_result(path):
+        loaded = json.loads(pathlib.Path(path).read_text())
+        assert loaded.get("outcome") in legal, \
+            f"outcome {loaded.get('outcome')!r} illegal for {env.get('DEVCAKE_MISSION_TYPE')}"
+        assert isinstance(loaded.get("summary"), str)
+        return loaded
+
+    recovered_path, recovery_note = None, ""
     try:
-        result = json.loads(result_path.read_text())
-        assert result.get("outcome") in legal, \
-            f"outcome {result.get('outcome')!r} illegal for {env.get('DEVCAKE_MISSION_TYPE')}"
-        assert isinstance(result.get("summary"), str)
+        result = load_result(result_path)          # row 5 — canonical wins
     except Exception as e:
-        send_artifacts({"result": None, "exit_code": 11,
-                        "transcript_md": with_session(
-                            f"result.json missing/invalid: {e}\n\n---\n\n{result_text}", dump),
-                        "token_report": token_report})
-        stop.set()
-        sys.exit(11)
+        reason = bad_output_reason(e)
+        # Diagnosis is UNCONDITIONAL: whether or not recovery is enabled, a
+        # misplaced result.json is named in the artifact, the transcript and the
+        # live run terminal, so the prompt can be fixed.
+        stray, note = find_result_json(WORKSPACE, workdir, harness_started_at)
+        if note:
+            print(note, file=sys.stderr)
+            try:
+                send("run.log", {"lines": [note]})
+            except Exception:  # noqa: BLE001 — advisory relay line; never fail a run over it
+                pass
+            reason = "misplaced"
+        # rows 6/7 — the harness's own verdict beats any recovered file, so a
+        # backend fault plus a stray can never manufacture a PMO transition
+        if fault:
+            code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
+            cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
+            fail(code, cls, f"{fault['detail']} | {note}" if note else fault["detail"],
+                 f"{fault['reason']}: no usable result.json ({e})\n\n"
+                 f"{note}\n\n{fault['detail']}" if note
+                 else f"{fault['reason']}: no usable result.json ({e})\n\n"
+                      f"{fault['detail']}")
+        # row 8 — recovery, opt-out via config (default on). `stray` can be the
+        # canonical path itself when that file exists but is unreadable/invalid;
+        # re-reading it would only reproduce the same error.
+        if (stray is not None and stray != result_path
+                and env.get("DEVCAKE_RECOVER_MISPLACED_RESULT")):
+            try:
+                result = load_result(stray)
+                recovered_path, recovery_note = str(stray), note
+                print(f"[devcake] recovered result.json from {stray}", file=sys.stderr)
+            except Exception as e2:                # the stray is no better
+                fail(11, "DEV_BAD_OUTPUT", f"{note} | recovered file invalid: {e2}",
+                     f"result.json missing/invalid: {e}\n\n{note}\n\n"
+                     f"recovered file also invalid: {e2}\n\n---\n\n{result_text}",
+                     bad_output_reason=bad_output_reason(e2))
+        else:                                      # row 9
+            fail(11, "DEV_BAD_OUTPUT", f"{e}{' | ' + note if note else ''}",
+                 f"result.json missing/invalid: {e}"
+                 + (f"\n\n{note}" if note else "")
+                 + f"\n\n---\n\n{result_text}",
+                 bad_output_reason=reason)
 
     plan_path = WORKSPACE / "out" / "PLAN.md"
     transcript = assemble_transcript(
@@ -1022,6 +1563,13 @@ def main() -> None:
     # comment; the app treats a missing/empty key as "post the pointer only"
     payload = {"result": result, "transcript_md": transcript,
                "last_message_md": result_text, "token_report": token_report}
+    if recovered_path:
+        # The run succeeds, so there is no failure artifact to carry the
+        # evidence — the transcript is the only durable surface, and it is
+        # always posted (INV-5). A live relay line alone would vanish.
+        payload["recovered_result_path"] = recovered_path
+        payload["transcript_md"] = (
+            f"> {recovery_note}\n\n" + payload["transcript_md"])
     if plan_path.exists():
         payload["plan_md"] = plan_path.read_text()
     send_artifacts(payload)

@@ -139,6 +139,29 @@ def test_max_decomposition_depth_defaults_and_bounds():
     assert AppConfig.model_validate(merged).max_decomposition_depth == 1
 
 
+def test_recover_misplaced_result_defaults_on_and_round_trips():
+    """ADR-0018: misplaced-result recovery is operator policy (Limits) —
+    default ON, and the field is additive: a config file written before it
+    existed still validates at schema v4 with no migration."""
+    base = _base()
+    assert "recover_misplaced_result" in base          # dumped for the SPA draft
+    assert AppConfig().recover_misplaced_result is True
+    assert AppConfig.model_validate(base).recover_misplaced_result is True
+    del base["recover_misplaced_result"]              # pre-ADR-0018 config JSON
+    loaded = AppConfig.model_validate(base)
+    assert loaded.recover_misplaced_result is True
+    assert loaded.schema_version == 4                 # additive, not a migration
+    off = AppConfig.model_validate({**base, "recover_misplaced_result": False})
+    assert off.recover_misplaced_result is False
+    round_tripped = AppConfig.model_validate(off.model_dump())
+    assert round_tripped.recover_misplaced_result is False
+    assert round_tripped.schema_version == 4
+    # a patch touching an unrelated field must not reset the setting
+    from devcake.config import deep_merge
+    merged = deep_merge(off.model_dump(), {"auto_merge": True})
+    assert AppConfig.model_validate(merged).recover_misplaced_result is False
+
+
 def test_repo_url_shape_validated():
     """ISSUES #10: malformed forge URLs rejected at schema layer."""
     base = _base()

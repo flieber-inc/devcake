@@ -54,7 +54,9 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
         inject(carrier)
         traceparent = carrier.get("traceparent", "")
 
-        spec_env = dispatch._protocol_spec_env(mgr, 
+        spec_env = dispatch._protocol_spec_env(
+            mgr,
+            recover_misplaced_result=mgr.config.recover_misplaced_result,
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
             dev_type=dev_type, seq=seq, extra_args="",
             repo=repo, forge=forge)

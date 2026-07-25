@@ -72,6 +72,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team`); unconfigured instances show grey (`ok: null`) |
 | `forge` | per-repo `ForgeHealth` map (`ok`, `can_push`, `can_read`, `transient`, `detail`, …) |
 | `circuit_breakers` | per-Dev-Type auth breakers + **per-repo** `repo:{name}` forge breakers (`15-errors-and-retries.md` §4) |
+| `dev_backend_degraded` | dev_type → reason: model-backend degradation (ADR-0018). NOT a breaker — the Dev Type is throttled to one probe run and clears itself on success, so it is deliberately kept out of `circuit_breakers` (`15-errors-and-retries.md` §4a) |
 | `intake_paused` | the master switch state |
 | `last_poll_at` | ISO-8601 UTC of the last poll cycle that finished (periodic OR manual); `null` before the first cycle. Powers the Missions board's "Last polled Ns ago · next in ~Ns" honesty line |
 | `poll_interval_seconds` | current `config.poll_interval_seconds`, echoed here so the SPA doesn't need a separate `/config` read to compute the cadence line |

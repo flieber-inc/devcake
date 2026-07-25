@@ -101,7 +101,11 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 | 12 | Credential/auth failure (harness) | `DEV_AUTH` |
 | 13 | Clone or forge operation failed | `DEV_FORGE` / `DEV_FORGE_AUTH` (classified from git stderr — `15-errors-and-retries.md` §4) |
 | 14 | MCP setup command failed or timed out (300 s per command) | `DEV_MCP_SETUP` (counted) |
+| 15 | Harness reported a failure in-band, or produced no output at all, despite the process exit status | `DEV_HARNESS_FAULT` — counted unless the failure is *correlated* across ≥2 missions (`15-errors-and-retries.md` §4a) |
+| 16 | Harness stopped at its configured turn cap (`--max-turns`) | `DEV_TURN_BUDGET` (always counted; deterministic, so never correlated) |
 | 20 | Entrypoint internal error | `DEV_CRASH` |
+
+**The exit status alone is not the failure signal (ADR-0018).** Every harness CLI can terminate with status 0 while reporting failure in-band — a backend answering HTTP 200 with an empty completion is the measured case — and their stderr carries no failure information at all, so the entrypoint inspects the harness's own terminal event before deciding. Exits 10, 11, 15 and 16 all carry `error_class`, `error_detail` and a bounded workspace-forensics block.
 
 App-side timeout is **not** an entrypoint exit code: the watchdog kills the run via Dagu stop (SIGTERM → SIGKILL), and the Run is marked `timed_out` (`DEV_TIMEOUT`). The container may exit on SIGTERM; it does **not** emit exit 124 from the entrypoint.
 

@@ -44,6 +44,9 @@ const EXACT = {
   "cfg.concurrency.global_max": { group: "Limits", label: "Global max Devs" },
   "cfg.dev_timeout_minutes": { group: "Limits", label: "Dev run timeout (min)" },
   "cfg.review_loop_warning_every": { group: "Limits", label: "Loop warning every N rejections" },
+  "cfg.recover_misplaced_result": {
+    group: "Limits", label: "Accept misplaced result files", format: onOff,
+  },
 };
 
 const DEV_TYPE_FIELDS = {

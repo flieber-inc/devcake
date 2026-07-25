@@ -90,7 +90,11 @@ SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 job is to sync `{branch}` with the default branch and resolve conflicts.
 
 ### Binding rules (violations fail the run)
-1. Work ONLY inside /workspace/repo/{repo_name}/.
+1. Make ALL changes inside /workspace/repo/{repo_name}/ and nowhere else —
+   never modify another repository. This rule is about the files you change; it
+   does NOT restrict where your outputs go. /workspace/out/ is outside every
+   repository and is the required destination for result.json (rule 7).
+   Never write result.json into the repository.
 2. Branch: `{branch}`. If it exists on the remote, check it out and continue
    (`git fetch origin {branch} && git checkout {branch}`); otherwise create it
    from the default branch. NEVER force-push.

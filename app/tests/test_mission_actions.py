@@ -85,10 +85,13 @@ class FakeStore:
 
 class FakeRunManager:
     def __init__(self):
-        self.kills: list[tuple[Any, str, str]] = []
+        self.kills: list[tuple[Any, str, str, str | None]] = []
 
-    async def kill(self, run, new_state, reason):
-        self.kills.append((run, new_state, reason))
+    async def kill(self, run, new_state, reason, *, error_class=None):
+        # error_class is RECORDED, not discarded (ADR-0018): these endpoints are
+        # the only callers that override `_kill_inner`'s state-keyed default, so
+        # a fake swallowing it makes that wiring untestable
+        self.kills.append((run, new_state, reason, error_class))
 
 
 # ── fixture-y helpers ────────────────────────────────────────────────────────
@@ -293,10 +296,13 @@ def test_stop_run_live_calls_kill_with_failed_and_operator_reason(state):
     rm = FakeRunManager()
     result = run(ma.stop_run("r-1", run_manager=rm, run_store=store))
     assert rm.kills, "RunManager.kill was not called"
-    killed_run, new_state, reason = rm.kills[0]
+    killed_run, new_state, reason, error_class = rm.kills[0]
     assert killed_run is rec
     assert new_state == "failed"
     assert "operator" in reason.lower()  # honest audit trail per plan
+    # ADR-0018: an operator stop is NOT DEV_KILLED — the state-keyed default is
+    # overridden here so the run reads as deliberate in the taxonomy
+    assert error_class == "DEV_OPERATOR_STOP"
     assert result["state"] == "failed"
 
 
@@ -398,6 +404,7 @@ def test_stop_all_kills_live_and_skips_finalizing():
                                run_store=_ActiveStore([live1, fin, live2])))
     assert [k[0].run_id for k in rm.kills] == ["r-1", "r-2"]
     assert all(k[1] == "failed" and "operator" in k[2] for k in rm.kills)
+    assert all(k[3] == "DEV_OPERATOR_STOP" for k in rm.kills)   # ADR-0018
     assert out == {"ok": True, "stopped": ["r-1", "r-2"],
                    "skipped_finalizing": ["r-3"], "errors": []}
 
@@ -426,10 +433,10 @@ def test_stop_all_isolates_a_failing_kill():
     """Audit D5 #9: one kill raising (e.g. store.save OSError on a full/RO
     /data) must not abort the batch or lose accounting."""
     class _FlakyRM(FakeRunManager):
-        async def kill(self, run, new_state, reason):
+        async def kill(self, run, new_state, reason, *, error_class=None):
             if run.run_id == "r-2":
                 raise OSError("read-only file system")
-            await super().kill(run, new_state, reason)
+            await super().kill(run, new_state, reason, error_class=error_class)
 
     a = SimpleNamespace(run_id="r-1", state="running")
     b = SimpleNamespace(run_id="r-2", state="running")

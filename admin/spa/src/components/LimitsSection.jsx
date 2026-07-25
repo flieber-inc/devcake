@@ -2,6 +2,7 @@ import React from "react";
 import { Section } from "./Card.jsx";
 import { Input } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
+import Toggle from "./Toggle.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 export default function LimitsSection() {
@@ -33,6 +34,16 @@ export default function LimitsSection() {
             <Input type="number" className="w-24" min={1} value={cfg.review_loop_warning_every}
               aria-label="Review-loop warning every N rejections"
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Accept misplaced result files"
+            desc={cfg.recover_misplaced_result
+              ? "ON — a result file written elsewhere in the workspace still counts."
+              : "OFF — only /workspace/out/result.json counts."}
+            help="Devs are told to write /workspace/out/result.json. With this on, DevCake also accepts a result file a Dev wrote somewhere else in its workspace — but only if the file was created during that run and passes the same validation. Either way, the misplacement is always recorded in the run terminal and the mission feed, so you can fix the prompt.">
+            <Toggle on={!!cfg.recover_misplaced_result}
+              label="Accept misplaced result files"
+              onClick={() => setField("cfg.recover_misplaced_result",
+                !cfg.recover_misplaced_result)} />
           </SettingRow>
           <SettingRow label="Service auto-restart"
             desc="Long-lived services restart unless stopped (compose-managed)."

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from .. import backend_health
 from ..model import (LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, Mission,
                      MissionRef, MissionType, PRIORITY_RANK, derive,
                      find_cycles)
@@ -102,7 +103,13 @@ async def schedule(mgr, missions: list[Mission],
         dev_type = mgr.dev_types.get(mgr.config.assignments[d.mission_type.value].dev_type)
         if dev_type is None or dev_type.name in mgr.breakers:
             continue  # unassigned or auth breaker tripped (docs/15 §4)
-        if sum(1 for r in active if r.dev_type == dev_type.name) >= dev_type.max_concurrency:
+        # ADR-0018: a dev type whose model backend looks sick is throttled to a
+        # single probe run rather than blocked. The probe IS the half-open — it
+        # is what lets the store-derived condition clear itself, so this must
+        # never become a hard skip.
+        cap = (backend_health.DEGRADED_CONCURRENCY
+               if dev_type.name in mgr.backend_degraded else dev_type.max_concurrency)
+        if sum(1 for r in active if r.dev_type == dev_type.name) >= cap:
             continue
         if len(active) >= mgr.config.concurrency.global_max:
             break

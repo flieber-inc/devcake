@@ -42,6 +42,7 @@ observability gap.
 | `ingress.poison` | root | app | reliability event: a message group dead-lettered after 5 deliveries (ERROR) |
 | `audit.event` | current span (or root) | app | mirrors every audit-log write: `devcake.audit.action` (e.g. `devcake_needs_human`), `devcake.pmo.id` — the needs-human alert queries this (`15-errors-and-retries.md` §6) |
 | `breaker.trip` | current span (or root) | app | ERROR status; `devcake.breaker` (dev type or `forge`), `devcake.reason` — breakers are otherwise in-memory only |
+| `dev.backend_degraded` | poll cycle | app | ERROR status; `devcake.dev_type`, `devcake.reason` — emitted ONLY on transition into degradation (ADR-0018). Deliberately not `breaker.trip`: that alert means "a human must fix a credential", and this self-heals |
 | `forge.probe_transient` | current span (or root) | app | a transient forge-probe failure that did NOT touch the breaker; the >15 min transient alert counts these |
 | `oauth.start` / `oauth.result` | API request span | app | `devcake.run.id`, `devcake.dev_type` |
 | `system.clear_runs` | API request span | app | deletion counts |

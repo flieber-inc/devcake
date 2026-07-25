@@ -57,6 +57,11 @@ class FinalizerRouter:
             await self._messaging.delete_reply_stream(run.run_id)
         run.state = "failed"
         run.error = self._orphan_error(run)
+        # ADR-0018: this path does NOT funnel through RunManager._kill_inner, so
+        # it stamps its own class. The state is "failed" but the condition is a
+        # genuine orphan (the run's PMO instance is gone from config) — the
+        # state/class mismatch is pre-existing and deliberate.
+        run.error_class = "DEV_ORPHANED"
         run.ended_at = utcnow()
         self._store.save(run)
 

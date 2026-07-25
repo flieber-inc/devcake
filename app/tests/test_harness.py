@@ -464,6 +464,35 @@ def test_protocol_spec_env_points_devs_at_collector(monkeypatch):
     assert not any("openobserve" in v for v in env.values())
 
 
+def test_recover_misplaced_result_env_is_flag_not_str_bool():
+    """ADR-0018: the entrypoint reads DEVCAKE_RECOVER_MISPLACED_RESULT with
+    bare truthiness (`env.get(...)`), so the wire encoding must be "1"/""
+    exactly — str(bool) would make the default-ON flag impossible to switch
+    off, because "False" is truthy."""
+    from fakes import make_mission_manager
+    from devcake.adapters.registry import make_forge
+    from devcake.config import RepoInstance
+    mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
+    repo = RepoInstance(url="https://github.com/o/r")
+    dt = DevType(name="main-dev", harness_template="grok-build")
+
+    def flag(**over):
+        return dispatch._protocol_spec_env(
+            mgr, mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
+            dev_type=dt, seq=1, extra_args="", repo=repo,
+            forge=make_forge(repo), **over)["DEVCAKE_RECOVER_MISPLACED_RESULT"]
+
+    on, off = flag(recover_misplaced_result=True), flag(recover_misplaced_result=False)
+    assert on == "1"
+    assert off == ""
+    assert flag() == "1"                  # kwarg default matches the config default
+    for value in (on, off):
+        assert isinstance(value, str)     # spec env is str→str on every path
+        assert value not in ("True", "False", "true", "false", "0")
+    # exactly what the entrypoint does with it — OFF must read as falsey
+    assert bool(on) is True and bool(off) is False
+
+
 def test_harness_default_model_flows_into_spec_env(tmp_path):
     """UX item 2 (2026-07-15): grok-build runs grok-4.5 unless the Dev Type
     pins its own model; an explicit Dev Type model still wins."""

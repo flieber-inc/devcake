@@ -342,6 +342,12 @@ class AppConfig(BaseModel):
     poll_interval_seconds: int = Field(30, ge=1, le=3600)
     dev_timeout_minutes: int = Field(120, ge=1, le=24 * 60)
     max_attempts: int = Field(3, ge=1, le=50)
+    # ADR-0018 — Devs are told to write /workspace/out/result.json. With this on,
+    # a result file the Dev wrote elsewhere in its workspace is still accepted,
+    # but only when it was created during that run and passes the same
+    # validation. The misplacement is recorded either way, so turning this off
+    # costs diagnosis nothing — it only stops DevCake acting on the stray.
+    recover_misplaced_result: bool = True
     # ge=1: used as a modulo cadence; 0 would ZeroDivisionError (ISSUES #8/#9)
     review_loop_warning_every: int = Field(3, ge=1)
     auto_merge: bool = False

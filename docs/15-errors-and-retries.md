@@ -19,7 +19,7 @@
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap | counted attempt; deterministic, so never correlated and never excused |
-| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt |
+| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — a **fleet-wide** exit-11 cascade is usually a model that stopped tool-calling against a shared backend (`08-harness-templates.md` §8, measured 2026-07-25), and §4a's brake keys on exit 15, so it does not cover this |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
 | `EXTERNAL_TRANSITION` | human changed status/label mid-run (`04-orchestrator.md` §4) | **not an error** — first-class outcome |
@@ -117,6 +117,13 @@ actively wrong here. The SPA alert is a **warning**, not critical, and says
 explicitly that no credential change is needed. Span: `dev.backend_degraded`, on
 transition into degradation only (never `breaker.trip`, which alerts mean "a
 human must fix a credential").
+
+**What it does not cover (known gap).** Both predicates key on
+`error_class == "DEV_HARNESS_FAULT"`, so a shared-backend failure that surfaces as
+some *other* class is unbraked. The measured case is a model that answers in prose
+instead of tool-calling: every Dev exits 0 without writing `result.json`, so the
+fleet cascades as `DEV_BAD_OUTPUT` (exit 11) — counted, unexcused, unthrottled
+(`08-harness-templates.md` §8).
 
 **Who this protects.** Strongest for multi-mission fleets. A deployment running
 one mission per Dev Type can never satisfy the ≥2-mission rule, so it gets

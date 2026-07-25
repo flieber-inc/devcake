@@ -3,7 +3,7 @@
 > **Audience:** implementers. This document centralizes the runtime contract for
 > harness CLI churn. Model assignments normally change on a Dev Type; CLI,
 > image, credential, or artifact-shape changes also require the implementation
-> locations named in §8.
+> locations named in §9.
 > **Depends on:** `07-dev-runtime.md` (container contract), `02-domain-model.md` (DevType, TokenReport).
 
 A **harness template** describes how one CLI runs inside a Dev container:
@@ -27,8 +27,9 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 > the skills read-set records Grok **0.2.103** (§7a). The Grok image installs
 > latest rather than a pinned artifact, so every rebuild can invalidate the
 > recorded shapes. Grok PLAN is flag-verified but not exercised end-to-end
-> (§3). Treat each statement's own version and caveat as its verification
-> boundary.
+> (§3). §8 is narrower still: it is one model+backend pairing measured on
+> 2026-07-25, not a statement about local backends generally. Treat each
+> statement's own version and caveat as its verification boundary.
 
 ## 1. Invocation patterns
 
@@ -188,7 +189,117 @@ append on the composed prompt (“must consult these skills”). That is
 in the admin UI matches this contract. Skills are domain modules, never
 mission-step scripts (`app/devcake/skills/README.md`).
 
-## 8. Adding or changing a template (checklist)
+## 8. Running against local / OpenAI-compatible backends
+
+A template owns an invocation, not a model (§1). Any harness can therefore be
+pointed at a local or OpenAI-compatible backend through its own base-URL / API-key
+environment variables, and DevCake neither knows nor validates which backend a Dev
+Type reaches. What every template *does* assume is that the model **actually tool-calls**:
+outside PLAN, a Dev produces its deliverable by writing files, so a model that
+answers in prose yields a run that exits 0 having done nothing. The pairing below
+is one measured worked example of that failure mode — read it as the shape to look
+for, not as a verdict on local backends.
+
+### The measured pairing (2026-07-25)
+
+| element | measured |
+|---|---|
+| Backend | vLLM serving `DeepSeek-V4-Flash-DSpark-Abliterated`, `max_model_len` 300000, at `http://192.168.2.20:8000` (raw) |
+| Proxy | request-rewriting proxy on `:8765` that repositions the system prompt for codex |
+| Routes | **both** ports serve `/v1/chat/completions`, `/v1/responses` and `/v1/messages` |
+| CLI versions | read from inside the baked images: codex-cli **0.144.4**, claude **2.1.210**, grok **0.2.112** |
+
+**Symptom.** `codex`, invoked through DevCake's own `harness_argv` (§1), never makes
+a real tool call. It emits tool syntax as **prose** inside an `agent_message` — in at
+least three invented formats (`<tool_call type="exec" cmd="…">`, `<exec>…</exec>`,
+and narrated HTML with a fabricated `▶` prompt and hallucinated command output).
+codex executes nothing, writes no files, and exits **0**. 5 of 5 mission-shaped runs
+behaved this way.
+
+**The backend is not at fault**, and that was established before anything else was
+touched. Direct protocol probes with no CLI involved, on both ports: `POST /v1/responses`
+with one simple tool returns a real `function_call`; `POST /v1/messages` returns a real
+`tool_use`. And `claude-code`, against the *same* model, backend and prompt, produced
+**4 real `tool_use` blocks** and completed the task.
+
+### What the bisect isolated
+
+codex's verbatim outbound request was taken from the capture stub's `journal.jsonl`
+(below) and replayed against `:8765` with `stream: false`:
+
+| variant | real `function_call`? |
+|---|---|
+| codex's request verbatim (10 tools) | no |
+| minus the `namespace` and `web_search` tools (10 → 8 function tools) | no |
+| `exec_command` alone | no |
+| codex's full `instructions` + `input`, but ONE simple tool (`get_weather`) | **yes** |
+| codex's tools + `tool_choice: "required"` | **yes** |
+| `exec_command` with only its REQUIRED parameter (`cmd`) | **yes** |
+| `exec_command` name kept, minimal schema | **yes** |
+| codex's request minus `reasoning` | no |
+| no `instructions`, codex's tools | no |
+
+**Root cause: the size of the optional-parameter surface.** Not the backend, not the
+proxy, not the `instructions`, not `reasoning`, not the tool count, and not the
+non-`function` tool types — each of those was eliminated by a row above.
+`exec_command` declares ten properties of which exactly one (`cmd`) is required;
+removing the nine optional ones (`justification`, `login`, `max_output_tokens`,
+`prefix_rule`, `sandbox_permissions`, `shell`, `tty`, `workdir`, `yield_time_ms`)
+restores correct tool calling. This is a model-side limitation of **this model**
+handling large optional schemas — not a DevCake bug and not a vLLM bug.
+
+### What DevCake sees, and why PLAN masks it
+
+Because the model is being pushed to the edge of its schema-handling ability, it
+degrades **probabilistically**: it tool-calls on some runs and narrates on others.
+When it narrates, no Dev can write `/workspace/out/result.json`, so the run reports
+**exit 11 `DEV_BAD_OUTPUT`** (`15-errors-and-retries.md` §1) — on every container, at
+once, for the same reason the ADR-0018 incident was fleet-wide: the transducer is
+uniform, so a shared backend fault arrives identically everywhere with no contagion.
+
+**PLAN is the exception, and that asymmetry is the confusing part.** Plan mode is
+read-only by construction, so the entrypoint synthesises `PLAN.md` and `result.json`
+from the returned text (§3), gated only on that text being ≥ 200 chars. A PLAN step
+therefore **succeeds with zero tool calls**, while ONBOARD, EXECUTE and REVIEW fail.
+A board can look healthy until the pipeline advances into a stage that needs a real
+tool call.
+
+**Known gap — the ADR-0018 brake does not cover this.** `backend_correlated` /
+`backend_degraded` key on `error_class == "DEV_HARNESS_FAULT"` (exit 15,
+`15-errors-and-retries.md` §4a). These runs are `DEV_BAD_OUTPUT` (exit 11), so a
+fleet-wide bad-output cascade is throttled by nothing, excused by nothing, and every
+failure counts toward `max_attempts`. Recorded, not fixed.
+
+### Operator remedies
+
+In increasing order of effort; all three are operator-side, because nothing in
+DevCake misbehaved — the invocation, the entrypoint and the predicate all did exactly
+what they specify:
+
+| effort | remedy | evidence |
+|---|---|---|
+| lowest | set `tool_choice: "required"` on the request | worked every time in the bisect |
+| medium | slim tool schemas proxy-side, dropping optional properties on `/v1/responses` — the proxy already rewrites requests, so it is the natural home | dropping `exec_command`'s nine optional properties restored tool calling |
+| highest | use a model with better large-optional-schema handling | `claude-code` on this same model and backend never exhibited the fault |
+
+### The capture rig (`scripts/harness_capture/`)
+
+The rig this section was measured with. It runs **inside a baked Dev image** on
+purpose: host CLI versions drift from the image pins (codex host 0.144.6 vs image
+0.144.4; grok is installed unpinned, §2), and a capture taken at the wrong version
+silently stops describing what production runs.
+
+| file | role |
+|---|---|
+| `in_container.py` | One real harness run inside the image. argv comes from the entrypoint's own `harness_argv` (§1), so a capture cannot drift from the production invocation; the backend is preflighted, so a routing failure aborts loudly instead of being recorded as a backend fault; exit status, stdout, stderr, codex's `-o` file and grok's `grok export` are all recorded verbatim; and the **current** predicate is run against the capture with its verdict written beside the intended one — a mismatch is the finding, never something the capture is edited to hide. |
+| `stub_backend.py` | Stdlib three-protocol stub — `/v1/messages`, `/v1/responses`, `/v1/chat/completions`, plus `/v1/models` and `/healthz` — with deterministic failure injection (401/429/500, truncated stream, empty completion, tool-only, refusal). Its `journal.jsonl` records each CLI's outbound request **verbatim**; that record is what made the bisect above possible at all, and it is also what proves a capture hit the stub rather than quietly reaching a real API. |
+| `prompts/*.md` | The prompt shapes: `trivial.md` (one word, no tools), `mission_shaped.md` (edit a file + write `out/result.json`), `execute_real.md` (the real EXECUTE playbook, absolute `/workspace` paths included). |
+
+Honesty rule, stated in the stub itself: it answers HTTP and nothing else. Every
+committed fixture byte is real CLI stdout, and a scenario a real backend could not
+produce is never added.
+
+## 9. Adding or changing a template (checklist)
 
 1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow, optional `skills_dir` — the home-relative dir the CLI reads personal skills from; leave unset if unsupported) and the new value to `DevType.harness_template`'s Literal (`config.py`).
 2. Add a target to `images/Dockerfile` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and a matching target in `docker-bake.hcl` (group `images` / `all`).

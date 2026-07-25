@@ -1113,6 +1113,41 @@ def forge_dialect(env: dict) -> tuple:
             env["DEVCAKE_GIT_EMAIL"], cli_envs)
 
 
+def harness_argv(harness: str, prompt: str, *, plan_mode: bool = False,
+                 model: str = "", extra=(), out_dir=None) -> list:
+    """The harness command line (docs/08 §1) — ONE definition.
+
+    Extracted from `main()` so the capture rig (`scripts/harness_capture/`)
+    builds argv through the SAME code path production uses. A fixture captured
+    with even slightly different flags silently stops corresponding to what the
+    predicate sees on a real run, and that divergence is invisible in review —
+    the stream still looks plausible.
+
+    `out_dir` defaults to /workspace/out (codex's `-o` target); the capture rig
+    points it at a throwaway directory.
+    """
+    extra = list(extra)
+    out = pathlib.Path(out_dir) if out_dir is not None else WORKSPACE / "out"
+    if harness == "grok-build":
+        mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
+        pin = ["--model", model] if model else []
+        return ["grok", "-p", prompt, "--output-format", "streaming-json",
+                *mode, *pin, *extra]
+    if harness == "codex":
+        mode = (["--sandbox", "read-only"] if plan_mode
+                else ["--dangerously-bypass-approvals-and-sandbox"])
+        pin = ["-m", model] if model else []
+        return ["codex", "exec", prompt, "--json",
+                "-o", str(out / "last_message.txt"),
+                "--skip-git-repo-check", *mode, *pin, *extra]
+    mode = (["--permission-mode", "plan"] if plan_mode
+            else ["--dangerously-skip-permissions"])
+    pin = ["--model", model] if model else []
+    # --verbose is REQUIRED with -p + stream-json (the CLI errors out without it)
+    return ["claude", "-p", prompt, "--output-format", "stream-json",
+            "--verbose", *mode, *pin, *extra]
+
+
 def main() -> None:
     spec = request_reply("runspec.get", "runspec.result")
     send("runspec.ack", {})
@@ -1259,24 +1294,8 @@ def main() -> None:
     plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
     model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
-    if harness == "grok-build":
-        mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
-        pin = ["--model", model] if model else []
-        cmd = ["grok", "-p", prompt, "--output-format", "streaming-json",
-               *mode, *pin, *extra]
-    elif harness == "codex":
-        mode = ["--sandbox", "read-only"] if plan_mode \
-            else ["--dangerously-bypass-approvals-and-sandbox"]
-        pin = ["-m", model] if model else []
-        cmd = ["codex", "exec", prompt, "--json",
-               "-o", str(WORKSPACE / "out" / "last_message.txt"),
-               "--skip-git-repo-check", *mode, *pin, *extra]
-    else:
-        mode = ["--permission-mode", "plan"] if plan_mode             else ["--dangerously-skip-permissions"]
-        pin = ["--model", model] if model else []
-        # --verbose is REQUIRED with -p + stream-json (CLI errors out without it)
-        cmd = ["claude", "-p", prompt, "--output-format", "stream-json",
-               "--verbose", *mode, *pin, *extra]
+    cmd = harness_argv(harness, prompt, plan_mode=plan_mode, model=model,
+                       extra=extra)
     harness_exit = 1
     out_lines: list[str] = []
     err_lines: list[str] = []

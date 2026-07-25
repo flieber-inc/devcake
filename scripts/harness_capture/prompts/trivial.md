@@ -1,0 +1,3 @@
+Reply with exactly the word: ACKNOWLEDGED
+
+Do not use any tools. Do not explain. One word.

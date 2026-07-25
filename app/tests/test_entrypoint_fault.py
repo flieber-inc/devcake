@@ -470,3 +470,73 @@ FAULT_BUDGET = {"reason": ep.FAULT_TURN_BUDGET, "detail": "stopped at the turn c
 ])
 def test_classify_nonzero_exit(err, fault, status, expected):
     assert ep.classify_nonzero_exit(err, fault, status) == expected
+
+
+# ── harness_argv: one definition, shared with the capture rig ────────────────
+# Extracted from main() so scripts/harness_capture builds argv through
+# production's own code path. A fixture captured with different flags silently
+# stops corresponding to what the predicate sees on a real run.
+
+@pytest.mark.parametrize("harness,head,doc_flags", [
+    # the invocations docs/08 §1 documents, flag-for-flag
+    ("claude-code", ["claude", "-p"],
+     ["--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]),
+    ("grok-build", ["grok", "-p"],
+     ["--output-format", "streaming-json", "--always-approve"]),
+    ("codex", ["codex", "exec"],
+     ["--json", "-o", "--skip-git-repo-check",
+      "--dangerously-bypass-approvals-and-sandbox"]),
+])
+def test_argv_matches_the_documented_invocation(harness, head, doc_flags):
+    argv = ep.harness_argv(harness, "PROMPT")
+    assert argv[:len(head)] == head
+    for flag in doc_flags:
+        assert flag in argv, f"{harness}: docs/08 documents {flag}"
+    assert "PROMPT" in argv
+
+
+def test_argv_verbose_is_mandatory_for_claude():
+    """The CLI errors out on -p + stream-json without --verbose, so this is a
+    behavioural requirement rather than a preference."""
+    assert "--verbose" in ep.harness_argv("claude-code", "P")
+
+
+@pytest.mark.parametrize("harness,plan_flags", [
+    ("claude-code", ["--permission-mode", "plan"]),
+    ("grok-build", ["--permission-mode", "plan"]),
+    ("codex", ["--sandbox", "read-only"]),          # codex's read-only substitute
+])
+def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
+    argv = ep.harness_argv(harness, "P", plan_mode=True)
+    for f in plan_flags:
+        assert f in argv
+    for f in ("--dangerously-skip-permissions", "--always-approve",
+              "--dangerously-bypass-approvals-and-sandbox"):
+        assert f not in argv, f"{harness}: plan mode must not grant writes"
+
+
+@pytest.mark.parametrize("harness,pin", [
+    ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m")])
+def test_argv_model_pin_is_omitted_when_empty(harness, pin):
+    """An empty DEVCAKE_MODEL means "harness default" — passing an empty pin
+    would make every CLI reject the invocation."""
+    assert pin not in ep.harness_argv(harness, "P", model="")
+    argv = ep.harness_argv(harness, "P", model="some-model")
+    assert argv[argv.index(pin) + 1] == "some-model"
+
+
+def test_argv_extra_args_come_last_so_they_can_override():
+    """docs/08 §1: extra args come last, so a Mission Type can override the pin."""
+    argv = ep.harness_argv("codex", "P", model="a", extra=["-m", "b"])
+    assert argv[-2:] == ["-m", "b"]
+
+
+def test_argv_codex_out_dir_is_redirectable():
+    """The capture rig runs outside /workspace and must not write there."""
+    assert "/tmp/cap/last_message.txt" in ep.harness_argv(
+        "codex", "P", out_dir="/tmp/cap")
+
+
+def test_argv_unknown_harness_falls_back_to_claude():
+    """Mirrors harness_fault and the renderer dispatch — one fallback, not three."""
+    assert ep.harness_argv("something-new", "P")[0] == "claude"

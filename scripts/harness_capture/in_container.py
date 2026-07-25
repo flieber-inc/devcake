@@ -39,6 +39,7 @@ import json
 import os
 import pathlib
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -151,6 +152,33 @@ def grok_session_id(out: str) -> str:
     return ""
 
 
+KILL_GRACE_SECS = 15        # bounded wait after SIGKILLing the group, then give up
+
+
+def kill_harness_group(proc) -> None:
+    """SIGKILL the harness's whole process group.
+
+    `proc.kill()` alone is not enough and the difference is a hang, not a
+    slowdown: codex's `exec_command` leaves a persistent `/bin/bash` child that
+    INHERITED the stdout pipe, so the following `communicate()` never sees EOF
+    and the driver waits forever. (Measured while capturing the codex turn-cap
+    runaway — 5,535 requests, no files written, killed at the container level.)
+    `start_new_session=True` on the Popen puts the harness in its own process
+    group, so one killpg closes every inherited pipe end at once.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except OSError:                             # group already gone, or not ours
+        proc.kill()
+
+
+def partial_text(buf) -> str:
+    """TimeoutExpired carries the reads it managed as BYTES, even in text mode."""
+    if buf is None:
+        return ""
+    return buf.decode("utf-8", "replace") if isinstance(buf, bytes) else str(buf)
+
+
 def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
     """One harness invocation. Returns the measured record."""
     prompt = pathlib.Path(args.prompt_file).read_text()
@@ -164,14 +192,28 @@ def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
     started = time.monotonic()
     proc = subprocess.Popen(argv, cwd=workdir, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
-                            env={**os.environ})
+                            env={**os.environ}, start_new_session=True)
     try:
         stdout, stderr = proc.communicate(timeout=args.timeout)
         timed_out = False
     except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
         timed_out = True
+        kill_harness_group(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=KILL_GRACE_SECS)
+        except subprocess.TimeoutExpired as partial:
+            # something escaped the group and still holds a pipe end: keep the
+            # partial reads and stop waiting. A capture driver that can hang is
+            # worse than one that records an incomplete run and says so.
+            stdout, stderr = partial_text(partial.stdout), partial_text(partial.stderr)
+            for pipe in (proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
+            proc.kill()
+            try:
+                proc.wait(timeout=KILL_GRACE_SECS)
+            except subprocess.TimeoutExpired:   # unreapable; exit_code stays None
+                pass
     exit_code = proc.returncode
     duration_ms = int((time.monotonic() - started) * 1000)
 

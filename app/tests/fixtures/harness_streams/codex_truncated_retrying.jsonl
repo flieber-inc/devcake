@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"019f99fd-5926-7b10-b9c3-5a097eed9f1e"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+{"type":"error","message":"Reconnecting... 2/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+{"type":"error","message":"Reconnecting... 3/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+{"type":"error","message":"Reconnecting... 4/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}
+{"type":"error","message":"stream disconnected before completion: Transport error: network error: error decoding response body"}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: Transport error: network error: error decoding response body"}}

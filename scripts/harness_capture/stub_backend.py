@@ -119,6 +119,35 @@ def pick_tool(body: dict, protocol: str):
     return None, {}
 
 
+def tool_result_present(body: dict) -> bool:
+    """True when this request already carries a tool RESULT — i.e. it is a
+    follow-up turn.
+
+    Stateless sequencing, and it is what makes `tool_only` mean what it says.
+    A stub that cannot tell turn 1 from turn 2 can only answer every turn the
+    same way, so "one tool call, no final text" degenerated into an infinite
+    tool loop: codex has no turn cap, so it looped until the capture timeout and
+    produced a killed process instead of the conservatism evidence the scenario
+    exists for. Derived from the request itself, exactly as a real model's next
+    turn is — no server-side state, so parallel captures stay independent.
+    `loop` deliberately does NOT consult this: exhausting a turn cap is its job.
+    """
+    for item in body.get("input") or []:               # OpenAI Responses
+        if isinstance(item, dict) and str(item.get("type") or "").endswith(
+                "_call_output"):
+            return True
+    for msg in body.get("messages") or []:             # Anthropic / OpenAI Chat
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "tool":
+            return True
+        content = msg.get("content")
+        for block in content if isinstance(content, list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return True
+    return False
+
+
 def note_tools(body: dict) -> None:
     names = [t.get("name") or (t.get("function") or {}).get("name")
              for t in (body.get("tools") or [])]
@@ -265,12 +294,26 @@ class Handler(BaseHTTPRequestHandler):
                       "status": "completed",
                       "content": [{"type": "output_text",
                                    "text": "I can't help with that."}]}]
-        elif scenario in ("tool_only", "loop") and name:
+        elif scenario == "loop" and name:
             items = [{"type": "function_call", "id": "fc_1", "call_id": "call_1",
                       "name": name, "arguments": json.dumps(args),
                       "status": "completed"}]
+        elif scenario == "tool_only" and name and not tool_result_present(body):
+            items = [{"type": "function_call", "id": "fc_1", "call_id": "call_1",
+                      "name": name, "arguments": json.dumps(args),
+                      "status": "completed"}]
+        # `total_tokens` and the *_details sub-objects are REQUIRED, not padding:
+        # codex 0.144.4 deserializes `response.completed` into a typed
+        # ResponseCompleted and a missing `total_tokens` aborts the stream with
+        # "failed to parse ResponseCompleted", turning EVERY responses scenario
+        # into a spurious terminal error. Real OpenAI-compatible backends always
+        # send it, so omitting it was the stub failing to be a backend.
+        out_tokens = 0 if scenario in ("empty",) else 24
         usage = {"input_tokens": 120,
-                 "output_tokens": 0 if scenario in ("empty",) else 24}
+                 "input_tokens_details": {"cached_tokens": 0},
+                 "output_tokens": out_tokens,
+                 "output_tokens_details": {"reasoning_tokens": 0},
+                 "total_tokens": 120 + out_tokens}
         events = [("response.created", {"type": "response.created",
                                         "response": {"id": rid, "status": "in_progress"}})]
         for it in items:
@@ -297,7 +340,8 @@ class Handler(BaseHTTPRequestHandler):
             blocks = [{"type": "text", "text": "  \n "}]
         elif scenario == "refusal":
             blocks = [{"type": "text", "text": "I can't help with that."}]
-        elif scenario in ("tool_only", "loop") and name:
+        elif scenario == "loop" and name or (
+                scenario == "tool_only" and name and not tool_result_present(body)):
             blocks = [{"type": "tool_use", "id": "tu_1", "name": name, "input": args}]
             stop = "tool_use"
         usage = {"input_tokens": 120,
@@ -343,7 +387,8 @@ class Handler(BaseHTTPRequestHandler):
             msg["content"] = "  \n "
         elif scenario == "refusal":
             msg["content"] = "I can't help with that."
-        elif scenario in ("tool_only", "loop") and name:
+        elif scenario == "loop" and name or (
+                scenario == "tool_only" and name and not tool_result_present(body)):
             msg["tool_calls"] = [{"id": "call_1", "type": "function",
                                   "function": {"name": name,
                                                "arguments": json.dumps(args)}}]

@@ -1,0 +1,5 @@
+error: the argument '--output-format <OUTPUT_FORMAT>' cannot be used multiple times
+
+Usage: grok [OPTIONS] [PROMPT] [COMMAND]
+
+For more information, try '--help'.

@@ -1,0 +1,2 @@
+{"type":"text","data":"I can't help with that."}
+{"type":"end","stopReason":"EndTurn","sessionId":"019f99f2-ee38-7870-a488-bef0f4edccbf","requestId":"0fdec9e4-8d7d-433a-9093-c4f77727d16b","usage":{"input_tokens":120,"cache_read_input_tokens":0,"output_tokens":24,"reasoning_tokens":0,"total_tokens":144},"num_turns":1,"modelUsage":{"stub-model":{"inputTokens":120,"outputTokens":24,"cacheReadInputTokens":0,"modelCalls":1}}}

@@ -464,9 +464,14 @@ Two rules make the exercise mean something:
   including `observed_reason` — the verdict of the predicate *at capture time*. The intended verdict
   is a human judgement and lives in the pytest table, under review. If an expectation could be edited
   in a sidecar, a capture could be quietly "corrected" into agreeing with a wrong predicate.
-* **every mismatch is `@pytest.mark.xfail(strict=True)`**, with a reason naming the mechanism. This
-  is the evidence half of a two-commit sequence; the fix commit is finished exactly when all of them
-  are gone, and `strict=True` means an accidental fix cannot pass silently either.
+* **every mismatch was `@pytest.mark.xfail(strict=True)`**, with a reason naming the mechanism. This
+  was the evidence half of a two-commit sequence; the fix commit was finished exactly when all of
+  them were gone, and `strict=True` meant an accidental fix could not pass silently either.
+
+> **Status: the fix commit has landed.** All 27 rows hold and the test file carries no xfails. The
+> "observed today" column below is preserved as the **pre-fix** snapshot — it is the record of what
+> the captures found, not a description of the shipped predicate. One intended verdict was changed
+> by the fix commit and is marked in place: `grok_empty`.
 
 The sidecars' `observed_reason` is deliberately **not** asserted (it is a snapshot of a predicate
 about to change); their **byte counts** are, on every row, which is the guard that catches a stream
@@ -499,7 +504,7 @@ is the capture prompt writing no `result.json`; it is not a fault verdict.)
 | `grok_healthy` | 0 | none | none | — |
 | `grok_refusal` | 0 | none | none | — |
 | `grok_tool_only` | 0 | none | none | — |
-| `grok_empty` | 1 | `empty_completion` / 15 / DEV_HARNESS_FAULT | `empty_completion` / 15 / DEV_HARNESS_FAULT | — |
+| `grok_empty` | 1 | `empty_completion` / 15 / DEV_HARNESS_FAULT — **fix commit changed this to `terminal_error` / 15**, see below | `empty_completion` / 15 / DEV_HARNESS_FAULT | — |
 | `grok_whitespace` | 0 | `empty_completion` / 15 / DEV_HARNESS_FAULT | none | yes |
 | `grok_http_401` | 1 | `terminal_error` / **12 / DEV_AUTH** | `empty_completion` / 15 / DEV_HARNESS_FAULT | yes |
 | `grok_http_429` | 1 | `terminal_error` / 15 / DEV_HARNESS_FAULT | `empty_completion` / 15 / DEV_HARNESS_FAULT | yes |
@@ -508,10 +513,12 @@ is the capture prompt writing no `result.json`; it is not a fault verdict.)
 | `grok_turn_budget` | 1 | `turn_budget` / **16 / DEV_TURN_BUDGET** | none / 10 / DEV_CRASH | yes |
 | `grok_json_blob` | 2 | none / **10 / DEV_CRASH** | `no_terminal_event` / 15 / DEV_HARNESS_FAULT | yes |
 
-**11 of 27 rows are xfail.** Four of them (`codex_empty`, `codex_whitespace`, `grok_whitespace`,
-`grok_turn_budget`) are wrong *reasons*; four (`codex_http_401`, `codex_http_401_retrying`,
-`grok_http_401`, `grok_json_blob`) are wrong *exit codes*, and all four of those are ADR-0018
-**regressions** — every one of them reached a better code before the ADR (12, 12, 12, 10).
+**11 of 27 rows were xfail** at capture time. Four of them (`codex_empty`, `codex_whitespace`,
+`grok_whitespace`, `grok_turn_budget`) were wrong *reasons*; four (`codex_http_401`,
+`codex_http_401_retrying`, `grok_http_401`, `grok_json_blob`) were wrong *exit codes*, and all four
+of those were ADR-0018 **regressions** — every one of them reached a better code before the ADR
+(12, 12, 12, 10). All eleven were flipped by the fix commit; none of the sixteen baselines moved,
+and the one intended verdict that changed (`grok_empty`) kept its exit code.
 
 ### Where this supersedes the per-harness tables above
 
@@ -525,14 +532,18 @@ assert:
 | `grok_truncated` | intended `no_terminal_event` | intended `terminal_error` | same rule, same evidence: grok's truncation arrives as a single terminal `{"type":"error"}` event. |
 | `grok_json_blob` | intended left blank | intended none / 10 / `DEV_CRASH` | the CLI refused its own argv and never ran, so this is a crash with a precise stderr diagnosis, not a shared-backend-shaped fault. Judgement call — flagged as such in the test file. |
 
-`grok_empty` is a **constraint on the fix**, not a finding: it already lands on the intended verdict,
-but for the wrong reason (the arm fires because the error event carries no `sessionId`, not because
-grok said `no_visible_content`). A new grok error-event arm must not swallow it into `terminal_error`.
+`grok_empty` was a **constraint on the fix**, not a finding: it already landed on the intended exit
+code, but for the wrong reason (the arm fired because the error event carries no `sessionId`, not
+because grok said `no_visible_content`). **Resolved in the fix commit by letting the new
+error-event arm claim it:** the intended reason is now `terminal_error`, the exit code is unchanged
+at 15, and the detail carries grok's verbatim `empty response from model (no_visible_content)`.
+Keeping it at `empty_completion` would have required matching that message STRING, which buys
+nothing when the exit code is identical either way.
 
-### Arms that proved structurally unreachable
+### Arms that proved structurally unreachable — and how the fix commit reopened them
 
-Each of these is asserted as a fact about the captured bytes, so it stays true after the predicate is
-fixed:
+Each mechanism below is asserted as a fact about the captured **bytes**, so those assertions stay
+true; what changed is the predicate that read them. The right-hand column is the pre-fix diagnosis:
 
 | harness | arm | mechanism |
 |---|---|---|
@@ -546,6 +557,18 @@ fixed:
 | grok | `turn_budget` | no arm exists, although grok announces the cap twice in band (`{"type":"max_turns_reached"}` **and** `end`/`stopReason:"Cancelled"`) plus `Error: max turns reached` on stderr. |
 | grok | the json-blob branch | `harness_argv` always passes `--output-format streaming-json`; a second one is a clap error, exit 2. |
 | codex + grok | both auth arms | `api_error_status` is extracted only for claude in `main()`, so an in-band 401 has no structured status; and neither harness's stderr carries the failure (codex: 39 bytes about stdin; grok: generic `unauthorized` wording only). |
+
+**How each was reopened** (all five fixes are in one commit; `codex`'s missing turn cap is a CLI
+fact and stays unreachable):
+
+| arm | fix |
+|---|---|
+| codex `empty_completion` | error items get their own bucket — evidence, never activity — and `agent_message` counts only when its text is non-blank. |
+| grok `empty_completion` | `grok_export_activity(dump, prompt)` locates the prompt echo in the export, keeps only what follows it, drops `#`-prefixed headings, and asks whether anything non-blank remains. Deliberately brittle, and both brittleness modes fail SAFE toward "activity found" ⇒ no fault. |
+| grok `terminal_error` | fires on the `error` **event type**; `error` and `end` never co-occur across the eleven captures, so no ordering rule is needed. `GROK_FAULT_STOP_REASONS` stays empty. |
+| grok `turn_budget` | fires on the `max_turns_reached` **event type**, checked first, mirroring claude — a deterministic cap must never become correlation-eligible. |
+| grok json-blob branch | kept as a defensive read only, and no longer reachable for a zero-byte stdout: a CLI that refused its own argv is not a harness fault at all. |
+| codex + grok auth | `harness_api_error_status()` extracts a status for **every** harness, matching each CLI's own HTTP-layer wording (`unexpected status NNN`, `last status: NNN`, `Unauthorized (NNN)`, `(status NNN`) rather than a generic `status (\d{3})` — codex echoes the server's response body into `error.message` (`codex_http_400`), so a generic pattern would let a backend put "status 401" in a 500 and pause a whole Dev Type. |
 
 ### Known gaps between these fixtures and production
 

@@ -232,11 +232,8 @@ def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
 
     # grade the CURRENT predicate — the whole point of the exercise
     fault = ep.harness_fault(args.harness, stdout, exit_code, dump=dump,
-                             last_message=last_message)
-    api_status = None
-    if args.harness not in ("codex", "grok-build"):
-        ev = ep.claude_result_event(stdout)
-        api_status = ep._dict(ev).get("api_error_status") if ev else None
+                             last_message=last_message, prompt=prompt)
+    api_status = ep.harness_api_error_status(args.harness, stdout)
     observed_exit, observed_class = (
         ep.classify_nonzero_exit(stderr[-1500:], fault, api_status)
         if exit_code != 0 else

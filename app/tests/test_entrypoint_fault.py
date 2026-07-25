@@ -1,9 +1,10 @@
 """Harness fault detection, failure forensics and misplaced-result recovery
 (ADR-0018) — the container half.
 
-Claude cases run against REAL captured streams in fixtures/harness_streams/;
-codex and grok cases are synthetic (no captures exist yet — see the fixture
-README) and their predicate arms are provisional until they do.
+Claude cases run against REAL captured streams in fixtures/harness_streams/.
+The codex and grok cases here stay synthetic on purpose — they vary one field at
+a time to pin an arm's boundary; the real codex-cli 0.144.4 and grok 0.2.112
+captures are asserted end-to-end in test_harness_captures.py.
 """
 
 import importlib.util
@@ -259,12 +260,20 @@ def test_codex_empty_completion_uses_the_raw_last_message_not_the_stdout_fallbac
 
 # ── grok (synthetic) ─────────────────────────────────────────────────────────
 
-def test_grok_thought_only_run_is_not_a_fault():
-    """grok emits no tool-call events (docs/08 §1), so thoughts and the export
-    transcript are the only activity signals available."""
+def test_grok_activity_is_a_closed_set_of_event_types():
+    """REVERSAL, on measured evidence: this used to assert that a `thought`-only
+    run is not a fault. There is no `thought` event at 0.2.112 — the catalogue is
+    exactly {text, end, max_turns_reached, error} (docs/08 §1, enumerated over
+    all eleven grok captures) — so the counter was dead weight. Activity is now a
+    closed set, like `_claude_activity`'s: counting an unrecognized event as work
+    is exactly what made codex's `empty_completion` arm unreachable. grok emits
+    no tool-call events at all, so the `grok export` transcript is what rescues a
+    silent-but-productive run."""
     out = "\n".join([J({"type": "thought", "data": "thinking"}),
                      J({"type": "end", "stopReason": "stop"})])
-    assert ep.harness_fault("grok-build", out, 0) is None
+    assert reason(ep.harness_fault("grok-build", out, 0)) == ep.FAULT_EMPTY_COMPLETION
+    assert ep.harness_fault("grok-build", out, 0, prompt="P",
+                            dump="## User\n\nP\n\n## Tools\n\n- Execute: ls") is None
 
 
 def test_grok_silent_run_with_a_session_transcript_is_not_a_fault():

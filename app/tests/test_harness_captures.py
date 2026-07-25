@@ -20,12 +20,14 @@ against every sidecar is its byte counts (`test_sidecar_byte_counts_match_the_
 committed_files`) — pure facts about the fixture, and the guard that catches a
 stream and its sidecar drifting apart.
 
-Rows whose observed verdict differs from the intended one carry
-`@pytest.mark.xfail(strict=True, reason=...)` naming the mechanism that produces
-the wrong answer. This module is the EVIDENCE half of a two-commit sequence: the
-follow-up fix commit is finished exactly when every xfail here has been removed,
-and `strict=True` is what makes that true in both directions — an accidental fix
-cannot pass silently either.
+This module opened as the EVIDENCE half of a two-commit sequence: eleven rows
+landed as strict expected failures naming the mechanism that produced the wrong
+answer, and the fix commit was finished exactly when every one of them had been
+removed. All twenty-seven rows now hold against the working-tree predicate, so
+the table is a plain regression suite: any row that stops holding is a real
+change of verdict, and every verdict change is a behaviour change an operator
+feels (15 excuses an attempt and feeds the correlation brake, 12 pauses a whole
+Dev Type, 16 is always counted).
 """
 
 import importlib.util
@@ -95,6 +97,18 @@ def harness_dump(harness: str, name: str, out: str) -> str:
     return ep.claude_text_dump(out)
 
 
+def capture_prompt(meta: dict) -> str:
+    """The prompt the rig actually sent, read back out of the recorded argv.
+
+    It is argv[2] for all three harnesses (`claude -p P`, `grok -p P`,
+    `codex exec P`) because the rig builds argv through the entrypoint's own
+    `harness_argv`. grok's `empty_completion` arm needs it: the `grok export`
+    transcript opens by echoing the prompt, and the prompt is what separates
+    that echo from anything the run itself produced.
+    """
+    return meta["argv"][2]
+
+
 def verdict(name: str) -> tuple:
     """(reason, exit code, error class) for one capture, wired as main() wires it.
 
@@ -106,13 +120,12 @@ def verdict(name: str) -> tuple:
     out = (FIXTURES / f"{name}.jsonl").read_text()
     dump = harness_dump(harness, name, out)
     fault = ep.harness_fault(harness, out, harness_exit, dump=dump,
-                             last_message=companion(name, "last_message.txt"))
-    # main() ~L1443: api_error_status is extracted ONLY for claude, so a
-    # structured 401 on codex or grok never reaches auth_evidence_is_distinctive.
-    api_status = None
-    if harness not in ("codex", "grok-build"):
-        _ev = ep.claude_result_event(out)
-        api_status = ep._dict(_ev).get("api_error_status") if _ev else None
+                             last_message=companion(name, "last_message.txt"),
+                             prompt=capture_prompt(meta))
+    # main() ~L1443: one status extractor for every harness — claude reads the
+    # structured `api_error_status`, codex and grok are matched on their own
+    # HTTP-layer wording, since neither exposes a field at all.
+    api_status = ep.harness_api_error_status(harness, out)
     reason = fault["reason"] if fault else None
     if harness_exit != 0:                       # main() ~L1466: the composed rule
         return (reason,) + ep.classify_nonzero_exit(
@@ -132,126 +145,102 @@ AUTH = (ep.FAULT_TERMINAL_ERROR, 12, "DEV_AUTH")
 BUDGET = (ep.FAULT_TURN_BUDGET, 16, "DEV_TURN_BUDGET")
 CRASH = (None, 10, "DEV_CRASH")
 
-_NO_STATUS = ("`api_error_status` is extracted only for claude in `main()`, so the in-band "
-              "401 never reaches `auth_evidence_is_distinctive`")
-
-# (capture, intended verdict, why the predicate does NOT produce it today).
-# An empty third column means the row already holds — it is a baseline, not a
-# finding, and the fix commit must leave it alone.
+# (capture, intended verdict). Comments record WHY a row is what it is, and in
+# particular which predicate arm each one keeps honest.
 CAPTURES = [
     # ── claude-code 2.1.210 — the conservatism baseline ──────────────────────
     # The arm that must NEVER fire. A refusal is protocol-identical to a healthy
     # run (same subtype, same terminal_reason, only shorter text), which is why
     # empty_completion has to be structural.
-    ("claude_healthy", NO_FAULT, ""),
-    ("claude_refusal", NO_FAULT, ""),
+    ("claude_healthy", NO_FAULT),
+    ("claude_refusal", NO_FAULT),
 
     # ── codex-cli 0.144.4 ────────────────────────────────────────────────────
-    ("codex_empty", EMPTY,
-     "codex emits an `item.completed` whose item type is \"error\" (`Model metadata for "
-     "stub-model not found`) BEFORE `turn.started` whenever `-m` names a model the backend "
-     "does not advertise, and `codex_run_fault`'s `elif item: items += 1` scores it as tool "
-     "activity — so items == 1 and `empty_completion` can never fire. Every local backend "
-     "serves a model id codex has no metadata for, so in the deployment ADR-0018 was written "
-     "for, a 200-with-nothing is laundered into exit 11 DEV_BAD_OUTPUT."),
+    # Reaches empty_completion only because error items are bucketed apart from
+    # tool activity: with `-m` naming a model the backend does not advertise,
+    # codex emits an `item.completed` whose item type is "error" (`Model
+    # metadata for stub-model not found`) BEFORE `turn.started`, and scoring
+    # that as tool work made this arm unreachable against every local backend.
+    ("codex_empty", EMPTY),
     # THE controlled counterfactual for the row above: same stub scenario, same
-    # CLI, argv differing only in the `-m stub-model` pair, and the arm fires.
-    ("codex_empty_no_model", EMPTY, ""),
-    ("codex_healthy", NO_FAULT, ""),
-    ("codex_whitespace", EMPTY,
-     "`messages += 1` fires on any `agent_message` item with no `.strip()`, so a "
-     "whitespace-only completion is not classified — unlike `_claude_activity`, which strips. "
-     "The `-o` file is four whitespace bytes and `codex_text_dump` is empty, so nothing was "
-     "actually said. Two arms, two different notions of \"text\"."),
+    # CLI, argv differing only in the `-m stub-model` pair.
+    ("codex_empty_no_model", EMPTY),
+    ("codex_healthy", NO_FAULT),
+    # `agent_message` counts only when its text is non-blank, like
+    # `_claude_activity`: the `-o` file here is four whitespace bytes and
+    # `codex_text_dump` is empty, so nothing was actually said.
+    ("codex_whitespace", EMPTY),
     # Tool work with no closing message is not a fault, whatever the counters say.
-    ("codex_tool_only", NO_FAULT, ""),
-    ("codex_refusal", NO_FAULT, ""),
-    ("codex_http_400", TERMINAL, ""),
-    ("codex_http_401", AUTH,
-     f"{_NO_STATUS}; codex's stderr is the 39-byte `Reading additional input from stdin...` "
-     "on every failure and matches no auth marker, so the predicate's terminal_error wins and "
-     "`classify_nonzero_exit` returns 15. Exit 15 is correlation-eligible, so an expired key "
-     "rolled out to a whole Dev Type reads as a shared backend outage and is excused instead "
-     "of latching the auth breaker."),
-    ("codex_http_401_retrying", AUTH,
-     f"{_NO_STATUS}. Same 401 with codex's DEFAULT retry policy — five `Reconnecting... N/5` "
-     "`error` events before the bare one — which proves the retry noise does not change the "
-     "verdict either way."),
-    ("codex_http_429", TERMINAL, ""),
-    ("codex_http_500", TERMINAL, ""),
+    ("codex_tool_only", NO_FAULT),
+    ("codex_refusal", NO_FAULT),
+    ("codex_http_400", TERMINAL),
+    # 12, not 15, and the status comes from the STREAM: codex's stderr is the
+    # same 39 bytes of `Reading additional input from stdin...` on every failure
+    # and matches no auth marker at all. Exit 15 would be correlation-eligible,
+    # so an expired key rolled out to a whole Dev Type would read as a shared
+    # backend outage and be excused instead of latching the auth breaker.
+    ("codex_http_401", AUTH),
+    # Same 401 with codex's DEFAULT retry policy — five `Reconnecting... N/5`
+    # `error` events before the bare one — proving the retry noise changes
+    # nothing either way.
+    ("codex_http_401_retrying", AUTH),
+    ("codex_http_429", TERMINAL),
+    ("codex_http_500", TERMINAL),
     # 404 on /v1/responses — a backend that lacks the route at all. Same family
     # as the HTTP rows above: a hard error the harness reports and cannot retry.
-    ("codex_no_route", TERMINAL, ""),
+    ("codex_no_route", TERMINAL),
     # `no_terminal_event` is UNREACHABLE for codex, so `terminal_error` is the
     # intended reason here and not a concession: every codex failure path emits a
     # plain {"type":"error"} immediately before `turn.failed`
     # (test_codex_always_emits_an_error_event_before_turn_failed), so a stream
     # with no `turn.completed` always has an error message to classify on.
-    ("codex_truncated", TERMINAL, ""),
-    ("codex_truncated_retrying", TERMINAL, ""),
+    ("codex_truncated", TERMINAL),
+    ("codex_truncated_retrying", TERMINAL),
 
     # ── grok-build 0.2.112 ───────────────────────────────────────────────────
-    ("grok_healthy", NO_FAULT, ""),
-    ("grok_refusal", NO_FAULT, ""),
+    ("grok_healthy", NO_FAULT),
+    ("grok_refusal", NO_FAULT),
     # 16 real tool executions, and the stream is ONE line long (the `end` event).
     # Conservative only because the `grok export` transcript lists the tool calls.
-    ("grok_tool_only", NO_FAULT, ""),
-    # Right answer, wrong evidence — and a CONSTRAINT ON THE FIX: the arm fires
-    # only because the `{"type":"error"}` event carries no `sessionId`, so `dump`
-    # is empty. grok names the condition itself (`no_visible_content`), so a new
-    # error-event arm must not swallow this row into terminal_error.
-    ("grok_empty", EMPTY, ""),
-    ("grok_whitespace", EMPTY,
-     "`grok export` prints Markdown beginning with `## User` + the prompt, so `dump` is never "
-     "empty when a session id exists. `empty_completion` is INVERTED for grok: it fires only "
-     "when grok crashed hard enough to have no session id, and never in the 200-with-nothing "
-     "case it was written for."),
-    ("grok_http_401", AUTH,
-     "no `terminal_error` arm exists for grok (`GROK_FAULT_STOP_REASONS` is empty by design "
-     "and there is no `error`-event arm), so a 401 falls through to `empty_completion`; and "
-     f"{_NO_STATUS}. grok's stderr DOES match the generic `unauthorized` marker, which is how "
-     "this exited 12 DEV_AUTH before ADR-0018 — the generic arm now ranks below the predicate, "
-     "so the one row where ADR-0018 changes a grok outcome, it changes it for the worse."),
-    ("grok_http_429", TERMINAL,
-     "no `terminal_error` arm exists for grok (`GROK_FAULT_STOP_REASONS` is empty by design "
-     "and there is no `error`-event arm), so every hard backend failure lands in "
-     "`empty_completion` — and only because the `{\"type\":\"error\"}` event carries no "
-     "`sessionId`, leaving `dump` empty. Same exit, wrong reason in `error_detail`."),
-    ("grok_http_500", TERMINAL,
-     "no `terminal_error` arm exists for grok, so the HTTP 500 lands in `empty_completion` "
-     "(again only because the error event carries no `sessionId`). Same exit, wrong reason."),
-    ("grok_truncated", TERMINAL,
-     "grok always emits a terminal `{\"type\":\"error\"}` event first — the truncation is "
-     "reported as `reqwest error stream: Transport error` — so `no_terminal_event` is "
-     "unreachable for grok and `terminal_error` is the intended reason. There is no "
-     "`terminal_error` arm either, so it lands in `empty_completion`."),
-    ("grok_turn_budget", BUDGET,
-     "no `turn_budget` arm exists in `grok_run_fault`, although grok announces the cap twice "
-     "in band — a `{\"type\":\"max_turns_reached\"}` event and `end` with "
-     "`stopReason:\"Cancelled\"` — plus `Error: max turns reached` on stderr. With no fault "
-     "and no auth marker the run falls through to 10 DEV_CRASH, so a deterministic cap is "
-     "charged to the Dev as a crash and retried."),
-    # JUDGEMENT CALL, flagged: the task guidance is silent on this row. grok
-    # 0.2.112 exits 2 at argument parsing when EXTRA_ARGS adds a second
-    # --output-format, so the CLI never ran and stdout is zero bytes. Calling
-    # that a harness fault makes an operator misconfiguration correlation-
-    # eligible and deterministic-across-the-fleet — exactly what turn_budget is
-    # separated out to avoid — while stderr carries the precise clap diagnosis
-    # that exit 10 surfaces. Pre-ADR-0018 it was 10.
-    ("grok_json_blob", CRASH,
-     "`grok_run_fault` reads a zero-byte stream as `no_terminal_event`, so a CLI that refused "
-     "its own argv is reported as a shared-backend-shaped harness fault (15, correlation-"
-     "eligible) instead of the crash it is. ADR-0018 regressed this row from 10 the same way "
-     "it regressed grok's and codex's 401s."),
+    ("grok_tool_only", NO_FAULT),
+    # EXPECTATION CHANGED by the fix commit (from empty_completion, same exit).
+    # grok reports 200-with-nothing as an `{"type":"error"}` event naming its own
+    # condition — `empty response from model (no_visible_content)` — and the new
+    # arm fires on that EVENT TYPE, carrying grok's verbatim message into the
+    # detail. Demoting it back to empty_completion would take a match on the
+    # message STRING, which buys nothing here: the exit code is 15 either way,
+    # and terminal_error is the more informative of the two.
+    ("grok_empty", TERMINAL),
+    # THE grok incident row, and the only one `empty_completion` still fires on:
+    # `grok export` opens by echoing the prompt, so `dump.strip()` is truthy for
+    # every run that has a session id. Only the prompt-anchored parse
+    # (`grok_export_activity`) sees that the transcript is the echo and nothing
+    # else.
+    ("grok_whitespace", EMPTY),
+    # grok's stderr matches only the GENERIC `unauthorized` marker, which ranks
+    # below the predicate; the 12 comes from the in-band `Unauthorized (401)`.
+    ("grok_http_401", AUTH),
+    ("grok_http_429", TERMINAL),
+    ("grok_http_500", TERMINAL),
+    # The truncation is reported as `reqwest error stream: Transport error` on
+    # the same `error` event, so `no_terminal_event` is unreachable for grok too.
+    ("grok_truncated", TERMINAL),
+    # Announced twice in band — a `{"type":"max_turns_reached"}` event and `end`
+    # with `stopReason:"Cancelled"` — but only the event TYPE decides, and it is
+    # checked FIRST so a deterministic cap can never become correlation-eligible.
+    ("grok_turn_budget", BUDGET),
+    # NOT a harness fault: grok 0.2.112 exits 2 at argument parsing when
+    # EXTRA_ARGS adds a second --output-format, so the CLI never ran and stdout
+    # is zero bytes. Calling that a harness fault would make an operator
+    # misconfiguration correlation-eligible and deterministic-across-the-fleet —
+    # exactly what turn_budget is separated out to avoid — while stderr carries
+    # the precise clap diagnosis that exit 10 surfaces.
+    ("grok_json_blob", CRASH),
 ]
 
 
-def _param(name: str, intended: tuple, xfail: str):
-    marks = [pytest.mark.xfail(strict=True, reason=xfail)] if xfail else []
-    return pytest.param(name, intended, id=name, marks=marks)
-
-
-@pytest.mark.parametrize("name,intended", [_param(*row) for row in CAPTURES])
+@pytest.mark.parametrize("name,intended",
+                         [pytest.param(n, i, id=n) for n, i in CAPTURES])
 def test_capture_gets_the_intended_verdict(name, intended):
     """The whole table: run the working-tree predicate over the captured bytes."""
     assert verdict(name) == intended
@@ -285,8 +274,9 @@ def test_sidecar_byte_counts_match_the_committed_files(name):
 
 
 # ── the mechanisms, measured ─────────────────────────────────────────────────
-# Facts about the captured bytes, not about the predicate — they stay true after
-# the fix commit, and they are what the xfail reasons above assert in prose.
+# Facts about the captured bytes, not about the predicate — they were true before
+# the fix commit and are true after it. They are what the table's comments assert
+# in prose, and what a predicate change has to keep agreeing with.
 
 def events(name: str) -> list:
     out = (FIXTURES / f"{name}.jsonl").read_text()
@@ -302,10 +292,12 @@ def test_the_two_codex_empty_captures_differ_only_in_the_model_pin():
     assert "/s/empty/v1" in " ".join(pinned) and "/s/empty/v1" in " ".join(bare)
 
 
-def test_the_model_pin_adds_an_error_item_that_scores_as_tool_activity():
+def test_the_model_pin_adds_an_error_item_before_the_turn_starts():
     """`Model metadata … not found` arrives as an `item.completed` before
-    `turn.started`, and its item type is "error" — not `agent_message` — so
-    codex_run_fault's `elif item: items += 1` counts it as a tool call."""
+    `turn.started`, and its item type is "error" — neither `agent_message` nor
+    a tool item. `codex_run_fault` used to score it as tool activity, which is
+    what made `empty_completion` unreachable against every local backend; it now
+    has its own bucket and is evidence only."""
     kinds = [e.get("type") for e in events("codex_empty")]
     items = [e["item"] for e in events("codex_empty") if e.get("type") == "item.completed"]
     assert kinds.index("item.completed") < kinds.index("turn.started")
@@ -332,23 +324,38 @@ def test_codex_always_emits_an_error_event_before_turn_failed():
 
 
 def test_codex_reports_a_401_in_band_only():
-    """The evidence for the intended 12: the status is in the stream, and the
-    only channel the pre-ADR-0018 classifier read says nothing about it."""
+    """The evidence for the 12: the status is in the stream, and the only
+    channel the pre-ADR-0018 classifier read says nothing about it — so the
+    in-band extractor is the whole difference between 12 and 15 here."""
     stream = (FIXTURES / "codex_http_401.jsonl").read_text()
     stderr = companion("codex_http_401", "stderr.txt")
     assert "401 Unauthorized" in stream
     assert "401" not in stderr and stderr.strip() == "Reading additional input from stdin..."
     assert ep.classify_harness_failure(stderr) == 10
     assert ep.auth_evidence_is_distinctive(stderr) is False
+    assert ep.harness_api_error_status("codex", stream) == 401
+    # …and PRECISION, the reason the pattern is anchored on codex's own
+    # transport wording: codex echoes the server's response BODY verbatim into
+    # `error.message`, so a generic `status (\\d{3})` would let a backend put
+    # "status 401" inside a 500 and pause the whole Dev Type.
+    body_echo = (FIXTURES / "codex_http_400.jsonl").read_text()
+    assert "invalid_request_error" in body_echo
+    assert ep.harness_api_error_status("codex", body_echo) is None
 
 
 def test_grok_export_echoes_the_prompt_so_dump_is_never_empty():
-    """The finding that inverts grok's `empty_completion`: the whole transcript
-    of a run that produced nothing useful is the prompt read back."""
+    """The finding that inverted grok's `empty_completion`: the whole transcript
+    of a run that produced nothing useful is the prompt read back — and the
+    prompt-anchored parse is what sees through it."""
     dump = companion("grok_whitespace", "dump.txt")
     assert dump.startswith("## User") and "ACKNOWLEDGED" in dump
     text, session = ep.grok_stream_parse((FIXTURES / "grok_whitespace.jsonl").read_text())
     assert text.strip() == "" and session
+    assert dump.strip()          # the naive `dump.strip()` test still says "worked"
+    assert ep.grok_export_activity(dump, capture_prompt(META["grok_whitespace"])) is False
+    for name in ("grok_healthy", "grok_refusal", "grok_tool_only", "grok_turn_budget"):
+        assert ep.grok_export_activity(companion(name, "dump.txt"),
+                                       capture_prompt(META[name])) is True
     # and the arm therefore fires only where there is no session to export
     for name in ("grok_empty", "grok_http_401", "grok_http_429", "grok_truncated"):
         assert META[name]["session_id"] is None
@@ -372,14 +379,23 @@ def test_grok_announces_the_turn_cap_twice_in_band():
     assert companion("grok_turn_budget", "stderr.txt").strip() == "Error: max turns reached"
 
 
-def test_grok_401_stderr_is_the_generic_marker_that_used_to_reach_exit_12():
-    """The regression in one assertion: the wording is auth wording, but only the
-    GENERIC kind, and the generic arm now ranks below the predicate."""
+def test_grok_401_reaches_exit_12_on_the_in_band_status_not_on_stderr():
+    """grok's stderr wording is auth wording, but only the GENERIC kind, and the
+    generic arm ranks BELOW the predicate — which now finds a fault on every one
+    of these rows. So the 12 this capture reached before ADR-0018 is preserved
+    only because the status is extracted from the stream."""
     stderr = companion("grok_http_401", "stderr.txt")
+    stream = (FIXTURES / "grok_http_401.jsonl").read_text()
     assert "Unauthorized (401)" in stderr
     assert ep.classify_harness_failure(stderr) == 12
     assert ep.auth_evidence_is_distinctive(stderr) is False
+    assert ep.harness_api_error_status("grok-build", stream) == 401
     assert META["grok_http_401"]["devcake_exit_before_adr0018"] == 12
+    # and the neighbouring statuses stay out of the auth lane
+    assert ep.harness_api_error_status(
+        "grok-build", (FIXTURES / "grok_http_500.jsonl").read_text()) == 500
+    assert ep.harness_api_error_status(
+        "grok-build", (FIXTURES / "grok_http_429.jsonl").read_text()) is None
 
 
 def test_grok_json_blob_never_ran_the_model():

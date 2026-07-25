@@ -1,0 +1,1 @@
+{"type":"end","stopReason":"EndTurn","sessionId":"019f9ac8-5ebd-77f1-ad1d-7356427f1860","requestId":"61b8d2ee-7165-4d8a-a574-86c300796d5f","usage":{"input_tokens":1920,"cache_read_input_tokens":0,"output_tokens":384,"reasoning_tokens":0,"total_tokens":2304},"num_turns":16,"modelUsage":{"stub-model":{"inputTokens":1920,"outputTokens":384,"cacheReadInputTokens":0,"modelCalls":16}}}

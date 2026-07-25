@@ -4,10 +4,12 @@ Live captures of real CLI stdout, taken against stub backends that reproduce one
 each. No fixture byte is hand-written or edited: when a capture came out wrong the *condition* was
 changed and the run repeated.
 
-Four batches so far — Claude Code 2.1.219 (2026-07-24, the incident investigation), and three from
-the ADR-0018 gate-1 capture session on 2026-07-25: grok-build 0.2.112, codex 0.144.4, and two
-Claude Code 2.1.210 conservatism baselines. Every harness now has real captures; no predicate arm
-rests on a synthetic stream any more.
+Five batches so far — Claude Code 2.1.219 (2026-07-24, the incident investigation), three from
+the ADR-0018 gate-1 capture session on 2026-07-25 (grok-build 0.2.112, codex 0.144.4, and two
+Claude Code 2.1.210 conservatism baselines), and three more grok captures taken later the same day
+when the gate-1 batch turned out to have measured something nobody had asked about — grok halting a
+run *itself* at 16 turns ([below](#grok-halts-a-repeated-tool-call-run-itself-at-16-turns--and-that-is-not-a-turn-cap)).
+Every harness now has real captures; no predicate arm rests on a synthetic stream any more.
 
 **CLI versions are read from inside the baked image by the rig itself** and recorded in every
 sidecar's `cli_version` — the host's CLIs drift from the image pins, so a capture taken at the wrong
@@ -84,12 +86,17 @@ Backend: `scripts/harness_capture/stub_backend.py`, selected per capture by path
 purpose — they are the provenance that proves a capture hit the stub and not a real API. Nothing
 needed scrubbing: grok's streaming-json carries no paths, no tool listing and no environment.
 
-**Wire protocol.** `GROK_MODELS_BASE_URL` + `XAI_API_KEY` (no `grok login`), with
-`$GROK_HOME/config.toml` holding only `[model.stub-model] api_backend = "messages"`. grok's default
-`chat_completions` lane **rejects the stub**: it requires `created` on every streamed chunk and aborts
-with `Internal error: "serialization error: missing field 'created' at line 1 column 641"` — a stub
-gap, not a grok or DevCake defect. The wire protocol does not change grok's stdout shape, which is
-what these fixtures are about.
+**Wire protocol.** `GROK_MODELS_BASE_URL` + `XAI_API_KEY` (no `grok login`). The eleven gate-1
+captures were taken with `$GROK_HOME/config.toml` holding only
+`[model.stub-model] api_backend = "messages"`, because grok's default `chat_completions` lane
+**rejected the stub**: it requires `created` on every streamed chunk and aborted with
+`Internal error: "serialization error: missing field 'created' at line 1 column 641"`. That was a
+stub gap and it has since been closed — the streamed chunks carry `created` and `model` like real
+OpenAI ones, so the default lane works and needs no `config.toml` at all. **`grok_loop_varying_cap20`
+is the first grok capture taken over the default `chat_completions` lane**; the others are
+`messages`. The lane does not change grok's stdout shape (measured both ways for the 16-turn stop
+below), which is what these fixtures are about. A sidecar does not record the lane — only the
+preflight URL — so this paragraph is the record of which capture used which.
 
 | File | Backend condition | CLI exit | grok stdout (terminal event) | `dump` (`grok export`) |
 |---|---|---|---|---|
@@ -104,6 +111,9 @@ what these fixtures are about.
 | `grok_truncated.jsonl` | stream cut mid-body (retried ~5 min first) | 1 | `{"type":"error"}` — `reqwest error stream: Transport error` | empty |
 | `grok_turn_budget.jsonl` | `tool_use` every turn, `--max-turns 2` | 1 | `{"type":"max_turns_reached"}` then `end` `stopReason:"Cancelled"` | 482 B |
 | `grok_json_blob.jsonl` | `--extra '--output-format json'` | **2** | **empty** — clap refuses a duplicate `--output-format` | empty |
+| `grok_loop_nocap.jsonl` | the `loop` lane — the **same** `tool_use` every turn, no `--max-turns` | **0** | **only** `end` `EndTurn`, `num_turns:16` | 916 B — 16 identical tool lines |
+| `grok_loop_cap30.jsonl` | the same lane, **`--max-turns 30`** | **0** | byte-identical shape — `end` `EndTurn`, `num_turns:16` | 916 B |
+| `grok_loop_varying_cap20.jsonl` | `loop_varying` — a **different** `tool_use` every turn, `--max-turns 20` | 1 | `{"type":"max_turns_reached"}` then `end` `Cancelled`, **`num_turns:20`** | 1140 B — 20 distinct tool lines |
 
 ### What the shipped predicate does with them
 
@@ -124,6 +134,11 @@ prompt wrote no `result.json` — it is not a fault verdict.
 | `grok_truncated` | `no_terminal_event` | `empty_completion` | 15 | 10 | grok always emits a terminal `error`, so this arm is unreachable for grok |
 | `grok_turn_budget` | `turn_budget` | **none** | 10 | 10 | **mismatch** — `grok_run_fault` has no turn-budget arm |
 | `grok_json_blob` | — | `no_terminal_event` | 15 | 10 | |
+
+The three later captures are graded against the **shipped** predicate (they postdate the fix commit),
+and none of them moved it: `grok_loop_nocap` and `grok_loop_cap30` are `none` / 11 / 11 like every
+other clean-exit row, and `grok_loop_varying_cap20` is `turn_budget` / 16 / 10. What they measure is
+a property of the CLI, not of the predicate.
 
 `grok_run_fault` has no reachable `terminal_error` arm: `GROK_FAULT_STOP_REASONS` is empty by design
 and the predicate never inspects `{"type":"error"}`, so every hard backend failure lands in
@@ -189,9 +204,17 @@ evidence a grok run did anything, which is why it cannot simply be dropped from 
 
 It was captured against a stub whose `tool_only` lane answered **every** turn with a tool call; grok
 ended the run itself at 16 turns with `stopReason:"EndTurn"` and exit **0**, which is why it is a
-clean tool-only capture and not a turn-cap one. If that lane is later changed to answer only the
-first turn, grok will not reproduce this stream — turn 2 would be a content-free response and grok
-treats that as `no_visible_content` (see `grok_empty`), not as the end of a turn.
+clean tool-only capture and not a turn-cap one.
+
+**That lane has since changed, so `grok_tool_only` is no longer reproducible from `tool_only`.**
+`tool_only` now answers the first turn with a tool call and the turn *after a tool result* with
+nothing (`tool_result_present`), because codex — which has no turn cap — otherwise looped until the
+capture timeout and produced a killed process instead of the conservatism evidence the scenario
+exists for. grok on that lane does **not** end its turn at the content-free response: it reports
+`no_visible_content` and exits 1 (see `grok_empty`). **To reproduce `grok_tool_only` today, use the
+`loop` lane** — `grok_loop_nocap` is exactly that run, and its stream differs only in the session and
+request ids. The `tool_only` shape is right for codex (`codex_tool_only`: one tool call, a turn that
+ends with no final text, exit 0, no fault — the arm that must never fire) and is left alone.
 
 ### Turn exhaustion
 
@@ -201,6 +224,79 @@ dedicated `{"type":"max_turns_reached"}` event **and** `end` with `stopReason:"C
 event types when this was captured (it returned `None` for anything that was not `text` or `end`), so
 the operator's live transcript said nothing about the stop; it now renders `max_turns_reached` and
 `error`, and the `error` arm flushes the text buffer the way `end` does.
+
+`grok_loop_varying_cap20` is the same shape at `num_turns:20` — the evidence that the cap is not
+pinned to some lower ceiling, and the reason the "raise `--max-turns`" remedy in
+`docs/15-errors-and-retries.md` §2a is real advice for grok.
+
+### grok halts a repeated-tool-call run itself at 16 turns — and that is NOT a turn cap
+
+The gate-1 batch left a hedge in `docs/08` ("whether that 16 is a default cap is unverified"). It is
+answered now, and the answer is *neither* of the two things it could have been.
+
+**Measured.** Six runs of the `loop` lane — the byte-identical `tool_use` every turn — stopped at
+exactly `num_turns: 16` / `modelCalls: 16`:
+
+| run | lane | `--max-turns` | result |
+|---|---|---|---|
+| `grok_tool_only` (committed) | messages | unset | `EndTurn`, exit 0, **16** |
+| `grok_loop_nocap` (committed) | messages | unset | `EndTurn`, exit 0, **16** |
+| `grok_loop_cap30` (committed) | messages | **30** | `EndTurn`, exit 0, **16** |
+| `probe_cap17` (campaign note) | chat_completions | **17** | `EndTurn`, exit 0, **16** |
+| `grok_loop_chatlane` (campaign note) | chat_completions | unset | `EndTurn`, exit 0, **16** |
+| `probe_cap16` (campaign note) | chat_completions | **16** | `max_turns_reached` + `Cancelled`, exit 1, **16** |
+
+Reading only those, "grok has a hard 16-turn ceiling and `--max-turns` can only lower it" is the
+obvious conclusion, and it is **wrong**. The control that breaks it is `grok_loop_varying_cap20`:
+the same lane, the same CLI, the same protocol, with **one** difference — the tool call's arguments
+change every turn (`stub_backend.py::vary`). That run sails past 16 and is stopped by `--max-turns
+20` at `num_turns: 20`, loudly. Without a cap at all it does not stop: **~2,900 model calls in 300 s,
+still going when the rig killed it** (campaign note — a killed grok run writes zero bytes of stdout,
+so there is nothing to commit).
+
+So `--max-turns 30` did not "fail to raise a ceiling" on `grok_loop_cap30`. **The flag was accepted
+and armed; the halt simply fired first, at 16, and a cap of 30 was never reached** — exactly as a cap
+of 20 was never reached on the repeating lane and *was* reached on the varying one. Independently of
+these captures, the founder inspected the CLI on 2026-07-25 and found no default to raise in the
+first place: `--max-turns <N>` is documented with **no default**, `config.toml` has no `max_turns`
+key, and the binary's strings carry the cap path only for an explicit limit (`max turns reached`,
+`max_turns_reached`, `max_turns must be greater than 0`) with no `DEFAULT_MAX_TURNS` equivalent —
+plus live runs stopping at exactly 5, 30 and 50. That is CLI inspection, not a capture, and is
+recorded here as corroboration only; the committed proof that the flag works above 16 is
+`grok_loop_varying_cap20`.
+
+**The mechanism is grok's own stall detector, and it is visible only in the stub's journal.** Every
+tool result grok fed back to the model on the repeating runs carried an injected reminder:
+
+```
+exit: 0
+working
+
+<system-reminder>
+You appear to be running empty commands to stay active while waiting for background work. End your
+turn — you will be woken automatically when there is something to do.
+</system-reminder>
+```
+
+So the run does not hit a limit — grok talks the model into ending its turn, and after 16 such turns
+the run ends. Nothing about this appears in grok's **output** stream: `stopReason:"EndTurn"`, exit 0,
+one `end` event, no `max_turns_reached`. It is byte-identical in shape to a clean success.
+
+**Why an operator cares.** A grok Dev that gets stuck repeating one command stops at 16 turns having
+completed nothing, writes no `result.json`, and is reported **exit 11 `DEV_BAD_OUTPUT`** — before and
+after ADR-0018, and correctly so (16 tool executions really happened; the fault predicate is right
+not to fire). There is no diagnostic anywhere saying the run was truncated. `docs/15` §2b carries the
+operator-facing version of this.
+
+**What is NOT established.** Whether the constant is exactly 16 for every prompt and tool, what
+counts as "the same command" to the detector, and whether a real model — which would read the
+reminder and act on it — behaves the way the stub's fixed answer forces. The stub cannot read a
+system-reminder, so these captures measure grok's *harness* behaviour under a pathological model, not
+a model's behaviour.
+
+**Campaign notes above are uncommitted runs** taken with the same rig on 2026-07-25; the `probe_*`
+ones are reproducible from the committed stub (`/s/loop/v1` with `--extra '--max-turns N'`), and the
+~2,900-call one needs `/s/loop_varying/v1` with no cap.
 
 ### `usage` on the `end` event (docs/08 §2 is out of date)
 
@@ -476,10 +572,11 @@ Two rules make the exercise mean something:
   was the evidence half of a two-commit sequence; the fix commit was finished exactly when all of
   them were gone, and `strict=True` meant an accidental fix could not pass silently either.
 
-> **Status: the fix commit has landed.** All 27 rows hold and the test file carries no xfails. The
+> **Status: the fix commit has landed.** All 30 rows hold and the test file carries no xfails. The
 > "observed today" column below is preserved as the **pre-fix** snapshot — it is the record of what
 > the captures found, not a description of the shipped predicate. One intended verdict was changed
-> by the fix commit and is marked in place: `grok_empty`.
+> by the fix commit and is marked in place: `grok_empty`. The three `grok_loop_*` rows postdate the
+> fix commit entirely, so for them "observed" and "shipped" are the same thing.
 
 The sidecars' `observed_reason` is deliberately **not** asserted (it is a snapshot of a predicate
 about to change); their **byte counts** are, on every row, which is the guard that catches a stream
@@ -520,8 +617,12 @@ is the capture prompt writing no `result.json`; it is not a fault verdict.)
 | `grok_truncated` | 1 | `terminal_error` / 15 / DEV_HARNESS_FAULT | `empty_completion` / 15 / DEV_HARNESS_FAULT | yes |
 | `grok_turn_budget` | 1 | `turn_budget` / **16 / DEV_TURN_BUDGET** | none / 10 / DEV_CRASH | yes |
 | `grok_json_blob` | 2 | none / **10 / DEV_CRASH** | `no_terminal_event` / 15 / DEV_HARNESS_FAULT | yes |
+| `grok_loop_nocap` | 0 | none | none (post-fix capture) | — |
+| `grok_loop_cap30` | 0 | none | none (post-fix capture) | — |
+| `grok_loop_varying_cap20` | 1 | `turn_budget` / 16 / DEV_TURN_BUDGET | same (post-fix capture) | — |
 
-**11 of 27 rows were xfail** at capture time. Four of them (`codex_empty`, `codex_whitespace`,
+**11 of the 27 rows that existed then were xfail** at capture time (the three `grok_loop_*` rows
+came later and were never xfail — they measure the CLI, not the predicate). Four of them (`codex_empty`, `codex_whitespace`,
 `grok_whitespace`, `grok_turn_budget`) were wrong *reasons*; four (`codex_http_401`,
 `codex_http_401_retrying`, `grok_http_401`, `grok_json_blob`) were wrong *exit codes*, and all four
 of those were ADR-0018 **regressions** — every one of them reached a better code before the ADR

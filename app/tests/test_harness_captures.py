@@ -23,11 +23,18 @@ stream and its sidecar drifting apart.
 This module opened as the EVIDENCE half of a two-commit sequence: eleven rows
 landed as strict expected failures naming the mechanism that produced the wrong
 answer, and the fix commit was finished exactly when every one of them had been
-removed. All twenty-seven rows now hold against the working-tree predicate, so
+removed. All thirty rows now hold against the working-tree predicate, so
 the table is a plain regression suite: any row that stops holding is a real
 change of verdict, and every verdict change is a behaviour change an operator
 feels (15 excuses an attempt and feeds the correlation brake, 12 pauses a whole
 Dev Type, 16 is always counted).
+
+Three rows carry a fact about a HARNESS rather than about the predicate: grok
+halts a repeated-tool-call run itself at 16 model calls, silently and with exit
+0 (`grok_loop_nocap`, `grok_loop_cap30`). That is a non-progress halt, NOT a turn
+cap — `grok_loop_varying_cap20` runs past 16 on the same lane and is stopped by
+`--max-turns 20` at turn 20. Their verdicts are unremarkable; the tests below
+them are the point.
 """
 
 import importlib.util
@@ -229,6 +236,25 @@ CAPTURES = [
     # with `stopReason:"Cancelled"` — but only the event TYPE decides, and it is
     # checked FIRST so a deterministic cap can never become correlation-eligible.
     ("grok_turn_budget", BUDGET),
+    # ── grok's SILENT NON-PROGRESS HALT, and the control that explains it ────
+    # Both are the `loop` lane — the byte-identical tool call, every turn — and
+    # both stop at 16 model calls with `EndTurn` and exit 0, one of them having
+    # asked for `--max-turns 30` (accepted and armed; the halt fired at 16, so
+    # turn 30 was never reached — this is NOT a cap the flag failed to raise).
+    # NO FAULT is the correct verdict and not a concession: 16 tool executions
+    # happened, the export lists them, and the predicate is right to see
+    # activity. It is what happens NEXT that hurts — no `result.json` was
+    # written, so the honest report is exit 11 `DEV_BAD_OUTPUT`,
+    # indistinguishable from a Dev that simply misbehaved
+    # (`test_grok_halts_silently_on_a_repeated_tool_call`, `15` §2b).
+    ("grok_loop_nocap", NO_FAULT),
+    ("grok_loop_cap30", NO_FAULT),
+    # THE control, and the row that keeps the remedy honest: the same lane with
+    # the tool ARGUMENTS varied runs straight past 16, and `--max-turns 20` then
+    # stops it loudly at `num_turns: 20`. So the halt is not a ceiling and the
+    # cap is genuinely raisable on grok — `15-errors-and-retries.md` §2a's
+    # advice is correct as written.
+    ("grok_loop_varying_cap20", BUDGET),
     # NOT a harness fault: grok 0.2.112 exits 2 at argument parsing when
     # EXTRA_ARGS adds a second --output-format, so the CLI never ran and stdout
     # is zero bytes. Calling that a harness fault would make an operator
@@ -373,10 +399,65 @@ def test_grok_reports_every_hard_failure_as_one_terminal_error_event():
 
 def test_grok_announces_the_turn_cap_twice_in_band():
     """A `turn_budget` arm is implementable for grok — the capture says so."""
-    assert [e.get("type") for e in events("grok_turn_budget")] == [
-        "max_turns_reached", "end"]
-    assert events("grok_turn_budget")[1]["stopReason"] == "Cancelled"
-    assert companion("grok_turn_budget", "stderr.txt").strip() == "Error: max turns reached"
+    for name in ("grok_turn_budget", "grok_loop_varying_cap20"):
+        assert [e.get("type") for e in events(name)] == ["max_turns_reached", "end"]
+        assert events(name)[1]["stopReason"] == "Cancelled"
+        assert companion(name, "stderr.txt").strip() == "Error: max turns reached"
+        assert META[name]["exit_code"] == 1
+
+
+def test_grok_halts_silently_on_a_repeated_tool_call():
+    """THE operational hazard, and why `--max-turns` is not the lever for it.
+
+    Answered with the byte-identical tool call every turn, grok 0.2.112 ends the
+    run ITSELF at 16 model calls — and the stream it leaves is
+    indistinguishable from a clean success: one `end` event, `EndTurn`, exit 0,
+    no `max_turns_reached`. Nothing was completed, so no `result.json` exists and
+    the run is reported exit 11 `DEV_BAD_OUTPUT` with no hint of the cause. The
+    predicate is CORRECT not to fault it (16 tool executions really happened,
+    and the export lists them) — the hazard is the silence, not the verdict.
+    """
+    for name in ("grok_loop_nocap", "grok_loop_cap30", "grok_tool_only"):
+        evs = events(name)
+        assert [e.get("type") for e in evs] == ["end"]           # nothing else
+        assert evs[0]["stopReason"] == "EndTurn"                 # says "success"
+        assert evs[0]["num_turns"] == 16
+        assert evs[0]["modelUsage"]["stub-model"]["modelCalls"] == 16
+        assert META[name]["exit_code"] == 0 and not companion(name, "stderr.txt")
+        # …and DevCake's honest report is the bad-output code, before and after
+        # ADR-0018 — this row is untouched by the fault predicate
+        assert (META[name]["devcake_exit_now"],
+                META[name]["devcake_exit_before_adr0018"]) == (11, 11)
+
+
+def test_grok_stops_at_16_only_when_the_tool_call_repeats():
+    """The control that rules out a 16-turn ceiling — the alternative reading of
+    the three rows above, and the one an operator would act on wrongly.
+
+    `grok_loop_cap30` ASKED for 30 turns and got 16, which looks exactly like a
+    cap that cannot be raised. It is not: the `loop_varying` lane differs only in
+    that the tool arguments move (`stub_backend.py::vary`), and the same CLI then
+    sails past 16 and is stopped by `--max-turns 20` at `num_turns: 20`. The 30
+    was accepted and armed — the halt just fired first and the run never reached
+    turn 30. `--max-turns` is fully actionable on grok, above 16 like anywhere
+    else; what stops the repeated-call runs is grok's own non-progress halt,
+    which it announces in the tool RESULT ("You appear to be running empty
+    commands…") and nowhere in its output stream.
+    """
+    varying = events("grok_loop_varying_cap20")[1]
+    assert varying["num_turns"] == 20                        # > 16, and loud
+    assert varying["modelUsage"]["stub-model"]["modelCalls"] == 20
+    assert "--max-turns" in META["grok_loop_varying_cap20"]["argv"]
+    # the cap30 row asked for MORE than the varying row got, and got less
+    assert META["grok_loop_cap30"]["argv"][-2:] == ["--max-turns", "30"]
+    assert events("grok_loop_cap30")[0]["num_turns"] == 16
+    # 20 distinct calls in the export vs 16 identical ones — the whole difference
+    tools = [ln for ln in companion("grok_loop_varying_cap20", "dump.txt").splitlines()
+             if ln.startswith("- ")]
+    assert len(tools) == 20 and len(set(tools)) == 20
+    repeated = [ln for ln in companion("grok_loop_nocap", "dump.txt").splitlines()
+                if ln.startswith("- ")]
+    assert len(repeated) == 16 and len(set(repeated)) == 1
 
 
 def test_grok_401_reaches_exit_12_on_the_in_band_status_not_on_stderr():

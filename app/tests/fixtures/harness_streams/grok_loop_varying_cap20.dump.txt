@@ -1,0 +1,34 @@
+## User
+
+You are working in a small git repository at the current directory.
+
+Task: add a `farewell(name)` function to `src/greet.py` that returns
+`f"bye {name}"`, mirroring the existing `greet` function.
+
+When you are done, write your outcome to `out/result.json` EXACTLY as:
+{"schema_version": 1, "outcome": "executed", "summary": "<what you changed>"}
+
+Do not commit. Do not push. Keep the change minimal.
+
+## Tools
+
+- Execute: echo working 0 (stub 0)
+- Execute: echo working 1 (stub 1)
+- Execute: echo working 2 (stub 2)
+- Execute: echo working 3 (stub 3)
+- Execute: echo working 4 (stub 4)
+- Execute: echo working 5 (stub 5)
+- Execute: echo working 6 (stub 6)
+- Execute: echo working 7 (stub 7)
+- Execute: echo working 8 (stub 8)
+- Execute: echo working 9 (stub 9)
+- Execute: echo working 10 (stub 10)
+- Execute: echo working 11 (stub 11)
+- Execute: echo working 12 (stub 12)
+- Execute: echo working 13 (stub 13)
+- Execute: echo working 14 (stub 14)
+- Execute: echo working 15 (stub 15)
+- Execute: echo working 16 (stub 16)
+- Execute: echo working 17 (stub 17)
+- Execute: echo working 18 (stub 18)
+- Execute: echo working 19 (stub 19)

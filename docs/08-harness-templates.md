@@ -73,14 +73,14 @@ grok -p "$PROMPT" --output-format streaming-json --always-approve
 - The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image.
 
 **Headless stream, observed at 0.2.112 (captured 2026-07-25).** Not a complete
-event catalogue — the distinct `type` values present across the eleven `grok_*`
+event catalogue — the distinct `type` values present across the fourteen `grok_*`
 captures are exactly:
 
 | `type` | payload observed | fixture |
 |---|---|---|
 | `text` | assistant text under **`data`** | `grok_healthy`, `grok_refusal`, `grok_whitespace` |
-| `end` | `{stopReason, sessionId, requestId, usage, num_turns, modelUsage}` | the same three + `grok_tool_only`, `grok_turn_budget` |
-| `max_turns_reached` | no payload — the bare `{"type":"max_turns_reached"}` | `grok_turn_budget` |
+| `end` | `{stopReason, sessionId, requestId, usage, num_turns, modelUsage}` | the same three + `grok_tool_only`, `grok_turn_budget`, all three `grok_loop_*` |
+| `max_turns_reached` | no payload — the bare `{"type":"max_turns_reached"}` | `grok_turn_budget`, `grok_loop_varying_cap20` |
 | `error` | `{message}` — **never a `sessionId`** | `grok_empty`, `grok_http_401/429/500`, `grok_truncated` |
 
 `thought` is recorded from the 0.2.93 verification and is **unverified at
@@ -95,7 +95,8 @@ result text. `sessionId` comes from the `end` event only — an `error` event
 carries none, so a crashed run cannot be located on disk.
 
 - **Usage/cost — corrected at 0.2.112.** The older record "neither contains usage/cost fields in this version" was true of 0.2.93 and is **false at 0.2.112**: every captured `end` event carries `usage = {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}`, `num_turns`, and `modelUsage = {<model>: {inputTokens, outputTokens, cacheReadInputTokens, modelCalls}}` — an input/output split inline in stdout, which 0.2.93 did not have. There is **no cost field** (`total_cost_usd` or otherwise) in any capture. Caveat: the numbers are the stub's; the presence and key names are the CLI's. §5 records what this means for extraction.
-- **Turn cap, observed at 0.2.112:** with `--max-turns 2` grok emits **both** a dedicated `{"type":"max_turns_reached"}` event **and** an `end` event with `stopReason: "Cancelled"` (`num_turns: 2`), writes `Error: max turns reached` to stderr, and exits **1** (`grok_turn_budget`). Consumers must expect the pair, not one or the other. With no `--max-turns`, grok ended a 16-turn always-tool-calling run itself with `stopReason: "EndTurn"` and exit 0 (`grok_tool_only`); whether that 16 is a default cap is unverified.
+- **Turn cap, observed at 0.2.112:** with `--max-turns 2` grok emits **both** a dedicated `{"type":"max_turns_reached"}` event **and** an `end` event with `stopReason: "Cancelled"` (`num_turns: 2`), writes `Error: max turns reached` to stderr, and exits **1** (`grok_turn_budget`). Consumers must expect the pair, not one or the other. The cap is an ordinary flag with **no default**: it fires wherever it is set, including above the 16 of §1c — `grok_loop_varying_cap20` stops at `num_turns: 20`, and the founder's CLI inspection found `--max-turns <N>` documented with no default, no `max_turns` key in `config.toml`, and no `DEFAULT_MAX_TURNS` string in the binary. Do not read §1c's 16 as a cap.
+- **A silent non-progress halt, and it is NOT a turn cap (measured 2026-07-25).** Answered with the **byte-identical** tool call every turn, grok ends the run *itself* after 16 model calls with `stopReason: "EndTurn"` and exit **0** — the shape of a clean success, and the run then reports exit 11 `DEV_BAD_OUTPUT`. Mechanism, fixtures and the boundary of the measurement: **§1c** below; operator guidance: `15-errors-and-retries.md` §2b.
 - **`--output-format json` is unreachable through `$DEVCAKE_EXTRA_ARGS` at 0.2.112.** The invocation already passes `--output-format streaming-json`, and a second one makes grok exit **2** with `error: the argument '--output-format <OUTPUT_FORMAT>' cannot be used multiple times` and an empty stdout (`grok_json_blob`, `.stderr.txt`). The 0.2.93 blob shape `{text, stopReason, sessionId, requestId, thought}` is therefore unverified at 0.2.112 and cannot be reached from DevCake's own argv.
 - Sessions persist under `~/.grok/sessions/{urlencoded-cwd}/{session_id}/` (verified at 0.2.93) — the `sessionId` from the headless output locates the directory; `signals.json` there carries `contextTokensUsed`/`totalTokens`, `contextWindowTokens`, `modelsUsed` (totals only — no input/output split, no cost). The capture campaign reports `signals.json` **still present at 0.2.112, and only for cleanly-ended sessions** (present for `grok_healthy`/`whitespace`/`refusal`/`tool_only`, absent after a turn-cap stop or an HTTP failure) — **unverified here**: no `signals.json` is committed as a fixture, so treat it as a campaign note (`app/tests/fixtures/harness_streams/README.md`) until one is. The TUI `/usage` command is interactive-only and not used.
 
@@ -107,7 +108,7 @@ codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
 - **Verified on the installed CLI pinned by the image (`@openai/codex@0.144.4`, 2026-07).** `--json` emits a JSONL event stream; **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `item.type: agent_message` is the in-stream equivalent). A run that produced no agent message leaves that file **empty** rather than absent (`codex_empty`, `codex_empty_no_model` — `last_message_bytes: 0`), and a whitespace-only completion writes the whitespace verbatim (`codex_whitespace`, 4 bytes).
 
 **`--json` stream, observed at 0.144.4 (captured 2026-07-25).** Not a complete
-event catalogue — the distinct `type` values present across the thirteen
+event catalogue — the distinct `type` values present across the fourteen
 `codex_*` captures are exactly `thread.started`, `turn.started`,
 `item.started`, `item.completed`, `turn.completed`, `turn.failed`, `error`;
 the distinct `item.type` values are `error`, `agent_message`,
@@ -145,6 +146,39 @@ fixture; the committed `codex_tool_only` is the redesigned, terminating lane.)
 The only bound left is DevCake's own run timeout (`07-dev-runtime.md`), which
 arrives as a signal kill rather than as a turn-budget stop — so a looping codex
 Dev burns wall-clock and backend capacity for the whole timeout, every attempt.
+
+### grok's silent non-progress halt (§1c, observed 2026-07-25)
+
+Not a cap, and the reason the row above says "no default": grok 0.2.112 stops a
+run that keeps making the **same** tool call, on its own, at 16 model calls.
+
+| condition | what grok does | fixture |
+|---|---|---|
+| identical `tool_use` every turn, no `--max-turns` | ends at `num_turns: 16`, `stopReason: "EndTurn"`, exit **0**, one `end` event, **no** `max_turns_reached` | `grok_tool_only`, `grok_loop_nocap` |
+| the same, **`--max-turns 30`** | identical shape — still 16; the cap was armed and never reached | `grok_loop_cap30` |
+| tool call **arguments vary**, `--max-turns 20` | runs past 16 and stops at `num_turns: 20`, loudly, exit 1 | `grok_loop_varying_cap20` |
+| arguments vary, no cap | does not stop — ~2,900 model calls in 300 s, killed by the rig (campaign note) | — |
+
+The mechanism is grok's own stall detection, and it is addressed to the **model**,
+not to the operator: grok appends `You appear to be running empty commands to stay
+active while waiting for background work. End your turn — you will be woken
+automatically when there is something to do.` to the tool result it feeds back.
+That text is in the request the harness sends its backend; it is in **no** DevCake
+channel — not stdout, not stderr, not `grok export`, which lists the repeated tool
+lines and nothing about why the run ended.
+
+**What DevCake reports.** Exit 0 with nothing accomplished means no
+`/workspace/out/result.json`, so the run is **exit 11 `DEV_BAD_OUTPUT`** — the same
+verdict as a Dev that wrote garbage, with no indication the run was truncated. The
+ADR-0018 fault predicate deliberately does **not** fire (16 tool executions really
+happened and the export lists them), and that is correct: this is a harness that
+gave up, not a harness that failed. Operator-facing writeup:
+`15-errors-and-retries.md` §2b.
+
+**Boundary of the measurement.** The stub answers with a fixed tool call and
+cannot read the reminder; a real model would. So this measures grok's behaviour
+under a pathologically stuck model — which is precisely the case a weak or
+degrading backend produces — and not what a healthy model does.
 
 ## 2. Base images
 
@@ -387,6 +421,13 @@ tool call.
 `15-errors-and-retries.md` §4a). These runs are `DEV_BAD_OUTPUT` (exit 11), so a
 fleet-wide bad-output cascade is throttled by nothing, excused by nothing, and every
 failure counts toward `max_attempts`. Recorded, not fixed.
+
+**A second route to the same exit 11, on grok.** A model that does not stop
+tool-calling but keeps repeating the *same* call is halted by grok itself at 16
+turns, silently and with exit 0 (§1c) — same class, same absent brake, and the
+same fleet-wide arrival, because "the model is too weak for this step" is a
+property of the shared backend. §1c has the signature to recognise it by;
+`15-errors-and-retries.md` §2b has the operator's version.
 
 ### Operator remedies
 

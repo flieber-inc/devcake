@@ -19,7 +19,7 @@
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.144.4, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
-| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — a **fleet-wide** exit-11 cascade is usually a model that stopped tool-calling against a shared backend (`08-harness-templates.md` §8, measured 2026-07-25), and §4a's brake keys on exit 15, so it does not cover this |
+| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — a **fleet-wide** exit-11 cascade is usually a model that stopped tool-calling against a shared backend (`08-harness-templates.md` §8, measured 2026-07-25) or, on grok, one that looped on a single command until the harness gave up silently (§2b); §4a's brake keys on exit 15, so it covers neither |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
 | `EXTERNAL_TRANSITION` | human changed status/label mid-run (`04-orchestrator.md` §4) | **not an error** — first-class outcome |
@@ -68,6 +68,54 @@ is stopped only by `dev_timeout_minutes` (`config.py:343`, default 120 — a
 it arrives as a signal kill reported `DEV_TIMEOUT`, never `DEV_TURN_BUDGET`. The
 levers there are a smaller task, a different Dev Type, or accepting the timeout as
 the bound. Do not go looking for a codex turn flag; at 0.144.4 there is not one.
+
+**grok's cap has no default**, so nothing sits above the value you set: measured
+2026-07-25 it stops exactly where it is told (`grok_loop_varying_cap20` at 20;
+`grok_turn_budget` at 2), `--max-turns <N>` is documented with no default, and
+`config.toml` has no `max_turns` key. The 16 in §2b is a different stop path
+entirely — do not mistake it for a ceiling on this flag.
+
+## 2b. grok's silent non-progress halt — a `DEV_BAD_OUTPUT` with no diagnosis
+
+**The hazard.** A grok Dev whose model keeps issuing the **same** tool call is
+stopped by grok itself after ~16 model calls. The run ends `stopReason: "EndTurn"`
+with **exit 0** — byte-identical in shape to a clean success, no
+`max_turns_reached`, nothing on stderr. Nothing was accomplished, so no
+`result.json` was written, so DevCake reports **exit 11 `DEV_BAD_OUTPUT`**
+(`07-dev-runtime.md` §4) and the operator sees a Dev that "produced bad output".
+There is no signal anywhere that the run was truncated.
+
+**Why it matters now.** The trigger is a model looping on one command, which is
+exactly what a weak, overloaded or degrading backend does. It therefore arrives
+**fleet-wide and identically**, and `DEV_BAD_OUTPUT` is the one class with no
+brake: every attempt counts, nothing is excused, nothing is throttled (§4a's
+detector keys on exit 15). Three attempts per step, and the board reaches
+`DEVCAKE-FAILED`.
+
+**What it is not.** It is **not** a turn cap and `--max-turns` is not the lever:
+a run with `--max-turns 30` halts at the same 16 because the cap is never reached
+(`grok_loop_cap30`), while the same lane with *varying* tool calls runs past 16
+and honours a cap of 20 (`grok_loop_varying_cap20`). Raising the cap changes
+nothing about this failure; §2a's advice is for real cap stops (exit 16).
+
+**How to recognise it.** In this order, because only the first two are visible in
+DevCake:
+
+| where | what you see |
+|---|---|
+| run report | exit 11 `DEV_BAD_OUTPUT`, `result.json` missing — **and the run ended early and cheaply** (low token count, short duration for the step) |
+| activity / transcript | the same tool invocation repeated, then nothing; `grok export` lists the repeats and no conclusion |
+| grok's own diagnosis | `You appear to be running empty commands to stay active while waiting for background work. End your turn` — grok injects this into the **tool result** it sends its backend. It never reaches stdout, stderr or the transcript, so DevCake cannot surface it. |
+
+**What to do.** The remedies are the model's, not the cap's: assign a stronger Dev
+Type / harness for that Mission Type (`11-admin-panel.md` §3), or decompose the
+mission so each step is small enough that the model does not stall (ADR-0012
+decomposition depth, `03-mission-lifecycle.md`). If a whole board fails this way
+at once, treat it as the shared-backend case in `08-harness-templates.md` §8 —
+the brake does not cover it, so the judgement is human.
+
+Measured on grok-build 0.2.112 only; the mechanism, the fixtures and the limits of
+the measurement are in `08-harness-templates.md` §1c.
 
 ## 3. `DEVCAKE-FAILED` semantics
 
@@ -141,10 +189,11 @@ human must fix a credential").
 
 **What it does not cover (known gap).** Both predicates key on
 `error_class == "DEV_HARNESS_FAULT"`, so a shared-backend failure that surfaces as
-some *other* class is unbraked. The measured case is a model that answers in prose
-instead of tool-calling: every Dev exits 0 without writing `result.json`, so the
-fleet cascades as `DEV_BAD_OUTPUT` (exit 11) — counted, unexcused, unthrottled
-(`08-harness-templates.md` §8).
+some *other* class is unbraked. Two measured cases, both landing on
+`DEV_BAD_OUTPUT` (exit 11) — counted, unexcused, unthrottled: a model that answers
+in prose instead of tool-calling (`08-harness-templates.md` §8), and a model that
+loops on one command until grok halts the run itself at 16 turns with exit 0
+(§2b). Both exit 0 without writing `result.json`, and both arrive fleet-wide.
 
 **Who this protects.** Strongest for multi-mission fleets. A deployment running
 one mission per Dev Type can never satisfy the ≥2-mission rule, so it gets

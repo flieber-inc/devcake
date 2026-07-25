@@ -1,0 +1,43 @@
+{
+  "name": "grok_loop_nocap",
+  "harness": "grok-build",
+  "cli_version": "grok 0.2.112 (9bbd559437)",
+  "entrypoint_source": "/srv/images/common/dev_entrypoint.py",
+  "condition": "stub loop (tool call every turn); NO --max-turns",
+  "model": "stub-model",
+  "plan_mode": false,
+  "argv": [
+    "grok",
+    "-p",
+    "You are working in a small git repository at the current directory.\n\nTask: add a `farewell(name)` function to `src/greet.py` that returns\n`f\"bye {name}\"`, mirroring the existing `greet` function.\n\nWhen you are done, write your outcome to `out/result.json` EXACTLY as:\n{\"schema_version\": 1, \"outcome\": \"executed\", \"summary\": \"<what you changed>\"}\n\nDo not commit. Do not push. Keep the change minimal.\n",
+    "--output-format",
+    "streaming-json",
+    "--always-approve",
+    "--model",
+    "stub-model"
+  ],
+  "extra": null,
+  "preflight": {
+    "url": "http://devcake-capture-stub:8080/s/loop/v1/models",
+    "status": 200,
+    "latency_ms": 47,
+    "body_head": "{\"object\": \"list\", \"data\": [{\"id\": \"stub-model\", \"object\": \"model\", \"owned_by\": \"stub\", \"max_model_len\": 300000}]}"
+  },
+  "concurrency": 1,
+  "concurrency_note": null,
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_ms": 2050,
+  "stdout_bytes": 383,
+  "stdout_lines": 1,
+  "stderr_bytes": 0,
+  "dump_bytes": 916,
+  "last_message_bytes": 0,
+  "session_id": "019f9ac8-0e65-7852-97df-2626eec3a20b",
+  "observed_reason": null,
+  "observed_detail": null,
+  "devcake_exit_now": 11,
+  "devcake_class_now": "",
+  "devcake_exit_before_adr0018": 11,
+  "captured_at": "2026-07-25T19:37:11Z"
+}

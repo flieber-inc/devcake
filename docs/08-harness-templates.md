@@ -23,13 +23,30 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 
 > Verification is capability- and version-specific, not blanket. Invocation,
 > headless output, plan flags, MCP syntax, and token extraction below record
-> live evidence for **Grok Build 0.2.93** and the pinned **Codex CLI 0.144.4**;
-> the skills read-set records Grok **0.2.103** (§7a). The Grok image installs
-> latest rather than a pinned artifact, so every rebuild can invalidate the
-> recorded shapes. Grok PLAN is flag-verified but not exercised end-to-end
-> (§3). §8 is narrower still: it is one model+backend pairing measured on
-> 2026-07-25, not a statement about local backends generally. Treat each
-> statement's own version and caveat as its verification boundary.
+> live evidence at the version each statement names. The **headless output
+> shapes in §1, §5 and §6 were re-captured on 2026-07-25** inside the baked Dev
+> images at **grok 0.2.112 (`9bbd559437`)**, **codex-cli 0.144.4** and **Claude
+> Code 2.1.210** — versions read from inside the image by the capture rig (§8)
+> and recorded in every sidecar's `cli_version`. Where a 0.2.112 measurement
+> differs from the older **Grok Build 0.2.93** record, the 0.2.112 statement
+> wins and says so; grok claims *not* re-measured at 0.2.112 (plan mode §3, MCP
+> syntax §7, skills read-set §7a at **0.2.103**) keep their original version
+> tag and are unverified at 0.2.112. The Grok image installs latest rather than
+> a pinned artifact, so every rebuild can invalidate the recorded shapes. Grok
+> PLAN is flag-verified but not exercised end-to-end (§3). §8 is narrower
+> still: it is one model+backend pairing measured on 2026-07-25, not a
+> statement about local backends generally. Treat each statement's own version
+> and caveat as its verification boundary.
+>
+> The 2026-07-25 captures are committed verbatim under
+> `app/tests/fixtures/harness_streams/` (`<name>.jsonl` stream, `<name>.meta.json`
+> measured sidecar, `<name>.stderr.txt`, grok `<name>.dump.txt`); a claim below
+> that names a `<harness>_<scenario>` fixture is backed by those bytes, and a
+> claim sourced from the campaign's own notes rather than from a committed
+> fixture says so. They were taken
+> against the stub backend of `scripts/harness_capture/stub_backend.py`, so the
+> **presence and shape** of a field is real CLI evidence while any **numeric
+> value** in them is whatever the stub served.
 
 ## 1. Invocation patterns
 
@@ -52,19 +69,82 @@ The entrypoint pumps the harness's stdout line-by-line instead of buffering it (
 ```bash
 grok -p "$PROMPT" --output-format streaming-json --always-approve
 ```
-- **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output).
-- **Behavior verified against CLI v0.2.93** (current stable at spec time). The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image. Verified output shapes: `--output-format json` returns one object `{text, stopReason, sessionId, requestId, thought}`; `streaming-json` emits typed line events (`thought`, `text`, …, final `{type:"end", stopReason, sessionId, requestId}`) — **`text`/`thought` are token-level deltas** (re-verified live 2026-07-12; no tool-call events in the stream), so the entrypoint coalesces `text` deltas into lines for the relay (§1a) and reconstructs the result text by concatenating them; `sessionId` comes from the `end` event. **Neither contains usage/cost fields in this version**, so token extraction uses the session files (§5). If a future observed CLI release adds usage/cost to headless output, record that version and live evidence before promoting it to the primary strategy.
-- Sessions persist under `~/.grok/sessions/{urlencoded-cwd}/{session_id}/` (verified) — the `sessionId` from the headless output locates the directory; `signals.json` there carries `contextTokensUsed`/`totalTokens`, `contextWindowTokens`, `modelsUsed` (totals only — no input/output split, no cost). The TUI `/usage` command is interactive-only and not used.
+- **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output). `--max-turns` was **exercised end-to-end at 0.2.112** (below); the other flags are unverified at 0.2.112.
+- The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image.
+
+**Headless stream, observed at 0.2.112 (captured 2026-07-25).** Not a complete
+event catalogue — the distinct `type` values present across the eleven `grok_*`
+captures are exactly:
+
+| `type` | payload observed | fixture |
+|---|---|---|
+| `text` | assistant text under **`data`** | `grok_healthy`, `grok_refusal`, `grok_whitespace` |
+| `end` | `{stopReason, sessionId, requestId, usage, num_turns, modelUsage}` | the same three + `grok_tool_only`, `grok_turn_budget` |
+| `max_turns_reached` | no payload — the bare `{"type":"max_turns_reached"}` | `grok_turn_budget` |
+| `error` | `{message}` — **never a `sessionId`** | `grok_empty`, `grok_http_401/429/500`, `grok_truncated` |
+
+`thought` is recorded from the 0.2.93 verification and is **unverified at
+0.2.112**: no capture contains one (the stub emitted no reasoning content).
+**No tool-call events at all** — this survives at 0.2.112 and is now measured
+rather than assumed: `grok_tool_only.jsonl` is 16 real tool executions and is
+*one line long* (the `end` event). Each capture carries exactly one `text`
+event because the stub delivered the completion in a single `content_block_delta`;
+delta granularity follows the backend's chunking, so the entrypoint still
+coalesces `text` deltas for the relay (§1a) and concatenates them for the
+result text. `sessionId` comes from the `end` event only — an `error` event
+carries none, so a crashed run cannot be located on disk.
+
+- **Usage/cost — corrected at 0.2.112.** The older record "neither contains usage/cost fields in this version" was true of 0.2.93 and is **false at 0.2.112**: every captured `end` event carries `usage = {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}`, `num_turns`, and `modelUsage = {<model>: {inputTokens, outputTokens, cacheReadInputTokens, modelCalls}}` — an input/output split inline in stdout, which 0.2.93 did not have. There is **no cost field** (`total_cost_usd` or otherwise) in any capture. Caveat: the numbers are the stub's; the presence and key names are the CLI's. §5 records what this means for extraction.
+- **Turn cap, observed at 0.2.112:** with `--max-turns 2` grok emits **both** a dedicated `{"type":"max_turns_reached"}` event **and** an `end` event with `stopReason: "Cancelled"` (`num_turns: 2`), writes `Error: max turns reached` to stderr, and exits **1** (`grok_turn_budget`). Consumers must expect the pair, not one or the other. With no `--max-turns`, grok ended a 16-turn always-tool-calling run itself with `stopReason: "EndTurn"` and exit 0 (`grok_tool_only`); whether that 16 is a default cap is unverified.
+- **`--output-format json` is unreachable through `$DEVCAKE_EXTRA_ARGS` at 0.2.112.** The invocation already passes `--output-format streaming-json`, and a second one makes grok exit **2** with `error: the argument '--output-format <OUTPUT_FORMAT>' cannot be used multiple times` and an empty stdout (`grok_json_blob`, `.stderr.txt`). The 0.2.93 blob shape `{text, stopReason, sessionId, requestId, thought}` is therefore unverified at 0.2.112 and cannot be reached from DevCake's own argv.
+- Sessions persist under `~/.grok/sessions/{urlencoded-cwd}/{session_id}/` (verified at 0.2.93) — the `sessionId` from the headless output locates the directory; `signals.json` there carries `contextTokensUsed`/`totalTokens`, `contextWindowTokens`, `modelsUsed` (totals only — no input/output split, no cost). The capture campaign reports `signals.json` **still present at 0.2.112, and only for cleanly-ended sessions** (present for `grok_healthy`/`whitespace`/`refusal`/`tool_only`, absent after a turn-cap stop or an HTTP failure) — **unverified here**: no `signals.json` is committed as a fixture, so treat it as a campaign note (`app/tests/fixtures/harness_streams/README.md`) until one is. The TUI `/usage` command is interactive-only and not used.
 
 ### `codex`
 ```bash
 codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
   --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
 ```
-- **Verified on the installed CLI pinned by the image (`@openai/codex@0.144.4`, 2026-07).** `--json` emits a JSONL event stream (`thread.started` → `turn.started` → `item.completed` → `turn.completed`); **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `type: agent_message` is the in-stream equivalent).
+- **Verified on the installed CLI pinned by the image (`@openai/codex@0.144.4`, 2026-07).** `--json` emits a JSONL event stream; **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `item.type: agent_message` is the in-stream equivalent). A run that produced no agent message leaves that file **empty** rather than absent (`codex_empty`, `codex_empty_no_model` — `last_message_bytes: 0`), and a whitespace-only completion writes the whitespace verbatim (`codex_whitespace`, 4 bytes).
+
+**`--json` stream, observed at 0.144.4 (captured 2026-07-25).** Not a complete
+event catalogue — the distinct `type` values present across the thirteen
+`codex_*` captures are exactly `thread.started`, `turn.started`,
+`item.started`, `item.completed`, `turn.completed`, `turn.failed`, `error`;
+the distinct `item.type` values are `error`, `agent_message`,
+`command_execution`. Shapes:
+
+| sequence | events | fixture |
+|---|---|---|
+| success | `thread.started` (`thread_id`) → `turn.started` → 0..n `item.*` → `turn.completed` (`usage`), exit 0 | `codex_healthy`, `codex_empty`, `codex_empty_no_model`, `codex_whitespace`, `codex_refusal`, `codex_tool_only` |
+| failure | `thread.started` → `turn.started` → 1..n `{"type":"error","message":…}` → `{"type":"turn.failed","error":{"message":…}}`, exit 1 | all eight `codex_http_*` / `codex_no_route` / `codex_truncated*` |
+
+- The **`turn.failed`** terminal event is real at 0.144.4 (present on all eight failure captures) and is always preceded by a plain `{"type":"error"}` carrying the same text. With default retries, a failing turn emits five `Reconnecting... N/5` `error` events first and takes ~6.5 s (`codex_http_401_retrying`, `codex_truncated_retrying`); with retries disabled every failure capture finished in under 0.6 s. codex fails **fast**, where grok burns ~5¾ minutes of backoff before reporting (`grok_empty` / `grok_http_500` / `grok_truncated`: 344.7–344.9 s).
+- **A pinned `-m` costs a benign error item.** When `-m` names a model codex has no metadata for — which is every local/OpenAI-compatible backend — codex emits `{"type":"item.completed","item":{"type":"error","message":"Model metadata for \`<model>\` not found. Defaulting to fallback metadata; …"}}` **before `turn.started`, on every run** (`codex_healthy` and eleven others). It is not a failure; anything counting `item.completed` as work must exclude it. Without `-m` the item is absent (`codex_empty_no_model`).
+- **stderr carries nothing about the failure.** Every codex capture that exited nonzero has **exactly 39 bytes** of stderr, and those bytes are `Reading additional input from stdin...\n` — boilerplate, identical across a 400, a 401, a 429, a 500, a 404 and a truncated stream. The only diagnostic line codex writes to stderr, `Warning: no last agent message; wrote empty content to <path>` (134 bytes total, in `codex_empty`, `codex_empty_no_model`, `codex_tool_only`), appears on **zero-exit** runs. This is the second independent confirmation of ADR-0018's founding premise: classifying harness failure on stderr cannot work. (For contrast, the two Claude Code 2.1.210 captures — both successes — carry **0 bytes** of stderr: `claude_healthy`, `claude_refusal`. No 2.1.210 *failure* capture exists, so claude's failure stderr is unverified at that version.)
 - Sandboxing: `--dangerously-bypass-approvals-and-sandbox` is the container invocation — its own help text says "intended solely for running in environments that are externally sandboxed", which is exactly the Dev container. The plan-substitute run uses `--sandbox read-only` instead. `--ephemeral` (no session files) and `--ignore-user-config` exist for hermetic runs.
-- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (probe: 12196/10112/5/0). Caveat: on `codex exec resume` these are cumulative across the session — DevCake runs are single-session so this is naturally correct. No cost field in the stream → `cost_usd` is omitted (never guessed).
+- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` (probe: 12196/10112/5/0). Re-confirmed at 0.144.4 across all six `turn.completed` captures: those four keys and **no others** — in particular **no `total_tokens`** on `turn.completed`, so a total must be summed, never read. `usage` is present even when the turn produced nothing (`codex_empty`: `output_tokens: 0`). Caveat: on `codex exec resume` these are cumulative across the session — DevCake runs are single-session so this is naturally correct. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
+
+### Turn caps — codex is unbounded (§1b, observed 2026-07-25)
+
+| Template | Cap flag | What exhaustion looks like |
+|---|---|---|
+| `claude-code` (2.1.219) | `--max-turns <N>` | `is_error:true`, `subtype:"error_max_turns"`, exit 1 (`claude_max_turns`) |
+| `grok-build` (0.2.112) | `--max-turns <N>` | `max_turns_reached` **and** `end` `stopReason:"Cancelled"`, exit 1 (`grok_turn_budget`) |
+| `codex` (0.144.4) | **none** | nothing — the run does not stop |
+
+**Operational hazard.** `codex exec` at 0.144.4 exposes no `--max-turns`
+equivalent and no config key for one, so the per-Mission-Type extra CLI args
+(`02-domain-model.md` §9) cannot bound a codex Dev the way they bound the
+seeded ONBOARD claude Dev. Against a backend that answers every turn with a
+tool call, a codex run is **unbounded**: the capture campaign measured one such
+run issuing **~5,535 requests in ~7 minutes** and still going when it was killed
+at the container level. (That run produced no capture files at all — it is a
+campaign note in `app/tests/fixtures/harness_streams/README.md`, not a committed
+fixture; the committed `codex_tool_only` is the redesigned, terminating lane.)
+The only bound left is DevCake's own run timeout (`07-dev-runtime.md`), which
+arrives as a signal kill rather than as a turn-budget stop — so a looping codex
+Dev burns wall-clock and backend capacity for the whole timeout, every attempt.
 
 ## 2. Base images
 
@@ -118,8 +198,9 @@ Implemented extraction methods (`TokenReport.extraction_method`); silence is nev
 
 1. **`session_json`** — structured harness output (the only path that fills real usage today):
    - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown).
-   - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `output_tokens→output`; `reasoning_output_tokens` recorded in `notes`. No native cost field → `cost_usd` omitted.
-   - `grok-build` (verified v0.2.93 shapes): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`); revisit after every Grok image rebuild or observed CLI-version change.
+   - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `output_tokens→output`; `reasoning_output_tokens` recorded in `notes`. Re-confirmed at 0.144.4 (§1): those four keys, **no `total_tokens`**, present on every `turn.completed` including zero-output turns. No native cost field → `cost_usd` omitted.
+   - `grok-build` (implemented against verified v0.2.93 shapes): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts). Reported with `input/output` left null, the total in `notes`, and `cost_usd` omitted (no input/output split → no honest price computation). This is the known weak spot of cost visibility (`12-observability.md`).
+     **The 0.2.112 captures change the premise, not yet the code.** At 0.2.112 the `end` event itself carries an input/output split (`usage.input_tokens` / `cache_read_input_tokens` / `output_tokens` / `reasoning_tokens` / `total_tokens`) plus `num_turns` and `modelUsage` (§1) — so the "totals only, session files or nothing" constraint no longer holds for this version, and stdout is now a candidate primary source that needs no session-folder read. Still absent at 0.2.112: any cost field, so `cost_usd` stays omitted either way. Two caveats before anyone promotes it: the captured token *values* came from a stub (only the field names and their presence are CLI evidence), and grok is installed unpinned, so a rebuild can withdraw the fields again. The campaign additionally reports `signals.json` surviving at 0.2.112 for cleanly-ended sessions only — **unverified**, no fixture (§1).
 2. **`unavailable`** — post an explicit report when structured extraction fails. There is **no** `stdout_parse` strategy in the entrypoint, and **no** in-code price table that invents `cost_usd` from token counts.
 
 The token report message posted to the activity feed (format in `03-mission-lifecycle.md` §8) accompanies **every** step, and the same numbers ride the `dev.run` span as `devcake.tokens.*` / `devcake.cost.usd` attributes (`12-observability.md`).
@@ -131,10 +212,32 @@ The shared entrypoint's `assemble_transcript(seq, mtype, run_id, dev_type, harne
 | Template | Dump source fed into `assemble_transcript` |
 |---|---|
 | `claude-code` | Session JSONL from `~/.claude/projects/...` (plus the `-p` JSON result). |
-| `grok-build` | Captured `streaming-json` stream + session dir artifacts. |
+| `grok-build` | The output of a separate **`grok export <sessionId>`** call (shape below) — it cannot be reconstructed from stdout, since grok's stream carries no tool events at all (§1). |
 | `codex` | Session files under `$CODEX_HOME/sessions/` + captured JSONL. |
 
 There is **no** `/workspace/out/transcript/` contract — the entrypoint does not stage raw transcript trees under that path for collection.
+
+### `grok export` output shape (observed at 0.2.112, captured 2026-07-25)
+
+Verbatim, because this text is parsed downstream. `grok export <sessionId>` writes
+**Markdown**, opening with a `## User` section that echoes the prompt, followed by
+zero or more further sections. The section headings observed across the five
+`grok_*.dump.txt` fixtures are exactly:
+
+| heading | contents observed | fixture |
+|---|---|---|
+| `## User` | the prompt, verbatim — **always present** | all five |
+| `## Assistant` | the assistant's text | `grok_healthy`, `grok_refusal` |
+| `## Tools` | one `- Execute: <command>` line per tool execution | `grok_tool_only` (16 lines), `grok_turn_budget` (2 lines) |
+
+Sections are **conditional**: a run whose only output was whitespace produced a
+dump containing the `## User` section and nothing else (`grok_whitespace`, 100
+bytes). No capture contains both `## Assistant` and `## Tools`, so their relative
+order is unverified. The load-bearing consequence: because `## User` always echoes
+the prompt, **a grok dump is never empty when a `sessionId` exists**, however
+little the run actually did — dump length is not evidence of work. When no
+`sessionId` exists (every `{"type":"error"}` path, §1) there is nothing to export
+and the dump is empty.
 
 ## 7. MCP registration syntax
 
@@ -248,6 +351,21 @@ removing the nine optional ones (`justification`, `login`, `max_output_tokens`,
 restores correct tool calling. This is a model-side limitation of **this model**
 handling large optional schemas — not a DevCake bug and not a vLLM bug.
 
+**That ten-function surface only exists because the model is pinned.** With `-m`
+set, codex 0.144.4 sends the classic `tools` array (`exec_command`, `write_stdin`,
+`update_plan`, …) the bisect measured. With **no `-m`**, the same CLI sends **no
+`tools` key at all** — the tool surface moves into an `additional_tools` *input
+item* advertising a `custom` JavaScript `exec` orchestrator plus `wait` and
+`request_user_input`. Anything that reads `body["tools"]` to decide what to answer
+(the capture stub does exactly that, `stub_backend.py::pick_tool`) therefore sees
+nothing and answers nothing. Fixture evidence for the difference: `codex_empty`
+(with `-m`) and `codex_empty_no_model` (without) are the same CLI against the same
+backend condition and differ in their streams. The request-body detail itself is a
+campaign note read from the stub's uncommitted `journal.jsonl`
+(`app/tests/fixtures/harness_streams/README.md`), not a committed fixture. Practical
+consequence: `$DEVCAKE_MODEL` on a codex Dev Type is not only a model choice, it
+decides which tool protocol the backend is asked to support.
+
 ### What DevCake sees, and why PLAN masks it
 
 Because the model is being pushed to the edge of its schema-handling ability, it
@@ -294,6 +412,16 @@ silently stops describing what production runs.
 | `in_container.py` | One real harness run inside the image. argv comes from the entrypoint's own `harness_argv` (§1), so a capture cannot drift from the production invocation; the backend is preflighted, so a routing failure aborts loudly instead of being recorded as a backend fault; exit status, stdout, stderr, codex's `-o` file and grok's `grok export` are all recorded verbatim; and the **current** predicate is run against the capture with its verdict written beside the intended one — a mismatch is the finding, never something the capture is edited to hide. |
 | `stub_backend.py` | Stdlib three-protocol stub — `/v1/messages`, `/v1/responses`, `/v1/chat/completions`, plus `/v1/models` and `/healthz` — with deterministic failure injection (401/429/500, truncated stream, empty completion, tool-only, refusal). Its `journal.jsonl` records each CLI's outbound request **verbatim**; that record is what made the bisect above possible at all, and it is also what proves a capture hit the stub rather than quietly reaching a real API. |
 | `prompts/*.md` | The prompt shapes: `trivial.md` (one word, no tools), `mission_shaped.md` (edit a file + write `out/result.json`), `execute_real.md` (the real EXECUTE playbook, absolute `/workspace` paths included). |
+
+Its output is `app/tests/fixtures/harness_streams/` — the fixtures cited throughout
+§1, §5 and §6, one committed stream per backend condition per harness, each with a
+machine-written `.meta.json` of measured facts (`cli_version`, `argv`, `exit_code`,
+byte counts, `session_id`, duration). One rig hazard worth knowing before re-running
+it: a backend that omits `total_tokens` from the Responses `response.completed`
+payload aborts **every** codex turn with `failed to parse ResponseCompleted: missing
+field 'total_tokens'` — codex requires the field on the wire even though it does not
+re-emit it on `turn.completed` (§1). That was a stub defect, found and fixed during
+the campaign; it is the same failure a real local backend would produce.
 
 Honesty rule, stated in the stub itself: it answers HTTP and nothing else. Every
 committed fixture byte is real CLI stdout, and a scenario a real backend could not

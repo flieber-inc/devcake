@@ -197,8 +197,10 @@ treats that as `no_visible_content` (see `grok_empty`), not as the end of a turn
 
 `grok_turn_budget.jsonl` was driven by `--max-turns 2` and answers what grok emits: **both** a
 dedicated `{"type":"max_turns_reached"}` event **and** `end` with `stopReason:"Cancelled"`,
-`num_turns:2`, plus `Error: max turns reached` on stderr, exit **1**. `GrokCoalescer` drops both
-event types (it returns `None` for anything that is not `text` or `end`).
+`num_turns:2`, plus `Error: max turns reached` on stderr, exit **1**. `GrokCoalescer` dropped both
+event types when this was captured (it returned `None` for anything that was not `text` or `end`), so
+the operator's live transcript said nothing about the stop; it now renders `max_turns_reached` and
+`error`, and the `error` arm flushes the text buffer the way `end` does.
 
 ### `usage` on the `end` event (docs/08 §2 is out of date)
 
@@ -362,7 +364,9 @@ elif kind.startswith("turn.") and kind not in ("turn.started", "turn.completed")
 
 never contributes: codex always emits a plain `{"type":"error","message":…}` **immediately before**
 `turn.failed`, so `error_msg` is already set and the `or` short-circuits. The arm is correct and
-unreachable. Nothing reads `turn.failed`'s own `error.message`.
+unreachable. Nothing in the *predicate* reads `turn.failed`'s own `error.message` — the live output
+relay now does (`render_codex`), because a terminal event that decides a run's fate must not be
+invisible in the operator's transcript.
 
 By the same token **`no_terminal_event` is unreachable for codex**: every failure path emits an
 `error` event, so a stream with no `turn.completed` always classifies as `terminal_error`.

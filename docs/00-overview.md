@@ -160,7 +160,7 @@ Operating duties — once at setup and recurring — live in
 | `12-observability.md` | OTel conventions, cost telemetry, dashboards |
 | `13-deployment.md` | docker-compose, Dagu config, networking, runbook |
 | `15-errors-and-retries.md` | Error taxonomy, retry matrix, `DEVCAKE-FAILED` |
-| `16-roadmap.md` | Milestones with exit criteria |
+| `16-roadmap.md` | Milestone era + closed releases + living log after v0.2 |
 | `17-positioning.md` | Outward voice — must not outclaim `14` |
 | `18-operator-contract.md` | What the operator owns — setup pointer + recurring duties + rotation |
 | `adr/` | Records of significant architectural decisions |

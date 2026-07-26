@@ -26,23 +26,21 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 > **headless output shapes in §1, §5 and §6 were re-captured on 2026-07-25**
 > inside the baked Dev images at **grok 0.2.112 (`9bbd559437`)**, **codex-cli
 > 0.144.4** and **Claude Code 2.1.210** (versions read from inside the image by
-> the capture rig, §8, and recorded in each sidecar's `cli_version`). Where a
+> the capture rig, and recorded in each sidecar's `cli_version`). Where a
 > 0.2.112 measurement differs from the older **Grok Build 0.2.93** record the
 > 0.2.112 statement wins and says so; the grok claims *not* re-measured at
 > 0.2.112 — plan mode (§3), MCP syntax (§7), skills read-set (§7a, at
 > **0.2.103**) — keep their original version tag and are **unverified at
 > 0.2.112**. The Grok image installs latest rather than a pinned artifact, so any
 > rebuild can invalidate its recorded shapes, and grok PLAN is flag-verified but
-> never exercised end-to-end (§3). §8a's recipes were measured on one
-> model+backend pairing and are not a verdict on local backends generally; that
-> pairing's own failure analysis is `19-local-backend-pairing.md`.
+> never exercised end-to-end (§3). §8's recipes were measured on one
+> model+backend pairing and are not a verdict on local backends generally.
 >
 > The captures cited below are committed verbatim under
 > `app/tests/fixtures/harness_streams/` (`<name>.jsonl` stream, `<name>.meta.json`
 > measured sidecar, `<name>.stderr.txt`, grok `<name>.dump.txt`), in two campaigns:
 > **30 stub-backend captures stamped 2026-07-25** (§1, §5, §6) and **17 `live_*`
-> real-backend captures stamped 2026-07-26** (§8a and `19-local-backend-pairing.md`)
-> — plus the earlier
+> real-backend captures stamped 2026-07-26** (§8) — plus the earlier
 > 2026-07-24 Claude Code 2.1.219 incident batch (`claude_max_turns`, §1b). A claim
 > naming a fixture is backed by those bytes; a claim sourced from a campaign's own
 > notes rather than from a committed fixture says so. The 2026-07-25 batch ran
@@ -162,9 +160,12 @@ run that keeps making the **same** tool call, on its own, at 16 model calls.
 | arguments vary, no cap | does not stop — ~2,900 model calls in 300 s, killed by the rig (campaign note) | — |
 
 The mechanism is grok's own stall detection, and it is addressed to the **model**,
-not to the operator: grok appends `You appear to be running empty commands to stay
-active while waiting for background work. End your turn — you will be woken
-automatically when there is something to do.` to the tool result it feeds back.
+not to the operator. grok appends this to the tool result it feeds back:
+
+> You appear to be running empty commands to stay active while waiting for
+> background work. End your turn — you will be woken automatically when there is
+> something to do.
+
 That text is in the request the harness sends its backend; it is in **no** DevCake
 channel — not stdout, not stderr, not `grok export`, which lists the repeated tool
 lines and nothing about why the run ended.
@@ -330,196 +331,89 @@ mission-step scripts (`app/devcake/skills/README.md`).
 
 ## 8. Running against local / OpenAI-compatible backends
 
-A template owns an invocation, not a model (§1). Any harness can therefore be
-pointed at a local or OpenAI-compatible backend through its own base-URL / API-key
-environment variables, and DevCake neither knows nor validates which backend a Dev
-Type reaches. What every template *does* assume is that the model **actually tool-calls**:
-outside PLAN, a Dev produces its deliverable by writing files, so a model that
-answers in prose yields a run that exits 0 having done nothing. One pairing has been measured end to end as a worked example of that failure
-mode — read it as the shape to look for: `19-local-backend-pairing.md`.
+A template owns an invocation, not a model (§1), so any harness can be pointed at a
+local or OpenAI-compatible backend through its own base-URL and API-key environment
+variables; DevCake neither knows nor validates which backend a Dev Type reaches.
+What every template *does* assume is that the model **actually tool-calls** — outside
+PLAN a Dev produces its deliverable by writing files, so a model that answers in
+prose yields a run that exits 0 having done nothing.
 
-### Pointing each harness at a local backend (§8a, measured 2026-07-26)
-
-**The three templates are configured by completely different mechanisms**, and
-that is the part that surprises an operator. codex takes the whole backend
-definition as `-c` overrides in the per-Mission-Type **extra CLI args**;
-claude-code and grok-build take **no CLI args at all** and are steered entirely
-by **environment variables**, which reach a Dev container through the Dev Type's
-`secret_env` list plus the GUI harness-secret store (recipes below;
-`11-admin-panel.md` §3). The model comes from the Dev Type's `model` field in all
-three cases (`DEVCAKE_MODEL` → `--model` / `--model` / `-m`, §1).
+**The three templates are configured by different mechanisms**, which is the part
+that surprises operators. `codex` takes the whole backend definition as `-c`
+overrides in the per-Mission-Type extra CLI args. `claude-code` and `grok-build` take
+**no CLI args at all** and are steered entirely by environment variables, delivered
+through the Dev Type's `secret_env` names plus the GUI harness-secret store
+(`11-admin-panel.md` §3). The model comes from the Dev Type's `model` field in all
+three cases (`$DEVCAKE_MODEL`, §1).
 
 | harness | how the backend is selected | base-URL shape | extra CLI args |
 |---|---|---|---|
-| `claude-code` | env `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` | **no `/v1` suffix** — `http://<vllm-host>:8000` | **none** |
-| `grok-build` | env `GROK_MODELS_BASE_URL` + `XAI_API_KEY` | **`/v1` suffix required** — `http://<vllm-host>:8000/v1` | **none** |
+| `claude-code` | env `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` | **no `/v1` suffix** — `http://<host>:8000` | **none** |
+| `grok-build` | env `GROK_MODELS_BASE_URL` + `XAI_API_KEY` | **`/v1` suffix required** — `http://<host>:8000/v1` | **none** |
 | `codex` | `-c` overrides (extra CLI args) + env `CODEX_API_KEY` | `/v1` suffix, inside `-c …base_url` | the whole `-c` block |
 
-That claude and grok need **no** args is measured, not assumed: both live
-mission-shaped captures record `extra: null` with a stock DevCake argv
-(`live_claude_raw_mission`, `live_grok_raw_mission` sidecars), and both finished the
-task on this backend — claude with 4 real `tool_use` calls, grok with 7 including a
-self-corrected malformed `result.json` (`live_grok_raw_mission.dump.txt`). The rig
-delivers no credential files (`in_container.py` runs `harness_argv` and nothing
-else), so both runs authenticated **purely from the environment**.
+**The `/v1` asymmetry is load-bearing and easy to get wrong.** Each CLI documents its
+own half; observed at claude 2.1.210 and grok 0.2.112:
 
-**The `/v1` asymmetry is load-bearing and easy to get wrong.** Each CLI documents
-its own half:
+- `claude-code` defaults to `https://api.anthropic.com` and appends the route itself
+  (`/v1/messages`), so `ANTHROPIC_BASE_URL` stops **before** `/v1`.
+- `grok-build` appends only the method path and fetches the model list from
+  `{base_url}/models`, so the `/v1` must be **in** the variable.
+- `codex` is handed `base_url` verbatim inside the `-c` block, `/v1` included.
 
-- **claude-code** defaults to `https://api.anthropic.com` and appends the route
-  itself (`/v1/messages`), so `ANTHROPIC_BASE_URL` stops **before** `/v1` — the
-  binary's own embedded example is `base_url="http://my.test.server.example.com:8083"
-  # or ANTHROPIC_BASE_URL env var` (read from the 2.1.210 binary in
-  `devcake/dev-claude-code`). `live_claude_raw_mission`'s condition records the
-  route it reached: `via ANTHROPIC_BASE_URL (/v1/messages)`.
-- **grok-build** appends only the *method* path, so the `/v1` must be in the
-  variable. Its own env-var table, read from the 0.2.112 binary: *"`GROK_MODELS_BASE_URL`
-  | Yes | Base URL for inference / chat completions (e.g. `https://api.acme.com/v1`).
-  The model list is fetched from `{base_url}/models` automatically"*, with bundled
-  examples `http://localhost:11434/v1` and `https://litellm.corp.example/v1`. By
-  that documented rule a base URL missing `/v1` sends the model-list probe to
-  `{host}/models` — not separately captured, but it is the CLI's own stated
-  behaviour. `live_grok_raw_mission`'s condition records the lane it used:
-  `via GROK_MODELS_BASE_URL (chat_completions lane)`.
-- **codex** is handed `base_url` verbatim inside the `-c` block, `/v1` included —
-  the founder's incident block, reproduced in the codex recipe below and in every
-  `live_codex_*` sidecar's `extra` field.
+**Credentials.** Set the key variable even when the backend ignores it: each CLI
+treats its key as required, so a backend that checks nothing still needs a non-empty
+value. Where a Dev Type has a stored OAuth credential file for its template (§4) it
+is still delivered; clear it if the Dev Type is dedicated to a local backend.
 
-**A dummy credential works for all three — but the variable must still be set.**
-Every live capture ran with `CODEX_API_KEY` / `ANTHROPIC_AUTH_TOKEN` /
-`XAI_API_KEY` = `dummy-key`: this backend checks no credentials, which is why an
-expired key was ruled out of the incident (fixtures README, *The rig*). The CLIs
-still treat the key as **required** — grok's env table marks `XAI_API_KEY` "Yes …
-sent as `Authorization: Bearer` to the custom endpoint", and codex reads whatever
-`model_providers.<id>.env_key` names — so set it to some non-empty string. What
-each CLI does when the variable is **absent** was not measured.
+**Ports.** Where a deployment fronts the model with a request-rewriting proxy, point
+only the harness that proxy exists for at it — a transformation shaped for one CLI is
+not neutral for the others.
 
-**Which port, on the measured deployment.** It runs raw vLLM on `:8000` and the
-codex-shaped rewriting proxy on `:8765` (`19-local-backend-pairing.md` §1). **Use
-`:8000` (proxy bypassed) for claude-code and grok-build** — the proxy exists to
-apply a codex-specific transformation and there is no reason to submit other
-harnesses to it. That is also where the evidence is: both mission-shaped successes
-were captured against `:8000`. For these two harnesses `:8765` was exercised **only
-with a trivial prompt** (`live_claude_proxy_trivial`, `live_grok_proxy_trivial` —
-both clean, exit 0), so the accurate statement for that port is *works for trivial
-prompts, mission-shaped untested*.
+### Recipes
 
-#### Recipe — `claude-code` against a local backend
+**`claude-code`** — Dev Type: **model** = the backend's model id (empty means the
+CLI's own default, which a local backend will not serve). **Secret env vars**:
+`ANTHROPIC_BASE_URL` (no `/v1`) and `ANTHROPIC_AUTH_TOKEN`; paste each value into the
+field that appears under its name (`PUT /api/v1/harness-secrets/{VAR}`, stored `0600`
+under `/data/secrets/harness/`). Extra CLI args: empty.
 
-1. **Config → Dev Types →** the Dev Type: set **harness template** = `claude-code`.
-2. **Model**: the backend's model id exactly as its `/v1/models` reports it (the
-   measured pairing's is `DeepSeek-V4-Flash-DSpark-Abliterated`,
-   `19-local-backend-pairing.md` §1). Empty means the
-   CLI's own default, which a local backend will not serve.
-3. **Secret env vars** (free-text area, one NAME per line):
-   ```
-   ANTHROPIC_BASE_URL
-   ANTHROPIC_AUTH_TOKEN
-   ```
-4. Paste each **value** into the field that appears under its name
-   (`PUT /api/v1/harness-secrets/{VAR}`, stored `0600` under
-   `/data/secrets/harness/`, never echoed back):
-   - `ANTHROPIC_BASE_URL` = `http://<vllm-host>:8000` — **no `/v1`**
-   - `ANTHROPIC_AUTH_TOKEN` = `dummy-key` (or the backend's real key)
-5. **Config → Assignments**: leave **extra CLI args** empty for every Mission Type
-   routed to this Dev Type.
-6. **Save.** The Dev Type now dispatches against the local backend.
-
-> The card will still show **"no credentials configured"**: `credentials_ready`
+> The Dev Type card will still read **"no credentials configured"**. `credentials_ready`
 > only inspects the *registry* requirements for the template
-> (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`, plus credential files —
-> `harness.py::dev_type_status`), and neither is used in this mode. The badge is
-> advisory: it colors the Overview Devs card and gates nothing. The only
-> dispatch-time secret gate is a `secret_env` name **referenced by an
-> `mcp_setup_command`** with no stored value (`missing_referenced_secret_env`).
+> (`harness.py::dev_type_status`), which this mode does not use. The badge is
+> advisory and gates nothing; the only dispatch-time secret gate is a `secret_env`
+> name referenced by an `mcp_setup_command` with no stored value.
 
-#### Recipe — `grok-build` against a local backend
+**`grok-build`** — same shape: **model** = the backend's model id (the registry
+default `grok-4.5` is an xAI model and will not exist locally); **secret env var**
+`GROK_MODELS_BASE_URL` **with** `/v1`. `XAI_API_KEY` is a registry requirement for
+this template (§4), so it has its own row in the Dev Type's Runtime & credentials
+checklist rather than a `secret_env` line. Extra CLI args: empty.
 
-1. **Config → Dev Types →** the Dev Type: **harness template** = `grok-build`.
-2. **Model**: the backend's model id (grok's registry default `grok-4.5` is an
-   xAI model and will not exist locally).
-3. **Secret env vars**: one line — `GROK_MODELS_BASE_URL`.
-4. Paste `GROK_MODELS_BASE_URL` = `http://<vllm-host>:8000/v1` — **with `/v1`**.
-5. `XAI_API_KEY` is a *registry* requirement for this template (§4), so it has its
-   own row in the Dev Type's **Runtime & credentials** checklist — paste
-   `dummy-key` there. Same store, same endpoint; no need to also list it under
-   secret env vars.
-6. **Assignments**: extra CLI args empty. **Save.**
+**`codex`** — **model** = the backend's model id; it arrives as `-m`, which on codex
+also decides which tool protocol the backend is asked to support. `CODEX_API_KEY` goes
+in the Runtime & credentials checklist. The backend definition goes in **Config →
+Assignments → extra CLI args**, and those are per **Mission Type** (`02-domain-model.md`
+§9), so a Dev Type holding all four stages needs the block in all four rows:
 
-> If a `grok-auth.json` from an earlier device-code login sits in this Dev Type's
-> `/data/secrets/{dev_type}/`, it is still delivered and written to
-> `~/.grok/auth.json` (§4). Whether a stored xAI OAuth file overrides a custom
-> endpoint is **untested** — the captures ran with no credential file at all.
-> Clear it if the Dev Type is dedicated to the local backend.
+```
+-c model_provider=vllm -c model_providers.vllm.name=vLLM -c model_providers.vllm.base_url=http://<host>:8765/v1 -c model_providers.vllm.env_key=CODEX_API_KEY -c model_providers.vllm.wire_api=responses -c model_context_window=300000 -c model_auto_compact_token_limit=240000
+```
 
-#### Recipe — `codex` against a local backend (read the warning first)
+Match `model_context_window` and `model_auto_compact_token_limit` to the backend's
+own `max_model_len`.
 
-1. **Config → Dev Types →** the Dev Type: **harness template** = `codex`;
-   **model** = the backend's model id. It arrives as `-m`, which on codex also
-   decides which tool protocol the backend is asked to support
-   (`19-local-backend-pairing.md` §2).
-2. **Runtime & credentials** checklist: `CODEX_API_KEY` = `dummy-key`. This is the
-   variable named by `-c model_providers.vllm.env_key` in step 3.
-3. **Config → Assignments**: paste the block below into the **extra CLI args**
-   textbox of **every Mission Type** routed to this Dev Type. Extra args are
-   per-**Mission Type**, not per Dev Type (`02-domain-model.md` §9) — a Dev Type
-   holding all four stages needs the block in all four rows.
-   ```
-   -c model_provider=vllm -c model_providers.vllm.name=vLLM -c model_providers.vllm.base_url=http://<vllm-host>:8765/v1 -c model_providers.vllm.env_key=CODEX_API_KEY -c model_providers.vllm.wire_api=responses -c model_context_window=300000 -c model_auto_compact_token_limit=240000
-   ```
-   The two context values match this backend's `max_model_len` of 300000.
-
-**⚠ Do not assign codex to a Dev Type pointed at `DeepSeek-V4-Flash-DSpark-Abliterated`.**
-Against this model codex 0.144.4 answers with prose containing invented tool syntax,
-executes nothing and exits **0**, so DevCake reports **exit 11 `DEV_BAD_OUTPUT`** —
-measured across 13 runs with zero tool calls between them. Evidence, controls and
-root cause: `19-local-backend-pairing.md`. **Use `grok-build` or `claude-code` for
-this model.**
-
-### The measured failure this section exists because of
-
-One pairing has been measured end to end and it is the reason §8a leads with a
-warning: against `DeepSeek-V4-Flash-DSpark-Abliterated`, **codex 0.144.4 never makes
-a real tool call** — it answers with prose containing invented tool syntax, executes
-nothing, and exits **0**, so DevCake reports **exit 11 `DEV_BAD_OUTPUT`** on every
-container at once. `claude-code` and `grok-build` finish the same task on the same
-server and model, so it is neither the backend nor the proxy; the cause is the size
-of codex's optional-parameter tool surface.
-
-The evidence, the request-level bisect that isolated the cause, why PLAN masks the
-failure, the ADR-0018 brake gap and the operator remedies are
-**[`19-local-backend-pairing.md`](19-local-backend-pairing.md)** — split out of this
-section on 2026-07-26, when it had grown to half of a document about harness
-templates.
-
-### The capture rig (`scripts/harness_capture/`)
-
-The rig every measurement in this document was taken with, including
-`19-local-backend-pairing.md`'s. It runs **inside a baked Dev image** on
-purpose: host CLI versions drift from the image pins (codex host 0.144.6 vs image
-0.144.4; grok is installed unpinned, §2), and a capture taken at the wrong version
-silently stops describing what production runs.
-
-| file | role |
-|---|---|
-| `in_container.py` | One real harness run inside the image. argv comes from the entrypoint's own `harness_argv` (§1), so a capture cannot drift from the production invocation; the backend is preflighted, so a routing failure aborts loudly instead of being recorded as a backend fault; exit status, stdout, stderr, codex's `-o` file and grok's `grok export` are all recorded verbatim; and the **current** predicate is run against the capture with its verdict written beside the intended one — a mismatch is the finding, never something the capture is edited to hide. |
-| `stub_backend.py` | Stdlib three-protocol stub — `/v1/messages`, `/v1/responses`, `/v1/chat/completions`, plus `/v1/models` and `/healthz` — with deterministic failure injection (401/429/500, truncated stream, empty completion, tool-only, refusal). Its `journal.jsonl` records each CLI's outbound request **verbatim**; that record is what made the bisect above possible at all, and it is also what proves a capture hit the stub rather than quietly reaching a real API. |
-| `prompts/*.md` | The prompt shapes: `trivial.md` (one word, no tools), `mission_shaped.md` (edit a file + write `out/result.json`), `execute_real.md` (the real EXECUTE playbook, absolute `/workspace` paths included). |
-
-Its output is `app/tests/fixtures/harness_streams/`: the 2026-07-25 stub fixtures
-cited throughout §1, §5 and §6 (one committed stream per backend condition per
-harness) and the 2026-07-26 `live_*` real-backend captures cited in §8/§8a, each with
-a machine-written `.meta.json` of measured facts (`cli_version`, `argv`, `exit_code`,
-byte counts, `session_id`, duration). One rig hazard worth knowing before re-running
-it: a backend that omits `total_tokens` from the Responses `response.completed`
-payload aborts **every** codex turn with `failed to parse ResponseCompleted: missing
-field 'total_tokens'` — codex requires the field on the wire even though it does not
-re-emit it on `turn.completed` (§1). That was a stub defect, found and fixed during
-the campaign; it is the same failure a real local backend would produce.
-
-Honesty rule, stated in the stub itself: it answers HTTP and nothing else. Every
-committed fixture byte is real CLI stdout, and a scenario a real backend could not
-produce is never added.
+> **Known limitation — codex and large tool schemas.** `codex` 0.144.4 declares an
+> `exec_command` tool with ten properties, one of which is required. Models that
+> handle large optional-parameter schemas poorly answer with **prose containing
+> invented tool syntax**, execute nothing and exit **0**, which DevCake reports as
+> exit 11 `DEV_BAD_OUTPUT` — with no brake, since ADR-0018's detector keys on exit 15
+> (`15-errors-and-retries.md` §4a). PLAN masks it, because plan mode synthesises its
+> result from returned text. One pairing is measured end to end in
+> [`adr/0018-harness-fault-classification-and-backend-brake.md`](adr/0018-harness-fault-classification-and-backend-brake.md)
+> (Amendment 2026-07-26), including the remedies. **The recognition signature:** a
+> codex Dev produces no `result.json` while `claude-code` or `grok-build` succeed on
+> the same backend and model.
 
 ## 9. Adding or changing a template (checklist)
 

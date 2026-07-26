@@ -143,6 +143,60 @@ The §Context premise — the classified channel carries no failure information 
 - **grok 0.2.112** does write real wording (25–247 bytes across the failure captures), but its 401 matches only the *generic* auth markers, which rank below the predicate in §3 — which is why its 12 is restored from the in-band status and not from stderr.
 - **claude-code 2.1.210** writes **0 bytes on success** (both conservatism captures). Its *failure* stderr is **unverified at 2.1.210**: the 349-byte figure in §Context was measured at **2.1.219** on the incident host, and no 2.1.210 failure stderr was captured.
 
+## Amendment — 2026-07-26: the pairing that reproduces the incident, and the gap it exposes
+
+The 2026-07-24 cascade was reproduced against the backend that caused it. This
+records what that measured, because it bounds what this ADR's brake can do.
+
+**The pairing.** vLLM serving `DeepSeek-V4-Flash-DSpark-Abliterated`
+(`max_model_len` 300000), raw on `:8000` and behind a request-rewriting proxy on
+`:8765` that repositions the system prompt for codex. Both ports serve
+`/v1/chat/completions`, `/v1/responses` and `/v1/messages`. CLI versions read from
+inside the baked images: codex-cli 0.144.4, claude 2.1.210, grok 0.2.112.
+
+**F. codex never tool-calls against this model, and the run reports exit 11.**
+It emits tool syntax as prose inside an `agent_message`, executes nothing, writes no
+files — while its closing message asserts it wrote `out/result.json` — and exits 0.
+Seventeen `live_*` captures: **13 codex runs across two prompts, both ports and
+concurrency 1, 8 and 16 produced zero tool calls between them**. Workspaces were
+bind-mounted and inspected, so "wrote no `result.json`" is a filesystem fact on
+every row. Not the backend and not the proxy: the `:8000`/`:8765` A/B is identical,
+and `live_claude_raw_mission` (4 real `tool_use` blocks) and `live_grok_raw_mission`
+(7 real tool calls) both finish the task on the same server and model.
+
+**G. Root cause: the size of the optional-parameter surface.** codex's verbatim
+outbound request, replayed by hand against `:8765` (campaign notes, not committed
+fixtures), isolates it — the request verbatim, minus the non-`function` tools, minus
+`reasoning`, and `exec_command` alone all fail; one simple tool,
+`tool_choice: "required"`, and `exec_command` carrying only its one required
+parameter all succeed. `exec_command` declares ten properties of which one (`cmd`) is required;
+dropping the nine optional ones restores tool calling. A model-side limitation of
+this model, not a DevCake or vLLM bug. Note `$DEVCAKE_MODEL` on a codex Dev Type is
+therefore not only a model choice — with `-m` set codex sends the classic `tools`
+array, and with no `-m` it sends no `tools` key at all (`codex_empty` vs
+`codex_empty_no_model`).
+
+**H. The brake does not cover this, and that is the finding.** `backend_correlated`
+/ `backend_degraded` key on `DEV_HARNESS_FAULT` (exit 15). These runs are
+`DEV_BAD_OUTPUT` (exit 11), so a fleet-wide bad-output cascade is throttled by
+nothing, excused by nothing, and every failure counts toward `max_attempts`. The
+verdict never moved off 11 at any concurrency, including N=16 with the backend
+saturated to 232 s per run — there is no load at which this becomes visible to the
+predicate. Nor is it a predicate defect: the model *answers*, at length, so the only
+thing separating these runs from a legitimately chatty one is the content of a
+model-controlled string, which is exactly what no fault arm may key on (§3, and the
+2026-07-25 amendment's §C). Recorded, not fixed.
+
+PLAN masks it: plan mode synthesises `result.json` from the returned text (gated only
+on ≥ 200 chars), so a PLAN step succeeds with zero tool calls while ONBOARD, EXECUTE
+and REVIEW fail — a board can look healthy until the pipeline advances. grok reaches
+the same unbraked exit 11 by the different route in the 2026-07-25 annotation above.
+
+**Remedies are operator-side**, because nothing in DevCake misbehaved: route the
+stage to `grok-build` or `claude-code` (`08-harness-templates.md` §8 has the
+per-harness configuration); or set `tool_choice: "required"`; or slim tool schemas
+proxy-side; or use a model that handles large optional schemas.
+
 ## Related
 
 - `docs/07-dev-runtime.md` §4 (exit codes), `docs/15-errors-and-retries.md` §1/§2/§2a/§4a, `docs/09-messaging.md` §3 (`run.artifacts` now documents `exit_code`/`error_class`/`error_detail`), `docs/03-mission-lifecycle.md` §3 (INV-6 scopes code changes, not outputs), `docs/11-admin-panel.md`, `docs/12-observability.md`.

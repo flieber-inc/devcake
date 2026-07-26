@@ -153,7 +153,7 @@ Operating duties — once at setup and recurring — live in
 | `05-pmo-adapter.md` | `PMOPort` + Linear + Gitea Issues adapters |
 | `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab/Gitea adapters, PR/branch conventions |
 | `07-dev-runtime.md` | Dev container contract: filesystem, env, exit codes, lifecycle |
-| `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup, local-backend recipes |
+| `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup, local backends |
 | `09-messaging.md` | Redis Streams protocol |
 | `10-persistence.md` | `/data` layout, file formats, atomic writes |
 | `11-admin-panel.md` | Admin UI + `/api/v1` contract |
@@ -162,7 +162,6 @@ Operating duties — once at setup and recurring — live in
 | `15-errors-and-retries.md` | Error taxonomy, retry matrix, `DEVCAKE-FAILED` |
 | `16-roadmap.md` | Milestones with exit criteria |
 | `17-positioning.md` | Outward voice — must not outclaim `14` |
-| `19-local-backend-pairing.md` | Measured case study: codex vs a local model that will not tool-call |
 | `18-operator-contract.md` | What the operator owns — setup pointer + recurring duties + rotation |
 | `adr/` | Records of significant architectural decisions |
 | `tutorials/` | Operator path (includes supply-chain checklist) |

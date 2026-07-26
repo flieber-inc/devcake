@@ -19,7 +19,7 @@
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.144.4, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
-| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — a **fleet-wide** exit-11 cascade is usually a model that stopped tool-calling against a shared backend (`19-local-backend-pairing.md`, measured 2026-07-26) or, on grok, one that looped on a single command until the harness gave up silently (§2b); §4a's brake keys on exit 15, so it covers neither |
+| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — a **fleet-wide** exit-11 cascade is usually a model that stopped tool-calling against a shared backend (`08-harness-templates.md` §8; evidence in `adr/0018-harness-fault-classification-and-backend-brake.md`) or, on grok, one that looped on a single command until the harness gave up silently (§2b); §4a's brake keys on exit 15, so it covers neither |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
 | `EXTERNAL_TRANSITION` | human changed status/label mid-run (`04-orchestrator.md` §4) | **not an error** — first-class outcome |
@@ -111,7 +111,7 @@ DevCake:
 Type / harness for that Mission Type (`11-admin-panel.md` §3), or decompose the
 mission so each step is small enough that the model does not stall (ADR-0012
 decomposition depth, `03-mission-lifecycle.md`). If a whole board fails this way
-at once, treat it as the shared-backend case in `19-local-backend-pairing.md` —
+at once, treat it as the shared-backend case in `08-harness-templates.md` §8 —
 the brake does not cover it, so the judgement is human.
 
 Measured on grok-build 0.2.112 only; the mechanism, the fixtures and the limits of
@@ -191,7 +191,7 @@ human must fix a credential").
 `error_class == "DEV_HARNESS_FAULT"`, so a shared-backend failure that surfaces as
 some *other* class is unbraked. Two measured cases, both landing on
 `DEV_BAD_OUTPUT` (exit 11) — counted, unexcused, unthrottled: a model that answers
-in prose instead of tool-calling (`19-local-backend-pairing.md`), and a model that
+in prose instead of tool-calling (`08-harness-templates.md` §8), and a model that
 loops on one command until grok halts the run itself at 16 turns with exit 0
 (§2b). Both exit 0 without writing `result.json`, and both arrive fleet-wide.
 

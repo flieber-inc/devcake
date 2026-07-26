@@ -179,7 +179,7 @@ Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). 
 
 Four click targets, and **which ones you use depends on the harness** — the full
 recipes, the measured evidence and the `/v1` warning live in
-[`08-harness-templates.md`](08-harness-templates.md) §8a:
+[`08-harness-templates.md`](08-harness-templates.md) §8:
 
 | where | what goes there |
 |---|---|
@@ -191,7 +191,7 @@ recipes, the measured evidence and the `/v1` warning live in
 - **claude-code and grok-build need no extra CLI args at all** — leave the textbox empty; the backend is selected entirely by env vars.
 - **The base-URL shape differs**: `ANTHROPIC_BASE_URL` takes **no** `/v1` suffix; `GROK_MODELS_BASE_URL` **requires** it. Getting this backwards is the common failure.
 - A claude-code Dev Type configured this way shows **"no credentials configured"** on the Devs card — `credentials_ready` only checks the registry keys (§3, Dev Types). Advisory only; it gates nothing.
-- **codex is measured non-functional against the local model of `19-local-backend-pairing.md`** (invented `<exec>` prose, zero tool calls, exit 0 → exit 11 `DEV_BAD_OUTPUT`). Assign such stages to grok-build or claude-code.
+- **codex is measured non-functional against one local model** (`adr/0018-harness-fault-classification-and-backend-brake.md`, Amendment 2026-07-26) (invented `<exec>` prose, zero tool calls, exit 0 → exit 11 `DEV_BAD_OUTPUT`). Assign such stages to grok-build or claude-code.
 
 ### Profiles (anchor `#/config/profiles`)
 Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely Instant** — profiles carry secret values, which never enter the client draft, so the section header carries the ImmediateBadge and the apply panel sits in an InstantZone. The UI deals in presence and counts only; a secret value never reaches the SPA.

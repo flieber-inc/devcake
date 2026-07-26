@@ -254,8 +254,8 @@ exactly `num_turns: 16` / `modelCalls: 16`:
 Reading only those, "grok has a hard 16-turn ceiling and `--max-turns` can only lower it" is the
 obvious conclusion, and it is **wrong**. The control that breaks it is `grok_loop_varying_cap20`:
 the same lane, the same CLI, the same protocol, with **one** difference — the tool call's arguments
-change every turn (`stub_backend.py::vary`). That run sails past 16 and is stopped by `--max-turns
-20` at `num_turns: 20`, loudly. Without a cap at all it does not stop: **~2,900 model calls in 300 s,
+change every turn (`stub_backend.py::vary`). That run sails past 16 and is stopped by `--max-turns 20`
+at `num_turns: 20`, loudly. Without a cap at all it does not stop: **~2,900 model calls in 300 s,
 still going when the rig killed it** (campaign note — a killed grok run writes zero bytes of stdout,
 so there is nothing to commit).
 
@@ -314,8 +314,8 @@ capture above. docs/08 records "Neither contains usage/cost fields in this versi
 `contextWindowTokens`, `modelsUsed`, `turnCount` and much more, so grok token extraction is not
 broken. It is written only for sessions that end cleanly: it is present for `grok_healthy`,
 `grok_whitespace`, `grok_refusal` and `grok_tool_only`, and **absent** for `grok_turn_budget`,
-`grok_http_429` and every other failed run — which is why those reported `extraction_method:
-"unavailable"` at capture time. Since then the `end` event is the primary source and `signals.json`
+`grok_http_429` and every other failed run — which is why those reported
+`extraction_method: "unavailable"` at capture time. Since then the `end` event is the primary source and `signals.json`
 the fallback (docs/08 §5), so a failed run that still emits `end` (`grok_turn_budget`) now reports
 `end_event`, and only the runs with no `end` event at all (`grok_empty`, `grok_http_401/429/500`,
 `grok_truncated`, `grok_json_blob`) fall through to `unavailable`. Note also that
@@ -338,8 +338,12 @@ would parse it — but no `EXTRA_ARGS` path reaches that branch on this CLI vers
 
 Produced inside `devcake/dev-codex:latest` by `scripts/harness_capture/in_container.py`, so argv came
 from the entrypoint's own `harness_argv`:
-`codex exec <prompt> --json -o <out>/last_message.txt --skip-git-repo-check
---dangerously-bypass-approvals-and-sandbox -m stub-model [-c overrides]`.
+
+```
+codex exec <prompt> --json -o <out>/last_message.txt --skip-git-repo-check \
+  --dangerously-bypass-approvals-and-sandbox -m stub-model [-c overrides]
+```
+
 
 Backend: `scripts/harness_capture/stub_backend.py` over the **Responses** wire
 (`-c model_providers.stub.wire_api=responses`; `chat` was removed in 0.144.x), selected per capture by
@@ -372,12 +376,13 @@ the surface moves into an `additional_tools` *input item* advertising a `custom`
 orchestrator plus `wait` and `request_user_input`. The stub reads `body["tools"]`, finds nothing, and
 answers with no items — so `tool_only` silently degenerates into `empty` and the conservatism arm is
 never exercised. With `-m` set, codex sends the classic ten-function surface
-(`exec_command`, `write_stdin`, `update_plan`, …) that `docs/19-local-backend-pairing.md` §2's bisect measured. Pinning is also
+(`exec_command`, `write_stdin`, `update_plan`, …) that `adr/0018-harness-fault-classification-and-backend-brake.md`'s bisect measured. Pinning is also
 the production shape for a local backend, which is the deployment ADR-0018 exists for.
 
 The cost of pinning is that codex emits a benign
-`{"type":"item.completed","item":{"type":"error","message":"Model metadata for \`stub-model\` not
-found. Defaulting to fallback metadata…"}}` **before `turn.started` on every run**, exactly as it does
+an `item.completed` whose item is
+`{"type":"error","message":"Model metadata for stub-model not found. Defaulting to fallback metadata…"}`
+**before `turn.started` on every run**, exactly as it does
 against a real vLLM. It is in every capture below except `codex_empty_no_model`, and it is not
 inert — see the first finding.
 
@@ -667,7 +672,7 @@ value the model chose). Every one of these rows is therefore `NO_FAULT` in the a
 they serve as a **false-positive guard**: a future predicate change that starts faulting them has
 begun grading prose.
 
-This is the cascade `docs/19-local-backend-pairing.md` and `docs/15` §1/§4a already record as a **known gap in ADR-0018's
+This is the cascade `adr/0018-harness-fault-classification-and-backend-brake.md` and `docs/15` §1/§4a already record as a **known gap in ADR-0018's
 coverage** — the brake keys on exit 15, and this never reaches 15. What was previously argued from
 five uninstrumented runs is now measured, with sidecars, under concurrency, with the filesystem
 checked.

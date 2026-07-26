@@ -28,68 +28,19 @@ If that contract is wrong for your environment, do not run DevCake there.
 
 ### 0a. How to read this contract
 
-The rest of this file mixes **design stance**, **implementation residuals**, and
-**fog at the edges**. A simple reading aid (Rumsfeld’s three buckets):
+This file mixes **design stance**, **implementation residuals**, and **fog at
+the edges**. A reading aid (Rumsfeld’s three buckets), applied row-by-row in
+the §10 residual-risk tables:
 
-| Term | Meaning here |
-|---|---|
-| **Known knowns** | Named and accepted. Part of the product deal—not bugs to “fix away.” |
-| **Known unknowns** | The *kind* of failure is known; *whether / when / how hard* it hits is not. |
-| **Unknown unknowns** | Paths not fully inventoried (composition, novel tooling, platform surprises). |
+| Term | Meaning here | What to do with it |
+|---|---|---|
+| **Known known** | Named and accepted — part of the product deal, not a bug to “fix away” | Don’t file it; read the stance (§§2–8) |
+| **Known unknown** | The *kind* of failure is known; *whether / when / how hard* it hits is not | Two flavors: **weather** — you can only watch; **verifiable state** — retire it today via the §9 checklist |
+| **Unknown unknown** | Paths not inventoried (composition, novel tooling, platform surprises) | A finding that maps to no §10 row and no §§2–8 stance is one — report it |
 
-**Rule:** design choices (capable agents, prompt injection as input, open Dev
-egress and credentials in the Dev under the current stack) are **known knowns**.
+**Rule:** design choices — capable agents, prompt injection as input, open Dev
+egress, credentials in the Dev under the current stack — are **known knowns**.
 Do not reclassify them as unknown simply because they are sharp.
-
-Tables below give the **shape** of risk per trust zone (§2). Detail and controls
-follow in later sections; this subsection does not replace zone C branch
-protection or the operator checklist (§9).
-
-#### Zone A — Host / control plane
-
-| Risk shape | Bucket | Implication |
-|---|---|---|
-| Dedicated host; not multi-tenant SaaS | Known known | One machine’s trust boundary is the product boundary |
-| Dagu holds `docker.sock` | Known known | Dagu ≈ host-root blast radius (§5) |
-| Admin auth + GUI secrets (+ export) | Known known | Admin password ≈ full secret set (§4) |
-| `/data`, profiles, backups, `gitea_data` | Known known | Treat as secret dumps (§1, §4) |
-| Control ports default loopback | Known known | Public bind is operator-chosen total exposure |
-| Operator session theft / misconfig | Known unknown | Surfaces known; timing and compliance are ops |
-| Control-plane CVEs / supply chain | Known unknown | Pins help; next CVE is timing |
-| Unlisted admin/Dagu/API footguns | Unknown unknown | Not fully enumerated |
-
-#### Zone B — Dev (agent execution)
-
-| Risk shape | Bucket | Implication |
-|---|---|---|
-| Ticket + repo content steers the agent | Known known | Prompt injection is design input (§3) |
-| Dev is a powerful coding agent | Known known | Code, git, tools, network by design (§6) |
-| Forge + model credentials in the Dev | Known known | Current delivery model (runspec / env / files) |
-| Open outbound internet | Known known | Forge, packages, model APIs (§6) |
-| Redaction only on app→PMO/forge writes | Known known | Does not cover Dev egress (§7) |
-| Shared host kernel (Docker container) | Known known | Not a multi-tenant jail (§6) |
-| This mission’s injection or tool misuse succeeds | Known unknown | Capability known; per-run outcome is not |
-| Key exfil / phone-home over open egress | Known unknown | Easy in principle; whether it happens is incident weather |
-| Write-token misuse if forge protection is weak | Known unknown | Zone C configuration is the variable (§2 zone C) |
-| Novel harness / MCP / dependency composition | Unknown unknown | Tooling churn and combos not fully listed |
-
-#### Zone C — Supply chain (path to default branch)
-
-| Risk shape | Bucket | Implication |
-|---|---|---|
-| Branch protection is the real merge fence | Known known | App cannot invent forge physics (§2 zone C) |
-| Who can write tickets/repos steers agents | Known known | Membership is a control (§0) |
-| `auto_merge` gates the **app** only | Known known | Does not strip Dev merge capability |
-| LEGAL_OUTCOMES + INV-4 | Known known | Block forged **app** deputy paths, not all forge API use |
-| Protection actually on and non-bypass for the Dev account | Known unknown | `/health` is advisory; forge truth is external |
-| Human merges a bad PR | Known unknown | Process risk outside the app |
-| Forge product or novel social path | Unknown unknown | Outside day-to-day inventory |
-
-**One-line read-across:** Zone A is mostly known knowns (host trust is the deal).
-Zone B’s sharp edges are mostly known knowns of a capable agent runtime; the
-weather is known unknowns. Zone C’s strategy is known known; whether protection
-and humans hold is known unknown. Unknown unknowns are fog at the edges—not an
-excuse to treat keys-in-Dev or open egress as mysteries.
 
 ---
 
@@ -446,32 +397,43 @@ Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 
 ## 10. Residual risk summary
 
+Bucket per §0a. **Weather** = you can only watch; **verify** =
+operator-verifiable state — retire it via the §9 checklist.
+
 ### Zone A — Host / control plane
 
-| Risk | Blast radius | Owns |
-|---|---|---|
-| Dagu or sock compromise | Host root | Design (dedicated host) |
-| Admin password leak / mis-bound :8080 | All GUI secrets + config mutation + clear-runs | Operator + design |
-| Volume/backup theft | All secrets | Operator (host encryption/backups) |
+| Risk | Blast radius | Owns | Bucket |
+|---|---|---|---|
+| Dagu or sock compromise | Host root | Design (dedicated host) | Known known (radius); weather (occurrence) |
+| Admin password leak / mis-bound :8080 | All GUI secrets + config mutation + clear-runs | Operator + design | Verify the bind (§9); leak is weather |
+| Volume/backup theft | All secrets | Operator (host encryption/backups) | Weather |
+| Control-plane CVEs (Dagu, Redis, OO, Gitea images) | Component-dependent; sock-adjacent (Dagu) = host root | Design (pins) + operator (update cadence) | Weather — the next CVE is timing |
 
 ### Zone B — Agent execution
 
-| Risk | Blast radius | Owns |
-|---|---|---|
-| Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) |
-| Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) |
-| Open egress | Exfil of env | Design |
-| No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) |
-| Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) |
+| Risk | Blast radius | Owns | Bucket |
+|---|---|---|---|
+| Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) | Known known (capability); weather (per-run outcome) |
+| Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) | Verify — set the RO PAT (§9) |
+| Open egress | Exfil of env | Design | Known known |
+| No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) | Known known until §11 lands |
+| Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) | Known known |
 
 ### Zone C — Supply chain
 
-| Risk | Blast radius | Owns |
-|---|---|---|
-| Unprotected default branch | Direct or weak path to main (agent **or** app) | **Operator** |
-| Relying on `auto_merge` off alone | Agent still holds write token + CLI | **Operator** (must also protect branch) |
-| `auto_merge` **on** + weak review / no reviewer token | App merges after REVIEW without formal forge approval | Operator |
-| Shared EXECUTE/REVIEW identity | Weaker second look | Operator |
+| Risk | Blast radius | Owns | Bucket |
+|---|---|---|---|
+| Unprotected default branch | Direct or weak path to main (agent **or** app) | **Operator** | Verify at the forge (§9): protection on **and** Dev account non-bypass — `/health` is advisory |
+| Relying on `auto_merge` off alone | Agent still holds write token + CLI | **Operator** (must also protect branch) | Known known — off gates the app only |
+| `auto_merge` **on** + weak review / no reviewer token | App merges after REVIEW without formal forge approval | Operator | Verify — reviewer token + forge review rules (§9) |
+| Shared EXECUTE/REVIEW identity | Weaker second look | Operator | Known known if chosen — warned (§8), not gated |
+| Human merges a bad PR | Bad code lands via the legitimate merge path | Operator (review process) | Weather — process risk outside the app |
+
+**Read-across:** the sharp edges are mostly known knowns of a capable agent
+runtime on a trusted host; the known unknowns split into weather (watch) and
+verifiable state (retire via §9). Anything that maps to no row here and no
+stance in §§2–8 is an **unknown unknown** — which is also the definition of a
+security finding worth reporting.
 
 ---
 

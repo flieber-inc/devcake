@@ -7,7 +7,7 @@
 #
 #   docker buildx bake images
 #
-# Context must be ./images (needs common/dev_entrypoint.py).
+# Context must be ./images (needs common/dev_entrypoint.py + common/devcake_dev/).
 # Pin harness CLIs below — bump intentionally, never float on :latest npm.
 
 # Digest-pinned (ISSUES #29). Bump: docker buildx imagetools inspect <image:tag>
@@ -70,6 +70,9 @@ RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
 
 ENV HOME=/home/dev
 
+# Shared entrypoint façade + Dev-side package (domain/fault pure; more slices later).
+# Package root is `/` so `import devcake_dev` works; ENTRYPOINT path unchanged.
+COPY common/devcake_dev /devcake_dev
 COPY common/dev_entrypoint.py /dev_entrypoint.py
 
 WORKDIR /workspace

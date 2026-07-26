@@ -26,7 +26,7 @@ the working tree's entrypoint (not the baked copy) supplies `harness_argv`:
 
     in_container.py --harness codex --name live_codex_healthy \\
         --prompt-file /capture/prompts/trivial.md --out /out \\
-        --preflight http://192.168.2.20:8765/v1/models \\
+        --preflight http://<vllm-host>:8765/v1/models \\
         [--model ID] [--extra '<shell-quoted argv tail>'] \\
         [--intended empty_completion] [--concurrency 4] [--timeout 300]
 """

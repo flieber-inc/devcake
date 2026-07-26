@@ -420,9 +420,11 @@ contract:
 - Protocol hardens: credential-upload filename allowlist + size cap; PMO
   `download_asset` host allowlist / redirect policy (all adapters that fetch
   feed assets); stronger bootstrap password policy than a short deny-list.
-- Optional: gVisor/Kata for Devs; egress proxy allowlists; OIDC if you must
-  expose the admin UI beyond loopback; OTLP bearer auth on the collector
-  (low priority on a dedicated single-tenant host).
+- Optional: gVisor/Kata for Devs; egress allowlists / credential-injection
+  proxy (e.g. [iron-proxy](https://github.com/ironsh/iron-proxy) class —
+  deferred radar in `16-roadmap.md`); OIDC if you must expose the admin UI
+  beyond loopback; OTLP bearer auth on the collector (low priority on a
+  dedicated single-tenant host).
 
 **Not backlog (explicit non-goals):** multi-tenant SaaS hardening; treating
 prompt injection as a ship-blocking defect; hard-gating dispatch on every

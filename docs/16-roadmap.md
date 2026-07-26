@@ -590,8 +590,22 @@ long-lived incomplete dialect API.
   approval, merge ordering); still capped at 0-or-1 work repo per mission.
 - **Per-run scoped forge tokens** and the rest of `14` §7 — companion to
   internal per-mission tokens; revisit when threat model demands it.
-- **Network egress allowlists / reduced sandbox-bypass** for non-EXECUTE
-  stages (ISSUES #16).
+- **Network egress allowlists / Dev egress proxy** (ISSUES #16 + radar) —
+  optional Zone B defense-in-depth: default-deny outbound and/or
+  **credential-injection MITM** so Devs hold proxy tokens rather than real
+  model/forge keys. Candidate implementation class:
+  [iron-proxy](https://github.com/ironsh/iron-proxy) (Apache-2.0; Hermes Agent
+  already integrates a host-daemon form). **Not** a sandbox product rewrite and
+  **not** a substitute for zone C branch protection (`14` §0–§3, §6, §11).
+  Promote only after a time-boxed spike proves: (1) enforcement beyond DNS
+  alone (nftables/TPROXY or measured non-bypass for our harness set), (2)
+  coexistence with `devcake_runtime` (Redis, otel-collector, internal Gitea)
+  without naive private-CIDR denials, (3) inventory of what still must be
+  real secrets in-container (OAuth files, uncovered auth schemes, MCP
+  `secret_env`), (4) no silent fallback to real keys when “enforced,” (5)
+  operator docs that do not overclaim isolation. Default-off / ops overlay
+  until then; opportunity cost is high (CA lifecycle, allowlists, Dagu spawn
+  path, every TLS client in the Dev image).
 - **Additional log-connector backends** (Loki; others on demand) in the
   standalone plugin repo <https://github.com/fidecastro/devcake-logs-mcp>
   (`LogBackend` seam; core MCP ports already shipped).

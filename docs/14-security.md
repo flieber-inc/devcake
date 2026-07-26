@@ -26,6 +26,71 @@ it does not nanny-gate most of those choices. See §8.
 
 If that contract is wrong for your environment, do not run DevCake there.
 
+### 0a. How to read this contract
+
+The rest of this file mixes **design stance**, **implementation residuals**, and
+**fog at the edges**. A simple reading aid (Rumsfeld’s three buckets):
+
+| Term | Meaning here |
+|---|---|
+| **Known knowns** | Named and accepted. Part of the product deal—not bugs to “fix away.” |
+| **Known unknowns** | The *kind* of failure is known; *whether / when / how hard* it hits is not. |
+| **Unknown unknowns** | Paths not fully inventoried (composition, novel tooling, platform surprises). |
+
+**Rule:** design choices (capable agents, prompt injection as input, open Dev
+egress and credentials in the Dev under the current stack) are **known knowns**.
+Do not reclassify them as unknown simply because they are sharp.
+
+Tables below give the **shape** of risk per trust zone (§2). Detail and controls
+follow in later sections; this subsection does not replace zone C branch
+protection or the operator checklist (§9).
+
+#### Zone A — Host / control plane
+
+| Risk shape | Bucket | Implication |
+|---|---|---|
+| Dedicated host; not multi-tenant SaaS | Known known | One machine’s trust boundary is the product boundary |
+| Dagu holds `docker.sock` | Known known | Dagu ≈ host-root blast radius (§5) |
+| Admin auth + GUI secrets (+ export) | Known known | Admin password ≈ full secret set (§4) |
+| `/data`, profiles, backups, `gitea_data` | Known known | Treat as secret dumps (§1, §4) |
+| Control ports default loopback | Known known | Public bind is operator-chosen total exposure |
+| Operator session theft / misconfig | Known unknown | Surfaces known; timing and compliance are ops |
+| Control-plane CVEs / supply chain | Known unknown | Pins help; next CVE is timing |
+| Unlisted admin/Dagu/API footguns | Unknown unknown | Not fully enumerated |
+
+#### Zone B — Dev (agent execution)
+
+| Risk shape | Bucket | Implication |
+|---|---|---|
+| Ticket + repo content steers the agent | Known known | Prompt injection is design input (§3) |
+| Dev is a powerful coding agent | Known known | Code, git, tools, network by design (§6) |
+| Forge + model credentials in the Dev | Known known | Current delivery model (runspec / env / files) |
+| Open outbound internet | Known known | Forge, packages, model APIs (§6) |
+| Redaction only on app→PMO/forge writes | Known known | Does not cover Dev egress (§7) |
+| Shared host kernel (Docker container) | Known known | Not a multi-tenant jail (§6) |
+| This mission’s injection or tool misuse succeeds | Known unknown | Capability known; per-run outcome is not |
+| Key exfil / phone-home over open egress | Known unknown | Easy in principle; whether it happens is incident weather |
+| Write-token misuse if forge protection is weak | Known unknown | Zone C configuration is the variable (§2 zone C) |
+| Novel harness / MCP / dependency composition | Unknown unknown | Tooling churn and combos not fully listed |
+
+#### Zone C — Supply chain (path to default branch)
+
+| Risk shape | Bucket | Implication |
+|---|---|---|
+| Branch protection is the real merge fence | Known known | App cannot invent forge physics (§2 zone C) |
+| Who can write tickets/repos steers agents | Known known | Membership is a control (§0) |
+| `auto_merge` gates the **app** only | Known known | Does not strip Dev merge capability |
+| LEGAL_OUTCOMES + INV-4 | Known known | Block forged **app** deputy paths, not all forge API use |
+| Protection actually on and non-bypass for the Dev account | Known unknown | `/health` is advisory; forge truth is external |
+| Human merges a bad PR | Known unknown | Process risk outside the app |
+| Forge product or novel social path | Unknown unknown | Outside day-to-day inventory |
+
+**One-line read-across:** Zone A is mostly known knowns (host trust is the deal).
+Zone B’s sharp edges are mostly known knowns of a capable agent runtime; the
+weather is known unknowns. Zone C’s strategy is known known; whether protection
+and humans hold is known unknown. Unknown unknowns are fog at the edges—not an
+excuse to treat keys-in-Dev or open egress as mysteries.
+
 ---
 
 ## 1. Asset inventory

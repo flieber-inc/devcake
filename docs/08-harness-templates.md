@@ -353,11 +353,24 @@ and narrated HTML with a fabricated `▶` prompt and hallucinated command output
 codex executes nothing, writes no files, and exits **0**. 5 of 5 mission-shaped runs
 behaved this way.
 
+**Since 2026-07-26 this is committed evidence, not a campaign note.** The seventeen
+`live_*` captures in `app/tests/fixtures/harness_streams/` were taken against this
+same backend with the founder's verbatim incident configuration, and they carry the
+symptom into the test suite: **13 codex runs across two prompts, both ports and three
+concurrency levels produced zero tool calls between them**, every stream being exactly
+one `agent_message` plus the benign `-m` metadata error item. The workspaces were
+bind-mounted and inspected afterwards, so "wrote no `result.json`" is a filesystem
+fact on every row. See that directory's README,
+*The live captures*, for the reproduction, the `:8765`-vs-`:8000` A/B (identical —
+the proxy is not the variable) and the concurrency measurements.
+
 **The backend is not at fault**, and that was established before anything else was
 touched. Direct protocol probes with no CLI involved, on both ports: `POST /v1/responses`
 with one simple tool returns a real `function_call`; `POST /v1/messages` returns a real
 `tool_use`. And `claude-code`, against the *same* model, backend and prompt, produced
-**4 real `tool_use` blocks** and completed the task.
+**4 real `tool_use` blocks** and completed the task. Both controls are now committed
+too — `live_claude_raw_mission` (4 real `tool_use` calls) and `live_grok_raw_mission`
+(7 real tool calls), each of which finished the task and left `result.json` on disk.
 
 ### What the bisect isolated
 
@@ -421,6 +434,17 @@ tool call.
 `15-errors-and-retries.md` §4a). These runs are `DEV_BAD_OUTPUT` (exit 11), so a
 fleet-wide bad-output cascade is throttled by nothing, excused by nothing, and every
 failure counts toward `max_attempts`. Recorded, not fixed.
+
+**Measured, including under concurrency (2026-07-26).** Eight concurrent mission-shaped
+codex runs at the deployment's real `global_max: 8`, against the incident path, all
+failed this way at once — and so did sixteen at N=16, where the backend was visibly
+saturated (per-run latency out to 232 s). The verdict never moved off exit 11 at any
+concurrency level, so there is no load at which this cascade becomes visible to the
+predicate. And it is not a predicate defect to fix: the model *answers*, at length, so
+the only thing separating these runs from a legitimately chatty one is the content of a
+model-controlled string, which is exactly what no fault arm may key on
+(`adr/0018-harness-fault-classification-and-backend-brake.md`: an arm fires on an event
+**type**, never on text the model chose). The remedies below are the whole of the response.
 
 **A second route to the same exit 11, on grok.** A model that does not stop
 tool-calling but keeps repeating the *same* call is halted by grok itself at 16

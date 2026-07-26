@@ -24,6 +24,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
   const [clearSecrets, setClearSecrets] = useState(false);
   const [secretsEpoch, setSecretsEpoch] = useState(0);
+  const [clearReloadErr, setClearReloadErr] = useState("");
   // per-PMO intake: App-owned /health (like the sidebar master), never the
   // config draft — Discard must not desync a safety switch from the server.
   const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
@@ -130,6 +131,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               onClick: () => setClearSecrets(true) },
           ]} />
         }>
+        {clearReloadErr && (
+          <p className="text-sm text-red-600 dark:text-red-400">✗ {clearReloadErr}</p>
+        )}
         {cfg.pmos.map((inst, idx) => {
           const tr = testResult[`pmo:${inst.name}`];
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
@@ -318,10 +322,19 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           context="pmo"
           onClose={() => setClearSecrets(false)}
           onCleared={async (result) => {
-            await reload();
-            setSecretsEpoch((e) => e + 1);
-            if (result?.intake_paused) {
-              onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+            // Swallow reload errors so the ConfirmDialog does not re-label a
+            // successful delete as a failed clear (Fable PR #54 review).
+            try {
+              setClearReloadErr("");
+              setTestResult({});
+              await reload();
+              setSecretsEpoch((e) => e + 1);
+              if (result?.intake_paused) {
+                onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+              }
+            } catch (e) {
+              setClearReloadErr(
+                `reload after clear secrets failed: ${String(e.message || e)}`);
             }
           }}
         />

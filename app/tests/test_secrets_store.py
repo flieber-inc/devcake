@@ -398,3 +398,40 @@ def test_secrets_clear_clears_breakers_and_audits(monkeypatch, tmp_path):
     blob = "\n".join(lines)
     assert "breaker-sentinel-value" not in blob
     assert "file-sentinel" not in blob
+
+
+def test_secrets_clear_repo_pops_forge_breaker_and_reloads(monkeypatch, tmp_path):
+    """Repo-scope clears must drop forge_runtime breakers, reset the protection
+    cache, and call reload() — the pmo-only path does not exercise this."""
+    app_main = _main(monkeypatch, tmp_path)
+    s = _store(monkeypatch, tmp_path)
+    s.write_connection_secret("repo", "main", "token", "repo-tok-sentinel")
+
+    class _FR:
+        def __init__(self):
+            self.breakers = {"main": "FORGE_AUTH"}
+
+    reloads = []
+    resets = []
+    fr = _FR()
+    monkeypatch.setattr(app_main, "forge_runtime", fr)
+    # clear_secrets binds reload/forge_runtime at the route — call the service
+    # with fakes so we can assert the side effects without full composition.
+    from devcake.api import connections_service as cs
+    monkeypatch.setattr(cs, "reset_protection_cache",
+                        lambda: resets.append(True))
+
+    out = run_coro(cs.clear_secrets(
+        {"connections": [
+            {"scope": "repo", "instance": "main", "field": "token"}]},
+        forge_runtime=fr,
+        reload=lambda: reloads.append(True),
+        config=app_main.config,
+        shared_breakers=app_main.shared_breakers,
+        dev_types=app_main.dev_types,
+    ))
+    assert out["ok"] is True
+    assert "main" not in fr.breakers
+    assert reloads == [True]
+    assert resets == [True]
+    assert s.connection_status("repo", "main", "token")["present"] is False

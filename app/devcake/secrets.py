@@ -182,13 +182,16 @@ def require_credential_ref(dev_type: str, filename: str) -> None:
 
 def delete_credential_file(dev_type: str, filename: str) -> None:
     """Unlink one OAuth/uploaded credential file. Missing = no-op."""
+    import contextlib
     require_credential_ref(dev_type, filename)
     path = _root() / dev_type / filename
     path.unlink(missing_ok=True)
-    # drop empty dir so inventory doesn't keep a ghost
+    # drop empty dir so inventory doesn't keep a ghost. suppress: a concurrent
+    # OAuth write can race the empty check (TOCTOU) — unlink already succeeded.
     parent = path.parent
     if parent.is_dir() and not any(parent.iterdir()):
-        parent.rmdir()
+        with contextlib.suppress(OSError):
+            parent.rmdir()
 
 
 # ── status (never echoes values) ────────────────────────────────────────────

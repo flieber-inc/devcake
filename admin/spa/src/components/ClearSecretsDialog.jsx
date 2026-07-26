@@ -88,7 +88,7 @@ function Group({ title, help, items, selected, setSelected, idOf, labelOf, descO
           return (
             <CheckRow
               key={id}
-              id={`clear-sec-${id}`}
+              id={domId(id)}
               label={labelOf(it)}
               desc={descOf?.(it)}
               checked={selected.has(id)}
@@ -115,9 +115,12 @@ const CONN_FIELD_LABEL = {
   reviewer_token: "Reviewer token",
 };
 
+// Internal selection keys use \0 (collision-proof for any printable filename).
+// DOM id/htmlFor cannot use NUL — encode only for attributes (Fable PR #54).
 const idHarness = (it) => `h\0${it.var}`;
 const idConn = (it) => `c\0${it.scope}\0${it.instance}\0${it.field}`;
 const idFile = (it) => `f\0${it.dev_type}\0${it.filename}`;
+const domId = (id) => `clear-sec-${encodeURIComponent(id)}`;
 
 function allIds(inv) {
   const ids = [];

@@ -460,10 +460,19 @@ export default function ReposPage({ onHealthChange }) {
           context="repos"
           onClose={() => setClearSecrets(false)}
           onCleared={async (result) => {
-            await reload();
-            setSecretsEpoch((e) => e + 1);
-            if (result?.intake_paused) {
-              onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+            // Swallow reload errors so the ConfirmDialog does not re-label a
+            // successful delete as a failed clear (Fable PR #54 review).
+            try {
+              setClearErr("");
+              setTestResult({});
+              await reload();
+              setSecretsEpoch((e) => e + 1);
+              if (result?.intake_paused) {
+                onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+              }
+            } catch (e) {
+              setClearErr(
+                `reload after clear secrets failed: ${String(e.message || e)}`);
             }
           }}
         />

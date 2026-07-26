@@ -1,0 +1,53 @@
+{
+  "name": "live_grok_raw_mission",
+  "harness": "grok-build",
+  "cli_version": "grok 0.2.112 (9bbd559437)",
+  "entrypoint_source": "/srv/images/common/dev_entrypoint.py",
+  "condition": "live vLLM RAW :8000 via GROK_MODELS_BASE_URL (chat_completions lane), mission-shaped prompt",
+  "model": "DeepSeek-V4-Flash-DSpark-Abliterated",
+  "plan_mode": false,
+  "argv": [
+    "grok",
+    "-p",
+    "You are working in a small git repository at the current directory.\n\nTask: add a `farewell(name)` function to `src/greet.py` that returns\n`f\"bye {name}\"`, mirroring the existing `greet` function.\n\nWhen you are done, write your outcome to `out/result.json` EXACTLY as:\n{\"schema_version\": 1, \"outcome\": \"executed\", \"summary\": \"<what you changed>\"}\n\nDo not commit. Do not push. Keep the change minimal.\n",
+    "--output-format",
+    "streaming-json",
+    "--always-approve",
+    "--model",
+    "DeepSeek-V4-Flash-DSpark-Abliterated"
+  ],
+  "extra": null,
+  "preflight": {
+    "url": "http://vllm-backend:8000/v1/models",
+    "status": 200,
+    "latency_ms": 33,
+    "body_head": "{\"object\":\"list\",\"data\":[{\"id\":\"DeepSeek-V4-Flash-DSpark-Abliterated\",\"object\":\"model\",\"created\":1785035108,\"owned_by\":\"vllm\",\"root\":\"drowzeys/DeepSeek-V4-Flash-DSpark-Abliterated-Uncensored\",\"parent\":null,\"max_model_len\":300000,\"permission\":[{\"id\":\"modelperm-bb3ce253da25d9c4\",\"object\":\"model_permission\",\"created\":1785035108,\"allow_create_engine\":false,\"allow_sampling\":true,\"allow_logprobs\":true,\""
+  },
+  "concurrency": 1,
+  "concurrency_note": null,
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_ms": 16462,
+  "stdout_bytes": 1406,
+  "stdout_lines": 25,
+  "stderr_bytes": 0,
+  "dump_bytes": 962,
+  "last_message_bytes": 0,
+  "session_id": "019f9c62-3085-7e52-befb-544c6f964db6",
+  "observed_reason": null,
+  "observed_detail": null,
+  "devcake_exit_now": 11,
+  "devcake_class_now": "",
+  "devcake_exit_before_adr0018": 11,
+  "captured_at": "2026-07-26T03:05:24Z",
+  "scrub": {
+    "placeholder": "vllm-backend",
+    "occurrences_rewritten": 1,
+    "what": "the live backend's host address, in this sidecar only",
+    "preserved": "scheme and port \u2014 :8765 (proxy) vs :8000 (raw) is the A/B",
+    "length_preserving": true,
+    "found_in_stream_files": false
+  },
+  "reproducible": false,
+  "reproducibility_note": "live model backend: a rerun samples a different completion, so these bytes cannot be regenerated. Provenance is the model id and captured_at."
+}

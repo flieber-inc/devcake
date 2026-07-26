@@ -1,0 +1,3 @@
+{"type":"text","data":"ACKNOW"}
+{"type":"text","data":"LEDGED"}
+{"type":"end","stopReason":"EndTurn","sessionId":"019f9c62-c3e3-7e50-ae93-cd3591efa65a","requestId":"b9bdc253-c10e-4d93-a758-ef054473d5e8","usage":{"input_tokens":9754,"cache_read_input_tokens":0,"output_tokens":28,"reasoning_tokens":0,"total_tokens":9782},"num_turns":1,"modelUsage":{"DeepSeek-V4-Flash-DSpark-Abliterated":{"inputTokens":9754,"outputTokens":28,"cacheReadInputTokens":0,"modelCalls":1}}}

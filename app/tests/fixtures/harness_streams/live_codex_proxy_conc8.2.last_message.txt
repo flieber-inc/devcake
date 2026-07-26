@@ -1,0 +1,18 @@
+
+
+<details>
+<<viewing the existing `src/greet.py`>></details>
+
+<structural_actions>
+[Look at existing code]
+</structural_actions>
+
+Let me first look at the existing file and structure.
+
+<details>
+<summary>Checking the repo layout and existing greet function</summary>
+</details>
+
+<details>
+<summary>Checking the repo layout and existing greet function</summary>
+</details>

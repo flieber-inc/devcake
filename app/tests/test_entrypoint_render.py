@@ -210,8 +210,12 @@ def test_grok_coalescer_renders_the_terminal_error_and_the_turn_cap():
 
 FIXTURES = Path(__file__).parent / "fixtures" / "harness_streams"
 
-# A capture declares its harness in its filename prefix; the renderers are
-# dispatched by the harness name exactly as main() does (~L1528).
+# A capture's harness comes from its SIDECAR, which records it as a measured
+# fact; the filename prefix is only the fallback for the four 2026-07-24
+# Claude Code 2.1.219 streams that predate the capture rig and have none. (The
+# prefix alone stopped being sufficient with the `live_*` real-backend batch,
+# whose names lead with the provenance rather than the harness.) The renderers
+# are dispatched by the harness name exactly as main() does (~L1528).
 HARNESS_BY_PREFIX = {"claude": "claude-code", "codex": "codex", "grok": "grok-build"}
 
 # The events that decide a run's fate — every ADR-0018 fault arm fires on one of
@@ -224,6 +228,13 @@ TERMINAL_KINDS = {"claude-code": {"result"},
 
 # discovered from disk, so a capture added later cannot go unrendered
 CAPTURE_STREAMS = sorted(p.name[:-len(".jsonl")] for p in FIXTURES.glob("*.jsonl"))
+
+
+def capture_harness(name: str) -> str | None:
+    sidecar = FIXTURES / f"{name}.meta.json"
+    if sidecar.exists():
+        return json.loads(sidecar.read_text())["harness"]
+    return HARNESS_BY_PREFIX.get(name.split("_", 1)[0])
 
 
 def _renderer(harness):
@@ -239,8 +250,8 @@ def test_render_every_capture_without_raising(name):
     line, it does not kill the run), so the no-raise claim has to be asserted
     here or nowhere.
     """
-    harness = HARNESS_BY_PREFIX.get(name.split("_", 1)[0])
-    assert harness, f"{name}: filename prefix names no known harness"
+    harness = capture_harness(name)
+    assert harness, f"{name}: neither a sidecar nor the filename names a harness"
     render = _renderer(harness)
     terminals = []
     for raw in (FIXTURES / f"{name}.jsonl").read_text().splitlines(keepends=True):

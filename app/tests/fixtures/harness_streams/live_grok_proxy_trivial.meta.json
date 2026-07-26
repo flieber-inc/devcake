@@ -1,0 +1,53 @@
+{
+  "name": "live_grok_proxy_trivial",
+  "harness": "grok-build",
+  "cli_version": "grok 0.2.112 (9bbd559437)",
+  "entrypoint_source": "/srv/images/common/dev_entrypoint.py",
+  "condition": "live vLLM via the codex-shaped :8765 proxy \u2014 WRONG harness for this port; recorded so the predicate is graded on a misconfiguration too",
+  "model": "DeepSeek-V4-Flash-DSpark-Abliterated",
+  "plan_mode": false,
+  "argv": [
+    "grok",
+    "-p",
+    "Reply with exactly the word: ACKNOWLEDGED\n\nDo not use any tools. Do not explain. One word.\n",
+    "--output-format",
+    "streaming-json",
+    "--always-approve",
+    "--model",
+    "DeepSeek-V4-Flash-DSpark-Abliterated"
+  ],
+  "extra": null,
+  "preflight": {
+    "url": "http://vllm-backend:8765/v1/models",
+    "status": 200,
+    "latency_ms": 40,
+    "body_head": "{\"object\":\"list\",\"data\":[{\"id\":\"DeepSeek-V4-Flash-DSpark-Abliterated\",\"object\":\"model\",\"created\":1785035144,\"owned_by\":\"vllm\",\"root\":\"drowzeys/DeepSeek-V4-Flash-DSpark-Abliterated-Uncensored\",\"parent\":null,\"max_model_len\":300000,\"permission\":[{\"id\":\"modelperm-a8bab7763df8f51c\",\"object\":\"model_permission\",\"created\":1785035144,\"allow_create_engine\":false,\"allow_sampling\":true,\"allow_logprobs\":true,\""
+  },
+  "concurrency": 1,
+  "concurrency_note": null,
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_ms": 1342,
+  "stdout_bytes": 469,
+  "stdout_lines": 3,
+  "stderr_bytes": 0,
+  "dump_bytes": 128,
+  "last_message_bytes": 0,
+  "session_id": "019f9c62-c3e3-7e50-ae93-cd3591efa65a",
+  "observed_reason": null,
+  "observed_detail": null,
+  "devcake_exit_now": 11,
+  "devcake_class_now": "",
+  "devcake_exit_before_adr0018": 11,
+  "captured_at": "2026-07-26T03:05:47Z",
+  "scrub": {
+    "placeholder": "vllm-backend",
+    "occurrences_rewritten": 1,
+    "what": "the live backend's host address, in this sidecar only",
+    "preserved": "scheme and port \u2014 :8765 (proxy) vs :8000 (raw) is the A/B",
+    "length_preserving": true,
+    "found_in_stream_files": false
+  },
+  "reproducible": false,
+  "reproducibility_note": "live model backend: a rerun samples a different completion, so these bytes cannot be regenerated. Provenance is the model id and captured_at."
+}

@@ -1,0 +1,27 @@
+
+
+<small>Let me check the existing code first.</small>
+
+<exec>
+
+<command>cat src/greet.py</command>
+
+</exec>
+
+<exec>
+
+<command>mkdir -p out</command>
+
+</exec>
+
+<exec>
+
+<command>cat src/greet.py</command>
+
+</exec>
+
+<exec>
+
+<command>mkdir -p out</command>
+
+</exec>

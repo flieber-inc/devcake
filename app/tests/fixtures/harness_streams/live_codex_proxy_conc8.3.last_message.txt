@@ -1,0 +1,36 @@
+
+
+<details>
+<summary>Let me check the existing file first.</summary>
+
+```bash
+cat src/greet.py
+```
+</details>
+
+<details>
+<summary>Now I'll add the farewell function.</summary>
+
+```bash
+cat >> src/greet.py << 'EOF'
+
+def farewell(name):
+    return f"bye {name}"
+EOF
+```
+</details>
+
+<details>
+<summary>Write the outcome file.</summary>
+
+```bash
+mkdir -p out && cat > out/result.json << 'EOF'
+{"schema_version": 1, "outcome": "executed", "summary": "added farewell(name) function to src/greet.py that returns f\"bye {name}\""}
+EOF
+```
+</details>
+
+Done! I added a `farewell(name)` function to `src/greet.py` that returns `f"bye {name}"`, following the same pattern as the existing `greet` function.
+
+- `src/greet.py` — now contains both `greet(name)` and `farewell(name)`
+- `out/result.json` — written with the outcome

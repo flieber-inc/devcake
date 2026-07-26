@@ -51,7 +51,7 @@ Retries of Dev work are never in-place: a failed attempt ends the container; the
 ## 2a. "Raise `--max-turns`" is not universal advice
 
 The turn-cap remedy above assumes a harness that has a turn cap. Measured
-2026-07-25 (`08-harness-templates.md` §1b, `07-dev-runtime.md` §4):
+against each CLI (`adr/0018-harness-fault-classification-and-backend-brake.md`, `07-dev-runtime.md` §4):
 
 | Harness | Cap flag | Reaches exit 16? |
 |---|---|---|
@@ -115,7 +115,7 @@ at once, treat it as the shared-backend case in `08-harness-templates.md` §8 �
 the brake does not cover it, so the judgement is human.
 
 Measured on grok-build 0.2.112 only; the mechanism, the fixtures and the limits of
-the measurement are in `08-harness-templates.md` §1c.
+the measurement are in `adr/0018-harness-fault-classification-and-backend-brake.md` and `app/tests/fixtures/harness_streams/README.md`.
 
 ## 3. `DEVCAKE-FAILED` semantics
 

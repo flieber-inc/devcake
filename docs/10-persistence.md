@@ -95,7 +95,7 @@ assignments:                         # every Mission Type must be assigned to ex
     dev_type: judgment               #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
     extra_cli_args: "--max-turns 15" # seeded default: bounded-effort triage for claude-code; edit/clear freely
                                      #   --max-turns is claude-code + grok-build only; codex 0.144.4 has NO
-                                     #   turn cap, so no args value bounds a codex Dev (08 §1b, 15 §2a).
+                                     #   turn cap, so no args value bounds a codex Dev (08 §1, 15 §2a).
   PLAN:
     dev_type: judgment
     extra_cli_args: ""

@@ -173,13 +173,13 @@ The skill-store catalog: name / description / source badge (`store` = served fro
 Both validate server-side (name shape, required description, per-file 200 KB / total 1 MB caps, path-safety) and **refuse a name collision** with an existing store skill or a built-in unless the operator confirms **Overwrite** (409 → explicit confirm). Every row shows **View**; when the store is editable every row also shows a **Delete** control — live for operator/retired store skills, **disabled** for built-ins (they re-seed at boot; deselect on Dev Types instead; `DELETE` still 422s). Skills created here carry `metadata.source: operator (admin panel)`.
 
 ### Assignments
-Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). Harness-specific means capability-specific: `--max-turns` exists on claude-code and grok-build, but **codex 0.144.4 has no turn-cap flag at all**, so no args value bounds a codex Dev's effort (`08-harness-templates.md` §1b, `15-errors-and-retries.md` §2a). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).
+Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). Harness-specific means capability-specific: `--max-turns` exists on claude-code and grok-build, but **codex 0.144.4 has no turn-cap flag at all**, so no args value bounds a codex Dev's effort (`08-harness-templates.md` §1, `15-errors-and-retries.md` §2a). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).
 
 ### Pointing a Dev Type at a local / OpenAI-compatible backend
 
-Four click targets, and **which ones you use depends on the harness** — the full
-recipes, the measured evidence and the `/v1` warning live in
-[`08-harness-templates.md`](08-harness-templates.md) §8:
+Four click targets, and **which ones you use depends on the harness** — which
+mechanism each template reads is the template contract
+([`08-harness-templates.md`](08-harness-templates.md) §8):
 
 | where | what goes there |
 |---|---|
@@ -191,6 +191,18 @@ recipes, the measured evidence and the `/v1` warning live in
 - **claude-code and grok-build need no extra CLI args at all** — leave the textbox empty; the backend is selected entirely by env vars.
 - **The base-URL shape differs**: `ANTHROPIC_BASE_URL` takes **no** `/v1` suffix; `GROK_MODELS_BASE_URL` **requires** it. Getting this backwards is the common failure.
 - A claude-code Dev Type configured this way shows **"no credentials configured"** on the Devs card — `credentials_ready` only checks the registry keys (§3, Dev Types). Advisory only; it gates nothing.
+**The codex block.** codex takes its whole backend definition as `-c` overrides,
+pasted into the extra-CLI-args textbox of **every** Mission Type routed to that Dev
+Type (the args are per Mission Type, not per Dev Type — §3):
+
+```
+-c model_provider=vllm -c model_providers.vllm.name=vLLM -c model_providers.vllm.base_url=http://<host>:8000/v1 -c model_providers.vllm.env_key=CODEX_API_KEY -c model_providers.vllm.wire_api=responses -c model_context_window=<max_model_len> -c model_auto_compact_token_limit=<~80% of it>
+```
+
+**Clear a stale OAuth credential file.** If the Dev Type has a `grok-auth.json` or
+`codex-auth.json` from an earlier device-code login it is still delivered to the
+container; clear it if the Dev Type is dedicated to a local backend.
+
 - **codex is measured non-functional against one local model** (`adr/0018-harness-fault-classification-and-backend-brake.md`, Amendment 2026-07-26) (invented `<exec>` prose, zero tool calls, exit 0 → exit 11 `DEV_BAD_OUTPUT`). Assign such stages to grok-build or claude-code.
 
 ### Profiles (anchor `#/config/profiles`)

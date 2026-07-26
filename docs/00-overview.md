@@ -145,7 +145,7 @@ Operating duties — once at setup and recurring — live in
 
 | Doc | Governs |
 |---|---|
-| **`14-security.md`** | **Product security contract** — threat model, trust zones, operator checklist |
+| **`14-security.md`** | **Product security contract** — threat model, trust zones, risk-bucket reading aid, operator checklist |
 | `01-architecture.md` | Component topology, interaction matrix, ports & adapters layering |
 | `02-domain-model.md` | Entities, fields, Mission Type derivation, label set, state machine |
 | `03-mission-lifecycle.md` | The four Mission Type playbooks, `result.json`, canonical prompts |

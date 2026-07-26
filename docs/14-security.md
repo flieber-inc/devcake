@@ -26,6 +26,25 @@ it does not nanny-gate most of those choices. See §8.
 
 If that contract is wrong for your environment, do not run DevCake there.
 
+### 0a. How to read this contract
+
+This file mixes **design stance**, **implementation residuals**, and **fog at
+the edges**. A reading aid (Rumsfeld’s three buckets) and the plain labels the
+§10 residual-risk tables use for them:
+
+| Term | Meaning here | §10 label · what to do |
+|---|---|---|
+| **Known known** | Named and accepted — by design (the deal) or as tracked debt (§11) | **Accepted** · don’t file it; read the stance (§§2–8) |
+| **Known unknown** | The *kind* of failure is known; *whether / when / how hard* it hits is not | **Weather** · you can only watch — or **Verify** · operator-checkable state, retire it via §9 |
+| **Unknown unknown** | Paths not inventoried (composition, novel tooling, platform surprises) | No label — a finding that maps to no §10 row and no §§2–8 stance is one; report it |
+
+**Rule:** design choices — capable agents, prompt injection as input, open Dev
+egress, credentials in the Dev under the current stack — are **known knowns**.
+Do not reclassify them as unknown simply because they are sharp. The inverse
+also holds: naming a control here never immunizes it — an implemented claim
+that fails to hold (anything §8 marks **hard** or **gate**; INV-4; §7
+redaction at its choke points) is a bug to report, not weather.
+
 ---
 
 ## 1. Asset inventory
@@ -66,7 +85,7 @@ Compromise of Dagu auth, the admin password, or the host is total for that machi
 | Mission text + repo content in prompts | **Trusted by design** (adult-operator / OpenClaw-class). Prompt injection is not a product defect (§3). |
 | Forge + model credentials in the Dev | Required for clone/push and harnesses. Open **egress** by design (forge, package registries, model APIs). |
 | MCP setup commands / `extra_cli_args` | **Admin-equivalent code execution** inside the disposable container (`11-admin-panel.md`). |
-| Skill-store skills (`DevType.skills` / `skills_required`) | **Operator-controlled agent instructions** (same trust class as the MCP command area; **ADR-0016**). Available skills are installed for optional consult; Required adds a soft-force prompt line only (not kernel-enforced). The store repo is writable by anyone with Gitea access. The entrypoint refuses absolute/`..` paths and confines writes to the registry-declared skills dir under `$HOME` (the runspec `skills_dir` is itself validated home-relative — absolute/`..` values fall back to the default) — that guards file placement, not content. |
+| Skill-store skills (`DevType.skills` / `skills_required`) | **Operator-controlled agent instructions** (same trust class as the MCP command area; **ADR-0016**). Available skills are installed for optional consult; Required adds a soft-force prompt line only (not kernel-enforced). The store repo is writable by human Gitea accounts; mission Dev tokens are never collaborators on it (no machine user, no tokens — the app reads it with the admin credential), so an injected Dev cannot poison skills for future runs. The entrypoint refuses absolute/`..` paths and confines writes to the registry-declared skills dir under `$HOME` (the runspec `skills_dir` is itself validated home-relative — absolute/`..` values fall back to the default) — that guards file placement, not content. |
 | Harness flags (`--dangerously-skip-permissions`, etc.) | Autonomous coding requires them; Devs are not a secure sandbox product (§6). |
 | Unauthenticated OTLP to `otel-collector` | Residual on the dedicated host (self-noise / volume fill). Ops signal, not a tenancy boundary (§10). |
 | Internal Gitea mission tokens | **User-scoped, not repo-scoped** (live-verified). Isolation is one machine user + collaborator grant per mission (`adr/0010`), not forge-side repo ACLs. Admin password never enters Devs. **Extra in-container RO clones** expand the same class: **blocker RO mounts** (ADR-0017 — a dependent mission’s Dev may receive a **done** blocker’s `token_read` as an `extra_repos` credential) and **reference repos** (PMO `reference_repos` — RO clone of configured cards into every stage). Still one credential per listed repo, never the Gitea admin password. |
@@ -381,32 +400,48 @@ Tutorials: `docs/tutorials/01-first-mission.md`, `13-deployment.md`.
 
 ## 10. Residual risk summary
 
+Bucket labels per §0a: **Accepted** = the deal (or tracked debt — §11);
+**Weather** = you can only watch; **Verify** = operator-checkable state —
+retire it via the §9 checklist. The label names the decision-relevant aspect;
+nearly every row also pairs an accepted blast radius with an uncertain
+occurrence.
+
 ### Zone A — Host / control plane
 
-| Risk | Blast radius | Owns |
-|---|---|---|
-| Dagu or sock compromise | Host root | Design (dedicated host) |
-| Admin password leak / mis-bound :8080 | All GUI secrets + config mutation + clear-runs | Operator + design |
-| Volume/backup theft | All secrets | Operator (host encryption/backups) |
+| Risk | Blast radius | Owns | Bucket |
+|---|---|---|---|
+| Dagu or sock compromise | Host root | Design (dedicated host) | Accepted — the radius is the deal |
+| Admin password leak / mis-bound :8080 | All GUI secrets + config mutation + clear-runs | Operator + design | Verify the bind (§9); the leak itself is weather |
+| Volume/backup theft | All secrets | Operator (host encryption/backups) | Weather |
+| Control-plane CVEs (Dagu, Redis, OO, Gitea images) | Component-dependent; sock-adjacent (Dagu) = host root | Design (pins) + operator (update cadence) | Weather — the next CVE is timing |
 
 ### Zone B — Agent execution
 
-| Risk | Blast radius | Owns |
-|---|---|---|
-| Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) |
-| Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) |
-| Open egress | Exfil of env | Design |
-| No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) |
-| Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) |
+| Risk | Blast radius | Owns | Bucket |
+|---|---|---|---|
+| Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) | Accepted — the capability is design; per-run outcome is weather |
+| Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) | Verify — set the RO PAT (§9) |
+| Open egress | Exfil of env | Design | Accepted |
+| No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) | Accepted — tracked debt (§11) |
+| Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) | Accepted |
+| `activity-*` repos: past transcripts greppable by every future Dev until Clear | Cross-mission exposure of anything choke-point redaction missed (§1, ADR-0014) | Design (single-operator) + operator (Clear cadence) | Accepted |
 
 ### Zone C — Supply chain
 
-| Risk | Blast radius | Owns |
-|---|---|---|
-| Unprotected default branch | Direct or weak path to main (agent **or** app) | **Operator** |
-| Relying on `auto_merge` off alone | Agent still holds write token + CLI | **Operator** (must also protect branch) |
-| `auto_merge` **on** + weak review / no reviewer token | App merges after REVIEW without formal forge approval | Operator |
-| Shared EXECUTE/REVIEW identity | Weaker second look | Operator |
+| Risk | Blast radius | Owns | Bucket |
+|---|---|---|---|
+| Unprotected default branch | Direct or weak path to main (agent **or** app) | **Operator** | Verify at the forge (§9): protection on **and** Dev account non-bypass — `/health` is advisory |
+| Relying on `auto_merge` off alone | Agent still holds write token + CLI | **Operator** (must also protect branch) | Accepted — off gates the app only |
+| `auto_merge` **on** + weak review / no reviewer token | App merges after REVIEW without formal forge approval | Operator | Verify — reviewer token + forge review rules (§9) |
+| Shared EXECUTE/REVIEW identity | Weaker second look | Operator | Verify — independent identity (§9); dismissing the §8 warning = accepting |
+| Human merges a bad PR | Bad code lands via the legitimate merge path | Operator (review process) | Weather — process risk outside the app |
+
+**Read-across:** the sharp edges are mostly **accepted** properties of a
+capable agent runtime on a trusted host; the rest splits into weather (watch)
+and verifiable state (retire via §9). Anything that maps to no row here and no
+stance in §§2–8 is an **unknown unknown** — report it. So is any implemented
+claim that fails to hold (§0a Rule): mapping to a stance never immunizes
+breaking it.
 
 ---
 

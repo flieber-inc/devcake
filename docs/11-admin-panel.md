@@ -175,6 +175,24 @@ Both validate server-side (name shape, required description, per-file 200 KB / t
 ### Assignments
 Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). Harness-specific means capability-specific: `--max-turns` exists on claude-code and grok-build, but **codex 0.144.4 has no turn-cap flag at all**, so no args value bounds a codex Dev's effort (`08-harness-templates.md` §1b, `15-errors-and-retries.md` §2a). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).
 
+### Pointing a Dev Type at a local / OpenAI-compatible backend
+
+Four click targets, and **which ones you use depends on the harness** — the full
+recipes, the measured evidence and the `/v1` warning live in
+[`08-harness-templates.md`](08-harness-templates.md) §8a:
+
+| where | what goes there |
+|---|---|
+| **Dev Types → model** | the backend's model id exactly as its `/v1/models` reports it (rides as `DEVCAKE_MODEL` → the harness's model flag) |
+| **Dev Types → Secret env vars** | the NAMES the CLI reads: `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (claude-code), `GROK_MODELS_BASE_URL` (grok-build) |
+| **Dev Types → Runtime & credentials** / secret-env paste fields | the VALUES (`PUT /harness-secrets/{VAR}`) — the registry keys `XAI_API_KEY` / `CODEX_API_KEY` have their own checklist rows |
+| **Assignments → extra CLI args** | **codex only**: the whole `-c model_provider=… -c model_providers.<id>.base_url=…` block, in **every** Mission Type row routed to that Dev Type |
+
+- **claude-code and grok-build need no extra CLI args at all** — leave the textbox empty; the backend is selected entirely by env vars.
+- **The base-URL shape differs**: `ANTHROPIC_BASE_URL` takes **no** `/v1` suffix; `GROK_MODELS_BASE_URL` **requires** it. Getting this backwards is the common failure.
+- A claude-code Dev Type configured this way shows **"no credentials configured"** on the Devs card — `credentials_ready` only checks the registry keys (§3, Dev Types). Advisory only; it gates nothing.
+- **codex is measured non-functional against the local model of `08` §8** (invented `<exec>` prose, zero tool calls, exit 0 → exit 11 `DEV_BAD_OUTPUT`). Assign such stages to grok-build or claude-code.
+
 ### Profiles (anchor `#/config/profiles`)
 Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely Instant** — profiles carry secret values, which never enter the client draft, so the section header carries the ImmediateBadge and the apply panel sits in an InstantZone. The UI deals in presence and counts only; a secret value never reaches the SPA.
 

@@ -372,7 +372,7 @@ the surface moves into an `additional_tools` *input item* advertising a `custom`
 orchestrator plus `wait` and `request_user_input`. The stub reads `body["tools"]`, finds nothing, and
 answers with no items — so `tool_only` silently degenerates into `empty` and the conservatism arm is
 never exercised. With `-m` set, codex sends the classic ten-function surface
-(`exec_command`, `write_stdin`, `update_plan`, …) that docs/08 §8's bisect measured. Pinning is also
+(`exec_command`, `write_stdin`, `update_plan`, …) that `docs/19-local-backend-pairing.md` §2's bisect measured. Pinning is also
 the production shape for a local backend, which is the deployment ADR-0018 exists for.
 
 The cost of pinning is that codex emits a benign
@@ -667,7 +667,7 @@ value the model chose). Every one of these rows is therefore `NO_FAULT` in the a
 they serve as a **false-positive guard**: a future predicate change that starts faulting them has
 begun grading prose.
 
-This is the cascade `docs/08` §8 and `docs/15` §1/§4a already record as a **known gap in ADR-0018's
+This is the cascade `docs/19-local-backend-pairing.md` and `docs/15` §1/§4a already record as a **known gap in ADR-0018's
 coverage** — the brake keys on exit 15, and this never reaches 15. What was previously argued from
 five uninstrumented runs is now measured, with sidecars, under concurrency, with the filesystem
 checked.

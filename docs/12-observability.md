@@ -81,6 +81,7 @@ Canonical queries (the shapes `scripts/provision_oo.py` installs):
 | Cost / tokens by dev type & mission type | `run.finalize` spans: `devcake.cost.usd`, `devcake.tokens.*`, grouped by `devcake_dev_type` |
 | Runs by outcome | `run.finalize` spans: `devcake.outcome` (+ `devcake.verdict` for app-level rejections) |
 | Failure signals | `watchdog.kill` + `mission.give_up` spans (ERROR status); the `run_failures` log stream (§6) for pre-telemetry deaths |
+| Fleet / model-backend faults (ADR-0018) | `dev.backend_degraded` spans (transition into throttle — **not** `breaker.trip`); failed `run.finalize` / `dev.run` with `devcake.outcome` / `devcake.verdict` carrying harness error classes (`DEV_HARNESS_FAULT`, `DEV_TURN_BUDGET`, … — semantics in `15` §1 / §4a) |
 | Poison / forgery pressure | `ingress.poison` / `ingress.forged_drop` spans |
 | Poll health & queue depth | `poll.cycle` spans: duration + missions seen/candidates/dispatched |
 

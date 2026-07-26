@@ -1,7 +1,10 @@
 # 15 — Errors and Retries
 
 > **Audience:** implementers. One taxonomy; every component maps its failures into it.
-> **Depends on:** `04-orchestrator.md` (attempts, watchdog), `07-dev-runtime.md` (exit codes), `09-messaging.md` (poison messages).
+> **Depends on:** `04-orchestrator.md` (attempts, watchdog), `07-dev-runtime.md` (exit codes),
+> `09-messaging.md` (poison messages),
+> `adr/0018-harness-fault-classification-and-backend-brake.md` (exits 15/16, auth
+> precedence, backend brake).
 
 ## 1. Error classes
 
@@ -15,7 +18,8 @@
 | `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint); vanished container | counted attempt |
 | `DEV_MCP_SETUP` | exit 14: an `mcp_setup_commands` entry failed or hit the 300 s per-command cap; `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | app watchdog kill via Dagu stop → Run `timed_out` (not an entrypoint exit code) | counted attempt |
-| `DEV_AUTH` | exit 12 — harness credential wording per the §4 marker contract | circuit breaker (§4) — **not** a counted attempt |
+| `DEV_AUTH` | exit 12 — harness credential failure per the §4 precedence contract (stream 401/403 and/or distinctive stderr markers; generic markers only when no in-band fault already explains the run) | circuit breaker (§4) — **not** a counted attempt |
+| `DEV_FORGE` | exit 13 without the structured `DEV_FORGE_AUTH` class (transient forge/clone/push failure, or auth-ish wording without the structured class) | counted only after per-step excusals are spent (§4a) — **not** a latched breaker |
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.144.4, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
@@ -206,7 +210,54 @@ clear it (and the renamed Type would inherit no evidence at all).
 
 Exit 12 trips a **per-Dev-Type breaker** (`circuit_breakers` in `/health`, SPA alert): all scheduling for that Dev Type pauses (its Missions stay queued, unharmed). **Clear by rewriting credentials** — a credential/secret write for that Dev Type (or a successful OAuth completion) removes the breaker entry. There is no interactive "retry" control on the health strip, and half-open is not a manual probe: the write itself is the reset. Rationale: auth failures burn nothing but fail everything — retrying without new credentials is pure waste.
 
-**Harness-auth marker contract** (the Dev entrypoint's `classify_harness_failure` / `HARNESS_AUTH_MARKERS`, mirrored by `test_entrypoint_classify.py`): a nonzero harness exit maps to 12 only when the stderr tail matches a **word-boundary** regex for credential wording — currently `authentication`, `unauthorized`, `log in`, plus the grok distinctive phrases `not signed in` and `grok login`. **Deliberately dropped** (would false-trip on generic SSO/proxy stderr; those map to exit 10): `signed out`, `please sign in`. Bare `login` / `sign in` are also absent. A false 12 pauses the entire Dev Type until credentials are rewritten; a false 10 merely burns one attempt — when extending the list, err toward 10 and keep `\b` anchoring.
+### Harness exit classification (ADR-0018) — when a nonzero harness exit is 12 vs 15 vs 10 vs 16
+
+The entrypoint does **not** map exit 12 from stderr alone. After the harness
+process ends, it (1) runs the per-harness fault predicate on **stdout**
+(`harness_fault` — empty completion, terminal error, turn budget, …), (2) reads
+a structured HTTP status from the **stream** when the CLI reports one
+(`harness_api_error_status` — never from model-controlled assistant prose), and
+(3) classifies with `classify_nonzero_exit` (`images/common/devcake_dev/domain/fault.py`,
+mirrored by `test_entrypoint_classify.py` / `test_harness_captures.py`):
+
+| Order | Condition | Exit | Class |
+|---|---|---|---|
+| 1 | fault reason is turn budget | **16** | `DEV_TURN_BUDGET` |
+| 2 | **distinctive auth** evidence (below) | **12** | `DEV_AUTH` |
+| 3 | any other harness fault | **15** | `DEV_HARNESS_FAULT` |
+| 4 | no fault, but **generic** stderr auth markers | **12** | `DEV_AUTH` |
+| 5 | else | **10** | `DEV_CRASH` |
+
+**Why step 2 outranks step 3.** A false 12 pauses every mission on that Dev Type
+until credentials are rewritten. A false 10 or 15 burns attempts (15 may also
+throttle the fleet under §4a). So when the stream already looks like a harness
+fault, only **unambiguous** credential evidence may override it to 12. Ordinary
+OpenAI-compatible gateways often print `authentication` / `unauthorized` on
+non-auth rejections — those words alone must **not** win over an in-band fault.
+
+**Distinctive auth** (`auth_evidence_is_distinctive`) is true when either:
+
+1. **Stream HTTP status is 401 or 403** — preferred path. Sources (CLI error /
+   result events only, not assistant text):
+   - `claude-code`: `api_error_status` on the final `result` event
+   - `codex`: transport wording in error / `turn.failed` messages
+     (`unexpected status NNN`, `last status: NNN`)
+   - `grok-build`: `Unauthorized (NNN)` / `(status NNN` in error events
+2. **Or** stderr matches a **distinctive** marker (word-boundary): currently
+   only the grok session phrases `not signed in` and `grok login`.
+
+**Generic auth** (step 4 only — used when there is **no** fault already):
+stderr matches `HARNESS_AUTH_MARKERS` (word-boundary): `authentication`,
+`unauthorized`, `log in`, plus the same two grok distinctive phrases.
+**Deliberately dropped** (false-trip on generic SSO/proxy stderr → exit 10
+instead): `signed out`, `please sign in`. Bare `login` / `sign in` are also
+absent. When extending either list, err toward not-12 and keep `\b` anchoring.
+
+**Missed 401 falls through to 15**, not 10: the run still counts, still surfaces
+as a harness fault, and may correlate under §4a — it just does not latch the
+auth breaker. Precision over recall on exit 12 is intentional.
+
+### Forge breakers (exit 13)
 
 Exit 13 trips a **per-repo forge breaker** (`repo:{name}` in `circuit_breakers`) only when the Dev's clone-failure classification is the structured `DEV_FORGE_AUTH` class, which itself requires git's credential wording ("returned error: 403/401", "Authentication failed", "could not read Username", …) — a bare "403" in stderr (rate limit, URL fragment) never halts dispatch. A latched breaker on repo A never stops missions on repo B. Probes latch the breaker only on **definitive** credential/permission failures (HTTP 401/403/404; a GitHub rate-limit 403 is exempt): 5xx/network/probe errors are marked *transient* and neither latch nor clear it. While the breaker is latched, the poll loop re-probes every cycle — a false latch or a restored token self-heals within one poll interval, while a genuinely revoked token stays latched (and alerted) until fixed. Startup and the Forge connection test run the same probe and require push permission, so a private repository omitted from a fine-grained PAT is rejected before another Dev starts on that repo.
 
@@ -256,9 +307,10 @@ keeps that deliberate without becoming sloppy:
   the lint keeps it that way.
 - **Scope (be honest about it):** the gate runs `ruff check devcake tests`
   (`scripts/ci_suite.sh`, `.github/workflows/ci.yml`) — it covers `app/devcake`
-  and the test tree. `images/common/dev_entrypoint.py` runs INSIDE every Dev
-  container and is **not** under this gate; its blanket handlers follow the
-  same contracts by convention but are not lint-enforced (a standing follow-up
-  is to extend the gate to `images/`).
+  and the test tree. Everything under `images/` (including
+  `images/common/dev_entrypoint.py` and the `devcake_dev/` package) runs INSIDE
+  every Dev container and is **not** under this gate; its blanket handlers
+  follow the same contracts by convention but are not lint-enforced (a standing
+  follow-up is to extend the gate to `images/`).
 - Test code is exempt (`tests/*` per-file ignore) — tests legitimately catch
   broadly.

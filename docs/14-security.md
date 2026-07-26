@@ -7,17 +7,18 @@
 ## 0. Product security contract
 
 DevCake is a **single-operator agent runtime for a dedicated host** (one VM or
-machine you control). Anyone who can **write tickets** in the configured PMO
-team or **land content** in a configured repository can influence coding agents
-that hold your forge and model credentials. The control plane — admin basic
-auth, Dagu (with host `docker.sock`), and the `/data` secrets volume — is
+machine you control). Anyone who can **write tickets** on a configured PMO
+instance or **land content** in a configured repository can influence coding
+agents that hold your forge and model credentials. The control plane — admin
+basic auth, Dagu (with host `docker.sock`), and the `/data` secrets volume — is
 **equivalent to host root** for blast-radius purposes.
 
 **Multi-tenant least-privilege SaaS is an explicit non-goal.** Capable defaults
 (agents that can code, push branches, and reach the network) are intentional.
 The primary defense against supply-chain damage is **outside the agent**: forge
 **branch protection** (the control that actually stops a Dev token from landing
-on the default branch), who is on the Linear team, the app-side **`auto_merge`
+on the default branch), **who can write tickets** on each configured PMO
+instance (Linear team, Gitea Issues board, …), the app-side **`auto_merge`
 default off** (the control plane will not merge for you — it does **not** strip
 merge capability from the Dev; see §2 zone C), and optional tighter credentials
 (read-only PAT, independent REVIEW Dev Type). The app **warns** on weak posture;
@@ -33,7 +34,7 @@ If that contract is wrong for your environment, do not run DevCake there.
 |---|---|
 | Model credentials (API keys, subscription OAuth tokens) | Billing abuse; subscription hijack |
 | Forge tokens (write / RO / reviewer) | Repo write, PR approval/merge — supply-chain-grade |
-| Linear API key | Read/write of the team's project data |
+| PMO credentials (per instance — Linear API key, Gitea Issues token, …) | Read/write of that instance's project data (one team/board per instance) |
 | `docker.sock` (via Dagu) | **Root-equivalent on the host** |
 | `ADMIN_PASSWORD` / GUI secret store | All operator secrets on the volume |
 | Config profile snapshots (`/data/secrets/profiles/`) | A saved profile's full secret set — same class as the live store; dormant copies survive live rotation/deletion until the profile is deleted (ADR-0013) |
@@ -68,7 +69,7 @@ Compromise of Dagu auth, the admin password, or the host is total for that machi
 | Skill-store skills (`DevType.skills` / `skills_required`) | **Operator-controlled agent instructions** (same trust class as the MCP command area; **ADR-0016**). Available skills are installed for optional consult; Required adds a soft-force prompt line only (not kernel-enforced). The store repo is writable by anyone with Gitea access. The entrypoint refuses absolute/`..` paths and confines writes to the registry-declared skills dir under `$HOME` (the runspec `skills_dir` is itself validated home-relative — absolute/`..` values fall back to the default) — that guards file placement, not content. |
 | Harness flags (`--dangerously-skip-permissions`, etc.) | Autonomous coding requires them; Devs are not a secure sandbox product (§6). |
 | Unauthenticated OTLP to `otel-collector` | Residual on the dedicated host (self-noise / volume fill). Ops signal, not a tenancy boundary (§10). |
-| Internal Gitea mission tokens | **User-scoped, not repo-scoped** (live-verified). Isolation is one machine user + collaborator grant per mission (`adr/0010`), not forge-side repo ACLs. Admin password never enters Devs. **Blocker RO mounts** (ADR-0017): a dependent mission’s Dev may receive a **done** blocker’s `token_read` as an `extra_repos` clone credential — still user-scoped to that one repo; same Zone B trust as reference clones. |
+| Internal Gitea mission tokens | **User-scoped, not repo-scoped** (live-verified). Isolation is one machine user + collaborator grant per mission (`adr/0010`), not forge-side repo ACLs. Admin password never enters Devs. **Extra in-container RO clones** expand the same class: **blocker RO mounts** (ADR-0017 — a dependent mission’s Dev may receive a **done** blocker’s `token_read` as an `extra_repos` credential) and **reference repos** (PMO `reference_repos` — RO clone of configured cards into every stage). Still one credential per listed repo, never the Gitea admin password. |
 | OpenObserve ingest vs UI roles | OSS OO role separation is **advisory** only — do not treat ingest-only accounts as a hard multi-tenant boundary. |
 
 ### Zone C — Software supply chain (primary mitigation)
@@ -79,7 +80,7 @@ LLM, and not by pretending tickets are sterile.
 | Control | Owner | App role |
 |---|---|---|
 | Branch protection on the default branch (PR + reviews; Dev token cannot bypass) | **Operator** | Detects/warns unprotected branch; out-of-pipeline merge tripwire |
-| Who can write issues/comments on the configured team | **Operator** | Single-team scope only (`05-pmo-adapter.md`) |
+| Who can write issues/comments on each configured PMO instance | **Operator** | Per-instance scope only (one team/board key per instance — `05-pmo-adapter.md`) |
 | Who can push to the repo the agent clones | **Operator** | — |
 | `auto_merge` off (**app** does not merge) | **Operator** (default off) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
 | Read-only forge PAT for non-EXECUTE stages | **Operator** (recommended) | Dismissable `forge-write-token` warning if missing |
@@ -151,10 +152,10 @@ detected as an out-of-pipeline-merge **tripwire**, not prevented (`15`).
 ## 3. Prompt injection (design choice, not a bug)
 
 v0 **trusts** the configured repository's content and Mission
-descriptions/comments in the configured PMO team. Both flow into agent prompts.
-Anyone who can write an issue in that team (or land content in the repo) can
-attempt prompt injection against a Dev that may hold forge write credentials and
-model keys.
+descriptions/comments on each configured PMO instance. Both flow into agent
+prompts. Anyone who can write an issue on that instance (or land content in the
+repo) can attempt prompt injection against a Dev that may hold forge write
+credentials and model keys.
 
 **Stance:** accepted and intentional. The product *is* “ticket + repo in →
 agent work out.” Users are adults; the job of the docs and product is to
@@ -211,7 +212,8 @@ branch protection is weak or absent**, or exfiltrating tokens.
    (`07-dev-runtime.md`, `08-harness-templates.md`). No secret bind mounts into Devs.
 3. Forge tokens reach git via credential helper, not embedded remote URLs on disk.
 4. Secrets never logged at app choke points — redaction (§7).
-5. Minimum forge scopes: `06-forge-adapter.md`. Linear key scoped by team choice.
+5. Minimum forge scopes: `06-forge-adapter.md`. PMO credentials scoped by
+   instance choice (team key / board — `05-pmo-adapter.md`).
 6. **GUI secret store (schema v4, ADR-0011):** PMO/forge/model values entered in
    Config; stored `0600` under `/data/secrets/connections/` and
    `/data/secrets/harness/`. Never echoed (`GET /config` has no secret material;
@@ -320,7 +322,7 @@ values and token patterns with `«REDACTED»` (`app/devcake/security.py`):
   (inbound envelope scrub still covers the dominant echo path).
 
 Redaction matters **because Devs hold secrets**. It is the last line of defense
-for **app-mediated** posts to Linear/forges, not a substitute for zone C.
+for **app-mediated** posts to PMO systems and forges, not a substitute for zone C.
 
 ---
 
@@ -350,8 +352,8 @@ dismiss.
 1. **Dedicated host** — not a shared multi-tenant Docker host.
 2. **Loopback-only** control ports (default compose) or SSH tunnel; do not bind
    admin/Dagu/OO to the public internet.
-3. **Sandbox PMO team** (or tightly controlled membership) — ticket writers =
-   agent trust.
+3. **Sandbox (or tightly controlled) PMO membership** on every configured
+   instance — ticket writers = agent trust.
 4. **Branch protection** on the default branch; Dev token must not bypass —
    this is what stops a Dev from merging, not the auto-merge toggle alone
    (§2 zone C, `13` §8a).
@@ -361,7 +363,10 @@ dismiss.
    for REVIEW than EXECUTE.
 7. Strong bootstrap passwords in `.env` (empty/`change-me*` refuse boot unless
    `DEVCAKE_ALLOW_INSECURE=1` — local sandbox only).
-8. Read `/health` **security_warnings**; do not dismiss unread.
+8. Read `/health`: **`security_warnings`**, **`forge_protection`**,
+   **`circuit_breakers`**, and (ops, not credentials) **`dev_backend_degraded`**
+   if present — do not dismiss warnings unread (`15` §4 / §4a for breaker vs
+   backend-throttle semantics).
 9. Treat **`/data` backups** as secret material — including the config
    profile snapshots under `/data/secrets/profiles/`, which hold every
    secret value as of each save.
@@ -412,9 +417,9 @@ contract:
 
 - Docker HostConfig CPU/memory/PID limits on Dev containers (when Dagu supports
   them, or via another spawn path).
-- Protocol hardens: credential-upload filename allowlist + size cap; Linear
-  `download_asset` host allowlist / redirect policy; stronger bootstrap password
-  policy than a short deny-list.
+- Protocol hardens: credential-upload filename allowlist + size cap; PMO
+  `download_asset` host allowlist / redirect policy (all adapters that fetch
+  feed assets); stronger bootstrap password policy than a short deny-list.
 - Optional: gVisor/Kata for Devs; egress proxy allowlists; OIDC if you must
   expose the admin UI beyond loopback; OTLP bearer auth on the collector
   (low priority on a dedicated single-tenant host).

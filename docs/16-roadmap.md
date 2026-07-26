@@ -1,7 +1,36 @@
-# 16 — Roadmap: Milestones M0–M12
+# 16 — Roadmap
 
 > **Audience:** the implementing agent(s) and the founder. Each milestone leaves a demoable, committed system; exit criteria are mechanically checkable.
 > Format per milestone: Goal · In scope (docs it implements) · Out of scope · Exit criteria · Demo.
+>
+> **How this document is layered** (oldest → newest within each layer):
+>
+> | Layer | Sections | Status |
+> |---|---|---|
+> | **1. Milestone era** | M0–M12 (+ M7.1, F1–F5) | **Frozen** — planned work with exit criteria; the product was built this way |
+> | **2. Closed releases** | v0.1 FINAL, v0.2 FINAL, feature stream through the v0.2 tag | **Frozen** — release narratives + inventory of what fed those tags |
+> | **3. Living log** | After v0.2 only | **Open** — shipped since the last closed cut, residuals, candidates, deferred |
+>
+> Layers 1–2 are history. Layer 3 is the only place new work is appended.
+> Candidates (e.g. harness platformization H1–H5) are not a committed sprint
+> queue unless the founder picks them up.
+>
+> **Status vocabulary** (whole file): **built** = merged, full suite + CI green ·
+> **live-verified (date)** = exercised on the live stack with evidence ·
+> **⏳ live-pending** = built, live end-to-end still owed ·
+> milestone `[x]` checkboxes mark exit criteria verified at that milestone's close.
+>
+> **Where we are (2026-07-26):** layers 1–2 closed through tag **v0.2** (and
+> patch tags through `v0.2.3` on `main`). The product loop (poll → dispatch →
+> harness → finalize → forge/PMO) is operational with three harness templates
+> (`claude-code`, `grok-build`, `codex`), multi-PMO / multi-repo / internal
+> Gitea, skills (ADR-0016), settings profiles/export (ADR-0013), fault
+> classification + backend brake (ADR-0018), and a package-split Dev entrypoint
+> (`images/common/devcake_dev/`). Unit suite is on the order of **~800+** tests
+> (815 counted 2026-07-26; do not treat any single count as a permanent claim).
+> Ongoing append-only tracking: [Living log (after v0.2)](#living-log-after-v02).
+
+## History — Layer 1: Milestone era (M0–M12)
 
 ## M0 — Compose skeleton + observability spine
 
@@ -115,6 +144,8 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 - **2026-07-12 — Traffic control (`adr/0007`):** Mission ordering via native `blocked by` relations (ONBOARD decomposition declares `blocked_by`; scheduler gate honors any relation, human-added included) · `DEVCAKE-NEEDS-HUMAN` hand-off label + `human_needed` outcome (tenth label) · intake pause toggle (`intake_paused` + admin Traffic control section) · comment-provenance sentinel `` `devcake:v1` `` with 🧑/🤖 markers in `ACTIVITY.md` · Relations Mapper service (`MAPPER` run kind: interval + manual trigger + Dev Type combobox + on/off in the admin panel). Requires a dev-image rebuild (new legal outcomes in the entrypoint).
 - **2026-07-12 — Traffic-control hardening (`adr/0007` addendum), same day, post-adversarial-review:** app-side `LEGAL_OUTCOMES` trust boundary · branch-protection verification + out-of-pipeline-merge tripwire (docs/13 §8a, docs/14 §2) · paginated Linear reads + relations-page warnings · `gate_map` as an always-fresh poll artifact + dependency-cycle detection with header banner · hand-off evidence requirement + escalating warnings (never auto-park) · seeded `junior-dev` + `MapperService` (lock, post-success watermark, store-derived degradation) · quote-aware sentinel classification · project-update baton passes (verified live) · stateful pause banner with in-flight count · config deep-merge + mapper Dev Type delete guard.
 
+- **2026-07-12 — Harness registry (admin authoritative):** found live — changing a Dev Type's harness in the admin panel didn't change what ran (dispatch used the stored `docker_image`; harness selection was image-baked). Reworked: `app/devcake/harness.py` registry is the single source of truth (image + credential requirements + OAuth flow per `harness_template`); `DevType` slimmed (no stored image/credential config; legacy YAML keys dropped on next save); dispatch sends `DEVCAKE_HARNESS` in the run spec (overrides the baked ENV); OAuth became per-Dev-Type (`POST /oauth/dev-types/{name}/start` — fixes credentials landing in the first same-harness Dev Type's dir); Dev Type card shows the derived image + live credential checklist (`GET /harnesses`, enriched `GET /dev-types`).
+
 - **2026-07-13 — Modularization (`adr/0008`):** the hexagonal layout is now real (`app/devcake/` with `domain/`, `ports/`, `adapters/`, `api/`; `domain/*` has zero runtime adapter imports) · pluggable PMO + forge adapter registries (`adapters/registry.py` — `system`/`forge` are registry-validated open strings, not literals) · config schema v2: plural `pmos:`/`repos:` with exactly-one enforced, v1→v2 migrated on load with a `config.yaml.v1.bak` backup · MissionRef-unified `PMOPort` + typed `ForgePort` DTOs (`PullRequest`, `ForgeDescriptor`, `mission_branch()`) · registry-fed admin Config tab (`GET /api/v1/connections/registry`) with config hot-reload on PUT.
 
 - **2026-07-13 — v0 crystallization:** repo-wide cleanup before v0.1 work. Bug fixes (redaction-gap alarm on unreadable secrets files; datetime-safe attempt counting; `security.MASK` single-sourced; background-task death logging on config reload) · telemetry brought up to the "everything traced" invariant (spans now *cover* the PMO writes they name; new `ingress.handle`, `sweep.merge_retry`, `mapper.periodic`, `ingress.forged_drop`, `ingress.poison` spans — `12` §2 is the normative inventory) · **all legacy/compat surfaces removed** (founder decision): the old-image protocol dual-modes (`DEVCAKE_FORGE` discriminator, `forge_dialect()` fallback, pre-marker decomposition regex) AND the v1→v2 data migrations (config auto-migration, run-record secret scrub, Redis legacy scrubs). Consequences: app + dev images MUST rebuild in lockstep (`13` §8); a v1 `config.yaml` is refused at boot with hand-migration instructions; pre-v2 run records quarantine at boot (`10` §5) · `blocked_reasons` exposed in `/health`; meaningless `config_valid` dropped · dead `admin/site/` shell deleted · docs re-baselined against the code.
@@ -122,8 +153,6 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 - **2026-07-14 — ISSUES_LIST hardening + build overhaul:** the 38-item ISSUES_LIST review closed out (finalize-stall watchdog backstop, label-swap write-path pagination, all OO alerts backed by real spans, dismissable `/health` `security_warnings`, `domain/reconcile.py` extraction) · orchestrator god module split into the `domain/orchestrator/` package (ISSUES #36) · Docker Bake build system merged (bake-only images via `docker buildx bake all`, multi-stage Dockerfiles, GHA bake CI — collaborator contribution).
 
 - **2026-07-14 — RunBootstrap + secondary ports (`adr/0008` follow-up, PR #1):** `ExecutorPort` / `StatePort` / `MessagingPort` / `RunFinalizer` Protocols under `ports/` · deep `domain/run_bootstrap.py` owns the dispatch spine (ACL → auth digest → durable `StatePort.save` → `ExecutorPort.start`) for all four flavors (hello, mission, mapper, OAuth) · `RunManager.set_finalizer` breaks the concrete `mission_mgr` late-wire cycle · tests at `tests/test_run_bootstrap.py` · docs/01 §3 + docs/04 §3.1 re-baselined.
-
-- **2026-07-12 — Harness registry (admin authoritative):** found live — changing a Dev Type's harness in the admin panel didn't change what ran (dispatch used the stored `docker_image`; harness selection was image-baked). Reworked: `app/devcake/harness.py` registry is the single source of truth (image + credential requirements + OAuth flow per `harness_template`); `DevType` slimmed (no stored image/credential config; legacy YAML keys dropped on next save); dispatch sends `DEVCAKE_HARNESS` in the run spec (overrides the baked ENV); OAuth became per-Dev-Type (`POST /oauth/dev-types/{name}/start` — fixes credentials landing in the first same-harness Dev Type's dir); Dev Type card shows the derived image + live credential checklist (`GET /harnesses`, enriched `GET /dev-types`).
 
 ## v0.1 — feature specifications (F1–F5) + milestones M8–M12
 
@@ -211,20 +240,14 @@ Exit criteria:
 
 **Demo:** stranger-operability walkthrough — fresh clone, bootstrap `.env`, everything else via the GUI; one external-repo mission and one zero-repo mission both reach Done.
 
-## v0.2 — FINAL (tagged 2026-07-19)
+---
 
-The consolidation release: everything on `main` since v0.1.1, responding to an external skeptical review and successive adversarial review rounds. **All four hard release gates met** — the two live E2Es (ADR-0012 decomposition chain, ADR-0013 settings round-trip incl. a real Gitea volume restore), the Clear-Runs stop hardening, and the implementation audit/fix rounds recorded below. Residual documentation findings were corrected in the final cut; this record does not claim that review can make a moving codebase permanently drift-free.
+## History — Layer 2: Closed releases (frozen)
 
-- **Positioning (PR #16):** "Your board is the interface" replaces the walked-back "You never operate it"; normative when-to-use / when-not §1b; a real operator contract (`docs/18`) incl. the first consolidated secret-rotation procedure; roadmap status vocabulary (built / live-verified / ⏳).
-- **Reliability (PR #18):** ruff `BLE001` enforced — every blanket `except Exception` narrowed or contract-justified inline (`docs/15 §7`); the grok-auth classifier trips the DEV_AUTH breaker on revoked creds (exit 12) instead of burning three attempts.
-- **Structure (ADR-0015, PRs #21–#27):** the orchestrator binding façade is gone — `MissionManager` is DI + advisory state + verbs, implementation is module functions taking `mgr`; `api/main.py` went 1,837 → ~780 lines (composition root + ≤4-statement route forwards + service modules, AST-guarded); the admin ConfigPage god component became a 69-line dispatcher + section components. All behavior-preserving; a guard test is the "do not resurrect the god module" ratchet.
-- **Clear-Runs concurrency (PRs #28, #30–#32, #34):** the hard one. A stop-then-**drain** wipe that stops every dispatch flavor at the true chokepoints — `RunBootstrap.launch` holds a `dispatch_lock` (every dispatcher funnels through it; an AST tripwire fails CI if that ever stops being true), `RunManager._kill_inner` guards its final save atomically, and a process-local **wipe generation** no-ops any stale save at the store layer (restamped for adopted runs on reconcile). Found incomplete by audit **three times** (D3 fixed ordering not concurrency; #30's poll-lock missed the oauth/mapper/hello paths; #31's kill-guard left a phantom-record window) and closed each time at a deeper chokepoint. **Live-verified 2026-07-19:** clear-runs triggered while a Dev run was live → run stopped + drained, records wiped, **zero ghost runs after a forced poll, zero `AuthenticationError`, zero orphaned ACL users** — the ACL/SIGTERM race is closed end-to-end.
-
-**What the audit taught, recorded so it isn't relearned:** the test suite stayed green through all three incomplete concurrency fixes — only adversarial multi-agent re-audit of each fix delta caught them. Fix concurrency at the chokepoint (launch / kill / save-generation), never per-call-site; prove a structure tripwire fires by planting a violation; run the suite in the Redis harness (`pytest_app.sh`), not bare pytest.
-
-Final state: 663 unit tests + admin `check:ui` green; `ci_suite.sh` (pin gate, gitea battery 13/13, dispatch-hello smoke) green on the deployed stack; the live clear-under-load smoke passed. Trailers that landed with the initial cut or immediately after: **`profiles.mjs` in `check:ui`** (PR #36) and the missions-board 1280 layout fix (PR #37) — full suite **61** browser checks including profiles. Remaining non-gating trailer (⏳): a fresh-`/data` operator-drill re-run.
-
-**Final-cut hygiene (2026-07-19):** compose mounts `./dagu/dags` **read-only** into Dagu (trusted launch code — `14` §5; live-verified: health + hello dispatch; non-fatal `.dag.index` write WARN). Documentation was reconciled with multi-connection runtime behavior (`00`, `06`), the RO DAG mount (`13`, `14`), the admin/config split, harness/model ownership, process-local maintenance locks, and the public-config secret-response regression. The release tag is placed on this final cut only after it lands, then treated as immutable.
+Numbered milestones stop at M12. What follows are **immutable release records**
+(how the v0.1 and v0.2 tags were cut) plus a frozen feature inventory of major
+landings that fed those cuts. Do not append new work here — use
+[Layer 3](#living-log-after-v02).
 
 ## v0.1 — FINAL (tagged 2026-07-15)
 
@@ -253,91 +276,358 @@ Fixes from the founder's first post-v0.1.1 live pass, plus the multi-repo design
 - **Reference repos (founder request, same day):** each PMO instance carries an ordered `reference_repos` list (multiple supported) — configured repo cards cloned READ-ONLY into **every** stage's workspace (external and internal-forge missions alike) as consultation material, each with its own read token. Disjoint from the routing set by validation; a `devcake-repo:` marker naming one gates ("read-only context, never a work target"); all four playbooks gain a `{reference_repos}` section naming the clones. SPA: a second chips row on the PMO card, mutually exclusive with the work-repo chips.
 - **Smaller fixes:** Gitea UI quick link on Overview + a persistent Internal forge section (with the link) even when empty; a bulk "Clear data" action for internal repos; Connect-via-OAuth follows the DRAFTED harness (disabled until saved) — grok/codex flows verified (`codex login --device-auth` live-probed on the pinned CLI); claude-code cards explain the paste-token path.
 
-## Post-v0.1 backlog
+## v0.2 — FINAL (tagged 2026-07-19)
 
-> **Status vocabulary** (applies below; the honesty rule: a feature is not
-> *done* until the live box proves it): **built** = merged, full suite + CI
-> green · **live-verified (date)** = exercised on the live stack, evidence
-> noted · **⏳ live-pending** = built, live end-to-end still owed. Milestone
-> checkboxes `[x]` above mark exit criteria verified at that milestone's close.
+The consolidation release: everything on `main` since v0.1.1, responding to an external skeptical review and successive adversarial review rounds. **All four hard release gates met** — the two live E2Es (ADR-0012 decomposition chain, ADR-0013 settings round-trip incl. a real Gitea volume restore), the Clear-Runs stop hardening, and the implementation audit/fix rounds recorded below. Residual documentation findings were corrected in the final cut; this record does not claim that review can make a moving codebase permanently drift-free.
 
-### Shipped post-v0.1
+- **Positioning (PR #16):** "Your board is the interface" replaces the walked-back "You never operate it"; normative when-to-use / when-not §1b; a real operator contract (`docs/18`) incl. the first consolidated secret-rotation procedure; roadmap status vocabulary (built / live-verified / ⏳).
+- **Reliability (PR #18):** ruff `BLE001` enforced — every blanket `except Exception` narrowed or contract-justified inline (`docs/15 §7`); the grok-auth classifier trips the DEV_AUTH breaker on revoked creds (exit 12) instead of burning three attempts.
+- **Structure (ADR-0015, PRs #21–#27):** the orchestrator binding façade is gone — `MissionManager` is DI + advisory state + verbs, implementation is module functions taking `mgr`; `api/main.py` went 1,837 → ~780 lines (composition root + ≤4-statement route forwards + service modules, AST-guarded); the admin ConfigPage god component became a 69-line dispatcher + section components. All behavior-preserving; a guard test is the "do not resurrect the god module" ratchet.
+- **Clear-Runs concurrency (PRs #28, #30–#32, #34):** the hard one. A stop-then-**drain** wipe that stops every dispatch flavor at the true chokepoints — `RunBootstrap.launch` holds a `dispatch_lock` (every dispatcher funnels through it; an AST tripwire fails CI if that ever stops being true), `RunManager._kill_inner` guards its final save atomically, and a process-local **wipe generation** no-ops any stale save at the store layer (restamped for adopted runs on reconcile). Found incomplete by audit **three times** (D3 fixed ordering not concurrency; #30's poll-lock missed the oauth/mapper/hello paths; #31's kill-guard left a phantom-record window) and closed each time at a deeper chokepoint. **Live-verified 2026-07-19:** clear-runs triggered while a Dev run was live → run stopped + drained, records wiped, **zero ghost runs after a forced poll, zero `AuthenticationError`, zero orphaned ACL users** — the ACL/SIGTERM race is closed end-to-end.
 
-- **Harness fault classification + model-backend brake** (ADR-0018): truthful
-  in-band failure surfaces when experimenting with non-default models/backends
-  (exits 15/16, structured `error_class`/`attempt_counted`, workspace forensics,
-  misplaced-`result.json` recovery, store-derived per-Dev-Type throttle with
-  excusal caps). Scenario captures cover all three harnesses. Also: chunk-buffer
-  admission fix, attempt-count injection fix, EXECUTE binding-rule clarification.
-  **built** · unit suite green · ruff clean · bake app/admin/images.
+**What the audit taught, recorded so it isn't relearned:** the test suite stayed green through all three incomplete concurrency fixes — only adversarial multi-agent re-audit of each fix delta caught them. Fix concurrency at the chokepoint (launch / kill / save-generation), never per-call-site; prove a structure tripwire fires by planting a violation; run the suite in the Redis harness (`pytest_app.sh`), not bare pytest.
 
+Final state: 663 unit tests + admin `check:ui` green; `ci_suite.sh` (pin gate, gitea battery 13/13, dispatch-hello smoke) green on the deployed stack; the live clear-under-load smoke passed. Trailers that landed with the initial cut or immediately after: **`profiles.mjs` in `check:ui`** (PR #36) and the missions-board 1280 layout fix (PR #37) — full suite **61** browser checks including profiles. Remaining non-gating trailer (⏳): a fresh-`/data` operator-drill re-run.
 
-- **Pipeline handoff + PMO zip opt-in + setup/activity polish** (2026-07-21, ADR-0017): optional `attach_merged_changeset_to_pmo` (default off) for configured repos; always-on RO mounts of **done** direct blockers’ work repos (`Run.blocker_work` + `{blocker_repos}`); Overview setup accepts healthy internal forge or “I’ll work with the internal forge”; activity `.zip` attachments extracted under `{stem}/`. **built** · unit suite green · bake app/admin/images.
+**Final-cut hygiene (2026-07-19):** compose mounts `./dagu/dags` **read-only** into Dagu (trusted launch code — `14` §5; live-verified: health + hello dispatch; non-fatal `.dag.index` write WARN). Documentation was reconciled with multi-connection runtime behavior (`00`, `06`), the RO DAG mount (`13`, `14`), the admin/config split, harness/model ownership, process-local maintenance locks, and the public-config secret-response regression. The release tag is placed on this final cut only after it lands, then treated as immutable.
+
+### Feature stream through the v0.2 tag (frozen inventory)
+
+The v0.1 / v0.2 FINAL sections above are **release narratives**. This inventory
+is the chronological feature-level list of major landings that fed those cuts
+(post-M12 through the **2026-07-19** v0.2 tag). It is **frozen** with Layer 2 —
+do not append post-v0.2 work here.
+
+> Ordered **oldest → newest**.
+
 - **MCP plugins — core ports** (2026-07-17, PR #6): `DevType.secret_env` +
   live `mcp_setup_commands` runspec wire, referenced-missing-secret dispatch
   gate, exit-14 `DEV_MCP_SETUP` reporting, `tutorials/03-mcp-plugins.md`;
-  connectors live out-of-repo (vendor segregation). **built** · ⏳ live plugin
-  round pending the founder-owned `LOGS_MCP_GIT_TOKEN` PAT.
+  connectors live out-of-repo (vendor segregation). **built** ·
+  **live-verified (founder):** plugin install + registration path exercised
+  end-to-end on the live stack (functional with operator-supplied plugin
+  token; e.g. logs MCP).
 - **Decomposition depth + fail-closed edge inheritance** (2026-07-18,
   ADR-0012, PR #10): depth-tagged markers, `max_decomposition_depth` +
   Traffic-control UI, strict inherited edges, scheduler family gate, lineage
-  notes on canceled parents. **built** (493 tests at merge) ·
-  **live-verified 2026-07-19** (sandbox chain DEV-128→DEV-130/131→DEV-132/133:
-  inherited edges across two generations of canceled blockers — the dependent's
-  gate named children, then grandchildren + a SKIP'd sibling as dead blocker,
-  and cleared on completion; depth 1/2 markers; project containment held both
-  generations; lineage notes; at-limit refusal → NEEDS-HUMAN hand-off at the
-  default limit AND after a live Traffic-control flip to 1; unlimited flip
-  accepted).
+  notes on canceled parents. **built** · **live-verified 2026-07-19**
+  (sandbox chain DEV-128→…→DEV-132/133; depth limit + inherited edges).
 - **Missions board** (2026-07-18, PR #11, rflpazini): Hermes-style kanban with
-  steering comments + stop-run; pre-merge review fixed priority-validation
-  500, stop-of-finalizing 409, `create_mission` 502. **built** · deployed live
-  2026-07-18 (UI suite green).
-- **Config profiles + settings bundle** (2026-07-18, ADR-0013): ONE versioned bundle format over the four settings stores; named profile snapshots (A + B) with save/apply/rename/delete, apply = replace-the-world through the config choke points (409 while runs active, rollback-by-reapply, diff preview with rotation warnings), scrubbed-error hardening, settings audit events on `events.jsonl`, and the `#/config/profiles` admin section. **built** (530 tests at merge) · **live-verified 2026-07-19** (save → drift → apply round-trip restored the drifted setting; divergence flag + last-applied breadcrumb observed; audit events confirmed).
-- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013 part 2): single-file export (source = current or a profile; sections A/B/C; scrypt+AESGCM encrypted by default, plaintext behind explicit acknowledgment; optional skill embedding; audited), stateless import that **lands as a profile** (apply remains the one world-swap path), section C as a generated ready-to-place `.env` download, `scripts/backup_gitea.sh`/`restore_gitea.sh` for full-fidelity internal-forge backups, and the Export…/Import… transfer UI. **built** (548 tests at merge) · **live-verified 2026-07-19** (encrypted export with zero plaintext token shapes → passphrase-gated preview → import landed as a profile → generated `.env`; `backup_gitea.sh`/`restore_gitea.sh` real round-trip with gitea stopped — repos and skill store intact after volume replacement). **`profiles.mjs` UI suite shipped** (PR #36, part of the 61-check `check:ui` battery).
+  steering comments + stop-run. **built** · deployed live 2026-07-18.
+- **Config profiles + settings bundle** (2026-07-18, ADR-0013): versioned
+  bundle over the four settings stores; named profile snapshots; apply =
+  replace-the-world through config choke points. **built** ·
+  **live-verified 2026-07-19**.
+- **Settings export/import + setup-env + Gitea backup** (2026-07-18, ADR-0013
+  part 2): encrypted export/import landing as profiles; generated `.env`;
+  `backup_gitea.sh` / `restore_gitea.sh`. **built** ·
+  **live-verified 2026-07-19**. **`profiles.mjs`** in `check:ui` (PR #36).
 - **Activity-feed fidelity + per-mission activity repos** (2026-07-18,
-  ADR-0014, PR #15): last-message-inline + full-dump flip, `MISSION.md`
-  faithful mirror, per-mission `activity-*` repos swept on Clear, quoting
-  quarantine, `executed_trivially` removed. **live-verified 2026-07-18**
-  (missions DEV-126/DEV-127 on the live sandbox).
-- **Skills philosophy + prompt assembly (ADR-0016, 2026-07-20):** three-layer
-  composition (identifying prompt + mission playbook + optional Required
-  soft-force block); skills are domain-only, additive, consult-optional by
-  default; `skills_required` + tri-state Dev Type chips; role Dev Types
-  (`judgment` / `implementer` / `mapper`); builtin skill catalog overhaul;
-  admin View. Normative ADR + `app/devcake/skills/README.md` + docs 02/03/08/11/14.
-- **Missions "Poll now"** (2026-07-18, PR #14, rflpazini): INV-1-aligned poll
-  CTA; "New mission" dropped from the board. **live-verified 2026-07-18**.
-- **Clear-runs concurrency follow-up** (post independent review of #30–#32):
-  wipe generation (`store_gen`) so in-flight finalize cannot resurrect runs or
-  keep posting after clear; force-remove pass via Dagu when soft drain times
-  out (then wipe; `ok:false` if still undrained — no host docker.sock);
-  dispatch chokepoint AST tripwire; SelectionChips unavailable tooltip; docs
-  honesty (dual locks for full wipe including OO; not “poll is the only
-  dispatcher”). **built** · **live-verified 2026-07-19** (clear-under-load:
-  stop+drain while a Dev was live — zero ghost runs, zero orphaned ACL users;
-  see Clear-Runs concurrency note above). **Does not claim** multi-threaded
-  store safety or host-level force-kill.
+  ADR-0014, PR #15): last-message-inline + full dump, `MISSION.md`,
+  `activity-*` repos, quoting quarantine. **live-verified 2026-07-18**.
+- **Missions "Poll now"** (2026-07-18, PR #14): INV-1-aligned poll CTA.
+  **live-verified 2026-07-18**.
+- **Clear-runs concurrency follow-up** (v0.2 cut, **live-verified 2026-07-19**):
+  wipe generation (`store_gen`), force-remove via Dagu on soft-drain timeout,
+  dispatch chokepoint AST tripwire. **built**. **Does not claim** multi-threaded
+  store safety or host-level force-kill. (Release narrative: v0.2 FINAL above.)
 
-### Deferred (post-v0.2)
+---
 
-- **Webhook ingestion** — a PMO `watch()`/webhook `ChangeEvent` seam replacing polling (+ tunnel guide). Deliberately sequenced *after* F2: the multi-PMO port reshapes the exact surface the seam attaches to. Top candidate once v0.1 ships — multi-PMO instances multiply polling cost.
-- **Additional PMO adapters** (GitHub Issues, GitLab Issues, Monday) + the **markdown-fidelity adapter refactor** (ISSUES #35). **Gitea Issues** (`gitea_issues`) shipped as the first forge-issue family member (local board on bundled or external Gitea; pure `PMOPort`, not `ForgePort`). GitHub/GitLab Issues should copy that profile.
-- **N repos per mission** — cross-repo missions (one PR per repo, set-approval semantics, merge ordering) are a distributed-atomicity project of their own; v0.1 caps per-mission resolution at 0-or-1.
-- **Per-run scoped forge tokens** & the rest of `14` §7 — natural companion to F4's per-mission repo tokens; revisit once that machinery exists.
-- **Network egress allowlists / reduced sandbox-bypass** for non-EXECUTE stages (ISSUES #16).
-- **Additional log-connector backends** (Loki; others on demand) — live in the standalone plugin repo <https://github.com/fidecastro/devcake-logs-mcp> behind its own `LogBackend` seam, zero core impact. The core MCP-plugin ports (`DevType.secret_env` + the previously-dead `mcp_setup_commands` runspec wire, dispatch gate, exit-14 reporting) shipped 2026-07-17; plugins install per Dev Type at run time (`08` §7, `tutorials/03-mcp-plugins.md`).
-- **Priority-conditional Dev Type assignment** (e.g. Urgent missions route EXECUTE to Senior Dev — relaxes the strict 1 Mission Type → 1 Dev Type rule).
-- Admin panel **OIDC/SSO** (v0 has basic auth).
-- **First-class OTel metrics layer** — conditional: earns its keep when dashboards need pre-aggregation or long retention (v0 aggregates via SQL over span attributes — `12` §4).
-- **SQLite `StatePort` swap** — conditional: if run history outgrows files.
-- **Public-release hygiene** — conditional: if audience expands. LICENSE, SECURITY.md, CONTRIBUTING.md, CHANGELOG, SBOM (ISSUES #38).
-- **Internal-forge orphan sweep** — admin tool reconciling Gitea org repos/svc users against `/data/secrets/internal_forge/mission-*.json` (svc users leaked by pre-v0.1.1 Clears are not garbage-collected; the leak itself is fixed).
+## Living log (after v0.2)
 
-### Discarded (2026-07-14, with rationale — do not resurrect without new evidence)
+**Layer 3 — the only open section.** Append here for work that lands **after**
+the v0.2 tag (2026-07-19). This is not a second milestone series and not a
+continuation of “since v0.1” (that window is closed in Layer 2).
 
-- **Scout Dev experiment** — not an engineering item: routing ONBOARD to a cheap-model Dev Type requires zero code changes and can be run from the admin panel any week as an ops experiment. *Ops note: assign ONBOARD to a cheap-model Dev Type, watch decomposition quality for a week, adopt or revert.*
-- **Mid-run Dev→PMO write relay commands** — superseded by F4: the internal fallback repo gives Devs mid-run persistence with diff capture, without opening a live write channel to the PMO. Revisit only if humans need mid-run progress comments in the PMO feed itself.
-- **Internal Mission worktree as an activity mirror** (the original F5 shape: per-Mission git mirror of the `activity/` folder structure, folder-scoped keys, "fewer PMO API calls") — superseded 2026-07-14 by F4's internal fallback forge. The mirror duplicated PMO state and bought a cache-coherence problem against the single-source-of-truth invariant; its real payoff (PR mechanics for non-code artifacts) survives intact in F4 without any mirroring. If diff capture of human activity-feed edits is ever wanted, it's a run-record snapshot diff, not a git server. **Partially un-discarded 2026-07-18 by ADR-0014 D4:** per-mission `activity-*` repos in `devcake-repos` are write-only *records* (app-pushed per step, deleted on Clear, never read back) — not the rejected read-back mirror; the internal forge made them cheap and the PMO stays the single source of truth.
+| Subsection | What it is |
+|---|---|
+| **Shipped after v0.2** | Chronological log of merges on `main` after the closed cut |
+| **Still open** | Residuals / demos still owed from Layers 1–2 — not new features |
+| **Candidates** | Design we may invest in; **not** an ordered sprint queue |
+| **Deferred / Discarded** | Longer-term or rejected ideas |
 
-*(Note: `auto_merge` was originally slated post-v0 but is a confirmed v0 requirement — it ships in M5/M6.)*
+Honesty rule: a feature is not *done* until the live box proves it (status
+vocabulary at the top of this file).
+
+### Shipped after v0.2
+
+> Ordered **oldest → newest**. Starts the day after the v0.2 tag.
+
+- **Skills philosophy + prompt assembly** (ADR-0016, 2026-07-20): three-layer
+  composition; domain-only skills; `skills_required` + tri-state chips; role
+  Dev Types (`judgment` / `implementer` / `mapper`); registry `skills_dir`
+  snapshotted onto the Run. Normative ADR + `app/devcake/skills/README.md`.
+  **built**.
+- **Admin skill/prompt Markdown View** (PR #45, post-ADR-0016): skill and
+  prompt View render as Markdown in the SPA. **built**.
+- **Pipeline handoff + PMO zip opt-in + setup/activity polish** (2026-07-21,
+  ADR-0017): optional `attach_merged_changeset_to_pmo` (default off) for
+  configured repos; always-on RO mounts of **done** direct blockers’ work
+  repos (`Run.blocker_work` + `{blocker_repos}`); Overview setup accepts
+  healthy internal forge or “I’ll work with the internal forge”; activity
+  `.zip` attachments extracted under `{stem}/`. **built**.
+- **Gitea Issues PMO adapter** (`gitea_issues`, 2026-07-21): first forge-issue
+  family member — pure `PMOPort` on bundled or external Gitea (`team_key` =
+  `owner/repo`). GitHub/GitLab Issues adapters, if ever, copy this profile.
+  **built**.
+- **OpenObserve ingest auto-provision** on app boot (telemetry ops; lands with
+  the harness/fault campaign window). **built**.
+- **Harness fault classification + model-backend brake** (ADR-0018; expanded
+  2026-07-25…26): truthful in-band failure surfaces when experimenting with
+  non-default models/backends (exits 15/16, structured `error_class` /
+  `attempt_counted`, workspace forensics, misplaced-`result.json` recovery,
+  store-derived per-Dev-Type throttle with excusal caps). **Scenario captures**
+  under `app/tests/fixtures/harness_streams/` are verbatim CLI stdout (not
+  hand-written JSON) for all three templates, asserted by
+  `test_harness_captures.py`. Grok token extraction prefers the terminal
+  `end` event (input/output split) with `signals.json` as fallback. Also:
+  chunk-buffer admission fix, attempt-count injection fix, EXECUTE
+  binding-rule clarification, local OpenAI-compatible backend recipes in
+  `08` §8. **built** · unit suite green · ruff clean · bake app/admin/images.
+- **Dev entrypoint package split** (PR #49, 2026-07-26): ADR-0018 fault domain
+  plus harness argv/render/tokens and workspace helpers live under
+  `images/common/devcake_dev/` (`domain/`, `harness/`, `workspace/`,
+  `adapters/`); `dev_entrypoint.py` is the thin façade. Production and the
+  capture rig already share `harness_argv`. **built** — the natural substrate
+  for H1 (`HarnessDialect`) if that candidate is taken up.
+- **Per-PMO intake toggles** (PR #50, 2026-07-26): each PMO instance can pause
+  intake under the global `intake_paused` master switch; SPA health-driven;
+  draft Save cannot undo instance toggles. **built**.
+
+### Still open (residuals)
+
+Not new features — demos or proofs still owed from Layers 1–2 (milestones or
+the v0.2 trailer list).
+
+- **M9 additivity proof** (two Linear instances on one DevCake, full colliding-
+  id completion): architecture and hermetic tests done; live dual-team /
+  dual-key proof still **⏳** (sandbox plan limits / founder credentials).
+- **M10 live two-forge merged-PR demo** and **M11/M12 full live model golden
+  paths** on the operator's box: machinery proven hermetically + contract
+  batteries; full token-spending demos remain **⏳** when credentials allow.
+- **Fresh-`/data` operator-drill re-run** after the post-v0.2 surface growth
+  (profiles, skills, Gitea Issues, per-PMO intake): **⏳** non-gating trailer.
+
+---
+
+### Candidates — harness platformization (H1–H5)
+
+**Status: design candidate, not a committed “next” milestone.** Work here only
+if/when we choose to add more coding CLIs or to reduce the cost of doing so.
+It may be skipped, partial, or reordered relative to other product work.
+
+**Why it exists on the roadmap.** The control plane already has a deep harness
+registry (`app/devcake/harness.py`: image, credentials, OAuth, `skills_dir`,
+`default_model`). The Dev side has a package layout but still dispatches on
+stringly `if harness == …` across argv, render, tokens, fault, dump, and
+`dev_entrypoint.py` — with **unknown ids silently falling through to the Claude
+path**. Adding a fourth template today is a vertical slice that is
+intentionally expensive (docs/08 §9). Interest in more coding CLIs (qwen-code
+and peers under consideration) makes that tax worth *documenting* as a possible
+investment: fix the platform once, then each CLI is a dialect module + image +
+captures — **if** we decide the Nth harness is worth building.
+
+**Standing premise (do not invert):**
+
+| Layer | Owns | Does *not* own |
+|---|---|---|
+| **App registry** (`HARNESSES`) | Image tag, credential requirements, OAuth flow, skills dir, default model | Stream parsers, argv templates, fault predicates |
+| **Dev dialect** (image package) | Argv, live render, token extract, result text, transcript dump, fault / API-status classification | Secrets storage, Dev Type CRUD, dispatch spine |
+| **Capture gate** | Verbatim CLI fixtures + intended verdicts | Hand-written “plausible” JSON as truth |
+
+**What does *not* change when a new CLI lands** (reminder for implementers):
+dispatch spine, Redis runspec, plan materialization to `PLAN.md`, skills
+install into `skills_dir`, MCP free-text setup, SPA combobox driven by
+`GET /harnesses`. **What always changes:** registry entry, config id set,
+Dockerfile + Bake target, a dialect implementation, captures, docs/08.
+
+#### H1 — `HarnessDialect` protocol (highest leverage)
+
+**Goal:** one deep module seam for all harness-specific container behavior.
+**Implements:** evolution of `images/common/devcake_dev/harness/` + ADR-0018
+consumers; capture rig and production share the same dialect object (argv
+already does).
+
+Sketch of the seam (names indicative):
+
+```text
+HarnessDialect
+  argv(prompt, *, plan_mode, model, extra, out_dir) -> list[str]
+  render_line(raw) -> str | None          # live terminal / Dagu log
+  parse_run(out, *, exit_code, ...) -> HarnessRunView
+    # result_text, dump, token_report, fault, api_error_status
+```
+
+`DIALECTS: dict[str, HarnessDialect]` is fail-closed: unknown `DEVCAKE_HARNESS`
+aborts with a clear error — **no Claude fallback**.
+
+**Out of scope:** declarative JSONPath “configure a harness without code”;
+out-of-repo plugin harnesses (app↔image remain lockstep — docs/13).
+
+**Exit criteria:**
+- [ ] All three existing templates are pure dialect modules; `dev_entrypoint`
+      has no `if harness ==` for parse/fault/dump/render/argv.
+- [ ] Capture rig imports dialects only; no duplicated argv construction.
+- [ ] Planted unknown harness id fails closed (unit test).
+- [ ] Full harness capture suite green; `bake images` + entrypoint import smoke.
+
+**Demo:** delete the Claude fall-through; suite still green; intentional
+unknown-id run dies loudly.
+
+#### H2 — Registry is the single source of harness ids
+
+**Goal:** config schema cannot drift from `HARNESSES` keys.
+**Implements:** `app/devcake/harness.py` + `config.py` `DevType.harness_template`.
+
+Today: `Literal["claude-code", "grok-build", "codex"]` is hand-maintained
+beside the registry dict. Prefer validation against `HARNESSES` (frozen id set
+or pydantic constraint) so a new template is one registration, not two.
+
+**Exit criteria:**
+- [ ] Adding a registry key alone is what config accepts (or a single shared
+      id tuple imported by both).
+- [ ] Structure/unit test: every `HARNESSES` key is a valid `DevType.harness_template`
+      and every accepted template has a dialect (H1) and a Bake image name.
+- [ ] SPA still loads ids from `GET /harnesses` (no hard-coded combobox list).
+
+#### H3 — Credential registry extensions (only where declarative)
+
+**Goal:** support CLIs whose headless auth is multi-env or settings-file shaped
+without inventing per-Dev-Type special cases in dispatch.
+
+Optional `Harness` fields (grow only when a real CLI needs them):
+
+| Extension | Purpose |
+|---|---|
+| `credential_env` any-of (existing) | One of several keys is enough |
+| `credential_env_all_of` (new) | e.g. API key **and** base URL required together |
+| `config_files` / template materialization (new) | Entrypoint writes `~/.…/settings.json` from runspec or a stored secret blob |
+| `oauth` (existing) | Device-code flows that produce an auth file |
+
+**Out of scope:** putting argv or token-extraction logic in the app registry.
+
+**Exit criteria:**
+- [ ] Schema + `dev_type_status` / `credentials_ready` honor any-of vs all-of.
+- [ ] At least one path materialises a config file into the Dev (secret blob or
+      generated minimal settings) with 0600 semantics and redaction registration.
+- [ ] Docs/08 §4 and docs/14 updated; no stronger security claims than `14`.
+
+#### H4 — Capture campaign as the formal “harness ready” gate
+
+**Goal:** “this harness is supported” means a measured fixture matrix, not a
+docs paragraph.
+
+Minimum matrix per template (healthy, empty completion, auth failure,
+rate-limit / hard HTTP, tool-only work, plan mode, turn-budget or equivalent):
+
+- verbatim stdout under `app/tests/fixtures/harness_streams/`
+- sidecars for meta / stderr / dump where needed
+- rows in `test_harness_captures.py` with **intended** verdicts (never rewrite
+  expected class into the sidecar)
+
+**Exit criteria:**
+- [ ] Docs/08 §9 (or a short `08` annex) states the matrix as the gate.
+- [ ] CI fails if a registered dialect lacks the minimum capture set (or an
+      explicit `capture_exempt` with justification — `hello` only).
+- [ ] Pin bumps that change stream shape require re-capture (documented).
+
+#### H5 — Mechanical Bake / image scaffold
+
+**Goal:** boring checklist becomes hard to miss.
+
+Convention (script optional):
+
+1. `images/Dockerfile` stage name = harness id  
+2. `docker-bake.hcl` target + `images` / `all` groups  
+3. `HARNESSES[id].image = f"devcake/dev-{id}:${DEVCAKE_TAG}"`  
+4. `ENV DEVCAKE_HARNESS=<id>` in the image  
+
+**Exit criteria:**
+- [ ] Documented in docs/08 §9 and docs/13 image matrix.
+- [ ] Optional `scripts/new_harness.sh <id>` scaffolds empty stage + bake +
+      registry stub + empty dialect module (no fake stream logic).
+- [ ] Tripwire or checklist test that every `HARNESSES` image has a bake target.
+
+#### If pursuing new harness templates
+
+If/when a fourth CLI is worth shipping, prefer landing H1–H2 first (or in the
+same change set as the first new dialect) so the slice is repeatable:
+
+- Each new CLI is: characterize headless contract → capture matrix → dialect
+  module → registry + Bake → docs/08 tables → operator smoke.
+- **CLI candidates under consideration** (not commitments, not prioritized):
+  qwen-code and other agentic terminal CLIs. A candidate that is
+  Claude-stream-adjacent may share helpers *after* captures prove it — never
+  by silent alias. Multi-provider / settings.json auth is an H3 consumer.
+- **Not a new harness:** pointing an existing template at a new model or a
+  local OpenAI-compatible backend (`DevType.model`, secret_env, `08` §8).
+
+**Explicit non-goals for this track:**
+
+- One universal stream parser for all CLIs (codex / grok / claude proved
+  dialects need real code).
+- Plugin harnesses outside the monorepo.
+- Expanding product scope (webhooks, SSO, etc.) under the harness banner.
+
+**Suggested sequencing *if* this track is picked up:** H1 + H2 first (same PR
+train if small); H4 codifies what ADR-0018 already started; H5 is cheap; H3
+when the first multi-auth CLI is actually implemented. A first new template may
+pay for H1–H2 in-tree rather than as pure refactor — prefer that over a
+long-lived incomplete dialect API.
+
+---
+
+### Deferred (later / conditional)
+
+- **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
+  polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
+  among deferred items, independent of any harness-platform work.
+- **Additional PMO adapters** (GitHub Issues, GitLab Issues, Monday, …) +
+  **markdown-fidelity adapter refactor** (ISSUES #35). Copy the
+  `gitea_issues` profile (pure `PMOPort`).
+- **N repos per mission** — cross-repo atomicity (one PR per repo, set-
+  approval, merge ordering); still capped at 0-or-1 work repo per mission.
+- **Per-run scoped forge tokens** and the rest of `14` §7 — companion to
+  internal per-mission tokens; revisit when threat model demands it.
+- **Network egress allowlists / reduced sandbox-bypass** for non-EXECUTE
+  stages (ISSUES #16).
+- **Additional log-connector backends** (Loki; others on demand) in the
+  standalone plugin repo <https://github.com/fidecastro/devcake-logs-mcp>
+  (`LogBackend` seam; core MCP ports already shipped).
+- **Priority-conditional Dev Type assignment** (e.g. Urgent EXECUTE → stronger
+  Dev Type — relaxes 1 Mission Type → 1 Dev Type).
+- Admin panel **OIDC/SSO** (basic auth remains the dedicated-host story —
+  `14`).
+- **First-class OTel metrics layer** — when dashboards need pre-aggregation
+  or long retention (`12` §4 still SQL-over-spans).
+- **SQLite `StatePort` swap** — if run history outgrows files.
+- **Public-release hygiene** — LICENSE, SECURITY.md, CONTRIBUTING, CHANGELOG,
+  SBOM (ISSUES #38) if audience expands.
+- **Internal-forge orphan sweep** — reconcile Gitea org repos/svc users vs
+  `/data/secrets/internal_forge/mission-*.json` (pre-v0.1.1 Clear leak;
+  leak path itself is fixed).
+
+### Discarded (do not resurrect without new evidence)
+
+- **Scout Dev experiment** — not engineering: assign ONBOARD to a cheap-model
+  Dev Type from the admin panel as an ops experiment any week.
+- **Mid-run Dev→PMO write relay commands** — superseded by F4 internal fallback
+  forge mid-run persistence. Revisit only if humans need mid-run progress
+  comments *in the PMO feed itself*.
+- **Internal Mission worktree as an activity mirror** (original F5 shape) —
+  superseded by F4. **Partially un-discarded 2026-07-18 by ADR-0014 D4:**
+  per-mission `activity-*` repos are write-only records (app-pushed, deleted
+  on Clear, never read back) — not the rejected read-back mirror.
+- **Silent unknown-harness → Claude dialect fallback** — anti-pattern to
+  remove under H1; do not reintroduce “maybe it’s Claude-shaped” shortcuts
+  without captures.
+- **Declarative-only harness plugins** (JSON argv + JSONPath tokens, no
+  dialect code) — rejected: fault classification and stream churn need real
+  code (ADR-0018 evidence).
+- **One universal stream parser / harness SDK for all vendors** — same
+  rejection; deep dialect modules yes, one parser no.
+
+*(Note: `auto_merge` was originally slated post-v0 but is a confirmed v0
+requirement — it ships in M5/M6. It gates the **app's** auto-merge of an
+approved PR, not the Dev's ability to open PRs — see docs clarity 2026-07.)*

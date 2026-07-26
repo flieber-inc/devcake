@@ -279,7 +279,9 @@ def test_render_stderr():
 
 def test_logrelay_batches_truncates_and_caps(monkeypatch):
     sent = []
-    monkeypatch.setattr(ep, "send", lambda kind, payload: sent.append((kind, payload)))
+    # LogRelay calls bus.send (not the entrypoint façade name).
+    monkeypatch.setattr("devcake_dev.adapters.bus.send",
+                        lambda kind, payload: sent.append((kind, payload)))
     relay = ep.LogRelay()
     relay.add("a" * 5000)                     # truncated to LINE_LIMIT
     relay.add("multi\nline")                  # split into two entries
@@ -303,7 +305,7 @@ def test_logrelay_batches_truncates_and_caps(monkeypatch):
 def test_logrelay_swallows_send_failures(monkeypatch):
     def boom(kind, payload):
         raise RuntimeError("redis down")
-    monkeypatch.setattr(ep, "send", boom)
+    monkeypatch.setattr("devcake_dev.adapters.bus.send", boom)
     relay = ep.LogRelay()
     relay.add("line")
     relay.flush()                             # must not raise
@@ -312,7 +314,8 @@ def test_logrelay_swallows_send_failures(monkeypatch):
 
 def test_logrelay_reports_silent_live_harness_without_flooding(monkeypatch):
     ticks = iter([100.0, 105.0])
-    monkeypatch.setattr(ep.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr("devcake_dev.harness.render.time.monotonic",
+                        lambda: next(ticks))
     relay = ep.LogRelay()
 
     assert not relay.add_silence_notice("grok-build", now=159.9)
@@ -329,7 +332,8 @@ def test_logrelay_reports_silent_live_harness_without_flooding(monkeypatch):
 
 def test_visible_output_resets_silence_notice(monkeypatch):
     ticks = iter([100.0, 170.0])
-    monkeypatch.setattr(ep.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr("devcake_dev.harness.render.time.monotonic",
+                        lambda: next(ticks))
     relay = ep.LogRelay()
     relay.add("model response")
 
@@ -385,7 +389,7 @@ def test_clone_error_class_ignores_incidental_403():
 # ── oversized-artifact shrinking (a finished run's result must always ship) ──
 
 def test_fit_payload_truncates_oversized_transcript(monkeypatch):
-    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 1024 * 1024)
+    monkeypatch.setattr("devcake_dev.adapters.bus.MAX_ARTIFACT_BYTES", 1024 * 1024)
     result = {"schema_version": 1, "outcome": "pr_opened", "summary": "s"}
     payload = {"result": result, "token_report": {"model": "m"},
                "transcript_md": "x" * (3 * 1024 * 1024)}
@@ -481,14 +485,14 @@ def test_with_session_appends_dump_only_when_present():
 
 def test_fit_payload_shrinks_transcript_before_last_message(monkeypatch):
     # last_message_md is shrinkable, but the (larger) dump always halves first
-    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 64 * 1024)
+    monkeypatch.setattr("devcake_dev.adapters.bus.MAX_ARTIFACT_BYTES", 64 * 1024)
     payload = {"result": {"outcome": "x"}, "token_report": {},
                "transcript_md": "t" * (200 * 1024),
                "last_message_md": "m" * (20 * 1024)}
     fitted = ep._fit_payload(payload)
     assert fitted["last_message_md"] == "m" * (20 * 1024)   # untouched
     assert "[devcake] transcript_md truncated" in fitted["transcript_md"]
-    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 32 * 1024)
+    monkeypatch.setattr("devcake_dev.adapters.bus.MAX_ARTIFACT_BYTES", 32 * 1024)
     fitted2 = ep._fit_payload({"result": {}, "last_message_md": "z" * (100 * 1024)})
     assert "[devcake] last_message_md truncated" in fitted2["last_message_md"]
 
@@ -500,7 +504,7 @@ def test_fit_payload_small_payload_untouched():
 
 def test_fit_payload_raises_only_when_unshrinkable(monkeypatch):
     import pytest
-    monkeypatch.setattr(ep, "MAX_ARTIFACT_BYTES", 1024)
+    monkeypatch.setattr("devcake_dev.adapters.bus.MAX_ARTIFACT_BYTES", 1024)
     with pytest.raises(ValueError):
         ep._fit_payload({"result": {"outcome": "x" * 5000}})
 
@@ -508,7 +512,8 @@ def test_fit_payload_raises_only_when_unshrinkable(monkeypatch):
 def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     import hashlib
     sent = []
-    monkeypatch.setattr(ep, "send", lambda kind, payload: sent.append((kind, payload)))
+    monkeypatch.setattr("devcake_dev.adapters.bus.send",
+                        lambda kind, payload: sent.append((kind, payload)))
     ep.send_artifacts({"result": {"outcome": "hello"},
                        "transcript_md": "y" * 900_000})
     assert len(sent) > 1

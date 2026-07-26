@@ -167,6 +167,15 @@ Git pushes and PR interactions (EXECUTE, REVIEW approval checkout) happen inside
 
 **`devcake-relay` is not a shipped CLI.** Devs speak the Redis protocol of `09-messaging.md` **directly from the shared entrypoint** (`runspec.get`, `activity.get`, heartbeats, artifacts). There is no separate relay binary in the image.
 
+**Entrypoint layout.** The image `ENTRYPOINT` is still `/dev_entrypoint.py` (composition façade). Dev-side code lives under `images/common/devcake_dev/` (copied to `/devcake_dev`) — a Zone-B package separate from `app/devcake`:
+
+| Package path | Role |
+|---|---|
+| `domain.fault` | ADR-0018 harness fault classification (pure) |
+| `harness.render` / `tokens` / `argv` | Live relay, stream dumps, CLI argv |
+| `workspace.*` | Clone, skills/MCP, forensics, activity, transcript |
+| `adapters.bus` | Redis Streams send / request-reply / artifacts |
+
 There is **no write access** to the PMO mid-run (INV-4). Writes travel as end-of-run artifacts that the app applies. Mid-run re-fetch of the activity payload uses the same `activity.get` request/reply channel the entrypoint already speaks.
 
 Other tooling (log-platform access and the like) arrives as **MCP plugins** — standalone servers living outside this repo, installed per Dev Type at run time via `mcp_setup_commands` (`08-harness-templates.md` §7, `tutorials/03-mcp-plugins.md`). The official log connector is <https://github.com/fidecastro/devcake-logs-mcp>.

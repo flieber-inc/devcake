@@ -9,6 +9,8 @@ import Button from "../components/Button.jsx";
 import Toggle from "../components/Toggle.jsx";
 import { ConfirmDialog, Modal } from "../components/Modal.jsx";
 import ImmediateBadge from "../components/ImmediateBadge.jsx";
+import MoreMenu from "../components/MoreMenu.jsx";
+import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "../components/ClearSecretsDialog.jsx";
 import { AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
@@ -156,8 +158,8 @@ function RoOnlyNote({ name }) {
   );
 }
 
-export default function ReposPage() {
-  const { dr, loadErr } = useSharedDraft();
+export default function ReposPage({ onHealthChange }) {
+  const { dr, loadErr, reload } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
@@ -166,6 +168,8 @@ export default function ReposPage() {
   const [internalRefresh, setInternalRefresh] = useState(0);
   const [giteaVariant, setGiteaVariant] = useState({});   // card idx → variant
   const [createFor, setCreateFor] = useState(null);       // card idx | null
+  const [clearSecrets, setClearSecrets] = useState(false);
+  const [secretsEpoch, setSecretsEpoch] = useState(0);
   // cards added/renamed this session stay name-editable even when their name
   // collides with a still-saved one (the delete-then-re-add / mid-typing trap)
   const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos);
@@ -202,11 +206,18 @@ export default function ReposPage() {
         subtitle="Forge connections, tokens, merge policy, and the internal forge — edits apply on Save" />
 
       <Section id="repository" title="Repositories"
-        description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait.">
+        description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait."
+        actions={
+          <MoreMenu label="More repository actions" items={[
+            { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
+              desc: CLEAR_SECRETS_ENTRY.desc,
+              onClick: () => setClearSecrets(true) },
+          ]} />
+        }>
         {cfg.repos.map((repo, idx) => {
           const tr = testResult[`forge:${repo.name}`];
           return (
-            <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+            <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
                 {cfg.repos.length > 0 && (
@@ -444,6 +455,28 @@ export default function ReposPage() {
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />
+      {clearSecrets && (
+        <ClearSecretsDialog
+          context="repos"
+          onClose={() => setClearSecrets(false)}
+          onCleared={async (result) => {
+            // Swallow reload errors so the ConfirmDialog does not re-label a
+            // successful delete as a failed clear (Fable PR #54 review).
+            try {
+              setClearErr("");
+              setTestResult({});
+              await reload();
+              setSecretsEpoch((e) => e + 1);
+              if (result?.intake_paused) {
+                onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+              }
+            } catch (e) {
+              setClearErr(
+                `reload after clear secrets failed: ${String(e.message || e)}`);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

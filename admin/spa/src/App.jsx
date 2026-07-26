@@ -206,7 +206,7 @@ export default function App() {
               <ConfigPage section={section} health={health} healthError={healthError}
                 onHealthChange={setHealth} />
             )}
-            {page === "repos" && <ReposPage />}
+            {page === "repos" && <ReposPage onHealthChange={setHealth} />}
             {page === "runs" && <RunsPage />}
             {page === "missions" && <MissionsPage />}
             {page === "logs" && <LogsPage />}

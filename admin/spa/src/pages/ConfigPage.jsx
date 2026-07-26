@@ -61,7 +61,9 @@ export default function ConfigPage({ section, health, healthError, onHealthChang
         <PmoSection newNamesState={pmoNewNames}
           health={health} healthError={healthError} onHealthChange={onHealthChange} />
       )}
-      {section === "dev-types" && <DevTypesSection setPageErr={setPageErr} />}
+      {section === "dev-types" && (
+        <DevTypesSection setPageErr={setPageErr} onHealthChange={onHealthChange} />
+      )}
       {section === "skills" && <SkillsSection setPageErr={setPageErr} />}
       {section === "assignments" && <AssignmentsSection />}
       {section === "prompts" && (

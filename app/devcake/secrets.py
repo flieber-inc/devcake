@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -157,6 +158,42 @@ def delete_harness_secret(var: str) -> None:
     _harness_path(var).unlink(missing_ok=True)
 
 
+# ── per-Dev-Type credential files (OAuth / uploaded secrets) ────────────────
+# /data/secrets/{dev_type}/{filename} — NOT under harness/ or connections/.
+# Reserved top-level names are the structured secret stores; everything else
+# is treated as a Dev Type credential directory (see inventory()).
+
+_RESERVED_SECRET_DIRS = frozenset({
+    "connections", "harness", "profiles", "internal_forge",
+})
+
+
+def require_credential_ref(dev_type: str, filename: str) -> None:
+    """Path components only — refuse reserved dirs and traversal."""
+    if (not dev_type or dev_type in _RESERVED_SECRET_DIRS
+            or "/" in dev_type or "\\" in dev_type or ".." in dev_type
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", dev_type)):
+        raise ValueError(f"invalid credential dev_type {dev_type!r}")
+    base = os.path.basename(filename or "")
+    if (not base or base != filename or base in (".", "..")
+            or "/" in base or "\\" in base):
+        raise ValueError(f"invalid credential filename {filename!r}")
+
+
+def delete_credential_file(dev_type: str, filename: str) -> None:
+    """Unlink one OAuth/uploaded credential file. Missing = no-op."""
+    import contextlib
+    require_credential_ref(dev_type, filename)
+    path = _root() / dev_type / filename
+    path.unlink(missing_ok=True)
+    # drop empty dir so inventory doesn't keep a ghost. suppress: a concurrent
+    # OAuth write can race the empty check (TOCTOU) — unlink already succeeded.
+    parent = path.parent
+    if parent.is_dir() and not any(parent.iterdir()):
+        with contextlib.suppress(OSError):
+            parent.rmdir()
+
+
 # ── status (never echoes values) ────────────────────────────────────────────
 
 def _status(path: Path, field: str | None = None) -> dict:
@@ -211,6 +248,59 @@ def list_harness_secrets() -> dict[str, str]:
             if isinstance(value, str) and value:
                 out[p.stem] = value
     return out
+
+
+def inventory() -> dict[str, list[dict]]:
+    """Presence-only catalog of every operator-clearable secret. NEVER values.
+
+    Groups:
+      harness           — model / secret_env keys under harness/
+      connections       — pmo/repo fields under connections/
+      credential_files  — OAuth/upload files under /data/secrets/{dev_type}/
+
+    Excludes profile snapshots and internal_forge mission tokens (system-
+    managed; not operator "Clear secrets" targets).
+    """
+    harness: list[dict] = []
+    for var in list_harness_secrets():
+        st = harness_status(var)
+        if st["present"]:
+            harness.append({"var": var, "updated_at": st["updated_at"]})
+
+    connections: list[dict] = []
+    for key, fields in list_connection_secrets().items():
+        scope, _, instance = key.partition("-")
+        if not scope or not instance:
+            continue
+        for field in fields:
+            st = connection_status(scope, instance, field)
+            if st["present"]:
+                connections.append({
+                    "scope": scope, "instance": instance, "field": field,
+                    "updated_at": st["updated_at"],
+                })
+
+    credential_files: list[dict] = []
+    root = _root()
+    if root.is_dir():
+        for d in sorted(root.iterdir()):
+            if not d.is_dir() or d.name in _RESERVED_SECRET_DIRS:
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", d.name):
+                continue
+            for p in sorted(d.iterdir()):
+                if p.is_file():
+                    credential_files.append({
+                        "dev_type": d.name,
+                        "filename": p.name,
+                        "updated_at": _iso(p.stat().st_mtime),
+                    })
+
+    return {
+        "harness": harness,
+        "connections": connections,
+        "credential_files": credential_files,
+    }
 
 
 def register_all() -> None:

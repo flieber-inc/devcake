@@ -9,6 +9,7 @@ import { ConfirmDialog, Modal, PromptDialog } from "./Modal.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import MoreMenu from "./MoreMenu.jsx";
 import SkillModeChips from "./SkillModeChips.jsx";
+import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "./ClearSecretsDialog.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // ── OAuth wizard (docs/16 M6): device-code flow driven from the UI ──────────
@@ -152,7 +153,7 @@ function DevTypeCard({ name, draftDt, serverDt, harnesses, setField, onDelete, o
               desc: "Config, credentials and prompt templates follow the new name.",
               onClick: () => onRename(name) },
             { label: "Delete Dev Type", danger: true,
-              desc: "Removes its config; stored credentials stay on disk.",
+              desc: "Removes its config and this Dev Type's credential files; shared model keys and connection secrets stay.",
               onClick: () => onDelete(name) },
           ]} />
         </div>
@@ -340,11 +341,13 @@ function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
   );
 }
 
-export default function DevTypesSection({ setPageErr }) {
+export default function DevTypesSection({ setPageErr, onHealthChange }) {
   const { dr, reload, harnesses } = useSharedDraft();
   const [confirm, setConfirm] = useState(null); // delete confirms
   const [oauthFor, setOauthFor] = useState(null);
   const [addDev, setAddDev] = useState(false);
+  const [clearSecrets, setClearSecrets] = useState(false);
+  const [secretsEpoch, setSecretsEpoch] = useState(0);
   const [renameFor, setRenameFor] = useState(null);
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameErr, setRenameErr] = useState("");
@@ -374,11 +377,16 @@ export default function DevTypesSection({ setPageErr }) {
             <Button kind="ghost" icon={Plus} onClick={() => setAddDev(true)}>
               New Dev Type
             </Button>
+            <MoreMenu label="More Dev Types actions" items={[
+              { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
+                desc: CLEAR_SECRETS_ENTRY.desc,
+                onClick: () => setClearSecrets(true) },
+            ]} />
           </>
         }>
         <div className="grid gap-4 grid-cols-1">
           {dr.order.filter((n) => dr.draft.devTypes[n] && dr.server.devTypes[n]).map((name) => (
-            <DevTypeCard key={name} name={name}
+            <DevTypeCard key={`${name}-${secretsEpoch}`} name={name}
               draftDt={dr.draft.devTypes[name]}
               serverDt={dr.server.devTypes[name]}
               harnesses={harnesses}
@@ -388,7 +396,8 @@ export default function DevTypesSection({ setPageErr }) {
                 const hasEdits = dr.diff.some((x) => x.path.startsWith(`devTypes.${nm}.`));
                 setConfirm({
                   title: `Delete dev type ${nm}?`,
-                  body: "Its config file is removed; credentials under /data/secrets stay until cleaned manually."
+                  body: "Its config and credential files under /data/secrets/{name}/ are removed. "
+                    + "Shared model keys and PMO/forge tokens are untouched — use Clear secrets for those."
                     + (hasEdits ? "\n\nThis card has unsaved edits — deleting discards them." : ""),
                   confirmLabel: "Delete",
                   action: async () => {
@@ -412,6 +421,23 @@ export default function DevTypesSection({ setPageErr }) {
         onClose={() => { setOauthFor(null); reload(); }} />}
       {addDev && <NewDevTypeDialog harnesses={harnesses}
         onClose={() => setAddDev(false)} onCreated={reload} />}
+      {clearSecrets && (
+        <ClearSecretsDialog
+          context="dev-types"
+          onClose={() => setClearSecrets(false)}
+          onCleared={async (result) => {
+            try {
+              await reload();
+              setSecretsEpoch((e) => e + 1);
+              if (result?.intake_paused) {
+                onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+              }
+            } catch (e) {
+              setPageErr?.(`reload after clear secrets failed: ${String(e.message || e)}`);
+            }
+          }}
+        />
+      )}
       <PromptDialog open={!!renameFor}
         title={`Rename Dev Type "${renameFor}"`}
         label="New name" initial={renameFor || ""}

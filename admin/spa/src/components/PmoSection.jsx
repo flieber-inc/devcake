@@ -8,7 +8,9 @@ import Toggle from "./Toggle.jsx";
 import { ConfirmDialog } from "./Modal.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import InstantZone from "./InstantZone.jsx";
+import MoreMenu from "./MoreMenu.jsx";
 import RepoChips from "./RepoChips.jsx";
+import ClearSecretsDialog, { CLEAR_SECRETS_ENTRY } from "./ClearSecretsDialog.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
@@ -16,10 +18,13 @@ import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 
 export default function PmoSection({ newNamesState, health = {}, healthError = false,
                                      onHealthChange }) {
-  const { dr } = useSharedDraft();
+  const { dr, reload } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
+  const [clearSecrets, setClearSecrets] = useState(false);
+  const [secretsEpoch, setSecretsEpoch] = useState(0);
+  const [clearReloadErr, setClearReloadErr] = useState("");
   // per-PMO intake: App-owned /health (like the sidebar master), never the
   // config draft — Discard must not desync a safety switch from the server.
   const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
@@ -38,7 +43,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       .then((r) => setRepoHasToken(Object.fromEntries(
         names.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present]))))
       .catch(() => setRepoHasToken({}));
-  }, [repoNamesKey]);
+  }, [repoNamesKey, secretsEpoch]);
   const [testResult, setTestResult] = useState({});
   // PMO cards added/renamed this session stay name-editable even when their
   // name collides with a still-saved one (delete-then-re-add / mid-typing trap)
@@ -118,7 +123,17 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
     <>
       <Section id="pmo" title="PMO connections"
         description="The PMO teams DevCake watches, and how missions are adopted."
-        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}>
+        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}
+        actions={
+          <MoreMenu label="More PMO actions" items={[
+            { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
+              desc: CLEAR_SECRETS_ENTRY.desc,
+              onClick: () => setClearSecrets(true) },
+          ]} />
+        }>
+        {clearReloadErr && (
+          <p className="text-sm text-red-600 dark:text-red-400">✗ {clearReloadErr}</p>
+        )}
         {cfg.pmos.map((inst, idx) => {
           const tr = testResult[`pmo:${inst.name}`];
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
@@ -135,7 +150,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
               ? (paused ? "Mission intake — PAUSED (master also OFF)" : "Mission intake — ON (master paused)")
               : (paused ? "Mission intake — PAUSED" : "Mission intake — ON");
           return (
-            <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+            <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
                 {cfg.pmos.length > 1 && (
@@ -302,6 +317,28 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />
+      {clearSecrets && (
+        <ClearSecretsDialog
+          context="pmo"
+          onClose={() => setClearSecrets(false)}
+          onCleared={async (result) => {
+            // Swallow reload errors so the ConfirmDialog does not re-label a
+            // successful delete as a failed clear (Fable PR #54 review).
+            try {
+              setClearReloadErr("");
+              setTestResult({});
+              await reload();
+              setSecretsEpoch((e) => e + 1);
+              if (result?.intake_paused) {
+                onHealthChange?.((h) => ({ ...h, intake_paused: true }));
+              }
+            } catch (e) {
+              setClearReloadErr(
+                `reload after clear secrets failed: ${String(e.message || e)}`);
+            }
+          }}
+        />
+      )}
     </>
   );
 }

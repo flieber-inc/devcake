@@ -1,0 +1,1 @@
+Error: Internal error: "Unauthorized (401) from http://devcake-capture-stub:8080/s/http_401/v1/messages: invalid_request_error: stub injected HTTP 401\n\n  Model:     stub-model\n  Auth:      ApiKey\n  Version:   0.2.112\n  Available: stub-model"

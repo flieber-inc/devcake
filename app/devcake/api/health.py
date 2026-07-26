@@ -103,7 +103,8 @@ async def _oo_ingest_check() -> dict:
 
 async def build_health_payload(*, config, dev_types, managers, mappers,
                                forge_runtime, shared_breakers, store,
-                               internal_forge, poll_rt) -> dict:
+                               internal_forge, poll_rt,
+                               backend_degraded: dict | None = None) -> dict:
     """The /api/v1/health body (docs/11 §0). All deps explicit — unit-testable
     with fakes; the route in main.py is a one-line forward."""
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -168,6 +169,14 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
         # instances whose poll segment failed with a PERMANENT error (audit
         # A1) — the other instances keep polling; this names the sick one
         "poll_degraded": dict(poll_rt.poll_degraded),
+        # dev_type → reason (ADR-0018). Deliberately NOT merged into
+        # circuit_breakers: the SPA renders that whole map as ONE alert whose
+        # remediation is chosen by a `repo:` prefix test, so a third namespace
+        # there would tell the operator to refresh a credential that is fine —
+        # and services.js would paint the Dev card red for what is a
+        # self-healing throttle. Shaped like poll_degraded, placed by
+        # mapper_degraded (which is a plain string, not a map).
+        "dev_backend_degraded": dict(backend_degraded or {}),
         "internal_forge": (await internal_forge.health()
                            if internal_forge is not None else None),
         "mapper_degraded": " · ".join(

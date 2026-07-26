@@ -153,7 +153,7 @@ Operating duties — once at setup and recurring — live in
 | `05-pmo-adapter.md` | `PMOPort` + Linear + Gitea Issues adapters |
 | `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab/Gitea adapters, PR/branch conventions |
 | `07-dev-runtime.md` | Dev container contract: filesystem, env, exit codes, lifecycle |
-| `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup |
+| `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup, local backends |
 | `09-messaging.md` | Redis Streams protocol |
 | `10-persistence.md` | `/data` layout, file formats, atomic writes |
 | `11-admin-panel.md` | Admin UI + `/api/v1` contract |

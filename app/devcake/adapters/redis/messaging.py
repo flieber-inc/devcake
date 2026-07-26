@@ -32,6 +32,10 @@ MAX_CHUNKS = 128
 MAX_ASSEMBLED_BYTES = 50 * 1024 * 1024
 MAX_ACTIVE_CHUNK_GROUPS = 16
 MAX_BUFFERED_CHUNK_BYTES = 100 * 1024 * 1024
+# ADR-0018 — a single XADD is materialized in memory before any cap can look at
+# it, so bound it on its own. The sender splits at CHUNK_SIZE (400 KB); this is
+# a generous ceiling that only rejects a malformed or hostile payload.
+MAX_CHUNK_BYTES = 2 * 1024 * 1024
 RECLAIM_INTERVAL_SECONDS = 60
 # buffered chunks stay pending by design (restart recovery), so deliveries
 # accumulate on slow uploads — only a group with no NEW chunk for this long
@@ -274,6 +278,49 @@ class Messaging:
         except Exception:
             log.exception("poison handling failed for %s", entry_id)
 
+    def _admit_chunk(self, assembly, chunk: int, data: str, total: int,
+                     digest: str) -> None:
+        """Admission control for one chunk (ADR-0018) — validate and size-check
+        BEFORE storing, then store. Raises to reject, leaving no residue.
+
+        Previously the caps were evaluated AFTER `parts[chunk] = data` and
+        before the completion test, which made the global budget a one-way
+        ratchet: past the limit no group could ever complete — including the
+        chunk that would have finished one and freed its memory — while
+        rejected chunks stayed resident and, on a first delivery, had already
+        refreshed `last_progress`, deferring the stall reaper that was supposed
+        to be the recovery path.
+        """
+        # The group's OWN metadata decides completion and integrity — never the
+        # current envelope's. Without this, a redelivery declaring a different
+        # `of` either KeyErrors out of the join or assembles across generations
+        # and verifies the result against the wrong digest.
+        if assembly["total"] != total or assembly["sha256"] != digest:
+            raise ValueError("inconsistent chunk group metadata")
+        old = assembly["parts"].get(chunk)
+        if old is not None:
+            if old != data:
+                raise ValueError("conflicting duplicate chunk")
+            return          # redelivery of a buffered chunk: not progress
+        chunk_bytes = len(data.encode("utf-8"))
+        if chunk_bytes > MAX_CHUNK_BYTES:
+            raise ValueError("chunk exceeds per-chunk size limit")
+        group_bytes = sum(len(p.encode("utf-8"))
+                          for p in assembly["parts"].values()) + chunk_bytes
+        if group_bytes > MAX_ASSEMBLED_BYTES:
+            raise ValueError("chunk group exceeds assembled-size limit")
+        # A COMPLETING chunk is always admitted: handling it drains the whole
+        # group, so it can only reduce pressure. Admitting it is what breaks
+        # the ratchet. Anything else must fit inside the global budget.
+        if len(assembly["parts"]) + 1 < total:
+            buffered = sum(len(part.encode("utf-8"))
+                           for group in self._chunks.values()
+                           for part in group["parts"].values())
+            if buffered + chunk_bytes > MAX_BUFFERED_CHUNK_BYTES:
+                raise ValueError("global chunk buffer limit exceeded")
+        assembly["parts"][chunk] = data
+        assembly["last_progress"] = time.monotonic()   # accepted ⇒ real progress
+
     async def _handle_entry(self, entry_id, fields, handler, verify_auth) -> None:
         envelope = json.loads(fields.get("m", "{}"))
         run_id = envelope.get("run_id", "")
@@ -316,33 +363,21 @@ class Messaging:
                 return
             if key not in self._chunks and len(self._chunks) >= MAX_ACTIVE_CHUNK_GROUPS:
                 raise ValueError("too many active chunk groups")
+            created = key not in self._chunks
             assembly = self._chunks.setdefault(key, {
                 "total": total, "sha256": digest, "parts": {}, "entry_ids": [],
                 "last_progress": time.monotonic(),
             })
-            if assembly["total"] != total or assembly["sha256"] != digest:
-                raise ValueError("inconsistent chunk group metadata")
-            old = assembly["parts"].get(chunk)
-            if old is not None and old != data:
-                raise ValueError("conflicting duplicate chunk")
-            if old is None:
-                # redeliveries of already-buffered chunks are not progress —
-                # a dead sender's group must still stall out and poison
-                assembly["last_progress"] = time.monotonic()
-            assembly["parts"][chunk] = data
+            try:
+                self._admit_chunk(assembly, chunk, data, total, digest)
+            except Exception:
+                # a group this delivery created and never populated must not
+                # linger holding one of the MAX_ACTIVE_CHUNK_GROUPS slots
+                if created and not assembly["parts"]:
+                    self._chunks.pop(key, None)
+                raise
             if entry_id not in assembly["entry_ids"]:
                 assembly["entry_ids"].append(entry_id)
-            byte_count = sum(len(part.encode("utf-8"))
-                             for part in assembly["parts"].values())
-            if byte_count > MAX_ASSEMBLED_BYTES:
-                raise ValueError("chunk group exceeds assembled-size limit")
-            buffered = sum(
-                len(part.encode("utf-8"))
-                for group in self._chunks.values()
-                for part in group["parts"].values()
-            )
-            if buffered > MAX_BUFFERED_CHUNK_BYTES:
-                raise ValueError("global chunk buffer limit exceeded")
             if len(assembly["parts"]) < total:
                 return
             joined = "".join(assembly["parts"][i] for i in range(1, total + 1))

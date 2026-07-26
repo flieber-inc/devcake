@@ -62,7 +62,8 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
         if run is None or run.state not in ("dispatched", "running"):
             continue                                    # gone / finalizing / terminal
         try:
-            await run_manager.kill(run, "failed", "operator clear-runs")
+            await run_manager.kill(run, "failed", "operator clear-runs",
+                                   error_class="DEV_OPERATOR_STOP")
             stopped.append(run.run_id)
         except Exception:  # noqa: BLE001 — best-effort teardown: a kill failure is logged; the drain below still waits on Dagu's view
             log.exception("clear: kill failed for %s — continuing", run.run_id)

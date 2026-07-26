@@ -121,17 +121,43 @@ export default function deriveAlerts(health) {
   // the Needs Human Action panel on Overview (counted in the sidebar pill
   // separately via the stat card, not here)
 
+  // ADR-0018 — model-backend degradation. Deliberately NOT a circuit breaker:
+  // it throttles the named Dev Types to one probe run and clears itself when
+  // runs succeed, so the remediation is the opposite of the breaker advice
+  // below (there is no credential to fix).
+  const backend = Object.entries(health.dev_backend_degraded || {});
+  if (backend.length > 0) {
+    alerts.push({
+      id: "dev-backend",
+      severity: "warning", // throttled, not stopped — and it self-heals
+      title:
+        backend.length === 1
+          ? `Dev Type '${backend[0][0]}' is throttled — model backend degraded`
+          : `${backend.length} Dev Types are throttled — model backend degraded`,
+      body:
+        backend.map(([name, msg]) => `${name}: ${msg}`).join(" · ") +
+        " — DevCake has throttled these Dev Types to one probe run at a time " +
+        "and resumes full concurrency automatically once runs succeed. " +
+        "No credential change is needed; check your model provider's status.",
+    });
+  }
+
   const breakers = Object.entries(health.circuit_breakers || {});
   if (breakers.length > 0) {
+    // Per-ENTRY remediation. The old single trailing sentence was chosen by one
+    // `repo:` prefix test, so a mixed map told half the operator's breakers the
+    // wrong fix — and any future namespace would have inherited that bug.
+    const remedy = (k) =>
+      k.startsWith("repo:")
+        ? "update that repository's forge token with write access to resume"
+        : "upload or refresh that Dev Type's credential to resume";
     alerts.push({
       id: "breakers",
       severity: "critical",
       title: "Circuit breaker tripped",
-      body:
-        breakers.map(([k, v]) => `${k} (${v})`).join(" · ") +
-        (breakers.some(([k]) => k.startsWith("repo:"))
-          ? " — update that repository's forge token with write access to resume."
-          : " — upload or refresh that Dev Type's credential to resume."),
+      body: breakers
+        .map(([k, v]) => `${k} (${v}) — ${remedy(k)}`)
+        .join(" · "),
     });
   }
 

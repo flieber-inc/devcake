@@ -374,6 +374,7 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
     class MM:
         def dev_failure_error(self, run, payload):
             assert payload["exit_code"] == 13
+            run.error_class = "DEV_FORGE"      # the port mutates (ADR-0018)
             return "DEV_FORGE: clone failed"
 
     live = _make_run(store, state="running", run_id="LIVE-1")
@@ -484,6 +485,7 @@ def test_recon_enriches_exit14_mcp_setup(tmp_path):
     class MM:
         def dev_failure_error(self, run, payload):
             assert payload["exit_code"] == 14
+            run.error_class = "DEV_MCP_SETUP"  # the port mutates (ADR-0018)
             return "DEV_MCP_SETUP: claude mcp add …: exit 1"
 
     dead = _make_run(store, state="running", run_id="DEAD-14")

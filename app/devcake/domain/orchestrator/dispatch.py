@@ -416,7 +416,8 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         spec_env = _protocol_spec_env(mgr, 
             mission_id=mission.pmo_id, mission_key=mission.key,
             mission_type=mtype.value, dev_type=dev_type, seq=seq,
-            extra_args=assignment.extra_cli_args, repo=repo, forge=forge)
+            extra_args=assignment.extra_cli_args, repo=repo, forge=forge,
+            recover_misplaced_result=mgr.config.recover_misplaced_result)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
@@ -493,7 +494,8 @@ def append_required_skills(prompt: str, skills_required: list[str],
 
 def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        mission_type: str, dev_type: DevType, seq: int,
-                       extra_args: str, repo, forge) -> dict[str, str]:
+                       extra_args: str, repo, forge,
+                       recover_misplaced_result: bool = True) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
     place so mission and mapper dispatches can never drift apart — a var
     missing on one path would crash the entrypoint's strict readers."""
@@ -511,6 +513,11 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         "DEVCAKE_GIT_EMAIL": forge.descriptor.git_email,
         "DEVCAKE_FORGE_CLI_ENVS": ",".join(forge.descriptor.cli_token_envs),
         "DEVCAKE_EXTRA_ARGS": extra_args,
+        # "1"/"" — NEVER str(bool): the entrypoint tests these with bare
+        # truthiness, and "False" is truthy, which would make a default-True
+        # flag impossible to switch off (ADR-0018)
+        "DEVCAKE_RECOVER_MISPLACED_RESULT": (
+            "1" if recover_misplaced_result else ""),
         "DEVCAKE_MODEL": (dev_type.model
                           or HARNESSES[dev_type.harness_template].default_model),
         # Devs export through the collector, credential-free (ISSUES #13)
@@ -819,6 +826,40 @@ def _last_giveup_at(pmo_id: str) -> datetime | None:
         return None
 
 
+# ADR-0018 — classes whose failures NEVER burn a mission's attempts. Both latch
+# a breaker, so the mission stops being dispatched at all and cannot livelock:
+# that pairing is what makes "uncounted" safe.
+#
+# DEV_FORGE is deliberately NOT here. Making it unconditionally uncounted was
+# the founder's call, but plain exit 13 latches no breaker (only the
+# DEV_FORGE_AUTH arm calls forges.latch), so it would re-dispatch every poll
+# interval forever on a bad branch name, a DNS failure or a 500 — the exact
+# livelock `excusals_left` exists to bound. It gets the bounded treatment
+# instead: uncounted while the step has excusals, counted once they are spent,
+# so a forge outage costs no attempts but a permanent misconfiguration still
+# reaches DEVCAKE-FAILED.
+UNCOUNTED_CLASSES = frozenset({"DEV_AUTH", "DEV_FORGE_AUTH"})
+
+
+def counts_toward_attempts(r) -> bool:
+    """Does this failed run burn one of the step's attempts?
+
+    Matches the STRUCTURED class, never a substring of `run.error`. The old
+    substring test was injectable and the path is live: decomposition.py raises
+    with the Dev's `blocked_by` list verbatim and finalize wraps that into
+    `run.error`, so a Dev emitting `blocked_by: ["DEV_AUTH"]` made its own
+    failures stop counting — and its mission never gave up.
+
+    Pre-upgrade records (no class) fall back to a PREFIX match: `dev_failure_error`
+    always puts the class first, while injected text can only ever land in the
+    tail after `"DEV_BAD_OUTPUT: "`.
+    """
+    cls = getattr(r, "error_class", "") or ""
+    if cls:
+        return cls not in UNCOUNTED_CLASSES and getattr(r, "attempt_counted", True)
+    return not any((r.error or "").startswith(c) for c in UNCOUNTED_CLASSES)
+
+
 def attempt_number(mgr, pmo_id: str, mission_type: str,
                     activity: Activity | None = None) -> int:
     """Count consecutive counted failures, independent of transcript seq.
@@ -838,11 +879,10 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
                     if e.kind == "comment"
                     and not _is_devcake_comment(e.body)]
     since = max(anchors, default=None)
-    ignored = ("DEV_AUTH", "DEV_FORGE_AUTH", "dev failure artifact (exit 13)")
     return 1 + sum(
         1 for r in history
         if r.state in ("failed", "timed_out", "orphaned")
-        and not any(marker in (r.error or "") for marker in ignored)
+        and counts_toward_attempts(r)
         and (since is None or _aware(r.created_at) > since)
     )
 

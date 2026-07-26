@@ -37,6 +37,14 @@ DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("DEVCAKE_DEV_TIMEOUT_MINUTES", "120
 
 RUN_FAILURES_STREAM = "run_failures"
 
+# ADR-0018 — error class per kill target state, applied at the `_kill_inner`
+# chokepoint. `DEV_KILLED` is the catch-all for any state not named here (and
+# for a future one nobody remembers to add), so no kill path can leave a run
+# unclassified and silently fall back to the legacy `error`-prefix matching in
+# `attempt_number`. Operator-initiated stops pass DEV_OPERATOR_STOP explicitly.
+KILL_CLASSES = {"timed_out": "DEV_TIMEOUT", "orphaned": "DEV_ORPHANED",
+                "failed": "DEV_KILLED"}
+
 
 def failure_record(run: "Run", outcome: str, reason: str,
                    errors: list[dict[str, str]]) -> dict:
@@ -314,7 +322,8 @@ class RunManager:
 
     # ── watchdog support ─────────────────────────────────────────────────────
 
-    async def kill(self, run: Run, new_state: str, reason: str) -> None:
+    async def kill(self, run: Run, new_state: str, reason: str, *,
+                   error_class: str | None = None) -> None:
         from opentelemetry import trace as _t
         from opentelemetry.propagate import extract as _ex
         ctx = _ex({"traceparent": run.traceparent}) if run.traceparent else None
@@ -325,7 +334,7 @@ class RunManager:
             span.set_attribute("devcake.kill.reason", reason)
             span.set_attribute("devcake.verdict", f"{new_state}: {reason}")
             span.set_status(_t.Status(_t.StatusCode.ERROR, reason))
-            await self._kill_inner(run, new_state, reason)
+            await self._kill_inner(run, new_state, reason, error_class=error_class)
 
     async def _ship_failure(self, run: Run, new_state: str, reason: str) -> None:
         """The executor's failure detail must land where everything else does:
@@ -343,7 +352,8 @@ class RunManager:
         log.warning("run %s → %s (%s): %s", run.run_id, new_state, reason,
                     record["detail"][:500])
 
-    async def _kill_inner(self, run: Run, new_state: str, reason: str) -> None:
+    async def _kill_inner(self, run: Run, new_state: str, reason: str, *,
+                          error_class: str | None = None) -> None:
         # Fail-safe teardown (ISSUES #3): stop/_ship_failure may raise on
         # transport errors; ACL delete + terminal state MUST still run so the
         # run leaves store.active() and the watchdog does not re-kill forever.
@@ -371,6 +381,13 @@ class RunManager:
             run.ended_at = utcnow()
             from ..security import redact
             run.error = redact(reason)
+            # ADR-0018: classify HERE, not at the call sites. Seven callers
+            # across watchdog / reconcile / clear / stop-run / stop-all funnel
+            # through this method, and two earlier attempts to enumerate them
+            # in a table both missed one. The state-keyed default plus the
+            # DEV_KILLED catch-all means a future kill site cannot silently
+            # produce an unclassified run.
+            run.error_class = error_class or KILL_CLASSES.get(new_state, "DEV_KILLED")
             # Do not RESURRECT a record a concurrent clear-runs wipe just
             # deleted (re-audit #31 #1/#2): get()+save() with no await between
             # is atomic under asyncio's cooperative scheduling, so this fully

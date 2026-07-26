@@ -16,8 +16,10 @@ import logging
 from datetime import datetime, timezone
 
 from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from ..adapters.files.owner_store import OwnerStore
+from ..domain import backend_health
 from ..domain.model import derive
 from ..domain.orchestrator import MissionManager
 from ..ports.pmo import PMOTransient
@@ -59,7 +61,8 @@ class PollRuntime:
 
     def __init__(self, *, config, managers: dict[str, MissionManager],
                  mappers: dict, store, forge_runtime, refresh_forge_health,
-                 managers_in_config_order, owner_store: OwnerStore | None = None):
+                 managers_in_config_order, owner_store: OwnerStore | None = None,
+                 backend_degraded: dict[str, str] | None = None):
         self.config = config
         self.managers = managers                    # live reference
         self.mappers = mappers                      # live reference
@@ -73,6 +76,11 @@ class PollRuntime:
         # failure (revoked key, deleted team) skips only that instance's
         # segment; surfaced in /health as `poll_degraded`. Cleared on green.
         self.poll_degraded: dict[str, str] = {}
+        # dev_type → reason (ADR-0018). THIS class is the sole writer; every
+        # MissionManager holds the same dict object and only reads it, so the
+        # refresh below must mutate IN PLACE and never rebind.
+        self.backend_degraded: dict[str, str] = (
+            backend_degraded if backend_degraded is not None else {})
         # Wall-clock UTC of the last poll cycle that finished (periodic OR
         # manual) — /health `last_poll_at`; a stale timestamp is a signal.
         self.last_poll_at: datetime | None = None
@@ -189,6 +197,34 @@ class PollRuntime:
                 # (or a rotated-back token) self-heals without an operator
                 if self.forge_runtime.breakers:
                     await self.refresh_forge_health()
+                # ADR-0018 — recompute the backend-degraded map. Placement is
+                # load-bearing in two ways, and BOTH fail silently if broken:
+                #   * UNCONDITIONAL, at this indent. One level deeper it would
+                #     sit inside the `if self.forge_runtime.breakers:` above and
+                #     never run in the common case (no forge breaker latched),
+                #     leaving the map empty and the brake permanently disarmed.
+                #   * BEFORE the instance loop below, which is what calls
+                #     poll_instance → schedule(). After it, the throttle would
+                #     lag a full poll interval — long enough for the fleet to be
+                #     re-dispatched at full concurrency into a broken backend.
+                # `known` is the LIVE dev-type registry, unioned from the
+                # managers this runtime already holds (each carries the config's
+                # `dev_types`) — no `api.main` import, ADR-0015. Without it a
+                # renamed or deleted dev type keeps a permanent, unclearable
+                # entry (no new runs ⇒ no two greens) while the renamed type
+                # dispatches at full concurrency on no evidence.
+                known = {name for mgr in self.managers.values()
+                         for name in mgr.dev_types}
+                for dev_type in backend_health.refresh_degraded(
+                        self.store.all(), self.backend_degraded, known):
+                    with tracer.start_as_current_span("dev.backend_degraded") as bspan:
+                        bspan.set_attribute("devcake.dev_type", dev_type)
+                        bspan.set_attribute("devcake.reason",
+                                            self.backend_degraded[dev_type][:500])
+                        bspan.set_status(Status(StatusCode.ERROR,
+                                               "model backend degraded"))
+                    log.warning("backend degraded for dev type %s: %s",
+                                dev_type, self.backend_degraded[dev_type])
                 cache_rows: list[dict] = []
                 seen, cand, disp = 0, 0, 0
                 polled_ok: dict[str, set] = {}       # instance → fetched pmo_ids

@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 # host checkout: repo/app/tests → repo/images/common; app container: /srv/tests
 # → /srv/images/common (read-only compose mount)
 _CANDIDATES = [Path(__file__).parents[2] / "images" / "common" / "dev_entrypoint.py",
@@ -122,6 +124,11 @@ CODEX_MSG = json.dumps({"type": "item.completed", "item": {
     "id": "item_1", "type": "agent_message", "text": "Output:\n\nhi"}})
 CODEX_TURN = json.dumps({"type": "turn.completed", "usage": {
     "input_tokens": 25247, "output_tokens": 88}})
+# verbatim shape of the terminal event in every codex failure capture
+# (fixtures/harness_streams/codex_http_401.jsonl, last line)
+CODEX_FAILED = json.dumps({"type": "turn.failed", "error": {"message":
+    "unexpected status 401 Unauthorized: stub injected HTTP 401, "
+    "url: http://devcake-capture-stub-codex:8080/s/http_401/v1/responses"}})
 
 
 def test_render_codex_events():
@@ -129,6 +136,12 @@ def test_render_codex_events():
     assert ep.render_codex(CODEX_MSG).startswith("Output:")
     assert ep.render_codex(CODEX_TURN) == "[codex] turn done · in=25247 out=88"
     assert ep.render_codex(json.dumps({"type": "turn.started"})) is None
+    assert ep.render_codex(CODEX_FAILED) == \
+        "[codex] turn failed: unexpected status 401 Unauthorized: stub injected " \
+        "HTTP 401, url: http://devcake-capture-stub-codex:8080/s/http_401/v1/responses"
+    # model-controlled nested shape: never an AttributeError, never silence
+    assert ep.render_codex(json.dumps({"type": "turn.failed", "error": "boom"})) == \
+        "[codex] turn failed"
 
 
 def test_codex_text_dump_collects_agent_messages():
@@ -178,6 +191,83 @@ def test_grok_coalescer_and_parse():
 def test_grok_coalescer_flushes_long_buffer():
     co = ep.GrokCoalescer()
     assert co(_grok("text", data="x" * 250)) == "x" * 250
+
+
+def test_grok_coalescer_renders_the_terminal_error_and_the_turn_cap():
+    """The two events `grok_run_fault` decides on. The `error` arm flushes the
+    buffer like `end` does: a partial last line is otherwise drained by the
+    pump's `finish()` and printed AFTER the error that ended the run."""
+    co = ep.GrokCoalescer()
+    assert co(_grok("text", data="partial answer")) is None
+    line = co(_grok("error", message="Internal error:\n  \"Unauthorized (401)\""))
+    assert line == 'partial answer\n[grok] error: Internal error: "Unauthorized (401)"'
+    assert co.finish() is None                       # buffer flushed, not dropped
+    assert co(_grok("error")) == "[grok] error"      # message-less: still visible
+    assert co(_grok("max_turns_reached")) == "[grok] turn cap reached (--max-turns)"
+
+
+# ── every committed capture renders (the terminal-event silence guard) ───────
+
+FIXTURES = Path(__file__).parent / "fixtures" / "harness_streams"
+
+# Sidecar harness when present; filename prefix for the four pre-rig claude streams.
+HARNESS_BY_PREFIX = {"claude": "claude-code", "codex": "codex", "grok": "grok-build"}
+
+# The events that decide a run's fate — every ADR-0018 fault arm fires on one of
+# these, so each must produce a visible line. codex `turn.failed` did not: every
+# codex failure capture ends `… → error → turn.failed`, and the operator's
+# transcript stopped before the event that killed the run.
+TERMINAL_KINDS = {"claude-code": {"result"},
+                  "codex": {"turn.completed", "turn.failed"},
+                  "grok-build": {"end", "error", "max_turns_reached"}}
+
+# discovered from disk, so a capture added later cannot go unrendered
+CAPTURE_STREAMS = sorted(p.name[:-len(".jsonl")] for p in FIXTURES.glob("*.jsonl"))
+
+
+def capture_harness(name: str) -> str | None:
+    sidecar = FIXTURES / f"{name}.meta.json"
+    if sidecar.exists():
+        return json.loads(sidecar.read_text())["harness"]
+    return HARNESS_BY_PREFIX.get(name.split("_", 1)[0])
+
+
+def _renderer(harness):
+    return {"codex": ep.render_codex,
+            "grok-build": ep.GrokCoalescer()}.get(harness, ep.render_claude)
+
+
+@pytest.mark.parametrize("name", CAPTURE_STREAMS)
+def test_render_every_capture_without_raising(name):
+    """Real captured bytes through the live relay's renderer, per capture.
+
+    `_pump` swallows renderer exceptions (a raise there silently blanks the
+    line, it does not kill the run), so the no-raise claim has to be asserted
+    here or nowhere.
+    """
+    harness = capture_harness(name)
+    assert harness, f"{name}: neither a sidecar nor the filename names a harness"
+    render = _renderer(harness)
+    terminals = []
+    for raw in (FIXTURES / f"{name}.jsonl").read_text().splitlines(keepends=True):
+        if not raw.strip():
+            continue
+        text = render(raw)                          # must not raise
+        try:
+            kind = json.loads(raw).get("type")
+        except Exception:
+            kind = None                             # not an event; no verdict in it
+        if kind in TERMINAL_KINDS[harness]:
+            terminals.append((kind, text))
+    if name == "grok_json_blob":
+        # the one capture with no terminal event: grok 0.2.112 exits 2 at
+        # argument parsing, so the CLI never ran and stdout is zero bytes
+        # (test_harness_captures.test_grok_json_blob_never_ran_the_model)
+        assert terminals == [] and not (FIXTURES / f"{name}.jsonl").read_text()
+        return
+    assert terminals, f"{name}: no terminal event in the capture"
+    for kind, text in terminals:
+        assert text and text.strip(), f"{name}: {kind} rendered nothing"
 
 
 # ── stderr + relay ───────────────────────────────────────────────────────────

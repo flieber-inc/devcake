@@ -49,7 +49,8 @@ class MissionManager:
                  pmo: PMOPort, forges: "ForgeRuntime", runs: RunManager,
                  messaging: MessagingPort, *,
                  instance=None, breakers: dict[str, str] | None = None,
-                 internal_forge=None, skills=None):
+                 internal_forge=None, skills=None,
+                 backend_degraded: dict[str, str] | None = None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
@@ -76,6 +77,12 @@ class MissionManager:
         # dev_type → reason (DEV_AUTH circuit breaker). Credentials are
         # DevCake-global, so main injects ONE dict shared by all managers.
         self.breakers: dict[str, str] = breakers if breakers is not None else {}
+        # dev_type → reason (ADR-0018 backend degradation). READER ONLY here —
+        # PollRuntime is the sole writer, mutating the same dict in place once
+        # per cycle. Not a breaker: it throttles to one probe run and clears
+        # itself on success, so it lives outside /health's circuit_breakers.
+        self.backend_degraded: dict[str, str] = (
+            backend_degraded if backend_degraded is not None else {})
         self.blocked_reasons: dict[str, str] = {}  # last gate_map → /health (advisory)
         self.cycles: list[list[str]] = []   # dependency cycles from the last gate_map
         self.anomalies: dict[str, str] = {}  # pmo_id → out-of-pipeline anomaly (advisory)

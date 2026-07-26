@@ -1,0 +1,2 @@
+{"type":"max_turns_reached"}
+{"type":"end","stopReason":"Cancelled","sessionId":"019f9ad4-5dcb-7321-89db-a46549725cec","requestId":"94f0bd1d-5bbb-4a32-b702-de03a587edb0","usage":{"input_tokens":2400,"cache_read_input_tokens":0,"output_tokens":480,"reasoning_tokens":0,"total_tokens":2880},"num_turns":20,"modelUsage":{"stub-model":{"inputTokens":2400,"outputTokens":480,"cacheReadInputTokens":0,"modelCalls":20}}}

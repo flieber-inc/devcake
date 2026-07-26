@@ -85,7 +85,7 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OTLP endpoint = the stack's `otel-collector` on `devcake_runtime`. **Unauthenticated**: Devs hold no OO credentials at all; the collector alone authenticates upstream (`12-observability.md` §1, ISSUES #13). |
 | *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
 | *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active work repo's token for this run). |
-| *Dev-Type secret env* | 2 | Named vars from `DevType.secret_env` (`02-domain-model.md` §6), values GUI-stored under `/data/secrets/harness/` — mission-tooling credentials (e.g. a log-platform key) referenced as `$VAR` from `mcp_setup_commands` (`08-harness-templates.md` §7). Missing value: **referenced** by a setup command ⇒ dispatch refuses (`14-security.md` §8); unreferenced ⇒ warn-and-proceed. |
+| *Dev-Type secret env* | 2 | Named vars from `DevType.secret_env` (`02-domain-model.md` §6), values GUI-stored under `/data/secrets/harness/` — mission-tooling credentials (e.g. a log-platform key) referenced as `$VAR` from `mcp_setup_commands` (`08-harness-templates.md` §7). They land in the container's environment either way, so this is also how a var the **harness CLI itself** reads is delivered — e.g. a local backend's base URL (`08-harness-templates.md` §8a). Missing value: **referenced** by a setup command ⇒ dispatch refuses (`14-security.md` §8); unreferenced ⇒ warn-and-proceed. |
 
 Real secrets (harness and forge credentials) never appear in Dagu params, DAG YAML, its UI, or any bind mount; the sole param-borne credential is the per-run scoped, finalization-revoked Redis ACL pair (`14-security.md` §4, `09-messaging.md` §1a).
 
@@ -101,7 +101,29 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 | 12 | Credential/auth failure (harness) | `DEV_AUTH` |
 | 13 | Clone or forge operation failed | `DEV_FORGE` / `DEV_FORGE_AUTH` (classified from git stderr — `15-errors-and-retries.md` §4) |
 | 14 | MCP setup command failed or timed out (300 s per command) | `DEV_MCP_SETUP` (counted) |
+| 15 | Harness reported a failure in-band, or produced no output at all, despite the process exit status | `DEV_HARNESS_FAULT` — counted unless the failure is *correlated* across ≥2 missions (`15-errors-and-retries.md` §4a) |
+| 16 | Harness stopped at its configured turn cap (`--max-turns`) — **`claude-code` and `grok-build`; unreachable for `codex`**, see below | `DEV_TURN_BUDGET` (always counted; deterministic, so never correlated) |
 | 20 | Entrypoint internal error | `DEV_CRASH` |
+
+**The exit status alone is not the failure signal (ADR-0018).** Harness CLIs can
+exit 0 with an empty or failed in-band terminal event, and stderr often carries
+no failure information — the entrypoint inspects the stream before deciding.
+Exits 10, 11, 15 and 16 carry `error_class`, `error_detail` and bounded
+workspace forensics. Scenario captures: `app/tests/fixtures/harness_streams/`.
+
+**Which harnesses can reach exit 16.** `claude-code` (`max_turns` /
+`error_max_turns`) and `grok-build` (`max_turns_reached` event) — see
+`test_harness_captures.py` and ADR-0018. `codex` 0.144.4 has no turn cap, so
+exit 16 is unreachable; extra CLI args cannot invent one (`02` §9).
+
+**Grok non-progress halt → exit 11, not 16.** A repeated identical tool call can
+end with `EndTurn` and exit 0 after ~16 model calls (no `max_turns_reached`).
+Missing `result.json` → exit 11. Not a turn cap — see `15` §2b and `grok_loop_*`
+captures.
+
+**A runaway `codex` Dev is bounded only by the run timeout**
+(`dev_timeout_minutes`, default 120 — global; watchdog → `DEV_TIMEOUT`, never
+`DEV_TURN_BUDGET`).
 
 App-side timeout is **not** an entrypoint exit code: the watchdog kills the run via Dagu stop (SIGTERM → SIGKILL), and the Run is marked `timed_out` (`DEV_TIMEOUT`). The container may exit on SIGTERM; it does **not** emit exit 124 from the entrypoint.
 

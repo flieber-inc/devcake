@@ -1,0 +1,4 @@
+Error: Internal error: {
+  "message": "API error (status 500 Internal Server Error): api_error: stub injected HTTP 500",
+  "http_status": 500
+}

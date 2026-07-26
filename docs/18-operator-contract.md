@@ -37,6 +37,7 @@ proving a fresh machine works is the
 | **Pause intake** | Before maintenance, upgrades, or anything that shouldn't dispatch new work | Sidebar master switch; in-flight runs finish ([`02`](02-domain-model.md), [`11`](11-admin-panel.md)) |
 | **Re-run the fresh-`/data` drill** | Each release you adopt; quarterly otherwise | [operator drill](tutorials/operator-drill.md) — the standing stranger-operability proof |
 | **Treat Clear run history as a maintenance window** | When you use it | Dispatch (poll, hello, OAuth, mapper) is paused for the entire wipe, including OpenObserve stream deletes: Clear-runs holds the poll + dispatch locks, soft-drains and Dagu-stops live Devs, then wipes. `ok: false` with `undrained` means a container could not be stopped — inspect Dagu before re-running work because the app has no `docker.sock`. The store wipe generation prevents an in-flight finalizer from resurrecting deleted records ([`10`](10-persistence.md), [`11`](11-admin-panel.md), [`13`](13-deployment.md) §8) |
+| **Do NOT treat a throttled Dev Type as a breaker** | When `/health` shows `dev_backend_degraded` | There is no credential to fix — DevCake has throttled that Dev Type to one probe run and resumes automatically once runs succeed. Check your model provider ([15] §4a) |
 | **Rebuild in lockstep on upgrade** | Every time `app/`, `admin/`, or `images/` change | `docker buildx bake all && docker compose up -d` ([`13`](13-deployment.md) §8, `AGENTS.md`) |
 
 ## 4. Secret rotation (the procedure, in one place)

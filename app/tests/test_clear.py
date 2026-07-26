@@ -256,8 +256,11 @@ class _RM:
     def __init__(self):
         self.kills = []
 
-    async def kill(self, r, state, reason):
-        self.kills.append((r.run_id, state, reason))
+    async def kill(self, r, state, reason, *, error_class=None):
+        # error_class is RECORDED, not discarded (ADR-0018): the operator sites
+        # are the only callers that override `_kill_inner`'s state-keyed default,
+        # so a fake swallowing it makes that wiring untestable
+        self.kills.append((r.run_id, state, reason, error_class))
 
 
 def _store(runs, live=None):
@@ -276,6 +279,7 @@ def test_stop_and_drain_kills_waits_and_skips_finalizing(monkeypatch):
     out = run_coro(stop_and_drain(_store([live, fin]), ex, rm, timeout_s=30))
     assert [k[0] for k in rm.kills] == ["R-1"]          # finalizing untouched
     assert "clear" in rm.kills[0][2]
+    assert rm.kills[0][3] == "DEV_OPERATOR_STOP"        # ADR-0018 override
     assert out["stopped"] == 1
     assert out["undrained"] == []
     assert out["force_remove_attempted"] is False

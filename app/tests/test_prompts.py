@@ -23,6 +23,28 @@ def test_execute_playbook_binding_rules_inv6():
     assert "result.json" in p
 
 
+def test_execute_binding_rule_one_scopes_writes_not_outputs():
+    """ADR-0018: rule 1 used to read "Work ONLY inside /workspace/repo/…",
+    contradicting rule 7's /workspace/out/result.json — weaker models resolved
+    the contradiction by writing result.json inside the clone, which fails the
+    run as DEV_BAD_OUTPUT and can be swept into the PR by commit-at-end. The
+    rescoped rule restricts only the files the Dev CHANGES and names
+    /workspace/out/ as the required output destination."""
+    from devcake.prompts import DEFAULT_PLAYBOOKS
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+    for pb in (DEFAULT_PLAYBOOKS["EXECUTE"], CS_PLAYBOOKS["EXECUTE"]):
+        assert "Work ONLY inside" not in pb
+        assert "and nowhere else" in pb          # still scoped to ONE repo
+        assert "does NOT restrict where your outputs go." in pb
+        assert "required destination for result.json (rule 7)" in pb
+        assert "Never write result.json into the repository." in pb
+        assert "/workspace/out/" in pb
+    p = execute_prompt("ID", M, "repo", GH_PR)    # and in the rendered prompt
+    assert "Work ONLY inside" not in p
+    assert "does NOT restrict where your outputs go." in p
+    assert "/workspace/out/result.json" in p
+
+
 def test_execute_playbook_syncs_default_branch():
     # docs/03 §4.1 prevention rule: PRs arrive mergeable
     p = execute_prompt("ID", M, "repo", GH_PR)

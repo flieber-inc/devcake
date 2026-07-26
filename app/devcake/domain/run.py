@@ -71,6 +71,19 @@ class Run(BaseModel):
     token_report: Optional[dict[str, Any]] = None
     artifact_bytes: Optional[int] = None
     error: Optional[str] = None
+    # ADR-0018 — the STRUCTURED half of `error`. Every terminal path stamps one
+    # (the taxonomy of docs/15 §1); "" means a pre-upgrade record, which
+    # attempt counting still honours via a prefix match on `error`. Matching on
+    # this field instead of on `error` closes an injection: the tail of `error`
+    # can carry Dev-authored text (decomposition.py raises with the Dev's
+    # blocked_by list verbatim), so a Dev could otherwise emit
+    # blocked_by:["DEV_AUTH"] and make its own failures stop counting.
+    error_class: str = ""
+    # ADR-0018 — frozen at failure time, never recomputed. A correlated
+    # backend fault does not burn the mission's attempt; that verdict must not
+    # flip later when the backend heals and the evidence window clears, or the
+    # excused missions would give up all at once.
+    attempt_counted: bool = True
     # App-level judgment when it diverges from the executor's: a run can end
     # state="finished" (Dagu succeeded, artifacts were legal) yet carry a
     # verdict like "rejected: …" because _transition refused to act on the

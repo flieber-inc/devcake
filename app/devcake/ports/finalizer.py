@@ -23,6 +23,14 @@ class RunFinalizer(Protocol):
 
     def dev_failure_error(self, run: Run, payload: dict) -> str:
         """Classify a Dev-container failure artifact (exit code + detail) into
-        the run.error string; may trip auth breakers as a side effect. Used by
-        startup reconciliation to enrich exit-13 orphans (domain/reconcile.py)."""
+        the run.error string. Used by startup reconciliation to enrich
+        pre-harness orphans (domain/reconcile.py).
+
+        MUTATES the run as a side effect (ADR-0018): every implementation must
+        stamp `run.error_class`, and the exit-15 path also sets
+        `run.attempt_counted`. It may additionally trip auth/forge breakers.
+        A fake that returns a bare string leaves `error_class == ""`, which
+        silently exercises the legacy pre-upgrade branch of
+        `dispatch.counts_toward_attempts` instead of the real one.
+        """
         ...

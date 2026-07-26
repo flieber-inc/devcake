@@ -1,0 +1,2 @@
+{"type":"text","data":"  \n "}
+{"type":"end","stopReason":"EndTurn","sessionId":"019f99f2-a8b0-7923-9914-dde9ab40f5cb","requestId":"98638c3f-6b82-44a2-b529-b3b6afa906cf","usage":{"input_tokens":120,"cache_read_input_tokens":0,"output_tokens":24,"reasoning_tokens":0,"total_tokens":144},"num_turns":1,"modelUsage":{"stub-model":{"inputTokens":120,"outputTokens":24,"cacheReadInputTokens":0,"modelCalls":1}}}

@@ -1,37 +1,44 @@
 """DevCake Dev entrypoint — shared across harness images (docs/07, docs/08).
-Harness selected by the image-baked DEVCAKE_HARNESS env
-(claude-code | grok-build | codex).
+
+Composition root / façade for the Zone-B package `devcake_dev` (fault, render,
+workspace, bus). ENTRYPOINT path stays `/dev_entrypoint.py`.
 
 Exit codes per docs/07 §4: 0 ok · 10 harness crash · 11 bad result.json ·
-12 auth · 13 clone/forge · 14 MCP setup · 20 entrypoint error.
+12 auth · 13 clone/forge · 14 MCP setup · 15 harness fault · 16 turn budget ·
+20 entrypoint error.
 """
+from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 import pathlib
-import re as _re
 import shlex
-import shutil
-import stat
 import subprocess
 import sys
 import threading
 import time
-import uuid
-from datetime import datetime, timezone
 
-import redis
-
-# Dev package lives next to this façade in the image (/devcake_dev) and in the
-# checkout (images/common/devcake_dev). Tests load this file via importlib.
+# Package next to this façade (checkout: images/common/; image: /devcake_dev).
 _here = pathlib.Path(__file__).resolve().parent
 for _p in (_here, pathlib.Path("/")):
     if (_p / "devcake_dev").is_dir() and str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
         break
 
+# Env must be present before bus import (Redis client constructed at import).
+from devcake_dev.adapters.bus import (  # noqa: E402
+    CHUNK_LIMIT,
+    CHUNK_SIZE,
+    MAX_ARTIFACT_BYTES,
+    RUN_ID,
+    SHRINKABLE_FIELDS,
+    TRUNCATE_FLOOR,
+    _fit_payload,
+    heartbeat_loop,
+    request_reply,
+    send,
+    send_artifacts,
+)
 from devcake_dev.domain.fault import (  # noqa: E402
     CLAUDE_FAULT_TERMINAL_REASONS,
     DISTINCTIVE_AUTH_MARKERS,
@@ -57,856 +64,57 @@ from devcake_dev.domain.fault import (  # noqa: E402
     _dict,
     _one_line,
 )
+from devcake_dev.harness.argv import harness_argv  # noqa: E402
+from devcake_dev.harness.render import (  # noqa: E402
+    BATCH_LINES,
+    FLUSH_SECS,
+    GrokCoalescer,
+    LINE_LIMIT,
+    LogRelay,
+    MAX_RELAY_LINES,
+    SILENCE_NOTICE_SECS,
+    _progress_loop,
+    _pump,
+    render_claude,
+    render_codex,
+    render_stderr,
+)
+from devcake_dev.harness.tokens import (  # noqa: E402
+    claude_text_dump,
+    codex_text_dump,
+    grok_end_event,
+    grok_end_report,
+    grok_signals_report,
+    grok_stream_parse,
+)
+from devcake_dev.workspace.activity import (  # noqa: E402
+    clone_activity_repo,
+    materialize_activity,
+    write_activity_payload,
+    _safe_activity_relpath,
+)
+from devcake_dev.workspace.clone import clone_error_class, clone_extra_repos  # noqa: E402
+from devcake_dev.workspace.forensics import (  # noqa: E402
+    FORENSIC_LISTING_BUDGET,
+    FORENSIC_MAX_ENTRIES,
+    FORENSIC_STDERR_TAIL,
+    bad_output_reason,
+    find_result_json,
+    workspace_forensics,
+    _git_tracked,
+)
+from devcake_dev.workspace.setup import (  # noqa: E402
+    MCP_SETUP_TIMEOUT_SECS,
+    install_skills,
+    run_mcp_setup,
+)
+from devcake_dev.workspace.transcript import (  # noqa: E402
+    assemble_transcript,
+    with_session,
+)
 
-
-RUN_ID = os.environ["DEVCAKE_RUN_ID"]
-REDIS_URL = os.environ["REDIS_URL"]
 TRACEPARENT = os.environ.get("TRACEPARENT", "")
-INGRESS = "devcake:ingress"
-REPLY = f"devcake:reply:{RUN_ID}"
-CHUNK_LIMIT, CHUNK_SIZE = 512 * 1024, 400 * 1024
 WORKSPACE = pathlib.Path("/workspace")
-
-r = redis.from_url(REDIS_URL, username=os.environ["REDIS_USER"],
-                   password=os.environ["REDIS_PASSWORD"], decode_responses=True)
-
-
-def send(kind: str, payload: dict) -> None:
-    envelope = {"v": 1, "run_id": RUN_ID, "auth": os.environ["REDIS_PASSWORD"],
-                "kind": kind, "ts": datetime.now(timezone.utc).isoformat(),
-                "payload": payload}
-    for attempt in range(4):
-        try:
-            r.xadd(INGRESS, {"m": json.dumps(envelope)})
-            return
-        except redis.RedisError:
-            if attempt == 3:
-                raise
-            time.sleep(0.25 * (2 ** attempt))
-
-
-MAX_ARTIFACT_BYTES = 50 * 1024 * 1024 - 256 * 1024  # headroom under ingress caps
-SHRINKABLE_FIELDS = ("transcript_md", "plan_md", "last_message_md")  # never result/exit_code/token_report
-TRUNCATE_FLOOR = 10_000
-
-
-def _fit_payload(payload: dict) -> dict:
-    """Shrink an oversized artifact instead of dying at the end of the run:
-    halve the largest shrinkable text field (with an explicit notice) until
-    the blob fits, so result/exit_code/token_report always ship."""
-    if len(json.dumps(payload).encode("utf-8")) <= MAX_ARTIFACT_BYTES:
-        return payload
-    payload = dict(payload)
-    while len(json.dumps(payload).encode("utf-8")) > MAX_ARTIFACT_BYTES:
-        shrinkable = [f for f in SHRINKABLE_FIELDS
-                      if isinstance(payload.get(f), str)
-                      and len(payload[f]) > TRUNCATE_FLOOR]
-        if not shrinkable:
-            raise ValueError(
-                "artifact payload exceeds Redis ingress limits even after truncation")
-        field = max(shrinkable, key=lambda f: len(payload[f]))
-        text = payload[field]
-        keep = len(text) // 2
-        payload[field] = (text[:keep] + f"\n\n[devcake] {field} truncated: kept "
-                          f"{keep} of {len(text)} characters to fit ingress limits\n")
-    return payload
-
-
-def send_artifacts(payload: dict) -> None:
-    payload = _fit_payload(payload)
-    blob = json.dumps(payload)
-    if len(blob) <= CHUNK_LIMIT:
-        send("run.artifacts", payload)
-        return
-    parts = [blob[i:i + CHUNK_SIZE] for i in range(0, len(blob), CHUNK_SIZE)]
-    if len(parts) > 128 or len(blob.encode("utf-8")) > 50 * 1024 * 1024:
-        raise ValueError("artifact payload exceeds Redis ingress limits")
-    chunk_id = uuid.uuid4().hex
-    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
-    for i, part in enumerate(parts, start=1):
-        send("run.artifacts", {"chunk": i, "of": len(parts),
-                               "chunk_id": chunk_id, "sha256": digest,
-                               "data": part})
-
-
-def clone_extra_repos(extras, repo_dir, runner=None):
-    """Read-only sibling clones for multi-repo ONBOARD triage (item 2 full
-    scope): each extra repo rides its OWN read token via the shared askpass
-    script (per-clone env override). Shallow (--depth 1) — assessment only.
-    A failed extra clone is deliberately NON-fatal: triage proceeds on what
-    cloned, and the failures are returned for the transcript/log."""
-    import re as _re
-    runner = runner or subprocess.run
-    notes = []
-    for x in extras:
-        url = x.get("url") or ""
-        user = x.get("clone_user") or ""
-        clone_url = (_re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
-                     if user else url)
-        slug = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        env = {**os.environ, "DEVCAKE_FORGE_TOKEN": x.get("token") or ""}
-        r = runner(["git", "clone", "--depth", "1", clone_url,
-                    str(repo_dir / slug)],
-                   capture_output=True, text=True, env=env)
-        if r.returncode != 0:
-            notes.append(f"extra repo {x.get('name', slug)}: clone failed "
-                         f"({(r.stderr or '')[-200:]})")
-        else:
-            notes.append(f"extra repo {x.get('name', slug)}: cloned "
-                         f"read-only at repo/{slug}")
-    return notes
-
-
-def install_skills(skills, home=None, skills_dir=".claude/skills"):
-    """Skill-store files from the runspec → $HOME/<skills_dir>/<path> before
-    the harness starts. The dir is the harness registry's skills_dir
-    (harness.py), delivered as the runspec `skills_dir` key; the default is
-    claude-code's dir so an older app that sends no key keeps today's
-    behavior. Path-traversal-safe on BOTH the dir and every file path:
-    store content is operator-editable, so absolute paths and `..` parts
-    are refused. Per-file failures are NON-fatal — skills are additive; the
-    notes land in the run log."""
-    notes = []
-    sd = pathlib.PurePosixPath(skills_dir or ".claude/skills")
-    if not sd.parts or sd.is_absolute() or ".." in sd.parts:
-        notes.append(f"skills: refused unsafe skills_dir {skills_dir!r} "
-                     "— using default")
-        sd = pathlib.PurePosixPath(".claude/skills")
-    base = pathlib.Path(home or pathlib.Path.home()) / sd
-    for sk in skills or []:
-        name, wrote = sk.get("name", "?"), 0
-        for f in sk.get("files") or []:
-            rel = pathlib.PurePosixPath(f.get("path") or "")
-            if not rel.parts or rel.is_absolute() or ".." in rel.parts:
-                notes.append(f"skill {name}: refused unsafe path "
-                             f"{f.get('path')!r}")
-                continue
-            try:
-                target = base / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(base64.b64decode(f.get("content_b64") or "",
-                                                    validate=True))
-                wrote += 1
-            except Exception as e:
-                notes.append(f"skill {name}: {rel} failed ({e})")
-        notes.append(f"skill {name}: installed {wrote} file(s)")
-    return notes
-
-
-MCP_SETUP_TIMEOUT_SECS = 300   # per command (docs/07 §5 step 5)
-
-
-def run_mcp_setup(commands, workdir, timeout=MCP_SETUP_TIMEOUT_SECS):
-    """Run the Dev Type's admin-configured MCP setup commands in order.
-    Returns (failed_cmd, detail) for the exit-14 artifact, or None when all
-    pass. Each command gets a closed stdin, its own process group and a hard
-    per-command cap: the heartbeat daemon is already beating when these run,
-    so a hung install/interactive prompt would otherwise idle the run to the
-    full wall-clock timeout without the watchdog ever firing."""
-    import signal
-    for cmd in commands:
-        proc = subprocess.Popen(cmd, shell=True, cwd=workdir,
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                text=True, start_new_session=True)
-        try:
-            out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)  # pgid == pid (new session)
-            except ProcessLookupError:
-                pass
-            proc.wait()
-            return cmd, f"timed out after {timeout}s"
-        if proc.returncode != 0:
-            tail = (err or out or "")[-2000:]
-            return cmd, f"exit {proc.returncode}: {tail}"
-    return None
-
-
-def clone_error_class(stderr: str) -> str:
-    """DEV_FORGE_AUTH only on git's credential wording — a bare "403"/"401"
-    can be a rate limit or an incidental URL fragment, and DEV_FORGE_AUTH
-    latches the app's global forge breaker."""
-    lowered = stderr.lower()
-    auth_markers = ("returned error: 403", "returned error: 401",
-                    "authentication failed", "repository not found",
-                    "write access to repository not granted",
-                    "could not read username", "could not read password",
-                    "invalid credentials")
-    return "DEV_FORGE_AUTH" if any(m in lowered for m in auth_markers) else "DEV_FORGE"
-
-
-
-
-# ── live output relay (docs/08 §4, docs/09 §2) ──────────────────────────────
-# The harness's stdout is pumped line-by-line: the raw line is accumulated for
-# end-of-run parsing, and a condensed human-readable rendering is (a) printed
-# to THIS process's stdout — Dagu's container executor captures it live into
-# the step log — and (b) batched into run.log envelopes for the admin panel.
-
-LINE_LIMIT = 2000            # per condensed line
-BATCH_LINES = 50             # per run.log envelope (50×2000 ≈ 100KB « 512KB)
-FLUSH_SECS = 2.0
-MAX_RELAY_LINES = 20_000     # flood guard; Dagu's step log still has everything
-SILENCE_NOTICE_SECS = 60.0   # make a live-but-quiet harness observable
-
-
-class LogRelay:
-    """Thread-safe batcher for condensed lines → run.log. Best-effort only:
-    send failures are swallowed — logging must never kill a run."""
-
-    def __init__(self) -> None:
-        self.buf: list[str] = []
-        self.lock = threading.Lock()
-        self.stop = threading.Event()
-        self.sent = 0
-        now = time.monotonic()
-        self.started_at = now
-        self.last_visible_output_at = now
-        self.last_silence_notice_at = now
-
-    def add(self, text: str, *, visible_output: bool = True) -> None:
-        if self.sent >= MAX_RELAY_LINES:
-            return
-        with self.lock:
-            if visible_output:
-                self.last_visible_output_at = time.monotonic()
-            for line in text.splitlines() or [""]:
-                self.buf.append(line[:LINE_LIMIT])
-
-    def add_silence_notice(self, harness: str, now: float | None = None) -> bool:
-        """Queue at most one progress line per silence interval.
-
-        Some harnesses emit only hidden reasoning events until their final answer.
-        The process and heartbeat remain healthy, but an empty terminal looks hung.
-        These notices report process liveness without exposing hidden reasoning.
-        """
-        now = time.monotonic() if now is None else now
-        with self.lock:
-            quiet_for = now - self.last_visible_output_at
-            if (quiet_for < SILENCE_NOTICE_SECS
-                    or now - self.last_silence_notice_at < SILENCE_NOTICE_SECS):
-                return False
-            elapsed = max(0, int(now - self.started_at))
-            self.last_silence_notice_at = now
-            self.buf.append(
-                f"[devcake] {harness} is still running; "
-                f"no visible model output for {int(quiet_for)}s "
-                f"({elapsed}s elapsed)"
-            )
-        return True
-
-    def flush(self) -> None:
-        while True:
-            with self.lock:
-                batch, self.buf = self.buf[:BATCH_LINES], self.buf[BATCH_LINES:]
-            if not batch:
-                return
-            if self.sent >= MAX_RELAY_LINES:
-                with self.lock:
-                    self.buf = []
-                return
-            if self.sent + len(batch) >= MAX_RELAY_LINES:
-                batch = batch[:MAX_RELAY_LINES - self.sent]
-                batch.append("[output relay capped — see the Dagu step log]")
-            try:
-                send("run.log", {"lines": batch})
-                self.sent += len(batch)
-            except Exception:
-                return  # drop the batch, keep the run alive
-
-    def loop(self) -> None:
-        while not self.stop.wait(FLUSH_SECS):
-            self.flush()
-        self.flush()  # final drain after the pumps finish
-
-
-def _pump(stream, sink: list, render, relay: LogRelay, echo) -> None:
-    """Reader thread: drain one pipe fully (deadlock guard), echo + relay the
-    condensed rendering of each line."""
-    for raw in iter(stream.readline, ""):
-        sink.append(raw)
-        try:
-            text = render(raw)
-        except Exception:
-            text = None
-        if text:
-            print(text, file=echo, flush=True)
-            relay.add(text)
-    finish = getattr(render, "finish", None)  # stateful renderers flush here
-    if finish and (text := finish()):
-        print(text, file=echo, flush=True)
-        relay.add(text)
-    stream.close()
-
-
-def _progress_loop(proc, relay: LogRelay, harness: str) -> None:
-    """Add sparse liveness notices while a harness is alive but silent."""
-    while not relay.stop.wait(min(5.0, SILENCE_NOTICE_SECS)):
-        if proc.poll() is not None:
-            return
-        relay.add_silence_notice(harness)
-
-
-def render_claude(raw: str):
-    """Claude Code stream-json events → condensed lines (shape verified live)."""
-    try:
-        ev = json.loads(raw)
-    except Exception:
-        s = raw.strip()
-        return s[:LINE_LIMIT] if s else None
-    kind = ev.get("type")
-    if kind == "system" and ev.get("subtype") == "init":
-        return f"[claude] session {str(ev.get('session_id', ''))[:8]} · " \
-               f"model={ev.get('model', '?')}"
-    if kind == "assistant":
-        parts = []
-        for block in (ev.get("message") or {}).get("content") or []:
-            if block.get("type") == "text" and block.get("text", "").strip():
-                parts.append(block["text"].strip()[:200])
-            elif block.get("type") == "tool_use":
-                args = json.dumps(block.get("input") or {})[:160]
-                parts.append(f"→ {block.get('name', '?')} {args}")
-        return "\n".join(parts) or None
-    if kind == "result":
-        cost = ev.get("total_cost_usd")
-        line = f"[claude] done: {ev.get('subtype', '?')} · " \
-               f"turns={ev.get('num_turns', '?')}"
-        return line + (f" · cost=${cost:.2f}" if isinstance(cost, (int, float))
-                       else "")
-    return None  # thinking_tokens, rate_limit_event, tool results: noise
-
-
-def render_codex(raw: str):
-    """Codex exec --json JSONL events → condensed lines."""
-    try:
-        ev = json.loads(raw)
-    except Exception:
-        s = raw.strip()
-        return s[:LINE_LIMIT] if s else None
-    kind = ev.get("type")
-    if kind == "item.completed":
-        item = ev.get("item") or {}
-        it = item.get("item_type") or item.get("type")
-        if it == "command_execution":
-            return f"$ {str(item.get('command', ''))[:160]} → " \
-                   f"exit {item.get('exit_code', '?')}"
-        if it == "agent_message":
-            return str(item.get("text", "")).strip()[:200] or None
-        return None  # reasoning etc.
-    if kind == "turn.completed":
-        u = ev.get("usage") or {}
-        return f"[codex] turn done · in={u.get('input_tokens', '?')} " \
-               f"out={u.get('output_tokens', '?')}"
-    if kind == "error":
-        return f"[codex] error: {str(ev.get('message', ''))[:200]}"
-    if kind == "turn.failed":
-        # THE terminal event of every captured codex failure — `… → error →
-        # turn.failed` (test_harness_captures: all eight failure rows) — so the
-        # last thing an operator sees before the run dies rendered as nothing.
-        # The message repeats the preceding `error` event verbatim in every
-        # capture; it is echoed anyway because the two are separate events and
-        # nothing guarantees the first one rendered.
-        msg = _one_line(_dict(ev.get("error")).get("message") or "", 200)
-        return f"[codex] turn failed: {msg}" if msg else "[codex] turn failed"
-    return None
-
-
-class GrokCoalescer:
-    """grok streaming-json emits token-level {"type":"text","data":…} deltas
-    (verified live on 0.2.93) — coalesce them into lines; thoughts skipped.
-
-    The type values present across the eleven 0.2.112 captures are exactly
-    {`text`, `end`, `max_turns_reached`, `error`} (docs/08 §1; `thought` is a
-    0.2.93 record and unverified at 0.2.112). The last three each decide a
-    run's fate, so each of them renders a line.
-    """
-
-    def __init__(self) -> None:
-        self.buf = ""
-
-    def __call__(self, raw: str):
-        try:
-            ev = json.loads(raw)
-        except Exception:
-            s = raw.strip()
-            return s[:LINE_LIMIT] if s else None
-        kind = ev.get("type")
-        if kind == "text":
-            self.buf += ev.get("data", "")
-            if "\n" in self.buf:
-                emit, self.buf = self.buf.rsplit("\n", 1)
-                return emit.strip() or None
-            if len(self.buf) >= 200:
-                emit, self.buf = self.buf, ""
-                return emit
-            return None
-        if kind == "end":
-            tail = self.buf.strip()
-            self.buf = ""
-            done = f"[grok] done: {ev.get('stopReason', '?')}"
-            return f"{tail}\n{done}" if tail else done
-        if kind == "error":
-            # grok's terminal verdict, and the ONLY event a failed run emits:
-            # `error` and `end` never co-occur across the eleven captures. It is
-            # what `grok_run_fault` fires terminal_error on, so it must not be
-            # invisible in the transcript. Flushes `self.buf` exactly like the
-            # `end` arm — otherwise the partial last line of a streaming answer
-            # is drained by the pump's `finish()` and lands AFTER the error,
-            # which is the one place its ordering carries meaning.
-            tail = self.buf.strip()
-            self.buf = ""
-            msg = _one_line(ev.get("message") or "", 200)
-            line = f"[grok] error: {msg}" if msg else "[grok] error"
-            return f"{tail}\n{line}" if tail else line
-        if kind == "max_turns_reached":
-            # bare `{"type":"max_turns_reached"}` (grok_turn_budget) — the event
-            # `grok_run_fault` reads for exit 16. No flush here: `end` with
-            # stopReason "Cancelled" follows it in the capture and flushes.
-            return "[grok] turn cap reached (--max-turns)"
-        return None  # unrecognized event types: noise
-
-    def finish(self):
-        tail, self.buf = self.buf.strip(), ""
-        return tail or None
-
-
-def render_stderr(raw: str):
-    s = raw.strip()
-    return f"! {s[:LINE_LIMIT]}" if s else None
-
-
-
-def grok_stream_parse(out: str):
-    """(result_text, session_id) from streaming-json deltas; None if the
-    output isn't grok stream events (e.g. an EXTRA_ARGS format override)."""
-    texts, sid, saw = [], "", False
-    for line in out.splitlines():
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(ev, dict):
-            continue
-        kind = ev.get("type")
-        if kind == "text":
-            texts.append(ev.get("data", ""))
-            saw = True
-        elif kind == "end":
-            sid = ev.get("sessionId", "") or sid
-            saw = True
-        elif kind == "thought":
-            saw = True
-    return ("".join(texts), sid) if saw else None
-
-
-def grok_end_event(out: str):
-    """Last {"type":"end"} event in a grok streaming-json transcript, or None.
-
-    The sibling of `claude_result_event`. At 0.2.112 this event carries the
-    whole token report inline — `usage`, `num_turns`, `modelUsage` (docs/08 §1,
-    measured across every `grok_*` capture that reaches a terminal turn) — so
-    the report needs neither a session id nor a filesystem read."""
-    found = None
-    for line in out.splitlines():
-        try:
-            ev = json.loads(line)
-        except Exception:  # noqa: BLE001 — one unparseable line must never cost the whole report
-            continue
-        if isinstance(ev, dict) and ev.get("type") == "end":
-            found = ev
-    return found
-
-
-def grok_end_report(ev):
-    """TokenReport from grok's terminal event, or None when it carries no usage.
-
-    Takes the streaming `end` event and the `--output-format json` blob alike:
-    both carry the same `{usage, num_turns, modelUsage}` keys (docs/08 §1).
-
-    Every read is guarded (`_dict`): this is model-adjacent nested data reached
-    on the failure path too, and a token report must never abort the artifact
-    path — the caller falls back, and INV-5 posts "unavailable" at worst.
-
-    NO COST. grok emits no `total_cost_usd` and no cost field of any kind at
-    0.2.112 (measured across all eleven captures), so `cost_usd` stays None. A
-    0.0 here would read as "this run was free" in the feed report and would be
-    aggregated as real spend in `devcake.cost.usd` (docs/12 §4).
-
-    The captured token *values* came from a stub backend; the presence and key
-    names of these fields are the CLI's (fixtures README)."""
-    ev = _dict(ev)
-    usage = _dict(ev.get("usage"))
-    if not usage:
-        return None                     # nothing measured — let the caller fall back
-    mu = _dict(ev.get("modelUsage"))
-    # dominant model, as the claude arm picks it — but grok's inner keys are
-    # camelCase (`outputTokens`) and carry no per-model cost to rank by first
-    models = sorted(mu, key=lambda k: _dict(mu[k]).get("outputTokens") or 0,
-                    reverse=True)
-    return {
-        "input_tokens": usage.get("input_tokens"),
-        "output_tokens": usage.get("output_tokens"),
-        "cache_read_tokens": usage.get("cache_read_input_tokens"),
-        "total_tokens": usage.get("total_tokens"),
-        "cost_usd": None,               # never 0 — see above
-        "model": models[0] if models else "grok",
-        "extraction_method": "end_event",
-        "num_turns": ev.get("num_turns"),
-        "notes": f"reasoning_tokens={usage.get('reasoning_tokens')}",
-    }
-
-
-def grok_signals_report(session_id: str, home=None):
-    """TokenReport from `signals.json` in grok's session directory, or None.
-
-    The 0.2.93-verified path, kept as the FALLBACK for a stream with no usable
-    `end` event. Its survival at 0.2.112 is a capture-campaign note with no
-    committed fixture (docs/08 §1), so this asserts nothing either way: it
-    reports what it finds on disk, or nothing. Totals only — no input/output
-    split, no cost."""
-    if not session_id:
-        return None                     # an `error` event carries no sessionId
-    root = home if home is not None else pathlib.Path.home()
-    sig = None
-    for p in root.glob(f".grok/sessions/*/{session_id}/signals.json"):
-        sig = json.loads(p.read_text())
-    sig = _dict(sig)
-    if not sig:
-        return None
-    models = sig.get("modelsUsed")
-    return {
-        "total_tokens": sig.get("contextTokensUsed") or sig.get("totalTokens"),
-        "model": models[0] if isinstance(models, list) and models else "grok",
-        "extraction_method": "session_json",
-        "num_turns": sig.get("turnCount"),
-    }
-
-
-def claude_text_dump(out: str) -> str:
-    """ADR-0014 D1: every assistant-visible text block, in order, UNTRUNCATED.
-    Thinking blocks, tool calls, and subagent messages (parent_tool_use_id —
-    tool-internal chatter) are excluded: the dump is what the Dev said, not
-    what it did or privately considered. Defensive on inner shapes — one odd
-    line must never abort the artifact path."""
-    blocks = []
-    for line in out.splitlines():
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(ev, dict) or ev.get("type") != "assistant" \
-                or ev.get("parent_tool_use_id"):
-            continue
-        msg = ev.get("message")
-        content = msg.get("content") if isinstance(msg, dict) else None
-        for block in content if isinstance(content, list) else []:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                continue
-            text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                blocks.append(text.strip("\n"))    # keep indentation intact
-    return "\n\n".join(blocks)
-
-
-def codex_text_dump(out: str) -> str:
-    """ADR-0014 D1: every agent_message text, in order, untruncated."""
-    blocks = []
-    for line in out.splitlines():
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(ev, dict) or ev.get("type") != "item.completed":
-            continue
-        item = ev.get("item")
-        if not isinstance(item, dict):
-            continue
-        if (item.get("item_type") or item.get("type")) == "agent_message":
-            text = item.get("text")
-            if isinstance(text, str) and text.strip():
-                blocks.append(text.strip("\n"))
-    return "\n\n".join(blocks)
-
-
-# harness fault API: re-exported from devcake_dev.domain.fault (ADR-0018)
-
-
-# ── failure evidence and result recovery (ADR-0018) ──────────────────────────
-
-FORENSIC_MAX_ENTRIES = 20
-FORENSIC_STDERR_TAIL = 500
-# An entry-count cap alone does not bound the payload: json.dumps escapes each
-# non-ASCII character to \uXXXX, so 20 accented 100-char names serialize to ~12 KB.
-# Budget the total instead.
-FORENSIC_LISTING_BUDGET = 800
-
-
-def workspace_forensics(out_dir, harness_exit, out_bytes=0, out_lines_n=0,
-                        stderr_tail="") -> dict:
-    """Cheap, bounded post-mortem shipped on EVERY failure artifact: three
-    syscalls, no recursion, under ~1 KB. Answers what a human previously could
-    not answer from the mission feed alone — did the harness die on a signal,
-    was anything written, was the directory writable, was the disk full, and
-    was the channel we classify on (stderr) empty."""
-    info = {"harness_exit": harness_exit,
-            "stdout_bytes": out_bytes, "stdout_lines": out_lines_n,
-            "stderr_bytes": len(stderr_tail or "")}
-    listing, err = [], None
-    try:
-        with os.scandir(out_dir) as it:
-            entries = sorted(it, key=lambda e: e.name)
-        spent = 0
-        for i, entry in enumerate(entries):
-            if i >= FORENSIC_MAX_ENTRIES or spent >= FORENSIC_LISTING_BUDGET:
-                listing.append(f"+{len(entries) - i} more")
-                break
-            try:
-                row = f"{entry.name[:100]}:{entry.stat().st_size}"
-            except OSError as e:
-                row = f"{entry.name[:100]}:?({e.errno})"
-            listing.append(row)
-            spent += len(json.dumps(row))      # escaped length, not raw length
-    except OSError as e:
-        err = f"{getattr(e, 'errno', '?')}: {e.strerror or e}"
-    info["out_listing"] = listing
-    info["out_error"] = err
-    info["out_writable"] = bool(os.access(str(out_dir), os.W_OK))
-    try:
-        info["workspace_free_mb"] = shutil.disk_usage(str(WORKSPACE)).free // (1024 * 1024)
-    except OSError:
-        info["workspace_free_mb"] = None
-    if stderr_tail:
-        info["stderr_tail"] = _one_line(stderr_tail, FORENSIC_STDERR_TAIL)
-    return info
-
-
-def bad_output_reason(exc: BaseException) -> str:
-    """Split the single blanket `except` on the result.json read into causes a
-    human can act on. FileNotFoundError is tested before OSError (it is a
-    subclass), JSONDecodeError before the generic fallback."""
-    if isinstance(exc, FileNotFoundError):
-        return "missing"
-    if isinstance(exc, json.JSONDecodeError):
-        return "invalid_json"
-    if isinstance(exc, AssertionError):
-        return "illegal_outcome" if "outcome" in str(exc) else "bad_summary"
-    if isinstance(exc, OSError):
-        return "unreadable"
-    return "invalid"
-
-
-def _git_tracked(workdir, path, runner=None) -> bool:
-    """True when `path` is tracked by the repo clone's git index. EXECUTE tells
-    the Dev to commit at the end, so a stray result.json in the work tree may
-    already have been swept into the PR — a different question from "was it
-    written during this run", which the mtime gate answers."""
-    runner = runner or subprocess.run
-    try:
-        rel = pathlib.Path(path).relative_to(workdir)
-    except ValueError:
-        return False
-    try:
-        r = runner(["git", "-C", str(workdir), "ls-files", "--error-unmatch", str(rel)],
-                   capture_output=True, text=True, timeout=10)
-    except Exception:  # noqa: BLE001 — advisory annotation; a missing git must never fail a run
-        return False
-    return r.returncode == 0
-
-
-def find_result_json(workspace, workdir, started_at: float, runner=None):
-    """(path, note) — the canonical path first, then a FIXED candidate list.
-
-    Deliberately no traversal: there is no depth parameter to get wrong and no
-    way to enumerate the repo tree. A non-canonical hit is reported only when
-    its mtime is at or after harness start, so a result.json that was already
-    in the clone (a fixture, a project's own artifact) can never be adopted."""
-    workspace, workdir = pathlib.Path(workspace), pathlib.Path(workdir)
-    canonical = workspace / "out" / "result.json"
-    try:
-        # NOT `canonical.exists()`: on Python 3.12 (the pinned image base) that
-        # swallows only ENOENT/ENOTDIR/EBADF/ELOOP and lets EACCES propagate —
-        # an unreadable out/ would raise straight out of the recovery helper
-        # that exists to enrich the failure path.
-        if canonical.is_file():
-            return canonical, ""
-    except OSError:
-        return canonical, ""            # unreadable: let the caller's read report it
-    for cand in (workspace / "result.json", workspace / "repo" / "result.json",
-                 workdir / "result.json", workdir / "out" / "result.json"):
-        try:
-            if cand.is_symlink():
-                # `stat()` follows links, so both the freshness gate and the
-                # content would come from the TARGET — a symlink is a way out of
-                # the fixed candidate list and out of the workspace entirely.
-                continue
-            st = cand.stat()
-        except OSError:
-            continue
-        if not stat.S_ISREG(st.st_mode):
-            continue                    # a directory named result.json is not one
-        if st.st_mtime < started_at:
-            continue                    # predates the harness — not this run's
-        ts = datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat()
-        note = (f"[devcake] result.json is not at /workspace/out/result.json — found "
-                f"one at {cand} (mtime {ts}). The playbook requires the canonical "
-                f"path; fix the prompt.")
-        if _git_tracked(workdir, cand, runner=runner):
-            note += (" This file is ALSO tracked by git — check the PR for a stray "
-                     "result.json.")
-        return cand, note
-    return None, ""
-
-
-def _safe_activity_relpath(path: str):
-    """Mirror of the app's safe_activity_relpath: reject zip-slip / absolute
-    / empty paths. Returns a posix-relative string or None."""
-    if not path or not isinstance(path, str):
-        return None
-    raw = path.replace("\\", "/").strip()
-    if not raw or raw.startswith("/") or raw.startswith("~"):
-        return None
-    parts = [p for p in raw.split("/") if p not in ("", ".")]
-    if not parts or ".." in parts:
-        return None
-    if len(parts) > 20 or any(len(p) > 200 for p in parts):
-        return None
-    return "/".join(parts)
-
-
-def write_activity_payload(act: dict, dest: pathlib.Path) -> None:
-    """ADR-0014 D3: materialize the activity payload into the folder —
-    MISSION.md (when the app sent one; old apps don't), ACTIVITY.md, and
-    every attachment. Paths may be nested (zip extracts under `{stem}/`);
-    unsafe / escaping paths fall back to a basename or `attachment.bin`."""
-    dest.mkdir(parents=True, exist_ok=True)
-    dest_res = dest.resolve()
-    if act.get("mission_md"):
-        (dest / "MISSION.md").write_text(act["mission_md"])
-    (dest / "ACTIVITY.md").write_text(act.get("activity_md", ""))
-    for a in act.get("attachments", []):
-        raw = a.get("filename") or "attachment.bin"
-        rel = _safe_activity_relpath(raw)
-        if rel is None:
-            rel = pathlib.Path(str(raw).replace("\\", "/")).name
-            if not rel or rel in (".", ".."):
-                rel = "attachment.bin"
-        target = (dest / rel).resolve()
-        # zip-slip: must stay under dest
-        try:
-            target.relative_to(dest_res)
-        except ValueError:
-            target = dest_res / "attachment.bin"
-        data = base64.b64decode(a["content_b64"])
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        except OSError:
-            # file-vs-directory collision (an old app can still send a flat
-            # name and a same-named extraction dir) or any other tree
-            # conflict: flatten — the mirror is advisory and must never
-            # kill the run
-            try:
-                (dest_res / ("conflict-" + rel.replace("/", "__"))
-                 ).write_bytes(data)
-            except OSError:
-                print(f"activity attachment skipped (unwritable): {rel}",
-                      file=sys.stderr)
-
-
-def clone_activity_repo(activity, dest, runner=None):
-    """ADR-0014 D4: clone the mission's activity repo — FULL history (the
-    step-by-step evolution IS the payload: `git log -p ACTIVITY.md` works
-    in-container) with the shared RO token via the askpass env override.
-    Non-fatal on every failure; (ok, note)."""
-    import re as _re
-    if not activity or not activity.get("url"):
-        return False, "activity repo: no clone spec (Redis fallback)"
-    runner = runner or subprocess.run
-    url = activity["url"]
-    user = activity.get("clone_user") or ""
-    clone_url = (_re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
-                 if user else url)
-    env = {**os.environ, "DEVCAKE_FORGE_TOKEN": activity.get("token") or ""}
-    r = runner(["git", "clone", clone_url, str(dest)],
-               capture_output=True, text=True, env=env)
-    if r.returncode != 0:
-        return False, ("activity repo: clone failed "
-                       f"({(r.stderr or '')[-200:]}) — Redis fallback")
-    return True, "activity repo: cloned with history"
-
-
-def materialize_activity(spec, dest, request_reply, runner=None):
-    """Clone-first activity materialization (ADR-0014 D4), Redis fallback:
-    activity.get + payload write when the clone failed OR left no
-    ACTIVITY.md (empty repo — the first push failed; cloning an empty repo
-    succeeds). Never fatal, never exit 13 (that's the primary repo's)."""
-    notes = []
-    ok, note = clone_activity_repo(spec.get("activity_repo"), dest,
-                                   runner=runner)
-    notes.append(note)
-    if not ok or not (dest / "ACTIVITY.md").exists():
-        if ok:
-            notes.append("activity repo: empty clone — Redis fallback")
-        # drop any zero-commit .git so `git log` inside the folder fails
-        # honestly instead of confusingly ("no commits yet" over real files)
-        shutil.rmtree(dest / ".git", ignore_errors=True)
-        act = request_reply("activity.get", "activity.result")
-        write_activity_payload(act, dest)
-    return notes
-
-
-def with_session(text: str, dump: str) -> str:
-    """Failure-path transcripts: append the session dump when one exists."""
-    return text + (f"\n\n## Session transcript\n\n{dump}" if dump else "")
-
-
-def assemble_transcript(seq, mtype, run_id, dev_type, harness, token_report,
-                        dump, result_text, result) -> str:
-    """ADR-0014 D1: the attachment doc — header, the FULL session dump (all
-    assistant-visible text), the outcome JSON. `## Agent report` (last message
-    alone) appears only when no dump exists; the feed comment carries the last
-    message, so the attachment need not repeat it. result=None (failure paths)
-    drops the Outcome section."""
-    body = (f"## Session transcript\n\n{dump}\n\n" if dump
-            else f"## Agent report\n\n{result_text}\n\n")
-    return (
-        f"# {seq}_{mtype} — run {run_id}\n\n"
-        f"**Dev:** {dev_type} ({harness}) · "
-        f"**turns:** {token_report.get('num_turns', '—')} · "
-        f"**duration:** {token_report.get('duration_ms', '—')} ms\n\n"
-        + body
-        + (f"## Outcome\n\n```json\n{json.dumps(result, indent=2)}\n```\n"
-           if result is not None else ""))
-
-
-def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
-    send(kind, {})
-    last_id, deadline = "0", time.time() + timeout
-    while time.time() < deadline:
-        for _s, msgs in r.xread({REPLY: last_id}, block=5000, count=10) or []:
-            for entry_id, fields in msgs:
-                last_id = entry_id
-                env = json.loads(fields["m"])
-                if env.get("kind") == want:
-                    return env["payload"]
-                if env.get("kind") == "runspec.error":
-                    print(env.get("payload", {}).get("error", "run spec unavailable"),
-                          file=sys.stderr)
-                    sys.exit(20)
-    print(f"{kind} timed out", file=sys.stderr)
-    sys.exit(20)
-
-
-def heartbeat_loop(stop: threading.Event) -> None:
-    send("run.heartbeat", {"phase": "starting"})   # immediate first beat: a kill in the
-    while not stop.wait(30):                       # first 30s must still be detectable
-        try:
-            send("run.heartbeat", {"phase": "working"})
-        except Exception:
-            pass
 
 
 def forge_dialect(env: dict) -> tuple:
@@ -918,42 +126,6 @@ def forge_dialect(env: dict) -> tuple:
     cli_envs = [e for e in env.get("DEVCAKE_FORGE_CLI_ENVS", "").split(",") if e]
     return (env["DEVCAKE_CLONE_USER"], env["DEVCAKE_GIT_NAME"],
             env["DEVCAKE_GIT_EMAIL"], cli_envs)
-
-
-def harness_argv(harness: str, prompt: str, *, plan_mode: bool = False,
-                 model: str = "", extra=(), out_dir=None) -> list:
-    """The harness command line (docs/08 §1) — ONE definition.
-
-    Extracted from `main()` so the capture rig (`scripts/harness_capture/`)
-    builds argv through the SAME code path production uses. A fixture captured
-    with even slightly different flags silently stops corresponding to what the
-    predicate sees on a real run, and that divergence is invisible in review —
-    the stream still looks plausible.
-
-    `out_dir` defaults to /workspace/out (codex's `-o` target); the capture rig
-    points it at a throwaway directory.
-    """
-    extra = list(extra)
-    out = pathlib.Path(out_dir) if out_dir is not None else WORKSPACE / "out"
-    if harness == "grok-build":
-        mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
-        pin = ["--model", model] if model else []
-        return ["grok", "-p", prompt, "--output-format", "streaming-json",
-                *mode, *pin, *extra]
-    if harness == "codex":
-        mode = (["--sandbox", "read-only"] if plan_mode
-                else ["--dangerously-bypass-approvals-and-sandbox"])
-        pin = ["-m", model] if model else []
-        return ["codex", "exec", prompt, "--json",
-                "-o", str(out / "last_message.txt"),
-                "--skip-git-repo-check", *mode, *pin, *extra]
-    mode = (["--permission-mode", "plan"] if plan_mode
-            else ["--dangerously-skip-permissions"])
-    pin = ["--model", model] if model else []
-    # --verbose is REQUIRED with -p + stream-json (the CLI errors out without it)
-    return ["claude", "-p", prompt, "--output-format", "stream-json",
-            "--verbose", *mode, *pin, *extra]
-
 
 def main() -> None:
     spec = request_reply("runspec.get", "runspec.result")

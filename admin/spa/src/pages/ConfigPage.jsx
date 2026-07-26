@@ -17,7 +17,7 @@ import { CONFIG_SECTIONS } from "../lib/nav.js";
 // harnesses and health snapshot come from the shared provider (v0.1.1 B4);
 // the Repositories page edits the SAME draft, and DraftChrome (App-level)
 // owns Save/DirtyBar/NavGuard.
-export default function ConfigPage({ section }) {
+export default function ConfigPage({ section, health, healthError, onHealthChange }) {
   const { dr, loadErr } = useSharedDraft();
   // page-level error line — sections report async failures here (delete /
   // restore flows) so the message survives their local re-renders
@@ -57,7 +57,10 @@ export default function ConfigPage({ section }) {
         ))}
       </div>
 
-      {section === "pmo" && <PmoSection newNamesState={pmoNewNames} />}
+      {section === "pmo" && (
+        <PmoSection newNamesState={pmoNewNames}
+          health={health} healthError={healthError} onHealthChange={onHealthChange} />
+      )}
       {section === "dev-types" && <DevTypesSection setPageErr={setPageErr} />}
       {section === "skills" && <SkillsSection setPageErr={setPageErr} />}
       {section === "assignments" && <AssignmentsSection />}

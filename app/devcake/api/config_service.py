@@ -20,6 +20,36 @@ from ..settings_bundle import (BundleError, dry_run_adapters,
 log = logging.getLogger("devcake")
 
 
+def inherit_pmo_intake(body: dict, current: dict) -> dict:
+    """Preserve per-PMO intake owned by PUT /config/pmos/{name}/intake.
+
+    `pmos` is replaced wholesale on a general config PUT. A draft Save that
+    omits `intake_paused` (or never knew the live value) would otherwise re-
+    default every instance to False and undo a pause. Incoming entries that
+    omit the key inherit the live value by instance name; an explicit key
+    still wins (profile apply, intentional API clients). New names keep the
+    model default when the key is absent.
+    """
+    if not isinstance(body.get("pmos"), list):
+        return body
+    live = {p["name"]: bool(p.get("intake_paused"))
+            for p in (current.get("pmos") or [])
+            if isinstance(p, dict) and p.get("name")}
+    out = dict(body)
+    rows = []
+    for p in body["pmos"]:
+        if not isinstance(p, dict):
+            rows.append(p)
+            continue
+        row = dict(p)
+        name = row.get("name")
+        if "intake_paused" not in row and name in live:
+            row["intake_paused"] = live[name]
+        rows.append(row)
+    out["pmos"] = rows
+    return out
+
+
 async def apply_config_patch(body: dict, *, config, dev_types, managers,
                              reload) -> dict:
     """Validate + apply a config PUT in place; hot-reload adapters; restore
@@ -27,7 +57,11 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
     root's reload_connections."""
     try:
         reject_stale_patch(body)
-        merged = AppConfig.model_validate(deep_merge(config.model_dump(), body))
+        # inherit before merge — deep_merge replaces the list wholesale, so
+        # defaults would land if we waited until after model_validate
+        current = config.model_dump()
+        body = inherit_pmo_intake(body, current)
+        merged = AppConfig.model_validate(deep_merge(current, body))
     except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
         raise HTTPException(422, str(e))
     # cross-store semantics + dry-run adapter construction (ISSUES #11) live

@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 
 from devcake.api import config_service
+from devcake.api.config_service import inherit_pmo_intake
 from devcake.api.poll import intake_blocks_dispatch
 from devcake.config import AppConfig, PMOInstance
 
@@ -56,6 +57,69 @@ def test_config_roundtrip_keeps_per_pmo_intake():
     restored = AppConfig.model_validate(dumped)
     assert restored.pmos[0].intake_paused is True
     assert restored.pmos[1].intake_paused is False
+
+
+def test_inherit_pmo_intake_fills_omitted_key_from_live():
+    current = {"pmos": [
+        {"name": "alpha", "team_key": "A", "intake_paused": True},
+        {"name": "beta", "team_key": "B", "intake_paused": False},
+    ]}
+    # draft Save omits intake_paused (SPA strips it) — must not re-default
+    body = {"pmos": [
+        {"name": "alpha", "team_key": "A", "system": "linear"},
+        {"name": "beta", "team_key": "B", "system": "linear"},
+    ]}
+    out = inherit_pmo_intake(body, current)
+    assert out["pmos"][0]["intake_paused"] is True
+    assert out["pmos"][1]["intake_paused"] is False
+
+
+def test_inherit_pmo_intake_explicit_key_wins():
+    current = {"pmos": [{"name": "alpha", "intake_paused": True}]}
+    body = {"pmos": [{"name": "alpha", "intake_paused": False}]}
+    out = inherit_pmo_intake(body, current)
+    assert out["pmos"][0]["intake_paused"] is False
+
+
+def test_inherit_pmo_intake_noop_without_pmos_key():
+    body = {"intake_paused": True}
+    assert inherit_pmo_intake(body, {"pmos": []}) is body
+
+
+def test_apply_config_patch_does_not_undo_pause_when_pmos_omit_intake(
+        tmp_path, monkeypatch):
+    """The Save-revert repro: list replace with omitted intake_paused must
+    inherit the live True, not model-default False."""
+    cfg = AppConfig(pmos=[
+        PMOInstance(name="alpha", team_key="A", intake_paused=True),
+        PMOInstance(name="beta", team_key="B"),
+    ])
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    # production reload_connections is sync; apply_config_patch calls it bare
+    reloads = []
+
+    def _reload():
+        reloads.append(1)
+
+    body = {
+        "pmos": [
+            {"name": "alpha", "system": "linear", "team_key": "A-EDITED",
+             "repos": [], "reference_repos": []},
+            {"name": "beta", "system": "linear", "team_key": "B",
+             "repos": [], "reference_repos": []},
+        ],
+    }
+    run_coro(config_service.apply_config_patch(
+        body, config=cfg, dev_types={}, managers={}, reload=_reload))
+    assert reloads == [1]
+    by = {p.name: p for p in cfg.pmos}
+    assert by["alpha"].intake_paused is True
+    assert by["alpha"].team_key == "A-EDITED"
+    assert by["beta"].intake_paused is False
 
 
 def test_set_pmo_intake_mutates_in_place_without_list_replace(tmp_path, monkeypatch):

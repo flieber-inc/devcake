@@ -4,6 +4,36 @@
 // Skips cleanly when no saved PMO card is present (empty first boot).
 import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
+const POLL = 'input[aria-label="Poll interval (seconds)"]';
+
+async function waitChecked(page, label, want, timeout = 15000) {
+  await page.waitForFunction(
+    ({ label: l, want: w }) => {
+      const el = document.querySelector(
+        `#pmo button[role="switch"][aria-label="${l}"]`,
+      );
+      return el && el.getAttribute("aria-checked") === w && !el.disabled;
+    },
+    { label, want },
+    { timeout },
+  );
+}
+
+async function saveDraft(page) {
+  await page.click('button:has-text("Save changes")');
+  const dlg = page.locator('[role="dialog"]').filter({ hasText: /Review \d+ change/ }).first();
+  await dlg.waitFor({ timeout: 8000 });
+  await dlg.locator("button").filter({ hasText: /^Save \d+ change/ }).click();
+  // reload after save clears the dirty bar
+  await page.waitForSelector("text=Unsaved changes", {
+    state: "detached",
+    timeout: 20000,
+  }).catch(async () => {
+    // flash "Saved" may appear instead
+    await page.waitForTimeout(500);
+  });
+}
+
 await withPage(async (page) => {
   const narrowPuts = [];
   const fullConfigPuts = [];
@@ -13,7 +43,6 @@ await withPage(async (page) => {
     if (/\/config\/pmos\/[^/]+\/intake(?:\?|$)/.test(u)) {
       narrowPuts.push(u);
     } else if (/\/api\/v1\/config(?:\?|$)/.test(u) || /\/config(?:\?|$)/.test(u)) {
-      // bare config PUT (not profiles, not pmos/.../intake)
       if (!u.includes("/config/pmos/") && !u.includes("/profiles")) {
         fullConfigPuts.push(u);
       }
@@ -23,7 +52,6 @@ await withPage(async (page) => {
   await gotoFresh(page, "#/config/pmo");
   await page.waitForSelector("#pmo");
 
-  // InstantZone eyebrow only appears once at least one saved card exists
   const switches = page.locator(
     '#pmo button[role="switch"][aria-label^="Mission intake for "]',
   );
@@ -36,13 +64,8 @@ await withPage(async (page) => {
 
   check("saved PMO card exposes a Mission intake switch", n >= 1);
 
-  const zone = page.locator("#pmo", {
-    has: page.locator("text=applies immediately — does not wait for Save"),
-  }).first();
   check("intake InstantZone is present on a saved card",
-    (await zone.count()) >= 1
-    || (await page.locator("#pmo text=applies immediately").count()) >= 1
-    || (await page.getByText("applies immediately — does not wait for Save").count()) >= 1);
+    (await page.getByText("applies immediately — does not wait for Save").count()) >= 1);
 
   const sw = switches.first();
   const ariaLabel = await sw.getAttribute("aria-label");
@@ -55,8 +78,6 @@ await withPage(async (page) => {
   const beforeNarrow = narrowPuts.length;
   const beforeFull = fullConfigPuts.length;
   await sw.click();
-
-  // wait for optimistic + server round-trip to settle on the flipped value
   await page.waitForFunction(
     ({ label, prev }) => {
       const el = document.querySelector(
@@ -77,23 +98,39 @@ await withPage(async (page) => {
     fullConfigPuts.length === beforeFull,
     `unexpected full config PUTs: ${fullConfigPuts.slice(beforeFull).join(" ")}`);
 
-  // restore
-  const midNarrow = narrowPuts.length;
-  await sw.click();
-  await page.waitForFunction(
-    ({ label, want }) => {
-      const el = document.querySelector(
-        `#pmo button[role="switch"][aria-label="${label}"]`,
-      );
-      return el && el.getAttribute("aria-checked") === want && !el.disabled;
-    },
-    { label: ariaLabel, want: before },
-    { timeout: 15000 },
-  );
+  // ── Save-revert regression: dirty an unrelated field, Save, intake survives ──
+  const poll = page.locator(POLL);
+  await poll.waitFor({ timeout: 5000 });
+  const pollBefore = await poll.inputValue();
+  const pollDirty = String(Number(pollBefore) + 1);
+  await poll.fill(pollDirty);
+  await page.waitForSelector('span:has-text("Unsaved changes")');
+  const fullBeforeSave = fullConfigPuts.length;
+  await saveDraft(page);
+  check("unrelated Save issued a full PUT /config (expected)",
+    fullConfigPuts.length > fullBeforeSave);
+  // health may refresh after reload — wait for switch to still show mid
+  await page.waitForTimeout(800);
+  const afterSave = await sw.getAttribute("aria-checked");
+  check("intake state survives an unrelated draft Save",
+    afterSave === mid,
+    `wanted aria-checked=${mid}, got ${afterSave}`);
+
+  // restore poll (real write — leave operator config as found)
+  await poll.fill(pollBefore);
+  if ((await page.locator('span:has-text("Unsaved changes")').count()) > 0) {
+    await saveDraft(page);
+  }
+
+  // restore intake
+  if ((await sw.getAttribute("aria-checked")) !== before) {
+    await sw.click();
+    await waitChecked(page, ariaLabel, before);
+  }
   check("toggle restores the pre-test intake state",
     (await sw.getAttribute("aria-checked")) === before);
-  check("restore also used the narrow endpoint",
-    narrowPuts.length > midNarrow);
+  check("restore path used the narrow endpoint at least twice overall",
+    narrowPuts.length >= 2);
 });
 
 summary("pmo_intake");

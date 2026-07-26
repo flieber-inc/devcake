@@ -13,23 +13,18 @@ import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
-import usePoll from "../lib/usePoll.js";
 
-export default function PmoSection({ newNamesState }) {
+export default function PmoSection({ newNamesState, health = {}, healthError = false,
+                                     onHealthChange }) {
   const { dr } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
-  // per-PMO intake: driven by /health (like the sidebar master), never the
+  // per-PMO intake: App-owned /health (like the sidebar master), never the
   // config draft — Discard must not desync a safety switch from the server.
-  const [health, setHealth] = useState({});
   const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
   const [intakeBusy, setIntakeBusy] = useState({});
   const [intakeErr, setIntakeErr] = useState({});
-  usePoll(
-    () => get("/health").then((h) => { setHealth(h); }).catch(() => {}),
-    10000,
-  );
   // repos WITHOUT a stored Access (write) token cannot join a PMO's WORK
   // set (founder request 2026-07-15) — EXECUTE would fail at push; they
   // remain selectable as reference repos
@@ -82,10 +77,12 @@ export default function PmoSection({ newNamesState }) {
                     [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
 
   // Narrow endpoint — never rewrites the pmos list (lost-update / secret-delete race).
-  // State comes from /health.pmo_instances; only saved instances can toggle live.
+  // State comes from App /health; only saved instances can toggle live.
+  // Refuse while health is unknown (same contract as the sidebar master).
+  const healthKnown = !healthError && health.pmo_instances != null;
   const togglePmoIntake = async (name, idx) => {
     if (intakeBusy[name] || !name || !savedPmoNames.has(name)) return;
-    if (dr.errors[`cfg.pmos.${idx}.name`]) return;
+    if (!healthKnown || dr.errors[`cfg.pmos.${idx}.name`]) return;
     const healthPaused = !!(health.pmo_instances || {})[name]?.intake_paused;
     const current = intakeOverride[name] ?? healthPaused;
     const next = !current;
@@ -95,7 +92,7 @@ export default function PmoSection({ newNamesState }) {
     try {
       await send("PUT", `/config/pmos/${encodeURIComponent(name)}/intake`,
         { paused: next });
-      setHealth((h) => ({
+      onHealthChange?.((h) => ({
         ...h,
         pmo_instances: {
           ...(h.pmo_instances || {}),
@@ -175,7 +172,7 @@ export default function PmoSection({ newNamesState }) {
                     <Toggle
                       on={!paused}
                       label={`Mission intake for ${inst.name}`}
-                      disabled={!!intakeBusy[inst.name] || nameBad}
+                      disabled={!!intakeBusy[inst.name] || nameBad || !healthKnown}
                       onClick={() => togglePmoIntake(inst.name, idx)} />
                   </SettingRow>
                   {intakeErr[inst.name] && (

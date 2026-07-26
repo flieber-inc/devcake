@@ -367,6 +367,9 @@ export default function OverviewPage({
   }));
   const devsOk = devStates.filter((s) => s.state !== "broken").length;
   const paused = !!health.intake_paused;
+  const anyPmoPaused = Object.values(health.pmo_instances || {})
+    .some((v) => v?.intake_paused);
+  const intakeAmber = paused || anyPmoPaused;
   const merge = Object.values(health.merge_handoffs || {});
   const attention = Object.values(health.needs_human || {});
   const humanCount = merge.length + attention.length;
@@ -426,12 +429,12 @@ export default function OverviewPage({
             {health.active_runs ?? "—"}
           </span>
         </Stat>
-        <Stat icon={paused || Object.values(health.pmo_instances || {}).some((v) => v?.intake_paused) ? Pause : Play} label="Mission intake">
+        <Stat icon={intakeAmber ? Pause : Play} label="Mission intake">
           {health.app === undefined ? (
             <span className="font-display text-2xl font-extrabold tracking-tight">—</span>
           ) : (
             <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
-              paused || Object.values(health.pmo_instances || {}).some((v) => v?.intake_paused)
+              intakeAmber
                 ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
                 : "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
             }`}>

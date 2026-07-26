@@ -48,6 +48,16 @@ export default function DraftChrome({ registerNavGuard, health }) {
       .map((x) => x.path.split(".")[1]))];
     if (cfgKeys.length) {
       const patch = Object.fromEntries(cfgKeys.map((k) => [k, dr.draft.cfg[k]]));
+      // Per-PMO intake is owned by PUT /config/pmos/{name}/intake — never by
+      // a draft Save. Stripping the key lets the server inherit the live value
+      // (see inherit_pmo_intake); leaving a stale false would undo a pause.
+      if (Array.isArray(patch.pmos)) {
+        patch.pmos = patch.pmos.map((p) => {
+          if (!p || typeof p !== "object") return p;
+          const { intake_paused: _drop, ...rest } = p;
+          return rest;
+        });
+      }
       try { await send("PUT", "/config", patch); results["config"] = { ok: true }; }
       catch (e) { results["config"] = { ok: false, error: String(e.message || e) }; }
     }

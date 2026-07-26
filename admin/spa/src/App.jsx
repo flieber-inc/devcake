@@ -202,7 +202,10 @@ export default function App() {
                 }}
               />
             )}
-            {page === "config" && <ConfigPage section={section} />}
+            {page === "config" && (
+              <ConfigPage section={section} health={health} healthError={healthError}
+                onHealthChange={setHealth} />
+            )}
             {page === "repos" && <ReposPage />}
             {page === "runs" && <RunsPage />}
             {page === "missions" && <MissionsPage />}

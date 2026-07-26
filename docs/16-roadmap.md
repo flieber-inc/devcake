@@ -394,6 +394,13 @@ vocabulary at the top of this file).
 - **Per-PMO intake toggles** (PR #50, 2026-07-26): each PMO instance can pause
   intake under the global `intake_paused` master switch; SPA health-driven;
   draft Save cannot undo instance toggles. **built**.
+- **Clear secrets operator flow** (PR #54, 2026-07-26): section ⋯ on Dev
+  Types / PMO / Repositories — multi-select presence-only inventory, context
+  reorder, ConfirmDialog with default-on master intake pause, then
+  `POST /secrets/clear` (pause-first, breakers, audit). **built**.
+- **Security-contract reading aid** (PR #53) + roadmap/observability alignment
+  (PRs #51–#52): docs/14 §0a buckets, deferred iron-proxy radar. **built**
+  (docs).
 
 ### Still open (residuals)
 

@@ -16,6 +16,7 @@ const SUITES = [
   "redesign.mjs",
   "missions.mjs",
   "profiles.mjs",
+  "pmo_intake.mjs",
   "markdown.mjs",
 ];
 

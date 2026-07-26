@@ -7,17 +7,24 @@ import Button from "./Button.jsx";
 import Toggle from "./Toggle.jsx";
 import { ConfirmDialog } from "./Modal.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
+import InstantZone from "./InstantZone.jsx";
 import RepoChips from "./RepoChips.jsx";
 import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
 
-export default function PmoSection({ newNamesState }) {
+export default function PmoSection({ newNamesState, health = {}, healthError = false,
+                                     onHealthChange }) {
   const { dr } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
+  // per-PMO intake: App-owned /health (like the sidebar master), never the
+  // config draft — Discard must not desync a safety switch from the server.
+  const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
+  const [intakeBusy, setIntakeBusy] = useState({});
+  const [intakeErr, setIntakeErr] = useState({});
   // repos WITHOUT a stored Access (write) token cannot join a PMO's WORK
   // set (founder request 2026-07-15) — EXECUTE would fail at push; they
   // remain selectable as reference repos
@@ -69,6 +76,44 @@ export default function PmoSection({ newNamesState }) {
     setTestResult({ ...testResult,
                     [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
 
+  // Narrow endpoint — never rewrites the pmos list (lost-update / secret-delete race).
+  // State comes from App /health; only saved instances can toggle live.
+  // Refuse while health is unknown (same contract as the sidebar master).
+  const healthKnown = !healthError && health.pmo_instances != null;
+  const togglePmoIntake = async (name, idx) => {
+    if (intakeBusy[name] || !name || !savedPmoNames.has(name)) return;
+    if (!healthKnown || dr.errors[`cfg.pmos.${idx}.name`]) return;
+    const healthPaused = !!(health.pmo_instances || {})[name]?.intake_paused;
+    const current = intakeOverride[name] ?? healthPaused;
+    const next = !current;
+    setIntakeOverride((o) => ({ ...o, [name]: next }));
+    setIntakeBusy((b) => ({ ...b, [name]: true }));
+    setIntakeErr((e) => ({ ...e, [name]: "" }));
+    try {
+      await send("PUT", `/config/pmos/${encodeURIComponent(name)}/intake`,
+        { paused: next });
+      onHealthChange?.((h) => ({
+        ...h,
+        pmo_instances: {
+          ...(h.pmo_instances || {}),
+          [name]: { ...(h.pmo_instances || {})[name], intake_paused: next },
+        },
+      }));
+    } catch (e) {
+      setIntakeErr((er) => ({
+        ...er, [name]: `✗ ${String(e.message || e)}`,
+      }));
+      setTimeout(() => setIntakeErr((er) => ({ ...er, [name]: "" })), 5000);
+    } finally {
+      setIntakeOverride((o) => {
+        const n = { ...o };
+        delete n[name];
+        return n;
+      });
+      setIntakeBusy((b) => ({ ...b, [name]: false }));
+    }
+  };
+
   return (
     <>
       <Section id="pmo" title="PMO connections"
@@ -79,6 +124,16 @@ export default function PmoSection({ newNamesState }) {
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
             || { needs_api_base: false, team_key_label: "Team key",
                  team_key_help: "", api_base_help: "" };
+          const saved = savedPmoNames.has(inst.name);
+          const nameBad = !!dr.errors[`cfg.pmos.${idx}.name`];
+          const healthPaused = !!(health.pmo_instances || {})[inst.name]?.intake_paused;
+          const paused = intakeOverride[inst.name] ?? healthPaused;
+          const masterOff = !!health.intake_paused;
+          const label = !saved
+            ? "Mission intake — save instance first"
+            : masterOff
+              ? (paused ? "Mission intake — PAUSED (master also OFF)" : "Mission intake — ON (master paused)")
+              : (paused ? "Mission intake — PAUSED" : "Mission intake — ON");
           return (
             <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -104,6 +159,33 @@ export default function PmoSection({ newNamesState }) {
                   </Button>
                 )}
               </div>
+              {saved ? (
+                <InstantZone note="applies immediately — does not wait for Save">
+                  <SettingRow
+                    label={label}
+                    desc={paused
+                      ? "This PMO dispatches no new runs. In-flight work still finishes."
+                      : masterOff
+                        ? "This PMO is open, but the sidebar master switch freezes every team."
+                        : "This PMO may dispatch new runs."}
+                    help="Per-team intake under the sidebar Mission intake master switch. Master OFF freezes every PMO; this switch freezes only this instance.">
+                    <Toggle
+                      on={!paused}
+                      label={`Mission intake for ${inst.name}`}
+                      disabled={!!intakeBusy[inst.name] || nameBad || !healthKnown}
+                      onClick={() => togglePmoIntake(inst.name, idx)} />
+                  </SettingRow>
+                  {intakeErr[inst.name] && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      {intakeErr[inst.name]}
+                    </p>
+                  )}
+                </InstantZone>
+              ) : (
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Mission intake for this card unlocks after you Save the new instance.
+                </p>
+              )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
                   help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">

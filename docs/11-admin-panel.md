@@ -10,7 +10,8 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 ## 0. Sidebar (persistent shell)
 
 - Navigation to the six pages, with Config sub-entries for the sections above; collapsible to an icon rail.
-- **Mission-intake master switch** — THE operational control, so it lives in the sidebar (visible even collapsed, founder decision) and applies immediately (its own `PUT /config`, outside the Config draft): OFF pauses intake — no new runs start (missions or mapper) while the operator rearranges missions in the PMO. In-flight runs finish normally (pause freezes dispatch, not consequence) and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. Disabled (with an explanatory tooltip) while the backend is unreachable or health is unknown; save errors surface inline — the toggle never fails silently.
+- **Mission-intake master switch** — THE operational control, so it lives in the sidebar (visible even collapsed, founder decision) and applies immediately (its own `PUT /config`, outside the Config draft): OFF pauses intake — no new runs start on **any** PMO (missions or mapper) while the operator rearranges missions. In-flight runs finish normally (pause freezes dispatch, not consequence) and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. Disabled (with an explanatory tooltip) while the backend is unreachable or health is unknown; save errors surface inline — the toggle never fails silently.
+- **Per-PMO intake** — each *saved* PMO card on Configuration → PMO has an InstantZone toggle driven by `/health` (not the config draft). It calls `PUT /api/v1/config/pmos/{name}/intake` with `{paused}` — a narrow server-side flip that never rewrites the `pmos` list. Freezes only that instance's NEW dispatches; the sidebar master still freezes everything. Unsaved (draft-only) cards unlock the toggle after Save.
 - Component health dots from the 10 s health poll: app / pmo / redis / dagu / **gitea** (`health.internal_forge`, grey when Gitea is unset) / logs (OpenObserve) — not a generic forge dot — plus a theme toggle.
 
 ## 1. REST API contract (`/api/v1`)
@@ -19,7 +20,8 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 |---|---|
 | `GET /api/v1/health` | Full component health (below) |
 | `GET /api/v1/health/live` | Unauthenticated liveness (`{"app": true}`) — the compose healthcheck |
-| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**; stale-shaped bodies (singular `pmo`/`repo`, `id:` keys, `*_env` fields, non-v4 schema) are **rejected with 422** by `reject_stale_patch` (never silently dropped). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
+| `GET /api/v1/config` · `PUT /api/v1/config` | General settings (AppConfig minus dev types). PUT validates server-side (pydantic); errors return field-keyed messages surfaced inline. Nested dicts deep-merge, but the plural `pmos:`/`repos:` lists are **replaced whole**. **Exception:** `pmos[].intake_paused` is owned by the narrow intake endpoint below — when a list entry **omits** the key, the server inherits the live value by instance name so a draft Save cannot undo a pause. Stale-shaped bodies (singular `pmo`/`repo`, `id:` keys, `*_env` fields, non-v4 schema) are **rejected with 422** by `reject_stale_patch` (never silently dropped). A successful PUT hot-reloads both adapters (`reload_connections`) and re-ensures the managed labels |
+| `PUT /api/v1/config/pmos/{name}/intake` | `{paused: bool}` — flip one saved PMO's intake switch in place (no list rewrite, no adapter reload). 404 if the name is unknown. SPA InstantZone control; state is read from `/health` `pmo_instances` |
 | `GET /api/v1/harnesses` | The harness registry: derived image, credential requirements, OAuth availability per `harness_template` — the Dev Type card renders (and previews unsaved harness switches) from this |
 | `GET /api/v1/dev-types` · `POST /api/v1/dev-types` | List (enriched: `harness` info + `secrets_present`) / create Dev Types |
 | `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login; credential lands in `/data/secrets/{name}/` |
@@ -69,7 +71,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 |---|---|
 | `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; `pmo` is the aggregate over configured instances) |
 | `oo_ingest` | ingest-path probe (`{ok, detail}`) — distinct from the OO admin UI boolean; used by the operator drill / readiness |
-| `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team`); unconfigured instances show grey (`ok: null`) |
+| `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team` / `intake_paused`); unconfigured instances show grey (`ok: null`) |
 | `forge` | per-repo `ForgeHealth` map (`ok`, `can_push`, `can_read`, `transient`, `detail`, …) |
 | `circuit_breakers` | per-Dev-Type auth breakers + **per-repo** `repo:{name}` forge breakers (`15-errors-and-retries.md` §4) |
 | `dev_backend_degraded` | dev_type → reason: model-backend degradation (ADR-0018). NOT a breaker — the Dev Type is throttled to one probe run and clears itself on success, so it is deliberately kept out of `circuit_breakers` (`15-errors-and-retries.md` §4a) |

@@ -97,13 +97,24 @@ function Masthead({ health, humanCount, criticalCount = 0, runsTotal }) {
             <span className="font-semibold text-neutral-700 dark:text-neutral-200">
               {active} Dev{active === 1 ? "" : "s"} baking
             </span>
-            {" · "}intake {health.intake_paused ? "PAUSED" : "ON"}
+            {" · "}intake {intakeSummary(health)}
             {runsTotal != null && <>{" · "}{runsTotal} run{runsTotal === 1 ? "" : "s"} recorded</>}
           </>
         )}
       </p>
     </div>
   );
+}
+
+/** Master + per-PMO intake for the masthead subline. */
+function intakeSummary(health) {
+  if (health.intake_paused) return "PAUSED";
+  const paused = Object.entries(health.pmo_instances || {})
+    .filter(([, v]) => v && v.intake_paused)
+    .map(([n]) => n);
+  if (paused.length === 1) return `ON · ${paused[0]} paused`;
+  if (paused.length > 1) return `ON · ${paused.length} PMOs paused`;
+  return "ON";
 }
 
 // "In the oven": the pipeline strip — active runs by stage, the signature
@@ -356,6 +367,9 @@ export default function OverviewPage({
   }));
   const devsOk = devStates.filter((s) => s.state !== "broken").length;
   const paused = !!health.intake_paused;
+  const anyPmoPaused = Object.values(health.pmo_instances || {})
+    .some((v) => v?.intake_paused);
+  const intakeAmber = paused || anyPmoPaused;
   const merge = Object.values(health.merge_handoffs || {});
   const attention = Object.values(health.needs_human || {});
   const humanCount = merge.length + attention.length;
@@ -415,16 +429,16 @@ export default function OverviewPage({
             {health.active_runs ?? "—"}
           </span>
         </Stat>
-        <Stat icon={paused ? Pause : Play} label="Mission intake">
+        <Stat icon={intakeAmber ? Pause : Play} label="Mission intake">
           {health.app === undefined ? (
             <span className="font-display text-2xl font-extrabold tracking-tight">—</span>
           ) : (
             <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
-              paused
+              intakeAmber
                 ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
                 : "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
             }`}>
-              {paused ? "PAUSED" : "ON"}
+              {intakeSummary(health)}
             </span>
           )}
         </Stat>

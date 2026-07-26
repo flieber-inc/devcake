@@ -622,6 +622,15 @@ def diff_bundle(bundle: dict, config: AppConfig,
         if new.get("intake_paused") != cur.get("intake_paused"):
             state = "paused" if new.get("intake_paused") else "UNPAUSED"
             warnings.append(f"applying changes intake to {state}")
+        # per-PMO intake (same ADR-0013 "flag intake state" spirit as the master)
+        cur_pmo = {p["name"]: bool(p.get("intake_paused"))
+                   for p in (cur.get("pmos") or []) if p.get("name")}
+        new_pmo = {p["name"]: bool(p.get("intake_paused"))
+                   for p in (new.get("pmos") or []) if p.get("name")}
+        for name in sorted(set(cur_pmo) | set(new_pmo)):
+            if cur_pmo.get(name) != new_pmo.get(name) and name in new_pmo:
+                state = "paused" if new_pmo[name] else "UNPAUSED"
+                warnings.append(f"applying changes intake for PMO '{name}' to {state}")
 
     if parsed["secrets"] is not None:
         cur_conns = secrets_store.list_connection_secrets()

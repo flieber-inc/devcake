@@ -13,15 +13,23 @@ import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
+import usePoll from "../lib/usePoll.js";
 
 export default function PmoSection({ newNamesState }) {
   const { dr } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null); // flip-time danger + delete confirms
-  // per-PMO intake: immediate (like the sidebar master switch). Keyed by name.
+  // per-PMO intake: driven by /health (like the sidebar master), never the
+  // config draft — Discard must not desync a safety switch from the server.
+  const [health, setHealth] = useState({});
+  const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
   const [intakeBusy, setIntakeBusy] = useState({});
   const [intakeErr, setIntakeErr] = useState({});
+  usePoll(
+    () => get("/health").then((h) => { setHealth(h); }).catch(() => {}),
+    10000,
+  );
   // repos WITHOUT a stored Access (write) token cannot join a PMO's WORK
   // set (founder request 2026-07-15) — EXECUTE would fail at push; they
   // remain selectable as reference repos
@@ -73,37 +81,38 @@ export default function PmoSection({ newNamesState }) {
     setTestResult({ ...testResult,
                     [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
 
-  // lists replace wholesale on PUT — re-read server pmos, flip one field, write
-  // the full list back. Unsaved (draft-only) cards only update the draft.
-  // Always key by instance name (draft order can differ from server order).
-  const togglePmoIntake = async (name) => {
-    if (intakeBusy[name] || !name) return;
-    const flipDraft = (next) => setField(
-      "cfg.pmos",
-      (cfg.pmos || []).map((p) =>
-        p.name === name ? { ...p, intake_paused: next } : p),
-    );
-    if (!savedPmoNames.has(name)) {
-      const cur = (cfg.pmos || []).find((p) => p.name === name);
-      flipDraft(!cur?.intake_paused);
-      return;
-    }
+  // Narrow endpoint — never rewrites the pmos list (lost-update / secret-delete race).
+  // State comes from /health.pmo_instances; only saved instances can toggle live.
+  const togglePmoIntake = async (name, idx) => {
+    if (intakeBusy[name] || !name || !savedPmoNames.has(name)) return;
+    if (dr.errors[`cfg.pmos.${idx}.name`]) return;
+    const healthPaused = !!(health.pmo_instances || {})[name]?.intake_paused;
+    const current = intakeOverride[name] ?? healthPaused;
+    const next = !current;
+    setIntakeOverride((o) => ({ ...o, [name]: next }));
     setIntakeBusy((b) => ({ ...b, [name]: true }));
     setIntakeErr((e) => ({ ...e, [name]: "" }));
     try {
-      const live = await get("/config");
-      const next = !(live.pmos || []).find((p) => p.name === name)?.intake_paused;
-      const pmos = (live.pmos || []).map((p) =>
-        p.name === name ? { ...p, intake_paused: next } : p);
-      await send("PUT", "/config", { pmos });
-      // keep draft aligned; path is draft-ignored so it does not dirty Save
-      flipDraft(next);
+      await send("PUT", `/config/pmos/${encodeURIComponent(name)}/intake`,
+        { paused: next });
+      setHealth((h) => ({
+        ...h,
+        pmo_instances: {
+          ...(h.pmo_instances || {}),
+          [name]: { ...(h.pmo_instances || {})[name], intake_paused: next },
+        },
+      }));
     } catch (e) {
       setIntakeErr((er) => ({
         ...er, [name]: `✗ ${String(e.message || e)}`,
       }));
       setTimeout(() => setIntakeErr((er) => ({ ...er, [name]: "" })), 5000);
     } finally {
+      setIntakeOverride((o) => {
+        const n = { ...o };
+        delete n[name];
+        return n;
+      });
       setIntakeBusy((b) => ({ ...b, [name]: false }));
     }
   };
@@ -118,7 +127,16 @@ export default function PmoSection({ newNamesState }) {
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
             || { needs_api_base: false, team_key_label: "Team key",
                  team_key_help: "", api_base_help: "" };
-          const paused = !!inst.intake_paused;
+          const saved = savedPmoNames.has(inst.name);
+          const nameBad = !!dr.errors[`cfg.pmos.${idx}.name`];
+          const healthPaused = !!(health.pmo_instances || {})[inst.name]?.intake_paused;
+          const paused = intakeOverride[inst.name] ?? healthPaused;
+          const masterOff = !!health.intake_paused;
+          const label = !saved
+            ? "Mission intake — save instance first"
+            : masterOff
+              ? (paused ? "Mission intake — PAUSED (master also OFF)" : "Mission intake — ON (master paused)")
+              : (paused ? "Mission intake — PAUSED" : "Mission intake — ON");
           return (
             <div key={idx} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -144,25 +162,33 @@ export default function PmoSection({ newNamesState }) {
                   </Button>
                 )}
               </div>
-              <InstantZone note="intake applies immediately — does not wait for Save">
-                <SettingRow
-                  label={paused ? "Mission intake — PAUSED" : "Mission intake — ON"}
-                  desc={paused
-                    ? "This PMO dispatches no new runs. In-flight work still finishes."
-                    : "This PMO may dispatch new runs (subject to the sidebar master switch)."}
-                  help="Per-team intake under the sidebar Mission intake master switch. Master OFF freezes every PMO; this switch freezes only this instance. Hot-applied on the next poll cycle.">
-                  <Toggle
-                    on={!paused}
-                    label={`Mission intake for ${inst.name || "this PMO"}`}
-                    disabled={!!intakeBusy[inst.name]}
-                    onClick={() => togglePmoIntake(inst.name)} />
-                </SettingRow>
-                {intakeErr[inst.name] && (
-                  <p className="text-xs text-red-600 dark:text-red-400">
-                    {intakeErr[inst.name]}
-                  </p>
-                )}
-              </InstantZone>
+              {saved ? (
+                <InstantZone note="applies immediately — does not wait for Save">
+                  <SettingRow
+                    label={label}
+                    desc={paused
+                      ? "This PMO dispatches no new runs. In-flight work still finishes."
+                      : masterOff
+                        ? "This PMO is open, but the sidebar master switch freezes every team."
+                        : "This PMO may dispatch new runs."}
+                    help="Per-team intake under the sidebar Mission intake master switch. Master OFF freezes every PMO; this switch freezes only this instance.">
+                    <Toggle
+                      on={!paused}
+                      label={`Mission intake for ${inst.name}`}
+                      disabled={!!intakeBusy[inst.name] || nameBad}
+                      onClick={() => togglePmoIntake(inst.name, idx)} />
+                  </SettingRow>
+                  {intakeErr[inst.name] && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      {intakeErr[inst.name]}
+                    </p>
+                  )}
+                </InstantZone>
+              ) : (
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Mission intake for this card unlocks after you Save the new instance.
+                </p>
+              )}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <Field label="Instance name"
                   help="Operator-chosen identity (lowercase letters/digits, ≤12, no hyphens). Uppercased, it prefixes this instance's branches and run ids. Locked once saved — stored secrets and in-flight missions key on it; remove and re-add to rename.">
@@ -243,7 +269,7 @@ export default function PmoSection({ newNamesState }) {
           setField("cfg.pmos", [...cfg.pmos,
             { name, system: defaultSystem,
               team_key: "", api_base: null, repos: [],
-              reference_repos: [], intake_paused: false }]);
+              reference_repos: [] }]);
         }}>
           + Add PMO instance
         </Button>

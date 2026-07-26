@@ -54,10 +54,12 @@ def intake_blocks_dispatch(config, instance) -> bool:
     The global `intake_paused` master switch freezes every instance. Each
     instance's own `intake_paused` freezes only that instance — so a multi-PMO
     deployment can pause one team's intake while another keeps baking.
+    Direct field access (not getattr-default): a rename must fail closed at
+    call sites, never silently leave intake open.
     """
-    if getattr(config, "intake_paused", False):
+    if config.intake_paused:
         return True
-    return bool(getattr(instance, "intake_paused", False))
+    return bool(instance.intake_paused)
 
 
 class PollRuntime:

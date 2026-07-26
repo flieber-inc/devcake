@@ -79,3 +79,21 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
         log.info("auto_merge flipped ON — parked DEVCAKE-MERGE missions "
                  "re-armed for the deferred-merge sweep")
     return config.model_dump()
+
+
+def set_pmo_intake(*, name: str, paused: bool, config) -> dict:
+    """Flip one PMO instance's intake switch in place (docs/11).
+
+    Narrow write path: mutates the existing PMOInstance object (managers hold
+    the same identity after build_managers) and persists. Does NOT replace the
+    pmos list, so no deep_merge wholesale-list race and no secret-deletion
+    side effect from apply_config_patch's removed-instance cleanup.
+    """
+    if not isinstance(paused, bool):
+        raise HTTPException(422, "paused must be a boolean")
+    for inst in config.pmos:
+        if inst.name == name:
+            inst.intake_paused = paused
+            save_config(config)
+            return {"name": name, "intake_paused": paused}
+    raise HTTPException(404, f"no PMO instance named {name!r}")

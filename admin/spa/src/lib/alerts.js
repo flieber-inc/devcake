@@ -29,8 +29,29 @@ export default function deriveAlerts(health) {
           : "all runs drained; your PMO is all yours") +
         ". Resume with the sidebar master switch.",
     });
+  } else {
+    // Per-PMO freezes only show when the master is ON — otherwise the master
+    // alert already covers "nothing dispatches". Forgotten team freezes are
+    // the failure mode multi-PMO intake makes possible.
+    const pausedPmos = Object.entries(health.pmo_instances || {})
+      .filter(([, v]) => v && v.intake_paused)
+      .map(([name]) => name);
+    if (pausedPmos.length === 1) {
+      alerts.push({
+        id: "pmo-intake",
+        severity: "info",
+        title: `Intake paused for ${pausedPmos[0]}`,
+        body: `PMO '${pausedPmos[0]}' dispatches no new runs. Other PMOs keep baking. Resume on Configuration → PMO.`,
+      });
+    } else if (pausedPmos.length > 1) {
+      alerts.push({
+        id: "pmo-intake",
+        severity: "info",
+        title: `Intake paused for ${pausedPmos.length} PMOs`,
+        body: `${pausedPmos.join(", ")} dispatch no new runs. Resume on Configuration → PMO.`,
+      });
+    }
   }
-
   if ((health.dependency_cycles || []).length > 0) {
     alerts.push({
       id: "cycles",

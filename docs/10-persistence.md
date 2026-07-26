@@ -119,7 +119,8 @@ auto_merge: false                    # true = app merges after REVIEW; false = a
 auto_resolve_merge_conflicts: true   # inert while auto_merge is off: conflicts → EXECUTE rework (max 2)
 merge_retry_window_minutes: 30       # inert while auto_merge is off: sweep retries not-yet-mergeable PRs this long
 attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
-intake_paused: false                 # operator switch: no NEW dispatches while true (11 §2)
+intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
+# each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
 max_decomposition_depth: 2           # 0 = unlimited; ADR-0012 / 03 §1.3
 relations_mapper:                    # ADR-0007: manual-only by default; periodic service is opt-in
   enabled: false

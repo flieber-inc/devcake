@@ -11,7 +11,7 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 
 - Navigation to the six pages, with Config sub-entries for the sections above; collapsible to an icon rail.
 - **Mission-intake master switch** — THE operational control, so it lives in the sidebar (visible even collapsed, founder decision) and applies immediately (its own `PUT /config`, outside the Config draft): OFF pauses intake — no new runs start on **any** PMO (missions or mapper) while the operator rearranges missions. In-flight runs finish normally (pause freezes dispatch, not consequence) and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. Disabled (with an explanatory tooltip) while the backend is unreachable or health is unknown; save errors surface inline — the toggle never fails silently.
-- **Per-PMO intake** — each PMO card on Configuration → PMO has the same immediate toggle (InstantZone). It freezes only that instance's NEW dispatches; the sidebar master still freezes everything. Use multi-PMO deployments when one team should keep baking while another is being rearranged.
+- **Per-PMO intake** — each *saved* PMO card on Configuration → PMO has an InstantZone toggle driven by `/health` (not the config draft). It calls `PUT /api/v1/config/pmos/{name}/intake` with `{paused}` — a narrow server-side flip that never rewrites the `pmos` list. Freezes only that instance's NEW dispatches; the sidebar master still freezes everything. Unsaved (draft-only) cards unlock the toggle after Save.
 - Component health dots from the 10 s health poll: app / pmo / redis / dagu / **gitea** (`health.internal_forge`, grey when Gitea is unset) / logs (OpenObserve) — not a generic forge dot — plus a theme toggle.
 
 ## 1. REST API contract (`/api/v1`)
@@ -70,7 +70,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 |---|---|
 | `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; `pmo` is the aggregate over configured instances) |
 | `oo_ingest` | ingest-path probe (`{ok, detail}`) — distinct from the OO admin UI boolean; used by the operator drill / readiness |
-| `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team`); unconfigured instances show grey (`ok: null`) |
+| `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team` / `intake_paused`); unconfigured instances show grey (`ok: null`) |
 | `forge` | per-repo `ForgeHealth` map (`ok`, `can_push`, `can_read`, `transient`, `detail`, …) |
 | `circuit_breakers` | per-Dev-Type auth breakers + **per-repo** `repo:{name}` forge breakers (`15-errors-and-retries.md` §4) |
 | `dev_backend_degraded` | dev_type → reason: model-backend degradation (ADR-0018). NOT a breaker — the Dev Type is throttled to one probe run and clears itself on success, so it is deliberately kept out of `circuit_breakers` (`15-errors-and-retries.md` §4a) |

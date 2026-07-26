@@ -58,7 +58,7 @@ from ..telemetry.oo_provision import ensure_oo_ingest_user_at_boot
 from .auth import credentials_configured, enforce_control_plane_auth
 from . import (connections_service, devtypes_service, internal_repos_service,
                profiles_service, settings_transfer)
-from .config_service import apply_config_patch
+from .config_service import apply_config_patch, set_pmo_intake
 from .health import build_health_payload, reset_protection_cache
 from .poll import PollRuntime
 
@@ -526,6 +526,12 @@ async def get_config():
 async def put_config(body: dict):
     return await apply_config_patch(body, config=config, dev_types=dev_types,
                                     managers=managers, reload=reload_connections)
+
+
+@app.put("/api/v1/config/pmos/{name}/intake")
+async def put_pmo_intake(name: str, body: dict):
+    """Flip one PMO's intake switch without rewriting the pmos list (docs/11)."""
+    return set_pmo_intake(name=name, paused=body.get("paused"), config=config)
 
 
 # ── config profiles (ADR-0013): named snapshots — bodies in profiles_service ─

@@ -29,12 +29,12 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 > unverified at 0.2.112. Where a 0.2.112 observation supersedes the older 0.2.93
 > record it says so. The Grok image installs latest rather than a pinned artifact,
 > so every rebuild can invalidate the recorded shapes. Grok PLAN is flag-verified
-> but not exercised end-to-end (§3). §8's recipes were exercised on one
-> model+backend pairing and are not a verdict on local backends generally. Treat
-> each statement's own version and caveat as its verification boundary.
+> but not exercised end-to-end (§3). §8's local-backend recipes are operator
+> guidance, not a guarantee for every model. Treat each statement's own version
+> and caveat as its verification boundary.
 >
-> The harness streams behind these shapes are committed under
-> `app/tests/fixtures/harness_streams/`, with a README covering how they were taken.
+> Scenario captures of CLI stream shapes: `app/tests/fixtures/harness_streams/`
+> (README: how they are taken).
 
 ## 1. Invocation patterns
 
@@ -268,13 +268,12 @@ codex `-c` block verbatim — is `11-admin-panel.md` §3.
 > `exec_command` tool with ten properties, one of which is required. Models that
 > handle large optional-parameter schemas poorly answer with **prose containing
 > invented tool syntax**, execute nothing and exit **0**, which DevCake reports as
-> exit 11 `DEV_BAD_OUTPUT` — with no brake, since ADR-0018's detector keys on exit 15
-> (`15-errors-and-retries.md` §4a). PLAN masks it, because plan mode synthesises its
-> result from returned text. One pairing is measured end to end in
-> [`adr/0018-harness-fault-classification-and-backend-brake.md`](adr/0018-harness-fault-classification-and-backend-brake.md)
-> (Amendment 2026-07-26), including the remedies. **The recognition signature:** a
-> codex Dev produces no `result.json` while `claude-code` or `grok-build` succeed on
-> the same backend and model.
+> exit 11 `DEV_BAD_OUTPUT` — with no brake (ADR-0018 keys on exit 15;
+> `15-errors-and-retries.md` §4a). PLAN can mask it: plan mode synthesises its
+> result from returned text. Remedies: assign the stage to `grok-build` or
+> `claude-code`; slim tool schemas or force `tool_choice` proxy-side; use a model
+> that handles large optional schemas. **Recognition:** codex writes no
+> `result.json` while the other harnesses finish the same task on the same backend.
 
 ## 9. Adding or changing a template (checklist)
 

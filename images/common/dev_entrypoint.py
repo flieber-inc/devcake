@@ -650,21 +650,16 @@ def codex_text_dump(out: str) -> str:
 
 
 # ── harness fault detection (ADR-0018) ───────────────────────────────────────
-# Until ADR-0018 the ONLY failure signal here was the process exit status, and
-# `classify_harness_failure` read stderr — which these CLIs leave empty on
-# failure (measured: 349 bytes of unrelated warnings). Every in-band signal was
-# parsed for the token report and then discarded, so a shared backend fault (a
-# saturated inference server answering 200 with nothing) was laundered into
-# exit 11 "the Dev wrote bad output" on every container at once.
+# In-band stream events decide failure; exit status alone is insufficient.
+# See ADR-0018 and fixtures/harness_streams/README.md.
 
-FAULT_TURN_BUDGET = "turn_budget"            # deterministic — never a shared fault
+FAULT_TURN_BUDGET = "turn_budget"            # deterministic — never correlated
 FAULT_TERMINAL_ERROR = "terminal_error"
 FAULT_EMPTY_COMPLETION = "empty_completion"
 FAULT_NO_TERMINAL_EVENT = "no_terminal_event"
 FAULT_DETAIL_MAX = 400
 
-# Bad-value allowlist, never a good-value denylist: the terminal_reason enum is
-# not fully known, so an unrecognized value must stay "not a fault".
+# Bad-value allowlist: unknown terminal_reason must stay "not a fault".
 CLAUDE_FAULT_TERMINAL_REASONS = frozenset({"api_error"})
 # Empty by design: grok's stopReason enum is unverified, so it only ever
 # annotates the detail — it must never decide (a refusal must not be a fault).
@@ -681,19 +676,9 @@ def _fault(reason: str, summary: str, evidence: str = "") -> dict:
 
 
 def _claude_activity(out: str) -> tuple:
-    """(non-blank assistant text blocks, tool_use blocks) across the stream.
-
-    THE substance signal, and it is deliberately structural rather than numeric.
-    Token counts cannot tell "the backend returned nothing" from "the agent
-    worked for fifteen turns": in the committed fixtures `usage.output_tokens`
-    is 0 for BOTH (app/tests/fixtures/harness_streams/README.md), and
-    `modelUsage` is non-zero even for an empty completion because the stop token
-    costs tokens. Block counts separate them cleanly — and they also classify a
-    whitespace-only completion correctly, which no token threshold can.
-
-    Subagent blocks (`parent_tool_use_id`) are counted here, unlike in
-    `claude_text_dump`: the question is "did anything happen at all", and
-    counting more can only make the predicate MORE conservative.
+    """(non-blank assistant text blocks, tool_use blocks). Structural — token
+    counts cannot separate empty completion from tool-only work (fixtures README).
+    Counts subagent blocks (more activity ⇒ more conservative).
     """
     texts = tools = 0
     for line in out.splitlines():
@@ -763,9 +748,7 @@ def claude_run_fault(out: str, harness_exit: int, *, dump: str = "",
     activity = _claude_activity(out)          # parsed ONCE — `out` can be tens
     evidence = _claude_evidence(ev, out, activity)   # of MB on the failure path
 
-    # 1 — turn budget FIRST: it is deterministic, so it must never fall through
-    # into terminal_error and become correlation-eligible. A fleet hitting the
-    # same cap is not a transient shared fault, and retrying cannot help.
+    # Turn budget first — never correlation-eligible.
     if terminal == "max_turns" or subtype == "error_max_turns":
         return _fault(FAULT_TURN_BUDGET,
                       f"claude stopped at the configured turn cap after "
@@ -773,13 +756,7 @@ def claude_run_fault(out: str, harness_exit: int, *, dump: str = "",
                       f"Mission Type's assignment in Config -> Assignments, or assign "
                       f"a stronger Dev Type", evidence)
 
-    # 2 — the CLI's own terminal verdict. `subtype` is only ever matched on the
-    # "error" PREFIX: `subtype:"success"` was measured ALONGSIDE `is_error:true`
-    # on a hard 400, so a positive match on "success" proves nothing.
-    # `api_error_status` is a VALUE test, not a presence test: the healthy
-    # incident capture carries the field as null, and a future CLI version could
-    # report a benign status. 401/403 still reach exit 12, not 15 —
-    # classify_nonzero_exit reads the status itself, not this verdict.
+    # subtype "error" prefix only (400 can carry subtype success + is_error true).
     status = ev.get("api_error_status")
     if (ev.get("is_error") or (isinstance(status, int) and status >= 400)
             or subtype.startswith("error") or terminal in CLAUDE_FAULT_TERMINAL_REASONS):
@@ -787,7 +764,7 @@ def claude_run_fault(out: str, harness_exit: int, *, dump: str = "",
                       f"claude reported a terminal error: "
                       f"{str(ev.get('result') or terminal or subtype)[:120]}", evidence)
 
-    # 3 — the incident: a clean, well-formed "success" carrying nothing at all.
+    # Empty success: no text, no tools, empty result/dump.
     texts, tools = activity
     if (not str(ev.get("result") or "").strip() and not (dump or "").strip()
             and texts == 0 and tools == 0):
@@ -798,16 +775,15 @@ def claude_run_fault(out: str, harness_exit: int, *, dump: str = "",
 
 
 def codex_run_fault(out: str, harness_exit: int, *, last_message: str = ""):
-    """Codex: fault dict or None. `last_message` MUST be the raw `-o` file
-    content — never `result_text`, which the caller overwrites with a stdout
-    tail on any parse failure."""
+    """Codex: fault dict or None. `last_message` is the raw `-o` file (not
+    `result_text`, which may be a stdout-tail fallback)."""
     completed = error_msg = None
     messages = items = item_errors = 0
     out_tokens = None
     for line in out.splitlines():
         try:
             ev = json.loads(line)
-        except Exception:  # noqa: BLE001 — skip unparseable lines; terminal-event checks below still apply
+        except Exception:  # noqa: BLE001 — skip unparseable lines
             continue
         if not isinstance(ev, dict):
             continue
@@ -818,47 +794,24 @@ def codex_run_fault(out: str, harness_exit: int, *, last_message: str = ""):
         elif kind == "error":
             error_msg = str(ev.get("message") or "")[:120]
         elif kind.startswith("turn.") and kind not in ("turn.started", "turn.completed"):
-            # `turn.failed` is codex's documented failed-turn shape but is
-            # UNVERIFIED here (no capture yet) — treat any unrecognized terminal
-            # turn.* event as a failure rather than guessing its payload.
+            # Unrecognized terminal turn.* (e.g. turn.failed) → failure signal.
             error_msg = error_msg or f"unrecognized terminal event {kind!r}"
         elif kind == "item.completed":
             item = _dict(ev.get("item"))
-            # 0.144.4 writes `type`; `item_type` is kept because it is what the
-            # documented shape names and a future version may go back to it.
-            item_type = item.get("item_type") or item.get("type")
+            item_type = item.get("item_type") or item.get("type")  # 0.144.4: type
             if item_type == "agent_message":
-                # non-blank, exactly like `_claude_activity` — a whitespace-only
-                # completion IS the incident, not a message (codex_whitespace:
-                # the `-o` file is four whitespace bytes and the text dump is
-                # empty, so nothing was actually said).
                 if str(item.get("text") or "").strip():
                     messages += 1
             elif item_type == "error":
-                # EVIDENCE ONLY, NEVER ACTIVITY. With `-m` naming a model the
-                # backend does not advertise, codex emits an `item.completed`
-                # whose item type is "error" ("Model metadata for `X` not
-                # found") BEFORE `turn.started` — on every run, healthy or not.
-                # Scoring that as tool work made `empty_completion` unreachable
-                # against every local backend, i.e. in exactly the deployment
-                # ADR-0018 was written for (codex_empty vs codex_empty_no_model
-                # is the controlled counterfactual: same stub scenario, argv
-                # differing only in the `-m stub-model` pair).
+                # Metadata warning with -m (unknown model id) is NOT tool work.
                 item_errors += 1
             elif item:
-                # command_execution / file_change / patch_apply / mcp_tool_call:
-                # the codex analogue of claude's tool_use blocks. A run that did
-                # fifteen of these DID work, whatever its token counters say.
+                # command_execution / file_change / … — tool activity
                 items += 1
     tail = (f"(harness_exit={harness_exit} output_tokens={out_tokens} "
             f"agent_messages={messages} tool_items={items} "
             f"error_items={item_errors})")
-    # `turn.completed` IS codex's success signal, so its presence settles the
-    # question regardless of where an `error` event sits in the stream: an
-    # error before it was superseded, and one after it is post-hoc noise
-    # ("failed to persist rollout file") that did not stop the agent working.
-    # Only a stream with NO completed turn is a failure — and then the error
-    # message, when there is one, is the more useful classification.
+    # turn.completed wins over error events before/after it.
     if completed is None:
         if error_msg is not None:
             return _fault(FAULT_TERMINAL_ERROR,
@@ -866,9 +819,6 @@ def codex_run_fault(out: str, harness_exit: int, *, last_message: str = ""):
                           f"{error_msg}", tail)
         return _fault(FAULT_NO_TERMINAL_EVENT,
                       "codex stream ended without a turn.completed event", tail)
-    # Structural, like the claude arm — deliberately NOT a token threshold
-    # (fixtures README: output_tokens is 0 for both "did nothing" and "worked
-    # for fifteen turns").
     if not messages and not items and not (last_message or "").strip():
         return _fault(FAULT_EMPTY_COMPLETION,
                       "codex completed a turn with no agent message, no tool "
@@ -880,39 +830,12 @@ _MARKDOWN_HEADING = _re.compile(r"^#{1,6}\s")
 
 
 def grok_export_activity(dump: str, prompt: str = "") -> bool:
-    """Did the `grok export` transcript record anything the RUN produced?
+    """True if `grok export` shows content the run produced (not just prompt echo).
 
-    grok's stream carries no tool-call events at all (docs/08 §1, measured
-    across all eleven grok captures), so the export is THE activity signal for a
-    run that emitted no text — and the export always opens by echoing the whole
-    prompt back under `## User`. `dump.strip()` is therefore truthy for every
-    run that got far enough to have a session id, which INVERTED
-    `empty_completion` for grok: it fired only when grok had crashed hard enough
-    to have no session at all, and never in the 200-with-nothing case it exists
-    for (grok_whitespace: a whitespace-only answer is dropped from the export
-    entirely, leaving a 100-byte dump that is the prompt and nothing else).
-
-    So: locate the prompt verbatim, keep only what FOLLOWS it, drop Markdown
-    section headings, and ask whether anything non-blank is left.
-
-    This is DELIBERATELY BRITTLE and is documented as such (founder decision).
-    Two ways it can miss:
-
-    1. the prompt must appear verbatim — if grok ever reflows, re-indents or
-       truncates the echo, `find` returns -1;
-    2. `#`-prefixed lines must be section markers — if the export format
-       changes, fewer lines are stripped and more content survives.
-
-    BOTH FAIL SAFE, toward "activity found" ⇒ no fault ⇒ exit 11, the
-    pre-ADR-0018 status quo. Neither can manufacture a false fault, and a false
-    fault is the expensive direction: exit 15 excuses the attempt and feeds the
-    per-Dev-Type correlation brake.
-
-    Matching on heading NAMES instead ("any `##` that is not `## User` means
-    activity") is the obvious design and is INERT in production: every real
-    DevCake prompt opens with `## Your current mission type: …` plus `###
-    Workspace` / `### The mission` (app/devcake/prompts/__init__.py), and those
-    headings live INSIDE the echoed User section.
+    Export always re-prints the prompt under `## User`. Locate the prompt
+    verbatim, keep what follows, drop `#` headings. Fails safe toward "activity
+    found" (no false exit 15). Heading-name heuristics are wrong: DevCake
+    prompts embed `##` / `###` inside the User section.
     """
     body = dump or ""
     if not body.strip():
@@ -930,35 +853,22 @@ def grok_export_activity(dump: str, prompt: str = "") -> bool:
 
 def grok_run_fault(out: str, harness_exit: int, *, dump: str = "",
                    prompt: str = ""):
-    """Grok: fault dict or None. `stopReason` only ever annotates — its enum is
-    unverified, and calling a refusal a fault is the one mistake that must not
-    happen.
-
-    ONE pass over the stream, in the `_claude_activity` idiom: activity is a
-    CLOSED set of event types. The 0.2.112 catalogue is exactly
-    {`text`, `end`, `max_turns_reached`, `error`} (docs/08 §1, enumerated over
-    every grok capture) — in particular there is NO `thought` event, so the
-    `thoughts` counter this predicate used to keep could never be nonzero and is
-    gone. Unrecognized event types are not counted as activity either: an
-    unrecognized event scored as work is precisely what made codex's
-    `empty_completion` arm unreachable, and the export transcript already covers
-    the silent-but-productive run.
-
-    `error` and `end` NEVER co-occur across the captures, so no ordering rule is
-    needed — an `error` event IS the terminal verdict.
+    """Grok: fault dict or None. Closed event set: text / end / max_turns_reached
+    / error. Unrecognized types are not activity. `stopReason` only annotates
+    (GROK_FAULT_STOP_REASONS empty by design — refusals must not be faults).
     """
     texts, stop, error_msg = [], "", ""
     budget = saw_event = False
     for line in out.splitlines():
         try:
             ev = json.loads(line)
-        except Exception:  # noqa: BLE001 — one unparseable line must never decide a run's fate
+        except Exception:  # noqa: BLE001 — one bad line must not decide the run
             continue
         if not isinstance(ev, dict):
             continue
         kind = str(ev.get("type") or "")
         if not kind:
-            continue                    # not a grok stream event — see the blob path
+            continue
         saw_event = True
         if kind == "text":
             texts.append(str(ev.get("data") or ""))
@@ -971,22 +881,11 @@ def grok_run_fault(out: str, harness_exit: int, *, dump: str = "",
     text = "".join(texts)
     if not saw_event:
         if not out.strip():
-            # The CLI never ran: grok 0.2.112 exits 2 at ARGUMENT PARSING when
-            # $DEVCAKE_EXTRA_ARGS duplicates --output-format (grok_json_blob),
-            # and stderr carries the exact clap diagnosis. An operator
-            # misconfiguration must not be correlation-eligible — it is
-            # deterministic across the whole fleet, which is the property
-            # turn_budget is separated out to avoid — so this is not a harness
-            # fault at all: it falls through to 10 DEV_CRASH, where it was
-            # before ADR-0018, and stderr says exactly what to fix.
+            # CLI never ran (e.g. duplicate --output-format) → not a harness fault
             return None
-        # EXTRA_ARGS overriding the format back to a plain json blob is
-        # UNREACHABLE at 0.2.112 (the duplicate flag is refused, above), so the
-        # 0.2.93 blob shape is unverified. Kept as a defensive read only: an
-        # unrecognized stdout format must not be able to manufacture a fault.
         try:
             blob = json.loads(out)
-        except Exception:  # noqa: BLE001 — neither grok stream events nor a blob: no terminal event
+        except Exception:  # noqa: BLE001 — neither stream nor blob
             blob = None
         if not isinstance(blob, dict):
             return _fault(FAULT_NO_TERMINAL_EVENT,
@@ -996,25 +895,16 @@ def grok_run_fault(out: str, harness_exit: int, *, dump: str = "",
     tail = (f"(harness_exit={harness_exit} stopReason={stop!r} stdout={len(out)}B "
             f"text={len(text.strip())}B transcript={len(dump or '')}B)")
 
-    # 1 — turn budget FIRST, mirroring claude: it is deterministic, so it must
-    # never fall through into terminal_error and become correlation-eligible.
-    # grok announces the cap twice in band — a bare `{"type":"max_turns_reached"}`
-    # and `end` with stopReason "Cancelled" — but only the EVENT TYPE decides.
     if budget:
         return _fault(FAULT_TURN_BUDGET,
                       "grok stopped at the configured turn cap — raise --max-turns "
                       "on this Mission Type's assignment in Config -> Assignments, "
                       "or assign a stronger Dev Type", tail)
-
-    # 2 — the CLI's own terminal verdict, again on the EVENT TYPE. The message
-    # is carried into the detail as evidence; it never decides.
     if error_msg:
         return _fault(FAULT_TERMINAL_ERROR,
                       f"grok reported a terminal error: {error_msg[:120]}", tail)
     if stop and stop in GROK_FAULT_STOP_REASONS:      # empty set today, by design
         return _fault(FAULT_TERMINAL_ERROR, f"grok stopped with {stop!r}", tail)
-
-    # 3 — the incident: a clean run carrying nothing at all.
     if not text.strip() and not grok_export_activity(dump, prompt):
         return _fault(FAULT_EMPTY_COMPLETION,
                       "grok produced nothing at all — no text deltas, and nothing "
@@ -1038,39 +928,18 @@ def harness_fault(harness: str, out: str, harness_exit: int, *, dump: str = "",
     return claude_run_fault(out, harness_exit, dump=dump)
 
 
-# ── the HTTP status a harness reported (ADR-0018 §1.4) ───────────────────────
-# Only Claude Code exposes a structured field (`api_error_status` on the result
-# event). codex and grok expose none at all, so free text is the only source —
-# and these patterns are the deliberate, narrow exception to "a fault arm may
-# fire on an event TYPE, never on a model-controlled string VALUE": every one of
-# them matches wording written by the CLI's own HTTP layer, never by the model.
-#
-# PRECISION OVER RECALL, because the two failure directions are not symmetric.
-# A generic `status (\d{3})` would be unsafe: codex echoes the server's response
-# body verbatim into `error.message` (codex_http_400), so a backend that put
-# "status 401" in the body of a 500 would drive exit 12 and PAUSE THE WHOLE DEV
-# TYPE until a human re-uploads credentials — on what is really a backend fault.
-# Missing a 401 is the SAFE failure: it falls through to exit 15, which is
-# excusable, still counted, and still shows the operator the message.
+# HTTP status from CLI transport wording (not model prose). Precision over
+# recall: false 12 pauses a Dev Type; missed 401 falls through to 15.
 HARNESS_STATUS_PATTERNS = {
-    # `unexpected status 401 Unauthorized: …, url: http://…` (also 404),
-    # `exceeded retry limit, last status: 429 Too Many Requests`
     "codex": (_re.compile(r"unexpected status (\d{3})"),
               _re.compile(r"last status: (\d{3})")),
-    # `Internal error: "Unauthorized (401) from http://…"`,
-    # `Internal error: {"message": "API error (status 500 …)"`
     "grok-build": (_re.compile(r"Unauthorized \((\d{3})\)"),
                    _re.compile(r"\(status (\d{3})")),
 }
 
 
 def harness_error_messages(out: str) -> list:
-    """Every message the CLI's own terminal error events carry, in order.
-
-    Deliberately NOT a scan of the whole of stdout: an assistant message is
-    model-controlled text, and a model that writes "unexpected status 401" into
-    its answer must never be able to pause a Dev Type.
-    """
+    """Messages from CLI error / turn.failed events only (not assistant text)."""
     messages = []
     for line in out.splitlines():
         try:
@@ -1087,20 +956,11 @@ def harness_error_messages(out: str) -> list:
 
 
 def harness_api_error_status(harness: str, out: str):
-    """The HTTP status the harness itself reported, as an int, or None.
-
-    main() feeds this to `classify_nonzero_exit`, where 401/403 is the
-    DISTINCTIVE auth evidence that outranks the fault predicate. Before this
-    existed it was computed for claude only, so a 401 on codex or grok had no
-    structured status, the predicate won, and the run landed on exit 15 —
-    correlation-eligible, i.e. an expired key rolled out to a whole Dev Type
-    read as a shared backend outage and was excused instead of latching the
-    auth breaker.
-    """
+    """HTTP status the harness reported (int), or None. Feeds auth precedence."""
     patterns = HARNESS_STATUS_PATTERNS.get(harness)
-    if patterns is None:                     # claude-code (and the unknown-harness
+    if patterns is None:  # claude-code has api_error_status on the result event
         status = _dict(claude_result_event(out)).get("api_error_status")
-        return status if isinstance(status, int) else None      # fallback) has a field
+        return status if isinstance(status, int) else None
     for message in harness_error_messages(out):
         for rx in patterns:
             hit = rx.search(message)
@@ -1112,17 +972,9 @@ def harness_api_error_status(harness: str, out: str):
 def classify_nonzero_exit(err_text: str, fault, api_error_status=None) -> tuple:
     """(exit code, error_class) for a nonzero harness exit — ADR-0018 §3.
 
-    Pure so the COMPOSED rule is testable; main() only renders the transcript.
     Order: turn_budget → distinctive auth → predicate → generic auth → crash.
-
-    Both auth arms matter. DISTINCTIVE evidence (a structured 401/403, or the
-    `not signed in` / `grok login` wording) outranks the predicate: a revoked
-    credential answers 401 with an EMPTY stderr and a result event that also
-    trips `terminal_error`, so gating 12 on stderr alone routed it to 15 and
-    never told the operator to refresh the key. A GENERIC marker (bare
-    "authentication"/"unauthorized", which OpenAI-compatible gateways emit on
-    ordinary rejections) only wins when the predicate found nothing — otherwise
-    a backend fault would latch the per-Dev-Type breaker.
+    Distinctive 401/403 outranks the fault predicate so keys latch DEV_AUTH (12)
+    instead of becoming correlation-eligible 15.
     """
     if fault and fault["reason"] == FAULT_TURN_BUDGET:
         return 16, "DEV_TURN_BUDGET"

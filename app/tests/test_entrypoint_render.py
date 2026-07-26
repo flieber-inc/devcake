@@ -210,12 +210,7 @@ def test_grok_coalescer_renders_the_terminal_error_and_the_turn_cap():
 
 FIXTURES = Path(__file__).parent / "fixtures" / "harness_streams"
 
-# A capture's harness comes from its SIDECAR, which records it as a measured
-# fact; the filename prefix is only the fallback for the four 2026-07-24
-# Claude Code 2.1.219 streams that predate the capture rig and have none. (The
-# prefix alone stopped being sufficient with the `live_*` real-backend batch,
-# whose names lead with the provenance rather than the harness.) The renderers
-# are dispatched by the harness name exactly as main() does (~L1528).
+# Sidecar harness when present; filename prefix for the four pre-rig claude streams.
 HARNESS_BY_PREFIX = {"claude": "claude-code", "codex": "codex", "grok": "grok-build"}
 
 # The events that decide a run's fate — every ADR-0018 fault arm fires on one of

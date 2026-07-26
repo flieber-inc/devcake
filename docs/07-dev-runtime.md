@@ -105,13 +105,25 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 | 16 | Harness stopped at its configured turn cap (`--max-turns`) — **`claude-code` and `grok-build`; unreachable for `codex`**, see below | `DEV_TURN_BUDGET` (always counted; deterministic, so never correlated) |
 | 20 | Entrypoint internal error | `DEV_CRASH` |
 
-**The exit status alone is not the failure signal (ADR-0018).** Every harness CLI can terminate with status 0 while reporting failure in-band — a backend answering HTTP 200 with an empty completion is the measured case — and their stderr carries no failure information at all, so the entrypoint inspects the harness's own terminal event before deciding. Exits 10, 11, 15 and 16 all carry `error_class`, `error_detail` and a bounded workspace-forensics block.
+**The exit status alone is not the failure signal (ADR-0018).** Harness CLIs can
+exit 0 with an empty or failed in-band terminal event, and stderr often carries
+no failure information — the entrypoint inspects the stream before deciding.
+Exits 10, 11, 15 and 16 carry `error_class`, `error_detail` and bounded
+workspace forensics. Scenario captures: `app/tests/fixtures/harness_streams/`.
 
-**Which harnesses can reach exit 16** (`adr/0018-harness-fault-classification-and-backend-brake.md`, and `app/tests/fixtures/harness_streams/README.md` for the streams). Two of the three. `claude-code`: cap exhaustion surfaces as `terminal_reason: "max_turns"` / `subtype: "error_max_turns"`. `grok-build` 0.2.112: it emits a dedicated `{"type":"max_turns_reached"}` event **and** an `end` with `stopReason: "Cancelled"`, exiting 1 — and since ADR-0018's fix round the grok predicate fires its turn-budget arm on that **event type**, checked before every other arm exactly as claude's is, so a grok cap stop now reports exit 16 too (`grok_turn_budget`; asserted in `app/tests/test_harness_captures.py`). It reached `DEV_CRASH` (exit 10) before that arm existed. `codex` at 0.144.4 has **no `--max-turns` equivalent and no config key for one**, so exit 16 is unreachable for it and no value of the per-Mission-Type extra CLI args (`02-domain-model.md` §9) can bound it.
+**Which harnesses can reach exit 16.** `claude-code` (`max_turns` /
+`error_max_turns`) and `grok-build` (`max_turns_reached` event) — see
+`test_harness_captures.py` and ADR-0018. `codex` 0.144.4 has no turn cap, so
+exit 16 is unreachable; extra CLI args cannot invent one (`02` §9).
 
-**A grok Dev can also stop early WITHOUT reaching 16 — and it reports exit 11, not 16.** grok 0.2.112 halts a run in which the model repeats the identical tool call, on its own, after ~16 model calls: `stopReason: "EndTurn"`, exit **0**, no `max_turns_reached` (`grok_loop_nocap`, `grok_loop_cap30`). Nothing was completed, so `result.json` is missing and the run lands on **exit 11 `DEV_BAD_OUTPUT`** with no indication that it was truncated. This is a non-progress halt and **not** a turn cap — `--max-turns` is unaffected by it and still fires wherever it is set, above 16 included (`grok_loop_varying_cap20` stops at 20). Mechanism and fixtures: `adr/0018-harness-fault-classification-and-backend-brake.md`; operator guidance: `15-errors-and-retries.md` §2b.
+**Grok non-progress halt → exit 11, not 16.** A repeated identical tool call can
+end with `EndTurn` and exit 0 after ~16 model calls (no `max_turns_reached`).
+Missing `result.json` → exit 11. Not a turn cap — see `15` §2b and `grok_loop_*`
+captures.
 
-**A runaway `codex` Dev is bounded only by the run timeout.** Against a backend that answers every turn with a tool call, a codex run does not stop by itself — the capture campaign measured one at ~5,535 requests in ~7 minutes, still going when it was killed at the container level (a campaign note, not a committed fixture: that run produced no capture files). There is no turn-cap remedy to reach for. The only control left is `dev_timeout_minutes` (`02-domain-model.md` §9, default 120; enforced by the watchdog, `04-orchestrator.md` §5) — a **global** setting, so lowering it to fence one Dev Type shortens every run — and it arrives as a signal kill, so the run is reported `DEV_TIMEOUT`, never `DEV_TURN_BUDGET`, and burns its full timeout of wall-clock and backend capacity on every attempt.
+**A runaway `codex` Dev is bounded only by the run timeout**
+(`dev_timeout_minutes`, default 120 — global; watchdog → `DEV_TIMEOUT`, never
+`DEV_TURN_BUDGET`).
 
 App-side timeout is **not** an entrypoint exit code: the watchdog kills the run via Dagu stop (SIGTERM → SIGKILL), and the Run is marked `timed_out` (`DEV_TIMEOUT`). The container may exit on SIGTERM; it does **not** emit exit 124 from the entrypoint.
 

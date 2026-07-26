@@ -59,7 +59,7 @@ def reason(fault):
 # ── claude: the real captures ────────────────────────────────────────────────
 
 @pytest.mark.parametrize("name,harness_exit,expected", [
-    ("claude_empty_completion.jsonl", 0, ep.FAULT_EMPTY_COMPLETION),   # THE incident
+    ("claude_empty_completion.jsonl", 0, ep.FAULT_EMPTY_COMPLETION),   # empty completion
     ("claude_api_error_400.jsonl", 1, ep.FAULT_TERMINAL_ERROR),
     ("claude_max_turns.jsonl", 1, ep.FAULT_TURN_BUDGET),
     ("claude_aborted_streaming.jsonl", 1, ep.FAULT_TERMINAL_ERROR),
@@ -70,9 +70,8 @@ def test_real_captures_classify(name, harness_exit, expected):
                                    dump=ep.claude_text_dump(out))) == expected
 
 
-def test_incident_capture_exits_zero_and_is_a_fault():
-    """The whole point: the harness exited 0 and claimed success, so the old
-    exit-status-only classifier reported it as the Dev's bad output."""
+def test_empty_completion_exits_zero_and_is_a_fault():
+    """Harness exited 0 with success subtype but no content → fault (was exit 11)."""
     out = fx("claude_empty_completion.jsonl")
     ev = ep.claude_result_event(out)
     assert ev["subtype"] == "success" and not ev.get("is_error")
@@ -110,9 +109,7 @@ def test_refusal_is_not_a_fault():
 
 
 def test_tool_only_run_with_empty_final_message_is_not_a_fault():
-    """The case a token threshold gets WRONG: usage.output_tokens is 0 here and
-    in the incident alike (fixtures README), so only the structural signal —
-    tool_use blocks — separates them."""
+    """Token threshold would misclassify this; structural tool_use does not."""
     out = "\n".join(
         [J({"type": "assistant",
             "message": {"content": [{"type": "tool_use", "id": "t", "name": "Bash",
@@ -124,8 +121,7 @@ def test_tool_only_run_with_empty_final_message_is_not_a_fault():
 
 
 def test_stderr_noise_never_changes_the_verdict():
-    """stderr is not an input to the predicate at all — it carried only 349
-    bytes of unrelated connector warnings in every measured failure."""
+    """stderr is not an input to the fault predicate."""
     out = fx("claude_empty_completion.jsonl")
     assert reason(ep.harness_fault("claude-code", out, 0)) == \
         reason(ep.harness_fault("claude-code", out, 0, dump=""))

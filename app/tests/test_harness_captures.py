@@ -1,50 +1,19 @@
-"""ADR-0018 evidence — what the SHIPPED fault predicate does with real captures.
+"""ADR-0018 regression — fault predicate over real harness CLI streams.
 
-One row per capture in `fixtures/harness_streams/`, discovered from the
-`*.meta.json` sidecars on disk rather than listed by hand, so a capture dropped
-into that directory cannot be silently unasserted
-(`test_every_sidecar_has_a_row`). Every fixture byte is verbatim CLI stdout;
-nothing here is hand-written or edited.
+Each row is a **scenario capture**: the real CLI from a baked Dev image was run
+with its base URL pointed at `scripts/harness_capture/stub_backend.py` (a fake
+model server that returns one named condition). Stdout is committed
+byte-for-byte under `fixtures/harness_streams/`. Nothing here is hand-authored
+JSON.
 
-**Measured facts and expectations must not share a file.** A sidecar holds only
-what the capture rig measured — argv, exit status, byte counts, and the verdict
-the predicate happened to give AT CAPTURE TIME. The `intended` verdict is a
-human judgement about what SHOULD happen, and it lives in `CAPTURES` below, in
-this file, under review. If an expectation could be written into a sidecar, a
-capture could be "corrected" into agreement with a predicate that is wrong, and
-the whole exercise would grade itself.
+Sidecars (`*.meta.json`) hold measured facts only (argv, exit code, sizes).
+Intended verdicts live in `CAPTURES` below — never in the sidecar — so an
+expectation cannot be "corrected" without review. Discovery is from disk
+(`test_every_sidecar_has_a_row`): a new capture without a CAPTURES row fails
+collection.
 
-For the same reason a sidecar's `observed_reason` is deliberately NOT asserted
-here: it is a snapshot of a predicate that is about to change. What IS asserted
-against every sidecar is its byte counts (`test_sidecar_byte_counts_match_the_
-committed_files`) — pure facts about the fixture, and the guard that catches a
-stream and its sidecar drifting apart.
-
-This module opened as the EVIDENCE half of a two-commit sequence: eleven rows
-landed as strict expected failures naming the mechanism that produced the wrong
-answer, and the fix commit was finished exactly when every one of them had been
-removed. All forty-seven rows now hold against the working-tree predicate, so
-the table is a plain regression suite: any row that stops holding is a real
-change of verdict, and every verdict change is a behaviour change an operator
-feels (15 excuses an attempt and feeds the correlation brake, 12 pauses a whole
-Dev Type, 16 is always counted).
-
-Seventeen rows are `live_*`: captures against the REAL model backend that
-produced the 2026-07-24 production incident, rather than against a stub. They
-reproduce that incident exactly — codex exits 0, makes no tool call, writes no
-`result.json`, and DevCake reports exit 11 `DEV_BAD_OUTPUT` both before and
-after ADR-0018 — and every one of them intends NO FAULT, because the model did
-answer; it answered with prose. They are the false-positive guard for anything
-that would fault a run on the content of a model-controlled string. They are
-also the only fixtures here that cannot be regenerated, so their sidecars carry
-`reproducible: false` and a `scrub` record of the backend-address placeholder.
-
-Three rows carry a fact about a HARNESS rather than about the predicate: grok
-halts a repeated-tool-call run itself at 16 model calls, silently and with exit
-0 (`grok_loop_nocap`, `grok_loop_cap30`). That is a non-progress halt, NOT a turn
-cap — `grok_loop_varying_cap20` runs past 16 on the same lane and is stopped by
-`--max-turns 20` at turn 20. Their verdicts are unremarkable; the tests below
-them are the point.
+Verdict changes are operator-visible: exit 15 can excuse and throttle a Dev
+Type, 12 latches auth, 16 is always counted.
 """
 
 import importlib.util
@@ -84,8 +53,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "harness_streams"
 META = {p.name[:-len(".meta.json")]: json.loads(p.read_text())
         for p in sorted(FIXTURES.glob("*.meta.json"))}
 
-# The 2026-07-24 Claude Code 2.1.219 incident captures predate the capture rig,
-# so they carry no sidecar and are asserted by test_entrypoint_fault.py instead.
+# Pre-rig claude streams (no sidecar) — asserted by test_entrypoint_fault.py.
 PRE_SIDECAR_STREAMS = frozenset({
     "claude_aborted_streaming", "claude_api_error_400",
     "claude_empty_completion", "claude_max_turns",
@@ -179,8 +147,7 @@ CAPTURES = [
     # metadata for stub-model not found`) BEFORE `turn.started`, and scoring
     # that as tool work made this arm unreachable against every local backend.
     ("codex_empty", EMPTY),
-    # THE controlled counterfactual for the row above: same stub scenario, same
-    # CLI, argv differing only in the `-m stub-model` pair.
+    # Counterfactual for the row above: same scenario, argv differs only in `-m`.
     ("codex_empty_no_model", EMPTY),
     ("codex_healthy", NO_FAULT),
     # `agent_message` counts only when its text is non-blank, like
@@ -220,19 +187,10 @@ CAPTURES = [
     # 16 real tool executions, and the stream is ONE line long (the `end` event).
     # Conservative only because the `grok export` transcript lists the tool calls.
     ("grok_tool_only", NO_FAULT),
-    # EXPECTATION CHANGED by the fix commit (from empty_completion, same exit).
-    # grok reports 200-with-nothing as an `{"type":"error"}` event naming its own
-    # condition — `empty response from model (no_visible_content)` — and the new
-    # arm fires on that EVENT TYPE, carrying grok's verbatim message into the
-    # detail. Demoting it back to empty_completion would take a match on the
-    # message STRING, which buys nothing here: the exit code is 15 either way,
-    # and terminal_error is the more informative of the two.
+    # 200-with-nothing: grok emits type:error (empty response), not empty_completion.
     ("grok_empty", TERMINAL),
-    # THE grok incident row, and the only one `empty_completion` still fires on:
-    # `grok export` opens by echoing the prompt, so `dump.strip()` is truthy for
-    # every run that has a session id. Only the prompt-anchored parse
-    # (`grok_export_activity`) sees that the transcript is the echo and nothing
-    # else.
+    # empty_completion for grok: export echoes the prompt; only prompt-anchored
+    # parse sees that nothing followed (`grok_export_activity`).
     ("grok_whitespace", EMPTY),
     # grok's stderr matches only the GENERIC `unauthorized` marker, which ranks
     # below the predicate; the 12 comes from the in-band `Unauthorized (401)`.
@@ -246,90 +204,15 @@ CAPTURES = [
     # with `stopReason:"Cancelled"` — but only the event TYPE decides, and it is
     # checked FIRST so a deterministic cap can never become correlation-eligible.
     ("grok_turn_budget", BUDGET),
-    # ── grok's SILENT NON-PROGRESS HALT, and the control that explains it ────
-    # Both are the `loop` lane — the byte-identical tool call, every turn — and
-    # both stop at 16 model calls with `EndTurn` and exit 0, one of them having
-    # asked for `--max-turns 30` (accepted and armed; the halt fired at 16, so
-    # turn 30 was never reached — this is NOT a cap the flag failed to raise).
-    # NO FAULT is the correct verdict and not a concession: 16 tool executions
-    # happened, the export lists them, and the predicate is right to see
-    # activity. It is what happens NEXT that hurts — no `result.json` was
-    # written, so the honest report is exit 11 `DEV_BAD_OUTPUT`,
-    # indistinguishable from a Dev that simply misbehaved
-    # (`test_grok_halts_silently_on_a_repeated_tool_call`, `15` §2b).
+    # grok silent non-progress halt (repeated identical tool call) — NO_FAULT;
+    # run still lands exit 11 for missing result.json (docs/15 §2b).
     ("grok_loop_nocap", NO_FAULT),
     ("grok_loop_cap30", NO_FAULT),
-    # THE control, and the row that keeps the remedy honest: the same lane with
-    # the tool ARGUMENTS varied runs straight past 16, and `--max-turns 20` then
-    # stops it loudly at `num_turns: 20`. So the halt is not a ceiling and the
-    # cap is genuinely raisable on grok — `15-errors-and-retries.md` §2a's
-    # advice is correct as written.
+    # Control: varying tool args pass 16; --max-turns 20 stops loudly (exit 16).
     ("grok_loop_varying_cap20", BUDGET),
-    # NOT a harness fault: grok 0.2.112 exits 2 at argument parsing when
-    # EXTRA_ARGS adds a second --output-format, so the CLI never ran and stdout
-    # is zero bytes. Calling that a harness fault would make an operator
-    # misconfiguration correlation-eligible and deterministic-across-the-fleet —
-    # exactly what turn_budget is separated out to avoid — while stderr carries
-    # the precise clap diagnosis that exit 10 surfaces.
+    # Operator misconfig (duplicate --output-format) → exit 10, not correlation.
     ("grok_json_blob", CRASH),
-
-    # ── LIVE captures against the REAL incident backend (2026-07-25) ─────────
-    # Not reproducible: a real vLLM serving DeepSeek-V4-Flash-DSpark-Abliterated,
-    # sampled once. Provenance is each sidecar's `model` + `captured_at`, and
-    # every sidecar records `reproducible: false` and the address `scrub`.
-    #
-    # EVERY ONE OF THEM IS `NO_FAULT`, AND THAT IS THE FINDING — not a
-    # concession. The 2026-07-24 production incident reproduces here exactly
-    # (codex exits 0, writes no result.json, DevCake reports exit 11
-    # DEV_BAD_OUTPUT), and ADR-0018 does NOT reclassify it to 15, because the
-    # model DID speak: a long, non-blank `agent_message` containing invented
-    # tool syntax as prose. `empty_completion` is structural and there is
-    # nothing empty here; the only thing that would separate this from a
-    # legitimately chatty run is the CONTENT of a model-controlled string, and
-    # firing an arm on that is precisely what the predicate refuses to do
-    # (HARNESS_STATUS_PATTERNS' comment states the rule). So these rows are a
-    # false-positive guard: if a future predicate change starts faulting them,
-    # it has begun grading prose.
-    #
-    # codex on the :8765 proxy — THE incident path.
-    ("live_codex_proxy_trivial", NO_FAULT),      # control: the path is healthy
-    ("live_codex_proxy_mission", NO_FAULT),      # THE reproduction
-    # codex on raw :8000 — the A/B. The proxy exists to reposition the system
-    # prompt for codex, so this is the known-degenerate config; it degenerates
-    # the SAME way, which is what removes "the proxy hiccuped" from the list of
-    # explanations.
-    ("live_codex_raw_trivial", NO_FAULT),
-    ("live_codex_raw_mission", NO_FAULT),
-    # The controls that rule out the backend and the model: same server, same
-    # model id, same prompt, different harness — and both of these actually
-    # finished the task on disk (result.json written, `farewell` added).
-    ("live_claude_raw_mission", NO_FAULT),
-    ("live_grok_raw_mission", NO_FAULT),
-    # An operator could point claude or grok at the codex-shaped :8765 proxy by
-    # mistake. Recorded so the predicate is graded on that misconfiguration too
-    # — and it turns out not to be a failure at all for either of them.
-    ("live_claude_proxy_trivial", NO_FAULT),
-    ("live_grok_proxy_trivial", NO_FAULT),
-    # LANE 2 — eight concurrent runs at the deployment's real `global_max: 8`,
-    # against the incident path. All eight land identically, which is the
-    # CASCADE character of the incident ("every other container failed
-    # identically") rather than merely its verdict.
-    *[(f"live_codex_proxy_conc8.{i}", NO_FAULT) for i in range(8)],
-    # The escalation to N=16 produced one slot that behaved differently under
-    # saturation: 9,666 output tokens of degenerate repetition over 232 s,
-    # ~40x its siblings. Same verdict. Committed because it is the only
-    # measured instance of load changing the GENERATION, and it shows that even
-    # a completely degenerate one does not become classifiable.
-    ("live_codex_proxy_conc16.8", NO_FAULT),
 ]
-
-# The live rows, by the argument each group carries. Used by the tests below so
-# a capture cannot be added to one group and silently graded by another.
-LIVE_CODEX_SINGLE = ("live_codex_proxy_trivial", "live_codex_proxy_mission",
-                     "live_codex_raw_trivial", "live_codex_raw_mission")
-LIVE_CONC8 = tuple(f"live_codex_proxy_conc8.{i}" for i in range(8))
-LIVE_CODEX = LIVE_CODEX_SINGLE + LIVE_CONC8 + ("live_codex_proxy_conc16.8",)
-LIVE_ALL = tuple(n for n, _ in CAPTURES if n.startswith("live_"))
 
 
 @pytest.mark.parametrize("name,intended",
@@ -553,231 +436,3 @@ def test_grok_json_blob_never_ran_the_model():
     assert META["grok_json_blob"]["exit_code"] == 2
     assert "--output-format" in companion("grok_json_blob", "stderr.txt")
     assert "cannot be used multiple times" in companion("grok_json_blob", "stderr.txt")
-
-
-# ── the LIVE batch: the 2026-07-24 incident, reproduced against the real
-#    backend that caused it ────────────────────────────────────────────────
-# Everything below is a fact about bytes sampled once from a real model. They
-# cannot be regenerated, which is why the sidecars carry `reproducible: false`
-# — but once committed they are as deterministic as any other fixture, so the
-# verdicts above are re-derived from them normally rather than read back out of
-# a sidecar.
-
-
-def codex_item_counts(name: str) -> dict:
-    """`{item type: count}` over a codex stream's `item.completed` events —
-    the same three buckets `codex_run_fault` sorts them into."""
-    counts = {}
-    for ev in events(name):
-        if ev.get("type") == "item.completed":
-            item = ev["item"]
-            key = item.get("item_type") or item.get("type")
-            counts[key] = counts.get(key, 0) + 1
-    return counts
-
-
-def test_the_live_incident_reproduces_exactly_as_reported():
-    """THE headline row.
-
-    The production report was: a container failed `exit 11 — result.json
-    missing`, and under pre-ADR-0018 code exit 11 required the CLI to exit **0**
-    — so whatever happened, codex thought it had succeeded. That is what this
-    capture is, taken against the same backend through the same `:8765` proxy
-    with the founder's own `-c` block:
-
-      * codex exits 0 and completes a turn, so nothing failed as far as it knows;
-      * it made ZERO tool calls — no `command_execution`, no `file_change`;
-      * what it produced instead is prose containing INVENTED tool syntax, and
-        its closing message asserts it wrote `out/result.json`;
-      * nothing was written. (Verified on a host-mounted workspace at capture
-        time: no `result.json`, `src/greet.py` unmodified. That is a fact about
-        the run, not about these bytes, so it is recorded in the README.)
-
-    DevCake therefore reports exit 11 `DEV_BAD_OUTPUT` — and reports the SAME
-    thing before and after ADR-0018. The ADR did not launder this fault; it
-    never claimed to. `empty_completion` is structural and this completion is
-    not empty.
-    """
-    name = "live_codex_proxy_mission"
-    assert codex_item_counts(name) == {"error": 1, "agent_message": 1}
-    completed = [e for e in events(name) if e.get("type") == "turn.completed"]
-    assert completed and completed[0]["usage"]["output_tokens"] > 0
-    assert META[name]["exit_code"] == 0
-    # the model claims the deliverable it never produced
-    last = companion(name, "last_message.txt")
-    assert "result.json" in last and "<exec>" in last
-    # and DevCake's verdict is the incident's verdict, unchanged by the ADR
-    assert verdict(name) == NO_FAULT
-    assert (META[name]["devcake_exit_now"],
-            META[name]["devcake_exit_before_adr0018"]) == (11, 11)
-
-
-@pytest.mark.parametrize("name", LIVE_CODEX)
-def test_no_live_codex_run_ever_made_a_tool_call(name):
-    """Thirteen codex runs — two prompts, two ports, N=1/8/16 — and not one
-    `command_execution` between them. Every stream is exactly the benign `-m`
-    metadata error item plus a single `agent_message`, so the failure is
-    uniform: codex never executes anything against this model, and the
-    deliverable a Dev produces by writing files therefore never exists."""
-    assert codex_item_counts(name) == {"error": 1, "agent_message": 1}
-    assert META[name]["exit_code"] == 0
-    assert verdict(name) == NO_FAULT
-    assert (META[name]["devcake_exit_now"],
-            META[name]["devcake_exit_before_adr0018"]) == (11, 11)
-    # stderr opens with the same unrelated line the stub batch measured, and
-    # names neither the model nor the missing deliverable — ADR-0018's central
-    # premise, now confirmed against a real backend on the only channel
-    # pre-ADR-0018 DevCake could read.
-    stderr = companion(name, "stderr.txt")
-    assert stderr.startswith("Reading additional input from stdin...")
-    assert META[name]["model"] not in stderr and "result.json" not in stderr
-    # codex's ONE genuinely diagnostic stderr line is absent here, and correctly
-    # so: `no last agent message` fires when the `-o` file would be empty, and
-    # these runs all produced a message. It was just worth nothing.
-    assert "no last agent message" not in stderr
-    assert META[name]["last_message_bytes"] > 0
-
-
-def test_the_only_extra_stderr_line_in_the_batch_is_a_concurrency_artifact():
-    """Twelve of the thirteen codex captures write exactly 39 bytes of stderr.
-    The thirteenth writes one more line, and it is worth naming so it is not
-    read as a backend signal: running eight codex processes inside ONE container
-    makes them race on the shared `$HOME` skills directory. That is an artifact
-    of how the rig produces concurrency (N processes, one container — the
-    sidecars say so), not something a real eight-container fleet would hit, and
-    it still carries no information about the run's outcome.
-    """
-    sizes = {n: META[n]["stderr_bytes"] for n in LIVE_CODEX}
-    noisy = [n for n, size in sizes.items() if size != 39]
-    assert noisy == ["live_codex_proxy_conc8.5"]
-    extra = companion(noisy[0], "stderr.txt")
-    assert "failed to install system skills" in extra
-    assert "Directory not empty" in extra
-    assert META[noisy[0]]["concurrency"] == 8
-    # it changed nothing: the run still exited 0 with the same shape
-    assert META[noisy[0]]["exit_code"] == 0
-    assert verdict(noisy[0]) == NO_FAULT
-
-
-def test_the_proxy_is_not_the_variable():
-    """The A/B that removes "the proxy hiccuped" from the shortlist.
-
-    `:8765` repositions the system prompt where codex expects it and `:8000` is
-    raw vLLM, which for codex is a KNOWN-DEGENERATE config. Both ports answer a
-    no-tool prompt perfectly and both degenerate identically on a mission-shaped
-    one, so the difference between them explains nothing about the incident.
-    """
-    ports = {n: META[n]["preflight"]["url"] for n in LIVE_CODEX_SINGLE}
-    assert "vllm-backend:8765" in ports["live_codex_proxy_mission"]
-    assert "vllm-backend:8000" in ports["live_codex_raw_mission"]
-    # the trivial prompt succeeds on BOTH — one word, exactly as asked
-    for name in ("live_codex_proxy_trivial", "live_codex_raw_trivial"):
-        assert companion(name, "last_message.txt").strip() == "ACKNOWLEDGED"
-    # the mission-shaped prompt degenerates on BOTH, into the same shape
-    for name in ("live_codex_proxy_mission", "live_codex_raw_mission"):
-        assert "<exec>" in companion(name, "last_message.txt")
-        assert codex_item_counts(name) == {"error": 1, "agent_message": 1}
-
-
-def test_the_same_backend_and_model_serve_claude_and_grok_correctly():
-    """The control that rules out the backend, the model and the network.
-
-    Same server, same model id, same mission-shaped prompt — and the other two
-    harnesses tool-call for real and finish the job. Whatever broke codex is
-    not "the backend was down", which is the hypothesis a fleet-wide
-    simultaneous failure invites.
-    """
-    model = "DeepSeek-V4-Flash-DSpark-Abliterated"
-    assert {META[n]["model"] for n in LIVE_ALL} == {model}
-
-    tools = [b["name"] for ev in events("live_claude_raw_mission")
-             if ev.get("type") == "assistant"
-             for b in ev.get("message", {}).get("content", [])
-             if b.get("type") == "tool_use"]
-    assert tools == ["Read", "Edit", "Bash", "Write"]      # it read, edited, wrote
-    result = [e for e in events("live_claude_raw_mission") if e.get("type") == "result"]
-    assert result and result[0]["is_error"] is False and result[0]["subtype"] == "success"
-
-    # grok's tool work is visible only in its export, exactly as the stub batch
-    # established — and it lists real file operations, not prose
-    grok_dump = companion("live_grok_raw_mission", "dump.txt")
-    assert "## Tools" in grok_dump
-    for call in ("- Read: src/greet.py", "- Edit: src/greet.py",
-                 "- Edit: out/result.json"):
-        assert call in grok_dump
-    assert events("live_grok_raw_mission")[-1]["stopReason"] == "EndTurn"
-
-
-def test_eight_concurrent_runs_failed_identically_and_at_once():
-    """LANE 2, and the CASCADE half of the incident report: "after which every
-    other container failed identically".
-
-    Eight mission-shaped codex runs at the deployment's real `global_max: 8`,
-    concurrent against the incident path. All eight exit 0, none makes a tool
-    call, all eight report exit 11 — so a whole board burns simultaneously with
-    no classifiable fault anywhere in it. Concurrency multiplied the failure; it
-    did not change its shape.
-    """
-    assert len(LIVE_CONC8) == 8
-    for name in LIVE_CONC8:
-        assert META[name]["concurrency"] == 8
-        assert META[name]["timed_out"] is False
-        assert codex_item_counts(name) == {"error": 1, "agent_message": 1}
-        assert verdict(name) == NO_FAULT
-    # a single container's worth of concurrency, and every slot is its own run
-    assert len({META[n]["argv"][2] for n in LIVE_CONC8}) == 1      # same prompt
-    assert len({events(n)[0]["thread_id"] for n in LIVE_CONC8}) == 8
-
-
-def test_saturation_changes_the_generation_but_not_the_verdict():
-    """The N=16 escalation's one anomaly, and the reason it is committed.
-
-    Under 2x the deployment's concurrency one slot degenerated much further
-    than its siblings — 9,666 output tokens over 232 s of repetitive
-    non-progress, ~40x the stdout of the other fifteen — instead of the ~300
-    tokens of invented tool syntax the unloaded runs produce. It is the only
-    measured instance of backend pressure changing what the model emits.
-
-    It still exits 0, still produces one `agent_message` and no tool call, and
-    still reports exit 11. So pressure moves the generation and leaves the
-    classification exactly where it was: there is no concurrency level in reach
-    at which this fault becomes visible to the predicate.
-    """
-    name = "live_codex_proxy_conc16.8"
-    meta = META[name]
-    assert meta["concurrency"] == 16 and meta["timed_out"] is False
-    completed = [e for e in events(name) if e.get("type") == "turn.completed"]
-    assert completed[0]["usage"]["output_tokens"] == 9666
-    assert meta["duration_ms"] > 200_000
-    # ~40x its N=8 siblings, and still ONE message with no tool call
-    assert meta["stdout_bytes"] > 20 * max(META[n]["stdout_bytes"] for n in LIVE_CONC8) / 8
-    assert codex_item_counts(name) == {"error": 1, "agent_message": 1}
-    assert verdict(name) == NO_FAULT
-
-
-@pytest.mark.parametrize("name", LIVE_ALL)
-def test_live_captures_declare_their_scrub_and_their_non_reproducibility(name):
-    """Provenance guard for the only fixtures here that cannot be regenerated.
-
-    Two claims have to survive review. First, the backend address was
-    placeholdered — so the sidecar records the rewrite rather than leaving it
-    silent, and the substitution keeps scheme and port, because the
-    `:8765`-proxy / `:8000`-raw distinction is what the A/B above is made of.
-    Second, a live capture is a sample, not a fixture that can be re-taken: the
-    model id and `captured_at` are the whole of its provenance.
-    """
-    meta = META[name]
-    assert meta["reproducible"] is False and meta["reproducibility_note"]
-    assert meta["model"] and meta["captured_at"] and meta["cli_version"]
-    scrub = meta["scrub"]
-    assert scrub["placeholder"] == "vllm-backend"
-    assert scrub["occurrences_rewritten"] > 0
-    assert scrub["length_preserving"] is True
-    # the rewrite touched sidecars only, so no committed stream byte moved
-    assert scrub["found_in_stream_files"] is False
-    for suffix in ("jsonl", "stderr.txt", "dump.txt", "last_message.txt"):
-        assert "vllm-backend" not in companion(name, suffix)
-    # …and the port survived it, on both sides of the A/B
-    url = meta["preflight"]["url"]
-    assert url.startswith("http://vllm-backend:")
-    assert url.split(":")[2].split("/")[0] in ("8000", "8765")

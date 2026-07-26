@@ -203,7 +203,9 @@ Type (the args are per Mission Type, not per Dev Type — §3):
 `codex-auth.json` from an earlier device-code login it is still delivered to the
 container; clear it if the Dev Type is dedicated to a local backend.
 
-- **codex is measured non-functional against one local model** (`adr/0018-harness-fault-classification-and-backend-brake.md`, Amendment 2026-07-26) (invented `<exec>` prose, zero tool calls, exit 0 → exit 11 `DEV_BAD_OUTPUT`). Assign such stages to grok-build or claude-code.
+- **codex + models that invent tool syntax as prose** can exit 0 with no
+  `result.json` (exit 11; no brake) — prefer grok-build or claude-code for those
+  stages (`08-harness-templates.md` §8).
 
 ### Profiles (anchor `#/config/profiles`)
 Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely Instant** — profiles carry secret values, which never enter the client draft, so the section header carries the ImmediateBadge and the apply panel sits in an InstantZone. The UI deals in presence and counts only; a secret value never reaches the SPA.

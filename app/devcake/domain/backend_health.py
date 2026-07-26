@@ -1,27 +1,12 @@
 """Model-backend degradation detector (ADR-0018).
 
-A shared model backend that degrades makes EVERY Dev container fail at once and
-identically. Before this module the resulting class had no brake at all: exit 11
-counted toward `max_attempts`, `restore_after_failure` re-armed the mission, and
-the whole board reached `DEVCAKE-FAILED` in about three poll cycles.
+Store-derived throttle/excuse for repeated `DEV_HARNESS_FAULT` on a Dev Type —
+not a circuit breaker (no credential write to clear; docs/15 §4a).
 
-Deliberately NOT a third circuit breaker. The documented reset for those is "the
-write itself is the reset" (docs/15 §4) and a backend outage has no credential to
-write, so a latched breaker would need an interactive clear control that the same
-section forbids — and would turn a three-minute wobble into an indefinite stop
-pending a human. This follows `mapper_service.degraded()` instead: store-derived,
-restart-safe, no counters, cleared implicitly by success.
-
-TWO predicates, because throttling and accounting are different questions:
-
-* `backend_correlated` — ACCOUNTING. Truthy only when the evidence spans several
-  missions, i.e. "this is not your mission's fault". Feeds `attempt_counted`.
-* `backend_degraded`   — THROTTLING. Truthy for the above OR for a solo streak.
-  Feeds the dispatch concurrency cap.
-
-Routing both through one return value is what made an earlier design's
-single-mission fallback inexpressible: that fallback must throttle *without*
-excusing, and any truthy return would have excused.
+* `backend_correlated` — ACCOUNTING (≥2 missions): may set `attempt_counted=False`.
+* `backend_degraded` — THROTTLING (correlated **or** solo streak): cap concurrency
+  to one probe. Solo must throttle without free retries, so the predicates stay
+  separate.
 """
 
 from __future__ import annotations

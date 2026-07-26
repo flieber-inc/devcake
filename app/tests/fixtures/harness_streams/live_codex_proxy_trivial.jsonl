@@ -1,5 +1,0 @@
-{"type":"thread.started","thread_id":"019f9c61-1a73-74b3-ba60-0c34dc667bf0"}
-{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `DeepSeek-V4-Flash-DSpark-Abliterated` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"ACKNOWLEDGED"}}
-{"type":"turn.completed","usage":{"input_tokens":10685,"cached_input_tokens":10496,"output_tokens":29,"reasoning_output_tokens":0}}

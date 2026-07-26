@@ -118,6 +118,137 @@ async def secrets_check(conn: str = "", harness: str = ""):
     return out
 
 
+async def secrets_inventory():
+    """Presence-only catalog for the Clear-secrets modal — never values."""
+    return secrets_store.inventory()
+
+
+async def clear_secrets(body: dict, *, forge_runtime, reload, config,
+                        shared_breakers, dev_types):
+    """Delete the operator-selected subset of stored secrets.
+
+    Body:
+      harness: [VAR, …]
+      connections: [{scope, instance, field}, …]
+      credential_files: [{dev_type, filename}, …]
+      pause_intake: bool  (optional; default false when omitted)
+
+    Order is load-bearing: validate → optional master intake pause (fail
+    aborts with no deletes) → deletes → breakers/reload → audit. Pausing
+    first means a residual poll race can only fire before keys are gone,
+    not after (no poll lock in this path).
+
+    SPA always sends pause_intake explicitly; API-safe default when omitted
+    is false so scripts do not freeze intake by accident.
+    """
+    from ..config import save_config
+    from ..settings_bundle import audit_event
+
+    harness_req = body.get("harness") or []
+    conn_req = body.get("connections") or []
+    files_req = body.get("credential_files") or []
+    if not isinstance(harness_req, list) or not isinstance(conn_req, list) \
+            or not isinstance(files_req, list):
+        raise HTTPException(422, "harness, connections, and credential_files "
+                                 "must each be a list when present")
+    if not harness_req and not conn_req and not files_req:
+        raise HTTPException(422, "select at least one secret to clear")
+
+    if "pause_intake" not in body:
+        pause_intake = False
+    else:
+        pause_intake = body.get("pause_intake")
+        if not isinstance(pause_intake, bool):
+            raise HTTPException(422, "pause_intake must be a boolean")
+
+    harness_vars: list[str] = []
+    for var in harness_req:
+        if not isinstance(var, str) or not _HARNESS_VAR_RE.fullmatch(var):
+            raise HTTPException(422, f"invalid harness var {var!r}")
+        harness_vars.append(var)
+
+    connections: list[tuple[str, str, str]] = []
+    for item in conn_req:
+        if not isinstance(item, dict):
+            raise HTTPException(422, "each connection entry must be an object")
+        scope = item.get("scope")
+        instance = item.get("instance")
+        field = item.get("field")
+        if not (isinstance(scope, str) and isinstance(instance, str)
+                and isinstance(field, str)):
+            raise HTTPException(422, "connection entries need string "
+                                     "scope/instance/field")
+        _require_secret_ref(scope, instance, field)
+        connections.append((scope, instance, field))
+
+    credential_files: list[tuple[str, str]] = []
+    for item in files_req:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                422, "each credential_files entry must be an object")
+        dev_type = item.get("dev_type")
+        filename = item.get("filename")
+        if not (isinstance(dev_type, str) and isinstance(filename, str)):
+            raise HTTPException(
+                422, "credential_files entries need string dev_type/filename")
+        try:
+            secrets_store.require_credential_ref(dev_type, filename)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        credential_files.append((dev_type, filename))
+
+    # ── pause first (if requested) — no deletes yet ─────────────────────────
+    if pause_intake:
+        config.intake_paused = True
+        save_config(config)
+
+    deleted_h: list[str] = []
+    for var in harness_vars:
+        secrets_store.delete_harness_secret(var)
+        deleted_h.append(var)
+        for dt_name, dt in dev_types.items():
+            if var in HARNESSES[dt.harness_template].credential_env:
+                shared_breakers.pop(dt_name, None)
+
+    deleted_c: list[dict] = []
+    repo_touched = False
+    for scope, instance, field in connections:
+        secrets_store.delete_connection_field(scope, instance, field)
+        deleted_c.append({"scope": scope, "instance": instance,
+                          "field": field})
+        if scope == "repo":
+            forge_runtime.breakers.pop(instance, None)
+            repo_touched = True
+
+    deleted_f: list[dict] = []
+    for dev_type, filename in credential_files:
+        secrets_store.delete_credential_file(dev_type, filename)
+        deleted_f.append({"dev_type": dev_type, "filename": filename})
+        shared_breakers.pop(dev_type, None)
+
+    if repo_touched:
+        reset_protection_cache()
+    if connections:
+        # connection secrets are captured at adapter construction
+        reload()
+
+    audit_event(
+        "secrets_cleared",
+        f"harness={len(deleted_h)} connections={len(deleted_c)} "
+        f"files={len(deleted_f)} pause_intake={pause_intake}",
+    )
+
+    return {
+        "ok": True,
+        "deleted": {
+            "harness": deleted_h,
+            "connections": deleted_c,
+            "credential_files": deleted_f,
+        },
+        "intake_paused": bool(config.intake_paused),
+    }
+
+
 async def connections_registry():
     """Available PMO systems and forges with display metadata — drives the
     admin Config page's selectors and paste guard, so adding an adapter never

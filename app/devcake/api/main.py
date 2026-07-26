@@ -711,6 +711,20 @@ async def secrets_check(conn: str = "", harness: str = ""):
     return await connections_service.secrets_check(conn, harness)
 
 
+@app.get("/api/v1/secrets/inventory")
+async def secrets_inventory():
+    """Presence-only catalog of clearable secrets (never values)."""
+    return await connections_service.secrets_inventory()
+
+
+@app.post("/api/v1/secrets/clear")
+async def clear_secrets(body: dict):
+    """Delete operator-selected secrets (harness / connections / credential files)."""
+    return await connections_service.clear_secrets(
+        body, forge_runtime=forge_runtime, reload=reload_connections,
+        config=config, shared_breakers=shared_breakers, dev_types=dev_types)
+
+
 @app.get("/api/v1/connections/registry")
 async def connections_registry():
     return await connections_service.connections_registry()

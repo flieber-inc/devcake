@@ -7,6 +7,8 @@ import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "./instanceNames.js";
 // change underneath an open draft.
 const IGNORED = [
   /^cfg\.intake_paused$/,
+  // per-PMO intake toggles apply immediately (like the sidebar master switch)
+  /^cfg\.pmos\.\d+\.intake_paused$/,
   /^cfg\.dismissed_alerts$/,
   /^cfg\.schema_version$/,
   /^devTypes\.[^.]+\.secrets_present$/,

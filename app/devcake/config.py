@@ -76,6 +76,11 @@ class PMOInstance(BaseModel):
     # routing set above by validation. Multiple supported, order = listing
     # order in the workspace note.
     reference_repos: list[str] = Field(default_factory=list)
+    # Per-instance intake pause (under the global `AppConfig.intake_paused`
+    # master switch). While true, this instance dispatches no NEW runs;
+    # in-flight finalization and sweeps continue. Default open so a multi-PMO
+    # deployment starts with every configured team active.
+    intake_paused: bool = False
 
     @field_validator("system")
     @classmethod

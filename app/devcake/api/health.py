@@ -118,16 +118,20 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
     pmo_instances: dict[str, dict] = {}
     for inst in config.pmos:
         if not inst.configured:
-            pmo_instances[inst.name] = {"ok": None, "configured": False,
-                                        "team": ""}
+            pmo_instances[inst.name] = {
+                "ok": None, "configured": False, "team": "",
+                "intake_paused": bool(inst.intake_paused),
+            }
             continue
         mgr = managers.get(inst.name)
         try:
             ok = bool(mgr) and (await mgr.pmo.health_probe(inst.team_key)).ok
         except Exception:  # noqa: BLE001 — probe contract: any failure → ok:False for this instance; /health must never 500
             ok = False
-        pmo_instances[inst.name] = {"ok": ok, "configured": True,
-                                    "team": inst.team_key}
+        pmo_instances[inst.name] = {
+            "ok": ok, "configured": True, "team": inst.team_key,
+            "intake_paused": bool(inst.intake_paused),
+        }
     configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
     prefixed = len(managers) > 1   # advisory text carries the instance when N>1
 

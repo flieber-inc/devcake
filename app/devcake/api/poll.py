@@ -48,6 +48,18 @@ def _claim_missions(mgr: MissionManager, fetched: list,
     return missions
 
 
+def intake_blocks_dispatch(config, instance) -> bool:
+    """True when NEW dispatches must not start for this PMO instance.
+
+    The global `intake_paused` master switch freezes every instance. Each
+    instance's own `intake_paused` freezes only that instance — so a multi-PMO
+    deployment can pause one team's intake while another keeps baking.
+    """
+    if getattr(config, "intake_paused", False):
+        return True
+    return bool(getattr(instance, "intake_paused", False))
+
+
 class PollRuntime:
     """The poll loop's state and drivers, extracted from the composition root.
 
@@ -145,8 +157,9 @@ class PollRuntime:
         gate = await mgr.gate_map(missions)
         await mgr.sweeps(missions)   # merge + tracking sweeps (docs/04 §1)
         # intake pause (docs/11): no NEW dispatches — in-flight runs still
-        # finalize (ingress consumer) and sweeps above keep running
-        if self.config.intake_paused:
+        # finalize (ingress consumer) and sweeps above keep running. Global
+        # master OR this instance's own switch freezes dispatch for the segment.
+        if intake_blocks_dispatch(self.config, mgr.instance):
             dispatched = 0
         else:
             dispatched = await mgr.schedule(missions, gate)

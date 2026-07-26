@@ -21,33 +21,32 @@ this document (§8); changing a Dev Type's model does not add a template.
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
-> Verification is capability- and version-specific, not blanket. Invocation,
-> headless output, plan flags, MCP syntax, and token extraction below record
-> live evidence at the version each statement names. The **headless output
-> shapes in §1, §5 and §6 were re-captured on 2026-07-25** inside the baked Dev
-> images at **grok 0.2.112 (`9bbd559437`)**, **codex-cli 0.144.4** and **Claude
-> Code 2.1.210** — versions read from inside the image by the capture rig (§8)
-> and recorded in every sidecar's `cli_version`. Where a 0.2.112 measurement
-> differs from the older **Grok Build 0.2.93** record, the 0.2.112 statement
-> wins and says so; grok claims *not* re-measured at 0.2.112 (plan mode §3, MCP
-> syntax §7, skills read-set §7a at **0.2.103**) keep their original version
-> tag and are unverified at 0.2.112. The Grok image installs latest rather than
-> a pinned artifact, so every rebuild can invalidate the recorded shapes. Grok
-> PLAN is flag-verified but not exercised end-to-end (§3). §8 is narrower
-> still: it is one model+backend pairing measured on 2026-07-25 (per-harness
-> configuration re-measured 2026-07-26, §8a), not a statement about local
-> backends generally. Treat each statement's own version and caveat as its
-> verification boundary.
+> Verification is capability- and version-specific, not blanket — treat each
+> statement's own version and caveat as its verification boundary. The
+> **headless output shapes in §1, §5 and §6 were re-captured on 2026-07-25**
+> inside the baked Dev images at **grok 0.2.112 (`9bbd559437`)**, **codex-cli
+> 0.144.4** and **Claude Code 2.1.210** (versions read from inside the image by
+> the capture rig, §8, and recorded in each sidecar's `cli_version`). Where a
+> 0.2.112 measurement differs from the older **Grok Build 0.2.93** record the
+> 0.2.112 statement wins and says so; the grok claims *not* re-measured at
+> 0.2.112 — plan mode (§3), MCP syntax (§7), skills read-set (§7a, at
+> **0.2.103**) — keep their original version tag and are **unverified at
+> 0.2.112**. The Grok image installs latest rather than a pinned artifact, so any
+> rebuild can invalidate its recorded shapes, and grok PLAN is flag-verified but
+> never exercised end-to-end (§3). §8 is narrower still: one model+backend
+> pairing, not a verdict on local backends generally.
 >
-> The 2026-07-25 captures are committed verbatim under
+> The captures cited below are committed verbatim under
 > `app/tests/fixtures/harness_streams/` (`<name>.jsonl` stream, `<name>.meta.json`
-> measured sidecar, `<name>.stderr.txt`, grok `<name>.dump.txt`); a claim below
-> that names a `<harness>_<scenario>` fixture is backed by those bytes, and a
-> claim sourced from the campaign's own notes rather than from a committed
-> fixture says so. They were taken
-> against the stub backend of `scripts/harness_capture/stub_backend.py`, so the
-> **presence and shape** of a field is real CLI evidence while any **numeric
-> value** in them is whatever the stub served.
+> measured sidecar, `<name>.stderr.txt`, grok `<name>.dump.txt`), in two campaigns:
+> **30 stub-backend captures stamped 2026-07-25** (§1, §5, §6) and **17 `live_*`
+> real-backend captures stamped 2026-07-26** (§8, §8a) — plus the earlier
+> 2026-07-24 Claude Code 2.1.219 incident batch (`claude_max_turns`, §1b). A claim
+> naming a fixture is backed by those bytes; a claim sourced from a campaign's own
+> notes rather than from a committed fixture says so. The 2026-07-25 batch ran
+> against the stub of `scripts/harness_capture/stub_backend.py`, so in those
+> captures the **presence and shape** of a field is real CLI evidence while any
+> **numeric value** is whatever the stub served.
 
 ## 1. Invocation patterns
 
@@ -334,9 +333,8 @@ pointed at a local or OpenAI-compatible backend through its own base-URL / API-k
 environment variables, and DevCake neither knows nor validates which backend a Dev
 Type reaches. What every template *does* assume is that the model **actually tool-calls**:
 outside PLAN, a Dev produces its deliverable by writing files, so a model that
-answers in prose yields a run that exits 0 having done nothing. The pairing below
-is one measured worked example of that failure mode — read it as the shape to look
-for, not as a verdict on local backends.
+answers in prose yields a run that exits 0 having done nothing. The pairing below is
+one measured worked example of that failure mode — read it as the shape to look for.
 
 ### Pointing each harness at a local backend (§8a, measured 2026-07-26)
 
@@ -357,12 +355,11 @@ three cases (`DEVCAKE_MODEL` → `--model` / `--model` / `-m`, §1).
 
 That claude and grok need **no** args is measured, not assumed: both live
 mission-shaped captures record `extra: null` with a stock DevCake argv
-(`live_claude_raw_mission`, `live_grok_raw_mission` sidecars), and both finished
-the task on this backend — claude with 4 real `tool_use` calls, grok with 7 real
-tool calls including a self-corrected malformed `result.json`
-(`live_grok_raw_mission.dump.txt`). The capture rig delivers no credential files
-(`in_container.py` runs `harness_argv` and nothing else), so those two runs
-authenticated **purely from the environment**.
+(`live_claude_raw_mission`, `live_grok_raw_mission` sidecars), and both finished the
+task on this backend — claude with 4 real `tool_use` calls, grok with 7 including a
+self-corrected malformed `result.json` (`live_grok_raw_mission.dump.txt`). The rig
+delivers no credential files (`in_container.py` runs `harness_argv` and nothing
+else), so both runs authenticated **purely from the environment**.
 
 **The `/v1` asymmetry is load-bearing and easy to get wrong.** Each CLI documents
 its own half:
@@ -395,16 +392,15 @@ sent as `Authorization: Bearer` to the custom endpoint", and codex reads whateve
 `model_providers.<id>.env_key` names — so set it to some non-empty string. What
 each CLI does when the variable is **absent** was not measured.
 
-**Which port, on the measured deployment.** It runs raw vLLM on `:8000` and, on
-`:8765`, a request-rewriting proxy that repositions the system prompt where
-**codex** expects it. **Use `:8000` (proxy bypassed) for claude-code and
-grok-build** — the proxy exists to apply a codex-specific transformation and
-there is no reason to submit other harnesses to it. That is also where the
-evidence is: both mission-shaped successes were captured against `:8000`. For
-these two harnesses `:8765` was exercised **only with a trivial prompt**
-(`live_claude_proxy_trivial`, `live_grok_proxy_trivial` — both clean, exit 0), so
-the accurate statement for that port is *works for trivial prompts,
-mission-shaped untested*.
+**Which port, on the measured deployment.** It runs raw vLLM on `:8000` and the
+codex-shaped rewriting proxy on `:8765` (*The measured pairing* below). **Use
+`:8000` (proxy bypassed) for claude-code and grok-build** — the proxy exists to
+apply a codex-specific transformation and there is no reason to submit other
+harnesses to it. That is also where the evidence is: both mission-shaped successes
+were captured against `:8000`. For these two harnesses `:8765` was exercised **only
+with a trivial prompt** (`live_claude_proxy_trivial`, `live_grok_proxy_trivial` —
+both clean, exit 0), so the accurate statement for that port is *works for trivial
+prompts, mission-shaped untested*.
 
 #### Recipe — `claude-code` against a local backend
 
@@ -456,9 +452,9 @@ mission-shaped untested*.
 #### Recipe — `codex` against a local backend (read the warning first)
 
 1. **Config → Dev Types →** the Dev Type: **harness template** = `codex`;
-   **model** = the backend's model id. It arrives as `-m`, which on codex is not
-   only a model choice — it decides which tool protocol the backend is asked to
-   support (*What the bisect isolated*, below).
+   **model** = the backend's model id. It arrives as `-m`, which on codex also
+   decides which tool protocol the backend is asked to support (*What the bisect
+   isolated*, below).
 2. **Runtime & credentials** checklist: `CODEX_API_KEY` = `dummy-key`. This is the
    variable named by `-c model_providers.vllm.env_key` in step 3.
 3. **Config → Assignments**: paste the block below into the **extra CLI args**
@@ -471,17 +467,13 @@ mission-shaped untested*.
    The two context values match this backend's `max_model_len` of 300000.
 
 **⚠ Do not assign codex to a Dev Type pointed at `DeepSeek-V4-Flash-DSpark-Abliterated`.**
-Against this model, codex 0.144.4 emits prose containing invented
-`<exec><cmd>…</cmd></exec>` XML instead of real tool calls, then asserts in its
-closing message that it wrote `out/result.json` when nothing was written. It exits
-**0**, so DevCake reports **exit 11 `DEV_BAD_OUTPUT`**. Measured across **13 runs,
-two prompts, both ports, at concurrency 1, 8 and 16: zero tool calls**. The
-`:8000`-vs-`:8765` A/B made no difference, so it is not the proxy; claude and grok
-succeeding on the same server and model shows it is not the backend. It is codex's
-tool-calling protocol that this model cannot satisfy — the optional-parameter
-surface finding below. **Use `grok-build` or `claude-code` for this model.**
+Against this model codex 0.144.4 answers with prose containing invented tool syntax,
+executes nothing and exits **0**, so DevCake reports **exit 11 `DEV_BAD_OUTPUT`** —
+measured across 13 runs with zero tool calls between them. Evidence, controls and
+root cause: *The measured pairing* below. **Use `grok-build` or `claude-code` for
+this model.**
 
-### The measured pairing (2026-07-25)
+### The measured pairing (2026-07-26)
 
 | element | measured |
 |---|---|
@@ -491,35 +483,38 @@ surface finding below. **Use `grok-build` or `claude-code` for this model.**
 | CLI versions | read from inside the baked images: codex-cli **0.144.4**, claude **2.1.210**, grok **0.2.112** |
 
 **Symptom.** `codex`, invoked through DevCake's own `harness_argv` (§1), never makes
-a real tool call. It emits tool syntax as **prose** inside an `agent_message` — in at
-least three invented formats (`<tool_call type="exec" cmd="…">`, `<exec>…</exec>`,
-and narrated HTML with a fabricated `▶` prompt and hallucinated command output).
-codex executes nothing, writes no files, and exits **0**. 5 of 5 mission-shaped runs
-behaved this way.
+a real tool call. It emits tool syntax as **prose** inside an `agent_message`,
+executes nothing and writes no files — while its closing message asserts that it
+wrote `out/result.json` — and exits **0**.
 
-**Since 2026-07-26 this is committed evidence, not a campaign note.** The seventeen
-`live_*` captures in `app/tests/fixtures/harness_streams/` were taken against this
-same backend with the founder's verbatim incident configuration, and they carry the
+**Committed evidence since 2026-07-26, not a campaign note.** The seventeen `live_*`
+captures in `app/tests/fixtures/harness_streams/` were taken against this same
+backend with the founder's verbatim incident configuration, and they carry the
 symptom into the test suite: **13 codex runs across two prompts, both ports and three
-concurrency levels produced zero tool calls between them**, every stream being exactly
-one `agent_message` plus the benign `-m` metadata error item. The workspaces were
-bind-mounted and inspected afterwards, so "wrote no `result.json`" is a filesystem
-fact on every row. See that directory's README,
-*The live captures*, for the reproduction, the `:8765`-vs-`:8000` A/B (identical —
-the proxy is not the variable) and the concurrency measurements.
+concurrency levels (1, 8 and 16) produced zero tool calls between them**, every stream
+being exactly one `agent_message` plus the benign `-m` metadata error item. The
+workspaces were bind-mounted and inspected afterwards, so "wrote no `result.json`" is
+a filesystem fact on every row. These supersede the 2026-07-25 campaign, which argued
+the same finding from five uninstrumented mission-shaped runs; that campaign also saw
+two invented formats no committed capture holds (`<tool_call type="exec" cmd="…">` and
+narrated HTML with a fabricated `▶` prompt and hallucinated command output), against
+the `<exec><cmd>…</cmd></exec>` form committed in `live_codex_proxy_mission`. See that
+directory's README, *The live captures*, for the reproduction, the `:8765`-vs-`:8000`
+A/B (identical — the proxy is not the variable) and the concurrency measurements.
 
 **The backend is not at fault**, and that was established before anything else was
 touched. Direct protocol probes with no CLI involved, on both ports: `POST /v1/responses`
 with one simple tool returns a real `function_call`; `POST /v1/messages` returns a real
-`tool_use`. And `claude-code`, against the *same* model, backend and prompt, produced
-**4 real `tool_use` blocks** and completed the task. Both controls are now committed
-too — `live_claude_raw_mission` (4 real `tool_use` calls) and `live_grok_raw_mission`
-(7 real tool calls), each of which finished the task and left `result.json` on disk.
+`tool_use` (2026-07-25 campaign notes, no fixture). And against the *same* model,
+backend and prompt the other two harnesses finish the job — both committed controls:
+`live_claude_raw_mission` (**4 real `tool_use` blocks**) and `live_grok_raw_mission`
+(7 real tool calls), each leaving `result.json` on disk.
 
-### What the bisect isolated
+### What the bisect isolated (2026-07-25)
 
 codex's verbatim outbound request was taken from the capture stub's `journal.jsonl`
-(below) and replayed against `:8765` with `stream: false`:
+(below) and replayed by hand against `:8765` with `stream: false` — campaign notes,
+not committed fixtures:
 
 | variant | real `function_call`? |
 |---|---|
@@ -579,23 +574,22 @@ tool call.
 fleet-wide bad-output cascade is throttled by nothing, excused by nothing, and every
 failure counts toward `max_attempts`. Recorded, not fixed.
 
-**Measured, including under concurrency (2026-07-26).** Eight concurrent mission-shaped
-codex runs at the deployment's real `global_max: 8`, against the incident path, all
-failed this way at once — and so did sixteen at N=16, where the backend was visibly
-saturated (per-run latency out to 232 s). The verdict never moved off exit 11 at any
-concurrency level, so there is no load at which this cascade becomes visible to the
-predicate. And it is not a predicate defect to fix: the model *answers*, at length, so
-the only thing separating these runs from a legitimately chatty one is the content of a
-model-controlled string, which is exactly what no fault arm may key on
+**Measured, including under concurrency (2026-07-26).** At the deployment's real
+`global_max: 8`, and again at N=16 with the backend visibly saturated (per-run latency
+out to 232 s), every concurrent mission-shaped codex run on the incident path failed
+this way at once and the verdict never moved off exit 11 — there is no load at which
+this cascade becomes visible to the predicate. Nor is it a predicate defect to fix:
+the model *answers*, at length, so the only thing separating these runs from a
+legitimately chatty one is the content of a model-controlled string, which is exactly
+what no fault arm may key on
 (`adr/0018-harness-fault-classification-and-backend-brake.md`: an arm fires on an event
 **type**, never on text the model chose). The remedies below are the whole of the response.
 
-**A second route to the same exit 11, on grok.** A model that does not stop
-tool-calling but keeps repeating the *same* call is halted by grok itself at 16
-turns, silently and with exit 0 (§1c) — same class, same absent brake, and the
-same fleet-wide arrival, because "the model is too weak for this step" is a
-property of the shared backend. §1c has the signature to recognise it by;
-`15-errors-and-retries.md` §2b has the operator's version.
+**A second route to the same exit 11, on grok.** A model that keeps repeating the
+*same* tool call is halted by grok itself at 16 turns, silently and with exit 0
+(§1c, which has the signature to recognise it by) — same class, same absent brake,
+and the same fleet-wide arrival, because "the model is too weak for this step" is a
+property of the shared backend. Operator's version: `15-errors-and-retries.md` §2b.
 
 ### Operator remedies
 
@@ -623,9 +617,10 @@ silently stops describing what production runs.
 | `stub_backend.py` | Stdlib three-protocol stub — `/v1/messages`, `/v1/responses`, `/v1/chat/completions`, plus `/v1/models` and `/healthz` — with deterministic failure injection (401/429/500, truncated stream, empty completion, tool-only, refusal). Its `journal.jsonl` records each CLI's outbound request **verbatim**; that record is what made the bisect above possible at all, and it is also what proves a capture hit the stub rather than quietly reaching a real API. |
 | `prompts/*.md` | The prompt shapes: `trivial.md` (one word, no tools), `mission_shaped.md` (edit a file + write `out/result.json`), `execute_real.md` (the real EXECUTE playbook, absolute `/workspace` paths included). |
 
-Its output is `app/tests/fixtures/harness_streams/` — the fixtures cited throughout
-§1, §5 and §6, one committed stream per backend condition per harness, each with a
-machine-written `.meta.json` of measured facts (`cli_version`, `argv`, `exit_code`,
+Its output is `app/tests/fixtures/harness_streams/`: the 2026-07-25 stub fixtures
+cited throughout §1, §5 and §6 (one committed stream per backend condition per
+harness) and the 2026-07-26 `live_*` real-backend captures cited in §8/§8a, each with
+a machine-written `.meta.json` of measured facts (`cli_version`, `argv`, `exit_code`,
 byte counts, `session_id`, duration). One rig hazard worth knowing before re-running
 it: a backend that omits `total_tokens` from the Responses `response.completed`
 payload aborts **every** codex turn with `failed to parse ResponseCompleted: missing

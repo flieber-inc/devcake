@@ -21,7 +21,7 @@
 > milestone `[x]` checkboxes mark exit criteria verified at that milestone's close.
 >
 > **Where we are (2026-07-26):** layers 1–2 closed through tag **v0.2** (and
-> patch tags through `v0.2.3` on `main`). The product loop (poll → dispatch →
+> patch tags through `v0.2.4` on `main`). The product loop (poll → dispatch →
 > harness → finalize → forge/PMO) is operational with three harness templates
 > (`claude-code`, `grok-build`, `codex`), multi-PMO / multi-repo / internal
 > Gitea, skills (ADR-0016), settings profiles/export (ADR-0013), fault

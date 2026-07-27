@@ -14,6 +14,7 @@ const SUITES = [
   "settings.mjs",
   "hierarchy.mjs",
   "devtypes.mjs",
+  "prompts.mjs",
   "redesign.mjs",
   "missions.mjs",
   "profiles.mjs",

@@ -3,7 +3,7 @@ import { get, send } from "../api.js";
 import Button from "./Button.jsx";
 import { Section } from "./Card.jsx";
 import { ConfirmDialog, Modal } from "./Modal.jsx";
-import { Field, Input, Select, Textarea } from "./Field.jsx";
+import { Field, Help, Input, Select, Textarea } from "./Field.jsx";
 import ImmediateBadge from "./ImmediateBadge.jsx";
 import SettingRow from "./SettingRow.jsx";
 import MarkdownBody, {
@@ -77,6 +77,70 @@ function TemplateModal({ mt, kind = "mission", variables, initial, onClose, onSa
         </div>
       </div>
     </Modal>
+  );
+}
+
+// One compact row per group (Cursor-style settings list — the one-card-per-
+// group layout repeated a big Create button and a half-width select six-plus
+// times): identity left, active-template select right, template management
+// and creation behind the row's disclosure. `canEdit`/`canDelete` carry the
+// per-kind rules (mission: built-ins are read-only; dev: the active template
+// cannot be deleted).
+function PromptGroupRow({ name, tag, entries, active, help, builtinNote,
+                          canEdit, canDelete, onActiveChange, onCreate,
+                          onView, onEdit, onDelete }) {
+  return (
+    <div className="py-3 first:pt-1 last:pb-1">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+        <div className="min-w-0 sm:max-w-[34rem]">
+          <span className="font-mono text-sm font-semibold">
+            {name}
+            {help && <Help text={help} />}
+          </span>
+          {tag && <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">{tag}</p>}
+        </div>
+        <Select className="w-full sm:w-56" aria-label={`Active template for ${name}`}
+          value={active} onChange={onActiveChange}>
+          {entries.map((t) => (
+            <option key={t.name} value={t.name}>
+              {t.name}{t.builtin ? " (built-in)" : ""}
+            </option>
+          ))}
+        </Select>
+      </div>
+      <details className="group mt-1">
+        <summary className="cursor-pointer list-none text-xs font-medium text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400">
+          <span className="group-open:hidden">Manage templates ({entries.length})…</span>
+          <span className="hidden group-open:inline">Hide templates</span>
+        </summary>
+        <div className="mt-2 space-y-2 rounded-md bg-stone-50 p-3 dark:bg-neutral-900">
+          <ul className="space-y-1">
+            {entries.map((t) => (
+              <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
+                <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
+                {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
+                <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
+                  onClick={() => onView(t)}>View</button>
+                {canEdit(t) && (
+                  <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
+                    onClick={() => onEdit(t)}>Edit</button>
+                )}
+                {canDelete(t) && (
+                  <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
+                    onClick={() => onDelete(t)}>Delete</button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {builtinNote && entries.some((t) => t.builtin) && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Built-in templates are read-only and refreshed on upgrade.
+            </p>
+          )}
+          <Button kind="ghost" size="sm" onClick={onCreate}>+ New template…</Button>
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -185,118 +249,51 @@ export default function PromptsSection({ cfg, setField, devTypeNames = [] }) {
         </div>
       )}
       {data && (
-        <h4 className="border-b border-neutral-200 pb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-          Mission Types
-        </h4>
-      )}
-      {data && Object.keys(data.templates || {}).map((mt) => {
-        const entries = data.templates?.[mt] || [];
-        const active = activeOf(mt);
-        return (
-          <div key={mt} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-sm font-semibold">{mt}</span>
-              <Button kind="ghost" onClick={() => setModal({ mt })}>
-                + Create prompt template
-              </Button>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Active template"
-                help="Which playbook this Mission Type dispatches with. Saved with the page-level Save; if the template file disappears, dispatch falls back to the built-in default and /health warns.">
-                <Select value={active}
-                  onChange={(e) => setField(`cfg.active_prompt_templates.${mt}`, e.target.value)}>
-                  {entries.map((t) => (
-                    <option key={t.name} value={t.name}>
-                      {t.name}{t.builtin ? " (built-in)" : ""}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <details className="group">
-              <summary className="cursor-pointer list-none text-xs font-medium text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400">
-                <span className="group-open:hidden">Manage templates ({entries.length})…</span>
-                <span className="hidden group-open:inline">Hide templates</span>
-              </summary>
-              <ul className="mt-2 space-y-1">
-                {entries.map((t) => (
-                  <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
-                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
-                    {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
-                    <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                      onClick={() => { setViewMode("rendered"); setViewing({ mt, entry: t }); }}>View</button>
-                    {!t.builtin && (
-                      <>
-                        <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                          onClick={() => setModal({ mt, initial: t })}>Edit</button>
-                        <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
-                          onClick={() => remove(mt, t.name)}>Delete</button>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              {entries.some((t) => t.builtin) && (
-                <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-                  Built-in templates are read-only and refreshed on upgrade.
-                </p>
-              )}
-            </details>
+        <div>
+          <h4 className="border-b border-neutral-200 pb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+            Mission types
+          </h4>
+          <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            {Object.keys(data.templates || {}).map((mt) => (
+              <PromptGroupRow key={mt} name={mt}
+                entries={data.templates?.[mt] || []}
+                active={activeOf(mt)}
+                help="Which playbook this Mission Type dispatches with. Saved with the page-level Save; if the template file disappears, dispatch falls back to the built-in default and /health warns."
+                builtinNote
+                canEdit={(t) => !t.builtin}
+                canDelete={(t) => !t.builtin}
+                onActiveChange={(e) => setField(`cfg.active_prompt_templates.${mt}`, e.target.value)}
+                onCreate={() => setModal({ mt })}
+                onView={(t) => { setViewMode("rendered"); setViewing({ mt, entry: t }); }}
+                onEdit={(t) => setModal({ mt, initial: t })}
+                onDelete={(t) => remove(mt, t.name)} />
+            ))}
           </div>
-        );
-      })}
+        </div>
+      )}
       {data && (
-        <h4 className="border-b border-neutral-200 pb-1 pt-2 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
-          Dev Types
-        </h4>
-      )}
-      {data && Object.keys(data.dev_types || {}).map((n) => {
-        const entries = data.dev_types?.[n] || [];
-        const active = activeDevOf(n);
-        return (
-          <div key={`dev-${n}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-sm font-semibold">{n} <span className="font-sans text-xs text-neutral-500 dark:text-neutral-400">(Dev Type identifying prompt)</span></span>
-              <Button kind="ghost" onClick={() => setModal({ mt: n, kind: "dev" })}>
-                + Create prompt template
-              </Button>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Active template"
-                help="The identifying prompt this Dev Type runs with, delivered before every playbook. Saved with the page-level Save.">
-                <Select value={active}
-                  onChange={(e) => setField(`cfg.active_devtype_prompts.${n}`, e.target.value)}>
-                  {entries.map((t) => (
-                    <option key={t.name} value={t.name}>{t.name}</option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <details className="group">
-              <summary className="cursor-pointer list-none text-xs font-medium text-neutral-500 underline-offset-2 hover:underline dark:text-neutral-400">
-                <span className="group-open:hidden">Manage templates ({entries.length})…</span>
-                <span className="hidden group-open:inline">Hide templates</span>
-              </summary>
-              <ul className="mt-2 space-y-1">
-                {entries.map((t) => (
-                  <li key={t.name} className="flex flex-wrap items-center gap-2 text-sm">
-                    <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">{t.name}</code>
-                    {t.name === active && <span className="text-xs text-green-700 dark:text-green-400">active</span>}
-                    <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                      onClick={() => { setViewMode("rendered"); setViewing({ mt: n, entry: t }); }}>View</button>
-                    <button type="button" className="text-xs text-accent-600 underline-offset-2 hover:underline"
-                      onClick={() => setModal({ mt: n, kind: "dev", initial: t })}>Edit</button>
-                    {t.name !== active && (
-                      <button type="button" className="text-xs text-red-600 underline-offset-2 hover:underline dark:text-red-400"
-                        onClick={() => remove(n, t.name, "dev")}>Delete</button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </details>
+        <div>
+          <h4 className="border-b border-neutral-200 pb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+            Dev types
+          </h4>
+          <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+            {Object.keys(data.dev_types || {}).map((n) => (
+              <PromptGroupRow key={`dev-${n}`} name={n}
+                tag="Identifying prompt — delivered before every playbook."
+                entries={data.dev_types?.[n] || []}
+                active={activeDevOf(n)}
+                help="The identifying prompt this Dev Type runs with, delivered before every playbook. Saved with the page-level Save."
+                canEdit={() => true}
+                canDelete={(t) => t.name !== activeDevOf(n)}
+                onActiveChange={(e) => setField(`cfg.active_devtype_prompts.${n}`, e.target.value)}
+                onCreate={() => setModal({ mt: n, kind: "dev" })}
+                onView={(t) => { setViewMode("rendered"); setViewing({ mt: n, entry: t }); }}
+                onEdit={(t) => setModal({ mt: n, kind: "dev", initial: t })}
+                onDelete={(t) => remove(n, t.name, "dev")} />
+            ))}
           </div>
-        );
-      })}
+        </div>
+      )}
       {modal && (
         <TemplateModal mt={modal.mt} kind={modal.kind || "mission"} initial={modal.initial}
           variables={data?.variables?.[modal.mt] || []}

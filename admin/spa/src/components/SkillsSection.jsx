@@ -343,7 +343,12 @@ export default function SkillsSection({ setPageErr }) {
                       {s.name}
                     </td>
                     <td className="py-2.5 pr-4 text-neutral-500 dark:text-neutral-400">
-                      {s.description || "(no description)"}
+                      {/* the description doubles as the agent trigger and runs
+                          long — clamp for scanability; the full text lives in
+                          View (and on hover) */}
+                      <p className="line-clamp-2 max-w-prose" title={s.description || undefined}>
+                        {s.description || "(no description)"}
+                      </p>
                     </td>
                     <td className="py-2.5 pr-2">
                       <span className={"inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs "

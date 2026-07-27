@@ -16,6 +16,7 @@ cached in memory beyond the redaction registry.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -50,21 +51,26 @@ def _harness_path(var: str) -> Path:
     return _root() / "harness" / f"{var}.json"
 
 
-def _atomic_write(path: Path, data: dict) -> None:
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """tmp + fsync + chmod 0600 + replace + dir fsync (POSIX atomic durable)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")  # 0600 by default
     try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
         _fsync_dir(path.parent)          # make the rename itself durable
-    except Exception:
-        with __import__("contextlib").suppress(FileNotFoundError):
+    except Exception:  # noqa: BLE001 — temp cleanup then re-raise (atomic write contract)
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
         raise
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    _atomic_write_bytes(path, json.dumps(data).encode())
 
 
 def _fsync_dir(directory: Path) -> None:
@@ -134,9 +140,11 @@ def delete_connection_field(scope: str, instance: str, field: str) -> None:
 
 
 def delete_connection_instance(scope: str, instance: str) -> None:
+    """Unlink the connection secrets file. Redaction registrations are
+    deliberately kept until process restart — same safe direction as
+    delete_connection_field / delete_harness_secret (a just-revoked value
+    must still scrub late PMO/forge writes)."""
     path = _conn_path(scope, instance)
-    for field in _read(path):
-        security.unregister_runtime_secret(f"conn:{scope}:{instance}:{field}")
     path.unlink(missing_ok=True)
 
 
@@ -180,9 +188,29 @@ def require_credential_ref(dev_type: str, filename: str) -> None:
         raise ValueError(f"invalid credential filename {filename!r}")
 
 
+# Operator-uploaded / OAuth credential files (raw text, not JSON dicts).
+MAX_CREDENTIAL_FILE_BYTES = 1 * 1024 * 1024
+
+
+def write_credential_file(dev_type: str, filename: str, content: str) -> Path:
+    """Atomically write a raw credential file under /data/secrets/{dev_type}/.
+    0600; registers content for redaction when long enough (≥8)."""
+    require_credential_ref(dev_type, filename)
+    raw = content if isinstance(content, str) else str(content or "")
+    data = raw.encode()
+    if len(data) > MAX_CREDENTIAL_FILE_BYTES:
+        raise ValueError(
+            f"credential file too large ({len(data)} > {MAX_CREDENTIAL_FILE_BYTES})")
+    path = _root() / dev_type / filename
+    _atomic_write_bytes(path, data)
+    if len(raw) >= 8:
+        security.register_runtime_secret(
+            f"cred:{dev_type}:{filename}", raw)
+    return path
+
+
 def delete_credential_file(dev_type: str, filename: str) -> None:
     """Unlink one OAuth/uploaded credential file. Missing = no-op."""
-    import contextlib
     require_credential_ref(dev_type, filename)
     path = _root() / dev_type / filename
     path.unlink(missing_ok=True)
@@ -308,7 +336,13 @@ def register_all() -> None:
     glob scan already covers them, but explicit registration means immediate
     coverage for exact-match replacement even below the 16-char scan floor).
     Keys MUST match write_/delete_'s scheme or unregister leaves the
-    boot-registered copy behind."""
+    boot-registered copy behind.
+
+    Credential files (OAuth/upload) are raw text — the JSON-only disk scan
+    misses non-JSON blobs and values under the 16-char floor, so they are
+    registered here under the same ``cred:{dev}:{file}`` keys as
+    write_credential_file.
+    """
     for key, fields in list_connection_secrets().items():
         # {scope}-{instance}; instance names can't contain hyphens
         scope, _, instance = key.partition("-")
@@ -317,6 +351,19 @@ def register_all() -> None:
                 f"conn:{scope}:{instance}:{field}", value)
     for var, value in list_harness_secrets().items():
         security.register_runtime_secret(f"harness:{var}", value)
+    for cf in inventory().get("credential_files") or []:
+        dev, fname = cf.get("dev_type"), cf.get("filename")
+        if not dev or not fname:
+            continue
+        try:
+            require_credential_ref(dev, fname)
+            raw = (_root() / dev / fname).read_text()
+        except (ValueError, OSError) as e:
+            log.error("boot redaction: unreadable credential %s/%s: %s",
+                      dev, fname, e)
+            continue
+        if len(raw) >= 8:
+            security.register_runtime_secret(f"cred:{dev}:{fname}", raw)
 
 
 # ── profile secret snapshots (ADR-0013) ─────────────────────────────────────

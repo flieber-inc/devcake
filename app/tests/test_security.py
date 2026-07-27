@@ -208,11 +208,16 @@ def test_register_all_boot_coverage_and_key_scheme(tmp_path, monkeypatch):
     try:
         out = redact("boot leak short-key-1 and tiny-value9 end")
         assert "short-key-1" not in out and "tiny-value9" not in out
-    finally:
-        # unregister must remove the boot-registered copies — this is the
-        # key-scheme contract (conn:{scope}:{instance}:{field} / harness:{var})
+        # Instance delete unlinks the file but KEEPS redaction registrations
+        # until restart (safe direction — same as field/harness delete).
         secrets_store.delete_connection_instance("pmo", "linear")
+        assert not (conn_dir / "pmo-linear.json").exists()
+        still = redact("after-delete short-key-1 end")
+        assert "short-key-1" not in still
+    finally:
+        # key-scheme contract: explicit unregister drops boot-registered keys
         from devcake.security import unregister_runtime_secret
+        unregister_runtime_secret("conn:pmo:linear:api_key")
         unregister_runtime_secret("harness:XAI_API_KEY")
     out = redact("short-key-1 tiny-value9")
     assert "short-key-1" in out and "tiny-value9" in out

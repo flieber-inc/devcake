@@ -37,6 +37,12 @@ _NAMED_ASSET_RE = re.compile(
     r"\[([^\]]+\.\w{1,8})\]\((https?://[^\s)]+/attachments/[^\s)]+)\)")
 _BARE_ASSET_RE = re.compile(r"(https?://[^\s)]+/attachments/[A-Za-z0-9-]+)")
 
+# Bundled Gitea ROOT_URL is browser-facing (localhost:3300); the app reaches
+# the container as api_base (gitea:3000). Only these presentation hosts may
+# be rewritten onto the origin — never arbitrary foreign hosts (that made
+# the download allowlist vacuous). See docs/14 §11.
+_REWRITEABLE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 
 class GiteaIssuesAdapter:
     """PMOPort over Gitea Issues REST API (/api/v1). Issue-only missions."""
@@ -77,11 +83,15 @@ class GiteaIssuesAdapter:
         self._origin = self._api.removesuffix("/api/v1") if self._api else ""
 
     def _app_reachable_url(self, url: str) -> str:
-        """Rewrite Gitea ROOT_URL hosts to the configured api_base origin.
+        """Rewrite browser ROOT_URL hosts to the configured api_base origin.
 
         Self-hosted Gitea returns attachment URLs with ROOT_URL
         (http://localhost:3300/...) which is unreachable from the app
         container; the docker-network origin (http://gitea:3000) is.
+
+        Only ``_REWRITEABLE_HOSTS`` (localhost / loopback) are rewritten —
+        foreign hosts are left unchanged so the download allowlist can
+        refuse them (docs/14 §11).
         """
         if not url or not self._origin:
             return url
@@ -90,13 +100,27 @@ class GiteaIssuesAdapter:
         origin_parts = urlsplit(self._origin)
         if not parts.scheme or not parts.netloc:
             return url
-        # only rewrite same-path attachments/API links that disagree on host
+        host = (parts.hostname or "").lower()
+        if host not in _REWRITEABLE_HOSTS:
+            return url
         if parts.netloc == origin_parts.netloc:
             return url
         return urlunsplit((
             origin_parts.scheme, origin_parts.netloc,
             parts.path, parts.query, parts.fragment,
         ))
+
+    def _asset_allowed_hosts(self) -> set[str]:
+        """Hosts permitted on download_asset URLs (origin + rewriteable UI)."""
+        from urllib.parse import urlsplit
+        allowed = set(_REWRITEABLE_HOSTS)
+        for base in (self._origin, self._api):
+            if not base:
+                continue
+            h = urlsplit(base).hostname
+            if h:
+                allowed.add(h.lower())
+        return allowed
 
     # ── HTTP ────────────────────────────────────────────────────────────────
 
@@ -549,12 +573,44 @@ class GiteaIssuesAdapter:
             meta.get("browser_download_url") or meta.get("uuid") or "")
 
     async def download_asset(self, url: str) -> bytes:
-        url = self._app_reachable_url(url)
+        """Fetch an attachment; host allowlist before rewrite, no off-host
+        redirects with auth (docs/14 §11)."""
+        from ...domain.asset_fetch import (
+            AssetUrlError, assert_downloadable_asset_url,
+            resolve_redirect_location,
+        )
+        allowed = self._asset_allowed_hosts()
+        # 1) refuse evil hosts on the ORIGINAL URL (before rewrite)
+        try:
+            url = assert_downloadable_asset_url(
+                url, allowed_hosts=allowed, allow_http=True)
+        except AssetUrlError as e:
+            raise RuntimeError(f"gitea_issues download refused: {e}") from e
+        # 2) rewrite only localhost/loopback → docker-network origin
+        current = self._app_reachable_url(url)
+        headers = self._headers()
         try:
             async with httpx.AsyncClient(
                     timeout=60, transport=self._transport,
-                    follow_redirects=True) as client:
-                resp = await client.get(url, headers=self._headers())
+                    follow_redirects=False) as client:
+                for _ in range(5):
+                    resp = await client.get(current, headers=headers)
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("location") or ""
+                        try:
+                            nxt = resolve_redirect_location(current, loc)
+                            # validate pre-rewrite host, then rewrite loopback
+                            nxt = assert_downloadable_asset_url(
+                                nxt, allowed_hosts=allowed, allow_http=True)
+                        except AssetUrlError as e:
+                            raise RuntimeError(
+                                f"gitea_issues download redirect refused: {e}"
+                            ) from e
+                        current = self._app_reachable_url(nxt)
+                        continue
+                    break
+                else:
+                    raise RuntimeError("gitea_issues download: too many redirects")
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitea_issues download network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):

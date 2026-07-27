@@ -258,7 +258,19 @@ class RunManager:
                 self.runlog.append(
                     run_id, [redact(str(l))[:4000] for l in payload["lines"]])
             else:
-                log.info("[%s] %s", run_id, payload.get("message", "") or payload)
+                # OAuth device-code ceremony: never log url/code values
+                # (short-lived auth material; status API still holds them).
+                if payload.get("oauth_url") is not None or payload.get("oauth_error") is not None:
+                    log.info(
+                        "[%s] oauth progress url=%s has_code=%s error=%s",
+                        run_id,
+                        "present" if payload.get("oauth_url") else "absent",
+                        bool(payload.get("code")),
+                        "present" if payload.get("oauth_error") else "absent",
+                    )
+                else:
+                    msg = payload.get("message", "")
+                    log.info("[%s] %s", run_id, msg if msg else "(non-lines run.log)")
                 if self.oauth_mgr:
                     self.oauth_mgr.on_log(run_id, payload)
         elif kind == "oauth.result":

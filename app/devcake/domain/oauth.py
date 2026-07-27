@@ -10,9 +10,7 @@ this module owns session snapshot + credential landing.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, MutableMapping, Optional
 
 from ..harness import HARNESSES
@@ -20,8 +18,6 @@ from .ids import make_run_id
 from .run import Run
 
 log = logging.getLogger("devcake.oauth")
-
-SECRETS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
 
 
 class OAuthManager:
@@ -92,11 +88,10 @@ class OAuthManager:
         run = self.runs.store.get(run_id)
         if not s or not run:
             return
-        target = SECRETS_DIR / s["dev_type"]      # snapshot from start(), never
-        target.mkdir(parents=True, exist_ok=True)  # re-looked-up (see _start_inner)
-        p = target / s["secret_file"]
-        p.write_text(payload["content"])
-        p.chmod(0o600)
+        # snapshot from start(), never re-looked-up (see _start_inner)
+        from .. import secrets as secrets_store
+        secrets_store.write_credential_file(
+            s["dev_type"], s["secret_file"], payload["content"])
         s["state"] = "completed"
         run.state = "finished"
         self.runs.store.save(run)

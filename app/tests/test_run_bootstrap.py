@@ -260,13 +260,12 @@ def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
 
 def test_oauth_start_uses_bootstrap_spine(tmp_path, monkeypatch):
     """OAuth path: session snapshot stays in OAuthManager; spine is RunBootstrap."""
-    import devcake.domain.oauth as oauth_mod
     from devcake.config import DevType
     from devcake.domain.oauth import OAuthManager
     from devcake.domain.runs import RunManager
     from devcake.harness import HARNESSES
 
-    monkeypatch.setattr(oauth_mod, "SECRETS_DIR", tmp_path / "secrets")
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     store = InMemoryStore()
     executor = FakeExecutor(store)
     runs = RunManager(store, FakeMessaging(), executor)

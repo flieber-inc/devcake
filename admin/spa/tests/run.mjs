@@ -13,6 +13,7 @@ const spa = join(here, "..");
 const SUITES = [
   "settings.mjs",
   "hierarchy.mjs",
+  "devtypes.mjs",
   "redesign.mjs",
   "missions.mjs",
   "profiles.mjs",

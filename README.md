@@ -159,18 +159,21 @@ real EXECUTE: §9.
 ```bash
 git clone https://github.com/fidecastro/devcake && cd devcake
 cp .env.example .env
-# Bootstrap only: strong ADMIN / REDIS / DAGU / OO / GITEA passwords,
-# DOCKER_GID (stat -c %g /var/run/docker.sock). Empty or change-me* values
-# refuse boot unless DEVCAKE_ALLOW_INSECURE=1 (local sandbox only).
-# PMO / forge / model secrets → admin Config after up (not long-lived in .env).
+# Edit .env: strong ADMIN / REDIS / DAGU / OO / GITEA passwords only.
+# Leave DOCKER_GID blank. Empty/change-me* passwords refuse boot unless
+# DEVCAKE_ALLOW_INSECURE=1 (local sandbox only). Operator secrets
+# (PMO / forge / model) go in the admin Config UI after up — not in .env.
 
-docker buildx bake all    # builds all DevCake images (compose never does)
-docker compose up -d      # control ports bind 127.0.0.1
-# App boot auto-creates the OpenObserve ingest user from OO_INGEST_*.
-# Optional dashboard + alerts: python3 scripts/provision_oo.py
+./up.sh --bake            # discovers DOCKER_GID, bakes all images, compose up -d
+# Later restarts (images already baked):  ./up.sh
 
 open http://localhost:8080   # basic auth → Config → secrets + connection tests
+# Optional OO dashboard/alerts: python3 scripts/provision_oo.py
 ```
+
+`./up.sh` is the supported start path: it reads the docker socket’s group id
+into `.env`, optionally bakes, then runs compose. Control ports bind
+`127.0.0.1`. Images are **Bake-only** — compose never builds them.
 
 **Before the first real mission:**
 
@@ -187,14 +190,13 @@ open http://localhost:8080   # basic auth → Config → secrets + connection te
 3. [Tutorial 3 — MCP plugins](docs/tutorials/03-mcp-plugins.md)
 4. Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
 
-Rebuild after upgrades or changes under `app/`, `admin/`, or `images/`:
+After upgrades or changes under `app/`, `admin/`, or `images/`:
 
 ```bash
-docker buildx bake all && docker compose up -d
+./up.sh --bake
 ```
 
-Images are **Bake-only**. Compose only runs them. See [`AGENTS.md`](AGENTS.md)
-and [`docs/13-deployment.md`](docs/13-deployment.md).
+More detail: [`AGENTS.md`](AGENTS.md) · [`docs/13-deployment.md`](docs/13-deployment.md).
 
 ---
 

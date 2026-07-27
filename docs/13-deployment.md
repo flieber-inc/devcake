@@ -61,6 +61,8 @@ services:
       - ./dagu/dags:/var/lib/dagu/dags:ro
       - ./dagu/init:/etc/custom-init.d:ro
       - /var/run/docker.sock:/var/run/docker.sock  # ⚠ host root-equivalent — 14 §5
+    # Compose overrides entrypoint: runs custom-init.d via `sh` (bit-independent)
+    # then execs stock /entrypoint.sh — see live docker-compose.yml.
     networks: [control]
 
   redis:
@@ -122,7 +124,7 @@ REDIS_PASSWORD=
 ADMIN_USER=admin
 ADMIN_PASSWORD=
 
-# Host docker group: stat -c %g /var/run/docker.sock
+# Host docker group (auto by ./up.sh; or: stat -c %g /var/run/docker.sock)
 DOCKER_GID=
 
 # Optional local sandbox only — never in production
@@ -139,7 +141,7 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 
 - **Version pinned** (`2.10.5` at spec time — everything in this section was **verified live against v2.10.5**, source + running server, and exercised end-to-end at M1). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
 - **Auth (verified at M1):** v2.10.5 locks the API by default (401). We run `DAGU_AUTH_MODE=basic` with `DAGU_AUTH_BASIC_USERNAME/PASSWORD` (env names confirmed from the source's config loader); the app sends HTTP Basic on every call; `/api/v1/health` stays open for the compose healthcheck.
-- **docker.sock access (verified at M1):** the image's entrypoint always drops to uid 1000 via sudo, and its `DOCKER_GID` group setup is broken on the ubuntu base (alpine-only `addgroup`). Our `dagu/init/10-docker-group.sh` (mounted at `/etc/custom-init.d/`, the image's own hook) creates the docker group with `groupadd`, so the daemon runs as `dagu:docker` — least privilege, no root daemon.
+- **docker.sock access (verified at M1):** the image's entrypoint always drops to uid 1000 via sudo, and its `DOCKER_GID` group setup is broken on the ubuntu base (alpine-only `addgroup`). Our `dagu/init/10-docker-group.sh` (mounted at `/etc/custom-init.d/`) creates the docker group with `groupadd`, so the daemon runs as `dagu:docker` — least privilege, no root daemon. Stock `/entrypoint.sh` only runs custom-init scripts that are `+x`, and the bind is `:ro`, so a non-executable host file is a silent skip → `sudo: unknown group #$DOCKER_GID` crash-loop. Compose therefore wraps the entrypoint and always invokes hooks via `sh` before handing off (does not depend on the host execute bit; git still tracks the script as `100755`).
 - **Step ids are `^[a-zA-Z][a-zA-Z0-9_]*$`** (verified) — underscores, not dashes: the DAG's step is `run_dev`.
 - **Auto-retry disabled (verified):** the DAG sets `retry_policy: {limit: 0}` — Dagu would otherwise auto-retry failed runs 3×, fighting DevCake's own attempt counting (`15-errors-and-retries.md` §2).
 - **UI:** served at root on host port 8525; the admin panel links to it with a button (no iframe, no base-path/proxy configuration — confirmed decision).
@@ -189,7 +191,7 @@ steps:
         REDIS_PASSWORD: ${params.REDIS_PASSWORD}
 ```
 
-> Notes from the live verification: no `volumes:` are needed (credentials arrive via `runspec.get`, not bind mounts — and bind-mount sources would resolve on the *daemon host*, not inside the Dagu container). The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the 2.10.5 ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix creates the docker group so the daemon runs as `dagu:docker` (not root / not `user: "0:0"`). In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
+> Notes from the live verification: no `volumes:` are needed (credentials arrive via `runspec.get`, not bind mounts — and bind-mount sources would resolve on the *daemon host*, not inside the Dagu container). The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the 2.10.5 ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix (always invoked via `sh` by the compose entrypoint wrapper, so host `+x` is not required) creates the docker group so the daemon runs as `dagu:docker` (not root / not `user: "0:0"`). In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
 
 ## 5. Two-level containers and networking
 
@@ -262,7 +264,7 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ## 8. Runbook
 
-- **First run:** `cp .env.example .env` → strong bootstrap passwords + `DOCKER_GID` → `docker buildx bake all` → `docker compose up -d` → open `http://localhost:8080` → **Configuration** (PMO + model/harness secrets, Dev Types) and **Repositories** (`#/repos`: forge tokens + merge posture) → connection tests → done. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
+- **First run:** `cp .env.example .env` → strong bootstrap passwords → `./up.sh --bake` (discovers `DOCKER_GID` from the docker socket, bakes all images, `compose up -d`) → open `http://localhost:8080` → **Configuration** (PMO + model/harness secrets, Dev Types) and **Repositories** (`#/repos`: forge tokens + merge posture) → connection tests → done. Day-to-day restarts: `./up.sh`. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 

@@ -1,10 +1,12 @@
 # DevCake runtime stack.
 #
 # Images are built ONLY via Bake (docker-bake.hcl) — compose never builds:
-#   docker buildx bake all          # first install / full upgrade
+#   ./up.sh --bake                  # discover DOCKER_GID + bake all + up
+#   ./up.sh                         # day-to-day restart (re-discovers DOCKER_GID)
+#   docker buildx bake all          # first install / full upgrade (manual)
 #   docker buildx bake              # app + admin only
 #   docker buildx bake images       # Dev harnesses + hello
-#   docker compose up -d
+#   docker compose up -d            # needs DOCKER_GID already in .env / env
 #
 # Image tags must match bake output (default TAG/DEVCAKE_TAG=latest).
 name: devcake
@@ -57,6 +59,27 @@ services:
       # entrypoint runs dagu as uid 1000 with group $DOCKER_GID → docker.sock access
       # (least privilege; find yours with: stat -c %g /var/run/docker.sock)
       - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
+    # Stock /entrypoint.sh only runs /etc/custom-init.d/* when the file is +x.
+    # The bind is :ro, so a non-executable host file is a silent skip → alpine
+    # `addgroup` fails on this ubuntu image → `sudo: unknown group #$DOCKER_GID`
+    # crash-loop. Always invoke hooks via `sh` (bit-independent), then hand off.
+    entrypoint:
+      - /usr/local/bin/tini
+      - -g
+      - --
+      - /bin/sh
+      - -ec
+      - |
+        if [ -d /etc/custom-init.d ]; then
+          for f in /etc/custom-init.d/*; do
+            [ -f "$$f" ] || continue
+            echo "Running $$f"
+            sh "$$f"
+          done
+        fi
+        exec /entrypoint.sh "$$@"
+      - dagu-init
+    command: ["dagu", "start-all"]
     volumes:
       - dagu_data:/var/lib/dagu
       - ./dagu/dags:/var/lib/dagu/dags:ro  # trusted launch code — RO (docs/14 §5)

@@ -25,8 +25,14 @@ await withPage(async (page) => {
       (await page.locator('[role="dialog"] :text-is("Model")').count()) >= 1);
     check("editor keeps the credentials InstantZone",
       (await page.locator('[role="dialog"] :text("credentials store immediately")').count()) >= 1);
-    check("editor has the Advanced disclosure",
+    // Buzz-style first view: skills open, everything operational behind ONE
+    // Advanced disclosure — credentials must be folded until expanded
+    check("editor has exactly one Advanced disclosure",
       (await page.locator('[role="dialog"] summary:has-text("Advanced")').count()) === 1);
+    check("credentials are folded on first view",
+      (await page.locator('[role="dialog"] :text("credentials store immediately"):visible').count()) === 0);
+    check("header shows credential readiness",
+      (await page.locator('[role="dialog"] :text("no credentials"), [role="dialog"] :text("credentials ready")').count()) >= 1);
     check("editor has no per-modal save button",
       (await page.locator('[role="dialog"] button:has-text("Save")').count()) === 0);
 

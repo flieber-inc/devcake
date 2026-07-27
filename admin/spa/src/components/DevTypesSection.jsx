@@ -215,7 +215,6 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
   const pending = d.harness_template !== serverDt.harness_template;   // unsaved switch
   const ready = useCredsReady(d, serverDt, h);
   const filePresent = (sf) => (serverDt.secrets_present || []).includes(sf);
-  const advCount = (d.mcp_setup_commands || []).length + (d.secret_env || []).length;
   return (
     <Modal className="max-w-2xl" onClose={onClose}>
       <div className="mb-4 flex items-center gap-3">
@@ -223,15 +222,24 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
         <div className="min-w-0">
           <h4 className="truncate font-mono text-base font-semibold tracking-tight">{name}</h4>
           <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">
-            {d.harness_template} · {d.model || "default model"}
+            {d.harness_template} · {d.model || "default model"} ·{" "}
+            <span className={ready
+              ? "text-green-700 dark:text-green-400"
+              : "text-amber-600 dark:text-amber-400"}>
+              {ready ? "credentials ready" : "no credentials"}
+            </span>
           </p>
         </div>
       </div>
       <div className="max-h-[62vh] space-y-3 overflow-y-auto pr-1">
-        {/* one line: harness · model · a much smaller max-concurrency box */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_6rem]">
+        {/* Buzz-style progressive disclosure: the first view is harness, model
+            and skills — everything operational (credentials, concurrency, MCP
+            plumbing) waits behind Advanced. Credential readiness stays visible
+            in the header and the Advanced summary so a broken state is never
+            hidden by the fold. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Harness template"
-            help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements below follow it automatically on Save.">
+            help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements under Advanced follow it automatically on Save.">
             <Select
               value={d.harness_template}
               onChange={(e) => set("harness_template", e.target.value)}
@@ -245,19 +253,14 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
               placeholder={h.default_model ? `harness default: ${h.default_model}` : "e.g. claude-fable-5"}
               onChange={(e) => set("model", e.target.value)} />
           </Field>
-          <Field label="Max conc."
-            help="How many Devs of this type may run at once. The global ceiling under Limits still applies on top.">
-            <Input
-              type="number" min="1" value={d.max_concurrency}
-              onChange={(e) => set("max_concurrency", Number(e.target.value))}
-              onBlur={(e) => set("max_concurrency", Math.max(1, Number(e.target.value) || 1))}
-            />
-          </Field>
         </div>
-        <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Identifying prompt is managed in the{" "}
-          <a className="underline" href="#/config/prompts">Prompts section</a>.
-        </p>
+        {pending && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            ⚠ Unsaved harness change: on Save this Dev Type runs {h.docker_image} and
+            needs the credentials under Advanced. Files under /data/secrets/{name}/
+            for the old harness are kept but unused.
+          </p>
+        )}
         <SkillModeChips
           help={`Domain skills from the Skills section, installed to ~/${h.skills_dir || ".claude/skills"} before the agent starts. Available = consult-optional (description match). Required = same install plus a soft-force “must consult” line in the prompt (not kernel-enforced). Skills are additive domain modules — not mission-step scripts.`}
           options={(skillsCatalog?.skills || []).map((s) => ({
@@ -280,6 +283,17 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
             set("skills", skills);
             set("skills_required", skills_required);
           }} />
+        <details>
+          <summary className="cursor-pointer select-none rounded text-sm font-medium text-neutral-600 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-300 dark:hover:text-neutral-100">
+            Advanced — credentials{" "}
+            <span className={ready
+              ? "text-green-700 dark:text-green-400"
+              : "text-amber-600 dark:text-amber-400"}>
+              {ready ? "✓" : "✗"}
+            </span>
+            {" "}· concurrency · MCP setup…
+          </summary>
+          <div className="mt-3 space-y-3">
         <InstantZone className="text-xs" note="credentials store immediately">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>
@@ -292,13 +306,6 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
               {ready ? "✓ credentials ready" : "✗ no credentials configured"}
             </span>
           </div>
-          {pending && (
-            <p className="text-amber-600 dark:text-amber-400">
-              ⚠ Unsaved harness change: on Save this Dev Type runs {h.docker_image} and
-              needs the credentials listed below. Files under /data/secrets/{name}/
-              for the old harness are kept but unused.
-            </p>
-          )}
           {/* keyed on the DRAFTED harness so switching to an OAuth-capable
               harness shows the button immediately; disabled until the switch
               is saved (the device flow runs against the SAVED harness) */}
@@ -313,11 +320,11 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
           )}
           {!h.oauth_available && (
             <p className="text-neutral-500 dark:text-neutral-400">
-              {d.harness_template} has no device-code OAuth flow — it
-              authenticates via a pasted key/token below
-              {d.harness_template === "claude-code"
-                ? " (run `claude setup-token` locally and paste the CLAUDE_CODE_OAUTH_TOKEN, or use an ANTHROPIC_API_KEY)"
-                : ""}.
+              Authenticates with a pasted key or token — no OAuth flow.
+              <Help text={`${d.harness_template} has no device-code OAuth flow — paste a key/token below.${
+                d.harness_template === "claude-code"
+                  ? " Run `claude setup-token` locally and paste the CLAUDE_CODE_OAUTH_TOKEN, or use an ANTHROPIC_API_KEY."
+                  : ""}`} />
             </p>
           )}
           <div className="space-y-2">
@@ -340,15 +347,24 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
             ))}
           </ul>
           <p className="text-neutral-500 dark:text-neutral-400">
-            Any one ✓ is enough — env keys pass through at dispatch; files are
-            delivered securely to each run (stored 0600 under /data/secrets/{name}/).
+            Any one ✓ is enough.
+            <Help text={`Env keys pass through at dispatch; credential files are delivered securely to each run (stored 0600 under /data/secrets/${name}/).`} />
           </p>
         </InstantZone>
-        <details>
-          <summary className="cursor-pointer select-none text-sm font-medium text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-neutral-100">
-            Advanced — MCP setup &amp; secret env ({advCount})…
-          </summary>
-          <div className="mt-3 space-y-3">
+            <div className="sm:max-w-[10rem]">
+              <Field label="Max concurrency"
+                help="How many Devs of this type may run at once. The global ceiling under Limits still applies on top.">
+                <Input
+                  type="number" min="1" value={d.max_concurrency}
+                  onChange={(e) => set("max_concurrency", Number(e.target.value))}
+                  onBlur={(e) => set("max_concurrency", Math.max(1, Number(e.target.value) || 1))}
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Identifying prompt is managed in the{" "}
+              <a className="underline" href="#/config/prompts">Prompts section</a>.
+            </p>
             <Field
               label="MCP setup commands (one per line)"
               hint="⚠ Runs arbitrary code in the Dev container before the agent starts."

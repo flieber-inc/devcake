@@ -1,7 +1,8 @@
 # 17 — Positioning: What This Is, and How We Say It
 
 > **Audience:** anyone writing outward-facing words about this project — README,
-> website, pitch, launch post. The README is the applied version of this doc.
+> website, pitch, launch post. The README is the applied version of this doc;
+> the full argument it compresses is [`19-thesis.md`](19-thesis.md).
 > **Status:** adopted at v0 close; motto and fit criteria revised 2026-07-18
 > (pre-v0.2) — §1, §1b. **Aligned with the product security contract**
 > in [`14-security.md`](14-security.md). Outward copy must not claim a stronger
@@ -169,6 +170,9 @@ What we don't claim: that it replaces engineers (it drafts and reviews; you
 decide); that it's magic (receipts exist so you can see when it isn't); or that
 it is a multi-tenant secure sandbox (it is a powerful agent on **your** host —
 `14`).
+
+The long-form version of this argument — evidence status stated per claim,
+falsifiers included — is [`19-thesis.md`](19-thesis.md).
 
 ## 6. The name (open decision)
 

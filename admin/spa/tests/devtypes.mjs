@@ -8,9 +8,10 @@ await withPage(async (page) => {
   await gotoFresh(page, "#/config/dev-types");
   await page.waitForSelector("#dev-types");
 
-  // 1: roster grid — tiles + the dashed New tile, no bare secondary actions
-  check("dashed New Dev Type tile in the grid",
-    (await page.locator('#dev-types button:has-text("New Dev Type")').count()) >= 2); // header + tile
+  // 1: roster grid — the dashed tile is the ONLY create affordance (no
+  // redundant header button)
+  check("dashed New Dev Type tile is the sole create affordance",
+    (await page.locator('#dev-types button:has-text("New Dev Type")').count()) === 1);
 
   const tiles = page.locator('button[aria-label^="Edit dev type"]');
   if (!(await tiles.count())) {

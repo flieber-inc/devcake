@@ -285,13 +285,7 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
           }} />
         <details>
           <summary className="cursor-pointer select-none rounded text-sm font-medium text-neutral-600 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-300 dark:hover:text-neutral-100">
-            Advanced — credentials{" "}
-            <span className={ready
-              ? "text-green-700 dark:text-green-400"
-              : "text-amber-600 dark:text-amber-400"}>
-              {ready ? "✓" : "✗"}
-            </span>
-            {" "}· concurrency · MCP setup…
+            Advanced
           </summary>
           <div className="mt-3 space-y-3">
         <InstantZone className="text-xs" note="credentials store immediately">

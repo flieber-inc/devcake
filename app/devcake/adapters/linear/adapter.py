@@ -704,11 +704,49 @@ class LinearAdapter:
         return uf["assetUrl"]
 
     async def download_asset(self, url: str) -> bytes:
-        """assetUrl downloads require Linear auth (docs/05 §4)."""
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            resp = await client.get(url, headers={"Authorization": self._headers["Authorization"]})
-            resp.raise_for_status()
-            return resp.content
+        """assetUrl downloads require Linear auth (docs/05 §4).
+
+        Host allowlist + no off-host redirects + size cap (docs/14 §11)."""
+        from ...domain.asset_fetch import (
+            AssetUrlError, assert_downloadable_asset_url,
+            enforce_download_byte_cap, resolve_redirect_location,
+        )
+        allowed = {"uploads.linear.app"}
+        try:
+            url = assert_downloadable_asset_url(url, allowed_hosts=allowed)
+        except AssetUrlError as e:
+            raise RuntimeError(f"linear download refused: {e}") from e
+        # Manual redirects only when the next hop stays on the allowlist —
+        # never follow an open redirect with the Linear Authorization header.
+        headers = {"Authorization": self._headers["Authorization"]}
+        cap = self.capabilities().attachment_max_bytes
+        async with httpx.AsyncClient(
+                timeout=60, transport=self._transport,
+                follow_redirects=False) as client:
+            current = url
+            for _ in range(5):
+                resp = await client.get(current, headers=headers)
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("location") or ""
+                    try:
+                        nxt = resolve_redirect_location(current, loc)
+                        current = assert_downloadable_asset_url(
+                            nxt, allowed_hosts=allowed)
+                    except AssetUrlError as e:
+                        raise RuntimeError(
+                            f"linear download redirect refused: {e}") from e
+                    continue
+                resp.raise_for_status()
+                try:
+                    return enforce_download_byte_cap(
+                        resp.content,
+                        content_length=resp.headers.get("content-length"),
+                        max_bytes=cap,
+                    )
+                except AssetUrlError as e:
+                    raise RuntimeError(
+                        f"linear download refused: {e}") from e
+            raise RuntimeError("linear download: too many redirects")
 
     def capabilities(self) -> PMOCapabilities:
         return PMOCapabilities(projects_supported=True, project_labels_supported=True,

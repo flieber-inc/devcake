@@ -54,10 +54,15 @@ def decrypt_blob(passphrase: str, envelope: dict) -> bytes:
         if envelope.get("v") != 1 or envelope.get("cipher") != "aesgcm" \
                 or envelope.get("kdf") != "scrypt":
             raise DecryptError("unsupported envelope")
+        # Pin KDF cost to encrypt-time constants. Never trust envelope n/r/p
+        # for scrypt work — a hostile p/n stalls the FastAPI event loop.
+        for k, expected in _KDF.items():
+            if k in envelope and envelope[k] != expected:
+                raise DecryptError("unsupported envelope")
         salt = base64.b64decode(envelope["salt_b64"])
         nonce = base64.b64decode(envelope["nonce_b64"])
         ct = base64.b64decode(envelope["ct_b64"])
-        key = _derive(passphrase, salt, envelope)
+        key = _derive(passphrase, salt, _KDF)
         return AESGCM(key).decrypt(nonce, ct, None)
     except DecryptError:
         raise

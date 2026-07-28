@@ -315,3 +315,149 @@ def test_app_reachable_url_rewrites_root_url_host():
     assert pmo._app_reachable_url(
         "http://gitea:3000/attachments/abc") == (
         "http://gitea:3000/attachments/abc")
+    # Foreign hosts must NOT collapse onto the origin (allowlist would be vacuous)
+    assert pmo._app_reachable_url(
+        "https://evil.example/steal") == "https://evil.example/steal"
+
+
+def test_app_reachable_url_rewrites_gitea_ui_url_host(monkeypatch):
+    """GITEA_UI_URL presentation host (same signal as internal forge) rewrites."""
+    monkeypatch.setenv("GITEA_UI_URL", "https://gitea.example.com")
+    pmo = GiteaIssuesAdapter("http://gitea:3000", "tok", "o/r")
+    assert pmo._app_reachable_url(
+        "https://gitea.example.com/attachments/abc") == (
+        "http://gitea:3000/attachments/abc")
+
+
+def test_download_asset_refuses_evil_host():
+    """Allowlist runs before rewrite — ticket SSRF hosts are refused."""
+    pmo = GiteaIssuesAdapter("http://gitea:3000", "tok", "o/r",
+                             transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset("https://evil.example/secret"))
+
+
+def test_download_asset_refuses_empty_api_base():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, content=b"nope")
+
+    pmo = GiteaIssuesAdapter(
+        "", "tok", "o/r", transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="api_base is empty"):
+        run(pmo.download_asset("http://localhost:3300/attachments/x"))
+    assert seen == []
+
+
+def test_download_asset_ui_host_downloads_via_origin(monkeypatch):
+    monkeypatch.setenv("GITEA_UI_URL", "https://gitea.example.com")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, content=b"via-origin")
+
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(handler))
+    body = run(pmo.download_asset(
+        "https://gitea.example.com/attachments/uuid-1"))
+    assert body == b"via-origin"
+    assert seen == ["http://gitea:3000/attachments/uuid-1"]
+
+
+def test_download_asset_wrong_port_rewrites_onto_origin_netloc():
+    """Presentation hostname on another port must not be GETted; rewrite first."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, content=b"pinned")
+
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(handler))
+    body = run(pmo.download_asset("http://gitea:9/attachments/x"))
+    assert body == b"pinned"
+    assert seen == ["http://gitea:3000/attachments/x"]
+
+
+def test_download_asset_refuses_api_path():
+    """Same-origin API paths are not attachment downloads."""
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"x")))
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset("http://gitea:3000/api/v1/user"))
+
+
+def test_download_asset_refuses_redirect_to_api_path():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path.endswith("/start"):
+            return httpx.Response(
+                302, headers={"Location": "/api/v1/user"})
+        return httpx.Response(200, content=b"nope")
+
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="redirect refused"):
+        run(pmo.download_asset("http://gitea:3000/attachments/start"))
+    assert len(seen) == 1
+
+
+def test_download_asset_refuses_oversized_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"x" * 100,
+            headers={"Content-Length": "100"})
+
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(handler))
+    # Monkeypatch capability cap via a tiny wrapper: call enforce with low cap
+    # by patching capabilities on the instance.
+    pmo.capabilities = lambda: type(  # type: ignore[method-assign]
+        "C", (), {"attachment_max_bytes": 50})()
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset("http://gitea:3000/attachments/big"))
+
+
+def test_download_asset_refuses_evil_redirect():
+    """Off-allowlist Location must not be followed with the Gitea token."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path.endswith("/good"):
+            return httpx.Response(
+                302, headers={"Location": "https://evil.example/exfil"})
+        return httpx.Response(200, content=b"should-not-reach")
+
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError, match="redirect refused"):
+        run(pmo.download_asset("http://localhost:3300/attachments/good"))
+    assert len(seen) == 1
+    assert "evil.example" not in seen[0]
+    assert "gitea:3000" in seen[0]
+
+
+def test_download_asset_allows_same_host_redirect():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/start"):
+            return httpx.Response(
+                302, headers={"Location": "/attachments/final"})
+        return httpx.Response(200, content=b"payload-bytes")
+
+    pmo = GiteaIssuesAdapter(
+        "http://gitea:3000", "tok", "o/r",
+        transport=httpx.MockTransport(handler))
+    body = run(pmo.download_asset("http://gitea:3000/attachments/start"))
+    assert body == b"payload-bytes"

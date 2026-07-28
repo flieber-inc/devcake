@@ -6,6 +6,7 @@ thin forwards that pass the composition root's singletons at call time
 
 from __future__ import annotations
 
+import logging
 import re
 
 from fastapi import HTTPException
@@ -14,8 +15,12 @@ from .. import secrets as secrets_store
 from ..config import HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE
 from ..domain.model import ALL_LABELS
 from ..harness import HARNESSES
-from ..ports.forge import mission_branch
+from ..ports.forge import ForgeError, mission_branch
+from ..ports.pmo import PMOTransient
+from ..security import redact
 from .health import reset_protection_cache
+
+log = logging.getLogger("devcake.connections")
 
 # ── GUI-stored secrets (M12, F5): write-only VALUES, never echoed back ───────
 
@@ -277,6 +282,18 @@ async def connections_registry():
     }
 
 
+def _probe_client_error(e: Exception) -> str:
+    """Client-facing probe error: never echo raw vendor bodies (tokens/URLs).
+
+    Domain exceptions keep a short redacted message so operators still get a
+    signal; everything else is a stable generic string. Full detail stays in
+    app logs only."""
+    log.warning("connection probe failed: %s", redact(repr(e))[:500])
+    if isinstance(e, (PMOTransient, ForgeError)):
+        return redact(str(e))[:200]
+    return "connection probe failed — see app logs for details"
+
+
 async def test_pmo(name: str, *, config, managers):
     inst = next((i for i in config.pmos if i.name == name), None)
     if inst is None:
@@ -301,7 +318,7 @@ async def test_pmo(name: str, *, config, managers):
                 "labels_expected": h.managed_labels_expected,
                 "missions_visible": len(missions)}
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
-        return {"ok": False, "error": str(e)[:300]}
+        return {"ok": False, "error": _probe_client_error(e)}
 
 
 async def test_forge(name: str, *, config, forge_runtime):
@@ -346,4 +363,4 @@ async def test_forge(name: str, *, config, forge_runtime):
                 "reviewer_token_configured": reviewer, "probe_pr": pr is None,
                 "branch_protection": protection.model_dump() if protection else None}
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
-        return {"ok": False, "error": str(e)[:300]}
+        return {"ok": False, "error": _probe_client_error(e)}

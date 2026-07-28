@@ -188,16 +188,20 @@ async def remove_dev_type(name: str, *, config, dev_types):
 
 async def upload_credentials(name: str, body: dict, *, dev_types,
                              shared_breakers):
-    """{"filename": "...", "content": "..."} → /data/secrets/{name}/ (0600)."""
+    """{"filename": "...", "content": "..."} → /data/secrets/{name}/ (0600).
+
+    Path components validated via secrets.require_credential_ref; size capped
+    at secrets.MAX_CREDENTIAL_FILE_BYTES; write is atomic (docs/14 §11)."""
     if name not in dev_types:
         raise HTTPException(404)
-    from pathlib import Path
-    target = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / name
-    target.mkdir(parents=True, exist_ok=True)
-    fname = os.path.basename(body.get("filename") or "creds.json")
-    p = target / fname
-    p.write_text(body.get("content") or "")
-    p.chmod(0o600)
+    from .. import secrets as secrets_store
+    fname = body.get("filename") or "creds.json"
+    content = body.get("content") or ""
+    try:
+        secrets_store.require_credential_ref(name, fname)
+        secrets_store.write_credential_file(name, fname, content)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     shared_breakers.pop(name, None)   # fresh credential clears the breaker
     return {"stored": f"{name}/{fname}"}
 

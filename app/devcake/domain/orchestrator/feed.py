@@ -20,6 +20,10 @@ tracer = trace.get_tracer("devcake")
 
 
 def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
+    # Belt-and-braces: detail should be names/counts only, but exception
+    # fragments (e.g. activity_repo_push_failed) can embed secret shapes —
+    # match settings_bundle.audit_event so on-disk JSONL is scrubbed too.
+    detail = redact(detail)
     markers.AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(markers.AUDIT_PATH, "a") as f:
         f.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(),
@@ -33,7 +37,7 @@ def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
     with tracer.start_as_current_span("audit.event") as span:
         span.set_attribute("devcake.audit.action", action)
         span.set_attribute("devcake.pmo.id", pmo_id)
-        span.set_attribute("devcake.audit.detail", redact(detail)[:500])
+        span.set_attribute("devcake.audit.detail", detail[:500])
 
 
 def _trip_breaker(mgr, name: str, reason: str) -> None:

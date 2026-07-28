@@ -6,7 +6,6 @@ import asyncio
 
 import pytest
 
-import devcake.domain.oauth as oauth_mod
 from devcake.config import DevType
 from devcake.harness import HARNESSES
 from devcake.domain.oauth import OAuthManager
@@ -34,7 +33,7 @@ class NullMessaging:
 def make_mgr(tmp_path, monkeypatch):
     from devcake.domain.runs import RunManager
 
-    monkeypatch.setattr(oauth_mod, "SECRETS_DIR", tmp_path / "secrets")
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     store = RunStore(tmp_path / "runs")
     executor = FakeExecutor()
     messaging = NullMessaging()

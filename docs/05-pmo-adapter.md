@@ -260,7 +260,7 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 - **Relations:** `POST/GET/DELETE …/issues/{index}/dependencies` with `IssueMeta{owner,repo,index}`. `create_relation(blocker, blocked)` makes `blocked` depend on `blocker`. Duplicate create returns 500 “does already exist” → treated as success. `ensure_labels` enables `internal_tracker.enable_issue_dependencies` on the board (off by default on new repos).
 - **Labels:** repo labels; `PUT …/issues/{index}/labels` replaces the full set (`native_label_swap_atomic=True`). Managed set ensured uppercase.
 - **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified).
-- **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** (`localhost:3300`); the adapter rewrites the host to `api_base` so the app container can download.
+- **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
 ### 9.4 Operator setup (bundled Gitea)
 

@@ -357,3 +357,52 @@ def test_reference_repos_validated_and_disjoint():
         AppConfig.model_validate(base)
     base["pmos"][0]["repos"] = []
     AppConfig.model_validate(base)
+
+
+def test_pmo_assignment_override_keys_validated():
+    base = _base()
+    # unknown mission-type key refused loudly (a typo would otherwise be
+    # silently inert — the override map is consulted by mission type)
+    base["pmos"][0]["assignments"] = {
+        "DEPLOY": {"dev_type": "judgment", "extra_cli_args": ""}}
+    with pytest.raises(Exception, match="unknown mission type"):
+        AppConfig.model_validate(base)
+    # an override row with an empty dev_type is a contradiction: presence of
+    # the key means "override", emptiness means "inherit" — refuse, pointing
+    # at the fix
+    base["pmos"][0]["assignments"] = {
+        "EXECUTE": {"dev_type": "", "extra_cli_args": "--max-turns 15"}}
+    with pytest.raises(Exception, match="remove the key to inherit"):
+        AppConfig.model_validate(base)
+    # partial override is the designed shape: one row overridden, the rest
+    # of the map absent (inherits global)
+    base["pmos"][0]["assignments"] = {
+        "EXECUTE": {"dev_type": "judgment", "extra_cli_args": ""}}
+    cfg = AppConfig.model_validate(base)
+    assert cfg.pmos[0].assignments["EXECUTE"].dev_type == "judgment"
+    # default: no overrides — existing configs parse unchanged
+    assert PMOInstance(name="x", team_key="T").assignments == {}
+
+
+def test_assignment_for_resolves_override_wholesale_or_global():
+    from devcake.config import assignment_for
+    base = _base()
+    # global ONBOARD carries harness-specific args; the cs instance overrides
+    # ONBOARD to another dev type with NO args
+    base["pmos"] = [dict(base["pmos"][0], name="eng", team_key="ENG"),
+                    dict(base["pmos"][0], name="cs", team_key="CS",
+                         assignments={"ONBOARD": {"dev_type": "implementer",
+                                                  "extra_cli_args": ""}})]
+    cfg = AppConfig.model_validate(base)
+    eng, cs = cfg.pmos
+    # no override → the global row, args included
+    a = assignment_for(cfg, eng, "ONBOARD")
+    assert (a.dev_type, a.extra_cli_args) == ("judgment", "--max-turns 15")
+    # override → the override row WHOLESALE: empty args stay empty, never
+    # inherited from the global row (flags are harness-specific — mixing a
+    # judgment-harness flag into an implementer run is the exact mismatch
+    # the admin UI warns about)
+    a = assignment_for(cfg, cs, "ONBOARD")
+    assert (a.dev_type, a.extra_cli_args) == ("implementer", "")
+    # non-overridden type on the overriding instance still inherits
+    assert assignment_for(cfg, cs, "EXECUTE").dev_type == "implementer"

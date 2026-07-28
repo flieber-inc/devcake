@@ -40,6 +40,7 @@ from ..config import (HARNESS_VAR_PATTERN, AppConfig, Assignment, DevType,
                       _INSTANCE_NAME_RE, deep_merge, delete_dev_type,
                       load_config, load_dev_types, reject_stale_patch,
                       save_config, save_dev_type)
+from ..domain.blocker_locator import BlockerLocator
 from ..domain.model import ALL_LABELS, derive
 from ..domain.oauth import OAuthManager
 from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
@@ -101,6 +102,20 @@ internal_forge = make_internal_forge() if os.environ.get("GITEA_ADMIN_PASSWORD")
 skill_service = SkillService(internal_forge)
 
 
+def _mission_owner_of(bid: str) -> str | None:
+    """PollRuntime's durable claim map, read at call time — `poll_rt` is
+    defined below (module-global late binding: blocker resolution only runs
+    inside poll/dispatch, long after startup)."""
+    return poll_rt.mission_owner.get(bid)
+
+
+# Deployment-wide blocker resolution (ADR-0009 amendment): ONE locator over
+# the LIVE managers dict, so a native blocked_by edge to a peer instance's
+# mission gates and inherits exactly like a local one (Linear v1; read-only —
+# never claims, never writes). Same live-reference pattern as FinalizerRouter.
+blocker_locator = BlockerLocator(managers, _mission_owner_of)
+
+
 def build_managers() -> None:
     """(Re)build the manager set IN PLACE to match config.pmos: existing
     managers keep their advisory state (grace, anomalies, merge windows) and
@@ -117,12 +132,14 @@ def build_managers() -> None:
             mgr.instance, mgr.instance_name = inst, name
             mgr.internal_forge = internal_forge
             mgr.skills = skill_service
+            mgr.blocker_locator = blocker_locator
         else:
             managers[name] = MissionManager(
                 config, dev_types, p, forge_runtime, manager, messaging,
                 instance=inst, breakers=shared_breakers,
                 internal_forge=internal_forge, skills=skill_service,
-                backend_degraded=shared_backend_degraded)
+                backend_degraded=shared_backend_degraded,
+                blocker_locator=blocker_locator)
             mappers[name] = MapperService(config, dev_types, managers[name])
 
 

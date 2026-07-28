@@ -116,8 +116,10 @@ export default function AssignmentsSection() {
               Overrides — <span className="font-mono">{p.name || `PMO #${i + 1}`}</span>
               <Help text="A row set here replaces the global assignment for this PMO instance only — Dev Type and CLI args together, never mixed. Inherit rows follow the global table above (live: a later global edit applies here too)." />
             </h4>
-            {sharedReviewBanner(`On ${p.name || `PMO #${i + 1}`}: `,
-                                effectiveDev(p, "EXECUTE"), effectiveDev(p, "REVIEW"))}
+            {(p.assignments?.EXECUTE?.dev_type || p.assignments?.REVIEW?.dev_type)
+              ? sharedReviewBanner(`On ${p.name || `PMO #${i + 1}`}: `,
+                                   effectiveDev(p, "EXECUTE"), effectiveDev(p, "REVIEW"))
+              : null /* no override in play — the global banner already covers it */}
             <div className="overflow-x-auto">
               <table className="w-full min-w-[32rem] text-sm">
                 <tbody>

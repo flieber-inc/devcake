@@ -12,8 +12,8 @@ import re
 
 from fastapi import HTTPException
 
-from ..config import (Assignment, DevType, delete_dev_type, save_config,
-                      save_dev_type)
+from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
+                      delete_dev_type, save_config, save_dev_type)
 from ..harness import HARNESSES, dev_type_status
 from ..prompts import templates as prompt_templates
 
@@ -227,7 +227,7 @@ async def put_assignments(body: dict, *, config, dev_types):
         new = {k: Assignment.model_validate(v) for k, v in body.items()}
     except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
         raise HTTPException(422, str(e))
-    missing = {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"} - set(new)
+    missing = set(DEFAULT_ASSIGNMENTS) - set(new)
     if missing:
         raise HTTPException(422, f"unassigned mission types: {sorted(missing)}")
     unknown = {a.dev_type for a in new.values()} - set(dev_types)

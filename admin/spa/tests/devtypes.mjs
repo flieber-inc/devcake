@@ -17,6 +17,16 @@ await withPage(async (page) => {
   if (!(await tiles.count())) {
     skip("Dev Type editor flows", "no Dev Types on this stack");
   } else {
+    // 2a: the ⋯ overlays the full-tile edit button (z-10) — clicking it must
+    // open the MENU, never the editor. Rename/Delete dialog reachability is
+    // covered by hierarchy.mjs; this guards the stacking regression.
+    await page.locator('button[aria-label^="More actions for"]').first().click();
+    check("tile ⋯ opens the menu, not the editor",
+      (await page.locator('[role="menu"]').count()) === 1 &&
+      (await page.locator('[role="dialog"]').count()) === 0);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(100);
+
     // 2: tile opens the editor modal with the full config surface
     await tiles.first().click();
     await page.waitForSelector('[role="dialog"]');
@@ -42,10 +52,15 @@ await withPage(async (page) => {
     const before = await model.inputValue();
     await model.fill(`${before}-uicheck`);
     await page.locator('[role="dialog"] button:has-text("Close")').click();
-    await page.waitForSelector(':text("Unsaved changes")');
+    // wait on the DirtyBar's own button — a bare :text("Unsaved changes")
+    // resolves case-insensitively against the roster tile's badge, so the
+    // check would stay green even with the DirtyBar broken (review finding)
+    await page.waitForSelector('button:has-text("Discard changes")');
     check("closing the editor keeps the edit in the draft (DirtyBar)", true);
+    // :visible matters — the badge text node is always in the DOM and only
+    // toggles an `invisible` class (review finding)
     check("the edited tile is badged",
-      (await page.locator('button[aria-label^="Edit dev type"] :text("unsaved changes")').count()) >= 1);
+      (await page.locator('button[aria-label^="Edit dev type"] :text("unsaved changes"):visible').count()) >= 1);
     await page.locator('button:has-text("Discard changes")').click();
     await page.waitForTimeout(300);
     check("discard clears the draft",

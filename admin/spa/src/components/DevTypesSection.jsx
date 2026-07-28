@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Plus, KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
 import { Section } from "./Card.jsx";
@@ -162,18 +162,14 @@ function DevTypeTile({ name, draftDt, serverDt, harnesses, edited, onEdit, onRen
   const ready = useCredsReady(d, serverDt, h);
   return (
     <div className="relative rounded-card border border-neutral-200 transition hover:border-neutral-300 hover:shadow-card dark:border-neutral-800 dark:hover:border-neutral-600">
-      <div className="absolute right-2 top-2 z-10">
-        <MoreMenu label={`More actions for ${name}`} items={[
-          { label: "Rename",
-            desc: "Config, credentials and prompt templates follow the new name.",
-            onClick: () => onRename(name) },
-          { label: "Delete Dev Type", danger: true,
-            desc: "Removes its config and this Dev Type's credential files; shared model keys and connection secrets stay.",
-            onClick: () => onDelete(name) },
-        ]} />
-      </div>
+      {/* the aria-label REPLACES descendant text in the accessible name, so
+          it must carry the credential state itself — the avatar dot's sr-only
+          text is swallowed here (review finding). The ⋯ renders AFTER this
+          button so Tab reaches the primary action first (its absolute
+          position keeps it visually top-right). */}
       <button type="button" onClick={() => onEdit(name)}
-        aria-label={`Edit dev type ${name}`}
+        aria-label={`Edit dev type ${name} — ${
+          ready ? "credentials ready" : "no credentials configured"}`}
         className="flex w-full flex-col rounded-card p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
         <span className="flex w-full justify-center py-5">
           <DevTypeAvatar name={name} ready={ready} />
@@ -189,6 +185,16 @@ function DevTypeTile({ name, draftDt, serverDt, harnesses, edited, onEdit, onRen
           </span>
         </span>
       </button>
+      <div className="absolute right-2 top-2 z-10">
+        <MoreMenu label={`More actions for ${name}`} items={[
+          { label: "Rename",
+            desc: "Config, credentials and prompt templates follow the new name.",
+            onClick: () => onRename(name) },
+          { label: "Delete Dev Type", danger: true,
+            desc: "Removes its config and this Dev Type's credential files; shared model keys and connection secrets stay.",
+            onClick: () => onDelete(name) },
+        ]} />
+      </div>
     </div>
   );
 }
@@ -215,6 +221,11 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
   const pending = d.harness_template !== serverDt.harness_template;   // unsaved switch
   const ready = useCredsReady(d, serverDt, h);
   const filePresent = (sf) => (serverDt.secrets_present || []).includes(sf);
+  // the credential setup controls live under the Advanced fold — the header's
+  // amber status doubles as the way in, so a fresh Dev Type's one setup
+  // action stays a single click from the first view (review finding #6)
+  const advancedRef = useRef(null);
+  const openAdvanced = () => { if (advancedRef.current) advancedRef.current.open = true; };
   return (
     <Modal className="max-w-2xl" onClose={onClose}>
       <div className="mb-4 flex items-center gap-3">
@@ -223,11 +234,14 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
           <h4 className="truncate font-mono text-base font-semibold tracking-tight">{name}</h4>
           <p className="truncate text-xs text-neutral-500 dark:text-neutral-400">
             {d.harness_template} · {d.model || "default model"} ·{" "}
-            <span className={ready
-              ? "text-green-700 dark:text-green-400"
-              : "text-amber-600 dark:text-amber-400"}>
-              {ready ? "credentials ready" : "no credentials"}
-            </span>
+            {ready ? (
+              <span className="text-green-700 dark:text-green-400">credentials ready</span>
+            ) : (
+              <button type="button" onClick={openAdvanced}
+                className="rounded text-amber-600 underline underline-offset-2 hover:text-amber-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-amber-400 dark:hover:text-amber-300">
+                no credentials — set up…
+              </button>
+            )}
           </p>
         </div>
       </div>
@@ -283,68 +297,68 @@ function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, 
             set("skills", skills);
             set("skills_required", skills_required);
           }} />
-        <details>
+        <details ref={advancedRef}>
           <summary className="cursor-pointer select-none rounded text-sm font-medium text-neutral-600 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-300 dark:hover:text-neutral-100">
             Advanced
           </summary>
           <div className="mt-3 space-y-3">
-        <InstantZone className="text-xs" note="credentials store immediately">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>
-              Image <span className="font-mono">{h.docker_image || "?"}</span>
-              <Help text="Derived from the harness template — not editable. Changing the harness changes the image and the credential requirements below." />
-            </span>
-            <span className={ready
-              ? "font-medium text-green-700 dark:text-green-400"
-              : "font-medium text-amber-600 dark:text-amber-400"}>
-              {ready ? "✓ credentials ready" : "✗ no credentials configured"}
-            </span>
-          </div>
-          {/* keyed on the DRAFTED harness so switching to an OAuth-capable
-              harness shows the button immediately; disabled until the switch
-              is saved (the device flow runs against the SAVED harness) */}
-          {h.oauth_available && (
-            <Button kind="ghost" size="sm" icon={KeyRound} disabled={pending}
-              title={pending
-                ? "Save the harness change first — OAuth runs the saved harness's login flow"
-                : undefined}
-              onClick={() => !pending && onOAuth(name)}>
-              Connect via OAuth…{pending ? " (save first)" : ""}
-            </Button>
-          )}
-          {!h.oauth_available && (
-            <p className="text-neutral-500 dark:text-neutral-400">
-              Authenticates with a pasted key or token — no OAuth flow.
-              <Help text={`${d.harness_template} has no device-code OAuth flow — paste a key/token below.${
-                d.harness_template === "claude-code"
-                  ? " Run `claude setup-token` locally and paste the CLAUDE_CODE_OAUTH_TOKEN, or use an ANTHROPIC_API_KEY."
-                  : ""}`} />
-            </p>
-          )}
-          <div className="space-y-2">
-            {(h.credential_env || []).map((v) => (
-              <SecretField key={v} label={v}
-                help={`API key for the ${d.harness_template} harness. Stored securely — never echoed, never in .env.`}
-                refKey={v} checkKind="harness" paste />
-            ))}
-          </div>
-          <ul className="space-y-1">
-            {(h.credential_files || []).map((cf) => (
-              <li key={cf.secret_file} className="flex items-center gap-2">
+            <InstantZone className="text-xs" note="credentials store immediately">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span>
-                  {filePresent(cf.secret_file) ? "✓" : "✗"} file{" "}
-                  <span className="font-mono">{cf.secret_file}</span>
-                  <span className="text-neutral-500 dark:text-neutral-400"> → {cf.path_hint}</span>
+                  Image <span className="font-mono">{h.docker_image || "?"}</span>
+                  <Help text="Derived from the harness template — not editable. Changing the harness changes the image and the credential requirements below." />
                 </span>
-                <UploadButton devType={name} secretFile={cf.secret_file} onDone={onCredChange} />
-              </li>
-            ))}
-          </ul>
-          <p className="text-neutral-500 dark:text-neutral-400">
-            Any one ✓ is enough.
-            <Help text={`Env keys pass through at dispatch; credential files are delivered securely to each run (stored 0600 under /data/secrets/${name}/).`} />
-          </p>
-        </InstantZone>
+                <span className={ready
+                  ? "font-medium text-green-700 dark:text-green-400"
+                  : "font-medium text-amber-600 dark:text-amber-400"}>
+                  {ready ? "✓ credentials ready" : "✗ no credentials configured"}
+                </span>
+              </div>
+              {/* keyed on the DRAFTED harness so switching to an OAuth-capable
+                  harness shows the button immediately; disabled until the switch
+                  is saved (the device flow runs against the SAVED harness) */}
+              {h.oauth_available && (
+                <Button kind="ghost" size="sm" icon={KeyRound} disabled={pending}
+                  title={pending
+                    ? "Save the harness change first — OAuth runs the saved harness's login flow"
+                    : undefined}
+                  onClick={() => !pending && onOAuth(name)}>
+                  Connect via OAuth…{pending ? " (save first)" : ""}
+                </Button>
+              )}
+              {!h.oauth_available && (
+                <p className="text-neutral-500 dark:text-neutral-400">
+                  Authenticates with a pasted key or token — no OAuth flow.
+                  <Help text={`${d.harness_template} has no device-code OAuth flow — paste a key/token below.${
+                    d.harness_template === "claude-code"
+                      ? " Run `claude setup-token` locally and paste the CLAUDE_CODE_OAUTH_TOKEN, or use an ANTHROPIC_API_KEY."
+                      : ""}`} />
+                </p>
+              )}
+              <div className="space-y-2">
+                {(h.credential_env || []).map((v) => (
+                  <SecretField key={v} label={v}
+                    help={`API key for the ${d.harness_template} harness. Stored securely — never echoed, never in .env.`}
+                    refKey={v} checkKind="harness" paste />
+                ))}
+              </div>
+              <ul className="space-y-1">
+                {(h.credential_files || []).map((cf) => (
+                  <li key={cf.secret_file} className="flex items-center gap-2">
+                    <span>
+                      {filePresent(cf.secret_file) ? "✓" : "✗"} file{" "}
+                      <span className="font-mono">{cf.secret_file}</span>
+                      <span className="text-neutral-500 dark:text-neutral-400"> → {cf.path_hint}</span>
+                    </span>
+                    <UploadButton devType={name} secretFile={cf.secret_file} onDone={onCredChange} />
+                  </li>
+                ))}
+              </ul>
+              <p className="text-neutral-500 dark:text-neutral-400">
+                Any one ✓ is enough.
+                <Help text={`Env keys pass through at dispatch; credential files are delivered securely to each run (stored 0600 under /data/secrets/${name}/).`} />
+              </p>
+            </InstantZone>
             <div className="sm:max-w-[10rem]">
               <Field label="Max concurrency"
                 help="How many Devs of this type may run at once. The global ceiling under Limits still applies on top.">
@@ -420,9 +434,18 @@ function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
         name: name.trim(), harness_template: harness,
         identifying_prompt: "", max_concurrency: 1,
       });
-      await onCreated(name.trim()); onClose();
-    } catch (e) { setErr(String(e.message || e).replace(/^\d+ /, "")); }
-    finally { setBusy(false); }
+    } catch (e) {
+      setErr(String(e.message || e).replace(/^\d+ /, ""));
+      setBusy(false);
+      return;
+    }
+    // created server-side — close unconditionally; a reload failure after
+    // this point is NOT a creation failure and must not trap the dialog
+    // (a retry would 409 on the already-created name). onCreated reports
+    // its own failures to the page banner (the ClearSecretsDialog pattern).
+    setBusy(false);
+    onClose();
+    onCreated(name.trim());
   };
   return (
     <Modal onClose={busy ? undefined : onClose}>
@@ -548,7 +571,12 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
         onClose={() => { setOauthFor(null); reload(); }} />}
       {addDev && <NewDevTypeDialog harnesses={harnesses}
         onClose={() => setAddDev(false)}
-        onCreated={async (nm) => { await reload(); setEditFor(nm); }} />}
+        onCreated={async (nm) => {
+          try { await reload(); setEditFor(nm); }
+          catch (e) {
+            setPageErr(`dev-type created but reload failed: ${String(e.message || e)}`);
+          }
+        }} />}
       {clearSecrets && (
         <ClearSecretsDialog
           context="dev-types"

@@ -114,7 +114,10 @@ values stay in their `InstantZone`s inside it. The editor's first view is
 harness, model and skills only (Buzz-style); credentials, concurrency and
 per-type plumbing (MCP setup, secret env) live behind a single `Advanced…`
 disclosure (labeled just "Advanced"). Credential readiness is never hidden
-by the fold — the header subtitle carries it (green ready / amber missing).
+by the fold — the header subtitle carries it (green ready / amber missing),
+and the amber "no credentials — set up…" status is itself the control that
+expands Advanced, so a fresh Dev Type's one setup action (§3 rule 1) stays
+a single click from the first view.
 Use this idiom only for identity-like rosters; settings stay SettingRows.
 
 ### Tables
@@ -133,8 +136,7 @@ Never fake a table with flex rows that misalign.
 The rule that cleaned up Skills, Dev Type cards, and the Runs header:
 
 1. **Each header/card gets at most ONE visually primary action** — the thing a
-   user actually comes there to do (`Add skill`, `Connect via OAuth…`,
-   `Open Dagu`).
+   user actually comes there to do (`Add skill`, `Poll now`, `Open Dagu`).
 2. **Secondary, rare, and destructive actions go into a `MoreMenu`**
    (`src/components/MoreMenu.jsx`): items carry `label` + a one-line `desc`
    stating the real consequence, `external: true` renders ↗, `danger: true`

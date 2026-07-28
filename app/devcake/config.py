@@ -372,8 +372,12 @@ class AppConfig(BaseModel):
     schema_version: int = 4
     pmos: list[PMOInstance] = Field(default_factory=list)
     repos: list[RepoInstance] = Field(default_factory=list)
+    # deep copy: rename_dev_type edits rows IN PLACE, so shared Assignment
+    # objects would write through to DEFAULT_ASSIGNMENTS for the process
+    # lifetime and leak into every later AppConfig()
     assignments: dict[str, Assignment] = Field(
-        default_factory=lambda: dict(DEFAULT_ASSIGNMENTS))
+        default_factory=lambda: {k: v.model_copy()
+                                 for k, v in DEFAULT_ASSIGNMENTS.items()})
     concurrency: Concurrency = Field(default_factory=Concurrency)
     adoption_mode: Literal["opt_in", "opt_out"] = "opt_in"
     poll_interval_seconds: int = Field(30, ge=1, le=3600)

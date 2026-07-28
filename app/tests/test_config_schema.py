@@ -384,6 +384,19 @@ def test_pmo_assignment_override_keys_validated():
     assert PMOInstance(name="x", team_key="T").assignments == {}
 
 
+def test_default_assignments_are_copies_not_shared_objects():
+    """The assignments default factory must DEEP-copy DEFAULT_ASSIGNMENTS:
+    with shared Assignment objects, an in-place edit (rename_dev_type does
+    `a.dev_type = new`) on one defaults-shaped config writes through to the
+    module constant and every later AppConfig() for the process lifetime."""
+    from devcake.config import DEFAULT_ASSIGNMENTS
+    a = AppConfig()
+    assert a.assignments["EXECUTE"] is not DEFAULT_ASSIGNMENTS["EXECUTE"]
+    a.assignments["EXECUTE"].dev_type = "mutated"
+    assert DEFAULT_ASSIGNMENTS["EXECUTE"].dev_type == "implementer"
+    assert AppConfig().assignments["EXECUTE"].dev_type == "implementer"
+
+
 def test_assignment_for_resolves_override_wholesale_or_global():
     from devcake.config import assignment_for
     base = _base()

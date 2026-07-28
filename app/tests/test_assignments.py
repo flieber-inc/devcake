@@ -53,13 +53,29 @@ def test_schedule_staffs_by_instance_override(tmp_path):
 
 def test_schedule_skips_when_override_names_missing_dev_type(tmp_path):
     """An override naming a Dev Type that no longer exists behaves exactly
-    like an unassigned global row: skip, never crash (docs/15 fail-safe)."""
+    like an unassigned global row: skip, never crash (docs/15 fail-safe) —
+    and the WHY is surfaced in blocked_reasons (M10 repo-gate precedent;
+    overrides skip PUT-time existence checks, so this state is reachable
+    via a raw config PUT)."""
     cs, dispatched = _mgr(
         tmp_path, PMOInstance(
             name="cs", team_key="CS",
             assignments={"ONBOARD": Assignment(dev_type="vanished")}))
     run_coro(cs.schedule([m("p1", "T-1")]))
     assert dispatched == []
+    assert "vanished" in cs.blocked_reasons["p1"]
+    assert "ONBOARD" in cs.blocked_reasons["p1"]
+
+
+def test_schedule_surfaces_unassigned_mission_type(tmp_path):
+    """The pre-existing global path gains the same visibility: an empty
+    global row (hand-edited config) names the unassigned type instead of
+    skipping silently."""
+    cs, dispatched = _mgr(tmp_path, PMOInstance(name="cs", team_key="CS"))
+    cs.config.assignments["ONBOARD"] = Assignment(dev_type="")
+    run_coro(cs.schedule([m("p1", "T-1")]))
+    assert dispatched == []
+    assert "unassigned" in cs.blocked_reasons["p1"]
 
 
 def test_dispatch_spec_env_uses_override_args_wholesale(tmp_path):

@@ -45,3 +45,16 @@ Shipped as the immediate follow-up increment, after live verification (relation 
 6. **The Mapper runs on the seeded `mapper`** (claude-code, `claude-haiku-4-5`) by default, manual-only out of the box; `MapperService` serializes manual/periodic dispatch, advances its watermark only on success, and backs off after 3 consecutive dead runs (store-derived). The repo clone is kept (founder decision: preserves future code-aware ordering).
 7. **Blocking stays pipeline-coarse** (founder decision): better bottlenecked than accumulating parallel garbage — routing quality is the product thesis (docs/04 §2).
 8. Provenance classification ignores `>`-quoted lines (a human quoting DevCake stays human); project-kind baton passes go out as project updates.
+
+## Addendum — cross-instance edges (2026-07-28)
+
+"The gate honors *any* relation" now includes an edge whose blocker lives
+on a PEER PMO instance of the same deployment (same vendor environment,
+e.g. two Linear teams in one workspace). Off-snapshot resolution goes
+through the shared `BlockerLocator` (ADR-0009 amendment);
+open/done/canceled/FAILED/unreadable semantics are unchanged, and cycle
+detection stays on the local instance graph — a cross-instance edge is an
+edge to outside and cannot close a local cycle. DevCake still never creates
+such an edge: an external agent (human or non-DevCake automation) owns
+cross-team coordination; the gate only stops dropping board truth that
+already exists.

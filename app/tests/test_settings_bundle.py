@@ -494,3 +494,32 @@ def test_audit_event_appends_scrubbed_line(monkeypatch, tmp_path):
     assert rec["action"] == "profile_saved"
     assert rec["detail"] == "name=staging secrets=3"
     assert rec["pmo_id"] == "" and rec["instance"] == ""
+
+
+# ── cross-store semantics: assignment refs (global + ADR-0019 overrides) ─────
+
+def test_apply_semantics_refuse_unknown_devtype_in_any_assignment_map(
+        monkeypatch, tmp_path):
+    """check_assignments (apply-only) must scan the global map AND every
+    instance override map — a bundle whose override names a Dev Type the
+    bundle doesn't carry would otherwise apply cleanly and then silently
+    never staff that mission type on that instance."""
+    sb, _p, secrets, config_mod, prompt_templates = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, prompt_templates)
+    names = set(dts)
+    exists = lambda mt, name: True
+
+    sb.validate_config_semantics(cfg, names, exists, check_assignments=True)
+
+    bad_global = copy.deepcopy(cfg)
+    bad_global.assignments["EXECUTE"].dev_type = "ghost"
+    with pytest.raises(sb.BundleError, match="ghost"):
+        sb.validate_config_semantics(bad_global, names, exists,
+                                     check_assignments=True)
+
+    bad_override = copy.deepcopy(cfg)
+    bad_override.pmos[0].assignments = {
+        "EXECUTE": config_mod.Assignment(dev_type="ghost")}
+    with pytest.raises(sb.BundleError, match="linear.*ghost|ghost.*linear"):
+        sb.validate_config_semantics(bad_override, names, exists,
+                                     check_assignments=True)

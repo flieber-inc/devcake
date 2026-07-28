@@ -571,6 +571,12 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
             if a.dev_type and a.dev_type not in dev_type_names:
                 raise BundleError(422, f"assignments[{mt}]: unknown Dev Type "
                                        f"{a.dev_type!r}")
+        for inst in cfg.pmos:                     # ADR-0019 override maps
+            for mt, a in inst.assignments.items():
+                if a.dev_type not in dev_type_names:
+                    raise BundleError(
+                        422, f"pmos[{inst.name}].assignments[{mt}]: unknown "
+                             f"Dev Type {a.dev_type!r}")
 
 
 def dry_run_adapters(cfg: AppConfig) -> None:

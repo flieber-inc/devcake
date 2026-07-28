@@ -352,6 +352,41 @@ def test_remove_dev_type_clears_active_prompt_and_sidecar_dirs(monkeypatch, tmp_
     assert not secrets.exists()
 
 
+def test_instance_override_refs_block_delete_and_follow_rename(monkeypatch, tmp_path):
+    """ADR-0019 reference hygiene: a Dev Type named only by a PMO instance's
+    assignment override must refuse DELETE (409 naming the instance) and be
+    remapped by RENAME — same contract as the global map."""
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import config as config_mod
+    from devcake.api import devtypes_service
+    from devcake.config import AppConfig, Assignment, DevType, PMOInstance
+
+    monkeypatch.setattr(devtypes_service, "save_config", lambda c: None)
+    monkeypatch.setattr(devtypes_service, "save_dev_type", lambda d: None)
+    monkeypatch.setattr(devtypes_service, "delete_dev_type", lambda n: None)
+    dts = {"cs-agent": DevType(name="cs-agent", harness_template="codex"),
+           "judgment": DevType(name="judgment", harness_template="claude-code")}
+    cfg = AppConfig(pmos=[PMOInstance(
+        name="cs", team_key="CS",
+        assignments={"EXECUTE": Assignment(dev_type="cs-agent")})])
+    cfg.assignments = {mt: config_mod.Assignment(dev_type="judgment")
+                       for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")}
+
+    with pytest.raises(HTTPException) as e:
+        run_coro(devtypes_service.remove_dev_type(
+            "cs-agent", config=cfg, dev_types=dts))
+    assert e.value.status_code == 409 and "cs" in str(e.value.detail)
+
+    out = run_coro(devtypes_service.rename_dev_type(
+        "cs-agent", {"new_name": "cs-senior"}, config=cfg, dev_types=dts,
+        shared_breakers={}))
+    assert out["renamed"]
+    assert cfg.pmos[0].assignments["EXECUTE"].dev_type == "cs-senior"
+
+
 def test_template_warning_for_stale_executed_trivially(monkeypatch, tmp_path):
     # founder decision 2026-07-18: outcome removed outright — a pre-removal
     # custom ONBOARD template must warn in /health, not fail silently

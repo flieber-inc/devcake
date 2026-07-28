@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from ...config import assignment_for
 from .. import backend_health
 from ..model import (LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, Mission,
                      MissionType, PRIORITY_RANK, derive, find_cycles)
@@ -99,9 +100,22 @@ async def schedule(mgr, missions: list[Mission],
             continue
         if mission.repo in mgr.forges.breakers:
             continue  # this repo's breaker is latched (docs/15 §4)
-        dev_type = mgr.dev_types.get(mgr.config.assignments[d.mission_type.value].dev_type)
-        if dev_type is None or dev_type.name in mgr.breakers:
-            continue  # unassigned or auth breaker tripped (docs/15 §4)
+        assignment = assignment_for(mgr.config, mgr.instance,
+                                    d.mission_type.value)
+        dev_type = mgr.dev_types.get(assignment.dev_type)
+        if dev_type is None:
+            # surface WHY (M10 repo-gate precedent): overrides skip PUT-time
+            # existence checks, so a vanished/typo'd name is reachable via a
+            # raw config PUT and must never park missions invisibly
+            mgr.blocked_reasons[mission.pmo_id] = (
+                f"{d.mission_type.value} is unassigned — set an assignment"
+                if not assignment.dev_type else
+                f"{d.mission_type.value} is assigned to Dev Type "
+                f"{assignment.dev_type!r}, which does not exist — fix the "
+                f"assignment (global or this instance's override)")
+            continue
+        if dev_type.name in mgr.breakers:
+            continue  # auth breaker tripped (docs/15 §4)
         # ADR-0018: a dev type whose model backend looks sick is throttled to a
         # single probe run rather than blocked. The probe IS the half-open — it
         # is what lets the store-derived condition clear itself, so this must

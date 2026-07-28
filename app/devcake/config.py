@@ -53,6 +53,11 @@ RESERVED_SECRET_ENV = frozenset({
 RESERVED_SECRET_ENV_PREFIXES = ("DEVCAKE_", "OTEL_", "GIT_")
 
 
+class Assignment(BaseModel):
+    dev_type: str = ""
+    extra_cli_args: str = ""
+
+
 class PMOInstance(BaseModel):
     """One configured PMO connection (instances-with-identities; secrets GUI-stored).
     An instance with an empty team_key is VALID BUT IDLE — the poll loop and
@@ -81,6 +86,28 @@ class PMOInstance(BaseModel):
     # in-flight finalization and sweeps continue. Default open so a multi-PMO
     # deployment starts with every configured team active.
     intake_paused: bool = False
+    # Per-instance Mission Type → Dev Type overrides (ADR-0019, dual-crew
+    # staffing): a present key replaces the global AppConfig.assignments row
+    # WHOLESALE — extra_cli_args included, because CLI flags are harness-
+    # specific and must never leak from the global row's harness into the
+    # override's. An absent key inherits the global row. Empty dict (the
+    # default) = this instance staffs exactly like the deployment default.
+    assignments: dict[str, Assignment] = Field(default_factory=dict)
+
+    @field_validator("assignments")
+    @classmethod
+    def _assignment_overrides_valid(cls, v):
+        unknown = set(v) - set(DEFAULT_ASSIGNMENTS)
+        if unknown:
+            raise ValueError(
+                f"assignments: unknown mission type(s) {sorted(unknown)} — "
+                f"valid keys: {sorted(DEFAULT_ASSIGNMENTS)}")
+        empty = sorted(mt for mt, a in v.items() if not a.dev_type)
+        if empty:
+            raise ValueError(
+                f"assignments[{', '.join(empty)}]: an override must name a "
+                f"Dev Type — remove the key to inherit the global assignment")
+        return v
 
     @field_validator("system")
     @classmethod
@@ -180,11 +207,6 @@ class RepoInstance(BaseModel):
         material for every stage and is never a work target. Health treats
         readable-but-not-writable as OK for these; no breaker, no nagging."""
         return bool(self.token_ro) and not self.token
-
-
-class Assignment(BaseModel):
-    dev_type: str = ""
-    extra_cli_args: str = ""
 
 
 class Concurrency(BaseModel):
@@ -296,6 +318,16 @@ DEFAULT_ASSIGNMENTS = {
     "REVIEW": Assignment(dev_type="judgment"),
 }
 
+
+def assignment_for(config: "AppConfig", instance: PMOInstance,
+                   mission_type: str) -> Assignment:
+    """The Assignment staffing `mission_type` on `instance` (ADR-0019): the
+    instance's override row wholesale when present, else the global row.
+    Never mixes fields across the two — extra_cli_args are harness-specific
+    and belong to whichever row named the Dev Type."""
+    override = instance.assignments.get(mission_type)
+    return override if override is not None else config.assignments[mission_type]
+
 # docs/03 §7 — canonical identifying prompts (seed data; admin-editable)
 JUDGMENT_PROMPT = (
     "You are **Judgment**, DevCake's judgment-heavy engineer. You assess, plan, and "
@@ -340,8 +372,12 @@ class AppConfig(BaseModel):
     schema_version: int = 4
     pmos: list[PMOInstance] = Field(default_factory=list)
     repos: list[RepoInstance] = Field(default_factory=list)
+    # deep copy: rename_dev_type edits rows IN PLACE, so shared Assignment
+    # objects would write through to DEFAULT_ASSIGNMENTS for the process
+    # lifetime and leak into every later AppConfig()
     assignments: dict[str, Assignment] = Field(
-        default_factory=lambda: dict(DEFAULT_ASSIGNMENTS))
+        default_factory=lambda: {k: v.model_copy()
+                                 for k, v in DEFAULT_ASSIGNMENTS.items()})
     concurrency: Concurrency = Field(default_factory=Concurrency)
     adoption_mode: Literal["opt_in", "opt_out"] = "opt_in"
     poll_interval_seconds: int = Field(30, ge=1, le=3600)

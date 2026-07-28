@@ -50,7 +50,8 @@ def schedule(candidates, config, dev_types, active_runs):
                         updated_at ascending,     # oldest first
                         pmo_id))                  # deterministic final tiebreak
     for mission in order:
-        dev_type = config.assignments[mission.type]
+        # instance override wholesale, else the global row (ADR-0019)
+        dev_type = assignment_for(config, instance, mission.type)
         if active_runs.count(dev_type=dev_type) >= dev_types[dev_type].max_concurrency:
             continue
         if active_runs.count() >= config.concurrency.global_max:

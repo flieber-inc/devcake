@@ -27,7 +27,7 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `POST /api/v1/oauth/dev-types/{name}/start` · `GET /api/v1/oauth/status/{run_id}` | Per-dev-type device-code login; credential lands in `/data/secrets/{name}/` |
 | `PUT/DELETE /api/v1/dev-types/{name}` | Update / delete one Dev Type. DELETE refuses while assigned to a Mission Type (or to the Relations Mapper); on success it also drops `active_devtype_prompts` keys and removes that Dev Type's prompt-template **and credential** directories (`/data/secrets/{name}/`). Shared harness keys and connection secrets are untouched (use Clear secrets) |
 | `POST /api/v1/dev-types/{name}/credentials` | JSON `{"filename": "...", "content": "..."}` → stored to `/data/secrets/{name}/{filename}` (0600); a fresh credential clears that Dev Type's auth breaker |
-| `GET /api/v1/assignments` · `PUT /api/v1/assignments` | Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type |
+| `GET /api/v1/assignments` · `PUT /api/v1/assignments` | The **global** Mission-Type → Dev-Type map. Validation: all four types assigned, each to exactly one existing Dev Type. Per-instance override rows (ADR-0019) ride `pmos[*].assignments` in PUT `/config` instead — mission-type keys validated there; dev-type existence checked at bundle/profile apply and inline in the SPA (same split as the global map) |
 | `PUT/DELETE /api/v1/secrets/{scope}/{instance}/{field}` | Write/delete connection secret **VALUES** (pmo `api_key`; repo `token`/`token_ro`/`reviewer_token`) — never echoed (`14` §4, ADR-0011) |
 | `PUT/DELETE /api/v1/harness-secrets/{VAR}` | Write/delete harness/model key VALUES |
 | `GET /api/v1/secrets-check` | Presence + `updated_at` only (no values, no fingerprints) — powers Config ✓/✗ |
@@ -179,6 +179,8 @@ Both validate server-side (name shape, required description, per-file 200 KB / t
 
 ### Assignments
 Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). Harness-specific means capability-specific: `--max-turns` exists on claude-code and grok-build, but **codex 0.144.4 has no turn-cap flag at all**, so no args value bounds a codex Dev's effort (`08-harness-templates.md` §1, `15-errors-and-retries.md` §2a). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).
+
+Below the global matrix, **one override block per configured PMO instance** (ADR-0019): a tri-state select per Mission Type — the inherit option names the effective global Dev Type; choosing a type creates a wholesale override row with its **own** args textbox (fresh overrides start with empty args; the harness-mismatch warning applies per row). The review-independence advisory (EXECUTE = REVIEW) is evaluated per instance on **effective** rows. Overrides save through the config draft (PUT `/config`, they are `pmos[*]` fields), not PUT `/assignments`.
 
 ### Pointing a Dev Type at a local / OpenAI-compatible backend
 

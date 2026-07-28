@@ -115,6 +115,22 @@ export function metaFor(path) {
              multiline: false,
              format: (v) => ((v || []).length ? (v || []).join(", ") : "(none)") };
   }
+  // ADR-0019 instance override rows: field-level edits recurse to leaves;
+  // adding/removing a whole row diffs atomically at the row path
+  m = path.match(/^cfg\.pmos\.(\d+)\.assignments\.([^.]+)\.(.+)$/);
+  if (m && ASSIGNMENT_FIELDS[m[3]]) {
+    const f = ASSIGNMENT_FIELDS[m[3]];
+    return { group: "Assignments", multiline: false, format: orEmpty, ...f,
+             label: `${m[2]} override (PMO #${+m[1] + 1}) · ${f.label}` };
+  }
+  m = path.match(/^cfg\.pmos\.(\d+)\.assignments\.([^.]+)$/);
+  if (m) {
+    return { group: "Assignments", multiline: false,
+             label: `${m[2]} override (PMO #${+m[1] + 1})`,
+             format: (v) => (v == null ? "(inherit global)"
+                             : `${v.dev_type || "(unassigned)"}` +
+                               (v.extra_cli_args ? ` · ${v.extra_cli_args}` : "")) };
+  }
   m = path.match(/^devTypes\.([^.]+)\.(.+)$/);
   if (m && DEV_TYPE_FIELDS[m[2]]) {
     const f = DEV_TYPE_FIELDS[m[2]];

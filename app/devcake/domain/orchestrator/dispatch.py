@@ -16,7 +16,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from ...harness import HARNESSES, missing_referenced_secret_env
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
-from ...config import DevType
+from ...config import DevType, assignment_for
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
@@ -342,7 +342,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         await _give_up(mgr, live, mtype, attempt - 1)
         return None
 
-    assignment = mgr.config.assignments[mtype.value]
+    assignment = assignment_for(mgr.config, mgr.instance, mtype.value)
     from ..ids import RunIdOverflow, make_run_id
     try:
         run_id = make_run_id(mgr.instance_name, mission.key, seq, mtype.value)

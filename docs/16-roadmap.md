@@ -617,7 +617,12 @@ long-lived incomplete dialect API.
   standalone plugin repo <https://github.com/fidecastro/devcake-logs-mcp>
   (`LogBackend` seam; core MCP ports already shipped).
 - **Priority-conditional Dev Type assignment** (e.g. Urgent EXECUTE → stronger
-  Dev Type — relaxes 1 Mission Type → 1 Dev Type).
+  Dev Type — relaxes 1 Mission Type → 1 Dev Type). The **instance** dimension
+  shipped as ADR-0019 (per-PMO override rows); a condition language did not.
+- **Per-instance doctrine knobs beyond assignments** — adoption mode,
+  auto_merge, concurrency are still deployment-global; ADR-0019 lists them as
+  open candidates if two boards ever need different merge doctrine (until
+  then: second deployment).
 - Admin panel **OIDC/SSO** (basic auth remains the dedicated-host story —
   `14`).
 - **First-class OTel metrics layer** — when dashboards need pre-aggregation

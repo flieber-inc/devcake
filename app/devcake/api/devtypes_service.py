@@ -12,8 +12,8 @@ import re
 
 from fastapi import HTTPException
 
-from ..config import (Assignment, DevType, delete_dev_type, save_config,
-                      save_dev_type)
+from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
+                      delete_dev_type, save_config, save_dev_type)
 from ..harness import HARNESSES, dev_type_status
 from ..prompts import templates as prompt_templates
 
@@ -145,6 +145,11 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
         if a.dev_type == name:
             a.dev_type = new
             changed = True
+    for inst in config.pmos:                      # ADR-0019 override maps
+        for a in inst.assignments.values():
+            if a.dev_type == name:
+                a.dev_type = new
+                changed = True
     if config.relations_mapper.dev_type == name:
         config.relations_mapper.dev_type = new
         changed = True
@@ -170,6 +175,13 @@ async def remove_dev_type(name: str, *, config, dev_types):
         raise HTTPException(404, f"no Dev Type named {name!r}")
     if any(a.dev_type == name for a in config.assignments.values()):
         raise HTTPException(409, f"{name} is assigned to a mission type")
+    holders = sorted(p.name for p in config.pmos
+                     if any(a.dev_type == name
+                            for a in p.assignments.values()))
+    if holders:                                   # ADR-0019 override maps
+        raise HTTPException(
+            409, f"{name} is assigned on PMO instance(s) "
+                 f"{', '.join(holders)} — remove the override(s) first")
     if config.relations_mapper.dev_type == name:
         raise HTTPException(409, f"{name} is the Relations Mapper's Dev Type — "
                                  "repoint or disable the mapper first")
@@ -215,7 +227,7 @@ async def put_assignments(body: dict, *, config, dev_types):
         new = {k: Assignment.model_validate(v) for k, v in body.items()}
     except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
         raise HTTPException(422, str(e))
-    missing = {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"} - set(new)
+    missing = set(DEFAULT_ASSIGNMENTS) - set(new)
     if missing:
         raise HTTPException(422, f"unassigned mission types: {sorted(missing)}")
     unknown = {a.dev_type for a in new.values()} - set(dev_types)

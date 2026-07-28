@@ -152,7 +152,7 @@ async def resolve_blocker_work(
     memo: dict = {}   # fresh per dispatch — blocker status is read all-live
     for bid in mission.blocked_by:
         res = await mgr.blocker_locator.resolve(
-            bid, local_mgr=mgr, by_id={}, memo=memo)
+            bid, local_mgr=mgr, memo=memo)
         if res is None:
             skip.append(f"{bid}: unreadable")
             continue

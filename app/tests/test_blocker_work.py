@@ -155,6 +155,58 @@ def test_resolve_blocker_work_colliding_gitea_id_never_mounts_peer(tmp_path):
     assert any("no prior work repo" in s for s in skips)
 
 
+def test_dispatch_snapshots_foreign_blocker_work_end_to_end(tmp_path):
+    """Composed cross-instance path (ADR-0009 amendment): a REAL dispatch()
+    with a done PEER blocker snapshots its tree on run.blocker_work, and
+    _extra_repos_for emits the RO mount with the blocker repo's read token —
+    the full re-check → snapshot → runspec chain, not the seams in
+    isolation."""
+    from devcake.config import PMOInstance
+    from devcake.domain.blocker_locator import BlockerLocator
+    from devcake.domain.model import MissionType
+    from devcake.ports.internal_forge import MissionRepoCredentials
+    from fakes import FakeInternalForge
+    from test_prompt_templates import _ForgeWithDescriptor
+    from test_transitions import make_mgr, mission
+
+    class CrossForge(FakeInternalForge):
+        def mission_credentials(self, name):
+            if name != "cs-cs-1":
+                return None
+            return MissionRepoCredentials(
+                repo_name=name,
+                clone_url=f"http://gitea:3000/devcake-internal/{name}.git",
+                username="svc-cs-cs-1", token_write="w", token_read="cs-read")
+
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    m.blocked_by = ["cs-uuid"]
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=_ForgeWithDescriptor())
+    mgr.internal_forge = CrossForge()
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    launched = []
+
+    async def launch(run, image):
+        launched.append(run)
+    mgr.runs.bootstrap = type("B", (), {"launch": staticmethod(launch)})()
+
+    done = _mission("cs-uuid", "CS-1", status="done")
+    done.instance = "cs"
+    cs = _peer("cs", "linear", {"cs-uuid": done})
+    mgr.blocker_locator = BlockerLocator({"linear": mgr, "cs": cs},
+                                         lambda bid: None)
+    cs_run = _run("cs-uuid", "CS-1", "cs-cs-1")
+    cs_run.pmo_ref = "cs"
+    mgr.runs.store.save(cs_run)
+
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    assert run is not None and launched
+    assert run.blocker_work == [{"repo_ref": "cs-cs-1", "mission_key": "CS-1"}]
+    extras = dispatch._extra_repos_for(mgr, run)
+    item = next(x for x in extras if x["name"] == "cs-cs-1")
+    assert item["token"] == "cs-read"
+
+
 def test_resolve_blocker_work_same_repo_skipped(tmp_path):
     a = _mission("a", "T-A", status="done")
     b = _mission("b", "T-B", blocked_by=["a"])

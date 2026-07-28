@@ -134,7 +134,7 @@ async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
         if b is None:
             first = bid not in memo
             r = await mgr.blocker_locator.resolve(
-                bid, local_mgr=mgr, by_id=by_id, memo=memo)
+                bid, local_mgr=mgr, memo=memo)
             b = r.mission if r is not None else None
             if b is None and first:
                 log.warning("blocker %s of %s unreadable — treated as open",

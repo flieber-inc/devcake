@@ -285,6 +285,20 @@ def test_foreign_unreadable_fails_safe(tmp_path):
     assert "unreadable" in eng.blocked_reasons["e1"]
 
 
+def test_dispatch_recheck_aborts_on_live_foreign_blocker(tmp_path):
+    """The dispatch-time re-check (empty snapshot, fresh memo) resolves a
+    PEER blocker live and aborts while it is open — same fail-safe as the
+    local twin above."""
+    from devcake.domain.model import MissionType
+    eng, dispatched, eng_pmo, _ = make_pair(tmp_path, {"u1": fm("u1", "CS-7")})
+    live = m("e1", "ENG-1", blocked_by=["u1"])
+    eng_pmo.by_id["e1"] = live
+    del eng.dispatch                                # use the real dispatch
+    dt = eng.dev_types["judgment"]
+    run = run_coro(eng.dispatch(live, MissionType.ONBOARD, dt))
+    assert run is None                              # aborted at the re-check
+
+
 def test_foreign_resolution_uses_peer_adapter_and_memoizes(tmp_path):
     """The peer's OWN key reads its mission (eng adapter never asked), and
     two dependents cost ONE walk per cycle."""

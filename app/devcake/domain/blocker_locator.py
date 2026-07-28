@@ -17,10 +17,19 @@ mission_pmo_id "3" for unrelated missions.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Callable
 
 from .model import Mission, MissionRef
+
+# Peer resolution runs inside the LOCAL instance's poll segment: a sick peer
+# adapter (revoked key hanging to its 20 s client timeout, vendor brownout)
+# must not couple its latency into every local cycle. A peer that cannot
+# answer within this budget counts as a miss for THIS resolution path —
+# fail-safe unchanged (miss ⇒ next candidate ⇒ at worst unreadable-open,
+# self-healing next cycle).
+PEER_GET_TIMEOUT_S = 5.0
 
 # Systems whose pmo_ids are globally unique across the vendor environment
 # (Linear UUIDs). Only these may resolve via PEER adapters, and only these
@@ -49,15 +58,14 @@ class BlockerLocator:
         self._managers = managers          # live: instance name → manager
         self._owner_of = owner_of          # bid → owning instance name | None
 
-    async def resolve(self, bid: str, *, local_mgr, by_id: dict,
+    async def resolve(self, bid: str, *, local_mgr,
                       memo: dict) -> Resolved | None:
         """Mission for `bid` plus attribution, or None (= unreadable — callers
-        keep the ADR-0007 fail-safe: a missing Mission is NEVER done).
-        Memoized in the caller-supplied `memo` (one dict per poll segment or
-        dispatch), so a shared blocker costs one network walk per cycle."""
-        local = by_id.get(bid)
-        if local is not None:
-            return Resolved(local, self._local_refs(local_mgr))
+        keep the ADR-0007 fail-safe: a missing Mission is NEVER done). This
+        seam is for OFF-SNAPSHOT ids only — the gate resolves snapshot hits
+        against its own by_id first. Memoized in the caller-supplied `memo`
+        (one dict per poll segment or dispatch), so a shared blocker costs
+        one network walk per cycle."""
         if bid in memo:
             return memo[bid]
         memo[bid] = await self._resolve_uncached(bid, local_mgr)
@@ -71,7 +79,7 @@ class BlockerLocator:
             peer = self._managers.get(owner) if owner else None
             if peer is not None and peer is not local_mgr \
                     and peer.instance.system == system:
-                got = await self._get(peer, bid)
+                got = await self._get(peer, bid, timeout=PEER_GET_TIMEOUT_S)
                 if got is not None:
                     return Resolved(got, frozenset({peer.instance_name}))
             # The owner map misses done+aged-out blockers BY DESIGN
@@ -84,7 +92,7 @@ class BlockerLocator:
                     continue
                 if owner is not None and peer.instance_name == owner:
                     continue       # already tried via the owner map
-                got = await self._get(peer, bid)
+                got = await self._get(peer, bid, timeout=PEER_GET_TIMEOUT_S)
                 if got is not None:
                     return Resolved(got, frozenset({peer.instance_name}))
         got = await self._get(local_mgr, bid)
@@ -102,10 +110,14 @@ class BlockerLocator:
         return None
 
     @staticmethod
-    async def _get(mgr, bid: str) -> Mission | None:
+    async def _get(mgr, bid: str,
+                   timeout: float | None = None) -> Mission | None:
         try:
+            if timeout is not None:
+                async with asyncio.timeout(timeout):
+                    return await mgr.pmo.get(MissionRef(bid, "issue"))
             return await mgr.pmo.get(MissionRef(bid, "issue"))
-        except Exception:  # noqa: BLE001 — one unreadable path falls through to the next candidate; a fully-unresolved blocker stays open (ADR-0007 fail-safe)
+        except Exception:  # noqa: BLE001 — one unreadable/slow path falls through to the next candidate; a fully-unresolved blocker stays open (ADR-0007 fail-safe)
             return None
 
     @staticmethod

@@ -481,7 +481,7 @@ def test_locator_sees_owner_after_claim(tmp_path):
     _claim_missions(cs, [cs_m], rt.mission_owner)
     assert rt.mission_owner["uuid-a"] == "cs"
     r = run_coro(eng.blocker_locator.resolve(
-        "uuid-a", local_mgr=eng, by_id={}, memo={}))
+        "uuid-a", local_mgr=eng, memo={}))
     assert r.mission is cs_m
     assert r.accepted_pmo_refs == frozenset({"cs"})
 

@@ -72,11 +72,24 @@ _SECRETS_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
 # them through this registry. Registered at ACL-user creation, dropped at
 # teardown; stale entries are harmless (over-redacting a dead random token).
 _runtime_secrets: dict[str, str] = {}
+# Values displaced by register overwrite (credential rotation). Kept until
+# process restart so a just-rotated secret still scrubs late PMO/forge writes
+# — same safe direction as delete_connection_* keeping redaction on delete.
+# Bounded so pathological rotate loops cannot grow forever.
+_RUNTIME_SECRET_PRIOR_CAP = 64
+_runtime_secret_priors: list[str] = []
 
 
 def register_runtime_secret(key: str, value: str) -> None:
-    if value:
-        _runtime_secrets[key] = value
+    if not value:
+        return
+    prev = _runtime_secrets.get(key)
+    if prev and prev != value and len(prev) >= 8:
+        if prev not in _runtime_secret_priors:
+            _runtime_secret_priors.append(prev)
+            while len(_runtime_secret_priors) > _RUNTIME_SECRET_PRIOR_CAP:
+                _runtime_secret_priors.pop(0)
+    _runtime_secrets[key] = value
 
 
 def unregister_runtime_secret(key: str) -> None:
@@ -122,8 +135,19 @@ def _report_unreadable(path: Path, exc: Exception) -> None:
 _scan_cache: dict[str, tuple[int, int, list[str]]] = {}
 
 
+# Structured secret dirs expect JSON; raw OAuth/upload blobs live under
+# Dev-type dirs and are covered by register_all / write_credential_file.
+_STRUCTURED_SECRET_DIRS = frozenset({
+    "connections", "harness", "profiles", "internal_forge",
+})
+
+
 def _file_values(p) -> list[str]:
-    """Long-ish string values of one stored-secret JSON, mtime/size-cached."""
+    """Long-ish string values of one stored-secret JSON, mtime/size-cached.
+
+    Returns None when *p* is a non-JSON credential file under a Dev-type
+    directory (not a redaction gap — runtime registration owns those).
+    """
     st = p.stat()
     key = str(p)
     hit = _scan_cache.get(key)
@@ -141,7 +165,15 @@ def _file_values(p) -> list[str]:
         elif isinstance(o, str) and len(o) >= 16:
             found.append(o)
 
-    walk(json.loads(p.read_text()))
+    try:
+        walk(json.loads(p.read_text()))
+    except json.JSONDecodeError:
+        # Raw credential files under /data/secrets/{dev_type}/ are intentional
+        # non-JSON; boot register_all covers them. Do not alarm redaction_gap.
+        if p.parent.name not in _STRUCTURED_SECRET_DIRS:
+            _scan_cache[key] = (st.st_mtime_ns, st.st_size, [])
+            return []
+        raise
     _scan_cache[key] = (st.st_mtime_ns, st.st_size, found)
     return found
 
@@ -166,7 +198,9 @@ def redact(text: str, extra_values: list[str] | None = None) -> str:
     """Scrub known secret values + token patterns from PMO-bound content."""
     if not text:
         return text
-    runtime = sorted(_runtime_secrets.values(), key=len, reverse=True)
+    runtime = sorted(
+        list(_runtime_secrets.values()) + list(_runtime_secret_priors),
+        key=len, reverse=True)
     for value in _known_values() + runtime + [v for v in (extra_values or []) if v]:
         if len(value) >= 8:
             text = text.replace(value, MASK)

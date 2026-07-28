@@ -8,9 +8,11 @@ origin reachable from the app (internal: http://gitea:3000).
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -37,11 +39,14 @@ _NAMED_ASSET_RE = re.compile(
     r"\[([^\]]+\.\w{1,8})\]\((https?://[^\s)]+/attachments/[^\s)]+)\)")
 _BARE_ASSET_RE = re.compile(r"(https?://[^\s)]+/attachments/[A-Za-z0-9-]+)")
 
-# Bundled Gitea ROOT_URL is browser-facing (localhost:3300); the app reaches
-# the container as api_base (gitea:3000). Only these presentation hosts may
-# be rewritten onto the origin — never arbitrary foreign hosts (that made
-# the download allowlist vacuous). See docs/14 §11.
-_REWRITEABLE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# Browser-facing loopback names for bundled ROOT_URL (localhost:3300). The
+# app reaches the container as api_base (gitea:3000). Presentation hosts also
+# include GITEA_UI_URL (same signal as internal forge) and the api_base host.
+# Foreign hosts are never rewritten onto the origin (docs/14 §11).
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# Credentialed download_asset path pin — Gitea attachment bytes, not the API.
+_ATTACHMENT_PATH_PREFIX = "/attachments/"
 
 
 class GiteaIssuesAdapter:
@@ -82,28 +87,43 @@ class GiteaIssuesAdapter:
         # in browser_download_url) so the app container can fetch via api_base.
         self._origin = self._api.removesuffix("/api/v1") if self._api else ""
 
+    def _presentation_hosts(self) -> set[str]:
+        """Hosts that may appear on ticket / browser_download_url.
+
+        Fetch origin (api_base) + operator UI (GITEA_UI_URL, default
+        localhost:3300) + loopback. Humans still use Gitea out of band;
+        this only teaches the app which faces belong to *this* Gitea.
+        """
+        hosts = set(_LOOPBACK_HOSTS)
+        ui = (os.environ.get("GITEA_UI_URL") or "http://localhost:3300").strip()
+        for base in (self._origin, self._api, ui):
+            if not base:
+                continue
+            h = urlsplit(base).hostname
+            if h:
+                hosts.add(h.lower())
+        return hosts
+
     def _app_reachable_url(self, url: str) -> str:
-        """Rewrite browser ROOT_URL hosts to the configured api_base origin.
+        """Rewrite presentation hosts to the configured api_base origin.
 
-        Self-hosted Gitea returns attachment URLs with ROOT_URL
-        (http://localhost:3300/...) which is unreachable from the app
-        container; the docker-network origin (http://gitea:3000) is.
+        Self-hosted Gitea returns attachment URLs with ROOT_URL /
+        GITEA_UI_URL which may be unreachable from the app container; the
+        docker-network origin (http://gitea:3000) is.
 
-        Only ``_REWRITEABLE_HOSTS`` (localhost / loopback) are rewritten —
-        foreign hosts are left unchanged so the download allowlist can
-        refuse them (docs/14 §11).
+        Only presentation hosts are rewritten — foreign hosts are left
+        unchanged so the download allowlist can refuse them (docs/14 §11).
         """
         if not url or not self._origin:
             return url
-        from urllib.parse import urlsplit, urlunsplit
         parts = urlsplit(url)
         origin_parts = urlsplit(self._origin)
         if not parts.scheme or not parts.netloc:
             return url
         host = (parts.hostname or "").lower()
-        if host not in _REWRITEABLE_HOSTS:
+        if host not in self._presentation_hosts():
             return url
-        if parts.netloc == origin_parts.netloc:
+        if parts.netloc.lower() == origin_parts.netloc.lower():
             return url
         return urlunsplit((
             origin_parts.scheme, origin_parts.netloc,
@@ -111,16 +131,18 @@ class GiteaIssuesAdapter:
         ))
 
     def _asset_allowed_hosts(self) -> set[str]:
-        """Hosts permitted on download_asset URLs (origin + rewriteable UI)."""
-        from urllib.parse import urlsplit
-        allowed = set(_REWRITEABLE_HOSTS)
-        for base in (self._origin, self._api):
-            if not base:
-                continue
-            h = urlsplit(base).hostname
-            if h:
-                allowed.add(h.lower())
-        return allowed
+        """Hosts permitted on download_asset URLs (presentation set)."""
+        return self._presentation_hosts()
+
+    def _finalize_fetch_url(self, url: str) -> str:
+        """Rewrite presentation → origin, then pin netloc + attachment path."""
+        from ...domain.asset_fetch import (
+            assert_fetch_netloc, assert_path_prefix,
+        )
+        current = self._app_reachable_url(url)
+        assert_fetch_netloc(current, self._origin)
+        assert_path_prefix(current, _ATTACHMENT_PATH_PREFIX)
+        return current
 
     # ── HTTP ────────────────────────────────────────────────────────────────
 
@@ -573,22 +595,27 @@ class GiteaIssuesAdapter:
             meta.get("browser_download_url") or meta.get("uuid") or "")
 
     async def download_asset(self, url: str) -> bytes:
-        """Fetch an attachment; host allowlist before rewrite, no off-host
-        redirects with auth (docs/14 §11)."""
+        """Fetch an attachment; presentation allowlist, rewrite onto api_base,
+        path/netloc pin, size cap, no off-allowlist redirects with auth
+        (docs/14 §11)."""
         from ...domain.asset_fetch import (
             AssetUrlError, assert_downloadable_asset_url,
-            resolve_redirect_location,
+            enforce_download_byte_cap, resolve_redirect_location,
         )
+        if not self._origin:
+            raise RuntimeError(
+                "gitea_issues download refused: api_base is empty")
         allowed = self._asset_allowed_hosts()
-        # 1) refuse evil hosts on the ORIGINAL URL (before rewrite)
         try:
+            # 1) refuse evil hosts on the ORIGINAL URL (before rewrite)
             url = assert_downloadable_asset_url(
                 url, allowed_hosts=allowed, allow_http=True)
+            # 2) presentation → origin; pin netloc + /attachments/ path
+            current = self._finalize_fetch_url(url)
         except AssetUrlError as e:
             raise RuntimeError(f"gitea_issues download refused: {e}") from e
-        # 2) rewrite only localhost/loopback → docker-network origin
-        current = self._app_reachable_url(url)
         headers = self._headers()
+        cap = self.capabilities().attachment_max_bytes
         try:
             async with httpx.AsyncClient(
                     timeout=60, transport=self._transport,
@@ -599,14 +626,13 @@ class GiteaIssuesAdapter:
                         loc = resp.headers.get("location") or ""
                         try:
                             nxt = resolve_redirect_location(current, loc)
-                            # validate pre-rewrite host, then rewrite loopback
                             nxt = assert_downloadable_asset_url(
                                 nxt, allowed_hosts=allowed, allow_http=True)
+                            current = self._finalize_fetch_url(nxt)
                         except AssetUrlError as e:
                             raise RuntimeError(
                                 f"gitea_issues download redirect refused: {e}"
                             ) from e
-                        current = self._app_reachable_url(nxt)
                         continue
                     break
                 else:
@@ -619,7 +645,14 @@ class GiteaIssuesAdapter:
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"gitea_issues download → {resp.status_code}: {resp.text[:200]}")
-        return resp.content
+        try:
+            return enforce_download_byte_cap(
+                resp.content,
+                content_length=resp.headers.get("content-length"),
+                max_bytes=cap,
+            )
+        except AssetUrlError as e:
+            raise RuntimeError(f"gitea_issues download refused: {e}") from e
 
     # ── meta ────────────────────────────────────────────────────────────────
 

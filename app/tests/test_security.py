@@ -111,6 +111,53 @@ def test_runtime_secret_registry():
     assert redact("nothing to mask") == "nothing to mask"
 
 
+def test_runtime_secret_overwrite_keeps_prior_redacted():
+    """Credential rotation must not unmask the previous value until restart."""
+    from devcake import security as sec
+    from devcake.security import register_runtime_secret, unregister_runtime_secret
+
+    old = "rotated-away-secret-value-aaaa"
+    new = "rotated-in-secret-value-bbbb"
+    register_runtime_secret("cred:coder:auth.txt", old)
+    try:
+        register_runtime_secret("cred:coder:auth.txt", new)
+        assert old not in redact(f"leak {old} end")
+        assert new not in redact(f"leak {new} end")
+        assert MASK in redact(f"leak {old} and {new}")
+    finally:
+        unregister_runtime_secret("cred:coder:auth.txt")
+        # priors are process-local until restart; drop test values if present
+        if old in sec._runtime_secret_priors:
+            sec._runtime_secret_priors.remove(old)
+        if new in sec._runtime_secret_priors:
+            sec._runtime_secret_priors.remove(new)
+
+
+def test_raw_credential_file_does_not_alarm_redaction_gap(
+        tmp_path, monkeypatch, caplog):
+    """Non-JSON Dev-type credential files are not a redaction_gap (runtime
+    register_all owns them); corrupt connection JSON still alarms."""
+    import logging
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    # Point security scan at the same tree
+    import devcake.security as sec
+    monkeypatch.setattr(sec, "_SECRETS_DIR", tmp_path / "secrets")
+    monkeypatch.setattr(sec, "_reported_unreadable", set())
+    monkeypatch.setattr(sec, "_scan_cache", {})
+
+    raw_dir = tmp_path / "secrets" / "coder"
+    raw_dir.mkdir(parents=True)
+    (raw_dir / "auth.txt").write_text("not-json-raw-oauth-blob!!")
+
+    with caplog.at_level(logging.ERROR, logger="devcake.security"):
+        # force disk scan
+        sec.redact("hello")
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "unreadable secrets file" not in joined
+    assert "auth.txt" not in joined or "redaction" not in joined.lower()
+
+
 def test_oo_ingest_and_ro_forge_tokens_redacted(monkeypatch):
     """ISSUES #13/#15 follow-up: the opt-in credentials (ingest OO user, RO
     forge PATs) must be masked like every other platform secret — they are

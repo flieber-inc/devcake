@@ -706,10 +706,10 @@ class LinearAdapter:
     async def download_asset(self, url: str) -> bytes:
         """assetUrl downloads require Linear auth (docs/05 §4).
 
-        Host allowlist + no off-host redirects (docs/14 §11)."""
+        Host allowlist + no off-host redirects + size cap (docs/14 §11)."""
         from ...domain.asset_fetch import (
             AssetUrlError, assert_downloadable_asset_url,
-            resolve_redirect_location,
+            enforce_download_byte_cap, resolve_redirect_location,
         )
         allowed = {"uploads.linear.app"}
         try:
@@ -719,6 +719,7 @@ class LinearAdapter:
         # Manual redirects only when the next hop stays on the allowlist —
         # never follow an open redirect with the Linear Authorization header.
         headers = {"Authorization": self._headers["Authorization"]}
+        cap = self.capabilities().attachment_max_bytes
         async with httpx.AsyncClient(
                 timeout=60, transport=self._transport,
                 follow_redirects=False) as client:
@@ -736,7 +737,15 @@ class LinearAdapter:
                             f"linear download redirect refused: {e}") from e
                     continue
                 resp.raise_for_status()
-                return resp.content
+                try:
+                    return enforce_download_byte_cap(
+                        resp.content,
+                        content_length=resp.headers.get("content-length"),
+                        max_bytes=cap,
+                    )
+                except AssetUrlError as e:
+                    raise RuntimeError(
+                        f"linear download refused: {e}") from e
             raise RuntimeError("linear download: too many redirects")
 
     def capabilities(self) -> PMOCapabilities:

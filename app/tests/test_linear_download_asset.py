@@ -61,3 +61,18 @@ def test_download_asset_follows_same_host_redirect():
         transport=httpx.MockTransport(handler))
     body = run(a.download_asset("https://uploads.linear.app/team/start"))
     assert body == b"linear-bytes"
+
+
+def test_download_asset_refuses_oversized_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"y" * 80,
+            headers={"Content-Length": "80"})
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(handler))
+    a.capabilities = lambda: type(  # type: ignore[method-assign]
+        "C", (), {"attachment_max_bytes": 40})()
+    with pytest.raises(RuntimeError, match="refused"):
+        run(a.download_asset("https://uploads.linear.app/team/big.bin"))

@@ -455,9 +455,13 @@ contract:
 - Protocol hardens: ~~credential-upload filename allowlist + size cap~~
   (`secrets.require_credential_ref` + `MAX_CREDENTIAL_FILE_BYTES` + atomic
   `write_credential_file`); ~~PMO `download_asset` host allowlist / redirect
-  policy~~ (`domain/asset_fetch.py` — Linear `uploads.linear.app`, Gitea Issues
-  configured origin only; no off-allowlist redirects with auth headers);
-  stronger bootstrap password policy than a short deny-list.
+  policy~~ (`domain/asset_fetch.py` — Linear `uploads.linear.app`; Gitea Issues
+  presentation hosts = `api_base` + `GITEA_UI_URL` + loopback, rewritten onto
+  `api_base` origin, path pin `/attachments/`, netloc pin, body size cap;
+  no off-allowlist redirects with auth headers). Operator use of the Gitea UI
+  / direct git (migrate, clone, push) remains out of band and unrestricted by
+  this app-side policy. Stronger bootstrap password policy than a short
+  deny-list remains open.
 - Optional: gVisor/Kata for Devs; egress allowlists / credential-injection
   proxy (e.g. [iron-proxy](https://github.com/ironsh/iron-proxy) class —
   deferred radar in `16-roadmap.md`); OIDC if you must expose the admin UI

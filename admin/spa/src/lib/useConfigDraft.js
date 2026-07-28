@@ -16,7 +16,12 @@ const ignored = (path) => IGNORED.some((re) => re.test(path));
 
 function normalize(cfg, devTypesArr, assignments) {
   return {
-    cfg,
+    // seed the ADR-0019 override map on every PMO card (server and draft
+    // snapshots alike): diffs stay per-row and removing the last override
+    // round-trips to a clean draft, even against a backend predating the
+    // field
+    cfg: { ...cfg,
+           pmos: (cfg.pmos || []).map((p) => ({ assignments: {}, ...p })) },
     devTypes: Object.fromEntries(devTypesArr.map((d) => [d.name, d])),
     assignments,
   };
@@ -122,6 +127,12 @@ export default function useConfigDraft() {
           errs[`cfg.pmos.${i}.${field}`] =
             `PMO "${p.name}" lists removed ${label}${missing.length > 1 ? "s" : ""} ` +
             `${missing.map((m) => `"${m}"`).join(", ")} — deselect there or re-add the repo`;
+      }
+      // ADR-0019 assignment overrides — mirror the global-map check above
+      for (const [mt, a] of Object.entries(p.assignments || {})) {
+        if (a?.dev_type && !draft.devTypes[a.dev_type])
+          errs[`cfg.pmos.${i}.assignments.${mt}.dev_type`] =
+            `PMO "${p.name}": ${mt} override is assigned to "${a.dev_type}", which no longer exists`;
       }
     });
     return errs;

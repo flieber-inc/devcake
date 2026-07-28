@@ -187,7 +187,7 @@ Exit criteria — **all verified 2026-07-14 (M8 complete)**:
 ## M9 — Multi-PMO port (schema v3)
 
 **Goal:** DevCake is PMO-independent; one instance oversees N≥1 PMO instances. **Implements:** F2.
-**Out of scope:** new PMO adapters (post-v0.1); cross-PMO `blocked_by`; webhooks.
+**Out of scope:** new PMO adapters (post-v0.1); cross-PMO *auto-federation* (DevCake never creates cross-instance edges or missions — *honoring* native peer edges shipped 2026-07-28, ADR-0009 amendment); webhooks.
 
 Exit criteria:
 - [x] Schema v3 (instances-with-identities) boots — live stack hand-migrated per docs/10 §3 and running on it (2026-07-14); one GENERIC stale-schema refusal covers v1/v2/old-version files and PUT bodies; the singular shims are gone and the suite is migrated (258 tests).

@@ -129,16 +129,17 @@ async def resolve_blocker_work(
         return entries, skip
     if all_runs is None:
         all_runs = mgr.runs.store.all()
-    # Instance-scope + mission-only (mirror resolve_repo history): MAPPER/hello
-    # never carry a mission work repo; cross-instance pmo_id collisions are
-    # belt-and-braces (Linear UUIDs are already unique — docs/04).
+    # Mission-only run index (mirror resolve_repo history): MAPPER/hello never
+    # carry a mission work repo. Instance scope is PER BLOCKER now: the
+    # locator's attribution (accepted_pmo_refs) decides whose run history may
+    # serve each id — gitea_issues pmo_ids are per-repo issue NUMBERS, so a
+    # bare id-keyed index would let a purely local blocker mount a peer
+    # instance's tree (ADR-0009 amendment; ADR-0017).
     by_mid: dict[str, list] = {}
     for r in all_runs:
         if not getattr(r, "mission_pmo_id", None) or not getattr(r, "repo_ref", None):
             continue
         if r.mission_type in ("MAPPER", "HELLO", "OAUTH"):
-            continue
-        if not mgr._run_is_ours(r):
             continue
         # legacy default "main" is not a real resolved work repo name on the
         # sticky path (configured names are operator-chosen; internal names
@@ -148,19 +149,22 @@ async def resolve_blocker_work(
             continue
         by_mid.setdefault(r.mission_pmo_id, []).append(r)
 
+    memo: dict = {}   # fresh per dispatch — blocker status is read all-live
     for bid in mission.blocked_by:
-        try:
-            b = await mgr.pmo.get(MissionRef(bid, "issue"))
-        except Exception:  # noqa: BLE001 — skip one unreadable blocker; dispatch already cleared open-blocker gate
+        res = await mgr.blocker_locator.resolve(
+            bid, local_mgr=mgr, memo=memo)
+        if res is None:
             skip.append(f"{bid}: unreadable")
             continue
+        b = res.mission
         if b.status != "done":
             if b.status == "canceled":
                 skip.append(f"{b.key}: canceled — no work tree")
             else:
                 skip.append(f"{b.key}: not done ({b.status})")
             continue
-        runs = by_mid.get(bid) or []
+        runs = [r for r in (by_mid.get(bid) or [])
+                if getattr(r, "pmo_ref", "") in res.accepted_pmo_refs]
         runs_sorted = sorted(
             runs,
             key=lambda r: getattr(r, "created_at", None) or datetime.min.replace(

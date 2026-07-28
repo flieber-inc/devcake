@@ -275,6 +275,18 @@ class PollRuntime:
                     row for row in self.missions_cache
                     if row["instance"] in self.managers
                     and row["instance"] not in polled_ok)
+                # cross-instance blocker keys (ADR-0009 amendment): each
+                # segment maps blocked_by through ITS OWN id_to_key, so an id
+                # owned by a PEER instance stays a raw vendor id until this
+                # merged post-pass. Zero network; an id in NO instance's
+                # snapshot (done + aged out) legitimately stays raw —
+                # advisory display only, the gate has its own resolution.
+                key_of = {row["pmo_id"]: row["key"]
+                          for row in cache_rows if row.get("pmo_id")}
+                for row in cache_rows:
+                    if row.get("blocked_by"):
+                        row["blocked_by"] = [key_of.get(b, b)
+                                             for b in row["blocked_by"]]
                 self.missions_cache[:] = cache_rows
                 span.set_attribute("devcake.missions.seen", seen)
                 span.set_attribute("devcake.missions.candidates", cand)

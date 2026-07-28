@@ -6,8 +6,7 @@ import logging
 
 from .. import backend_health
 from ..model import (LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, Mission,
-                     MissionRef, MissionType, PRIORITY_RANK, derive,
-                     find_cycles)
+                     MissionType, PRIORITY_RANK, derive, find_cycles)
 from .markers import DISPATCHABLE_TYPES, decomposition_marker
 
 log = logging.getLogger("devcake.missions")
@@ -32,7 +31,7 @@ async def gate_map(mgr, missions: list[Mission]) -> dict[str, str]:
         for i in cyc:
             cycle_of[i] = keys
     gate: dict[str, str] = {}
-    memo: dict[str, Mission | None] = {}
+    memo: dict = {}   # bid → Resolved | None (BlockerLocator-managed)
     for m in missions:
         if not m.blocked_by or m.status in ("done", "canceled"):
             continue
@@ -121,22 +120,25 @@ async def schedule(mgr, missions: list[Mission],
 
 
 async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
-                         memo: dict[str, Mission | None]) -> list[str]:
+                         memo: dict) -> list[str]:
     """Blockers of `m` that are still open (status not done/canceled), as
-    human-readable keys. A blocker we cannot read counts as open (fail-safe;
-    self-heals next cycle). ADR-0007."""
+    human-readable keys. Off-snapshot ids resolve through the deployment-wide
+    BlockerLocator (ADR-0009 amendment): owner map → same-system peers
+    (Linear v1) → local adapter — so a native edge to a peer instance's
+    mission gates exactly like a local one. A blocker no path can read
+    counts as open (fail-safe; self-heals next cycle). ADR-0007. `memo`
+    holds `Resolved | None` per bid (locator-managed, one walk per cycle)."""
     open_ = []
     for bid in m.blocked_by:
         b = by_id.get(bid)
         if b is None:
-            if bid not in memo:
-                try:
-                    memo[bid] = await mgr.pmo.get(MissionRef(bid, "issue"))
-                except Exception:  # noqa: BLE001 — fail-safe per ADR-0007: an unreadable blocker counts as open (logged); self-heals next cycle
-                    log.warning("blocker %s of %s unreadable — treated as open",
-                                bid, m.key)
-                    memo[bid] = None
-            b = memo[bid]
+            first = bid not in memo
+            r = await mgr.blocker_locator.resolve(
+                bid, local_mgr=mgr, memo=memo)
+            b = r.mission if r is not None else None
+            if b is None and first:
+                log.warning("blocker %s of %s unreadable — treated as open",
+                            bid, m.key)
         if b is None:
             open_.append(f"{bid} (unreadable)")
         elif b.status not in ("done", "canceled"):

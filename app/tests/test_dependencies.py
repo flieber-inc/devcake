@@ -212,3 +212,101 @@ def test_dispatch_recheck_aborts_on_live_blocker(tmp_path):
     dt = mgr.dev_types["judgment"]
     run = run_coro(mgr.dispatch(live, MissionType.ONBOARD, dt))
     assert run is None                              # aborted before any side effect
+
+
+# ── cross-instance blockers (ADR-0009 amendment): a native edge to a PEER
+# instance's mission gates with the SAME semantics as a local one ──
+
+def fm(pmo_id, key, status="backlog", labels=("DEVCAKE",), instance="cs"):
+    f = m(pmo_id, key, status=status, labels=labels)
+    f.instance = instance
+    return f
+
+
+def make_pair(tmp_path, cs_missions, *, owner=None):
+    """Two managers (eng local, cs peer) sharing ONE locator — the production
+    shape from build_managers, hermetically. Returns
+    (eng_mgr, dispatched, eng_pmo, cs_pmo)."""
+    from devcake.config import PMOInstance
+    from devcake.domain.blocker_locator import BlockerLocator
+    from fakes import make_mission_manager
+    eng_pmo, cs_pmo = DepPMO(), DepPMO(by_id=dict(cs_missions))
+    eng = make_mission_manager(
+        tmp_path / "eng", pmo=eng_pmo,
+        instance=PMOInstance(name="eng", team_key="ENG"), noop_audit=True)
+    cs = make_mission_manager(
+        tmp_path / "cs", pmo=cs_pmo,
+        instance=PMOInstance(name="cs", team_key="CS"), noop_audit=True)
+    locator = BlockerLocator({"eng": eng, "cs": cs}, (owner or {}).get)
+    eng.blocker_locator = locator
+    cs.blocker_locator = locator
+    dispatched = []
+
+    async def fake_dispatch(mission, mtype, dev_type):
+        dispatched.append(mission.key)
+        return None
+
+    eng.dispatch = fake_dispatch
+    return eng, dispatched, eng_pmo, cs_pmo
+
+
+def test_foreign_open_blocker_gates_with_peer_key(tmp_path):
+    eng, dispatched, _, _ = make_pair(tmp_path, {"u1": fm("u1", "CS-7")})
+    blocked = m("e1", "ENG-1", blocked_by=["u1"])
+    run_coro(eng.schedule([blocked]))
+    assert dispatched == []
+    assert "CS-7" in eng.blocked_reasons["e1"]
+
+
+def test_foreign_done_blocker_unblocks(tmp_path):
+    eng, dispatched, _, _ = make_pair(
+        tmp_path, {"u1": fm("u1", "CS-7", status="done")})
+    blocked = m("e1", "ENG-1", blocked_by=["u1"])
+    run_coro(eng.schedule([blocked]))
+    assert dispatched == ["ENG-1"]
+    assert eng.blocked_reasons == {}
+
+
+def test_foreign_failed_blocker_blocks_and_names_label(tmp_path):
+    eng, dispatched, _, _ = make_pair(
+        tmp_path,
+        {"u1": fm("u1", "CS-7", labels=("DEVCAKE", "DEVCAKE-FAILED"))})
+    blocked = m("e1", "ENG-1", blocked_by=["u1"])
+    run_coro(eng.schedule([blocked]))
+    assert dispatched == []
+    assert "DEVCAKE-FAILED" in eng.blocked_reasons["e1"]
+
+
+def test_foreign_unreadable_fails_safe(tmp_path):
+    eng, dispatched, _, _ = make_pair(tmp_path, {})
+    blocked = m("e1", "ENG-1", blocked_by=["ghost"])
+    run_coro(eng.schedule([blocked]))
+    assert dispatched == []
+    assert "unreadable" in eng.blocked_reasons["e1"]
+
+
+def test_dispatch_recheck_aborts_on_live_foreign_blocker(tmp_path):
+    """The dispatch-time re-check (empty snapshot, fresh memo) resolves a
+    PEER blocker live and aborts while it is open — same fail-safe as the
+    local twin above."""
+    from devcake.domain.model import MissionType
+    eng, dispatched, eng_pmo, _ = make_pair(tmp_path, {"u1": fm("u1", "CS-7")})
+    live = m("e1", "ENG-1", blocked_by=["u1"])
+    eng_pmo.by_id["e1"] = live
+    del eng.dispatch                                # use the real dispatch
+    dt = eng.dev_types["judgment"]
+    run = run_coro(eng.dispatch(live, MissionType.ONBOARD, dt))
+    assert run is None                              # aborted at the re-check
+
+
+def test_foreign_resolution_uses_peer_adapter_and_memoizes(tmp_path):
+    """The peer's OWN key reads its mission (eng adapter never asked), and
+    two dependents cost ONE walk per cycle."""
+    eng, dispatched, eng_pmo, cs_pmo = make_pair(
+        tmp_path, {"u1": fm("u1", "CS-7")}, owner={"u1": "cs"})
+    a = m("e1", "ENG-1", blocked_by=["u1"])
+    b = m("e2", "ENG-2", blocked_by=["u1"])
+    run_coro(eng.schedule([a, b]))
+    assert dispatched == []
+    assert cs_pmo.live_fetches == ["u1"]
+    assert eng_pmo.live_fetches == []

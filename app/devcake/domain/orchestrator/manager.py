@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 from ...config import AppConfig, DevType
 from ...ports.pmo import PMOPort
+from ..blocker_locator import LEGACY_PMO_REFS
 from ..runs import RunManager
 from typing import TYPE_CHECKING as _TC
 
@@ -50,7 +51,8 @@ class MissionManager:
                  messaging: MessagingPort, *,
                  instance=None, breakers: dict[str, str] | None = None,
                  internal_forge=None, skills=None,
-                 backend_degraded: dict[str, str] | None = None):
+                 backend_degraded: dict[str, str] | None = None,
+                 blocker_locator=None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
@@ -71,6 +73,12 @@ class MissionManager:
         # prefix and the pmo_ref stamped on runs
         self.instance = instance if instance is not None else config.pmos[0]
         self.instance_name: str = self.instance.name
+        # deployment-wide blocker resolution (ADR-0009 amendment): ONE shared
+        # BlockerLocator holding live refs, set by build_managers on every
+        # manager. REQUIRED for gate/dispatch use — None is a construction
+        # window only; an unset locator fails loud at the first gate, never
+        # silently degrades to single-instance resolution.
+        self.blocker_locator = blocker_locator
         # ── advisory state (flat by design — see the module docstring) ──
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
@@ -146,9 +154,11 @@ class MissionManager:
         """Instance-scope a run record (schema v3). Vendor pmo_ids are UUIDs for
         Linear, so the mission_pmo_id filters are already collision-free — this
         is belt-and-braces for a future PMO with colliding ids. Legacy records
-        ("" / pre-v3 "main") always count: hiding them would silently reset
-        attempt counters on upgrade (count, don't hide)."""
-        return r.pmo_ref in ("", "main", self.instance_name)
+        (`LEGACY_PMO_REFS` — the ONE definition, shared with the
+        BlockerLocator's attribution sets so the two can never drift) always
+        count: hiding them would silently reset attempt counters on upgrade
+        (count, don't hide)."""
+        return r.pmo_ref in LEGACY_PMO_REFS or r.pmo_ref == self.instance_name
 
     # ── public verbs ──
     async def gate_map(self, missions: list[Mission]):

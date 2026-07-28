@@ -142,6 +142,8 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 **Blocked-by relations (adr/0007):** issue queries (`list_all`, `_get_issue`) additionally fetch `inverseRelations(first: 50)` with `pageInfo`; nodes of type `blocks` map to `Mission.blocked_by` (on issue B, `inverseRelations` holds relations where B is `relatedIssue`, so each node's `issue` is a blocker). A full first page is **cursor-walked** (`_paginate_issue_relations`, ceiling 10 × 50 with a fail-loud warning — adr/0012: a truncated read would under-block the gate and silently skip decomposition edge inheritance). `create_relation` → `issueRelationCreate(input: {issueId: blocker, relatedIssueId: blocked, type: blocks})`, tolerating the duplicate-relation error so decomposition resume stays idempotent. Relations are **issue-only** in Linear — projects always normalize with `blocked_by = []`.
 
+**Cross-instance resolution (ADR-0009 amendment):** a blocker id that is not in this instance's snapshot may resolve through a PEER Linear instance's adapter (same `get` query, that instance's API key) via the orchestrator's `BlockerLocator` — Linear ids are workspace-global UUIDs, so first-success is unambiguous. This is an orchestrator concern; the adapter itself stays instance-bound.
+
 **Verified live 2026-07-12 (sandbox):** (a) the direction above is correct end-to-end (`B.blocked_by == [A]`, A unaffected); (b) a duplicate `issueRelationCreate` returns an **idempotent success**, not an error — the adapter's error-tolerance is belt-and-suspenders; (c) the enlarged `list_all` costs complexity **1,310** against Linear's 3,000,000/hour budget (headers `x-complexity` / `x-ratelimit-complexity-*`) — ~5% of budget at 30 s polling; (d) the `` `devcake:v1` `` comment footer survives the create→read roundtrip byte-for-byte; (e) deleting a blocker issue clears the relation from the blocked issue immediately; (f) `projectUpdateCreate` posts a project update that reads back with the sentinel intact — the baton-pass channel for project-kind hand-offs (§6, `03-mission-lifecycle.md` §4a).
 
 **Read robustness (normative):** every list read (`list_all` issues and projects, `children_of`) is **cursor-paginated** — the scheduling gate and the mapper's validator must see the whole team; a first-page-only read turns silent truncation into wrong scheduling (and, for the mapper, wrong *writes*). `inverseRelations` uses `first: 50` — Linear returns ALL relation types and the `blocks` filter is client-side, so an undersized page can evict a blocker; a full relations page is logged as a WARNING (never silent).
@@ -254,6 +256,8 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 | `pmo_kind` | always `issue` (`projects_supported=False`) |
 
 `cancel_mission` closes the issue and appends the cancel footer (idempotent). Closing an issue that still has **open blockers** 412s on Gitea 1.24 — the adapter **clears dependencies first** then closes (scheduler already consumed them).
+
+**Cross-instance blockers are unsupported for Gitea Issues** (ADR-0009 amendment): `pmo_id` is a repo-scoped issue *number*, so ids collide across instances — the `BlockerLocator` hard-refuses peer resolution and peer run history for `gitea_issues` (never best-effort). Same-instance blocker semantics are unaffected.
 
 ### 9.3 Relations, labels, feed, attachments
 

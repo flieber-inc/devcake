@@ -448,3 +448,76 @@ def test_run_branch_legacy_fallback():
     derived = Run(run_id="LINEAR-T-9-3-EXECUTE-CCCCCC", mission_key="T-9",
                   mission_type="EXECUTE", dev_type="d", seq=3, pmo_ref="linear")
     assert run_branch(derived) == "devcake/LINEAR-T-9"
+
+
+# ── cross-instance blocker resolution wiring (ADR-0009 amendment) ────────────
+
+def test_locator_sees_owner_after_claim(tmp_path):
+    """The composition shape from api.main, hermetically: ONE locator over
+    the live managers dict, owner getter reading the runtime's durable claim
+    map. A mission claimed by cs resolves for eng via cs's OWN adapter, with
+    cs attribution."""
+    from devcake.api.poll import _claim_missions
+    from devcake.domain.blocker_locator import BlockerLocator
+
+    class _PMO:
+        def __init__(self, missions):
+            self.missions = missions
+
+        async def get(self, ref):
+            m = self.missions.get(ref.pmo_id)
+            if m is None:
+                raise RuntimeError(f"missing {ref.pmo_id}")
+            return m
+
+    cs, eng = _mgr("cs"), _mgr("eng")
+    cs_m = _mission("uuid-a", "CS-1", "cs")
+    cs.pmo, eng.pmo = _PMO({"uuid-a": cs_m}), _PMO({})
+    managers = {"cs": cs, "eng": eng}
+    rt = _rt(tmp_path, managers=managers)
+    locator = BlockerLocator(managers, lambda bid: rt.mission_owner.get(bid))
+    cs.blocker_locator = locator
+    eng.blocker_locator = locator
+    _claim_missions(cs, [cs_m], rt.mission_owner)
+    assert rt.mission_owner["uuid-a"] == "cs"
+    r = run_coro(eng.blocker_locator.resolve(
+        "uuid-a", local_mgr=eng, memo={}))
+    assert r.mission is cs_m
+    assert r.accepted_pmo_refs == frozenset({"cs"})
+
+
+def test_main_wires_one_shared_locator():
+    """build_managers must hand the ONE shared locator to BOTH branches
+    (create + reconcile) — a missed branch is the silent 'half multi-PMO'
+    wiring bug the required-dependency rule exists to prevent. Source-pinned
+    (the dispatch-stamp precedent above) without importing api.main's
+    import-time singletons."""
+    from pathlib import Path
+    import devcake
+    src = (Path(devcake.__file__).parent / "api" / "main.py").read_text()
+    assert "blocker_locator = BlockerLocator(managers, _mission_owner_of)" in src
+    assert "mgr.blocker_locator = blocker_locator" in src        # reconcile
+    assert "blocker_locator=blocker_locator" in src              # create
+
+
+def test_merged_cache_resolves_foreign_blocker_keys(tmp_path):
+    """A blocked_by id owned by a PEER instance displays as that instance's
+    key after the merged post-pass; an id in NO instance's snapshot stays a
+    raw vendor id (done + aged out — advisory feed, documented)."""
+    a, b = _mgr("cs"), _mgr("eng")
+    rt = _rt(tmp_path, managers={"cs": a, "eng": b}, order=lambda: [a, b])
+
+    async def seg(mgr, cache_rows):
+        if mgr.instance_name == "cs":
+            cache_rows.append({"instance": "cs", "key": "CS-1",
+                               "pmo_id": "uuid-a", "blocked_by": []})
+            return (1, 0, 0, {"uuid-a"})
+        cache_rows.append({"instance": "eng", "key": "ENG-1",
+                           "pmo_id": "uuid-b",
+                           "blocked_by": ["uuid-a", "uuid-gone"]})
+        return (1, 0, 0, {"uuid-b"})
+
+    rt.poll_instance = seg
+    run_coro(rt.run_cycle(1))
+    row = next(r for r in rt.missions_cache if r["key"] == "ENG-1")
+    assert row["blocked_by"] == ["CS-1", "uuid-gone"]

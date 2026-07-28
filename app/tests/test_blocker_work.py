@@ -75,12 +75,15 @@ def test_resolve_blocker_work_done_different_repo(tmp_path):
     assert skips == []
 
 
-def test_resolve_blocker_work_ignores_mapper_and_foreign_instance(tmp_path):
+def test_resolve_blocker_work_ignores_mapper_and_unattributed_foreign(tmp_path):
+    """Descendant of the pre-cross-instance guard: MAPPER runs never mount,
+    and a run stamped by an instance the locator did NOT attribute the
+    blocker to (here: unconfigured 'other-instance') stays invisible."""
     a = _mission("a", "T-A", status="done")
     b = _mission("b", "T-B", blocked_by=["a"])
     mapper = _run("a", "T-A", "evil-repo")
     mapper.mission_type = "MAPPER"
-    foreign = _run("a", "T-A", "linear-t-a")
+    foreign = _run("a", "T-A", "foreign-repo")
     foreign.pmo_ref = "other-instance"
     good = _run("a", "T-A", "linear-t-a")
     good.pmo_ref = "linear"
@@ -91,6 +94,117 @@ def test_resolve_blocker_work_ignores_mapper_and_foreign_instance(tmp_path):
         dispatch.resolve_blocker_work(
             mgr, b, "primary", [mapper, foreign, good]))
     assert entries == [{"repo_ref": "linear-t-a", "mission_key": "T-A"}]
+
+
+def _peer(name, system, missions):
+    """Minimal peer manager for the locator (instance identity + pmo.get)."""
+    class _PMO:
+        async def get(self, ref):
+            m = missions.get(ref.pmo_id)
+            if m is None:
+                raise RuntimeError(f"missing {ref.pmo_id}")
+            return m
+    return SimpleNamespace(
+        instance=SimpleNamespace(name=name, system=system),
+        instance_name=name, pmo=_PMO())
+
+
+def test_resolve_blocker_work_accepts_attributed_peer_runs(tmp_path):
+    """ADR-0009 amendment, the flagship case: an eng mission blocked by a
+    done CS mission mounts the CS work tree — run history attributed to the
+    cs instance via the locator, credentials via the SHARED internal forge
+    (internal names are {instance}-{key})."""
+    from devcake.domain.blocker_locator import BlockerLocator
+    a = _mission("a", "CS-1", status="done")
+    a.instance = "cs"
+    b = _mission("b", "ENG-1", blocked_by=["a"])
+    cs_run = _run("a", "CS-1", "cs-cs-1")
+    cs_run.pmo_ref = "cs"
+    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"b": b}),
+                               internal_forge=_ROInternal())
+    cs = _peer("cs", "linear", {"a": a})
+    locator = BlockerLocator({"linear": mgr, "cs": cs}, lambda bid: None)
+    mgr.blocker_locator = locator
+    entries, skips = run_coro(
+        dispatch.resolve_blocker_work(mgr, b, "primary", [cs_run]))
+    assert entries == [{"repo_ref": "cs-cs-1", "mission_key": "CS-1"}]
+    assert skips == []
+
+
+def test_resolve_blocker_work_colliding_gitea_id_never_mounts_peer(tmp_path):
+    """Regression guard for the colliding-id hole: gitea_issues pmo_ids are
+    per-repo issue NUMBERS, so a purely LOCAL blocker '3' must never index a
+    peer instance's run for ITS OWN unrelated '3'."""
+    from devcake.config import PMOInstance
+    from devcake.domain.blocker_locator import BlockerLocator
+    a = _mission("3", "#3", status="done")
+    b = _mission("9", "#9", blocked_by=["3"])
+    evil = _run("3", "#3", "evil-repo")
+    evil.pmo_ref = "g2"                       # the OTHER gitea instance's #3
+    mgr = make_mission_manager(
+        tmp_path, pmo=BlockerPMO({"3": a, "9": b}),
+        instance=PMOInstance(name="g1", system="gitea_issues",
+                             team_key="o/r"),
+        internal_forge=_ROInternal())
+    g2 = _peer("g2", "gitea_issues", {"3": _mission("3", "#3", status="done")})
+    mgr.blocker_locator = BlockerLocator(
+        {"g1": mgr, "g2": g2}, lambda bid: None)
+    entries, skips = run_coro(
+        dispatch.resolve_blocker_work(mgr, b, "primary", [evil]))
+    assert entries == []
+    assert any("no prior work repo" in s for s in skips)
+
+
+def test_dispatch_snapshots_foreign_blocker_work_end_to_end(tmp_path):
+    """Composed cross-instance path (ADR-0009 amendment): a REAL dispatch()
+    with a done PEER blocker snapshots its tree on run.blocker_work, and
+    _extra_repos_for emits the RO mount with the blocker repo's read token —
+    the full re-check → snapshot → runspec chain, not the seams in
+    isolation."""
+    from devcake.config import PMOInstance
+    from devcake.domain.blocker_locator import BlockerLocator
+    from devcake.domain.model import MissionType
+    from devcake.ports.internal_forge import MissionRepoCredentials
+    from fakes import FakeInternalForge
+    from test_prompt_templates import _ForgeWithDescriptor
+    from test_transitions import make_mgr, mission
+
+    class CrossForge(FakeInternalForge):
+        def mission_credentials(self, name):
+            if name != "cs-cs-1":
+                return None
+            return MissionRepoCredentials(
+                repo_name=name,
+                clone_url=f"http://gitea:3000/devcake-internal/{name}.git",
+                username="svc-cs-cs-1", token_write="w", token_read="cs-read")
+
+    m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    m.blocked_by = ["cs-uuid"]
+    mgr, fake, _store = make_mgr(tmp_path, m, forge=_ForgeWithDescriptor())
+    mgr.internal_forge = CrossForge()
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
+    launched = []
+
+    async def launch(run, image):
+        launched.append(run)
+    mgr.runs.bootstrap = type("B", (), {"launch": staticmethod(launch)})()
+
+    done = _mission("cs-uuid", "CS-1", status="done")
+    done.instance = "cs"
+    cs = _peer("cs", "linear", {"cs-uuid": done})
+    mgr.blocker_locator = BlockerLocator({"linear": mgr, "cs": cs},
+                                         lambda bid: None)
+    cs_run = _run("cs-uuid", "CS-1", "cs-cs-1")
+    cs_run.pmo_ref = "cs"
+    mgr.runs.store.save(cs_run)
+
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    assert run is not None and launched
+    assert run.blocker_work == [{"repo_ref": "cs-cs-1", "mission_key": "CS-1"}]
+    extras = dispatch._extra_repos_for(mgr, run)
+    item = next(x for x in extras if x["name"] == "cs-cs-1")
+    assert item["token"] == "cs-read"
 
 
 def test_resolve_blocker_work_same_repo_skipped(tmp_path):

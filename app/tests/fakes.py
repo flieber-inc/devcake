@@ -134,6 +134,7 @@ def make_mission_manager(
     internal_forge: Any = None,
     skills: Any = None,
     noop_audit: bool = False,
+    blocker_locator: Any = None,
 ) -> MissionManager:
     """Construct MissionManager via the real ``__init__`` (DI constructor).
 
@@ -170,6 +171,14 @@ def make_mission_manager(
         instance=inst, breakers=breakers, internal_forge=internal_forge,
         skills=skills,
     )
+    # Locator is a required gate/dispatch dependency in production
+    # (build_managers sets ONE shared instance); single-manager tests get a
+    # self-only locator with the same resolution semantics.
+    if blocker_locator is None:
+        from devcake.domain.blocker_locator import BlockerLocator
+        blocker_locator = BlockerLocator(
+            {mgr.instance_name: mgr}, lambda bid: None)
+    mgr.blocker_locator = blocker_locator
     if noop_audit:
         mgr._audit = lambda *a, **k: None  # type: ignore[method-assign]
     return mgr

@@ -17,13 +17,10 @@ mission_pmo_id "3" for unrelated missions.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Callable
 
 from .model import Mission, MissionRef
-
-log = logging.getLogger("devcake.missions")
 
 # Systems whose pmo_ids are globally unique across the vendor environment
 # (Linear UUIDs). Only these may resolve via PEER adapters, and only these

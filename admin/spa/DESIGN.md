@@ -95,8 +95,27 @@ the child is a real labelable input — a bare `<label>` around non-inputs forwa
 clicks to the first labelable descendant (this was a shipped bug; see §6).
 
 Do not build a new one-off field layout when SettingRow fits. Complex entities
-(PMO instances, Dev Types, repos) stay as cards; grids of per-type values
-(Assignments) stay as tables.
+(PMO instances, repos) stay as cards; grids of per-type values (Assignments)
+stay as tables.
+
+### Roster grid (Dev Types)
+
+Dev Types render as a **roster grid** (decided 2026-07-27, Buzz-style): compact
+tiles — monogram avatar in the accent tint (no emoji/illustrations), a
+credential-readiness dot (green = ready, amber = none), name in mono,
+`harness · model` line — plus a dashed "New Dev Type" tile closing the grid.
+The dashed tile is the ONLY create affordance — no twin button in the section
+header (the header keeps the immediacy badge and the ⋯; Clear secrets stays in
+the ⋯ even as its lone item, because §3.4 bars destructive header buttons).
+The whole tile opens the **editor modal**; Rename/Delete stay behind the
+tile's ⋯. The modal edits the shared draft (footer states "applied by the
+page-level Save" — no per-modal save button, ever); OAuth / uploads / secret
+values stay in their `InstantZone`s inside it. The editor's first view is
+harness, model and skills only (Buzz-style); credentials, concurrency and
+per-type plumbing (MCP setup, secret env) live behind a single `Advanced…`
+disclosure (labeled just "Advanced"). Credential readiness is never hidden
+by the fold — the header subtitle carries it (green ready / amber missing).
+Use this idiom only for identity-like rosters; settings stay SettingRows.
 
 ### Tables
 

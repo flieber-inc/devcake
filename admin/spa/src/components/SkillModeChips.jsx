@@ -102,8 +102,8 @@ export default function SkillModeChips({
     );
   };
 
-  return (
-    <Field label={label} help={help}>
+  const body = (
+    <>
       <div className="flex flex-wrap items-center gap-1.5 pt-1">
         {options.length === 0 && stale.length === 0 && (
           <span className="text-xs text-neutral-500 dark:text-neutral-400">{emptyNote}</span>
@@ -115,7 +115,7 @@ export default function SkillModeChips({
             <button key={o.name} type="button" disabled={blocked}
               title={titleFor(mode, o.title, disabled ? disabledNote : "")}
               onClick={() => onChip(o.name)}
-              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition ${chipClass(mode, blocked)}`}>
+              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${chipClass(mode, blocked)}`}>
               {o.name}{mode === MODE.required ? " · req" : ""}
             </button>
           );
@@ -133,7 +133,7 @@ export default function SkillModeChips({
           ) : (
             <button key={n} type="button" title={staleNote} disabled={disabled}
               onClick={() => removeStale(n)}
-              className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
+              className="rounded-full border border-red-300 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700 line-through hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300 dark:hover:bg-red-950">
               {n} ✕
             </button>
           )
@@ -144,10 +144,10 @@ export default function SkillModeChips({
       </div>
       {(options.length > 0 || stale.length > 0) && !disabled && (
         <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-          Click to cycle: off → Available (may consult) → Required (prompt soft-force) → off.
-          Required is instructional, not kernel-enforced.
+          Click a skill to cycle: off → available → required.
         </p>
       )}
-    </Field>
+    </>
   );
+  return <Field label={label} help={help}>{body}</Field>;
 }

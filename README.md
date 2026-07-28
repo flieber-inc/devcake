@@ -27,6 +27,28 @@ Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning
 
 ---
 
+## Why DevCake?
+
+The deepest AI-assisted work today happens in CLI harnesses — Claude Code,
+Grok Build, Codex — with an expert invisibly orchestrating each session:
+curating context, sizing the task, sequencing the work, verifying the output.
+DevCake mechanizes that orchestration for board-shaped work. It is not a new
+coding agent; it is a session made repeatable, without the expert chained to
+the keyboard.
+
+The method is context hygiene, engineered: one clear goal per session, tasks
+decomposed until they fit, fresh containers, curated read-only mounts of
+exactly the relevant prior work, feedback at step boundaries — never
+interruption inside one. We call it putting AI to work in a state of flow,
+and we treat the conditions for it as a design target, not a hope.
+
+We believe this works; we have not yet proven it. The mechanisms are built
+and tested; the results so far are our own use. The full argument — its
+evidence status stated claim by claim, and what would change our mind — is
+[`docs/19-thesis.md`](docs/19-thesis.md).
+
+---
+
 ## Who this is for
 
 - Teams already running work on a **PMO board** (Linear and Gitea Issues in-tree)
@@ -236,6 +258,7 @@ must not exceed [`docs/14-security.md`](docs/14-security.md).
 | Admin API & UI contract | [`docs/11-admin-panel.md`](docs/11-admin-panel.md) |
 | History and backlog | [`docs/16-roadmap.md`](docs/16-roadmap.md) |
 | How we talk about it | [`docs/17-positioning.md`](docs/17-positioning.md) |
+| Why this exists — the thesis | [`docs/19-thesis.md`](docs/19-thesis.md) |
 
 Full map and architecture: [`docs/00`](docs/00-overview.md) §7 · [`docs/01`](docs/01-architecture.md).
 

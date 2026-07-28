@@ -163,5 +163,6 @@ Operating duties — once at setup and recurring — live in
 | `16-roadmap.md` | Milestone era + closed releases + living log after v0.2 |
 | `17-positioning.md` | Outward voice — must not outclaim `14` |
 | `18-operator-contract.md` | What the operator owns — setup pointer + recurring duties + rotation |
+| `19-thesis.md` | Why DevCake — the thesis: four claims with evidence status, scope doctrine (ordering vs originating), falsifiers |
 | `adr/` | Records of significant architectural decisions |
 | `tutorials/` | Operator path (includes supply-chain checklist) |

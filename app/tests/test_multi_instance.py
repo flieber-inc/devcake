@@ -498,3 +498,26 @@ def test_main_wires_one_shared_locator():
     assert "blocker_locator = BlockerLocator(managers, _mission_owner_of)" in src
     assert "mgr.blocker_locator = blocker_locator" in src        # reconcile
     assert "blocker_locator=blocker_locator" in src              # create
+
+
+def test_merged_cache_resolves_foreign_blocker_keys(tmp_path):
+    """A blocked_by id owned by a PEER instance displays as that instance's
+    key after the merged post-pass; an id in NO instance's snapshot stays a
+    raw vendor id (done + aged out — advisory feed, documented)."""
+    a, b = _mgr("cs"), _mgr("eng")
+    rt = _rt(tmp_path, managers={"cs": a, "eng": b}, order=lambda: [a, b])
+
+    async def seg(mgr, cache_rows):
+        if mgr.instance_name == "cs":
+            cache_rows.append({"instance": "cs", "key": "CS-1",
+                               "pmo_id": "uuid-a", "blocked_by": []})
+            return (1, 0, 0, {"uuid-a"})
+        cache_rows.append({"instance": "eng", "key": "ENG-1",
+                           "pmo_id": "uuid-b",
+                           "blocked_by": ["uuid-a", "uuid-gone"]})
+        return (1, 0, 0, {"uuid-b"})
+
+    rt.poll_instance = seg
+    run_coro(rt.run_cycle(1))
+    row = next(r for r in rt.missions_cache if r["key"] == "ENG-1")
+    assert row["blocked_by"] == ["CS-1", "uuid-gone"]

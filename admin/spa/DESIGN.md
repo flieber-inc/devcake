@@ -110,8 +110,8 @@ page-level Save" — no per-modal save button, ever); OAuth / uploads / secret
 values stay in their `InstantZone`s inside it. The editor's first view is
 harness, model and skills only (Buzz-style); credentials, concurrency and
 per-type plumbing (MCP setup, secret env) live behind a single `Advanced…`
-disclosure. Credential readiness is never hidden by the fold — the header
-subtitle and the Advanced summary both carry it (green ✓ / amber ✗).
+disclosure (labeled just "Advanced"). Credential readiness is never hidden
+by the fold — the header subtitle carries it (green ready / amber missing).
 Use this idiom only for identity-like rosters; settings stay SettingRows.
 
 ### Tables

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from ...config import assignment_for
 from .. import backend_health
 from ..model import (LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, Mission,
                      MissionType, PRIORITY_RANK, derive, find_cycles)
@@ -99,7 +100,8 @@ async def schedule(mgr, missions: list[Mission],
             continue
         if mission.repo in mgr.forges.breakers:
             continue  # this repo's breaker is latched (docs/15 §4)
-        dev_type = mgr.dev_types.get(mgr.config.assignments[d.mission_type.value].dev_type)
+        dev_type = mgr.dev_types.get(
+            assignment_for(mgr.config, mgr.instance, d.mission_type.value).dev_type)
         if dev_type is None or dev_type.name in mgr.breakers:
             continue  # unassigned or auth breaker tripped (docs/15 §4)
         # ADR-0018: a dev type whose model backend looks sick is throttled to a

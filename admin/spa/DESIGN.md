@@ -104,6 +104,9 @@ Dev Types render as a **roster grid** (decided 2026-07-27, Buzz-style): compact
 tiles — monogram avatar in the accent tint (no emoji/illustrations), a
 credential-readiness dot (green = ready, amber = none), name in mono,
 `harness · model` line — plus a dashed "New Dev Type" tile closing the grid.
+The dashed tile is the ONLY create affordance — no twin button in the section
+header (the header keeps the immediacy badge and the ⋯; Clear secrets stays in
+the ⋯ even as its lone item, because §3.4 bars destructive header buttons).
 The whole tile opens the **editor modal**; Rename/Delete stay behind the
 tile's ⋯. The modal edits the shared draft (footer states "applied by the
 page-level Save" — no per-modal save button, ever); OAuth / uploads / secret

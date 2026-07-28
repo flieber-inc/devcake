@@ -505,9 +505,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
         actions={
           <>
             <ImmediateBadge text="create/delete apply immediately" />
-            <Button kind="ghost" icon={Plus} onClick={() => setAddDev(true)}>
-              New Dev Type
-            </Button>
+            {/* creation lives on the grid's dashed tile — no header twin */}
             <MoreMenu label="More Dev Types actions" items={[
               { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
                 desc: CLEAR_SECRETS_ENTRY.desc,

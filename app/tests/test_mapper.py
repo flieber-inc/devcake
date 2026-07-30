@@ -88,17 +88,23 @@ def test_creates_cycle_transitive():
 
 
 def test_config_defaults():
+    from devcake.config import RepoInstance
     cfg = AppConfig()
     assert cfg.intake_paused is False
     assert cfg.relations_mapper.enabled is False           # manual-only by default
     assert cfg.relations_mapper.interval_minutes == 60
     assert cfg.relations_mapper.dev_type == "mapper"   # seeded cheap vehicle
-    assert cfg.auto_resolve_merge_conflicts is True        # docs/03 §4.1
-    assert cfg.merge_retry_window_minutes == 30
+    # merge doctrine lives on RepoInstance (ADR-0020 / docs/03 §4.1)
+    repo = RepoInstance(name="main", url="https://github.com/o/r")
+    assert repo.auto_merge is False
+    assert repo.auto_resolve_merge_conflicts is True
+    assert repo.merge_retry_window_minutes == 30
     # roundtrips through dump/validate (the /api/v1/config PUT path)
     assert AppConfig.model_validate(cfg.model_dump()) == cfg
     with pytest.raises(Exception):                         # ge=0 enforced
-        AppConfig.model_validate({"merge_retry_window_minutes": -5})
+        RepoInstance.model_validate(
+            {"name": "main", "url": "https://github.com/o/r",
+             "merge_retry_window_minutes": -5})
 
 
 def test_deep_merge_preserves_nested_siblings():

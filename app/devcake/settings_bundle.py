@@ -703,6 +703,7 @@ def _newer_secret_warnings(bundle: dict, parsed: dict) -> list[str]:
 def apply_bundle(bundle: dict, *, config: AppConfig,
                  dev_types: dict[str, DevType],
                  reload: Callable[[], None],
+                 managers: dict | None = None,
                  _is_rollback: bool = False) -> dict:
     """REPLACE the live world with the bundle's sections. Synchronous end to
     end — no awaits between validation and the in-memory swap, so the asyncio
@@ -725,6 +726,9 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
         include_config=new_cfg is not None,
         include_secrets=parsed["secrets"] is not None,
         include_orphan_secrets=True)   # byte-exact rollback (re-audit #3)
+    # snapshot auto_merge before the in-memory swap so OFF→ON re-arm works
+    # for profile/import apply the same way as PUT /config (ADR-0020)
+    prev_repos = list(config.repos) if new_cfg is not None else []
 
     applied: list[str] = []
     try:
@@ -759,6 +763,11 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
                 log.exception("rollback reload failed — files restored")
         else:
             reload()
+            if new_cfg is not None and not _is_rollback:
+                # same OFF→ON re-arm as PUT /config — ONE implementation in
+                # config.py (ADR-0020); no api import (module stays import-light)
+                from .config import apply_auto_merge_rearm
+                apply_auto_merge_rearm(prev_repos, config.repos, managers)
     except BundleError:
         raise
     except Exception as e:
@@ -767,7 +776,7 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
         log.exception("bundle apply failed — restoring previous settings")
         try:
             apply_bundle(previous, config=config, dev_types=dev_types,
-                         reload=reload, _is_rollback=True)
+                         reload=reload, managers=None, _is_rollback=True)
         except Exception:
             log.exception("rollback also failed")
             raise BundleError(

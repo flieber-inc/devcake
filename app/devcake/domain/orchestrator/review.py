@@ -66,13 +66,14 @@ async def _conflict_attempts(mgr, pmo_id: str) -> int:
 
 async def _maybe_route_conflict_to_execute(mgr, pmo_id: str, key: str,
                                            pr_url: str,
-                                           from_label: str) -> bool:
+                                           from_label: str, inst) -> bool:
     """docs/03 §4.1 — on an auto-resolvable merge failure (conflict or
     stale branch), route the mission back to EXECUTE with a resolve
     directive, max MAX_CONFLICT_RESOLVES attempts per mission. Returns
     True when routed; any failure or decline returns False so the caller's
-    human fallback (DEVCAKE-MERGE) is never blocked."""
-    if not mgr.config.auto_resolve_merge_conflicts:
+    human fallback (DEVCAKE-MERGE) is never blocked. ``inst`` is the
+    mission's RepoInstance (per-repo doctrine, ADR-0020)."""
+    if not inst.auto_resolve_merge_conflicts:
         return False
     try:
         n = await _conflict_attempts(mgr, pmo_id)
@@ -106,10 +107,11 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
     verdict = result.get("verdict")
     report = result.get("report_md") or result.get("summary") or ""
     forge = mgr.forges.get(run.repo_ref)
-    if forge is None:
-        # the run's repo vanished from config mid-flight: fail CLEANLY —
-        # transcripts/report are already posted; no transition is applied
-        # (the resolution-failure contract, domain/forge_runtime.py)
+    # forges + instances are co-populated (rebuild / register_internal); still
+    # treat a missing instance as vanished so a desync never AttributeErrors
+    # mid-finalize (resolution-failure contract, domain/forge_runtime.py)
+    inst = mgr.forges.instance(run.repo_ref) if forge is not None else None
+    if forge is None or inst is None:
         run.verdict = redact(
             f"failed: repo '{run.repo_ref}' is no longer configured — "
             f"REVIEW outcome not applied")
@@ -146,7 +148,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 # redelivery: only claim formal approval if it succeeded
                 formal = "review:formal_approve_ok" in run.finalized_steps
 
-        if mgr.config.auto_merge and pr:
+        if inst.auto_merge and pr:
             if "review:done" not in run.finalized_steps \
                     and "review:merge_failed" not in run.finalized_steps \
                     and "review:merge_deferred" not in run.finalized_steps \
@@ -213,8 +215,9 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                         if "review:conflict_routed" in run.finalized_steps:
                             return
                         try:
-                            routed = await _maybe_route_conflict_to_execute(mgr, 
-                                pmo_id, run.mission_key, pr_url, LABEL_REVIEW)
+                            routed = await _maybe_route_conflict_to_execute(
+                                mgr, pmo_id, run.mission_key, pr_url,
+                                LABEL_REVIEW, inst)
                         except Exception:
                             log.exception("conflict route failed for %s",
                                           run.mission_key)
@@ -230,13 +233,13 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                 MissionRef(pmo_id, "issue"),
                                 remove={LABEL_REVIEW}, add={LABEL_MERGE})
                             if mstate is not False and \
-                                    mgr.config.merge_retry_window_minutes > 0:
+                                    inst.merge_retry_window_minutes > 0:
                                 await mgr._feed(
                                     pmo_id, "issue",
                                     f"⏳ REVIEW approved but the merge is not "
                                     f"possible yet ({merge_err}) — DevCake keeps "
                                     f"retrying for up to "
-                                    f"{mgr.config.merge_retry_window_minutes} "
+                                    f"{inst.merge_retry_window_minutes} "
                                     f"minutes (mergeability computing / CI "
                                     f"pipeline running). You can merge {pr_url} "
                                     f"manually at any time. {MERGE_RETRY_MARKER}")

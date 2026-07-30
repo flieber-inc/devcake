@@ -18,7 +18,7 @@ basic auth, Dagu (with host `docker.sock`), and the `/data` secrets volume — i
 The primary defense against supply-chain damage is **outside the agent**: forge
 **branch protection** (the control that actually stops a Dev token from landing
 on the default branch), **who can write tickets** on each configured PMO
-instance (Linear team, Gitea Issues board, …), the app-side **`auto_merge`
+instance (Linear team, Gitea Issues board, …), the per-repo app-side **`auto_merge`
 default off** (the control plane will not merge for you — it does **not** strip
 merge capability from the Dev; see §2 zone C), and optional tighter credentials
 (read-only PAT, independent REVIEW Dev Type). The app **warns** on weak posture;
@@ -101,12 +101,14 @@ LLM, and not by pretending tickets are sterile.
 | Branch protection on the default branch (PR + reviews; Dev token cannot bypass) | **Operator** | Detects/warns unprotected branch; out-of-pipeline merge tripwire |
 | Who can write issues/comments on each configured PMO instance | **Operator** | Per-instance scope only (one team/board key per instance — `05-pmo-adapter.md`) |
 | Who can push to the repo the agent clones | **Operator** | — |
-| `auto_merge` off (**app** does not merge) | **Operator** (default off) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
+| Per-repo `auto_merge` off (**app** does not merge that repo) | **Operator** (default off per card) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
 | Read-only forge PAT for non-EXECUTE stages | **Operator** (recommended) | Dismissable `forge-write-token` warning if missing |
 | Independent REVIEW Dev Type (different model/role than EXECUTE) | **Operator** (recommended) | API/UI warning if shared — not a hard 422 |
 | LEGAL_OUTCOMES + INV-4 (Dev never writes PMO; forged outcomes cannot approve own work via app deputy path) | **Product (hard)** | Enforced |
 
-#### `auto_merge` gates the app, not the Dev (normative)
+#### Per-repo `auto_merge` gates the app, not the Dev (normative)
+
+Doctrine is per `RepoInstance` (ADR-0020); internal/zero-repo missions always auto-merge.
 
 Two different actors can merge a PR. Do not conflate them:
 

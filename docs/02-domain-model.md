@@ -101,13 +101,13 @@ Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything exc
                                         │ approve
                                         ▼
                         remove DEVCAKE-REVIEW, approve PR, then:
-                        · auto_merge ON:  merge PR → on success mark Done
-                            (conflict + auto-resolve ON, < 2 tries →
+                        · mission's repo auto_merge ON: merge PR → Done
+                            (conflict + that repo's auto-resolve ON, < 2 tries →
                              swap → EXECUTE with a resolve directive;
                              not-mergeable-yet → + DEVCAKE-MERGE, sweep
-                             retries for merge_retry_window_minutes;
+                             retries for that repo's merge_retry_window;
                              else → + DEVCAKE-MERGE + warning)
-                        · auto_merge OFF: + DEVCAKE-MERGE (await human merge)
+                        · mission's repo auto_merge OFF: + DEVCAKE-MERGE
                                         │
                                         ▼
                         ┌───────────────────────────────┐
@@ -229,15 +229,12 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 |---|---|---|
 | `schema_version` | `int` (= 4) | Stale shapes refused at boot with hand-migration instructions (`10-persistence.md` §3). |
 | `pmos` | `list[PMOInstance]` — `{name, system, team_key, api_base, repos, reference_repos, assignments, …}` | Instance `name` is the identity. `system` validated against `PMO_SYSTEMS`. **`api_key` is a read-through** over the GUI secret store (`/data/secrets/connections/pmo-{name}.json`) — not an env-var name. `repos` is the ordered work-repo set for that instance (first = default for unmarked missions); `reference_repos` are read-only consultation clones, disjoint from the work set. `assignments` is the instance's Mission-Type override map (ADR-0019): present key = wholesale override of the global row below, absent = inherit live; empty `dev_type` and unknown mission-type keys refused. |
-| `repos` | `list[RepoInstance]` — `{name, forge, url, api_base, default_branch, …}` | `forge` validated against `forges()`. **`token` / `token_ro` / `reviewer_token` are read-throughs** over `/data/secrets/connections/repo-{name}.json` — not `*_env` fields. |
+| `repos` | `list[RepoInstance]` — `{name, forge, url, api_base, default_branch, auto_merge, auto_resolve_merge_conflicts, merge_retry_window_minutes, …}` | `forge` validated against `forges()`. **`token` / `token_ro` / `reviewer_token` are read-throughs** over `/data/secrets/connections/repo-{name}.json` — not `*_env` fields. **Merge doctrine is per repo** (ADR-0020): `auto_merge` (default `false`) — when true, the **app** merges this repo's PRs after REVIEW approval; when false, parks at `DEVCAKE-MERGE` (does **not** strip Dev forge-token merge capability — that is branch protection, `14-security.md` §2 zone C). `auto_resolve_merge_conflicts` (default `true`, inert while `auto_merge` off) — on conflict/stale branch, route back to EXECUTE (max 2 attempts). `merge_retry_window_minutes` (default 30, `≥ 0`, inert while `auto_merge` off) — deferred-merge sweep window. **Internal (zero-repo) synthesized instances always set `auto_merge=True`** at provision time — the zip deliverable depends on merge; operators who want doctrine control create the repo as a config card instead. |
 | `adoption_mode` | `"opt_in" \| "opt_out"` (default `opt_in`) | `opt_in`: only Missions labeled `DEVCAKE` are adopted. `opt_out`: every non-terminal item in the team is adopted (the original mission-doc behavior — enable deliberately; the admin panel warns about the backlog-wide consequence, `11-admin-panel.md` §3). |
 | `assignments` | `dict[MissionType, {dev_type: str, extra_cli_args: str}]` | The **global** Mission Type → Dev Type map: Dev Type name plus optional **extra CLI args** appended verbatim to the harness invocation for that Mission Type (`08-harness-templates.md` §1). Args are admin-set data, never hardcoded — they are harness-specific, so the admin UI warns and offers to clear them when the Mission Type is reassigned to a Dev Type with a different harness (`11-admin-panel.md` §3). Validation: all four types assigned. Per-instance override rows on `pmos[*].assignments` take precedence wholesale (ADR-0019); resolution is `assignment_for(config, instance, mission_type)` — the only read path schedule and dispatch use. |
 | `concurrency` | `{global_max: int}` | Per-type caps live on each DevType. Effective ceiling = min(global_max, Σ per-type) — this is a property of the dispatch check, not a separate rule. |
 | `dev_timeout_minutes` | `int` (default 120) | Enforced by the app watchdog (`04-orchestrator.md` §5), not by Dagu. |
 | `poll_interval_seconds` | `int` (default 30) | |
-| `auto_merge` | `bool` (default `false`) | When true, the **app** merges its own PRs after REVIEW approval (no human PR click). When false, the app parks at `DEVCAKE-MERGE` and does not call merge — it does **not** strip merge capability from Dev forge tokens; that is branch protection (`14-security.md` §2 zone C). See `03-mission-lifecycle.md`, `06-forge-adapter.md`. |
-| `auto_resolve_merge_conflicts` | `bool` (default `true`) | Inert while `auto_merge` is off. On a merge conflict (or stale branch), route the Mission back to EXECUTE with a sync-and-resolve directive instead of parking on `DEVCAKE-MERGE`; max 2 attempts per Mission, counted from feed markers (`03-mission-lifecycle.md` §4.1). |
-| `merge_retry_window_minutes` | `int ≥ 0` (default 30) | Inert while `auto_merge` is off. When a merge is not possible *yet* (CI running, mergeability computing), the merge sweep keeps retrying for this long before the human hand-off; 0 = hand off immediately. Lower on CI-light repos, raise on CI-heavy ones. |
 | `attach_merged_changeset_to_pmo` | `bool` (default `false`) | When true, after a REVIEW-approved **merge** the app also zips the PR change set onto the PMO feed for **configured** work repos. Internal/zero-repo missions always attach a zip (ADR-0010) regardless. Leave off for eng repos — the forge PR is canonical; the zip is a merge-time snapshot (size-capped, may omit files). Best-effort: packaging failure never un-Dones the mission. |
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |

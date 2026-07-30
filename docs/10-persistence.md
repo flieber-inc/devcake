@@ -92,8 +92,12 @@ repos:                               # 0..N (empty = every mission routes to the
   url: https://github.com/acme/product
   api_base: null                     # null = the adapter's default API host / the repo's origin
   default_branch: main
+  auto_merge: false                  # per-repo (ADR-0020): true = app merges after REVIEW; false = park
+  auto_resolve_merge_conflicts: true # inert while auto_merge off: conflicts → EXECUTE rework (max 2)
+  merge_retry_window_minutes: 30     # inert while auto_merge off: deferred-merge sweep window
                                      # token VALUES (token/token_ro/reviewer_token) are GUI-stored:
                                      # /data/secrets/connections/repo-main.json
+                                     # internal (zero-repo) synthesized instances always auto_merge=true
 
 assignments:                         # every Mission Type must be assigned to exactly one Dev Type.
   ONBOARD:                           #   extra_cli_args are appended verbatim to the harness invocation —
@@ -120,9 +124,6 @@ poll_interval_seconds: 30
 dev_timeout_minutes: 120             # enforced by the app watchdog (04 §5)
 max_attempts: 3
 review_loop_warning_every: 3
-auto_merge: false                    # true = app merges after REVIEW; false = app parks (not a Dev merge fence)
-auto_resolve_merge_conflicts: true   # inert while auto_merge is off: conflicts → EXECUTE rework (max 2)
-merge_retry_window_minutes: 30       # inert while auto_merge is off: sweep retries not-yet-mergeable PRs this long
 attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
 # each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
@@ -137,6 +138,8 @@ dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts
 ```
 
 **Stale configs are refused, not auto-migrated:** any `schema_version` other than **4**, or a body still carrying singular `pmo:`/`repo:` / `id:`-keyed / `*_env` shapes, fails startup with a clear error. Hand-migrate all the way to **schema v4 name-keyed** lists (`pmos: [{name: …}]`, `repos: [{name: …}]`, secret VALUES under `/data/secrets/connections/`, no `*_env` fields) **or** delete the file and reconfigure via the admin panel. There is no stepwise auto-upgrade through v2/v3.
+
+**Pre-v1 field moves (ADR-0020):** merge doctrine used to be top-level (`auto_merge`, `auto_resolve_merge_conflicts`, `merge_retry_window_minutes`). Those keys now live under each `repos[]` entry. Pre-v1 policy: no migration — pydantic drops unknown top-level keys and per-repo defaults apply (`auto_merge: false`, …). **Operational footgun:** a file that still has top-level `auto_merge: true` will **stop** auto-merging after upgrade until each repo card is re-enabled. `load_config` logs a WARNING listing dropped keys and a second WARNING naming the legacy doctrine keys so this is not a quiet no-op.
 
 `dev_types/{name}.yaml` mirrors the DevType fields of `02-domain-model.md` §6 exactly.
 

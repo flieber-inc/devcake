@@ -12,7 +12,8 @@ import logging
 from fastapi import HTTPException
 
 from .. import secrets as secrets_store
-from ..config import AppConfig, deep_merge, reject_stale_patch, save_config
+from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
+                      reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
 from ..settings_bundle import (BundleError, dry_run_adapters,
                                validate_config_semantics)
@@ -104,14 +105,10 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
         except Exception:  # noqa: BLE001 — cleanup is best-effort: the config change is APPLIED; a failure must not 500 it (audit A21); orphan named in the log
             log.exception("could not delete stored secrets of removed "
                           "%s instance %r", scope, name)
-    if not previous["auto_merge"] and config.auto_merge:
-        # auto_merge flipped OFF→ON (founder request 2026-07-15): re-arm the
-        # deferred-merge window for missions already parked at DEVCAKE-MERGE —
-        # the next sweep posts a fresh window entry and drives their merges
-        for mgr in managers.values():
-            mgr.rearm_merge_windows = True
-        log.info("auto_merge flipped ON — parked DEVCAKE-MERGE missions "
-                 "re-armed for the deferred-merge sweep")
+    # Per-repo auto_merge OFF→ON (founder request 2026-07-15, ADR-0020):
+    # re-arm the deferred-merge window only for missions whose work repo
+    # flipped — the next sweep posts a fresh window entry for those.
+    apply_auto_merge_rearm(previous.get("repos") or [], config.repos, managers)
     return config.model_dump()
 
 

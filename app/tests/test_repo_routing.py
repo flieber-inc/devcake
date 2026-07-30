@@ -308,11 +308,15 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
         runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
     )
 
-    # zero-repo mission → internal
+    # zero-repo mission → internal (always auto-merge, ADR-0020)
     name, reason = run_coro(mgr.resolve_repo_live(_m()))
     assert name == "linear-t-1" and reason is None
     assert provisioned == [("linear", "T-1")]
     assert "linear-t-1" in rt.internal
+    inst = rt.instances["linear-t-1"]
+    assert inst.auto_merge is True
+    assert inst.auto_resolve_merge_conflicts is True
+    assert inst.merge_retry_window_minutes == 30
 
     # unknown marker → GATED, never redirected internal
     m2 = _m(description="`devcake-repo:nope`")

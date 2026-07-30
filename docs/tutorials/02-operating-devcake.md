@@ -33,8 +33,8 @@ abandoned (decomposed away, or PR closed unmerged).
 - **Force a rework:** swap `DEVCAKE-MERGE` (or `-REVIEW`) → `DEVCAKE-EXECUTE`,
   optionally with a comment saying what you want changed — the next run reads
   the feed, reuses the branch, and updates the same PR. This is also the answer
-  when a waiting PR grows **merge conflicts** — though with `auto_merge` +
-  `auto_resolve_merge_conflicts` ON, DevCake does this swap itself (up to 2
+  when a waiting PR grows **merge conflicts** — though with that repo's
+  `auto_merge` + `auto_resolve_merge_conflicts` ON, DevCake does this swap itself (up to 2
   attempts) before handing the conflict to you; the manual swap remains the
   recovery path after that, or with the toggle OFF.
 - **Edit mid-run without fear:** if you change a mission's stage label while a
@@ -58,7 +58,7 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** (Repositories page, not Configuration) — off (default): the
+- **`auto_merge`** (per repo card on the Repositories page, not Configuration) — off (default): the
   **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
   On: after REVIEW approves, the **app** merges and missions go straight to
   Done. Off does **not** strip merge rights from Dev tokens — **branch

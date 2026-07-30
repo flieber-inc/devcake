@@ -147,6 +147,16 @@ class RepoInstance(BaseModel):
     url: str = ""
     api_base: str | None = None     # None = the adapter's default API host / the repo's origin
     default_branch: str = "main"
+    # Per-repo merge doctrine (docs/03 §4.1, ADR-0020). The last two are inert
+    # while auto_merge is OFF: on a merge conflict, route back to EXECUTE to
+    # sync + resolve (max 2 attempts) instead of parking on DEVCAKE-MERGE;
+    # while a merge is merely not-possible-yet (CI running, mergeability
+    # computing) the merge sweep keeps retrying for merge_retry_window_minutes
+    # before the human hand-off (0 = immediately). Internal (zero-repo)
+    # synthesized instances always set auto_merge=True at provision time.
+    auto_merge: bool = False
+    auto_resolve_merge_conflicts: bool = True
+    merge_retry_window_minutes: int = Field(30, ge=0)
     # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
     # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);
@@ -391,19 +401,13 @@ class AppConfig(BaseModel):
     recover_misplaced_result: bool = True
     # ge=1: used as a modulo cadence; 0 would ZeroDivisionError (ISSUES #8/#9)
     review_loop_warning_every: int = Field(3, ge=1)
-    auto_merge: bool = False
-    # both inert while auto_merge is OFF (docs/03 §4.1): on a merge conflict,
-    # route back to EXECUTE to sync + resolve (max 2 attempts) instead of
-    # parking on DEVCAKE-MERGE; while a merge is merely not-possible-yet
-    # (CI running, mergeability computing) the merge sweep keeps retrying for
-    # merge_retry_window_minutes before the human hand-off (0 = immediately)
-    auto_resolve_merge_conflicts: bool = True
-    merge_retry_window_minutes: int = Field(30, ge=0)
     # After a REVIEW-approved merge, also zip the PR change set onto the PMO
     # feed for CONFIGURED (external) work repos. Internal/zero-repo missions
     # always zip (ADR-0010) regardless of this flag. Default OFF: the forge
     # PR is the canonical artifact for eng repos; zips are merge-time
     # snapshots (can omit large files, dual-truth vs main, secrets risk).
+    # (Merge doctrine — auto_merge / auto-resolve / retry window — lives on
+    # each RepoInstance; see ADR-0020.)
     attach_merged_changeset_to_pmo: bool = False
     # operator switch: no NEW runs dispatch while paused; in-flight runs finish
     # and sweeps keep running (docs/11)
@@ -586,11 +590,88 @@ def _refuse_stale_file(data: dict) -> None:
             "delete the file and reconfigure via the admin panel")
 
 
+# Former top-level merge doctrine keys (pre-ADR-0020). Dropped silently by
+# pydantic unless we shout — operators with auto_merge:true lose auto-merge
+# until they re-enable per repo card.
+_LEGACY_MERGE_DOCTRINE_KEYS = frozenset({
+    "auto_merge", "auto_resolve_merge_conflicts", "merge_retry_window_minutes",
+})
+
+
+def auto_merge_flipped_on(
+    previous_repos: list, new_repos: list,
+) -> set[str]:
+    """Repo names whose auto_merge went OFF→ON (ADR-0020 re-arm set).
+
+    Accepts model_dump dicts or RepoInstance rows for either side so PUT and
+    bundle apply can share one comparison.
+    """
+    def _name_on(r) -> tuple[str | None, bool]:
+        if isinstance(r, dict):
+            return r.get("name"), bool(r.get("auto_merge"))
+        return getattr(r, "name", None), bool(getattr(r, "auto_merge", False))
+
+    prev_on: set[str] = set()
+    for r in previous_repos:
+        name, on = _name_on(r)
+        if name and on:
+            prev_on.add(name)
+    flipped: set[str] = set()
+    for r in new_repos:
+        name, on = _name_on(r)
+        if name and on and name not in prev_on:
+            flipped.add(name)
+    return flipped
+
+
+def apply_auto_merge_rearm(previous_repos: list, new_repos: list,
+                           managers) -> set[str]:
+    """Union OFF→ON repo names into every manager's rearm set (ADR-0020).
+
+    THE re-arm implementation for both world-swap paths — config PUT and
+    profile/bundle apply. Touches only plain manager attributes, so it can
+    live here without pulling orchestrator imports into config.
+    """
+    if not managers:
+        return set()
+    flipped = auto_merge_flipped_on(previous_repos, new_repos)
+    if not flipped:
+        return set()
+    for mgr in managers.values():
+        mgr.rearm_merge_repos |= flipped
+    log.info("auto_merge flipped ON for repo(s) %s — parked "
+             "DEVCAKE-MERGE missions on those repos re-armed for the "
+             "deferred-merge sweep", sorted(flipped))
+    return flipped
+
+
+def warn_unknown_top_level_keys(data: dict) -> None:
+    """Pre-v1: no migration — pydantic drops unknown fields. Surface them so
+    a silent default is not a quiet no-op (docs/10 §3, ADR-0020)."""
+    known = set(AppConfig.model_fields)
+    dropped = sorted(k for k in data if k not in known)
+    if not dropped:
+        return
+    log.warning(
+        "config: ignoring unknown top-level key(s) %s "
+        "(pre-v1 policy — no migration; check docs/10 §3)",
+        dropped)
+    doctrine = [k for k in dropped if k in _LEGACY_MERGE_DOCTRINE_KEYS]
+    if doctrine:
+        log.warning(
+            "config: former top-level merge doctrine key(s) %s were DROPPED — "
+            "merge policy is per-repo (ADR-0020). Each repos[] entry defaults "
+            "to auto_merge=false; re-enable on the Repos page cards if this "
+            "deployment previously auto-merged (docs/10 §3, docs/11 §2b)",
+            doctrine)
+
+
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
         data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
         if isinstance(data, dict):
             _refuse_stale_file(data)
+            warn_unknown_top_level_keys(data)
         cfg = AppConfig.model_validate(data)
     else:
         # first boot is EMPTY (schema v4, F5): everything — PMO instances,

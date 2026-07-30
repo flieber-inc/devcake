@@ -624,6 +624,27 @@ def auto_merge_flipped_on(
     return flipped
 
 
+def apply_auto_merge_rearm(previous_repos: list, new_repos: list,
+                           managers) -> set[str]:
+    """Union OFF→ON repo names into every manager's rearm set (ADR-0020).
+
+    THE re-arm implementation for both world-swap paths — config PUT and
+    profile/bundle apply. Touches only plain manager attributes, so it can
+    live here without pulling orchestrator imports into config.
+    """
+    if not managers:
+        return set()
+    flipped = auto_merge_flipped_on(previous_repos, new_repos)
+    if not flipped:
+        return set()
+    for mgr in managers.values():
+        mgr.rearm_merge_repos |= flipped
+    log.info("auto_merge flipped ON for repo(s) %s — parked "
+             "DEVCAKE-MERGE missions on those repos re-armed for the "
+             "deferred-merge sweep", sorted(flipped))
+    return flipped
+
+
 def warn_unknown_top_level_keys(data: dict) -> None:
     """Pre-v1: no migration — pydantic drops unknown fields. Surface them so
     a silent default is not a quiet no-op (docs/10 §3, ADR-0020)."""

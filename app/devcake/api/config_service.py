@@ -12,7 +12,7 @@ import logging
 from fastapi import HTTPException
 
 from .. import secrets as secrets_store
-from ..config import (AppConfig, auto_merge_flipped_on, deep_merge,
+from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
                       reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
 from ..settings_bundle import (BundleError, dry_run_adapters,
@@ -110,22 +110,6 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
     # flipped — the next sweep posts a fresh window entry for those.
     apply_auto_merge_rearm(previous.get("repos") or [], config.repos, managers)
     return config.model_dump()
-
-
-def apply_auto_merge_rearm(previous_repos, new_repos, managers) -> set[str]:
-    """Union flipped-ON repo names into every manager's rearm set. Shared by
-    config PUT and profile/bundle apply so both world-swap paths re-arm."""
-    if not managers:
-        return set()
-    flipped = auto_merge_flipped_on(previous_repos, new_repos)
-    if not flipped:
-        return set()
-    for mgr in managers.values():
-        mgr.rearm_merge_repos |= flipped
-    log.info("auto_merge flipped ON for repo(s) %s — parked "
-             "DEVCAKE-MERGE missions on those repos re-armed for the "
-             "deferred-merge sweep", sorted(flipped))
-    return flipped
 
 
 def set_pmo_intake(*, name: str, paused: bool, config) -> dict:

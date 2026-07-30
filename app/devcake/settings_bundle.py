@@ -763,18 +763,11 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
                 log.exception("rollback reload failed — files restored")
         else:
             reload()
-            if new_cfg is not None and managers and not _is_rollback:
-                # same OFF→ON re-arm as PUT /config (ADR-0020); pure helper
-                # in config.py — no api import (keeps this module import-light)
-                from .config import auto_merge_flipped_on
-                flipped = auto_merge_flipped_on(prev_repos, config.repos)
-                if flipped:
-                    for mgr in managers.values():
-                        mgr.rearm_merge_repos |= flipped
-                    log.info(
-                        "auto_merge flipped ON for repo(s) %s via bundle "
-                        "apply — parked DEVCAKE-MERGE missions on those "
-                        "repos re-armed", sorted(flipped))
+            if new_cfg is not None and not _is_rollback:
+                # same OFF→ON re-arm as PUT /config — ONE implementation in
+                # config.py (ADR-0020); no api import (module stays import-light)
+                from .config import apply_auto_merge_rearm
+                apply_auto_merge_rearm(prev_repos, config.repos, managers)
     except BundleError:
         raise
     except Exception as e:

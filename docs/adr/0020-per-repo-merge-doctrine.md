@@ -26,7 +26,10 @@ co-populated with `forges.get` by `rebuild` / `register_internal`).
 
 Re-arm on config PUT is per-repo: only repos that flipped OFF→ON join
 `mgr.rearm_merge_repos`; the next sweep reopens parked `DEVCAKE-MERGE`
-missions whose `m.repo` is in that set.
+missions whose `m.repo` is in that set. A repo absent from the previous
+config counts as OFF, so a card removed and re-added with `auto_merge: true`
+re-arms that repo's parked missions — deliberate: its merge queue resumes
+visibly (feed marker) instead of waiting for a human forever.
 
 ### 2 — Internal (zero-repo) repos always auto-merge
 
@@ -47,7 +50,9 @@ pydantic; per-repo defaults apply. `load_config` logs a WARNING listing
 dropped top-level keys **and** a second WARNING when any of the three former
 doctrine keys appear — a prior global `auto_merge: true` becomes per-repo
 `false` until re-enabled on cards. Schema version stays **4**. No
-`_stale_shape_reason` extension.
+`_stale_shape_reason` extension. The warning is boot-only: a PUT body
+carrying the legacy top-level keys drops them silently (the SPA ships with
+the app, so a stale client is not a supported case pre-v1).
 
 Config PUT **and** profile/bundle apply both re-arm parked `DEVCAKE-MERGE`
 missions for repos that flipped OFF→ON (`auto_merge_flipped_on` +

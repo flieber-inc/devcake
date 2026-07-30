@@ -279,22 +279,23 @@ branch looks unprotected and does not hard-block dispatch (`14` §8).
 
 Why it is mandatory for production-ish use: Dev containers hold a write-capable
 forge token, and token scoping cannot separate “push a feature branch” from
-“merge to the default branch” (both are often `contents: write`). **`auto_merge`
-off only stops the app from merging** — it does not change what the Dev token
-can do (`14` §2 zone C). Full actor/token walkthrough: `14` §2 and the README
-“How forge merges are controlled.”
+“merge to the default branch” (both are often `contents: write`). **Per-repo
+`auto_merge` off only stops the app from merging that repo** — it does not
+change what the Dev token can do (`14` §2 zone C). Full actor/token
+walkthrough: `14` §2 and the README “How forge merges are controlled.”
 
 Recommended operator setup:
 
 1. **Protect `default_branch`** on every work repo.
 2. **Write token** for EXECUTE (push + open PR); app reuses it for merge if
-   `auto_merge` is later enabled.
+   that repo's `auto_merge` is later enabled (Repos page, per card — ADR-0020).
 3. **RO token** for non-EXECUTE (recommended).
 4. **Reviewer token** from a **different** account (app-only): formal approval
    so “require ≥1 approval” can pass without self-approval.
-5. Leave **`auto_merge` off** until you want the app to squash-merge after REVIEW.
+5. Leave each repo's **`auto_merge` off** until you want the app to
+   squash-merge that repo after REVIEW.
 
-- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so `auto_merge` can still work if you enable it.
+- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so per-repo `auto_merge` can still work if you enable it.
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 Forge connection test and `/health` surface protection state; amber warning when unprotected.

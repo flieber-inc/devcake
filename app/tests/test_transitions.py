@@ -251,7 +251,7 @@ def test_awaiting_merge_redelivery_not_misread_as_external(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})   # our own swap
     forge = FakeForge()
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
-    mgr.config.auto_merge = False
+    mgr.forges.instance("main").auto_merge = False
     run = _run("REVIEW", "DEVCAKE-REVIEW")
     run.finalized_steps = ["review:awaiting_merge"]            # checkpointed
     run_coro(transitions.transition(mgr, run, {"outcome": "reviewed", "verdict": "approve",
@@ -1148,7 +1148,7 @@ def merge_fail_mgr(tmp_path, mergeable_result):
                                            status=405),
                       mergeable_result=mergeable_result)
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
-    mgr.config.auto_merge = True
+    mgr.forges.instance("main").auto_merge = True
     return m, mgr, fake, forge
 
 
@@ -1184,7 +1184,7 @@ def test_quoted_conflict_marker_does_not_count(tmp_path):
 
 def test_merge_conflict_toggle_off_keeps_current_behavior(tmp_path):
     m, mgr, fake, forge = merge_fail_mgr(tmp_path, mergeable_result=False)
-    mgr.config.auto_resolve_merge_conflicts = False
+    mgr.forges.instance("main").auto_resolve_merge_conflicts = False
     run_coro(_approve_review(mgr))
     assert "DEVCAKE-MERGE" in m.labels and "DEVCAKE-EXECUTE" not in m.labels
     assert not any("devcake:conflict-resolve" in c for c in fake.comments)
@@ -1203,7 +1203,7 @@ def test_non_conflict_merge_failure_defers(tmp_path):
 
 def test_zero_window_skips_deferred_retry(tmp_path):
     m, mgr, fake, forge = merge_fail_mgr(tmp_path, mergeable_result=None)
-    mgr.config.merge_retry_window_minutes = 0
+    mgr.forges.instance("main").merge_retry_window_minutes = 0
     run_coro(_approve_review(mgr))
     assert any("`devcake:merge-handoff`" in c for c in fake.comments)
     assert not any("`devcake:merge-retry`" in c for c in fake.comments)
@@ -1215,7 +1215,7 @@ def sweep_mgr(tmp_path, mergeable_result, merge_exc=None):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
     forge = FakeForge(merge_exc=merge_exc, mergeable_result=mergeable_result)
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
-    mgr.config.auto_merge = True
+    mgr.forges.instance("main").auto_merge = True
     fake.activity_entries = [ActivityEntry(
         ts=datetime.now(timezone.utc), author="devcake", kind="comment",
         body="⏳ deferred `devcake:merge-retry`\n\n`devcake:v1`")]
@@ -1259,7 +1259,7 @@ def test_sweep_merges_behind_branch_without_rework(tmp_path):
 
 def test_sweep_window_expiry_hands_off_once(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
-    mgr.config.merge_retry_window_minutes = 0          # expires immediately
+    mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
     run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == []                          # no merge attempt past expiry
     handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
@@ -1288,7 +1288,7 @@ def test_manual_park_banners_without_feed_read(tmp_path):
     # auto_merge OFF: the banner entry derives from labels alone — zero
     # get_activity calls for the operator's normal merge queue
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
-    mgr.config.auto_merge = False
+    mgr.forges.instance("main").auto_merge = False
     run_coro(sweeps.merge_sweep(mgr, m))
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert getattr(fake, "get_activity_calls", 0) == 0
@@ -1303,7 +1303,7 @@ def test_active_retry_window_suppresses_banner(tmp_path):
 
 def test_expired_window_banners_and_skips_future_feed_reads(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
-    mgr.config.merge_retry_window_minutes = 0        # expires immediately
+    mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
     run_coro(sweeps.merge_sweep(mgr, m))
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert m.pmo_id in mgr._merge_window_closed
@@ -1374,24 +1374,24 @@ def test_human_needed_sets_verdict_and_advisory(tmp_path):
     assert mgr.needs_human["p1"].startswith("T-1: needs human")
 
 
-# ── auto-merge OFF→ON re-arm (founder request 2026-07-15) ────────────────────
+# ── auto-merge OFF→ON re-arm (founder request 2026-07-15, per-repo ADR-0020) ─
 # A mission parked at DEVCAKE-MERGE while auto_merge was OFF carries no retry
 # marker, so flipping auto_merge ON used to leave it awaiting a human forever
 # (the sweep closed the window on first read and the skip-set cached it).
-# The config PUT sets a one-shot re-arm flag on an OFF→ON flip: the next
+# The config PUT adds the flipped repo name to a one-shot re-arm set: the next
 # sweep posts a fresh retry-window entry (visible, marker-timestamped) for
-# every parked mission; the cycle after that reads the marker and drives the
-# merge inside the normal merge_retry_window_minutes bound.
+# parked missions on that repo; the cycle after that reads the marker and
+# drives the merge inside the normal merge_retry_window_minutes bound.
 
 def test_rearm_reopens_parked_mission_when_auto_merge_flips_on(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []            # the auto_merge-OFF park: no marker
-    mgr.rearm_merge_windows = True        # what put_config sets on OFF→ON
+    mgr.rearm_merge_repos = {"main"}     # what put_config sets on OFF→ON
     run_coro(mgr.sweeps([m]))             # cycle 1: posts the window entry
     rearm_comments = [c for c in fake.comments if "`devcake:merge-retry`" in c]
     assert len(rearm_comments) == 1
     assert m.pmo_id not in mgr._merge_window_closed
-    assert mgr.rearm_merge_windows is False           # one-shot
+    assert mgr.rearm_merge_repos == set()             # one-shot
     assert forge.merges == []                         # merge happens NEXT cycle
     fake.activity_entries = [ActivityEntry(
         ts=datetime.now(timezone.utc), author="devcake", kind="comment",
@@ -1405,7 +1405,7 @@ def test_rearm_reaches_missions_already_in_skip_set(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []
     mgr._merge_window_closed = {"p1"}     # cached closed from prior cycles
-    mgr.rearm_merge_windows = True
+    mgr.rearm_merge_repos = {"main"}
     run_coro(mgr.sweeps([m]))
     assert any("`devcake:merge-retry`" in c for c in fake.comments)
     assert "p1" not in mgr._merge_window_closed
@@ -1416,11 +1416,188 @@ def test_rearm_noop_when_window_zero(tmp_path):
     # open a window the operator has configured away
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []
-    mgr.config.merge_retry_window_minutes = 0
-    mgr.rearm_merge_windows = True
+    mgr.forges.instance("main").merge_retry_window_minutes = 0
+    mgr.rearm_merge_repos = {"main"}
     run_coro(mgr.sweeps([m]))
     assert not any("`devcake:merge-retry`" in c for c in fake.comments)
     assert forge.merges == []
+
+
+# ── ADR-0020: per-repo merge doctrine ────────────────────────────────────────
+
+def test_per_repo_auto_merge_only_merges_that_repos_missions(tmp_path):
+    """Two repos: A auto_merge ON merges on REVIEW approve; B OFF parks."""
+    from devcake.config import RepoInstance
+    from fakes import make_mission_manager
+
+    forge_a, forge_b = FakeForge(), FakeForge()
+    inst_a = RepoInstance(name="alpha", url="https://github.com/o/a",
+                          auto_merge=True)
+    inst_b = RepoInstance(name="beta", url="https://github.com/o/b",
+                          auto_merge=False)
+
+    class MultiRuntime:
+        def __init__(self):
+            self._map = {"alpha": (forge_a, inst_a), "beta": (forge_b, inst_b)}
+            self.health, self.breakers, self.internal = {}, {}, set()
+
+        def get(self, name):
+            return self._map[name][0] if name in self._map else None
+
+        def instance(self, name):
+            return self._map[name][1] if name in self._map else None
+
+        @property
+        def forges(self):
+            return {k: v[0] for k, v in self._map.items()}
+
+        @property
+        def instances(self):
+            return {k: v[1] for k, v in self._map.items()}
+
+    rt = MultiRuntime()
+    ma = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    ma.repo = "alpha"
+    mb = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    mb.pmo_id, mb.key, mb.repo = "p2", "T-2", "beta"
+    cfg = AppConfig()
+    mgr_a = make_mission_manager(
+        tmp_path, pmo=FakePMO(ma), forge_runtime=rt, config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    mgr_b = make_mission_manager(
+        tmp_path, pmo=FakePMO(mb), forge_runtime=rt, config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    run_a = _run("REVIEW", "DEVCAKE-REVIEW")
+    run_a.repo_ref = "alpha"
+    run_b = Run(run_id="T-2-1-REVIEW-BBBBBB", mission_key="T-2",
+                mission_pmo_id="p2", mission_type="REVIEW",
+                dev_type="senior-dev", seq=1,
+                stage_label_at_dispatch="DEVCAKE-REVIEW", repo_ref="beta")
+    run_coro(review.finalize_review(mgr_a, run_a,
+                                    {"verdict": "approve", "report_md": "ok"}))
+    run_coro(review.finalize_review(mgr_b, run_b,
+                                    {"verdict": "approve", "report_md": "ok"}))
+    assert forge_a.merges == [8]
+    assert ma.status == "done" and "DEVCAKE-MERGE" not in ma.labels
+    assert forge_b.merges == []
+    assert "DEVCAKE-MERGE" in mb.labels and mb.status == "in_progress"
+
+
+def test_conflict_auto_resolve_honors_mission_repo_flag(tmp_path):
+    """Mission on alpha (resolve OFF) parks even when beta would resolve ON."""
+    from devcake.config import RepoInstance
+    from fakes import make_mission_manager
+
+    forge_a = FakeForge(
+        merge_exc=ForgeError("405: conflicts", status=405),
+        mergeable_result=False)
+    inst_a = RepoInstance(name="alpha", url="https://github.com/o/a",
+                          auto_merge=True,
+                          auto_resolve_merge_conflicts=False)
+    inst_b = RepoInstance(name="beta", url="https://github.com/o/b",
+                          auto_merge=True,
+                          auto_resolve_merge_conflicts=True)
+
+    class MultiRuntime:
+        def __init__(self):
+            self._map = {"alpha": (forge_a, inst_a), "beta": (None, inst_b)}
+            self.health, self.breakers, self.internal = {}, {}, set()
+
+        def get(self, name):
+            pair = self._map.get(name)
+            return pair[0] if pair else None
+
+        def instance(self, name):
+            pair = self._map.get(name)
+            return pair[1] if pair else None
+
+        @property
+        def forges(self):
+            return {k: v[0] for k, v in self._map.items() if v[0] is not None}
+
+        @property
+        def instances(self):
+            return {k: v[1] for k, v in self._map.items()}
+
+    ma = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    ma.repo = "alpha"
+    mgr = make_mission_manager(
+        tmp_path, pmo=FakePMO(ma), forge_runtime=MultiRuntime(),
+        config=AppConfig(),
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    run = _run("REVIEW", "DEVCAKE-REVIEW")
+    run.repo_ref = "alpha"
+    run_coro(review.finalize_review(mgr, run,
+                                    {"verdict": "approve", "report_md": "ok"}))
+    assert "DEVCAKE-MERGE" in ma.labels and "DEVCAKE-EXECUTE" not in ma.labels
+    assert not any("devcake:conflict-resolve" in c for c in mgr.pmo.comments)
+    # beta's ON flag must not have been consulted — alpha parked
+
+
+def test_rearm_only_targets_flipped_repo(tmp_path):
+    """rearm_merge_repos={alpha} must not reopen a mission parked on beta."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    fake.activity_entries = []
+    m.repo = "main"
+    mgr.rearm_merge_repos = {"other"}   # flipped a different repo
+    run_coro(mgr.sweeps([m]))
+    assert not any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert forge.merges == []
+    # now re-arm the mission's own repo
+    mgr.rearm_merge_repos = {"main"}
+    run_coro(mgr.sweeps([m]))
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+
+
+def test_config_put_rearm_is_per_repo(tmp_path, monkeypatch):
+    """apply_config_patch only re-arms repos that flipped OFF→ON."""
+    from devcake.api import config_service
+    from devcake.config import RepoInstance
+
+    cfg = AppConfig(repos=[
+        RepoInstance(name="alpha", url="https://github.com/o/a",
+                     auto_merge=False),
+        RepoInstance(name="beta", url="https://github.com/o/b",
+                     auto_merge=False),
+    ])
+    mgr = make_mgr(tmp_path, mission())[0]
+    managers = {"linear": mgr}
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(
+        "devcake.api.config_service.secrets_store.delete_connection_instance",
+        lambda *a, **k: None)
+    monkeypatch.setattr(
+        "devcake.api.config_service.validate_config_semantics",
+        lambda *a, **k: None)
+    monkeypatch.setattr(
+        "devcake.api.config_service.dry_run_adapters", lambda *a, **k: None)
+
+    def _reload():
+        pass
+
+    body = {
+        "repos": [
+            {"name": "alpha", "forge": "github",
+             "url": "https://github.com/o/a", "auto_merge": True,
+             "auto_resolve_merge_conflicts": True,
+             "merge_retry_window_minutes": 30, "default_branch": "main",
+             "api_base": None},
+            {"name": "beta", "forge": "github",
+             "url": "https://github.com/o/b", "auto_merge": False,
+             "auto_resolve_merge_conflicts": True,
+             "merge_retry_window_minutes": 30, "default_branch": "main",
+             "api_base": None},
+        ],
+    }
+    run_coro(config_service.apply_config_patch(
+        body, config=cfg, dev_types={}, managers=managers, reload=_reload))
+    assert mgr.rearm_merge_repos == {"alpha"}
 
 
 def test_executed_feed_uses_descriptor_pr_noun(tmp_path):

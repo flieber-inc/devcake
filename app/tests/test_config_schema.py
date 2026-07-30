@@ -135,7 +135,8 @@ def test_max_decomposition_depth_defaults_and_bounds():
     # a patch touching an unrelated field must not reset the setting
     from devcake.config import deep_merge
     tuned = {**base, "max_decomposition_depth": 1}
-    merged = deep_merge(tuned, {"auto_merge": True})
+    merged = deep_merge(tuned, {"repos": [
+        {**base["repos"][0], "auto_merge": True}]})
     assert AppConfig.model_validate(merged).max_decomposition_depth == 1
 
 
@@ -158,7 +159,11 @@ def test_recover_misplaced_result_defaults_on_and_round_trips():
     assert round_tripped.schema_version == 4
     # a patch touching an unrelated field must not reset the setting
     from devcake.config import deep_merge
-    merged = deep_merge(off.model_dump(), {"auto_merge": True})
+    dumped = off.model_dump()
+    merged = deep_merge(dumped, {"repos": [
+        {**(dumped["repos"][0] if dumped["repos"] else
+            {"name": "main", "url": "https://github.com/o/r"}),
+         "auto_merge": True}]})
     assert AppConfig.model_validate(merged).recover_misplaced_result is False
 
 
@@ -218,8 +223,8 @@ def test_stale_put_bodies_rejected_not_dropped():
         reject_stale_patch({"repos": [{"name": "main", "token_env": "GITHUB_TOKEN"}]})
     with pytest.raises(ValueError, match=r"v3 \*_env"):
         reject_stale_patch({"repos": [{"name": "main", "reviewer_token_env": None}]})
-    # current bodies pass through untouched
-    reject_stale_patch({"auto_merge": False})
+    # current bodies pass through untouched (auto_merge is per-repo, ADR-0020)
+    reject_stale_patch({"repos": [{"name": "main", "auto_merge": False}]})
     reject_stale_patch({"pmos": [{"team_key": "OPS"}]})
     reject_stale_patch({"pmos": [{"name": "linear", "team_key": "OPS"}]})
 
@@ -233,6 +238,43 @@ def test_load_config_refuses_v1_file(tmp_path, monkeypatch):
         config_mod.load_config()
     # the refusal must not touch the file — the operator migrates it by hand
     assert yaml.safe_load(path.read_text())["schema_version"] == 1
+
+
+def test_load_config_warns_on_legacy_top_level_merge_doctrine(tmp_path, monkeypatch,
+                                                             caplog):
+    """ADR-0020: pre-v1 top-level auto_merge is dropped (defaults per-repo);
+    operators must see a loud warning, not a quiet no-op."""
+    import logging
+    path = tmp_path / "config" / "config.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "schema_version: 4\n"
+        "pmos:\n- name: linear\n  team_key: DEV\n"
+        "repos:\n- name: main\n  url: https://github.com/o/r\n"
+        "auto_merge: true\n"
+        "auto_resolve_merge_conflicts: false\n"
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", path)
+    with caplog.at_level(logging.WARNING, logger="devcake.config"):
+        # logger name may be the package logger — also catch root "devcake"
+        with caplog.at_level(logging.WARNING):
+            cfg = config_mod.load_config()
+    assert cfg.repos[0].auto_merge is False          # default, not migrated
+    assert cfg.repos[0].auto_resolve_merge_conflicts is True
+    text = "\n".join(r.message for r in caplog.records)
+    assert "auto_merge" in text
+    assert "DROPPED" in text or "dropped" in text.lower()
+    assert "per-repo" in text.lower() or "ADR-0020" in text
+
+
+def test_auto_merge_flipped_on_helper():
+    from devcake.config import auto_merge_flipped_on
+    prev = [{"name": "a", "auto_merge": False},
+            {"name": "b", "auto_merge": True}]
+    new = [RepoInstance(name="a", url="https://github.com/o/a", auto_merge=True),
+           RepoInstance(name="b", url="https://github.com/o/b", auto_merge=True),
+           RepoInstance(name="c", url="https://github.com/o/c", auto_merge=True)]
+    assert auto_merge_flipped_on(prev, new) == {"a", "c"}
 
 
 def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):

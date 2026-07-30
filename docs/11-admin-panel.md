@@ -114,10 +114,12 @@ Hermes-style kanban of the current poll snapshot (`GET /api/v1/missions`): cards
 
 Operator-facing repository inventory: external `RepoInstance` cards (forge, URL, secret presence, connection test via `POST /api/v1/connections/forge/{name}/test`) plus bundled internal Gitea operator repos when `internal_forge` is live. This is where repository identity lives — **not** under Configuration.
 
-Also hosts the merge posture toggles (drafted with the rest of config):
-- **`auto_merge`** — default OFF; enabling shows a confirm dialog whose body matches `AUTO_MERGE_COPY` (`lib/configLabels.js`): the **app** will merge after REVIEW approve; without a reviewer token, merges proceed without a formal forge approval; parked `DEVCAKE-MERGE` missions are re-armed; and the copy states that the toggle **gates the app only** — branch protection stops agents from merging. Only enable with branch protection + eyes open (`14` §2 zone C).
-- **`auto_resolve_merge_conflicts`** — default ON; dimmed while `auto_merge` is OFF. Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
-- **`merge_retry_window_minutes`** — default 30, min 0; dimmed while `auto_merge` is OFF.
+Each repository card hosts that repo's merge doctrine (drafted with the rest of config; ADR-0020 — not a deployment master switch):
+- **`auto_merge`** — default OFF per card; enabling shows a confirm dialog whose body matches `AUTO_MERGE_COPY` (`lib/configLabels.js`) and names the repo: the **app** will merge after REVIEW approve on **this** repo; without a reviewer token, merges proceed without a formal forge approval; parked `DEVCAKE-MERGE` missions on **this** repo are re-armed; and the copy states that the toggle **gates the app only** — branch protection stops agents from merging. Only enable with branch protection + eyes open (`14` §2 zone C).
+- **`auto_resolve_merge_conflicts`** — default ON; dimmed while this card's `auto_merge` is OFF. Tooltip explains the EXECUTE rework loop and the 2-attempt cap (`03-mission-lifecycle.md` §4.1).
+- **`merge_retry_window_minutes`** — default 30, min 0; dimmed while this card's `auto_merge` is OFF.
+
+Internal (zero-repo) missions always auto-merge; operators who want doctrine control create the repo as a config card via "gitea (internal) → + Create repository". The page-level **`attach_merged_changeset_to_pmo`** toggle remains deployment-global.
 
 ## 3. Config page — draft/Save model and sections
 

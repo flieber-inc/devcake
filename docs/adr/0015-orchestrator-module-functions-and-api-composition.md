@@ -35,7 +35,7 @@ re-inlining bodies into one class.
 
 Reaffirms ADR-0009. No `AdvisoryState` wrapper object: `breakers` is an
 injected dict aliased by `main.shared_breakers` and `OAuthManager`;
-`anomalies`/`rearm_merge_windows`/`_grace` are mutated from the composition
+`anomalies`/`rearm_merge_repos`/`_grace` are mutated from the composition
 root; and `build_managers()` reconciles managers **in place** on config reload
 precisely so advisory state survives — the manager's identity IS the state
 container. A wrapper is isomorphic to the manager and only endangers the

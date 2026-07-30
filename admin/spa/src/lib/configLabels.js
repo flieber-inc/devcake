@@ -2,11 +2,12 @@
 // drives the Save review dialog. Labels mirror the Field labels on the page.
 
 export const AUTO_MERGE_COPY =
-  "DevCake's app will merge its own pull requests to the default branch " +
-  "without a human PR click (after its REVIEW step approves). Without a " +
-  "reviewer token, merges proceed without a formal approval on the forge. " +
-  "Missions already parked at DEVCAKE-MERGE are picked back up: DevCake " +
-  "reopens their merge window and merges them as they become ready. " +
+  "DevCake's app will merge this repository's pull requests to the default " +
+  "branch without a human PR click (after its REVIEW step approves). Without " +
+  "a reviewer token, merges proceed without a formal approval on the forge. " +
+  "Missions on THIS repo already parked at DEVCAKE-MERGE are picked back up: " +
+  "DevCake reopens their merge window and merges them as they become ready " +
+  "(other repos are unaffected). " +
   "This toggle gates the app only — Devs still hold write forge tokens; " +
   "branch protection is what stops an agent from merging.";
 
@@ -27,14 +28,6 @@ const EXACT = {
     warning: (o, n) => (n === "opt_out" ? ADOPTION_COPY : null),
   },
   "cfg.poll_interval_seconds": { group: "PMO", label: "Poll interval (s)" },
-  "cfg.auto_merge": {
-    group: "Repository", label: "Auto-merge", format: onOff,
-    warning: (o, n) => (n === true ? AUTO_MERGE_COPY : null),
-  },
-  "cfg.auto_resolve_merge_conflicts": {
-    group: "Repository", label: "Auto-resolve merge conflicts", format: onOff,
-  },
-  "cfg.merge_retry_window_minutes": { group: "Repository", label: "Merge retry window (min)" },
   "cfg.attach_merged_changeset_to_pmo": {
     group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
   },
@@ -86,10 +79,28 @@ export function metaFor(path) {
              multiline: false, format: instanceNames };
   let m = path.match(/^cfg\.repos\.(\d+)\.([^.]+)$/);
   if (m) {
-    const FIELDS = { name: "Repo name", forge: "Forge", url: "Repository URL",
-                     default_branch: "Default branch", api_base: "API base" };
-    return { group: "Repository", multiline: false, format: orEmpty,
-             label: `Repo #${+m[1] + 1} · ${FIELDS[m[2]] || m[2]}` };
+    // meta objects so per-repo merge doctrine can carry format/warning
+    // (ADR-0020); plain string values remain label-only identity fields
+    const FIELDS = {
+      name: { label: "Repo name" },
+      forge: { label: "Forge" },
+      url: { label: "Repository URL" },
+      default_branch: { label: "Default branch" },
+      api_base: { label: "API base" },
+      auto_merge: {
+        label: "Auto-merge", format: onOff,
+        warning: (o, n) => (n === true ? AUTO_MERGE_COPY : null),
+      },
+      auto_resolve_merge_conflicts: {
+        label: "Auto-resolve merge conflicts", format: onOff,
+      },
+      merge_retry_window_minutes: { label: "Merge retry window (min)" },
+    };
+    const f = FIELDS[m[2]] || { label: m[2] };
+    return {
+      group: "Repository", multiline: false, format: orEmpty, ...f,
+      label: `Repo #${+m[1] + 1} · ${f.label}`,
+    };
   }
   m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base)$/);
   if (m) {

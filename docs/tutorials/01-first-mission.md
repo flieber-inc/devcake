@@ -56,7 +56,7 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 1. **Configuration → PMO** — Add PMO instance → team key → **Set** Linear API key → Test.
 2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token (and optional RO / reviewer) → Test. Repos are **not** under Configuration.
 3. **Configuration → Dev Types** — Assign harness secrets / OAuth.
-4. On **Repositories**, leave **`auto_merge` OFF** for this tutorial.
+4. On **Repositories**, leave each card's **`auto_merge` OFF** for this tutorial.
 5. Prefer different Dev Types for EXECUTE vs REVIEW (warned if shared).
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.

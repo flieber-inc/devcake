@@ -77,5 +77,6 @@ per-row and removing the last override round-trips to a clean draft.
   adds an instance dimension, not a condition language.
 - Two instances sharing one board domain but needing different staffing no
   longer motivates a second deployment — the remaining single-global knobs
-  (adoption mode, auto_merge, concurrency) are listed in docs/16 as open
-  per-instance candidates, deliberately unbundled from this change.
+  (adoption mode, concurrency) are listed in docs/16 as open per-instance
+  candidates, deliberately unbundled from this change. **`auto_merge` moved
+  to per-repo doctrine** (ADR-0020), not per-PMO.

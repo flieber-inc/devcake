@@ -619,10 +619,11 @@ long-lived incomplete dialect API.
 - **Priority-conditional Dev Type assignment** (e.g. Urgent EXECUTE → stronger
   Dev Type — relaxes 1 Mission Type → 1 Dev Type). The **instance** dimension
   shipped as ADR-0019 (per-PMO override rows); a condition language did not.
-- **Per-instance doctrine knobs beyond assignments** — adoption mode,
-  auto_merge, concurrency are still deployment-global; ADR-0019 lists them as
-  open candidates if two boards ever need different merge doctrine (until
-  then: second deployment).
+- **Per-instance doctrine knobs beyond assignments** — adoption mode and
+  concurrency are still deployment-global; ADR-0019 lists them as open
+  candidates if two boards ever need different intake/concurrency doctrine
+  (until then: second deployment). **`auto_merge` is per-repo** (ADR-0020),
+  not a per-PMO candidate.
 - Admin panel **OIDC/SSO** (basic auth remains the dedicated-host story —
   `14`).
 - **First-class OTel metrics layer** — when dashboards need pre-aggregation

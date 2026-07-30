@@ -11,7 +11,7 @@ manager's identity is the state container — ``breakers`` is an injected dict
 shared across managers, and ``build_managers()`` reconciles managers in place
 on config reload precisely so this state survives. The advisory set:
 ``_grace``/``_grace_next``, ``breakers``, ``blocked_reasons``, ``cycles``,
-``anomalies``, ``merge_handoffs``, ``rearm_merge_windows``, ``needs_human``,
+``anomalies``, ``merge_handoffs``, ``rearm_merge_repos``, ``needs_human``,
 ``_merge_window_closed``.
 
 Tests construct via the real ``__init__`` (``tests/fakes.make_mission_manager``
@@ -98,12 +98,13 @@ class MissionManager:
         # by the merge sweep for every open-PR DEVCAKE-MERGE mission whose
         # deferred-retry window is not actively running; pruned in sweeps()
         self.merge_handoffs: dict[str, str] = {}
-        # one-shot: set by the config PUT when auto_merge flips OFF→ON
-        # (founder request 2026-07-15) — the next sweep opens a fresh
-        # deferred-merge window for every parked DEVCAKE-MERGE mission, so
-        # the flip retroactively covers the operator's existing merge queue.
-        # In-memory: a restart between flip and sweep loses it (re-toggle).
-        self.rearm_merge_windows: bool = False
+        # one-shot: set by the config PUT when a repo's auto_merge flips
+        # OFF→ON (founder request 2026-07-15, per-repo ADR-0020) — the next
+        # sweep opens a fresh deferred-merge window for parked DEVCAKE-MERGE
+        # missions whose m.repo is in this set, so the flip retroactively
+        # covers that repo's merge queue. In-memory: a restart between flip
+        # and sweep loses it (re-toggle).
+        self.rearm_merge_repos: set[str] = set()
         # pmo_id → "needs human" note (advisory; admin Needs-Human panel).
         # Rebuilt every sweep from the DEVCAKE-NEEDS-HUMAN label — declarative,
         # restart-safe, self-pruning. Same "text — url" convention as

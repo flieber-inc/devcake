@@ -22,10 +22,13 @@ def _ext(name="main"):
 
 
 def _internal_inst(name):
-    # internal repo names carry hyphens by design — synthesized, not operator input
+    # internal repo names carry hyphens by design — synthesized, not operator input.
+    # Always auto-merge (ADR-0020) — match dispatch.resolve_repo_live provision.
     return RepoInstance.model_construct(
         name=name, forge="gitea", url=f"http://gitea:3300/devcake-internal/{name}.git",
-        default_branch="main", api_base=None)
+        default_branch="main", api_base=None,
+        auto_merge=True, auto_resolve_merge_conflicts=True,
+        merge_retry_window_minutes=30)
 
 
 def test_rebuild_preserves_internal_registrations():

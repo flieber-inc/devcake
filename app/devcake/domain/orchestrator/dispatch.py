@@ -1102,10 +1102,16 @@ async def resolve_repo_live(mgr, mission, all_runs=None):
         adapter = make_gitea_adapter(creds.clone_url, svc.get("app_token"),
                                      svc.get("reviewer_token"))
         # model_construct: internal repo names carry hyphens / exceed the
-        # operator-name pattern by design — they are synthesized, not input
+        # operator-name pattern by design — they are synthesized, not input.
+        # Always auto-merge: the zip deliverable only posts after merge, and
+        # no human watches the internal Gitea. Operators who want doctrine
+        # control create the repo as a config card ("gitea (internal) →
+        # + Create repository") instead (ADR-0020).
         inst = RepoInstance.model_construct(
             name=creds.repo_name, forge="gitea", url=creds.clone_url,
-            default_branch="main", api_base=None)
+            default_branch="main", api_base=None,
+            auto_merge=True, auto_resolve_merge_conflicts=True,
+            merge_retry_window_minutes=30)
         mgr.forges.register_internal(creds.repo_name, inst, adapter)
         return creds.repo_name
 

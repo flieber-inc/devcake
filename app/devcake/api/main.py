@@ -573,7 +573,7 @@ async def apply_profile(name: str):
     return profiles_service.apply_profile_body(
         name, config=config, dev_types=dev_types, store=store,
         reload=reload_connections, shared_breakers=shared_breakers,
-        forge_breakers=forge_runtime.breakers)
+        forge_breakers=forge_runtime.breakers, managers=managers)
 
 
 @app.post("/api/v1/profiles/{name}/rename")

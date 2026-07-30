@@ -51,14 +51,19 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
                 await tracking_sweep(mgr, m)
         except Exception:
             log.exception("sweep failed for %s", m.key)
-    # the auto_merge OFF→ON re-arm is one-shot: every parked mission got its
-    # fresh window entry this cycle (or was already being driven)
-    mgr.rearm_merge_windows = False
+    # the auto_merge OFF→ON re-arm is one-shot: every parked mission whose
+    # repo was in the set got its fresh window entry this cycle (or was
+    # already being driven)
+    mgr.rearm_merge_repos.clear()
 
 
 async def merge_sweep(mgr, m: Mission) -> None:
     forge = mgr.forges.get(m.repo) if m.repo else None
-    if forge is None:
+    # forges + instances are co-populated; missing instance still VISIBLE-gates
+    # so a desync never AttributeErrors mid-sweep (forge_runtime.py contract)
+    inst = (mgr.forges.instance(m.repo)
+            if forge is not None and m.repo else None)
+    if forge is None or inst is None:
         # the mission's repo vanished (or resolution gates it): skip with a
         # VISIBLE reason — a parked DEVCAKE-MERGE mission must never wedge
         # silently (resolution-failure contract, domain/forge_runtime.py)
@@ -100,12 +105,12 @@ async def merge_sweep(mgr, m: Mission) -> None:
         # (_deferred_merge_retry pops the entry while it drives the window)
         mgr.merge_handoffs[m.pmo_id] = (
             f"{m.key}: awaiting human merge — {state.url}")
-        if mgr.config.auto_merge:
-            await _deferred_merge_retry(mgr, m, pr, state.url)
+        if inst.auto_merge:
+            await _deferred_merge_retry(mgr, m, pr, state.url, inst)
 
 
 async def _deferred_merge_retry(mgr, m: Mission, pr,
-                                pr_url: str) -> None:
+                                pr_url: str, inst) -> None:
     """docs/03 §4.1 deferred-merge window: while `devcake:merge-retry` is
     the latest merge-state marker in the feed, keep watching the PR each
     sweep cycle — merge when it becomes ready, route to EXECUTE if a
@@ -114,9 +119,11 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
     marker entry's PMO timestamp (no local clocks), so the window is
     live-tunable and restart-safe. The label stays DEVCAKE-MERGE
     throughout: a manual human merge mid-window is caught by the
-    external-merge branch above on the next cycle."""
+    external-merge branch above on the next cycle. ``inst`` is the
+    mission's RepoInstance (per-repo doctrine, ADR-0020)."""
+    rearm = m.repo in mgr.rearm_merge_repos
     if m.pmo_id in mgr._merge_window_closed:
-        if not mgr.rearm_merge_windows:
+        if not rearm:
             return  # window known closed — skip the per-cycle feed read
         mgr._merge_window_closed.discard(m.pmo_id)   # re-read the feed once
     forge = mgr.forges.get(m.repo) if m.repo else None
@@ -136,13 +143,14 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             retry_ts = max(retry_ts, ts) if retry_ts else ts
         if MERGE_HANDOFF_MARKER in body:
             handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
-    window = mgr.config.merge_retry_window_minutes
+    window = inst.merge_retry_window_minutes
     if not retry_ts or (handoff_ts and handoff_ts >= retry_ts):
-        if mgr.rearm_merge_windows and window > 0:
-            # auto_merge flipped OFF→ON with this mission parked (founder
-            # request 2026-07-15): open a fresh window. The feed entry IS the
-            # window state (marker timestamp = start), so this is restart-
-            # safe and visible; the next cycle reads it and drives the merge.
+        if rearm and window > 0:
+            # auto_merge flipped OFF→ON for this mission's repo with it
+            # parked (founder request 2026-07-15, per-repo ADR-0020): open
+            # a fresh window. The feed entry IS the window state (marker
+            # timestamp = start), so this is restart-safe and visible; the
+            # next cycle reads it and drives the merge.
             await mgr._feed(
                 m.pmo_id, "issue",
                 f"⏳ Auto-merge is now ON — DevCake resumes driving the merge "
@@ -184,8 +192,8 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         except Exception:  # noqa: BLE001 — a failed merge IS the signal here: a real conflict routes/hands off, anything else is logged transient and next cycle retries
             if verdict is False:
                 span.set_attribute("devcake.outcome", "conflict")
-                if not await review._maybe_route_conflict_to_execute(mgr, 
-                        m.pmo_id, m.key, pr_url, LABEL_MERGE):
+                if not await review._maybe_route_conflict_to_execute(
+                        mgr, m.pmo_id, m.key, pr_url, LABEL_MERGE, inst):
                     span.set_attribute("devcake.outcome", "conflict_handoff")
                     await mgr._feed(
                         m.pmo_id, "issue",

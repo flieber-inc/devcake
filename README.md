@@ -100,7 +100,7 @@ Three different things are easy to conflate. Only the forge enforces the last:
 
 | Knob | Who it constrains | What it does |
 |---|---|---|
-| **`auto_merge`** (default **off**) | The **app** only | Off → app never calls merge; parks at `DEVCAKE-MERGE` until a real merge is observed. On → app squash-merges after REVIEW approve. |
+| **`auto_merge`** (per repo, default **off**) | The **app** only | Off on a repo → app never merges that repo's PRs; parks at `DEVCAKE-MERGE` until a real merge is observed. On → app squash-merges after REVIEW approve. (ADR-0020) |
 | **Forge tokens** (Repositories page) | Devs + app | **Write** token: EXECUTE push + open PR; app also uses it to **merge** when auto-merge is on. **RO** token (recommended): non-EXECUTE stages clone without write. **Reviewer** token (optional, **app-only** — never injected into a Dev): formal PR/MR approval under branch protection. |
 | **Branch protection** (on the forge UI) | Everyone with a token | Server rules on the **default branch** (require a PR, require ≥1 approval, no bypass for the Dev account). Token scopes usually **cannot** separate “push a feature branch” from “merge to main” — protection is what does. |
 
@@ -110,8 +110,8 @@ Three different things are easy to conflate. Only the forge enforces the last:
 2. **REVIEW** Dev judges the PR (`result.json`). It does **not** formally approve on the forge. With an RO token set, it does not even hold write credentials.
 3. **App** (on approve): posts the PR comment; if a **reviewer** token is set, files a **formal forge approval** with that token (different identity from the PR author — needed when the forge blocks self-approval).
 4. Then either:
-   - **`auto_merge` off:** park at `DEVCAKE-MERGE`; **you** merge on the forge; the app marks Done when it sees the merge.
-   - **`auto_merge` on:** the app **merges with the write token** (not the reviewer token), then Done.
+   - **mission's repo `auto_merge` off:** park at `DEVCAKE-MERGE`; **you** merge on the forge; the app marks Done when it sees the merge.
+   - **mission's repo `auto_merge` on:** the app **merges with the write token** (not the reviewer token), then Done.
 
 Without branch protection, a Dev that holds the write token can often merge (or push) despite `auto_merge` being off — playbooks say not to; that is guidance, not enforcement. Full contract: [`docs/14-security.md`](docs/14-security.md) §2 zone C · setup steps: [`docs/13-deployment.md`](docs/13-deployment.md) §8a · token details: [`docs/06-forge-adapter.md`](docs/06-forge-adapter.md) §4–5.
 
@@ -204,7 +204,7 @@ into `.env`, optionally bakes, then runs compose. Control ports bind
    write account must not bypass) — see [merge control](#how-forge-merges-are-controlled-first-deploy).
 3. Repositories: write token; prefer **RO** for non-EXECUTE and a separate
    **reviewer** token (app-only formal approval).
-4. Leave **`auto_merge` off** until you want the **app** to merge after REVIEW.
+4. Leave each repo's **`auto_merge` off** until you want the **app** to merge that repo after REVIEW.
 5. Prefer a different Dev Type for REVIEW than EXECUTE.
 
 1. [Tutorial 1 — first mission](docs/tutorials/01-first-mission.md)

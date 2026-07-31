@@ -233,14 +233,16 @@ async def put_assignments(body: dict, *, config, dev_types):
     unknown = {a.dev_type for a in new.values()} - set(dev_types)
     if unknown:
         raise HTTPException(422, f"unknown dev types: {sorted(unknown)}")
-    # Independent review is default config, not a hard invariant (ISSUES #19)
+    # Shared EXECUTE/REVIEW Dev Type is a performance tip (skills / identifying
+    # prompt), not a security control — the reviewer token is. Soft advisory only.
     warnings: list[str] = []
     ex = new.get("EXECUTE")
     rev = new.get("REVIEW")
     if ex and rev and ex.dev_type == rev.dev_type:
         msg = (f"EXECUTE and REVIEW share Dev Type {ex.dev_type!r} — "
-               "independent AI review is not enforced")
-        log.warning(msg)
+               "optional: a distinct REVIEW type can carry review-focused "
+               "skills and prompt (not a security control)")
+        log.info(msg)
         warnings.append(msg)
     config.assignments = new
     save_config(config)

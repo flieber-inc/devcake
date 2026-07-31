@@ -41,8 +41,11 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 
 - Multi-operator RBAC or OIDC-as-default (HTTP basic auth is the control-plane
   auth story for dedicated host / loopback — `11-admin-panel.md`, `14` §4).
-- Hard enforcement of branch protection, RO forge PATs, or independent REVIEW
-  Dev Types — **recommended + warned**, operator-enforced (`14` §8).
+- Hard enforcement of branch protection, RO forge PATs, or the reviewer token
+  (`14` §8): RO missing → dismissable `forge-write-token` warning; unprotected
+  default branch → advisory; reviewer token is **recommended** for formal forge
+  approval but not a health warning today. (Staffing different Dev Types for
+  EXECUTE vs REVIEW is a performance choice, not a security gate.)
 - Treating prompt injection as a product defect — ticket + repo content are the
   interface; agents are powerful by design (`14` §3).
 - Sandboxed multi-tenant Dev isolation or least-privilege multi-customer
@@ -117,7 +120,7 @@ A concrete end-to-end pass, naming the governing document at each hop:
 6. **The app finalizes**: posts `1_ONBOARD.md` and the token report to the Linear activity feed, then — after re-reading the Mission live (compare-and-transition, `04-orchestrator.md` §4) — adds the `DEVCAKE-PLAN` label.
 7. **Next poll cycle**: status `started` + `DEVCAKE-PLAN` ⇒ Mission Type **PLAN** ⇒ judgment produces `PLAN.md`; the app uploads it, swaps the label to `DEVCAKE-EXECUTE`.
 8. **EXECUTE**: implementer (Grok Build) implements the plan on branch `devcake/LINEAR-ENG-142` (instance-prefixed — `mission_branch(instance, key)`), opens a PR (`06-forge-adapter.md`), and the app swaps the label to `DEVCAKE-REVIEW`.
-9. **REVIEW:** by **recommended** config, a *different* Dev Type than EXECUTE reviews the PR (warned if shared — not a hard gate; `14` §8). The REVIEW **Dev** only returns judgment in `result.json`. On approval, the **app** posts the PR comment and, if a **reviewer token** is configured (app-only, never injected into a Dev), files a formal forge approval; then **merge precedes Done**: with the mission's repo `auto_merge` **off** (default on config cards) the Mission carries `DEVCAKE-MERGE` until a merge is observed (normally a human — the app does not merge; Dev write tokens are stopped by **forge branch protection**, not by this toggle — `14` §2 zone C); with it on the app squash-merges using the **write** token (not the reviewer token) and only then marks **Done**. On rejection, the report is posted and the label swaps back to `DEVCAKE-EXECUTE`.
+9. **REVIEW** (always a pipeline stage — not optional): the Dev assigned to REVIEW judges the PR and returns only judgment in `result.json` (seeded default: `judgment`; staffing a different Dev Type than EXECUTE is for role-focused skills/prompts, not a security control). On approval, the **app** posts the PR comment and, if a **reviewer token** is configured (app-only, never injected into a Dev — the security-relevant second identity), files a formal forge approval; then **merge precedes Done**: with the mission's repo `auto_merge` **off** (default on config cards) the Mission carries `DEVCAKE-MERGE` until a merge is observed (normally a human — the app does not merge; Dev write tokens are stopped by **forge branch protection**, not by this toggle — `14` §2 zone C); with it on the app squash-merges using the **write** token (not the reviewer token) and only then marks **Done**. On rejection, the report is posted and the label swaps back to `DEVCAKE-EXECUTE`.
 10. **Throughout**, every hop is one connected OpenTelemetry trace (dispatch → container → finalization), visible in OpenObserve (`12-observability.md`).
 
 ## 6a. Onboarding path (30 minutes for a new engineer)

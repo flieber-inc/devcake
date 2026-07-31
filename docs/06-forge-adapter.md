@@ -125,7 +125,7 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 
 GitHub and Gitea forbid approving a PR with the account that opened it (`self_approval_blocked=True`). GitLab allows self-approval by default (`self_approval_blocked=False`). Resolution (confirmed with the founder):
 
-1. **Optional reviewer token** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`.
+1. **Reviewer token (recommended for formal forge approval under branch protection)** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`. App-only — never injected into a Dev. Not the same as staffing a different Dev Type for the REVIEW stage.
 2. **Without it** — `approve()` returns `False` (no error): the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
 3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
 
@@ -135,7 +135,7 @@ GitHub and Gitea forbid approving a PR with the account that opened it (`self_ap
 |---|---|---|
 | **Write / access** (`token`) | EXECUTE Dev (always); non-EXECUTE only if `token_ro` is unset; **app** always has it for forge side effects | Push feature branch, open/update PR; app **squash-merge** when `auto_merge` is on |
 | **Read-only** (`token_ro`) | Non-EXECUTE stages when set (recommended) | Clone/read only — health warns `forge-write-token:{repo}` if missing (`14` §8) |
-| **Reviewer** (`reviewer_token`) | **App only** — never injected into a Dev container | Formal PR/MR approval after REVIEW Dev returns approve; enables protected-branch auto-merge without self-approval |
+| **Reviewer** (`reviewer_token`, recommended for formal approval) | **App only** — never injected into a Dev container | Formal PR/MR approval after REVIEW Dev returns approve; enables protected-branch auto-merge without self-approval |
 
 Do not conflate REVIEW Dev judgment with forge approval: the Dev returns
 `result.json`; the app calls `approve()` with the reviewer token (or skips

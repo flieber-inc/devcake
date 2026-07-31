@@ -1,4 +1,4 @@
-"""Dispatch chokepoint tripwire (independent review residual G).
+"""Dispatch chokepoint tripwire.
 
 Every Dev ACL user create + executor.start MUST go through
 ``RunBootstrap.launch`` so clear-runs can serialize on ``dispatch_lock``.

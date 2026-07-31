@@ -30,10 +30,11 @@ plainly: it is *why* the output can be trusted, not fine print to walk back
 
 The second pillar is **autonomy with receipts.** Every step posts its transcript
 and token bill to the ticket; dispatches, kills, sweeps, and PMO writes are
-traced. **Recommended** config uses a different Dev Type for REVIEW than
-EXECUTE (warned when shared — not a hard invariant). **Unless you turn on
-auto-merge**, a human merges before Done. Autonomy you can audit is the only
-autonomy worth shipping — receipts do not make agents injection-proof (`14` §3).
+traced. REVIEW is always a pipeline stage; the **reviewer token** (app-only
+formal forge approval) is the security-relevant second identity when branch
+protection requires it. **Unless you turn on auto-merge**, a human merges
+before Done. Autonomy you can audit is the only autonomy worth shipping —
+receipts do not make agents injection-proof (`14` §3).
 
 **Every sentence that claims autonomy must earn a trust clause** (§1a).
 
@@ -46,12 +47,12 @@ Any pitch, README line, or launch post that claims autonomy, “reviewed,” or
 2. **Ticket and repo writers are in the trust boundary** — they can steer agents that hold forge/model credentials.
 3. **Default-branch protection is the operator’s job** — the app warns; the forge enforces.
 4. **Human merge unless auto-merge** — default off; enabling is an explicit choice.
-5. **Independent AI review is recommended configuration**, not a guaranteed invariant.
+5. **Reviewer token is recommended for formal forge approval** under branch protection (app-only; never given to a Dev) — not the same as staffing a different Dev Type for the REVIEW stage.
 
 Forbidden overclaims:
 
 - “Credentials never leave your machine” without noting Dev open egress / injection residual.
-- “Independent review by default” as a hard product guarantee.
+- Implying that a separate REVIEW Dev Type is a security control or second identity on the forge.
 - Implying sandboxed multi-customer isolation.
 
 ### 1b. When to use it — and when not (normative for all outward copy)
@@ -92,29 +93,28 @@ both lists recognizable within the first minute.
 
 **Ten seconds:**
 > Write a ticket in your task board. An AI crew sizes it up, plans it, builds
-> it; a second role can review it like a skeptical senior engineer; you approve
-> a finished pull request. Every step comes with a receipt. You run it on your
-> own machine.
+> it, and a review step judges the PR; you approve a finished pull request.
+> Every step comes with a receipt. You run it on your own machine.
 
 **Thirty seconds (the elevator):**
 > You know how software teams track work — a board of tickets, each one a task?
 > DevCake staffs that board with AI developers. You write a ticket in plain
 > language and stay in the tool you already use; DevCake triages it, plans it,
-> writes the code, and — when you assign a separate review role — a second AI
-> looks at the work skeptically before you merge. What comes back is a pull
-> request plus a receipt for every step and what it cost. It runs on a machine
-> you control, with your own AI subscriptions. Nothing reaches main without
-> your green light unless you turn on auto-merge and accept that path. Your
-> board is the interface — no chat UI to babysit. And you own the shop:
-> branch protection, who can write tickets, and the merge button.
+> writes the code, and a review step judges the PR before anything is treated
+> as shippable. What comes back is a pull request plus a receipt for every
+> step and what it cost. It runs on a machine you control, with your own AI
+> subscriptions. Nothing reaches main without your green light unless you turn
+> on auto-merge and accept that path. Your board is the interface — no chat UI
+> to babysit. And you own the shop: branch protection, who can write tickets,
+> the reviewer token when you want formal forge approval, and the merge button.
 
 **The kitchen-table version (zero tech vocabulary):**
 > It's a robot work crew for my to-do list. I write down what I want in plain
-> words. The robots figure out how big the job is, make a plan, and do the
-> work — and I can have another robot inspect it before I say yes. I look at
-> the finished thing and approve it. Every job comes with an itemized receipt.
-> It runs on my computer; people who can edit the to-do list can steer the
-> robots, so I keep that list tight.
+> words. The robots figure out how big the job is, make a plan, do the work,
+> and inspect the result before I say yes. I look at the finished thing and
+> approve it. Every job comes with an itemized receipt. It runs on my computer;
+> people who can edit the to-do list can steer the robots, so I keep that list
+> tight.
 
 **Two minutes (engineers):** the thirty-second pitch, then:
 > Under the hood it's deliberately boring: your PMO system (Linear in v0) is
@@ -138,13 +138,13 @@ both lists recognizable within the first minute.
 |---|---|
 | **Roof (motto)** | *Your board is the interface.* (board-native day-to-day Mission work — and you own the trust envelope) |
 | **Pillar 1 — Board-native Mission work** | Your task board is the day-to-day Mission interface. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. The admin UI remains the configuration and operations surface. |
-| **Pillar 2 — Autonomy with receipts** | Every step posts transcript + token bill. Traced and audited. Independent AI review is **recommended config** (warned if violated). “Done” never lies about merge. |
+| **Pillar 2 — Autonomy with receipts** | Every step posts transcript + token bill. Traced and audited. REVIEW is always a pipeline stage; formal forge approval uses the **reviewer token** when configured. “Done” never lies about merge. |
 | **Pillar 3 — Your box, your rules** | Self-hosted on a **dedicated** machine; you own the trust envelope — team membership, branch protection, the merge button, backups (`18`). Mix Claude/Grok/Codex per role. Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
 | **Foundation** | Verified, not vibed: acceptance path tickets → PRs, GitHub, GitLab, and Gitea, invariant tests, redaction of app-mediated posts. Security contract in `14`. |
 
 ## 4. Tone guide
 
-- **Concrete beats grand.** "A second AI reviews the work" — never "leveraging
+- **Concrete beats grand.** "A review step judges the PR" — never "leveraging
   multi-agent orchestration."
 - **Banned words:** revolutionary, supercharge, unleash, 10x, game-changing,
   "AI-powered" as an adjective.

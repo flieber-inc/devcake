@@ -21,8 +21,10 @@ on the default branch), **who can write tickets** on each configured PMO
 instance (Linear team, Gitea Issues board, …), the per-repo app-side **`auto_merge`
 default off** (the control plane will not merge for you — it does **not** strip
 merge capability from the Dev; see §2 zone C), and optional tighter credentials
-(read-only PAT, independent REVIEW Dev Type). The app **warns** on weak posture;
-it does not nanny-gate most of those choices. See §8.
+(read-only PAT; **reviewer token** for formal forge approval). The app **warns**
+on weak posture; it does not nanny-gate most of those choices. See §8.
+(Assigning different Dev Types to EXECUTE vs REVIEW is a **performance** staffing
+choice — skills and identifying prompts — not a supply-chain control.)
 
 If that contract is wrong for your environment, do not run DevCake there.
 
@@ -103,7 +105,7 @@ LLM, and not by pretending tickets are sterile.
 | Who can push to the repo the agent clones | **Operator** | — |
 | Per-repo `auto_merge` off (**app** does not merge that repo) | **Operator** (default off per card) | Confirm dialog when enabling; **not** a Dev capability fence — see below |
 | Read-only forge PAT for non-EXECUTE stages | **Operator** (recommended) | Dismissable `forge-write-token` warning if missing |
-| Independent REVIEW Dev Type (different model/role than EXECUTE) | **Operator** (recommended) | API/UI warning if shared — not a hard 422 |
+| Reviewer token (app-only; different account from write) | **Operator** (recommended for protected-branch formal approval) | Used by the app after REVIEW approve — never injected into a Dev; **no** dismissable health warning if missing (unlike RO) |
 | LEGAL_OUTCOMES + INV-4 (Dev never writes PMO; forged outcomes cannot approve own work via app deputy path) | **Product (hard)** | Enforced |
 
 #### Per-repo `auto_merge` gates the app, not the Dev (normative)
@@ -137,7 +139,7 @@ What is **not** hard from the toggle alone:
 |---|---|---|
 | **Write / access** (`token`) | **EXECUTE** always; other stages only if no RO PAT is set | PR comments, state, and **squash-merge** when `auto_merge` is on |
 | **Read-only** (`token_ro`, recommended) | Non-EXECUTE stages (ONBOARD / PLAN / REVIEW / MAPPER) | — (clone/read only in-container) |
-| **Reviewer** (`reviewer_token`, optional) | **Never** — app-side only | **Formal** PR/MR approval (`ForgePort.approve`) after REVIEW Dev returns approve |
+| **Reviewer** (`reviewer_token`, recommended for formal forge approval) | **Never** — app-side only | **Formal** PR/MR approval (`ForgePort.approve`) after REVIEW Dev returns approve |
 
 REVIEW’s job is judgment (`result.json`). Formal forge approval and merge are **app** side effects, never something the REVIEW container is handed credentials to do with the reviewer token.
 
@@ -355,7 +357,6 @@ for **app-mediated** posts to PMO systems and forges, not a substitute for zone 
 | `repo-read-only:{repo}` | **Warning** in `security_warnings` (dismissable) | Repo is in a PMO work set but stores only a RO token (no write) — EXECUTE will fail at push; move it to reference repos or add a write token |
 | `gui-secrets-basic-auth` | **Info** in `security_warnings` | Reminder of control-plane posture |
 | Unprotected default branch | **Advisory** via `/health` `forge_protection` (SPA alert) — **not** in the `security_warnings` list | Operator must fix forge-side |
-| EXECUTE and REVIEW share Dev Type | **Warning** (SPA) | Independent review recommended, not enforced |
 | `secret_env` value missing **and** referenced by an mcp_setup_command | **Gate** (dispatch refused) | `blocked_reasons`/health names the var; self-heals the poll cycle after the value is pasted. Declared-but-unreferenced = warning only (log + ✗ on the Config card) |
 | `auto_merge` enable | Confirm dialog | Operator accepts **app**-driven merge after REVIEW (not a Dev sandbox) |
 | `LEGAL_OUTCOMES` violations | **Hard** | Illegal outcomes not applied |
@@ -380,8 +381,10 @@ dismiss.
    (§2 zone C, `13` §8a).
 5. Leave **`auto_merge` off** until you understand forge approval + reviewer
    token (off = app will not merge; protect the branch so Devs cannot either).
-6. Prefer a **read-only forge PAT** for non-EXECUTE and a **different** Dev Type
-   for REVIEW than EXECUTE.
+6. Prefer a **read-only forge PAT** for non-EXECUTE and a **reviewer token**
+   (app-only, different account) for formal PR/MR approval under branch
+   protection. REVIEW is always a pipeline stage; staffing which Dev Type runs
+   it is not a security control.
 7. Strong bootstrap passwords in `.env` (empty/`change-me*` refuse boot unless
    `DEVCAKE_ALLOW_INSECURE=1` — local sandbox only).
 8. Read `/health`: **`security_warnings`**, **`forge_protection`**,
@@ -434,8 +437,7 @@ occurrence.
 |---|---|---|---|
 | Unprotected default branch | Direct or weak path to main (agent **or** app) | **Operator** | Verify at the forge (§9): protection on **and** Dev account non-bypass — `/health` is advisory |
 | Relying on `auto_merge` off alone | Agent still holds write token + CLI | **Operator** (must also protect branch) | Accepted — off gates the app only |
-| `auto_merge` **on** + weak review / no reviewer token | App merges after REVIEW without formal forge approval | Operator | Verify — reviewer token + forge review rules (§9) |
-| Shared EXECUTE/REVIEW identity | Weaker second look | Operator | Verify — independent identity (§9); dismissing the §8 warning = accepting |
+| `auto_merge` **on** + no reviewer token / weak forge review rules | App merges after REVIEW without formal forge approval | Operator | Verify — reviewer token + forge review rules (§9) |
 | Human merges a bad PR | Bad code lands via the legitimate merge path | Operator (review process) | Weather — process risk outside the app |
 
 **Read-across:** the sharp edges are mostly **accepted** properties of a

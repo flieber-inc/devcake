@@ -62,9 +62,10 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
   On: after REVIEW approves, the **app** merges and missions go straight to
   Done. Off does **not** strip merge rights from Dev tokens — **branch
-  protection** does that (`14` §2 zone C). Enable only with protection, a clear
-  review setup, and eyes open. Independent REVIEW Dev Type is **recommended**,
-  not enforced.
+  protection** does that (`14` §2 zone C). Enable only with protection, a
+  **reviewer token** (app-only formal approval), and eyes open. REVIEW always
+  runs as a pipeline stage; which Dev Type staffs it is a performance choice
+  (skills / identifying prompt), not a security control.
 
 ## Config profiles — save and switch whole setups
 

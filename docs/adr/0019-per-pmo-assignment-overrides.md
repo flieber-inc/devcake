@@ -60,8 +60,9 @@ instance-name-keyed sibling structure can drift against the instance list.
 The Assignments section keeps the global table ("global defaults") and adds
 one override block per configured PMO card: a tri-state select per mission
 type whose inherit option names the effective global Dev Type, an args input
-only when overridden, and the review-independence (EXECUTE ≠ REVIEW) and
-harness-mismatch advisories evaluated per instance on **effective** rows.
+only when overridden, and the role-focus (EXECUTE vs REVIEW share a Dev Type —
+performance tip: skills/prompt focus) and harness-mismatch advisories
+evaluated per instance on **effective** rows.
 The draft seeds `assignments: {}` on every PMO card at load so diffs stay
 per-row and removing the last override round-trips to a clean draft.
 

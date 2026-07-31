@@ -73,7 +73,7 @@ What you own as the operator — once at setup, and recurring — fits on one pa
 | You set up | The system does |
 |---|---|
 | One or more **PMO instances** (teams) | Polls, managed labels, feed posts, adoption modes |
-| Zero or more **external repos** | Clone, branch, PR; zero uses the bundled Gitea; optional read-only and reviewer tokens |
+| Zero or more **external repos** | Clone, branch, PR; zero uses the bundled Gitea; **RO** + **reviewer** tokens recommended (write always for work repos) |
 | **Work** vs **reference** repos per PMO | Routing targets vs read-only consultation clones |
 | **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional mapper) |
 | **Skills** per Dev Type (skill store) | Curated Claude Code skills seeded into an editable Gitea repo, installed into agent sessions |
@@ -90,9 +90,12 @@ What you own as the operator — once at setup, and recurring — fits on one pa
    route by instance config and optional markers; reference repos can ride along
    read-only for every stage.
 
-Independent AI review (a different Dev Type for REVIEW than EXECUTE) is
-**recommended configuration**, warned when shared — not a hard product
-invariant. How merges are actually controlled is next.
+REVIEW is always a pipeline stage (judgment in `result.json`). The
+**reviewer token** — app-only, different forge account — is what is
+**recommended** when branch protection requires formal approval; it is never
+injected into a Dev. Staffing a different Dev Type for REVIEW than EXECUTE is
+optional and about role focus (skills, identifying prompt), not security. How
+merges are actually controlled is next.
 
 ### How forge merges are controlled (first deploy)
 
@@ -101,7 +104,7 @@ Three different things are easy to conflate. Only the forge enforces the last:
 | Knob | Who it constrains | What it does |
 |---|---|---|
 | **`auto_merge`** (per repo, default **off**) | The **app** only | Off on a repo → app never merges that repo's PRs; parks at `DEVCAKE-MERGE` until a real merge is observed. On → app squash-merges after REVIEW approve. (ADR-0020) |
-| **Forge tokens** (Repositories page) | Devs + app | **Write** token: EXECUTE push + open PR; app also uses it to **merge** when auto-merge is on. **RO** token (recommended): non-EXECUTE stages clone without write. **Reviewer** token (optional, **app-only** — never injected into a Dev): formal PR/MR approval under branch protection. |
+| **Forge tokens** (Repositories page) | Devs + app | **Write** token: EXECUTE push + open PR; app also uses it to **merge** when auto-merge is on. **RO** token (recommended): non-EXECUTE stages clone without write. **Reviewer** token (**recommended** for formal PR/MR approval under branch protection; **app-only** — never injected into a Dev). |
 | **Branch protection** (on the forge UI) | Everyone with a token | Server rules on the **default branch** (require a PR, require ≥1 approval, no bypass for the Dev account). Token scopes usually **cannot** separate “push a feature branch” from “merge to main” — protection is what does. |
 
 **Happy path with protection + tokens configured:**
@@ -168,8 +171,8 @@ on the app volume — never echoed back.
 
 Agents are powerful by design. The app enforces outcome legality and never lets
 Devs write the PMO directly; it **warns** on weak posture (write token on every
-stage, unprotected default branch, shared EXECUTE/REVIEW). It does not replace
-forge branch protection or careful team membership.
+stage, unprotected default branch). It does not replace forge branch protection
+or careful team membership.
 
 → [`docs/14-security.md`](docs/14-security.md) (contract) · checklist before first
 real EXECUTE: §9.
@@ -202,10 +205,9 @@ into `.env`, optionally bakes, then runs compose. Control ports bind
 1. Sandbox (or tightly controlled) Linear team — ticket writers = agent trust.
 2. On the forge: **protect the default branch** (require PR + ≥1 approval; Dev
    write account must not bypass) — see [merge control](#how-forge-merges-are-controlled-first-deploy).
-3. Repositories: write token; prefer **RO** for non-EXECUTE and a separate
-   **reviewer** token (app-only formal approval).
+3. Repositories: write token; prefer **RO** for non-EXECUTE and a **reviewer**
+   token (app-only formal approval — the security-relevant second identity).
 4. Leave each repo's **`auto_merge` off** until you want the **app** to merge that repo after REVIEW.
-5. Prefer a different Dev Type for REVIEW than EXECUTE.
 
 1. [Tutorial 1 — first mission](docs/tutorials/01-first-mission.md)
 2. [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)

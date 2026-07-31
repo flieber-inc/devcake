@@ -315,8 +315,8 @@ export default function ReposPage({ onHealthChange }) {
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
                   refKey={`repo:${repo.name}:token_ro`} paste optional
                   locked={!nameLocked(repo.name, idx)} />
-                <SecretField label="Reviewer token" hint="Optional 2nd account → formal PR approvals"
-                  help="Optional second account's token. When set, REVIEW posts a formal approval from that account before merging."
+                <SecretField label="Reviewer token" hint="Recommended 2nd account → formal PR approvals"
+                  help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not the same as staffing a different Dev Type for REVIEW."
                   refKey={`repo:${repo.name}:reviewer_token`} paste optional
                   locked={!nameLocked(repo.name, idx)} />
               </div>

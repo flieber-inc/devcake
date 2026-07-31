@@ -290,8 +290,9 @@ Recommended operator setup:
 2. **Write token** for EXECUTE (push + open PR); app reuses it for merge if
    that repo's `auto_merge` is later enabled (Repos page, per card — ADR-0020).
 3. **RO token** for non-EXECUTE (recommended).
-4. **Reviewer token** from a **different** account (app-only): formal approval
-   so “require ≥1 approval” can pass without self-approval.
+4. **Reviewer token** from a **different** account (**recommended**, app-only):
+   formal approval so “require ≥1 approval” can pass without self-approval.
+   Not the same as which Dev Type runs the REVIEW stage.
 5. Leave each repo's **`auto_merge` off** until you want the app to
    squash-merge that repo after REVIEW.
 

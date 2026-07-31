@@ -7,8 +7,10 @@ These rules are **mandatory** unless the user explicitly overrides them for a ta
 
 The **product security contract** is [`docs/14-security.md`](docs/14-security.md).
 Do not write docs, README, or PR copy that claims a stronger posture (multi-tenant
-sandbox, guaranteed independent review, secrets never leave the host under
-injection, hard-gated branch protection) than that file. Design choices
+sandbox, secrets never leave the host under injection, hard-gated branch
+protection) than that file. Do not treat staffing a different Dev Type for
+REVIEW as a security control — the security-relevant second identity is the
+**reviewer token** (app-only); REVIEW is always a pipeline stage. Design choices
 (dedicated host, adult-operator prompt trust, warnings vs gates) are intentional.
 
 ## Admin SPA design system (mandatory)

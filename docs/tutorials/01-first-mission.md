@@ -54,10 +54,11 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 ### Step 1b — Secrets and connections
 
 1. **Configuration → PMO** — Add PMO instance → team key → **Set** Linear API key → Test.
-2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token (and optional RO / reviewer) → Test. Repos are **not** under Configuration.
+2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token;
+   prefer **RO** for non-EXECUTE and a **reviewer** token (app-only, different
+   account) for formal forge approval → Test. Repos are **not** under Configuration.
 3. **Configuration → Dev Types** — Assign harness secrets / OAuth.
 4. On **Repositories**, leave each card's **`auto_merge` OFF** for this tutorial.
-5. Prefer different Dev Types for EXECUTE vs REVIEW (warned if shared).
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
@@ -84,8 +85,7 @@ On Configuration → Dev Types, **implementer** → **Connect via OAuth…** —
 | **Branch protection** on default branch (forge UI: require PR + ≥1 approval; Dev account cannot bypass) | Primary containment — forge enforces merges, not `auto_merge` (`14` zone C, `13` §8a) |
 | `auto_merge` still **off** | App will not merge; you merge; Done only after a real merge |
 | Write token set; **RO** forge token set (recommended) | EXECUTE pushes/opens PR; non-EXECUTE should not hold write |
-| **Reviewer** token from a different account (optional) | App-only formal forge approval — never given to a Dev; useful if you later enable auto-merge under protection |
-| EXECUTE ≠ REVIEW Dev Type (recommended) | Independent second look (judgment only — not forge approval) |
+| **Reviewer** token from a different account (recommended for formal forge approval) | App-only — never given to a Dev; second identity under branch protection / later auto-merge |
 | Health `security_warnings` read, not dismissed unread | Advisory posture (`14` §8) |
 
 Mental model: EXECUTE opens the PR → REVIEW Dev judges → app may formally

@@ -13,7 +13,7 @@ from ..model import MissionRef
 from ..run import Run, utcnow
 from . import transitions
 from .feed import _blockquote, _stage_of
-from .markers import FEED_INLINE_MAX
+from .markers import FEED_INLINE_MAX, REPLY_MARKER
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -83,6 +83,13 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                                         payload.get("last_message_md"))
             run.finalized_steps.append("transcript")
             mgr.runs.store.save(run)
+
+        # 1b — the Slack-bound reply (ADR-0014 D2 quarantine still applies).
+        # Its own comment, marker first, so devcake-concierge can find the
+        # answer without parsing our transcript header or opening the zip.
+        await _checkpoint(mgr, run, "reply", lambda: _post_reply(
+            mgr, run, payload.get("last_message_md"),
+        ))
 
         if _pre_wipe(mgr, run):
             log.info("abort finalize mid-flight pre-wipe %s", run.run_id)
@@ -325,6 +332,27 @@ async def _post_transcript(mgr, run: Run, transcript: str,
         # inline dump; externalization stays on as the size second-chance
         await mgr._feed(run.mission_pmo_id, "issue", body)
     mgr._audit(run.mission_pmo_id, "transcript", name)
+
+
+async def _post_reply(mgr, run: Run, last_message: str | None) -> None:
+    """The answer, marked for devcake-concierge to carry into Slack.
+
+    No last message (old-image payload) or an empty one ⇒ no comment: an empty
+    reply must never become an empty Slack post. Issues only — a project feed
+    has no Slack thread waiting on it.
+    """
+    if run.pmo_kind != "issue" or not (last_message or "").strip():
+        return
+    # redact BEFORE truncate, same rule as the transcript comment: a clipped
+    # half-secret no longer matches its own pattern.
+    body = redact(last_message)
+    if len(body) > FEED_INLINE_MAX:
+        body = body[:FEED_INLINE_MAX] + "\n\n… (truncated — full text in the attachment)"
+    await mgr._feed(
+        run.mission_pmo_id, "issue",
+        f"{REPLY_MARKER}\n\n" + _blockquote(body),
+        externalize=False,
+    )
 
 
 def _token_report_md(run: Run, tr: dict) -> str:

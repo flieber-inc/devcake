@@ -58,6 +58,14 @@ _SWAP_MARKER_STAGE: dict[str, str | None] = {
 # inline-last-message truncation bound.
 FEED_INLINE_MAX = 2048
 
+# The Slack-bound answer, carried on its own issue comment for devcake-concierge
+# (docs/00 §2: the PMO is the only interface; the concierge imports nothing of
+# ours). The marker must be the FIRST thing in the comment — the concierge
+# matches on `startswith`, which is what keeps a relayed Slack message that
+# happens to quote this string from being mistaken for our reply and echoed
+# back into the thread.
+REPLY_MARKER = "<!-- DEVCAKE-REPLY -->"
+
 # docs/03 §4.1 — merge-failure state markers, counted/located from the feed
 # so the state stays fully PMO-derivable (no local clocks or counters). The
 # comments carrying them are short by construction (< FEED_INLINE_MAX): the

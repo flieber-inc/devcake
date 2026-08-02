@@ -187,9 +187,15 @@ export default function RunsPage() {
         </p>
       )}
       <Card className="p-4">
-        <div className="mb-3 flex items-center gap-3">
-          <span className="relative">
-            <Input className="w-64 pr-7"
+        {/* Every control sits in a fixed-width shrink-0 wrapper: the shared
+            Input/Select carry w-full (a width class on them loses the
+            Tailwind conflict), and without shrink-0 a crowded flex row
+            crushes the filter to a sliver. flex-wrap + ml-auto keep the
+            pagination cluster right-aligned even when it wraps to its own
+            line on narrow viewports. */}
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <span className="relative w-64 shrink-0">
+            <Input className="pr-7"
               placeholder="Filter by mission (e.g. DEV-17)"
               aria-label="Filter runs by mission key"
               value={filter}
@@ -203,31 +209,38 @@ export default function RunsPage() {
               </button>
             )}
           </span>
-          <Select className="w-36" aria-label="Filter by PMO connector"
-            value={pmoRef}
-            onChange={(e) => { setPmoRef(e.target.value); setOffset(0); }}>
-            <option value="">all PMOs</option>
-            {(data.pmo_refs || []).map((p) => (
-              <option key={p} value={p}>{p}</option>
-            ))}
-          </Select>
-          <Input type="date" className="w-36" aria-label="From date (UTC)"
-            title="From (UTC calendar day)" value={fromDate}
-            onChange={(e) => { setFromDate(e.target.value); setOffset(0); }} />
-          <Input type="date" className="w-36" aria-label="To date (UTC, inclusive)"
-            title="To (UTC calendar day, inclusive)" value={toDate}
-            onChange={(e) => { setToDate(e.target.value); setOffset(0); }} />
-          <span className="text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
-          <span className="grow" />
-          <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE))}>newer</Button>
-          <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-            {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}
+          <span className="w-40 shrink-0">
+            <Select aria-label="Filter by PMO connector"
+              value={pmoRef}
+              onChange={(e) => { setPmoRef(e.target.value); setOffset(0); }}>
+              <option value="">all PMOs</option>
+              {(data.pmo_refs || []).map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </Select>
           </span>
-          <Button kind="ghost" size="sm" disabled={offset + PAGE >= data.total}
-            onClick={() => setOffset(offset + PAGE)}>
-            older <ChevronRight size={13} aria-hidden />
-          </Button>
+          <span className="w-40 shrink-0">
+            <Input type="date" aria-label="From date (UTC)"
+              title="From (UTC calendar day)" value={fromDate}
+              onChange={(e) => { setFromDate(e.target.value); setOffset(0); }} />
+          </span>
+          <span className="w-40 shrink-0">
+            <Input type="date" aria-label="To date (UTC, inclusive)"
+              title="To (UTC calendar day, inclusive)" value={toDate}
+              onChange={(e) => { setToDate(e.target.value); setOffset(0); }} />
+          </span>
+          <span className="whitespace-nowrap text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
+          <span className="ml-auto flex shrink-0 items-center gap-3">
+            <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE))}>newer</Button>
+            <span className="whitespace-nowrap text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+              {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}
+            </span>
+            <Button kind="ghost" size="sm" disabled={offset + PAGE >= data.total}
+              onClick={() => setOffset(offset + PAGE)}>
+              older <ChevronRight size={13} aria-hidden />
+            </Button>
+          </span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[64rem] text-left text-sm">

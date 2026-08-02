@@ -20,6 +20,7 @@ const SUITES = [
   "profiles.mjs",
   "pmo_intake.mjs",
   "markdown.mjs",
+  "repos.mjs",
   "costs.mjs",
 ];
 

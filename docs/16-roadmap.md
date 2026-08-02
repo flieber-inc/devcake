@@ -401,6 +401,16 @@ vocabulary at the top of this file).
 - **Security-contract reading aid** (PR #53) + roadmap/observability alignment
   (PRs #51–#52): docs/14 §0a buckets, deferred iron-proxy radar. **built**
   (docs).
+- **Dev toolchain floor** (ADR-0023, 2026-08-02): capability floors baked
+  into the shared Dev base — playwright's pinned headless Chromium + system
+  libs (class A: user-space can download a browser but never apt its shared
+  libraries), build-essential, Node in EVERY harness image (grok Devs could
+  not `npm run dev` before), uv + PATH/`.npmrc` guarantees for root-free
+  self-provisioning (class B), and the turn-saving conveniences + pandoc/
+  poppler/pandas/openpyxl document-and-spreadsheet floor (class C, founder
+  decision). Build-time smoke proves the floor AS uid 1000 (headless shell
+  must launch). Out by doctrine: sudo, docker, DBs, vendor CLIs,
+  LibreOffice. Base ~1.4 GB, shared layers. **built**.
 - **In-container run continuation** (ADR-0022, 2026-08-02): the
   narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
   ~50% of long weak-model runs, hours lost late) is nudged instead of failed:

@@ -227,9 +227,38 @@ DevCake is **not** a multi-tenant sandbox product (`14-security.md` §6). Isolat
 - **MCP / extra CLI args:** admin-configured free-text commands run with `shell=True` / harness flags before/with the agent — **admin-equivalent ACE** inside the disposable container (`11-admin-panel.md`).
 - **Resources:** Dagu 2.10.5 step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container (**engineering debt**, `14` §11). Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps).
 
+### 7a. Toolchain floor (ADR-0023, normative — identical across harness images)
+
+The base image bakes **capability floors, not tool inventories** — classified
+by who is able to provide the capability, since the mission space is
+open-ended and runtime `apt` rightly does not exist (no root):
+
+- **Class A (root-only — baked or impossible):** `build-essential` (native
+  pip/npm builds), and the browser stack: playwright's pinned headless
+  Chromium shell + every system library it loads, at
+  `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` (world-readable), with the
+  `playwright` CLI on PATH at the same pin (`playwright --version` tells a
+  Dev which version finds the baked browser; a mismatched install falls back
+  to downloading its own — degraded, never broken).
+- **Class B (self-provisioning enablers):** Node/npm/npx (shared base — every
+  harness, so a JS repo's dev server always starts), pip/venv, `uv`, and a
+  PATH that honors user installs: `~/.local/bin` and `~/.npm-global/bin`
+  (dev-owned `.npmrc` prefix — runtime `npm i -g` needs no root).
+- **Class C (high-frequency conveniences — turn economics, ADR-0022):** jq,
+  ripgrep, unzip/zip, less, procps, file, sqlite3, and the
+  document/spreadsheet floor: pandoc, poppler-utils, pandas + openpyxl in
+  the system Python.
+
+Deliberately absent: sudo, docker CLI, databases/services, cloud/vendor
+CLIs, media tooling (`adr/0023` records the rationale for each). The long
+tail is per-Dev-Type via `mcp_setup_commands` or runtime user-space
+installs. The base build ends with a smoke RUN **as uid 1000** proving the
+floor (headless shell launches, imports resolve, binaries exist) — CI's
+image bake asserts it on every PR.
+
 ## 8. Building a new Dev image (checklist)
 
 1. Start from the harness template's base image (`08-harness-templates.md` §2).
-2. Include: `git`, the harness CLI, the shared entrypoint (Redis protocol speaker), an OTel-emitting wrapper.
+2. Include: `git`, the harness CLI, the shared entrypoint (Redis protocol speaker), an OTel-emitting wrapper — and the §7a toolchain floor (build from the shared `base` stage and it is inherited).
 3. Honor every env var in §3; produce every artifact in §1; exit per §4.
 4. Verify with the M1 hello-world DAG and the contract test battery (`16-roadmap.md`).

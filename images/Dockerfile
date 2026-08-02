@@ -16,6 +16,10 @@ ARG NODE_IMAGE=node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc
 # Pinned harness CLIs (npm view @anthropic-ai/claude-code / @openai/codex).
 ARG CLAUDE_CODE_VERSION=2.1.210
 ARG CODEX_VERSION=0.144.4
+# Toolchain floor (ADR-0023): playwright pinned to the SPA suite's family
+# (admin/spa/package.json playwright-core) so the whole repo speaks one
+# browser stack; python doc/spreadsheet libs pinned like the entrypoint deps.
+ARG PLAYWRIGHT_VERSION=1.61.1
 
 # ── Node toolchain (copied into node-based harnesses; no nodesource mess) ────
 FROM ${NODE_IMAGE} AS node-tools
@@ -34,11 +38,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # One layer: system packages + GitHub CLI + GitLab CLI (docs/06 §7).
 # Sorted packages; apt lists wiped in the same RUN (Docker best practices).
+# ADR-0023 capability floor, class A (root-only: compilers + system libs) and
+# class C (high-frequency conveniences — every run that bootstraps ripgrep by
+# hand is burning the turns ADR-0022 exists to save): build-essential unlocks
+# native pip/npm builds; pandoc + poppler-utils are the document/spreadsheet
+# floor (LibreOffice rejected: ~700 MB for fidelity nobody asked for).
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
+        file \
         git \
         gnupg \
+        jq \
+        less \
+        pandoc \
+        poppler-utils \
+        procps \
+        ripgrep \
+        sqlite3 \
+        unzip \
+        zip \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
          -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -53,22 +73,74 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f /tmp/glab.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Python runtime deps for the shared entrypoint (Redis Streams + OTEL).
+# Python runtime deps for the shared entrypoint (Redis Streams + OTEL), plus
+# the ADR-0023 spreadsheet/document floor (pandas/openpyxl — models reach for
+# these before anything else) and uv (root-free env management for Devs).
 # Cache mount speeds rebuilds; mount is never committed into the image layer.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         redis==5.2.1 \
         opentelemetry-api==1.29.0 \
         opentelemetry-sdk==1.29.0 \
-        opentelemetry-exporter-otlp-proto-http==1.29.0
+        opentelemetry-exporter-otlp-proto-http==1.29.0 \
+        openpyxl==3.1.5 \
+        pandas==2.2.3 \
+        uv==0.5.11
+
+# Node toolchain in the SHARED base (ADR-0023, class B): the tool floor must
+# be harness-identical — grok Devs could not even `npm run dev` before this —
+# and playwright needs it. HOME is still /root here, so root's npm never
+# reads the dev user's .npmrc prefix redirect (set below).
+COPY --from=node-tools /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-tools /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# Browser floor (ADR-0023, class A — user-space can download a browser but
+# can NEVER apt-install its shared libraries): playwright's pinned headless
+# shell + its system deps, in a world-readable shared path so every user and
+# every matching-version playwright finds it without re-downloading. The
+# `playwright` CLI itself goes on PATH globally at the same pin.
+ARG PLAYWRIGHT_VERSION
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps chromium-headless-shell \
+    && chmod -R a+rX /opt/pw-browsers \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/*
 
 # Non-root harness user (docs/07 §7; Claude Code refuses root).
 # Create user before setting HOME so installers (e.g. Grok CLI) can write $HOME.
+# The .npmrc prefix makes RUNTIME `npm i -g` a user-space self-serve (root
+# builds are unaffected: they run with HOME=/root above).
 RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
-    && mkdir -p /workspace \
+    && mkdir -p /workspace /home/dev/.npm-global /home/dev/.local/bin \
+    && printf 'prefix=/home/dev/.npm-global\n' > /home/dev/.npmrc \
     && chown -R dev:dev /home/dev /workspace
 
-ENV HOME=/home/dev
+ENV HOME=/home/dev \
+    PATH="/home/dev/.local/bin:/home/dev/.npm-global/bin:${PATH}"
+
+# Build-time proof the floor actually works AS THE DEV USER — above all that
+# the headless shell LAUNCHES (loads every shared lib; the exact failure the
+# unbaked images hit) and the doc/spreadsheet imports resolve. The shell
+# binary name depends on which mirror playwright used (classic build:
+# chrome-linux/headless_shell; Chrome-for-Testing fallback:
+# chrome-headless-shell-linux64/chrome-headless-shell) — the runtime registry
+# resolves both, so the smoke must accept both (measured: local bake pulled
+# classic, CI pulled CfT, same playwright pin).
+RUN su dev -s /bin/sh -c ' \
+        set -e; \
+        node --version && npx --version; \
+        playwright --version; \
+        shell="$(find /opt/pw-browsers -type f \
+            \( -name headless_shell -o -name chrome-headless-shell \) \
+            | head -1)"; \
+        test -n "$shell" || { echo "no headless shell under /opt/pw-browsers" >&2; exit 1; }; \
+        "$shell" --version; \
+        python -c "import pandas, openpyxl"; \
+        uv --version; \
+        command -v jq rg pandoc pdftotext sqlite3 unzip zip gcc make >/dev/null'
 
 # Shared entrypoint façade + Dev-side package (domain/fault pure; more slices later).
 # Package root is `/` so `import devcake_dev` works; ENTRYPOINT path unchanged.
@@ -111,13 +183,11 @@ LABEL org.opencontainers.image.title="devcake-dev-claude-code"
 
 ARG CLAUDE_CODE_VERSION
 
-# Official Node image toolchain — smaller/faster than nodesource setup scripts.
-COPY --from=node-tools /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-tools /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-    && npm cache clean --force
+# Node lives in base (ADR-0023). HOME=/root: base sets HOME=/home/dev, and
+# root's npm would otherwise read the dev user's .npmrc prefix redirect and
+# install the CLI into /home/dev/.npm-global root-owned.
+RUN HOME=/root npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && HOME=/root npm cache clean --force
 
 USER dev
 ENV DEVCAKE_HARNESS=claude-code
@@ -129,17 +199,14 @@ LABEL org.opencontainers.image.title="devcake-dev-codex"
 
 ARG CODEX_VERSION
 
-COPY --from=node-tools /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-tools /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && npm install -g "@openai/codex@${CODEX_VERSION}" \
-    && npm cache clean --force
+# Node lives in base (ADR-0023); HOME=/root for the same .npmrc reason as claude.
+RUN HOME=/root npm install -g "@openai/codex@${CODEX_VERSION}" \
+    && HOME=/root npm cache clean --force
 
 USER dev
 ENV DEVCAKE_HARNESS=codex
 
-# ── grok-build (no Node; CLI installed as the harness user) ─────────────────
+# ── grok-build (CLI installed as the harness user; Node now via base) ───────
 FROM base AS grok-build
 
 LABEL org.opencontainers.image.title="devcake-dev-grok-build"
@@ -148,5 +215,6 @@ USER dev
 # Official installer (docs/08 §2; CLI verified ~v0.2.93)
 RUN curl -fsSL https://x.ai/cli/install.sh | bash
 
-ENV PATH="/home/dev/.grok/bin:/home/dev/.local/bin:${PATH}" \
+# base's PATH already carries ~/.local/bin and ~/.npm-global/bin (ADR-0023)
+ENV PATH="/home/dev/.grok/bin:${PATH}" \
     DEVCAKE_HARNESS=grok-build

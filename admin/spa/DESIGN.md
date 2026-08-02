@@ -71,7 +71,7 @@ renders `LimitsSection` + `TrafficSection` — the merged Limits & traffic
 view). Every section is a component in `src/components/`: `DevTypesSection`,
 `SkillsSection`, `AssignmentsSection`, `PromptsSection`, `ProfilesSection`,
 `LimitsSection`, `TrafficSection`. `PmoSection` renders on its own page
-(`#/pmo`, Adapters group) — same shared draft, not a Config section. Most
+(`#/pmo`, Adapters item) — same shared draft, not a Config section. Most
 sections pull the shared draft themselves via
 `useSharedDraft()` (ConfigDraftContext); `PromptsSection` is the exception —
 it takes `cfg`/`setField`/`devTypeNames` as props from the dispatcher. Either

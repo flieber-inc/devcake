@@ -54,11 +54,11 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
 
 ## The two big switches
 
-- **`adoption_mode`** (the PMO page, Adapters group) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
+- **`adoption_mode`** (the PMO page, under Adapters) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** (per repo card on the Repositories page, Adapters group) — off (default): the
+- **`auto_merge`** (per repo card on the Repositories page, under Adapters) — off (default): the
   **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
   On: after REVIEW approves, the **app** merges and missions go straight to
   Done. Off does **not** strip merge rights from Dev tokens — **branch

@@ -16,7 +16,7 @@ import { CONFIG_SECTIONS } from "../lib/nav.js";
 // harnesses and health snapshot come from the shared provider (v0.1.1 B4);
 // the Repositories and PMO pages edit the SAME draft, and DraftChrome
 // (App-level) owns Save/DirtyBar/NavGuard. PMO left this page for #/pmo
-// under the Adapters group (2026-08-02 nav reorg).
+// under the Adapters item (2026-08-02 nav reorg).
 export default function ConfigPage({ section, onHealthChange }) {
   const { dr, loadErr } = useSharedDraft();
   // page-level error line — sections report async failures here (delete /

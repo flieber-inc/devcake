@@ -38,11 +38,23 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   useEffect(() => {
     const names = repoNamesKey ? repoNamesKey.split(",").filter(Boolean) : [];
     if (!names.length) { setRepoHasToken({}); return; }
-    const q = names.map((n) => `repo:${n}:token`).join(",");
-    get(`/secrets-check?conn=${encodeURIComponent(q)}`)
-      .then((r) => setRepoHasToken(Object.fromEntries(
-        names.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present]))))
-      .catch(() => setRepoHasToken({}));
+    // CHUNKED (bulk-scale 2026-08-02): one GET for 350 repos built a ~10KB
+    // request line, past nginx's 8KB limit. ≤40 names per request keeps
+    // URLs short, and a failed chunk marks only ITS repos unknown-truthy
+    // (previously any failure disabled EVERY work chip).
+    let live = true;
+    const chunks = [];
+    for (let i = 0; i < names.length; i += 40) chunks.push(names.slice(i, i + 40));
+    Promise.all(chunks.map((chunk) => {
+      const q = chunk.map((n) => `repo:${n}:token`).join(",");
+      return get(`/secrets-check?conn=${encodeURIComponent(q)}`)
+        .then((r) => Object.fromEntries(
+          chunk.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present])))
+        .catch(() => Object.fromEntries(chunk.map((n) => [n, true])));
+    })).then((parts) => {
+      if (live) setRepoHasToken(Object.assign({}, ...parts));
+    });
+    return () => { live = false; };
   }, [repoNamesKey, secretsEpoch]);
   const [testResult, setTestResult] = useState({});
   // PMO cards added/renamed this session stay name-editable even when their
@@ -253,12 +265,22 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                   unavailableNote="no Access token stored — usable only as a reference repo"
                   firstBadge=" · default"
                   onChange={(next) => setField(`cfg.pmos.${idx}.repos`, next)} />
+                {dr.errors[`cfg.pmos.${idx}.repos`] && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    ✗ {dr.errors[`cfg.pmos.${idx}.repos`]}
+                  </p>
+                )}
                 <RepoChips label="Reference repos"
                   help="Read-only consultation material (docs sources, style guides) cloned into EVERY stage's workspace alongside the mission's repository. Never a work target — markers naming one gate. Multiple supported."
                   all={cfg.repos} selected={inst.reference_repos || []}
                   excluded={inst.repos || []}
                   excludedNote="work repo"
                   onChange={(next) => setField(`cfg.pmos.${idx}.reference_repos`, next)} />
+                {dr.errors[`cfg.pmos.${idx}.reference_repos`] && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    ✗ {dr.errors[`cfg.pmos.${idx}.reference_repos`]}
+                  </p>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>

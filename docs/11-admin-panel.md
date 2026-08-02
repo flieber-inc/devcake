@@ -115,6 +115,8 @@ Hermes-style kanban of the current poll snapshot (`GET /api/v1/missions`): cards
 
 Operator-facing repository inventory: external `RepoInstance` cards (forge, URL, secret presence, connection test via `POST /api/v1/connections/forge/{name}/test`) plus bundled internal Gitea operator repos when `internal_forge` is live. This is where repository identity lives — **not** under Configuration.
 
+Past **30 repo cards** the page engages its bulk mode (2026-08-02): a name-filter input (debounced, ✕ clear) with a render cap of 30 cards + a "Showing 30 of N — refine the filter" note (below the cap the input stays hidden, so a leftover filter can never hide cards invisibly), and the cards' token ✓/✗ states come from **one chunked `secrets-check` batch** for the rendered set instead of per-field fetches (~4 requests per card previously — ~1,400 at the 350-repo stress test).
+
 The header ⋯ menu offers **Remove unused repositories…** (2026-08-01 incident hygiene): computes — from the *draft*, so unsaved PMO (de)selections count — every repo card no PMO selects as work or reference, and removes them all in one confirmed draft edit. Like per-card removal, nothing changes until Save; saving deletes the dropped repos' stored tokens (`connections/repo-{name}.json`) via the ordinary config PUT. `/health.unused_repos` (`{count, names, configured}`) feeds the matching dismissable Overview alert.
 
 Each repository card hosts that repo's merge doctrine (drafted with the rest of config; ADR-0020 — not a deployment master switch):
@@ -132,14 +134,20 @@ Internal (zero-repo) missions always auto-merge; operators who want doctrine con
 selects multiple entries from a catalog/list — the PMO **repo set**,
 **reference repos**, Dev Type **skills**, and any future such field — uses
 the shared toggle-chip control
-(`admin/spa/src/components/SelectionChips.jsx`): ordered rounded chips
-(click to toggle; selection order = click order where order carries meaning,
-e.g. the repo set's `· default` first-badge — normalize order in `onChange`
-where it doesn't, the draft diff is order-sensitive), a selected entry whose
-option no longer exists renders **red/strikethrough with ✕** (visible and
-removable — a stale name must never wedge the Save PUT), and an explicit
-empty-state note. Do not introduce checkbox lists or multi-select dropdowns
-for these.
+(`admin/spa/src/components/SelectionChips.jsx`). Since the 2026-08-02
+bulk-scale rework: **selected chips render first, in selection order**
+(the order is load-bearing where a `firstBadge` marks it — the repo set's
+first entry is the default routing target, and every non-first selected
+chip carries a pin "make default" affordance that moves it to the front);
+the unselected **catalog** renders below, and past ~12 options it gains a
+**search box that narrows the catalog chips** (≤30 matches shown + an "N
+more — refine" note) — search narrows the chip control, it never replaces
+it. Callers for whom order is meaningless normalize it in `onChange` (the
+draft diff is order-sensitive). A selected entry whose option no longer
+exists renders **red/strikethrough with ✕** (visible and removable — a
+stale name must never wedge the Save PUT); dangling-name draft errors also
+render inline under the repo chips. Explicit empty-state note required. Do
+not introduce checkbox lists or multi-select dropdowns for these.
 
 Sections (one section per `#/config/<id>` view, from `nav.js`, in this order): **Dev Types · Mission Types · Skills · Prompts · Limits & traffic · Profiles & Export**. Repositories and PMO connections are **not** Configuration sections — they live under the sidebar's Adapters group (`#/repos`, `#/pmo`) and edit the same draft. The `limits` view renders BOTH the Limits card and the Traffic card (merged 2026-08-02; `#/config/traffic` redirects here).
 

@@ -352,12 +352,14 @@ async def list_missions():
 async def list_runs(limit: int = 25, offset: int = 0,
                     mission_key: str | None = None, pmo_ref: str | None = None,
                     created_from: str | None = None,
-                    created_to: str | None = None):
+                    created_to: str | None = None, sort: str | None = None,
+                    dir: str | None = None, group_by: str | None = None):
     from .runs_service import list_runs_response
     return list_runs_response(store, config.cost_inputs, limit=limit,
                               offset=offset, mission_key=mission_key,
                               pmo_ref=pmo_ref, created_from=created_from,
-                              created_to=created_to)
+                              created_to=created_to, sort=sort,
+                              direction=dir, group_by=group_by)
 
 
 @app.get("/api/v1/runs/{run_id}")

@@ -20,6 +20,15 @@ export const ADOPTION_COPY =
 const onOff = (v) => (v ? "on" : "off");
 const orEmpty = (v) => (v === null || v === undefined || v === "" ? "(empty)" : String(v));
 const lines = (v) => ((v || []).length ? (v || []).join("\n") : "(none)");
+// rate-card rows diff atomically (the Cost Inputs modal PUTs the whole
+// list) — render them as readable per-1M lines, never [object Object]
+const rateRows = (v) =>
+  ((v || []).length
+    ? (v || []).map((r) =>
+        `${r.model_prefix}: $${r.input_per_mtok} in / ` +
+        `$${r.cache_read_per_mtok} cr / $${r.cache_write_per_mtok} cw / ` +
+        `$${r.output_per_mtok} out per 1M`).join("\n")
+    : "(none)");
 
 const EXACT = {
   "cfg.adoption_mode": {
@@ -39,6 +48,13 @@ const EXACT = {
   "cfg.review_loop_warning_every": { group: "Limits", label: "Loop warning every N rejections" },
   "cfg.recover_misplaced_result": {
     group: "Limits", label: "Accept misplaced result files", format: onOff,
+  },
+  "cfg.cost_inputs.override_native": {
+    group: "Cost", label: "Operator rates override displayed cost", format: onOff,
+  },
+  "cfg.cost_inputs.rates": {
+    group: "Cost", label: "Cost rate card ($/1M tokens)",
+    format: rateRows, multiline: true,
   },
 };
 
@@ -61,7 +77,7 @@ const ASSIGNMENT_FIELDS = {
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
   "Traffic control", "PMO", "Repository", "Dev Types", "Assignments",
-  "Prompts", "Limits", "Other",
+  "Prompts", "Limits", "Cost", "Other",
 ];
 
 // the instance LISTS diff atomically when a card is added/removed — show the

@@ -26,7 +26,8 @@ _TOKEN_SUMS = ("input_tokens", "output_tokens", "cache_read_tokens",
 
 _LIST_FIELDS = {"run_id", "mission_key", "mission_type", "dev_type", "seq",
                 "state", "created_at", "started_at", "ended_at", "error",
-                "error_class", "attempt_counted", "verdict"}
+                "error_class", "attempt_counted", "verdict",
+                "continuations_used"}
 
 _DETAIL_FIELDS = _LIST_FIELDS | {
     "schema_version", "mission_pmo_id", "pmo_kind", "pmo_ref", "repo_ref",

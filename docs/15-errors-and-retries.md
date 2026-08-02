@@ -23,7 +23,7 @@
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.144.4, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
-| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid; app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 only, so it covers neither |
+| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid **after the in-container continuation budget is spent, when the loop is enabled** (ADR-0022; `07-dev-runtime.md` §5a); app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 only, so it covers neither |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
 | `EXTERNAL_TRANSITION` | human changed status/label mid-run (`04-orchestrator.md` §4) | **not an error** — first-class outcome |
@@ -50,7 +50,7 @@
 | `LABEL_CONFLICT` | n/a — skipped until resolved | no | — | derivation unschedulable reason only (`gate_map` / `GET /api/v1/missions`); **no** PMO comment, **no** metric |
 | `EXTERNAL_TRANSITION` | n/a | no | — | explanatory PMO comment; run's artifacts already posted |
 
-Retries of Dev work are never in-place: a failed attempt ends the container; the Mission's label never advanced (INV-3), so the next poll cycle re-derives and re-dispatches with `attempt_of_step + 1`.
+Retries of Dev work are never in-place: a failed attempt ends the container; the Mission's label never advanced (INV-3), so the next poll cycle re-derives and re-dispatches with `attempt_of_step + 1`. **One deliberate carve-out (ADR-0022):** an in-container *continuation* is in-place BY DESIGN — but it is not a retry of a failed attempt. It happens *before* the attempt fails, only on a clean exit with no fault (the row-9 landing), inside one Run, bounded by `cfg.max_continuations` and the watchdog. A crashed, faulted, or auth-failed container still dies exactly as this section describes, and attempt counting never sees continuations.
 
 ## 2a. "Raise `--max-turns`" is not universal advice
 
@@ -98,6 +98,13 @@ a run with `--max-turns 30` halts at the same 16 because the cap is never reache
 (`grok_loop_cap30`), while the same lane with *varying* tool calls runs past 16
 and honours a cap of 20 (`grok_loop_varying_cap20`). Raising the cap changes
 nothing about this failure; §2a's advice is for real cap stops (exit 16).
+
+**The lever that does exist (ADR-0022).** This landing is exactly the
+continuation loop's trigger: with `cfg.max_continuations > 0` the run is
+nudged — session-resume first, then a fresh session in the same workspace —
+before it is allowed to fail as exit 11, and the exit-11 artifact now names
+the terminal event (`evidence.terminal`: `stopReason`, `num_turns`) so a
+truncated-looking run is distinguishable from a clean-but-early stop.
 
 **How to recognise it.** In this order, because only the first two are visible in
 DevCake:

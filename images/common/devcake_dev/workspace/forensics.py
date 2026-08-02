@@ -1,6 +1,7 @@
 """Workspace forensics and result.json recovery (ADR-0018)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -73,6 +74,30 @@ def bad_output_reason(exc: BaseException) -> str:
     if isinstance(exc, OSError):
         return "unreadable"
     return "invalid"
+
+
+def workspace_fingerprint(workdir, runner=None):
+    """Cheap progress hash for the continuation loop's stall detection
+    (ADR-0022): sha256 over `git rev-parse HEAD` + NUL + `git status
+    --porcelain`. None on ANY failure — "progress unknown", which the policy
+    treats as NOT zero progress (a broken git must never escalate a mode,
+    let alone end a run). Known blind spot, documented in the ADR: edits to
+    an already-dirty file leave porcelain output unchanged; worst case is
+    one unnecessary resume→fresh escalation, never a stop."""
+    runner = runner or subprocess.run
+    try:
+        head = runner(["git", "-C", str(workdir), "rev-parse", "HEAD"],
+                      capture_output=True, text=True, timeout=10)
+        status = runner(["git", "-C", str(workdir), "status", "--porcelain"],
+                        capture_output=True, text=True, timeout=10)
+    except Exception:  # noqa: BLE001 — progress unknown, not a run failure
+        return None
+    if head.returncode != 0 or status.returncode != 0:
+        return None
+    digest = hashlib.sha256(head.stdout.encode("utf-8", "replace"))
+    digest.update(b"\0")
+    digest.update(status.stdout.encode("utf-8", "replace"))
+    return digest.hexdigest()
 
 
 def _git_tracked(workdir, path, runner=None) -> bool:

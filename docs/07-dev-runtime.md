@@ -82,6 +82,9 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` | 2 | The Dev's git identity (from the forge descriptor). |
 | `DEVCAKE_FORGE_CLI_ENVS` | 2 | Comma-joined env-var names the entrypoint mirrors `DEVCAKE_FORGE_TOKEN` into for the forge CLI (from the descriptor's `cli_token_envs`, e.g. `GH_TOKEN`). |
 | `DEVCAKE_EXTRA_ARGS` | 2 | Per-Mission-Type extra CLI args from `assignments` (`02-domain-model.md` §9), appended verbatim to the harness invocation (`08-harness-templates.md` §1). May be empty. |
+| `DEVCAKE_RECOVER_MISPLACED_RESULT` | 2 | Misplaced-result recovery flag (ADR-0018, `cfg.recover_misplaced_result`). Wire format `"1"`/`""` — the entrypoint reads it with bare truthiness, so `str(bool)` would be unswitchable. |
+| `DEVCAKE_CONTINUATION_POLICY` | 2 | Continuation policy string (ADR-0022, `cfg.continuation_policy`): `auto \| resume-only \| fresh-only \| off`. Parsed defensively in-container (unknown → `auto`). |
+| `DEVCAKE_MAX_CONTINUATIONS` | 2 | Continuation budget as `str(int)` (ADR-0022, `cfg.max_continuations`); `"0"`/absent/garbage → loop off. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OTLP endpoint = the stack's `otel-collector` on `devcake_runtime`. **Unauthenticated**: Devs hold no OO credentials at all; the collector alone authenticates upstream (`12-observability.md` §1, ISSUES #13). |
 | *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
 | *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active work repo's token for this run). |
@@ -97,7 +100,7 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 |---|---|---|
 | 0 | Success — `result.json` present and valid | — |
 | 10 | Harness exited nonzero / crashed | `DEV_CRASH` |
-| 11 | `result.json` missing or schema-invalid | `DEV_BAD_OUTPUT` |
+| 11 | `result.json` missing or schema-invalid — reached only after the in-container continuation budget is spent, when the loop is enabled (ADR-0022, §5a) | `DEV_BAD_OUTPUT` |
 | 12 | Credential/auth failure (harness) | `DEV_AUTH` |
 | 13 | Clone or forge operation failed | `DEV_FORGE` / `DEV_FORGE_AUTH` (classified from git stderr — `15-errors-and-retries.md` §4) |
 | 14 | MCP setup command failed or timed out (300 s per command) | `DEV_MCP_SETUP` (counted) |
@@ -124,7 +127,8 @@ exit 16 is unreachable; extra CLI args cannot invent one (`02` §9).
 **Grok non-progress halt → exit 11, not 16.** A repeated identical tool call can
 end with `EndTurn` and exit 0 after ~16 model calls (no `max_turns_reached`).
 Missing `result.json` → exit 11. Not a turn cap — see `15` §2b and `grok_loop_*`
-captures.
+captures. This is exactly the landing the ADR-0022 continuation loop (§5a)
+nudges before the run is allowed to fail.
 
 **A runaway `codex` Dev is bounded only by the run timeout**
 (`dev_timeout_minutes`, default 120 — global; watchdog → `DEV_TIMEOUT`, never
@@ -159,14 +163,41 @@ entrypoint start
   │      • the live log announces harness start and, while user-visible output is
   │        absent, emits one liveness notice per 60 s (hidden reasoning stays hidden)
   │ 7. harness finishes; entrypoint validates /workspace/out/result.json
+  │ 7a. CONTINUATION LOOP (ADR-0022, §5a below): if the harness exited 0 with
+  │      no fault but no usable result.json (and no recoverable stray), and
+  │      the continuation budget allows, relaunch the harness in THIS
+  │      container with a contract-reminder nudge — resuming the session
+  │      (verified harnesses) or starting a fresh one in the same workspace —
+  │      then re-run step 7. Every relaunch is announced on the live log.
   │ 8. assemble transcript (`assemble_transcript` in the shared entrypoint —
   │      header + session dump / agent report + outcome JSON) + extract TokenReport
-  │      (`session_json` or `unavailable` — 08-harness-templates.md §5)
-  │ 9. publish `run.artifacts` {result.json, transcript_md, token_report} on Redis
+  │      (`session_json` or `unavailable` — 08-harness-templates.md §5;
+  │      merged across invocations when the loop fired)
+  │ 9. publish `run.artifacts` {result.json, transcript_md, token_report,
+  │      continuations_used} on Redis
   └ 10. exit with code per §4  ──────────────────►  app finalizes (04-orchestrator.md §4)
 ```
 
 Git pushes and PR interactions (EXECUTE, REVIEW approval checkout) happen inside step 6, driven by the playbook prompt, but **commits only at the very end of the work** (INV-6) — the playbook prompts state this explicitly and the transcript is evidence of compliance.
+
+### 5a. The continuation loop (ADR-0022)
+
+Trigger: exactly the "row 9" landing — exit 0, fault predicate None, no valid
+canonical `result.json`, no recoverable stray. Every other terminal path
+classifies as before, including on a continuation invocation (the fault
+machinery outranks the loop). Policy `cfg.continuation_policy` — `auto`
+(resume the session where `RESUME_SPECS` has a capture-verified entry;
+escalate permanently to a fresh session after a zero-progress continuation) ·
+`resume-only` (stops, as today, when resume is unavailable) · `fresh-only` ·
+`off`. `cfg.max_continuations` is the ONLY terminator (stalls escalate,
+never stop). Plan mode never continues. The nudge restates the canonical
+path + legal outcomes and points back to the playbook's Required output
+section for the exact shape; fresh mode embeds the original prompt verbatim.
+The misplaced-result freshness gate stays pinned to the FIRST launch, so a
+stray written by an earlier invocation stays adoptable. Each relaunch resets
+the CLI's own `--max-turns` — effective turn budget is
+(continuations + 1) × max-turns. The watchdog (`dev_timeout_minutes`) is
+unchanged and bounds the whole loop.
 
 ## 6. Mid-run PMO access (not shipped as a CLI)
 
@@ -177,7 +208,8 @@ Git pushes and PR interactions (EXECUTE, REVIEW approval checkout) happen inside
 | Package path | Role |
 |---|---|
 | `domain.fault` | ADR-0018 harness fault classification (pure) |
-| `harness.render` / `tokens` / `argv` | Live relay, stream dumps, CLI argv |
+| `harness.continuation` | ADR-0022 continuation policy, nudges, session chains, token-report merge, terminal evidence (pure) |
+| `harness.render` / `tokens` / `argv` | Live relay, stream dumps, CLI argv (+ resume dialects, `RESUME_SPECS`) |
 | `workspace.*` | Clone, skills/MCP, forensics, activity, transcript |
 | `adapters.bus` | Redis Streams send / request-reply / artifacts |
 

@@ -58,6 +58,8 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
         spec_env = dispatch._protocol_spec_env(
             mgr,
             recover_misplaced_result=mgr.config.recover_misplaced_result,
+            continuation_policy=mgr.config.continuation_policy,
+            max_continuations=mgr.config.max_continuations,
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
             dev_type=dev_type, seq=seq, extra_args="",
             repo=repo, forge=forge)
@@ -90,6 +92,10 @@ async def finalize_mapper(mgr, run: Run, payload: dict) -> None:
     # same ADR-0021 stamp as mission finalize — mapper spend is fleet spend
     run.token_report = redact_value(costing.stamp_estimate(
         payload.get("token_report") or {}, mgr.config.cost_inputs))
+    try:                                               # ADR-0022, as finalize()
+        run.continuations_used = int(payload.get("continuations_used") or 0)
+    except (TypeError, ValueError):
+        run.continuations_used = 0
 
     ctx = None
     if run.traceparent:

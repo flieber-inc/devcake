@@ -1,9 +1,11 @@
 import React from "react";
 import { Section } from "./Card.jsx";
-import { Input } from "./Field.jsx";
+import { Input, Select } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Toggle from "./Toggle.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
+
+const CONTINUATION_POLICIES = ["auto", "resume-only", "fresh-only", "off"];
 
 export default function LimitsSection() {
   const { dr } = useSharedDraft();
@@ -44,6 +46,35 @@ export default function LimitsSection() {
               label="Accept misplaced result files"
               onClick={() => setField("cfg.recover_misplaced_result",
                 !cfg.recover_misplaced_result)} />
+          </SettingRow>
+          <SettingRow label="Continuation policy"
+            desc="Recover a run that ended cleanly without writing its result file."
+            help="When a harness exits cleanly but never wrote result.json (a weak model ending its turn mid-mission), DevCake relaunches the harness inside the same container with a reminder instead of failing the attempt. Auto resumes the same session where the harness supports it and switches permanently to a fresh session after a zero-progress continuation. Resume-only never falls back to fresh (fails as before when resume is unavailable); fresh-only always starts a new session in the same workspace; off disables the loop. Plan runs never continue.">
+            <Select className="w-40" value={cfg.continuation_policy}
+              aria-label="Continuation policy"
+              onChange={(e) => setField("cfg.continuation_policy", e.target.value)}>
+              {!CONTINUATION_POLICIES.includes(cfg.continuation_policy) && (
+                // an API/YAML-set policy outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={cfg.continuation_policy}>
+                  {cfg.continuation_policy} (set via API)
+                </option>
+              )}
+              <option value="auto">Auto (resume, then fresh)</option>
+              <option value="resume-only">Resume only</option>
+              <option value="fresh-only">Fresh only</option>
+              <option value="off">Off</option>
+            </Select>
+          </SettingRow>
+          <SettingRow label="Max continuations per run"
+            desc={Number(cfg.max_continuations) === 0
+              ? "0 — continuation is off."
+              : `Up to ${cfg.max_continuations} relaunches before the run fails.`}
+            help="The budget is the ONLY terminator: a stalled continuation escalates auto from resume to fresh but never ends the run early, so large experimental budgets (10, 50) run to completion — bounded only by the Dev run timeout. Each relaunch resets the harness's own --max-turns counter, so the effective turn budget is (continuations + 1) × max-turns. 0 disables the loop.">
+            <Input type="number" className="w-24" min={0} value={cfg.max_continuations}
+              aria-label="Max continuations per run"
+              onChange={(e) => setField("cfg.max_continuations", Number(e.target.value))} />
           </SettingRow>
           <SettingRow label="Service auto-restart"
             desc="Long-lived services restart unless stopped (compose-managed)."

@@ -53,6 +53,11 @@ const EXACT = {
   "cfg.recover_misplaced_result": {
     group: "Limits & traffic", label: "Accept misplaced result files", format: onOff,
   },
+  "cfg.continuation_policy": { group: "Limits & traffic", label: "Continuation policy" },
+  "cfg.max_continuations": {
+    group: "Limits & traffic", label: "Max continuations per run",
+    format: (v) => (v === 0 ? "off" : String(v)),
+  },
   "cfg.cost_inputs.override_native": {
     group: "Cost", label: "Operator rates override displayed cost", format: onOff,
   },

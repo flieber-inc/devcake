@@ -123,6 +123,9 @@ adoption_mode: opt_in                # opt_in (default): only missions labeled D
 poll_interval_seconds: 30
 dev_timeout_minutes: 120             # enforced by the app watchdog (04 §5)
 max_attempts: 3
+recover_misplaced_result: true       # ADR-0018: accept a stray result file written during the run
+continuation_policy: auto            # ADR-0022: auto | resume-only | fresh-only | off (07 §5a)
+max_continuations: 2                 # ADR-0022: nudge relaunches per run; 0 = off; no upper bound
 review_loop_warning_every: 3
 attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)

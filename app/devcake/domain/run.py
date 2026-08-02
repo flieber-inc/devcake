@@ -89,6 +89,10 @@ class Run(BaseModel):
     # verdict like "rejected: …" because _transition refused to act on the
     # outcome. None means an ordinary success.
     verdict: Optional[str] = None
+    # ADR-0022 — how many in-container continuations (nudge relaunches) the
+    # entrypoint used before this run ended, success or failure. 0 = the loop
+    # never fired, and every pre-ADR-0022 record reads as 0.
+    continuations_used: int = 0
     # Process-local wipe generation stamped at launch (docs/10): RunStore.clear
     # bumps wipe_generation then unlinks files; save() drops any run whose
     # store_gen is older so in-flight finalize/heartbeat cannot resurrect a

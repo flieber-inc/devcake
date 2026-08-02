@@ -128,6 +128,15 @@ DASHBOARD = {
                   "COUNT(*) AS n FROM default WHERE operation_name IN "
                   "('watchdog.kill', 'mission.give_up') GROUP BY ts, operation_name ORDER BY ts",
                   "bar", 12, 9, 12, 9),
+            # ADR-0021: estimated spend rides its own attribute — panel 1
+            # stays "billed as reported by the harness", this one is the
+            # labeled rate-card estimate (grok and friends)
+            panel(4, "Estimated cost per hour (USD, by dev type — rate card)",
+                  "SELECT histogram(_timestamp, '1 hour') AS ts, devcake_dev_type, "
+                  "SUM(devcake_cost_usd_estimated) AS cost_estimated FROM default "
+                  "WHERE devcake_cost_usd_estimated > 0 "
+                  "GROUP BY ts, devcake_dev_type ORDER BY ts",
+                  "line", 0, 18, 24, 9),
         ],
     }],
     "variables": {"list": []},

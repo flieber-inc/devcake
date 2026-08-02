@@ -62,7 +62,8 @@ devcake.dev_type            devcake.harness
 devcake.run.id              devcake.run.seq            devcake.run.attempt
 devcake.tokens.input        devcake.tokens.output      devcake.tokens.total
 devcake.tokens.cache_read   devcake.tokens.cache_write
-devcake.cost.usd            devcake.outcome            (result.json outcome | error class)
+devcake.cost.usd            devcake.cost.usd_estimated devcake.cost.rate_card
+devcake.outcome             (result.json outcome | error class)
 ```
 
 Every log line from app and Dev entrypoint carries `devcake.run.id` and `devcake.mission.key` for correlation.
@@ -93,9 +94,16 @@ attributes — OpenObserve is the cost dashboard.
 natively reported figure, and neither `codex` 0.144.4 nor `grok` 0.2.112 emits a
 cost field of any kind (`08-harness-templates.md` §5) — no price table invents
 one, and a missing cost is written as **null, never 0**, so a cost query returns
-claude runs only rather than silently averaging in free-looking runs. The
-cross-harness quantity is `devcake.tokens.*`: grok fills the full split plus
-`total` from its `end` event, codex the split with no total.
+claude runs only rather than silently averaging in free-looking runs.
+
+**`devcake.cost.usd_estimated` is the cross-harness spend proxy** (`adr/0021`):
+the app-side rate-card estimate, emitted only when the full token split exists
+and `config.cost_inputs.rates` maps the model, always accompanied by
+`devcake.cost.rate_card` (the card vintage that priced it). It never coalesces
+into `devcake.cost.usd` — dashboards that want "reported or estimated" must
+say so in their own labels (the provisioned dashboard keeps two panels). The
+cross-harness token quantity remains `devcake.tokens.*`: grok fills the full
+split plus `total` from its `end` event, codex the split with no total.
 
 ## 5. Pre-provisioned dashboard + alerts (`scripts/provision_oo.py`, idempotent)
 

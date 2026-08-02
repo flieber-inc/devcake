@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -71,12 +72,20 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                                       kind=SpanKind.CONSUMER) as span:
         span.set_attribute("devcake.run.id", run.run_id)
         span.set_attribute("devcake.outcome", outcome)
-        for k in ("input_tokens", "output_tokens", "total_tokens"):
+        for k in ("input_tokens", "output_tokens", "total_tokens",
+                  "cache_read_tokens", "cache_write_tokens"):
             if token_report.get(k) is not None:
                 span.set_attribute(f"devcake.tokens.{k.removesuffix('_tokens')}",
                                    token_report[k])
         if token_report.get("cost_usd") is not None:
             span.set_attribute("devcake.cost.usd", token_report["cost_usd"])
+        # ADR-0021: the estimate rides its OWN attribute — devcake.cost.usd
+        # keeps meaning "billed as reported by the harness", never a guess
+        if token_report.get("cost_usd_estimated") is not None:
+            span.set_attribute("devcake.cost.usd_estimated",
+                               token_report["cost_usd_estimated"])
+            span.set_attribute("devcake.cost.rate_card",
+                               str(token_report.get("rate_card_id")))
 
         # 1 — transcript (idempotent via finalized_steps)
         if "transcript" not in run.finalized_steps:
@@ -96,7 +105,8 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         # 2 — token report (INV-5: always)
         if "token_report" not in run.finalized_steps:
             await mgr._feed(pmo_id, run.pmo_kind,
-                             _token_report_md(run, token_report))
+                             _token_report_md(run, token_report,
+                                              mgr.config.cost_inputs))
             if _pre_wipe(mgr, run):
                 log.info("abort finalize after token_report pre-wipe %s",
                          run.run_id)
@@ -331,10 +341,24 @@ async def _post_transcript(mgr, run: Run, transcript: str,
     mgr._audit(run.mission_pmo_id, "transcript", name)
 
 
-def _token_report_md(run: Run, tr: dict) -> str:
+def _token_report_md(run: Run, tr: dict, cost_inputs=None) -> str:
+    """docs/03 §8 (normative format). The `run:` footer is the idempotency
+    anchor — additions go ABOVE it and only appear when their datum exists,
+    so pre-ADR-0021 reports render byte-identically."""
     def fmt(v):  # noqa: ANN001
         return "—" if v is None else v
     cost = tr.get("cost_usd")
+    est = tr.get("cost_usd_estimated")
+    # reasoning is informational (a subset of output, never priced) — grok
+    # and codex report it only inside `notes`
+    m = re.search(r"(?:reasoning_tokens|reasoning_output_tokens)=(\d+)",
+                  str(tr.get("notes") or ""))
+    reasoning = f" · reasoning: {m.group(1)}" if m else ""
+    # estimated line: fills the native gap by default; with override_native
+    # on, it appears ALONGSIDE the native line (both shown — honest)
+    show_est = est is not None and (
+        cost is None
+        or (cost_inputs is not None and cost_inputs.override_native))
     return (
         f"🧮 DevCake token report — step {run.seq} ({run.mission_type}, {run.dev_type})\n"
         f"model: {fmt(tr.get('model'))} · input: {fmt(tr.get('input_tokens'))} · "
@@ -342,6 +366,9 @@ def _token_report_md(run: Run, tr: dict) -> str:
         f"cache read/write: {fmt(tr.get('cache_read_tokens'))}/"
         f"{fmt(tr.get('cache_write_tokens'))}"
         + (f" · total: {tr['total_tokens']}" if tr.get('total_tokens') is not None else "")
+        + reasoning
         + (f"\ncost: ${cost:.4f}" if cost is not None else "")
+        + (f"\ncost (estimated, {tr.get('rate_card_id')}): ${est:.4f}"
+           if show_est else "")
         + f"\nextraction: {fmt(tr.get('extraction_method'))}\nrun: {run.run_id}")
 

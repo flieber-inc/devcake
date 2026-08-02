@@ -196,6 +196,42 @@ export default function ReposPage({ onHealthChange }) {
       action: () => { setField(path, value); setConfirm(null); },
     });
 
+  // computed from the DRAFT, so unsaved PMO (de)selections count. Unused ⇔
+  // selected by no PMO, so no per-PMO deselection cascade is ever needed.
+  const removeUnusedRepos = () => {
+    const selected = new Set();
+    (cfg.pmos || []).forEach((p) => {
+      (p.repos || []).forEach((n) => selected.add(n));
+      (p.reference_repos || []).forEach((n) => selected.add(n));
+    });
+    const names = cfg.repos.map((r) => r.name).filter((n) => !selected.has(n));
+    if (names.length === 0) {
+      setConfirm({
+        title: "No unused repositories",
+        body: "Every configured repository is selected as a work or reference repo on at least one PMO.",
+        confirmLabel: "OK",
+        action: () => setConfirm(null),
+      });
+      return;
+    }
+    const shown = names.slice(0, 8).join(", ");
+    const more = names.length > 8 ? ` and ${names.length - 8} more` : "";
+    setConfirm({
+      title: `Remove ${names.length} unused repositor${names.length > 1 ? "ies" : "y"}?`,
+      body: `${shown}${more} — selected as work or reference on no PMO. `
+        + "Removing them and saving permanently deletes their stored tokens "
+        + "(write / read-only / reviewer); a run still in flight on one fails "
+        + "cleanly. Nothing changes until you Save.",
+      confirmLabel: "Remove from draft",
+      danger: true,
+      action: () => {
+        names.forEach((n) => newNames.untrack(n));
+        setField("cfg.repos", cfg.repos.filter((r) => !names.includes(r.name)));
+        setConfirm(null);
+      },
+    });
+  };
+
   const testForge = async (name) =>
     setTestResult({ ...testResult,
                     [`forge:${name}`]: await send("POST", `/connections/forge/${name}/test`) });
@@ -209,6 +245,9 @@ export default function ReposPage({ onHealthChange }) {
         description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait."
         actions={
           <MoreMenu label="More repository actions" items={[
+            { label: "Remove unused repositories…", danger: true,
+              desc: "Drop every repo no PMO selects as work or reference — their stored tokens are deleted on Save.",
+              onClick: removeUnusedRepos },
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
               desc: CLEAR_SECRETS_ENTRY.desc,
               onClick: () => setClearSecrets(true) },

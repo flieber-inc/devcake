@@ -190,11 +190,17 @@ Posted to the activity feed immediately after each transcript (INV-5):
 ```
 🧮 DevCake token report — step {seq} ({TYPE}, {dev_type})
 model: {model} · input: {input_tokens} · output: {output_tokens}
-cache read/write: {cache_read_tokens}/{cache_write_tokens}
-cost: ${cost_usd}                 (omitted when unknown — never estimated)
+cache read/write: {cache_read_tokens}/{cache_write_tokens}[ · total: {total_tokens}][ · reasoning: {N}]
+cost: ${cost_usd}                 (native harness cost — omitted when unknown, NEVER guessed)
+cost (estimated, {rate_card_id}): ${cost_usd_estimated}
 extraction: {extraction_method}
 run: {run_id}
 ```
+
+Line rules (each optional line appears only when its datum exists):
+
+- `total:` when the harness reported one; `reasoning:` parsed from `notes` (informational — a subset of output, never priced).
+- `cost:` is the harness's own number, still never estimated. The **estimated** line (`adr/0021`) is the app-side rate-card computation, stamped at finalize and always labeled with its rate-card vintage; it appears when native cost is absent, or *alongside* the native line when the operator's `cost_inputs.override_native` is on. A report with neither shows no cost line at all.
 
 The `run: {run_id}` footer doubles as the idempotency key for finalization (`04-orchestrator.md` §4).
 

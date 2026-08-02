@@ -983,6 +983,63 @@ def test_finalize_leaves_unmapped_model_unstamped(tmp_path):
     assert saved["cost_usd"] == 0.1234              # native untouched
 
 
+def _grok_shaped_report(**over):
+    base = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+            "cache_write_tokens": None, "output_tokens": 500_000,
+            "total_tokens": 3_500_000, "cost_usd": None,
+            "model": "grok-4.5-build", "extraction_method": "end_event",
+            "notes": "reasoning_tokens=20616"}
+    base.update(over)
+    return base
+
+
+def test_feed_shows_estimated_cost_and_reasoning(tmp_path):
+    """docs/03 §8 + ADR-0021: native cost absent + estimate stamped → the
+    labeled estimated line appears (never the bare native line), and the
+    reasoning counter surfaces from notes without being priced."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        token_report=_grok_shaped_report())))
+    report = next(c for c in fake.comments if "token report" in c)
+    assert "cost (estimated, builtin-v1): $5.6000" in report
+    assert "\ncost: $" not in report
+    assert "reasoning: 20616" in report
+
+
+def test_feed_native_only_report_stays_byte_stable(tmp_path):
+    """A pre-ADR-0021-shaped report (native cost, unmapped model, no notes
+    counter) renders exactly the historical layout — no estimated line, no
+    reasoning segment."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(token_report={
+        "input_tokens": 10_000, "cache_read_tokens": 5_000,
+        "cache_write_tokens": 2_000, "output_tokens": 1_000,
+        "total_tokens": 18_000, "cost_usd": 0.1234,
+        "model": "claude-opus-5", "extraction_method": "session_json"})))
+    report = next(c for c in fake.comments if "token report" in c)
+    assert "\ncost: $0.1234" in report
+    assert "estimated" not in report
+    assert "reasoning" not in report
+
+
+def test_feed_override_native_shows_both_cost_lines(tmp_path):
+    """override_native on + a mapped model WITH native cost → both lines
+    appear (the honest form of 'operator rates override the display')."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    mgr.config.cost_inputs.override_native = True
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        token_report=_grok_shaped_report(cost_usd=4.4321))))
+    report = next(c for c in fake.comments if "token report" in c)
+    assert "\ncost: $4.4321" in report
+    assert "cost (estimated, builtin-v1): $5.6000" in report
+
+
 def _finalize_payload(**over):
     base = {"result": {"outcome": "plan_needed", "summary": "s"},
             "transcript_md": "FULL DUMP",

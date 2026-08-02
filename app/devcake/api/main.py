@@ -292,7 +292,9 @@ async def lifespan(app: FastAPI):
         except Exception:
             log.exception("label bootstrap failed for instance %s — poll loop "
                           "will keep retrying reads", mgr.instance_name)
-    await refresh_forge_health()
+    # forge sweep deliberately NOT awaited here (incident 2026-08-01: it held
+    # the listen socket O(N repos) and failed the compose healthcheck) — the
+    # poll task runs it before its first cycle; /health `forge_probe` tracks it
     await reconcile_runs(manager)
     tasks = [
         asyncio.create_task(poll_rt.loop(), name="poll_loop"),

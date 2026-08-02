@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 
 from .. import security
 from ..adapters.dagu import DAGU_URL
+from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..prompts import templates as prompt_templates
 from ..telemetry import OO_URL
 
@@ -45,22 +46,31 @@ def reset_protection_cache() -> None:
 
 
 async def _branch_protection(forge_runtime) -> dict:
-    """{repo_name: BranchProtection|None} across every configured repo."""
+    """{repo_name: BranchProtection|None} across every configured repo.
+    Bounded-parallel like ForgeRuntime.refresh_all — sequential, this walk
+    stalled the first rich /health call for O(N repos) of probe I/O (same
+    defect class as the 2026-08-01 boot incident)."""
     if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
         _protection_cache["ts"] = time.monotonic()
+        sem = asyncio.Semaphore(PROBE_CONCURRENCY)
         out: dict = {}
-        for name, f in forge_runtime.forges.items():
+
+        async def _probe(name: str, f) -> None:
             inst = forge_runtime.instance(name)
             # reference-only repos: DevCake never pushes or merges there, so
             # the unprotected-default-branch advisory would be pure noise
             if inst is not None and inst.reference_only:
-                continue
-            try:
-                prot = await f.default_branch_protection(
-                    inst.default_branch if inst else "main")
-                out[name] = prot.model_dump() if prot else None
-            except Exception:  # noqa: BLE001 — probe contract: failure → None (advisory omitted); /health must never 500
-                out[name] = None
+                return
+            async with sem:
+                try:
+                    prot = await f.default_branch_protection(
+                        inst.default_branch if inst else "main")
+                    out[name] = prot.model_dump() if prot else None
+                except Exception:  # noqa: BLE001 — probe contract: failure → None (advisory omitted); /health must never 500
+                    out[name] = None
+
+        await asyncio.gather(*(_probe(n, f)
+                               for n, f in list(forge_runtime.forges.items())))
         _protection_cache["value"] = out
     return _protection_cache["value"]
 
@@ -151,6 +161,15 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
         "pmo": bool(configured_ok) and all(configured_ok),
         "pmo_instances": pmo_instances,
         "forge": forge_runtime.health,
+        # the initial full sweep now rides the poll task (2026-08-01) — this
+        # tells an empty/partial `forge` map apart from a completed sweep
+        "forge_probe": {
+            "complete": forge_runtime.last_full_probe_at is not None,
+            "completed_at": (forge_runtime.last_full_probe_at.isoformat()
+                             if forge_runtime.last_full_probe_at else None),
+            "probed": len(forge_runtime.health),
+            "configured": len(forge_runtime.forges),
+        },
         # dev-type breakers + per-repo forge breakers, one map for the SPA
         "circuit_breakers": {**shared_breakers,
                              **{f"repo:{k}": v

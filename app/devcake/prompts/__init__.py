@@ -141,6 +141,20 @@ where they conflict with the mission description or with older comments, the
 most recent human comment wins.
 """
 
+# Appended to every playbook that must WRITE result.json (all but PLAN, whose
+# result.json the entrypoint synthesizes from the final message). Weaker models
+# end a turn to narrate an intention ("Let me continue with…"); a turn without
+# a tool call is the harness's end-of-run signal, so the run dies mid-mission
+# as exit 11 with the file never written (docs/15 §2b; measured live: a clean
+# `EndTurn` after hours of work with only the endgame remaining).
+TURN_DISCIPLINE = """
+### Ending your turn ends the run
+Never end your turn to narrate next steps or think out loud — if work remains,
+call a tool. A message without a tool call is treated as your FINAL answer: the
+run terminates immediately and any unfinished work is lost. Before you end your
+turn, verify that /workspace/out/result.json exists and is complete.
+"""
+
 
 # {decomposition_rule} wordings (ADR-0012): dispatch picks by the mission's
 # PMO-recorded depth vs the configured limit (dispatch._decomposition_rule).
@@ -191,7 +205,8 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos,
          "decomposition_rule": decomposition_rule})
-    return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+    return (identifying_prompt + "\n" + text
+            + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
 PLAN_PLAYBOOK = """
@@ -291,7 +306,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "description": mission.description or "(no description)",
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos})
-    return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+    return (identifying_prompt + "\n" + text
+            + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
 REVIEW_PLAYBOOK = """
@@ -339,7 +355,8 @@ def review_prompt(identifying_prompt: str, mission: Mission,
          "description": mission.description or "(no description)",
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos})
-    return identifying_prompt + "\n" + text + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE
+    return (identifying_prompt + "\n" + text
+            + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
 MAPPER_PLAYBOOK = """
@@ -388,4 +405,7 @@ def mapper_prompt(identifying_prompt: str, missions: list[Mission]) -> str:
         rows.append(f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
                     f"  {m.title} — {head or '(no description)'}")
     table = "\n".join(rows) or "(no open missions)"
-    return identifying_prompt + "\n" + MAPPER_PLAYBOOK.format(mission_table=table)
+    # MAPPER stays un-templated (founder decision 2026-07-14) — TURN_DISCIPLINE
+    # is a code-owned epilogue like the others, not a template
+    return (identifying_prompt + "\n"
+            + MAPPER_PLAYBOOK.format(mission_table=table) + TURN_DISCIPLINE)

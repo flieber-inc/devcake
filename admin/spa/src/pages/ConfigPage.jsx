@@ -3,7 +3,6 @@ import PageHeader from "../components/PageHeader.jsx";
 import AssignmentsSection from "../components/AssignmentsSection.jsx";
 import DevTypesSection from "../components/DevTypesSection.jsx";
 import LimitsSection from "../components/LimitsSection.jsx";
-import PmoSection from "../components/PmoSection.jsx";
 import ProfilesSection from "../components/ProfilesSection.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SkillsSection from "../components/SkillsSection.jsx";
@@ -15,17 +14,14 @@ import { CONFIG_SECTIONS } from "../lib/nav.js";
 // #/config/<section>. Each section lives in src/components/<Name>Section.jsx
 // and pulls the shared draft itself via useSharedDraft() — the draft, reload,
 // harnesses and health snapshot come from the shared provider (v0.1.1 B4);
-// the Repositories page edits the SAME draft, and DraftChrome (App-level)
-// owns Save/DirtyBar/NavGuard.
-export default function ConfigPage({ section, health, healthError, onHealthChange }) {
+// the Repositories and PMO pages edit the SAME draft, and DraftChrome
+// (App-level) owns Save/DirtyBar/NavGuard. PMO left this page for #/pmo
+// under the Adapters group (2026-08-02 nav reorg).
+export default function ConfigPage({ section, onHealthChange }) {
   const { dr, loadErr } = useSharedDraft();
   // page-level error line — sections report async failures here (delete /
   // restore flows) so the message survives their local re-renders
   const [pageErr, setPageErr] = useState("");
-  // "new PMO card" name tracking lives HERE, not in PmoSection (audit D5 #12):
-  // the dispatcher stays mounted across section switches, so a card added then
-  // navigated-away-from keeps its editable-name status when the operator returns
-  const pmoNewNames = useState(() => new Set());
 
   const loaded = dr.loaded;
 
@@ -40,7 +36,7 @@ export default function ConfigPage({ section, health, healthError, onHealthChang
   return (
     <div className="space-y-5">
       <PageHeader title="Configuration"
-        subtitle="One section at a time — drafted edits apply on Save, wherever you made them" />
+        subtitle="Edits everywhere gather into one draft — nothing applies until you Save" />
       {pageErr && <p className="text-sm text-red-600 dark:text-red-400">✗ {pageErr}</p>}
 
       {/* mobile section switcher (sidebar sub-nav is expanded-drawer-only) */}
@@ -57,22 +53,22 @@ export default function ConfigPage({ section, health, healthError, onHealthChang
         ))}
       </div>
 
-      {section === "pmo" && (
-        <PmoSection newNamesState={pmoNewNames}
-          health={health} healthError={healthError} onHealthChange={onHealthChange} />
-      )}
       {section === "dev-types" && (
         <DevTypesSection setPageErr={setPageErr} onHealthChange={onHealthChange} />
       )}
+      {section === "mission-types" && <AssignmentsSection />}
       {section === "skills" && <SkillsSection setPageErr={setPageErr} />}
-      {section === "assignments" && <AssignmentsSection />}
       {section === "prompts" && (
         <PromptsSection cfg={dr.draft.cfg} setField={dr.setField}
           devTypeNames={Object.keys(dr.draft.devTypes || {})} />
       )}
+      {section === "limits" && (
+        <>
+          <LimitsSection />
+          <TrafficSection />
+        </>
+      )}
       {section === "profiles" && <ProfilesSection />}
-      {section === "limits" && <LimitsSection />}
-      {section === "traffic" && <TrafficSection />}
     </div>
   );
 }

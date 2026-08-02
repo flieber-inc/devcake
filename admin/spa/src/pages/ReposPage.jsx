@@ -159,7 +159,7 @@ function RoOnlyNote({ name }) {
 }
 
 export default function ReposPage({ onHealthChange }) {
-  const { dr, loadErr, reload } = useSharedDraft();
+  const { dr, loadErr, reload, repoNewNamesState } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
@@ -172,7 +172,11 @@ export default function ReposPage({ onHealthChange }) {
   const [secretsEpoch, setSecretsEpoch] = useState(0);
   // cards added/renamed this session stay name-editable even when their name
   // collides with a still-saved one (the delete-then-re-add / mid-typing trap)
-  const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos);
+  // the Set lives in the provider (2026-08-02): an internal Set was lost on
+  // nav-away, so a session-added card whose name collided with a still-saved
+  // one came back born name-locked
+  const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos,
+                               repoNewNamesState);
 
   if (!dr.loaded) {
     return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;

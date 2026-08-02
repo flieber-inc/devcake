@@ -23,7 +23,10 @@ copy voice, evidence loop). Read it before touching the SPA. Iron rules:
 - Colors come from the `@theme` tokens in `admin/spa/src/index.css` — never raw
   hex or new color families in components. `accent-*` is the only brand accent.
 - Scalar settings are `SettingRow`s; record lists are real tables styled like
-  the Runs table; config renders one section per `#/config/<section>` view.
+  the Runs table; config renders one section per `#/config/<section>` view
+  (the `limits` view carries the merged Limits + Traffic cards); Repositories
+  and PMO are draft-editing pages under the sidebar's Adapters group, not
+  Config sections.
 - One primary action per header/card; secondary/rare/destructive actions go in
   a `MoreMenu` (⋯) with honest one-line consequence descriptions — but never a
   one-item menu when it's the element's only action.

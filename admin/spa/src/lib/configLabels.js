@@ -40,14 +40,18 @@ const EXACT = {
   "cfg.attach_merged_changeset_to_pmo": {
     group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
   },
-  "cfg.relations_mapper.dev_type": { group: "Traffic control", label: "Mapper Dev Type", format: orEmpty },
-  "cfg.relations_mapper.interval_minutes": { group: "Traffic control", label: "Mapper interval (minutes)" },
-  "cfg.relations_mapper.enabled": { group: "Traffic control", label: "Mapper periodic service", format: onOff },
-  "cfg.concurrency.global_max": { group: "Limits", label: "Global max Devs" },
-  "cfg.dev_timeout_minutes": { group: "Limits", label: "Dev run timeout (min)" },
-  "cfg.review_loop_warning_every": { group: "Limits", label: "Loop warning every N rejections" },
+  "cfg.relations_mapper.dev_type": { group: "Limits & traffic", label: "Mapper Dev Type", format: orEmpty },
+  "cfg.relations_mapper.interval_minutes": { group: "Limits & traffic", label: "Mapper interval (minutes)" },
+  "cfg.relations_mapper.enabled": { group: "Limits & traffic", label: "Mapper periodic service", format: onOff },
+  "cfg.max_decomposition_depth": {
+    group: "Limits & traffic", label: "Decomposition depth",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.concurrency.global_max": { group: "Limits & traffic", label: "Global max Devs" },
+  "cfg.dev_timeout_minutes": { group: "Limits & traffic", label: "Dev run timeout (min)" },
+  "cfg.review_loop_warning_every": { group: "Limits & traffic", label: "Loop warning every N rejections" },
   "cfg.recover_misplaced_result": {
-    group: "Limits", label: "Accept misplaced result files", format: onOff,
+    group: "Limits & traffic", label: "Accept misplaced result files", format: onOff,
   },
   "cfg.cost_inputs.override_native": {
     group: "Cost", label: "Operator rates override displayed cost", format: onOff,
@@ -76,8 +80,8 @@ const ASSIGNMENT_FIELDS = {
 
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
-  "Traffic control", "PMO", "Repository", "Dev Types", "Assignments",
-  "Prompts", "Limits", "Cost", "Other",
+  "PMO", "Repository", "Dev Types", "Mission Types",
+  "Prompts", "Limits & traffic", "Cost", "Other",
 ];
 
 // the instance LISTS diff atomically when a card is added/removed — show the
@@ -147,12 +151,12 @@ export function metaFor(path) {
   m = path.match(/^cfg\.pmos\.(\d+)\.assignments\.([^.]+)\.(.+)$/);
   if (m && ASSIGNMENT_FIELDS[m[3]]) {
     const f = ASSIGNMENT_FIELDS[m[3]];
-    return { group: "Assignments", multiline: false, format: orEmpty, ...f,
+    return { group: "Mission Types", multiline: false, format: orEmpty, ...f,
              label: `${m[2]} override (PMO #${+m[1] + 1}) · ${f.label}` };
   }
   m = path.match(/^cfg\.pmos\.(\d+)\.assignments\.([^.]+)$/);
   if (m) {
-    return { group: "Assignments", multiline: false,
+    return { group: "Mission Types", multiline: false,
              label: `${m[2]} override (PMO #${+m[1] + 1})`,
              format: (v) => (v == null ? "(inherit global)"
                              : `${v.dev_type || "(unassigned)"}` +
@@ -170,7 +174,7 @@ export function metaFor(path) {
   if (m && ASSIGNMENT_FIELDS[m[2]]) {
     const f = ASSIGNMENT_FIELDS[m[2]];
     return {
-      group: "Assignments", multiline: false, format: orEmpty, ...f,
+      group: "Mission Types", multiline: false, format: orEmpty, ...f,
       label: `${m[1]} · ${f.label}`,
     };
   }

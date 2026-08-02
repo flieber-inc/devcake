@@ -113,7 +113,7 @@ dashboard and optional alerts: all panels SQL over the traces stream —
 **Cost per hour (USD, by dev type)** · **Dev runs by outcome (daily)** ·
 **Failure signals (kills, give-ups)**. With `OO_ALERT_WEBHOOK` set in `.env`,
 the script also provisions the alert set of `15-errors-and-retries.md` §6
-against the same stream. The admin panel's Logs page deep-links here
+against the same stream. The admin panel's Consoles page deep-links here
 (`11-admin-panel.md` §5). Safe to re-run; still ensures the ingest user if
 you want a host-side check without restarting the app.
 

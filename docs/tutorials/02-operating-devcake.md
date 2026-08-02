@@ -47,18 +47,18 @@ abandoned (decomposed away, or PR closed unmerged).
 
 Every step posts a token report to the feed — model, token counts (full split
 for Claude and Codex; totals for Grok), and cost where the harness reports it.
-For aggregates, the Logs page (OpenObserve) carries every run as a trace with
+For aggregates, the Consoles page (OpenObserve) carries every run as a trace with
 `devcake.tokens.*` / `devcake.cost.usd` attributes. Watch for the **loop
 warning** comment: every third review rejection it posts the mission's
 cumulative recorded cost — that's your cue to intervene or SKIP.
 
 ## The two big switches
 
-- **`adoption_mode`** (Configuration → PMO) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
+- **`adoption_mode`** (the PMO page, Adapters group) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** (per repo card on the Repositories page, not Configuration) — off (default): the
+- **`auto_merge`** (per repo card on the Repositories page, Adapters group) — off (default): the
   **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
   On: after REVIEW approves, the **app** merges and missions go straight to
   Done. Off does **not** strip merge rights from Dev tokens — **branch

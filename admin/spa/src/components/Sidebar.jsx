@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   LayoutDashboard, SquareTerminal, Settings2, FolderGit2, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
-  Columns3,
+  Columns3, Briefcase,
 } from "lucide-react";
 import StatusDot from "./StatusDot.jsx";
 import { SERVICES, serviceValue } from "../lib/services.js";
@@ -10,13 +10,20 @@ import Toggle from "./Toggle.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 import { getTheme, setTheme, onThemeChange } from "../theme.js";
 
+// Entries are pages, or an Adapters-style group of pages. A group header is
+// a STATIC label — never a button (tests/missions.mjs scans `aside button`
+// for the collapse toggle) and never a link; collapsed mode hides it and
+// renders the children as their own icon items so they stay reachable.
 const NAV = [
   { page: "overview", href: "#/overview", label: "Overview", icon: LayoutDashboard },
   { page: "missions", href: "#/missions", label: "Missions", icon: Columns3 },
   { page: "runs", href: "#/runs", label: "Runs", icon: SquareTerminal },
-  { page: "repos", href: "#/repos", label: "Repositories", icon: FolderGit2 },
+  { group: "Adapters", children: [
+    { page: "repos", href: "#/repos", label: "Repositories", icon: FolderGit2 },
+    { page: "pmo", href: "#/pmo", label: "PMO", icon: Briefcase },
+  ] },
   { page: "config", href: "#/config", label: "Configuration", icon: Settings2 },
-  { page: "logs", href: "#/logs", label: "Logs", icon: ScrollText },
+  { page: "consoles", href: "#/consoles", label: "Consoles", icon: ScrollText },
 ];
 
 function NavItem({ href, icon: Icon, label, active, collapsed, onClick }) {
@@ -220,8 +227,23 @@ export default function Sidebar({
         />
       </div>
 
-      <nav className={`flex flex-col gap-0.5 pt-1 ${collapsed ? "px-2" : "px-3"}`}>
-        {NAV.map((item) => (
+      {/* min-h-0 + overflow-y-auto: the Adapters group's always-visible
+          children cost vertical space — the mt-auto footer (theme, service
+          grid, collapse) must never clip at short viewport heights */}
+      <nav className={`flex min-h-0 flex-col gap-0.5 overflow-y-auto pt-1 ${collapsed ? "px-2" : "px-3"}`}>
+        {NAV.map((item) => item.group ? (
+          <React.Fragment key={item.group}>
+            {!collapsed && (
+              <p className="px-2.5 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
+                {item.group}
+              </p>
+            )}
+            {item.children.map((child) => (
+              <NavItem key={child.page} {...child}
+                active={page === child.page} collapsed={collapsed} />
+            ))}
+          </React.Fragment>
+        ) : (
           <React.Fragment key={item.page}>
             <NavItem {...item} active={page === item.page} collapsed={collapsed} />
             {item.page === "config" && page === "config" && !collapsed && (

@@ -53,24 +53,25 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 
 ### Step 1b — Secrets and connections
 
-1. **Configuration → PMO** — Add PMO instance → team key → **Set** Linear API key → Test.
+1. **PMO** (`#/pmo`, under Adapters) — Add PMO instance → team key → **Set** Linear API key → Test.
 2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token;
    prefer **RO** for non-EXECUTE and a **reviewer** token (app-only, different
-   account) for formal forge approval → Test. Repos are **not** under Configuration.
+   account) for formal forge approval → Test. Repositories and PMO both live
+   under the sidebar's **Adapters** group.
 3. **Configuration → Dev Types** — Assign harness secrets / OAuth.
 4. On **Repositories**, leave each card's **`auto_merge` OFF** for this tutorial.
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
-## Step 2 — Meet the six pages
+## Step 2 — Meet the seven pages
 
 - **Overview** — masthead answer sentence, Let's get baking checklist, alerts, Needs Human Action, stats, In the oven, recent runs, quick links. Service health = **sidebar** dots.
 - **Missions** — kanban board of the poll snapshot; **Poll now**; card MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
 - **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
-- **Repositories** — external forge repos + bundled internal Gitea operator repos + merge posture toggles (not under Configuration).
-- **Configuration** — sections: PMO, Dev Types, Skills, Assignments, Prompts, Profiles & Export, Limits, Traffic.
-  Secrets are VALUES here (never echoed back). Connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
-- **Logs** — **Open OpenObserve ↗**. One Dev run = one trace.
+- **Adapters** — sidebar group with two pages: **Repositories** (external forge repos + bundled internal Gitea operator repos + merge posture toggles) and **PMO** (instances + adoption mode). Both edit the same shared config draft; connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
+- **Configuration** — sections: Dev Types, Mission Types, Skills, Prompts, Limits & traffic, Profiles & Export.
+  Secrets are VALUES here (never echoed back).
+- **Consoles** — the external UIs: OpenObserve (traces/costs), Dagu (execution history), Gitea (internal forge, when enabled). One Dev run = one trace.
 
 ## Step 3 — Log Grok in (one time)
 

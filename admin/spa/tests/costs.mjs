@@ -39,6 +39,9 @@ await withPage(async (page) => {
   check("⋯ offers Cost inputs…", (await item.count()) === 1);
   await item.click();
   await page.waitForSelector('[role="dialog"]:has-text("Cost inputs")');
+  // the rate table appears only after the modal's GET /config resolves —
+  // wait for it (a failed fetch times out here loudly, as it should)
+  await page.waitForSelector('[role="dialog"] th:has-text("Model prefix")');
   check("modal shows the rate table header",
     (await page.locator('[role="dialog"] th:has-text("Model prefix")').count()) === 1);
   check("modal has at least one rate row or the empty state",

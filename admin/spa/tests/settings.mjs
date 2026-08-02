@@ -112,8 +112,14 @@ await withPage(async (page) => {
   check("discard restored the edited value",
     (await page.locator(GLOBAL_MAX).inputValue()) === gmaxBefore);
 
-  // 9: the guard also fires leaving the PMO page dirty (the new regex leg)
-  await page.click('aside a[href="#/pmo"]');
+  // 9: the guard also fires leaving the PMO page dirty (the new regex leg).
+  // Adapters sub-entries render only while an adapter page is active
+  // (Configuration-style, 2026-08-02 follow-up) — hop through the parent.
+  check("Adapters sub-entries stay hidden while Configuration is active",
+    (await page.locator('aside a[href="#/pmo"]').count()) === 0);
+  await page.click('aside a[href="#/repos"]');           // the Adapters parent
+  await page.waitForSelector("#repository");
+  await page.click('aside a[href="#/pmo"]');             // sub-entry, now visible
   await page.waitForSelector("#pmo");
   const poll2 = page.locator(POLL);
   await poll2.fill(String(Number(await poll2.inputValue()) + 1));
@@ -144,6 +150,18 @@ await withPage(async (page) => {
     await page.locator("#limits").count() === 1 &&
     await page.locator("#traffic").count() === 1 &&
     await page.locator("#skills").count() === 0);
+
+  // AdapterTabs: the sidebar's Adapters sub-entries are expanded-drawer-only,
+  // so on mobile the adapter pages carry their own chip row (Config precedent)
+  await gotoFresh(page, "#/repos");
+  await page.waitForSelector("#repository");
+  const pmoChip = page.locator('a[href="#/pmo"]:visible').first();
+  check("mobile Repositories page shows the PMO adapter chip",
+    (await pmoChip.count()) === 1);
+  await pmoChip.click();
+  await page.waitForSelector("#pmo");
+  check("mobile adapter chip switches to the PMO page",
+    page.url().endsWith("#/pmo"));
 }, { width: 390, height: 844 });
 
 summary("settings");

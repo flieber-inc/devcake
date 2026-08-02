@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ...security import redact
+from .. import costing
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import mission_branch, run_branch
@@ -314,14 +315,30 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
             every = mgr.config.review_loop_warning_every
             if every < 1 or rejections % every != 0:
                 return
-            cost = sum((r.token_report or {}).get("cost_usd") or 0
-                       for r in mgr.runs.store.all()
-                       if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r))
+            # effective per run (ADR-0021): native harness cost when reported,
+            # else the finalize-stamped estimate — grok spend no longer reads
+            # as $0.00 here. The estimated share is named, not blended away.
+            ci = mgr.config.cost_inputs
+            cost = est = 0.0
+            for r in mgr.runs.store.all():
+                if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
+                    continue
+                tr = r.token_report or {}
+                native = tr.get("cost_usd")
+                estimated = tr.get("cost_usd_estimated")
+                eff = costing.effective_cost(native, estimated, ci)
+                if eff is None:
+                    continue
+                cost += eff
+                if estimated is not None and (ci.override_native
+                                              or native is None):
+                    est += eff
+            share = f" (of which ${est:.2f} estimated)" if est else ""
             warn = (f"⚠️ **Loop warning:** this mission has been through "
                     f"{rejections} REVIEW rejections. Cumulative recorded "
-                    f"cost so far: ${cost:.2f} (runs without cost data not "
-                    f"included). Add `DEVCAKE-SKIP` to stop DevCake, or "
-                    f"intervene on the PR directly.")
+                    f"cost so far: ${cost:.2f}{share} (runs with no cost "
+                    f"data not included). Add `DEVCAKE-SKIP` to stop "
+                    f"DevCake, or intervene on the PR directly.")
             await mgr._feed(pmo_id, "issue", warn)
             if pr:
                 await forge.post_pr_comment(pr.number, warn)

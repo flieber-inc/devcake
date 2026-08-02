@@ -949,6 +949,40 @@ def test_finalize_always_posts_report_inv5(tmp_path):
     assert ({"DEVCAKE-PLAN"} in [add for _, add in fake.swaps]) # transition applied
 
 
+def test_finalize_stamps_rate_card_estimate(tmp_path):
+    """ADR-0021: a grok-shaped report (full split, mapped model, no native
+    cost) persists cost_usd_estimated + rate_card_id; an unmapped model
+    persists neither; native cost_usd is never invented or touched."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    grok_report = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+                   "cache_write_tokens": None, "output_tokens": 500_000,
+                   "total_tokens": 3_500_000, "cost_usd": None,
+                   "model": "grok-4.5-build", "extraction_method": "end_event"}
+    run_coro(mgr.finalize(run, _finalize_payload(token_report=grok_report)))
+    saved = store.get(run.run_id).token_report
+    assert saved["cost_usd_estimated"] == 5.60      # $2/$0.30/$6 per 1M
+    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["cost_usd"] is None
+
+
+def test_finalize_leaves_unmapped_model_unstamped(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    claude_report = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
+                     "cache_write_tokens": 2_000, "output_tokens": 1_000,
+                     "total_tokens": 18_000, "cost_usd": 0.1234,
+                     "model": "claude-opus-5",
+                     "extraction_method": "session_json"}
+    run_coro(mgr.finalize(run, _finalize_payload(token_report=claude_report)))
+    saved = store.get(run.run_id).token_report
+    assert "cost_usd_estimated" not in saved
+    assert "rate_card_id" not in saved
+    assert saved["cost_usd"] == 0.1234              # native untouched
+
+
 def _finalize_payload(**over):
     base = {"result": {"outcome": "plan_needed", "summary": "s"},
             "transcript_md": "FULL DUMP",

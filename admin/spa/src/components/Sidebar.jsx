@@ -200,20 +200,9 @@ export default function Sidebar({
       return !c;
     });
   };
-  // Missions kanban needs ≥1536 (2xl) to fit 7 READABLE columns beside an
-  // expanded sidebar (floor raised 8rem→10.5rem, founder field report
-  // 2026-08-02); force-collapse below that on this page only, without
-  // touching the persisted preference.
-  const [narrowForMissions, setNarrowForMissions] = useState(false);
-  useEffect(() => {
-    if (page !== "missions") { setNarrowForMissions(false); return; }
-    const mq = window.matchMedia("(max-width: 1535.98px)");
-    const update = () => setNarrowForMissions(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, [page]);
-  const collapsed = collapsedPref || narrowForMissions;
+  // The Missions-page force-collapse (kanban fit math) died with the board
+  // (2026-08-02 re-decision) — the mission list works at any width.
+  const collapsed = collapsedPref;
 
   const dotOk = (key) =>
     (healthError && key === "app" ? false : serviceValue(health, key));
@@ -338,20 +327,11 @@ export default function Sidebar({
             </a>
           </p>
         )}
-        {/* When Missions force-collapses under 1536, toggling would just flip
-           the persisted preference without any visible change (effective
-           stays collapsed) — a control that lies about being functional.
-           Disable it with an honest title instead. */}
         <button
           onClick={toggleCollapsed}
-          disabled={narrowForMissions}
-          title={narrowForMissions
-            ? "Sidebar auto-collapsed on Missions below 1536 px so the board fits"
-            : collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={narrowForMissions
-            ? "Sidebar auto-collapsed on Missions below 1536 px"
-            : collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-500 dark:disabled:hover:bg-transparent dark:disabled:hover:text-neutral-400 ${
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
             collapsed ? "mx-auto h-8 w-8 justify-center" : "w-full px-2.5"
           }`}
         >

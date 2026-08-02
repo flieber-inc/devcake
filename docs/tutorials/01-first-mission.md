@@ -66,7 +66,7 @@ Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 ## Step 2 — Meet the seven pages
 
 - **Overview** — masthead answer sentence, Let's get baking checklist, alerts, Needs Human Action, stats, In the oven, recent runs, quick links. Service health = **sidebar** dots.
-- **Missions** — kanban board of the poll snapshot; **Poll now**; card MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
+- **Missions** — pipeline strip (stage counts) + grouped mission list of the poll snapshot; **Poll now**; row MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
 - **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
 - **Adapters** — sidebar group with two pages: **Repositories** (external forge repos + bundled internal Gitea operator repos + merge posture toggles) and **PMO** (instances + adoption mode). Both edit the same shared config draft; connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
 - **Configuration** — sections: Dev Types, Mission Types, Skills, Prompts, Limits & traffic, Profiles & Export.

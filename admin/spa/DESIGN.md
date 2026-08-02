@@ -133,6 +133,30 @@ their readiness probes by harness template (one fetch per template, not per
 row). Use this idiom only for identity-like rosters; settings stay
 SettingRows.
 
+### Mission list (Missions page)
+
+Missions render as a **pipeline strip + grouped list** (re-decided 2026-08-02,
+founder-directed — the kanban board didn't survive contact with the product's
+own success: working stages drain in minutes-to-hours *by design* while Done
+accumulates, so the steady state was six columns rendering "empty" (~86% of
+the board's width) around one overflowing Done whose ~160px-tall cards showed
+4 of 30 missions with titles clipped to ~4 words). The strip — a sticky row
+of seven stage chips with live counts, populated ones jump buttons, Needs
+human amber when non-zero — is the ONLY place empty stages appear; it carries
+the whole "shape of the pipeline" signal the columns used to spend the full
+viewport on. Sections exist per non-empty stage (Needs human pinned first —
+it answers "what needs me" — Done last) and each mission is ONE dense row:
+glyph slot (reserved even when empty so keys align), mono key, full-width
+truncating title, needs-human badge, deviating reason, repo, priority DOT
+(tooltip — labelled chips repeat "medium" fleet-wide and carry no scan
+value), age, ↗, ⋯. A reason all rows of a section share is hoisted into its
+header. Done previews its 10 newest behind "Show all N". Invariants carried
+over from the board: row click opens the drawer, context actions stay behind
+the ⋯, the PMO is the source of truth. The list owes rendering at ANY
+viewport width with no horizontal scroll — retiring the board also deleted
+the sidebar's Missions force-collapse exception, and nothing may reintroduce
+per-page sidebar behavior.
+
 ### Tables
 
 Lists of records are real `<table>`s styled like the Runs table:

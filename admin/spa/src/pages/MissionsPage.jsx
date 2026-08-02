@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import Button from "../components/Button.jsx";
-import MissionCard from "../components/MissionCard.jsx";
+import MissionRow from "../components/MissionRow.jsx";
 import MissionDrawer from "../components/MissionDrawer.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
 import { get, send } from "../api.js";
@@ -13,6 +13,33 @@ import { bucketize, COLUMNS } from "../lib/board.js";
 // server); polling at 10s here keeps the UI fresh without leading the operator
 // to expect a faster PMO round-trip than exists.
 const POLL_MS = 10_000;
+
+// Done is history, not work: the section previews the newest few and unfolds
+// on demand (bucketize itself already caps Done at its 30 newest).
+const DONE_PREVIEW = 10;
+
+// Sections render Needs human first (it answers "what needs me"), then the
+// pipeline in stage order, Done last. Empty stages exist only in the strip.
+const SECTION_ORDER = [
+  "needs_human",
+  ...COLUMNS.map((c) => c.id).filter((id) => id !== "needs_human"),
+];
+
+// The MAJORITY reason of a bucket (e.g. "terminal — ignored" on a Done
+// section) — hoisted into the section header so rows only spell out
+// deviations. Majority, not unanimity: one odd row must not force the
+// other 29 to repeat the same line (it shows its own reason inline).
+function sharedReason(bucket) {
+  const counts = new Map();
+  for (const r of bucket) {
+    if (r.reason && !r.schedulable) counts.set(r.reason, (counts.get(r.reason) || 0) + 1);
+  }
+  let best = null;
+  for (const [reason, n] of counts) {
+    if (n > bucket.length / 2 && (!best || n > counts.get(best))) best = reason;
+  }
+  return best;
+}
 
 // Copy shared with ConfirmDialog per DESIGN.md §7 (honest, sentence case).
 const CONFIRM_COPY = {
@@ -55,6 +82,7 @@ export default function MissionsPage() {
   // Cleared once the next /missions poll confirms the change.
   const [pending, setPending] = useState({});
   const [openMission, setOpenMission] = useState(null);
+  const [showAllDone, setShowAllDone] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null); // {pmo_id, action}
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [flash, setFlash] = useState("");
@@ -200,7 +228,7 @@ export default function MissionsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Missions"
-        subtitle="Every DevCake mission across your configured PMOs — the PMO is the source of truth; click a card to open its drawer"
+        subtitle="Every DevCake mission across your configured PMOs — the PMO is the source of truth; click a mission to open its drawer"
         actions={
           <Button
             icon={RefreshCw}
@@ -231,46 +259,112 @@ export default function MissionsPage() {
           create one there and DevCake will pick it up on the next cycle.
         </p>
       )}
-      {/* Fluid columns (max 18rem). Floor RAISED 8rem→10.5rem (founder field
-          report 2026-08-02: 7 forced-fit columns at 1280 left ~110px of text —
-          titles read as two words): the board fits without scroll at ≥1440
-          (the stated design floor) and scrolls horizontally below via
-          overflow-x-auto — readable cards beat squeezed ones. */}
-      <div data-testid="board-scroller" className="overflow-x-auto pb-4">
-        <div className="flex gap-2">
-          {COLUMNS.map((col) => (
+      {/* Pipeline strip + grouped list (2026-08-02 board re-decision,
+          DESIGN.md §2): kanban geometry assumed even occupancy, but the
+          steady state is extreme skew — working stages drain by design while
+          Done accumulates — so six empty columns burned ~86% of the width
+          and 4 clipped cards represented a 30-mission fleet. The strip keeps
+          the pipeline shape at a glance; the list spends the width on what
+          varies: many missions × long titles. Works at ANY viewport width —
+          the sidebar force-collapse exception died with the columns. */}
+      {rows.length > 0 && (
+        <div
+          data-testid="pipeline-strip"
+          className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center gap-1.5 bg-surface/90 px-4 py-2 backdrop-blur dark:bg-surface-dark/90"
+        >
+          {COLUMNS.map((col) => {
+            const n = buckets[col.id].length;
+            if (n === 0) {
+              return (
+                <span
+                  key={col.id}
+                  className="rounded-full border border-neutral-200 px-2.5 py-1 text-xs text-neutral-400 dark:border-neutral-800 dark:text-neutral-600"
+                >
+                  {col.label} <span className="tabular-nums">0</span>
+                </span>
+              );
+            }
+            const hot = col.id === "needs_human";
+            return (
+              <button
+                key={col.id}
+                type="button"
+                aria-label={`${col.label}: ${n} — jump to section`}
+                onClick={() =>
+                  document.getElementById(`stage-${col.id}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                  hot
+                    ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
+                    : "border-accent-300 bg-accent-50 text-accent-800 hover:bg-accent-100 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
+                }`}
+              >
+                {col.label} <span className="font-semibold tabular-nums">{n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div data-testid="mission-list" className="space-y-4 pb-4">
+        {SECTION_ORDER.filter((id) => buckets[id].length > 0).map((id) => {
+          const col = COLUMNS.find((c) => c.id === id);
+          const bucket = buckets[id];
+          const shared = sharedReason(bucket);
+          const shown =
+            id === "done" && !showAllDone ? bucket.slice(0, DONE_PREVIEW) : bucket;
+          return (
             <section
-              key={col.id}
+              key={id}
+              id={`stage-${id}`}
               aria-label={col.label}
-              className="flex flex-1 basis-0 min-w-[10.5rem] max-w-[18rem] flex-col rounded-card border border-neutral-200 bg-stone-50 p-2 dark:border-neutral-800 dark:bg-neutral-950/40"
+              className="scroll-mt-12 overflow-hidden rounded-card border border-neutral-200 bg-surface-raised shadow-card dark:border-neutral-800 dark:bg-surface-raised-dark"
             >
-              <header className="mb-2 flex items-center justify-between px-1 pb-1">
-                <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+              <header className="flex items-center gap-2 border-b border-neutral-100 px-3 py-2 dark:border-neutral-800">
+                <span
+                  className={`text-xs font-semibold uppercase tracking-wide ${
+                    id === "needs_human"
+                      ? "text-amber-700 dark:text-amber-300"
+                      : "text-neutral-500 dark:text-neutral-400"
+                  }`}
+                >
                   {col.label}
                 </span>
                 <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                  {buckets[col.id].length}
+                  {bucket.length}
                 </span>
-              </header>
-              <div className="flex flex-col gap-2">
-                {buckets[col.id].length === 0 && (
-                  <p className="rounded-card border border-dashed border-neutral-200 px-2 py-4 text-center text-[11px] text-neutral-400 dark:border-neutral-800">
-                    empty
-                  </p>
+                {shared && (
+                  <span
+                    className="min-w-0 truncate text-[11px] text-neutral-400 dark:text-neutral-500"
+                    title={shared}
+                  >
+                    — {shared}
+                  </span>
                 )}
-                {buckets[col.id].map((row) => (
-                  <MissionCard
+                {id === "done" && bucket.length > DONE_PREVIEW && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllDone((v) => !v)}
+                    className="ml-auto shrink-0 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
+                  >
+                    {showAllDone ? "Show fewer" : `Show all ${bucket.length}`}
+                  </button>
+                )}
+              </header>
+              <div>
+                {shown.map((row) => (
+                  <MissionRow
                     key={row.pmo_id}
                     row={row}
                     syncing={!!pending[row.pmo_id]?.syncing}
+                    sectionReason={shared}
                     onOpen={() => setOpenMission(row)}
                     onAction={(action) => requestAction(row.pmo_id, action)}
                   />
                 ))}
               </div>
             </section>
-          ))}
-        </div>
+          );
+        })}
       </div>
       {openMission && (
         <MissionDrawer

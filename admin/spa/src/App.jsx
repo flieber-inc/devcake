@@ -202,8 +202,7 @@ export default function App() {
           </a>
         )}
         <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
-          {/* Missions needs full main-pane width for the 7-col kanban; other pages keep the 6xl reading cap. */}
-          <div className={`mx-auto w-full ${page === "missions" ? "max-w-none" : "max-w-6xl"}`}>
+          <div className="mx-auto w-full max-w-6xl">
             {page === "overview" && (
               <OverviewPage
                 health={health}

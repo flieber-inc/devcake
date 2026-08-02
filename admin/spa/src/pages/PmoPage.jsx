@@ -1,9 +1,10 @@
 import React from "react";
 import PageHeader from "../components/PageHeader.jsx";
 import PmoSection from "../components/PmoSection.jsx";
+import AdapterTabs from "../components/AdapterTabs.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
-// PMO connections as their own page under the sidebar's Adapters group
+// PMO connections as their own page under the sidebar's Adapters item
 // (2026-08-02 nav reorg; ReposPage is the precedent) — edits ride the SAME
 // unified draft as Configuration and Repositories (DraftChrome owns
 // Save/DirtyBar/NavGuard; App gates it on this page too).
@@ -18,6 +19,7 @@ export default function PmoPage({ health, healthError, onHealthChange }) {
     <div className="space-y-5">
       <PageHeader title="PMO"
         subtitle="Project-management connections DevCake polls for missions — edits apply on Save" />
+      <AdapterTabs page="pmo" />
       <PmoSection newNamesState={pmoNewNamesState}
         health={health} healthError={healthError}
         onHealthChange={onHealthChange} />

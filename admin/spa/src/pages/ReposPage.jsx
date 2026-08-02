@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
+import AdapterTabs from "../components/AdapterTabs.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, SecretField, Input, Select } from "../components/Field.jsx";
 import SettingRow from "../components/SettingRow.jsx";
@@ -281,6 +282,7 @@ export default function ReposPage({ onHealthChange }) {
     <div className="space-y-5">
       <PageHeader title="Repositories"
         subtitle="Forge connections, tokens, merge policy, and the internal forge — edits apply on Save" />
+      <AdapterTabs page="repos" />
 
       <Section id="repository" title="Repositories"
         description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait."

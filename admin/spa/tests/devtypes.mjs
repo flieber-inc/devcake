@@ -17,6 +17,12 @@ await withPage(async (page) => {
   if (!(await tiles.count())) {
     skip("Dev Type editor flows", "no Dev Types on this stack");
   } else {
+    // status column is always informative (founder follow-up 2026-08-02:
+    // an empty-when-clean badge slot read as broken) — every row shows
+    // credential readiness even with a clean draft
+    check("status column shows readiness on every row",
+      (await page.locator('#dev-types tr:has(button[aria-label^="Edit dev type"]) td:has-text("ready"), #dev-types tr:has(button[aria-label^="Edit dev type"]) td:has-text("no credentials")').count())
+        >= (await tiles.count()));
     // 2: tile opens the editor modal with the full config surface
     await tiles.first().click();
     await page.waitForSelector('[role="dialog"]');

@@ -71,7 +71,7 @@ renders `LimitsSection` + `TrafficSection` — the merged Limits & traffic
 view). Every section is a component in `src/components/`: `DevTypesSection`,
 `SkillsSection`, `AssignmentsSection`, `PromptsSection`, `ProfilesSection`,
 `LimitsSection`, `TrafficSection`. `PmoSection` renders on its own page
-(`#/pmo`, Adapters group) — same shared draft, not a Config section. Most
+(`#/pmo`, Adapters item) — same shared draft, not a Config section. Most
 sections pull the shared draft themselves via
 `useSharedDraft()` (ConfigDraftContext); `PromptsSection` is the exception —
 it takes `cfg`/`setField`/`devTypeNames` as props from the dispatcher. Either
@@ -111,8 +111,12 @@ test made oversized cards the problem; a table is as elegant at 3 rows as at
 small monogram avatar (no emoji/illustrations) wearing the
 credential-readiness dot (green = ready, amber = none — readiness is NEVER
 hidden), name in mono, then harness / model / max-concurrency
-(`tabular-nums`) / skills-count columns and an always-reserved
-"unsaved changes" badge cell (invisible when clean, so the row never shifts).
+(`tabular-nums`) / skills-count columns and a **status** cell that is always
+informative: credential readiness in words (green "ready" / amber
+"no credentials" — the avatar dot's meaning, spelled out) plus an amber
+"· unsaved changes" badge appended while the row has draft edits (founder
+follow-up 2026-08-02: the earlier reserved-but-invisible badge slot looked
+like an empty, broken column).
 A dashed full-width "New Dev Type" row closes the table and is the ONLY
 create affordance — no twin button in the section header (the header keeps
 the immediacy badge and the ⋯; Clear secrets stays in the ⋯ even as its lone

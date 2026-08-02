@@ -21,6 +21,7 @@ const SUITES = [
   "pmo_intake.mjs",
   "markdown.mjs",
   "repos.mjs",
+  "costs.mjs",
 ];
 
 // pick up admin credentials from the repo-root .env when not already set

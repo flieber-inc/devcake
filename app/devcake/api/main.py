@@ -348,53 +348,25 @@ async def list_missions():
             "missions": poll_rt.missions_cache}
 
 
-def _pr_url_of(run) -> str | None:
-    """Extract the PR link from run.result without exposing the full blob.
-
-    `run.result` is not redacted at save time (only run.error is) — never
-    surface it wholesale through the API. `pr_url` is a scalar the Missions
-    drawer needs; anything else lives in the audit log.
-    """
-    return (run.result or {}).get("pr_url") if run.result else None
-
-
 @app.get("/api/v1/runs")
-async def list_runs(limit: int = 25, offset: int = 0, mission_key: str | None = None):
-    runs = sorted(store.all(), key=lambda r: r.created_at, reverse=True)
-    if mission_key:
-        needle = mission_key.strip().upper()
-        runs = [r for r in runs if needle in r.mission_key.upper()
-                or needle in r.run_id.upper()]
-    total = len(runs)
-    page = []
-    for r in runs[offset:offset + limit]:
-        row = r.model_dump(include={"run_id", "mission_key", "mission_type", "dev_type",
-                                    "seq", "state", "created_at", "started_at",
-                                    "ended_at", "error", "error_class",
-                                    "attempt_counted", "verdict"})
-        row["pr_url"] = _pr_url_of(r)
-        page.append(row)
-    return {"total": total, "offset": offset, "limit": limit, "runs": page}
+async def list_runs(limit: int = 25, offset: int = 0,
+                    mission_key: str | None = None, pmo_ref: str | None = None,
+                    created_from: str | None = None,
+                    created_to: str | None = None):
+    from .runs_service import list_runs_response
+    return list_runs_response(store, config.cost_inputs, limit=limit,
+                              offset=offset, mission_key=mission_key,
+                              pmo_ref=pmo_ref, created_from=created_from,
+                              created_to=created_to)
 
 
 @app.get("/api/v1/runs/{run_id}")
 async def get_run(run_id: str):
+    from .runs_service import run_detail
     run = store.get(run_id)
     if run is None:
         raise HTTPException(404)
-    body = run.model_dump(include={
-        "schema_version", "run_id", "mission_key", "mission_pmo_id", "pmo_kind",
-        "pmo_ref", "repo_ref", "mission_type", "dev_type", "seq",
-        "attempt_of_step", "stage_label_at_dispatch", "state", "created_at",
-        "started_at", "ended_at", "last_heartbeat", "timeout_seconds",
-        "finalized_steps", "artifact_bytes", "error",
-        # ADR-0018 — without these an excused run shows no reason it did not
-        # burn an attempt, which is the difference between diagnosable and not
-        "error_class", "attempt_counted",
-        "verdict",
-    })
-    body["pr_url"] = _pr_url_of(run)
-    return body
+    return run_detail(run, config.cost_inputs)
 
 
 TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}

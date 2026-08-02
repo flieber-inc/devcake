@@ -9,9 +9,10 @@ import StatusPill from "../components/StatusPill.jsx";
 import RunTerminal from "../components/RunTerminal.jsx";
 import StageGlyph from "../components/StageGlyph.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
-import { Input } from "../components/Field.jsx";
+import { Input, Select } from "../components/Field.jsx";
+import CostInputsModal from "../components/CostInputsModal.jsx";
 import usePoll from "../lib/usePoll.js";
-import { relTime, fullTime, duration } from "../lib/format.js";
+import { relTime, fullTime, duration, durationSeconds, tokens, usd } from "../lib/format.js";
 
 const cfg = window.DEVCAKE || {};
 const PAGE = 25;
@@ -37,14 +38,40 @@ export default function RunsPage() {
   const [stopping, setStopping] = useState(false);
   const [clearMsg, setClearMsg] = useState("");
   const [clearErr, setClearErr] = useState("");
+  const [pmoRef, setPmoRef] = useState("");
+  const [fromDate, setFromDate] = useState("");   // UTC calendar days —
+  const [toDate, setToDate] = useState("");       // run timestamps are UTC
+  const [costOpen, setCostOpen] = useState(false);
 
   const load = () => {
     const q = `/runs?limit=${PAGE}&offset=${offset}` +
-      (query ? `&mission_key=${encodeURIComponent(query)}` : "");
+      (query ? `&mission_key=${encodeURIComponent(query)}` : "") +
+      (pmoRef ? `&pmo_ref=${encodeURIComponent(pmoRef)}` : "") +
+      (fromDate ? `&created_from=${fromDate}` : "") +
+      (toDate ? `&created_to=${toDate}` : "");
     return get(q).then(setData).catch(() => {});
   };
 
-  usePoll(load, 10000, [offset, query]);
+  usePoll(load, 10000, [offset, query, pmoRef, fromDate, toDate]);
+
+  // effective displayed cost per row (ADR-0021): native first, estimates
+  // fill gaps — flipped when the operator's Cost Inputs override is on
+  const overrideOn = !!data.rate_card?.override_native;
+  const costCell = (r) => {
+    const showEst = overrideOn
+      ? r.cost_usd_estimated != null
+      : r.cost_usd == null && r.cost_usd_estimated != null;
+    const eff = showEst ? r.cost_usd_estimated : r.cost_usd;
+    if (eff == null) return <span>—</span>;
+    if (!showEst) return <span>{usd(eff)}</span>;
+    const title = `estimated (${data.rate_card?.rate_card_id || "rate card"})`
+      + (overrideOn && r.cost_usd != null ? ` — harness reported ${usd(r.cost_usd)}` : "");
+    return (
+      <span title={title} className="text-neutral-500 dark:text-neutral-400">
+        ~{usd(eff)}
+      </span>
+    );
+  };
 
   const doClear = async () => {
     setClearing(true);
@@ -132,6 +159,9 @@ export default function RunsPage() {
               Open Dagu <ExternalLink size={13} aria-hidden />
             </a>
             <MoreMenu label="More run actions" items={[
+              { label: "Cost inputs…",
+                desc: "Per-model rates behind estimated costs. Changes apply immediately.",
+                onClick: () => setCostOpen(true) },
               { label: "Stop all runs", danger: true,
                 desc: "Kills every in-flight Dev (each counts as a failed attempt). Finalizing runs complete on their own.",
                 onClick: () => { setStopConfirmOpen(true); setClearErr(""); } },
@@ -173,6 +203,20 @@ export default function RunsPage() {
               </button>
             )}
           </span>
+          <Select className="w-36" aria-label="Filter by PMO connector"
+            value={pmoRef}
+            onChange={(e) => { setPmoRef(e.target.value); setOffset(0); }}>
+            <option value="">all PMOs</option>
+            {(data.pmo_refs || []).map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </Select>
+          <Input type="date" className="w-36" aria-label="From date (UTC)"
+            title="From (UTC calendar day)" value={fromDate}
+            onChange={(e) => { setFromDate(e.target.value); setOffset(0); }} />
+          <Input type="date" className="w-36" aria-label="To date (UTC, inclusive)"
+            title="To (UTC calendar day, inclusive)" value={toDate}
+            onChange={(e) => { setToDate(e.target.value); setOffset(0); }} />
           <span className="text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
           <span className="grow" />
           <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
@@ -186,7 +230,7 @@ export default function RunsPage() {
           </Button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[42rem] text-left text-sm">
+          <table className="w-full min-w-[64rem] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr>
                 <th className="py-1.5 pr-3">run</th>
@@ -194,14 +238,40 @@ export default function RunsPage() {
                 <th className="pr-3">state</th>
                 <th className="pr-3">started</th>
                 <th className="pr-3">duration</th>
+                <th className="pr-3 text-right">in</th>
+                <th className="pr-3 text-right">out</th>
+                <th className="pr-3 text-right">cache r</th>
+                <th className="pr-3 text-right">cache w</th>
+                <th className="pr-3 text-right">cost</th>
                 <th>trace</th>
               </tr>
             </thead>
             <tbody>
               {data.runs.length === 0 && (
-                <tr><td colSpan={6} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
+                <tr><td colSpan={11} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
                   No runs{filter ? " match this filter" : " yet"}.
                 </td></tr>
+              )}
+              {data.totals && data.runs.length > 0 && (
+                <tr data-testid="runs-totals"
+                  className="border-t border-neutral-200 bg-stone-50/70 text-xs font-medium dark:border-neutral-700 dark:bg-neutral-900/70">
+                  <td className="py-2 pr-3" colSpan={4}>
+                    filtered totals — {data.total} run{data.total === 1 ? "" : "s"}
+                  </td>
+                  <td className="whitespace-nowrap pr-3 tabular-nums"
+                    title="Sum of completed runs' durations (live runs excluded)">
+                    {durationSeconds(data.totals.runtime_seconds)}
+                  </td>
+                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.input_tokens)}</td>
+                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.output_tokens)}</td>
+                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.cache_read_tokens)}</td>
+                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.cache_write_tokens)}</td>
+                  <td className="pr-3 text-right tabular-nums"
+                    title={`native ${usd(data.totals.cost_usd)} · estimated ${usd(data.totals.cost_usd_estimated)}`}>
+                    {usd(data.totals.cost_usd_effective)}
+                  </td>
+                  <td />
+                </tr>
               )}
               {data.runs.map((r) => (
                 <tr key={r.run_id} onClick={() => setOpenRun(r)}
@@ -251,6 +321,11 @@ export default function RunsPage() {
                   <td className="whitespace-nowrap pr-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
                     {duration(r.started_at, r.ended_at)}
                   </td>
+                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.input_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.output_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.cache_read_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.cache_write_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums">{costCell(r)}</td>
                   <td>
                     <a className="inline-flex items-center gap-0.5 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
                       href={traceUrl(r.run_id)}
@@ -266,6 +341,9 @@ export default function RunsPage() {
         </div>
       </Card>
       {openRun && <RunTerminal run={openRun} onClose={() => setOpenRun(null)} />}
+      {costOpen && (
+        <CostInputsModal onClose={() => setCostOpen(false)} onSaved={load} />
+      )}
       <ConfirmDialog
         open={stopConfirmOpen}
         title="Stop all in-flight runs?"

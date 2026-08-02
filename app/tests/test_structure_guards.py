@@ -23,7 +23,7 @@ MAIN = Path(__file__).parents[1] / "devcake" / "api" / "main.py"
 # clear endpoints. Everything else forwards to a service module.
 ROUTE_BODY_ALLOWLIST = {
     "dispatch_hello", "run_mapper", "oauth_start", "oauth_status",
-    "clear_runs", "list_runs", "get_run", "get_run_log", "stream_run_log",
+    "clear_runs", "get_run_log", "stream_run_log",
 }
 
 

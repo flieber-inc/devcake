@@ -8,6 +8,9 @@ import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "./instanceNames.js";
 const IGNORED = [
   /^cfg\.intake_paused$/,
   /^cfg\.dismissed_alerts$/,
+  // Cost Inputs modal on the Runs page writes {cost_inputs} instantly
+  // (ADR-0021) — a stale open draft must never clobber it on Save
+  /^cfg\.cost_inputs/,
   /^cfg\.schema_version$/,
   /^devTypes\.[^.]+\.secrets_present$/,
   /^devTypes\.[^.]+\.secret_env_present$/,

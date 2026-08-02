@@ -138,16 +138,13 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
 
 // neutral state note when a saved repo stores ONLY a read-only token: a
 // first-class reference-only repo (founder decisions 2026-07-15) — health
-// treats it as OK, so the note informs rather than warns
-function RoOnlyNote({ name }) {
-  const [state, setState] = useState(null);
-  useEffect(() => {
-    get(`/secrets-check?conn=repo:${name}:token,repo:${name}:token_ro`)
-      .then((r) => setState({
-        w: r.conn[`repo:${name}:token`]?.present,
-        ro: r.conn[`repo:${name}:token_ro`]?.present,
-      })).catch(() => setState(null));
-  }, [name]);
+// treats it as OK, so the note informs rather than warns. Reads the page's
+// batched presence map (bulk-scale 2026-08-02) instead of its own fetch.
+function RoOnlyNote({ name, presence }) {
+  const state = presence && {
+    w: presence[`repo:${name}:token`]?.present,
+    ro: presence[`repo:${name}:token_ro`]?.present,
+  };
   if (!state || state.w || !state.ro) return null;
   return (
     <p className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -178,6 +175,43 @@ export default function ReposPage({ onHealthChange }) {
   // one came back born name-locked
   const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos,
                                repoNewNamesState);
+  // bulk-scale (2026-08-02): 350 cards × (3 SecretField self-fetches + a
+  // RoOnlyNote fetch) was ~1,400 requests per page load. The page renders at
+  // most CARD_CAP filtered cards, and ONE chunked batch covers their three
+  // token fields; SecretFields receive it via the `presence` prop and skip
+  // their self-fetch. The filter is debounced so typing doesn't refetch per
+  // keystroke.
+  const CARD_CAP = 30;
+  const [filter, setFilter] = useState("");
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(filter), 300);
+    return () => clearTimeout(t);
+  }, [filter]);
+  const [presence, setPresence] = useState({});   // "repo:name:field" → {present}
+  const draftRepoNames = (dr.draft?.cfg.repos || []).map((r) => r.name);
+  // filter + cap engage only past CARD_CAP — small fleets keep every card,
+  // and a leftover filter can never hide cards while its input is hidden
+  const filterActive = draftRepoNames.length > CARD_CAP;
+  const fq = filterActive ? query.trim().toLowerCase() : "";
+  const visibleNames = filterActive
+    ? draftRepoNames.filter((n) => !fq || n.toLowerCase().includes(fq)).slice(0, CARD_CAP)
+    : draftRepoNames;
+  const visibleKey = visibleNames.join(",");
+  useEffect(() => {
+    const refs = visibleNames.filter(Boolean).flatMap((n) =>
+      [`repo:${n}:token`, `repo:${n}:token_ro`, `repo:${n}:reviewer_token`]);
+    if (!refs.length) return;
+    let live = true;
+    const chunks = [];
+    for (let i = 0; i < refs.length; i += 40) chunks.push(refs.slice(i, i + 40));
+    Promise.all(chunks.map((chunk) =>
+      get(`/secrets-check?conn=${encodeURIComponent(chunk.join(","))}`)
+        .then((r) => Object.fromEntries(chunk.map((ref) => [ref, r.conn[ref] || { present: false }])))
+        .catch(() => ({}))))
+      .then((parts) => { if (live) setPresence((p) => Object.assign({}, p, ...parts)); });
+    return () => { live = false; };
+  }, [visibleKey, secretsEpoch]);
 
   if (!dr.loaded) {
     return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
@@ -185,6 +219,9 @@ export default function ReposPage({ onHealthChange }) {
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
+  const visibleSet = new Set(visibleNames);
+  const shownRepos = cfg.repos.filter((r) => visibleSet.has(r.name));
+  const hiddenCount = cfg.repos.length - shownRepos.length;
   // stored tokens key on the repo name — locked once saved. A card counts as
   // saved only when the server holds its name AND it isn't the card that was
   // (re)added this session, so a new card can never be born frozen. When a
@@ -259,7 +296,30 @@ export default function ReposPage({ onHealthChange }) {
               onClick: () => setClearSecrets(true) },
           ]} />
         }>
+        {filterActive && (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="relative w-64 shrink-0">
+              <Input className="pr-7" value={filter}
+                placeholder={`Filter ${cfg.repos.length} repositories…`}
+                aria-label="Filter repositories by name"
+                onChange={(e) => setFilter(e.target.value)} />
+              {filter && (
+                <button type="button" aria-label="Clear repository filter"
+                  onClick={() => setFilter("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                  ✕
+                </button>
+              )}
+            </span>
+            {hiddenCount > 0 && (
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                Showing {shownRepos.length} of {cfg.repos.length} — refine the filter
+              </span>
+            )}
+          </div>
+        )}
         {cfg.repos.map((repo, idx) => {
+          if (!visibleSet.has(repo.name)) return null;
           const tr = testResult[`forge:${repo.name}`];
           return (
             <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
@@ -355,17 +415,20 @@ export default function ReposPage({ onHealthChange }) {
                   help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored securely — never echoed, never in .env."
                   refKey={`repo:${repo.name}:token`} paste
                   absentNote="not set — repo is reference-only until an Access token is stored"
+                  presence={presence[`repo:${repo.name}:token`] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
                   refKey={`repo:${repo.name}:token_ro`} paste optional
+                  presence={presence[`repo:${repo.name}:token_ro`] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Reviewer token" hint="Recommended 2nd account → formal PR approvals"
                   help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not the same as staffing a different Dev Type for REVIEW."
                   refKey={`repo:${repo.name}:reviewer_token`} paste optional
+                  presence={presence[`repo:${repo.name}:reviewer_token`] || null}
                   locked={!nameLocked(repo.name, idx)} />
               </div>
-              {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} />}
+              {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} presence={presence} />}
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testForge(repo.name)}>Test connection</Button>
                 <ImmediateBadge text="tests saved values" />

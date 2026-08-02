@@ -133,4 +133,39 @@ await withPage(async (page) => {
     narrowPuts.length >= 2);
 });
 
+// Repo picker (2026-08-02 bulk-scale): selected chips render first in
+// SELECTION order with the default badge on chip 1; non-first selected
+// chips carry a pin "make default" affordance that reorders the draft.
+// Everything here ends in Discard — live config untouched.
+await withPage(async (page) => {
+  await gotoFresh(page, "#/pmo");
+  await page.waitForSelector("#pmo");
+  const defaultChip = page.locator('#pmo button:has-text("· default")');
+  if ((await defaultChip.count()) === 0) {
+    skip("repo picker order affordances", "no PMO with ≥1 work repo on this stack");
+  } else {
+    check("the first selected work repo wears the default badge",
+      (await defaultChip.count()) >= 1);
+    const pin = page.locator('#pmo button[aria-label^="Make "]').first();
+    if ((await pin.count()) === 0) {
+      skip("make-default reorders the draft", "PMO has a single work repo");
+    } else {
+      const newDefault = (await pin.getAttribute("aria-label"))
+        .replace(/^Make | the default$/g, "");
+      await pin.click();
+      await page.waitForSelector('span:has-text("Unsaved changes")');
+      check("make-default reorders the draft (DirtyBar appears)",
+        (await page.locator(`#pmo button:has-text("${newDefault} · default")`).count()) === 1);
+      await page.click('button:has-text("Discard changes")');
+      await page.waitForTimeout(200);
+      check("discard restores the original default",
+        (await page.locator("text=Unsaved changes").count()) === 0);
+    }
+    // small catalogs keep the zero-friction chip cloud — no search box
+    check("catalog search stays hidden under the threshold",
+      (await page.locator('#pmo input[aria-label^="Search "]').count()) === 0 ||
+      (await page.locator('#pmo button').count()) > 12);
+  }
+});
+
 summary("pmo_intake");

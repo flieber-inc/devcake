@@ -1,27 +1,25 @@
-// Missions suite: the board must fit the main pane at the notebook floor
-// (≥1440, sidebar auto-collapsed) and at the harness default (1280) without triggering horizontal
-// scroll — both on an empty board AND with a stress payload that exercises
-// every column with long mono keys, long titles, and every label variant a
-// MissionCard renders. The empty-board pass is trivially satisfied by empty
-// dashed placeholders; the populated pass is what real operators see.
-// Read-only — everything is route-mocked or a plain GET.
+// Missions suite: pipeline strip + grouped mission list (2026-08-02 board
+// re-decision, DESIGN.md §2 — kanban columns retired: their geometry assumed
+// even occupancy while the steady state is extreme skew, six empty columns
+// around one overflowing Done). Gates: the strip carries all seven stages,
+// sections exist only for non-empty stages (Needs human pinned first, Done
+// last), rows stay single-line and dense, Done previews then unfolds, the
+// page never scrolls horizontally at ANY width, and the sidebar collapse
+// toggle works on Missions (the force-collapse exception died with the
+// board). Read-only — everything is route-mocked or a plain GET.
 import { check, gotoFresh, summary, withPage } from "./harness.mjs";
 
-// Worst-case rows: each column gets 5 cards with fields that push MissionCard
-// widest — a long key (font-mono, no truncate in the header row), a long
-// title, priority pill, repo string, url link, reason text. `done` gets 35
-// entries so `bucketize` exercises its 30-cap slice too.
 const LONG_KEY = "PLATFORM-999999";
 const LONG_TITLE =
-  "A ticket title that exercises the two-line line-clamp so the card grows " +
-  "tall enough to reveal any horizontal bleed from the meta row below";
-const LONG_REASON =
-  "A blocking condition that spans two lines when clamped so the reason row " +
-  "is exercised alongside the label chip and updated timestamp";
+  "A ticket title that is long enough to exercise the single-line truncate " +
+  "so a dense row can never wrap into a second line and grow the list";
+const DONE_REASON = "terminal — ignored";
 const LONG_REPO = "acme-corp/very-long-repo-name-with-hyphens-that-could-wrap";
 
+// Every stage populated + every needs-human variant + 35 done entries so
+// bucketize exercises its 30-cap and the section its 10-row preview.
 const COLUMN_SEEDS = [
-  { col: "backlog",     status: "backlog",    labels: [] },
+  { col: "backlog",     status: "backlog",     labels: [] },
   { col: "plan",        status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-PLAN"] },
   { col: "execute",     status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-EXECUTE"] },
   { col: "review",      status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-REVIEW"] },
@@ -30,7 +28,7 @@ const COLUMN_SEEDS = [
   { col: "needs_human_skip",     status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-SKIP"] },
   { col: "needs_human_failed",   status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-FAILED"] },
   { col: "needs_human_wanted",   status: "in_progress", labels: ["DEVCAKE", "DEVCAKE-NEEDS-HUMAN"] },
-  { col: "done",        status: "done",       labels: ["DEVCAKE"] },
+  { col: "done",        status: "done",        labels: ["DEVCAKE"] },
 ];
 
 function makeRows() {
@@ -46,139 +44,134 @@ function makeRows() {
         title: `${LONG_TITLE} (${seed.col} #${i + 1})`,
         status: seed.status,
         labels: seed.labels,
-        mission_type: "main-dev",
-        priority: "URGENT",
+        mission_type: "PLAN",
+        priority: i % 2 ? "urgent" : "medium",
         repo: LONG_REPO,
         url: `https://linear.app/example/issue/${idx}`,
         updated_at: new Date(Date.now() - idx * 60_000).toISOString(),
         schedulable: seed.col === "backlog",
-        reason: seed.col === "backlog" ? LONG_REASON : "",
+        reason: seed.col === "done" ? DONE_REASON : "",
       });
     }
   }
   return rows;
 }
 
-async function assertBoardFits(width, height, { populated } = {}) {
-  const rows = populated ? makeRows() : [];
-  const label = populated ? "populated" : "empty";
+function mockMissions(page, rows) {
+  return page.route(/\/api\/v1\/missions(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ missions: rows, adoption_mode: "auto", teams: {} }),
+    }),
+  );
+}
+
+// ── populated list: structure, density, preview, no horizontal scroll ──────
+async function assertList(width, height) {
   await withPage(async (page) => {
-    if (populated) {
-      // Surgical mock: exact /api/v1/missions only (leave /health, actions,
-      // etc. alone). Matches both first fetch and the 10s poll.
-      await page.route(/\/api\/v1\/missions(?:\?.*)?$/, (route) =>
-        route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ missions: rows, adoption_mode: "auto", teams: {} }),
-        }),
-      );
-    }
+    await mockMissions(page, makeRows());
     await gotoFresh(page, "#/missions");
-    await page.waitForSelector('[data-testid="board-scroller"] section', { timeout: 8000 });
-    if (populated) {
-      // Wait for at least one real card (MissionCard uses role="button" with
-      // a mono key inside). Bare-stack empty renders "empty" placeholders,
-      // no role=button — this proves the mock landed.
-      await page.waitForSelector('[data-testid="board-scroller"] [role="button"]', { timeout: 8000 });
-    }
-    // the sidebar force-collapse animates (transition-[width] 200ms) —
-    // measuring mid-transition reads an expanded-width main pane
-    await page.waitForTimeout(350);
-    const { boardScroll, boardClient, worstCard } = await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="board-scroller"]');
-      const cards = [...el.querySelectorAll('[role="button"]')];
-      let worst = { overflow: 0, key: null };
-      for (const c of cards) {
-        const over = Math.ceil(c.scrollWidth) - c.clientWidth;
-        if (over > worst.overflow) {
-          const keyEl = c.querySelector(".font-mono");
-          worst = { overflow: over, key: keyEl ? keyEl.textContent : "?" };
-        }
-      }
-      return { boardScroll: el.scrollWidth, boardClient: el.clientWidth, worstCard: worst };
+    await page.waitForSelector('[data-testid="mission-list"] [role="button"]', { timeout: 8000 });
+
+    // strip: all 7 stages present, populated ones as jump buttons
+    const strip = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="pipeline-strip"]');
+      return {
+        chips: el ? el.querySelectorAll("span.rounded-full, button").length : 0,
+        buttons: el ? el.querySelectorAll("button").length : 0,
+        text: el ? el.textContent : "",
+      };
     });
-    const boardOver = Math.ceil(boardScroll) - boardClient;
-    check(
-      `${label} board fits at ${width}×${height} (scrollWidth ${boardScroll} ≤ clientWidth ${boardClient})`,
-      boardOver <= 1,
-      boardOver > 1 ? `overflows by ${boardOver}px` : "",
-    );
-    if (populated) {
-      check(
-        `${label} board — no card overflows its column at ${width}×${height}`,
-        worstCard.overflow <= 1,
-        worstCard.overflow > 1
-          ? `worst card (${worstCard.key}) overflows by ${worstCard.overflow}px`
-          : "",
-      );
+    check(`strip carries all 7 stages at ${width}`, strip.chips === 7, `got ${strip.chips}`);
+    check(`strip: every populated stage is a jump button at ${width}`,
+      strip.buttons === 7, `got ${strip.buttons} (all stages are seeded)`);
+    check(`strip shows the capped Done count at ${width}`, /Done\s*30/.test(strip.text));
+
+    // sections: only non-empty stages, Needs human first, Done last, no
+    // "empty" placeholders anywhere
+    const sections = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="mission-list"] section')]
+        .map((s) => s.getAttribute("aria-label")));
+    check(`sections render only non-empty stages at ${width}`, sections.length === 7,
+      `got ${sections.join(",")}`);
+    check(`Needs human is pinned first at ${width}`, sections[0] === "Needs human");
+    check(`Done is last at ${width}`, sections[sections.length - 1] === "Done");
+    check(`no empty placeholders at ${width}`,
+      (await page.locator('[data-testid="mission-list"] :text-is("empty")').count()) === 0);
+
+    // density: rows are single-line (≤48px) and the viewport shows a crowd
+    const { rowMax, visible, listOver, docOver } = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-testid="mission-list"] [role="button"]')];
+      const vh = window.innerHeight;
+      return {
+        rowMax: Math.max(...rows.map((r) => r.getBoundingClientRect().height)),
+        visible: rows.filter((r) => {
+          const b = r.getBoundingClientRect();
+          return b.top >= 0 && b.bottom <= vh;
+        }).length,
+        listOver: (() => {
+          const el = document.querySelector('[data-testid="mission-list"]');
+          return Math.ceil(el.scrollWidth) - el.clientWidth;
+        })(),
+        docOver: Math.ceil(document.documentElement.scrollWidth) - document.documentElement.clientWidth,
+      };
+    });
+    // 52px = py-2 (16) + the 32px ⋯ trigger + row border and subpixel slack;
+    // a wrapped title would add a full ~20px line and blow well past this
+    check(`rows stay single-line at ${width} (tallest ${Math.ceil(rowMax)}px ≤ 52)`, rowMax <= 52);
+    if (height >= 900) {
+      check(`≥10 rows fully visible at ${width}×${height} (got ${visible})`, visible >= 10);
     }
+    check(`no horizontal scroll at ${width} (list ${listOver}px, doc ${docOver}px)`,
+      listOver <= 1 && docOver <= 1);
+
+    // Done preview: 10 rows + honest unfold, section header hoists the
+    // shared reason so rows don't repeat it
+    const doneRows = () =>
+      page.locator('section[aria-label="Done"] [role="button"]').count();
+    check(`Done previews ${10} of 30 at ${width}`, (await doneRows()) === 10);
+    check(`Done header hoists the shared reason at ${width}`,
+      (await page.locator(`section[aria-label="Done"] header:has-text("${DONE_REASON}")`).count()) === 1);
+    await page.click('section[aria-label="Done"] button:has-text("Show all 30")');
+    check(`Show all unfolds the capped 30 at ${width}`, (await doneRows()) === 30);
+    await page.click('section[aria-label="Done"] button:has-text("Show fewer")');
+    check(`Show fewer folds back at ${width}`, (await doneRows()) === 10);
+
+    // row click opens the drawer (drawer itself unchanged)
+    await page.locator('section[aria-label="Done"] [role="button"]').first().click();
+    await page.waitForSelector('button[aria-label="Close drawer"]', { timeout: 5000 });
+    check(`row click opens the mission drawer at ${width}`, true);
+    await page.click('button[aria-label="Close drawer"]');
   }, { width, height });
 }
 
-// Readability gate below the design floor: the board MAY scroll, but every
-// column must hold its raised min width so cards stay legible.
-async function assertBoardReadable(width, height) {
-  const rows = makeRows();
-  await withPage(async (page) => {
-    await page.route(/\/api\/v1\/missions(?:\?.*)?$/, (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ missions: rows, adoption_mode: "auto", teams: {} }),
-      }),
-    );
-    await gotoFresh(page, "#/missions");
-    await page.waitForSelector('[data-testid="board-scroller"] [role="button"]', { timeout: 8000 });
-    const { minCol, worstCard } = await page.evaluate(() => {
-      const cols = [...document.querySelectorAll('[data-testid="board-scroller"] section')];
-      const cards = [...document.querySelectorAll('[data-testid="board-scroller"] [role="button"]')];
-      let worst = 0;
-      for (const c of cards) worst = Math.max(worst, Math.ceil(c.scrollWidth) - c.clientWidth);
-      return { minCol: Math.min(...cols.map((c) => c.clientWidth)), worstCard: worst };
-    });
-    check(
-      `columns stay readable at ${width}×${height} (narrowest ${minCol}px ≥ 160)`,
-      minCol >= 160,
-    );
-    check(`no card overflows its column at ${width}×${height}`, worstCard <= 1);
-  }, { width, height });
-}
+await assertList(1440, 900);
+await assertList(1280, 900);
+await assertList(390, 844);   // the list layout owes ANY width — no fit math
 
-// Design floor (2026-08-02 re-decision, founder-directed): no horizontal
-// scroll at ≥1440 (sidebar auto-collapsed below 1536) — the floor the suite's original comment always named.
-// Below it, readable columns beat forced fit: 7×8rem columns at 1280 left
-// ~110px of text and titles read as two words (founder field report), so
-// 1280 now gates on column WIDTH while the board scrolls.
-await assertBoardFits(1440, 900);
-await assertBoardFits(1440, 900, { populated: true });
-await assertBoardReadable(1280, 900);
+// ── empty board: message only, no strip ────────────────────────────────────
+await withPage(async (page) => {
+  await mockMissions(page, []);
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector(':text("No missions yet")', { timeout: 8000 });
+  check("empty board shows the waiting message",
+    (await page.locator(':text("No missions yet")').count()) >= 1);
+  check("empty board renders no strip",
+    (await page.locator('[data-testid="pipeline-strip"]').count()) === 0);
+});
 
-// The Missions force-collapse under 1536 makes the sidebar toggle a no-op —
-// disable it honestly instead of shipping a control that lies. At 1600 the
-// force is off and the toggle is enabled.
+// ── the sidebar collapse toggle works on Missions at any width now ─────────
 await withPage(async (page) => {
   await gotoFresh(page, "#/missions");
-  await page.waitForSelector('[data-testid="board-scroller"]');
+  await page.waitForSelector('h1:has-text("Missions")');
   const state = await page.evaluate(() => {
     const btn = [...document.querySelectorAll("aside button")]
-      .find((b) => /sidebar|Missions below 1536/i.test(b.getAttribute("aria-label") || ""));
-    return { present: !!btn, disabled: btn?.disabled, aria: btn?.getAttribute("aria-label") };
-  });
-  check("sidebar toggle disabled at 1280 on Missions", state.present && state.disabled === true,
-    `aria=${state.aria} disabled=${state.disabled}`);
-}, { width: 1280, height: 900 });
-
-await withPage(async (page) => {
-  await gotoFresh(page, "#/missions");
-  await page.waitForSelector('[data-testid="board-scroller"]');
-  const state = await page.evaluate(() => {
-    const btn = [...document.querySelectorAll("aside button")]
-      .find((b) => /sidebar|Missions below 1536/i.test(b.getAttribute("aria-label") || ""));
+      .find((b) => /sidebar/i.test(b.getAttribute("aria-label") || ""));
     return { present: !!btn, disabled: btn?.disabled };
   });
-  check("sidebar toggle enabled at 1600 on Missions", state.present && state.disabled === false,
-    `disabled=${state.disabled}`);
-}, { width: 1600, height: 900 });
+  check("sidebar toggle enabled on Missions at 1280 (force-collapse deleted)",
+    state.present && state.disabled === false, `disabled=${state.disabled}`);
+}, { width: 1280, height: 900 });
 
 summary("missions");

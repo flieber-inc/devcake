@@ -23,7 +23,7 @@ export default function MissionCard({ row, syncing, onOpen, onAction }) {
       onClick: () => onAction(it.id),
     })),
     row.url && {
-      label: "Open in Linear",
+      label: "Open in PMO",
       external: true,
       onClick: () => window.open(row.url, "_blank", "noopener"),
     },
@@ -35,11 +35,14 @@ export default function MissionCard({ row, syncing, onOpen, onAction }) {
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onOpen()}
-      className="cursor-pointer rounded-card border border-neutral-200 bg-surface-raised p-3 shadow-card transition hover:border-accent-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:bg-surface-raised-dark"
+      className="cursor-pointer rounded-card border border-neutral-200 bg-surface-raised p-2.5 shadow-card transition hover:border-accent-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:bg-surface-raised-dark"
     >
-      <div className="mb-1.5 flex items-center gap-2">
+      <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
         {stage && <StageGlyph stage={stage} />}
-        <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
+        {/* min-w-0 + truncate: instance-prefixed keys (LINEARFIC-DEV-160)
+            must clip, not blow the card past its column */}
+        <span className="min-w-0 truncate font-mono text-xs text-neutral-500 dark:text-neutral-400"
+          title={row.key}>
           {row.key}
         </span>
         <span className="grow" />
@@ -75,7 +78,7 @@ export default function MissionCard({ row, syncing, onOpen, onAction }) {
           </span>
         )}
         {row.repo && (
-          <span className="truncate" title={`repo: ${row.repo}`}>
+          <span className="min-w-0 max-w-full truncate" title={`repo: ${row.repo}`}>
             {row.repo}
           </span>
         )}
@@ -85,7 +88,7 @@ export default function MissionCard({ row, syncing, onOpen, onAction }) {
             target="_blank"
             rel="noopener"
             onClick={(e) => e.stopPropagation()}
-            title="Open in Linear"
+            title="Open in PMO"
             className="inline-flex items-center gap-0.5 text-accent-700 underline underline-offset-2 dark:text-accent-300"
           >
             open <ExternalLink size={9} aria-hidden />

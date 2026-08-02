@@ -123,7 +123,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
     <>
       <Section id="pmo" title="PMO connections"
         description="The PMO teams DevCake watches, and how missions are adopted."
-        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}
+        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (MYTEAM-DEV-17).`}
         actions={
           <MoreMenu label="More PMO actions" items={[
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,

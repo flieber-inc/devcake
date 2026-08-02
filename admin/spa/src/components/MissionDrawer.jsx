@@ -67,7 +67,7 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
       });
       setComment("");
       setFlash(
-        "Guidance sent — it appears in Linear as a human comment, and the next poll will pick it up as steering."
+        "Guidance sent — it appears on your PMO as a human comment, and the next poll will pick it up as steering."
       );
       setTimeout(() => setFlash(""), 5000);
     } catch (e) {
@@ -133,7 +133,7 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
                   rel="noopener"
                   className="inline-flex items-center gap-1 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
                 >
-                  Open in Linear <ExternalLink size={11} aria-hidden />
+                  Open in PMO <ExternalLink size={11} aria-hidden />
                 </a>
               )}
               <button
@@ -188,13 +188,13 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
           <section>
             <h3 className="mb-1.5 text-sm font-semibold">Send guidance</h3>
             <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
-              This posts a human comment on the Linear issue. The next poll picks it up as
+              This posts a human comment on the PMO issue. The next poll picks it up as
               🧑 HUMAN context, and the attempt counter resets.
             </p>
             <Textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              placeholder="Type direction for the Dev — visible in Linear."
+              placeholder="Type direction for the Dev — visible on your PMO."
               rows={3}
               aria-label="Steering comment"
             />

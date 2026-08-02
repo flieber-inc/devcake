@@ -11,6 +11,7 @@ from opentelemetry.trace import SpanKind
 from ...harness import HARNESSES
 from ...security import redact_value
 from ...config import DevType
+from .. import costing
 from ..model import LABEL_OPTIN, Mission
 from . import dispatch
 from ..run import Run, utcnow
@@ -86,7 +87,9 @@ async def finalize_mapper(mgr, run: Run, payload: dict) -> None:
     mission. Failures are logged only; the next interval simply retries."""
     result = payload.get("result") or {}
     outcome = result.get("outcome", "")
-    run.token_report = redact_value(payload.get("token_report") or {})
+    # same ADR-0021 stamp as mission finalize — mapper spend is fleet spend
+    run.token_report = redact_value(costing.stamp_estimate(
+        payload.get("token_report") or {}, mgr.config.cost_inputs))
 
     ctx = None
     if run.traceparent:

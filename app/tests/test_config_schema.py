@@ -167,6 +167,55 @@ def test_recover_misplaced_result_defaults_on_and_round_trips():
     assert AppConfig.model_validate(merged).recover_misplaced_result is False
 
 
+def test_cost_inputs_defaults_validation_and_round_trip():
+    """ADR-0021: the operator rate card is additive config (no migration),
+    validated (no negative rates, no duplicate prefixes), and deep_merge-
+    patchable: a narrow PUT body {cost_inputs: {...}} replaces the rates
+    list wholesale while preserving the untouched sibling key."""
+    from devcake.config import CostInputs, ModelRate, deep_merge
+
+    fresh = AppConfig()
+    assert [r.model_prefix for r in fresh.cost_inputs.rates] == ["grok-4.5"]
+    assert fresh.cost_inputs.override_native is False
+    assert fresh.cost_inputs.rate_card_id == "builtin-v1"
+
+    # pre-feature config file (no cost_inputs key) still validates at v4
+    base = _base()
+    base.pop("cost_inputs", None)
+    assert AppConfig.model_validate(base).cost_inputs.rate_card_id == "builtin-v1"
+
+    # a default-card edit must not write through to DEFAULT_MODEL_RATES
+    fresh.cost_inputs.rates[0].input_per_mtok = 99.0
+    assert AppConfig().cost_inputs.rates[0].input_per_mtok == 2.00
+
+    with pytest.raises(ValueError):
+        ModelRate(model_prefix="x", input_per_mtok=-1.0,
+                  cache_read_per_mtok=0.1, output_per_mtok=1.0)
+    with pytest.raises(ValueError):
+        CostInputs(rates=[
+            ModelRate(model_prefix="grok-4.5", input_per_mtok=1.0,
+                      cache_read_per_mtok=0.1, output_per_mtok=1.0),
+            ModelRate(model_prefix="grok-4.5", input_per_mtok=2.0,
+                      cache_read_per_mtok=0.2, output_per_mtok=2.0)])
+
+    # narrow PUT patch: rates replaced wholesale, sibling flag preserved
+    on = AppConfig.model_validate(
+        {**_base(), "cost_inputs": {"override_native": True}})
+    assert on.cost_inputs.override_native is True
+    assert [r.model_prefix for r in on.cost_inputs.rates] == ["grok-4.5"]
+    merged = deep_merge(on.model_dump(), {"cost_inputs": {"rates": [
+        {"model_prefix": "claude-opus", "input_per_mtok": 5.0,
+         "cache_read_per_mtok": 0.5, "output_per_mtok": 25.0}]}})
+    patched = AppConfig.model_validate(merged)
+    assert [r.model_prefix for r in patched.cost_inputs.rates] == ["claude-opus"]
+    assert patched.cost_inputs.override_native is True    # sibling survived
+    assert patched.cost_inputs.rate_card_id.startswith("operator:")
+
+    # round-trip through model_dump keeps the operator card
+    again = AppConfig.model_validate(patched.model_dump())
+    assert again.cost_inputs.rate_card_id == patched.cost_inputs.rate_card_id
+
+
 def test_repo_url_shape_validated():
     """ISSUES #10: malformed forge URLs rejected at schema layer."""
     base = _base()

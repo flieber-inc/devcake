@@ -236,6 +236,63 @@ class RelationsMapper(BaseModel):
     dev_type: str | None = "mapper"
 
 
+class ModelRate(BaseModel):
+    """One operator rate-card row: USD per 1M tokens, keyed by model prefix
+    (longest prefix wins at estimation time — domain/costing.rate_for).
+    cache_write defaults to 0: grok reports no cache-write counter, and a
+    missing rate must price as free rather than block the whole estimate."""
+    model_prefix: str = Field(min_length=1, max_length=64)
+    input_per_mtok: float = Field(ge=0)
+    cache_read_per_mtok: float = Field(ge=0)
+    cache_write_per_mtok: float = Field(0.0, ge=0)
+    output_per_mtok: float = Field(ge=0)
+
+
+# xAI public list prices for grok-4.5 (standard, <200k prompt tokens) —
+# the one harness with token splits but no native cost_usd. Estimation is
+# app-side only; the harness layer stays estimate-free (docs/08 §5).
+DEFAULT_MODEL_RATES: list[ModelRate] = [
+    ModelRate(model_prefix="grok-4.5", input_per_mtok=2.00,
+              cache_read_per_mtok=0.30, output_per_mtok=6.00),
+]
+
+# Bump the -vN suffix whenever DEFAULT_MODEL_RATES change, so a stamped
+# feed line ("cost (estimated, builtin-v1)") names an unambiguous vintage.
+BUILTIN_RATE_CARD_ID = "builtin-v1"
+
+
+class CostInputs(BaseModel):
+    """Operator cost inputs (ADR-0021): the per-model rate card behind every
+    app-side cost estimate, plus the display-override switch. Native
+    harness-reported cost_usd stays authoritative and untouched; when
+    override_native is on, DISPLAY surfaces (Runs tab, feed) prefer the
+    rate-card computation where one is possible."""
+    rates: list[ModelRate] = Field(
+        default_factory=lambda: [r.model_copy() for r in DEFAULT_MODEL_RATES])
+    override_native: bool = False
+
+    @field_validator("rates")
+    @classmethod
+    def _unique_prefixes(cls, v: list[ModelRate]) -> list[ModelRate]:
+        seen: set[str] = set()
+        for r in v:
+            if r.model_prefix in seen:
+                raise ValueError(
+                    f"duplicate rate-card model prefix: {r.model_prefix!r}")
+            seen.add(r.model_prefix)
+        return v
+
+    @property
+    def rate_card_id(self) -> str:
+        rows = [r.model_dump() for r in self.rates]
+        if rows == [r.model_dump() for r in DEFAULT_MODEL_RATES]:
+            return BUILTIN_RATE_CARD_ID
+        import hashlib
+        import json
+        canon = json.dumps(rows, sort_keys=True)
+        return "operator:" + hashlib.sha256(canon.encode()).hexdigest()[:8]
+
+
 class DevType(BaseModel):
     """docs/02 §6 — one YAML per Dev Type under /data/config/dev_types/.
 
@@ -417,6 +474,9 @@ class AppConfig(BaseModel):
     # the fission backstop by explicit operator choice (docs/03 §1.3)
     max_decomposition_depth: int = Field(2, ge=0)
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    # operator rate card + display-override switch for app-side cost
+    # estimates (ADR-0021); edited via the Runs page "Cost inputs" modal
+    cost_inputs: CostInputs = Field(default_factory=CostInputs)
     # per-Mission-Type ACTIVE prompt template (v0.1.1): missing key ⇒ the
     # built-in "default". A dict map (deep_merge-safe: a patch touching one
     # type preserves siblings; reset = PUT the value "default"). Name

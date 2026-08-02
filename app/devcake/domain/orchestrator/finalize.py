@@ -8,7 +8,7 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ...security import redact, redact_value
-from .. import backend_health
+from .. import backend_health, costing
 from ..model import MissionRef
 from ..run import Run, utcnow
 from . import transitions
@@ -55,7 +55,11 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
     result = payload.get("result") or {}
     outcome = result.get("outcome", "")
     transcript = payload.get("transcript_md", "")
-    token_report = payload.get("token_report") or {}
+    # ADR-0021: stamp the app-side rate-card estimate (cost_usd_estimated +
+    # rate_card_id) before OTel/feed/persist all read the same dict. The
+    # harness never estimates; native cost_usd is never touched.
+    token_report = costing.stamp_estimate(
+        payload.get("token_report") or {}, mgr.config.cost_inputs)
     plan_md = payload.get("plan_md")
     pmo_id = run.mission_pmo_id
 

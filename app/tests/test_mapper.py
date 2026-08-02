@@ -61,6 +61,27 @@ def run_coro(c):
     return asyncio.get_event_loop().run_until_complete(c)
 
 
+def test_finalize_mapper_stamps_rate_card_estimate(tmp_path):
+    """ADR-0021 parity: mapper spend is fleet spend — finalize_mapper stamps
+    the same cost_usd_estimated + rate_card_id as mission finalize (failed
+    outcome path: the stamp must land regardless of run success)."""
+    mgr = make_mgr(tmp_path, MapPMO([]))
+    run = Run(run_id="SYS-MAPPER-1-ZZZZZZ", mission_key="MAPPER",
+              mission_type="MAPPER", dev_type="mapper", seq=1,
+              state="finalizing")
+    mgr.runs.store.save(run)
+    grok = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+            "cache_write_tokens": None, "output_tokens": 500_000,
+            "total_tokens": 3_500_000, "cost_usd": None,
+            "model": "grok-4.5-build", "extraction_method": "end_event"}
+    run_coro(mapper.finalize_mapper(
+        mgr, run, {"result": {"outcome": "nope"}, "token_report": grok}))
+    saved = mgr.runs.store.get(run.run_id).token_report
+    assert saved["cost_usd_estimated"] == 5.60
+    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["cost_usd"] is None
+
+
 def test_apply_mapper_edges_validates_everything(tmp_path):
     # B already blocked by A; C is terminal; D is free
     pmo = MapPMO([m("ia", "T-A"), m("ib", "T-B", blocked_by=["ia"]),

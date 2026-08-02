@@ -54,6 +54,19 @@ export default function RunsPage() {
 
   usePoll(load, 10000, [offset, query, pmoRef, fromDate, toDate]);
 
+  // per-run token magnitude for the cell tooltips: harness-reported total
+  // when present, else the sum of the known splits (plain arithmetic —
+  // deliberately NOT a 12th column: total ≈ cache reads on agent fleets
+  // and would hide the mix the split columns exist to show)
+  const runTotal = (r) => {
+    if (r.total_tokens != null) return r.total_tokens;
+    const known = [r.input_tokens, r.output_tokens, r.cache_read_tokens,
+                   r.cache_write_tokens].filter((v) => v != null);
+    return known.length ? known.reduce((a, b) => a + b, 0) : null;
+  };
+  const tokenCellTitle = (r) =>
+    runTotal(r) != null ? `run total: ${tokens(runTotal(r))} tokens` : undefined;
+
   // effective displayed cost per row (ADR-0021): native first, estimates
   // fill gaps — flipped when the operator's Cost Inputs override is on
   const overrideOn = !!data.rate_card?.override_native;
@@ -270,6 +283,12 @@ export default function RunsPage() {
                   className="border-t border-neutral-200 bg-stone-50/70 text-xs font-medium dark:border-neutral-700 dark:bg-neutral-900/70">
                   <td className="py-2 pr-3" colSpan={4}>
                     filtered totals — {data.total} run{data.total === 1 ? "" : "s"}
+                    {data.totals.total_tokens_effective != null && (
+                      <span className="font-normal text-neutral-500 dark:text-neutral-400"
+                        title="Reported totals where the harness gives one, summed splits where it doesn't">
+                        {" "}· {tokens(data.totals.total_tokens_effective)} tokens
+                      </span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap pr-3 tabular-nums"
                     title="Sum of completed runs' durations (live runs excluded)">
@@ -334,10 +353,10 @@ export default function RunsPage() {
                   <td className="whitespace-nowrap pr-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
                     {duration(r.started_at, r.ended_at)}
                   </td>
-                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.input_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.output_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.cache_read_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums">{tokens(r.cache_write_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.output_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
+                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
                   <td className="pr-3 text-right text-xs tabular-nums">{costCell(r)}</td>
                   <td>
                     <a className="inline-flex items-center gap-0.5 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"

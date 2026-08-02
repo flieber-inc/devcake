@@ -124,6 +124,22 @@ def test_totals_cover_the_whole_filtered_set(tmp_path):
     assert out["pmo_refs"] == ["alpha"]
 
 
+def test_effective_token_total_prefers_reported_else_sums_splits(tmp_path):
+    """The totals-row label wants ONE complete magnitude: per run, the
+    harness-reported total when present (grok), else the arithmetic sum of
+    the known splits (claude/codex report no total). Kept separate from
+    totals.total_tokens, which stays the honest sum of REPORTED totals."""
+    store = _store(tmp_path, [_run(1, tr=GROK_TR), _run(2, tr=CLAUDE_TR)])
+    t = list_runs_response(store, CostInputs(), limit=25, offset=0)["totals"]
+    claude_split_sum = 10_000 + 5_000 + 2_000 + 1_000
+    assert t["total_tokens_effective"] == 3_500_000 + claude_split_sum
+    assert t["total_tokens"] == 3_500_000          # reported-only, unchanged
+
+    bare = _store(tmp_path / "bare", [_run(1, tr=None)])
+    t = list_runs_response(bare, CostInputs(), limit=25, offset=0)["totals"]
+    assert t["total_tokens_effective"] is None
+
+
 def test_totals_are_null_when_no_run_contributed(tmp_path):
     """A column with zero contributions across the whole filtered set is
     UNKNOWN, not zero — an all-grok history must show cache-write "—" in the

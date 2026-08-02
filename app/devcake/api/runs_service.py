@@ -93,7 +93,7 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
     # "—", and a fleet with no cost data a fabricated $0.00
     totals: dict = {k: None for k in _TOKEN_SUMS}
     totals["runtime_seconds"] = 0
-    cost = cost_est = cost_eff = None
+    cost = cost_est = cost_eff = tok_eff = None
     for r in runs:
         if r.started_at and r.ended_at:
             totals["runtime_seconds"] += int(
@@ -103,6 +103,17 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
             v = tr.get(k)
             if v is not None:
                 totals[k] = (totals[k] or 0) + v
+        # effective run total for the totals-row label: harness-reported
+        # when present (grok), else the SUM of the known splits — plain
+        # arithmetic on counts (claude/codex report no total), never an
+        # estimate. totals.total_tokens stays reported-only.
+        run_total = tr.get("total_tokens")
+        if run_total is None:
+            known = [tr.get(k) for k in _TOKEN_SUMS if k != "total_tokens"
+                     and tr.get(k) is not None]
+            run_total = sum(known) if known else None
+        if run_total is not None:
+            tok_eff = (tok_eff or 0) + run_total
         native = tr.get("cost_usd")
         est = costing.estimate_cost_usd(tr, cost_inputs.rates)
         eff = costing.effective_cost(native, est, cost_inputs)
@@ -117,6 +128,7 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
                                     if cost_est is not None else None)
     totals["cost_usd_effective"] = (round(cost_eff, 6)
                                     if cost_eff is not None else None)
+    totals["total_tokens_effective"] = tok_eff
 
     page = []
     for r in runs[offset:offset + limit]:

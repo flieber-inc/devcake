@@ -1,5 +1,5 @@
 // Missions suite: the board must fit the main pane at the notebook floor
-// (≥1440) and at the harness default (1280) without triggering horizontal
+// (≥1440, sidebar auto-collapsed) and at the harness default (1280) without triggering horizontal
 // scroll — both on an empty board AND with a stress payload that exercises
 // every column with long mono keys, long titles, and every label variant a
 // MissionCard renders. The empty-board pass is trivially satisfied by empty
@@ -82,6 +82,9 @@ async function assertBoardFits(width, height, { populated } = {}) {
       // no role=button — this proves the mock landed.
       await page.waitForSelector('[data-testid="board-scroller"] [role="button"]', { timeout: 8000 });
     }
+    // the sidebar force-collapse animates (transition-[width] 200ms) —
+    // measuring mid-transition reads an expanded-width main pane
+    await page.waitForTimeout(350);
     const { boardScroll, boardClient, worstCard } = await page.evaluate(() => {
       const el = document.querySelector('[data-testid="board-scroller"]');
       const cards = [...el.querySelectorAll('[role="button"]')];
@@ -113,22 +116,53 @@ async function assertBoardFits(width, height, { populated } = {}) {
   }, { width, height });
 }
 
-// Notebook floor per plan/joyful-herding-knuth: no horizontal scroll at ≥1440.
-await assertBoardFits(1440, 900);
-await assertBoardFits(1280, 900);
-// Populated payload: what an operator actually sees.
-await assertBoardFits(1440, 900, { populated: true });
-await assertBoardFits(1280, 900, { populated: true });
+// Readability gate below the design floor: the board MAY scroll, but every
+// column must hold its raised min width so cards stay legible.
+async function assertBoardReadable(width, height) {
+  const rows = makeRows();
+  await withPage(async (page) => {
+    await page.route(/\/api\/v1\/missions(?:\?.*)?$/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ missions: rows, adoption_mode: "auto", teams: {} }),
+      }),
+    );
+    await gotoFresh(page, "#/missions");
+    await page.waitForSelector('[data-testid="board-scroller"] [role="button"]', { timeout: 8000 });
+    const { minCol, worstCard } = await page.evaluate(() => {
+      const cols = [...document.querySelectorAll('[data-testid="board-scroller"] section')];
+      const cards = [...document.querySelectorAll('[data-testid="board-scroller"] [role="button"]')];
+      let worst = 0;
+      for (const c of cards) worst = Math.max(worst, Math.ceil(c.scrollWidth) - c.clientWidth);
+      return { minCol: Math.min(...cols.map((c) => c.clientWidth)), worstCard: worst };
+    });
+    check(
+      `columns stay readable at ${width}×${height} (narrowest ${minCol}px ≥ 160)`,
+      minCol >= 160,
+    );
+    check(`no card overflows its column at ${width}×${height}`, worstCard <= 1);
+  }, { width, height });
+}
 
-// The Missions force-collapse under 1440 makes the sidebar toggle a no-op —
-// disable it honestly instead of shipping a control that lies. At 1440 the
+// Design floor (2026-08-02 re-decision, founder-directed): no horizontal
+// scroll at ≥1440 (sidebar auto-collapsed below 1536) — the floor the suite's original comment always named.
+// Below it, readable columns beat forced fit: 7×8rem columns at 1280 left
+// ~110px of text and titles read as two words (founder field report), so
+// 1280 now gates on column WIDTH while the board scrolls.
+await assertBoardFits(1440, 900);
+await assertBoardFits(1440, 900, { populated: true });
+await assertBoardReadable(1280, 900);
+
+// The Missions force-collapse under 1536 makes the sidebar toggle a no-op —
+// disable it honestly instead of shipping a control that lies. At 1600 the
 // force is off and the toggle is enabled.
 await withPage(async (page) => {
   await gotoFresh(page, "#/missions");
   await page.waitForSelector('[data-testid="board-scroller"]');
   const state = await page.evaluate(() => {
     const btn = [...document.querySelectorAll("aside button")]
-      .find((b) => /sidebar|Missions below 1440/i.test(b.getAttribute("aria-label") || ""));
+      .find((b) => /sidebar|Missions below 1536/i.test(b.getAttribute("aria-label") || ""));
     return { present: !!btn, disabled: btn?.disabled, aria: btn?.getAttribute("aria-label") };
   });
   check("sidebar toggle disabled at 1280 on Missions", state.present && state.disabled === true,
@@ -140,11 +174,11 @@ await withPage(async (page) => {
   await page.waitForSelector('[data-testid="board-scroller"]');
   const state = await page.evaluate(() => {
     const btn = [...document.querySelectorAll("aside button")]
-      .find((b) => /sidebar|Missions below 1440/i.test(b.getAttribute("aria-label") || ""));
+      .find((b) => /sidebar|Missions below 1536/i.test(b.getAttribute("aria-label") || ""));
     return { present: !!btn, disabled: btn?.disabled };
   });
-  check("sidebar toggle enabled at 1440 on Missions", state.present && state.disabled === false,
+  check("sidebar toggle enabled at 1600 on Missions", state.present && state.disabled === false,
     `disabled=${state.disabled}`);
-}, { width: 1440, height: 900 });
+}, { width: 1600, height: 900 });
 
 summary("missions");

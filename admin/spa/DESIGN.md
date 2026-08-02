@@ -102,24 +102,36 @@ Do not build a new one-off field layout when SettingRow fits. Complex entities
 (PMO instances, repos) stay as cards; grids of per-type values (Assignments)
 stay as tables.
 
-### Roster grid (Dev Types)
+### Roster table (Dev Types)
 
-Dev Types render as a **roster grid** (decided 2026-07-27, Buzz-style): compact
-tiles — monogram avatar in the accent tint (no emoji/illustrations), a
-credential-readiness dot (green = ready, amber = none), name in mono,
-`harness · model` line — plus a dashed "New Dev Type" tile closing the grid.
-The dashed tile is the ONLY create affordance — no twin button in the section
-header (the header keeps the immediacy badge and the ⋯; Clear secrets stays in
-the ⋯ even as its lone item, because §3.4 bars destructive header buttons).
-The whole tile opens the **editor modal**; Rename/Delete stay behind the
-tile's ⋯. The modal edits the shared draft (footer states "applied by the
-page-level Save" — no per-modal save button, ever); OAuth / uploads / secret
-values stay in their `InstantZone`s inside it. The editor's first view is
-harness, model and skills only (Buzz-style); credentials, concurrency and
-per-type plumbing (MCP setup, secret env) live behind a single `Advanced…`
-disclosure (labeled just "Advanced"). Credential readiness is never hidden
-by the fold — the header subtitle carries it (green ready / amber missing).
-Use this idiom only for identity-like rosters; settings stay SettingRows.
+Dev Types render as a **roster table** (re-decided 2026-08-02, founder-directed
+— the 2026-07-27 tile grid didn't survive bulk scale: a 12-Dev-Type stress
+test made oversized cards the problem; a table is as elegant at 3 rows as at
+20). The tile grid's invariants carry over unchanged: each row leads with the
+small monogram avatar (no emoji/illustrations) wearing the
+credential-readiness dot (green = ready, amber = none — readiness is NEVER
+hidden), name in mono, then harness / model / max-concurrency
+(`tabular-nums`) / skills-count columns and a **status** cell that is always
+informative: credential readiness in words (green "ready" / amber
+"no credentials" — the avatar dot's meaning, spelled out) plus an amber
+"· unsaved changes" badge appended while the row has draft edits (founder
+follow-up 2026-08-02: the earlier reserved-but-invisible badge slot looked
+like an empty, broken column).
+A dashed full-width "New Dev Type" row closes the table and is the ONLY
+create affordance — no twin button in the section header (the header keeps
+the immediacy badge and the ⋯; Clear secrets stays in the ⋯ even as its lone
+item, because §3.4 bars destructive header buttons). The whole row opens the
+**editor modal**; Rename/Delete stay behind the row's ⋯. The modal edits the
+shared draft (footer states "applied by the page-level Save" — no per-modal
+save button, ever); OAuth / uploads / secret values stay in their
+`InstantZone`s inside it. The editor's first view is harness, model and
+skills only (Buzz-style); credentials, concurrency and per-type plumbing
+(MCP setup, secret env) live behind a single `Advanced…` disclosure (labeled
+just "Advanced"). Credential readiness is never hidden by the fold — the
+header subtitle carries it (green ready / amber missing). Roster rows batch
+their readiness probes by harness template (one fetch per template, not per
+row). Use this idiom only for identity-like rosters; settings stay
+SettingRows.
 
 ### Tables
 

@@ -10,13 +10,19 @@ await withPage(async (page) => {
 
   // 1: roster grid — the dashed tile is the ONLY create affordance (no
   // redundant header button)
-  check("dashed New Dev Type tile is the sole create affordance",
+  check("dashed New Dev Type row is the sole create affordance",
     (await page.locator('#dev-types button:has-text("New Dev Type")').count()) === 1);
 
   const tiles = page.locator('button[aria-label^="Edit dev type"]');
   if (!(await tiles.count())) {
     skip("Dev Type editor flows", "no Dev Types on this stack");
   } else {
+    // status column is always informative (founder follow-up 2026-08-02:
+    // an empty-when-clean badge slot read as broken) — every row shows
+    // credential readiness even with a clean draft
+    check("status column shows readiness on every row",
+      (await page.locator('#dev-types tr:has(button[aria-label^="Edit dev type"]) td:has-text("ready"), #dev-types tr:has(button[aria-label^="Edit dev type"]) td:has-text("no credentials")').count())
+        >= (await tiles.count()));
     // 2: tile opens the editor modal with the full config surface
     await tiles.first().click();
     await page.waitForSelector('[role="dialog"]');
@@ -44,18 +50,20 @@ await withPage(async (page) => {
     await page.locator('[role="dialog"] button:has-text("Close")').click();
     await page.waitForSelector(':text("Unsaved changes")');
     check("closing the editor keeps the edit in the draft (DirtyBar)", true);
-    check("the edited tile is badged",
-      (await page.locator('button[aria-label^="Edit dev type"] :text("unsaved changes")').count()) >= 1);
+    // roster is a table (2026-08-02 re-decision): the badge is a sibling
+    // cell of the edit button, so assert row-scoped, not button-descendant
+    check("the edited row is badged",
+      (await page.locator('#dev-types tr:has(button[aria-label^="Edit dev type"]) span:text("unsaved changes"):visible').count()) >= 1);
     await page.locator('button:has-text("Discard changes")').click();
     await page.waitForTimeout(300);
     check("discard clears the draft",
       (await page.locator('button:has-text("Discard changes")').count()) === 0);
   }
 
-  // 4: dashed tile reaches the create dialog — cancelled
+  // 4: dashed row reaches the create dialog — cancelled
   await page.locator('#dev-types button:has-text("New Dev Type")').last().click();
   await page.waitForSelector('[role="dialog"]:has-text("New Dev Type")');
-  check("dashed tile reaches the create dialog", true);
+  check("dashed row reaches the create dialog", true);
   await page.click('[role="dialog"] button:has-text("Cancel")');
 });
 

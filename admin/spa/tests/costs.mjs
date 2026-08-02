@@ -15,10 +15,10 @@ await withPage(async (page) => {
     (await page.locator('input[aria-label="From date (UTC)"]').count()) === 1 &&
     (await page.locator('input[aria-label="To date (UTC, inclusive)"]').count()) === 1);
 
-  // token/cost columns
+  // token/cost columns — each header is its sortable button
   for (const col of ["in", "out", "cache r", "cache w", "cost"]) {
-    check(`"${col}" column header renders`,
-      (await page.locator(`th:text-is("${col}")`).count()) === 1);
+    check(`"${col}" column header renders (sortable)`,
+      (await page.locator(`th button[title="Sort by ${col}"]`).count()) === 1);
   }
 
   // totals row: present iff any runs are listed on this stack
@@ -32,6 +32,35 @@ await withPage(async (page) => {
       /filtered totals/.test(text));
     check("totals row is a single summary line", (await totals.count()) === 1 && rows >= 1);
   }
+
+  // (a) sortable headers — read-only interaction, restored to the default
+  const costTh = page.locator('th:has(button[title="Sort by cost"])');
+  check("cost header is sortable", (await costTh.count()) === 1);
+  await page.click('button[title="Sort by cost"]');
+  await page.waitForTimeout(400);
+  check("first click sorts cost descending",
+    (await costTh.getAttribute("aria-sort")) === "descending");
+  await page.click('button[title="Sort by cost"]');
+  await page.waitForTimeout(400);
+  check("second click flips the direction",
+    (await costTh.getAttribute("aria-sort")) === "ascending");
+  await page.click('button[title="Sort by started"]');   // back to default
+  await page.waitForTimeout(400);
+
+  // (b) aggregate by mission — a view mode, safe to toggle and restore
+  const agg = page.locator('label:has-text("Aggregate by mission") input');
+  check("aggregate-by-mission checkbox renders", (await agg.count()) === 1);
+  await agg.check();
+  await page.waitForTimeout(800);
+  if ((await page.locator('[data-testid="mission-group"]').count()) === 0) {
+    skip("grouped mode clusters runs under mission rows", "no runs on this stack");
+  } else {
+    check("grouped mode clusters runs under mission rows", true);
+    check("pagination speaks missions when grouped",
+      /of \d+ missions/.test(await page.innerText("main")));
+  }
+  await agg.uncheck();
+  await page.waitForTimeout(400);
 
   // ⋯ → Cost inputs modal: structure only, then Cancel
   await page.click('button[aria-label="More run actions"]');

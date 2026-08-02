@@ -67,30 +67,11 @@ def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     return out
 
 
-def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
-                       offset: int = 0, mission_key: str | None = None,
-                       pmo_ref: str | None = None,
-                       created_from: str | None = None,
-                       created_to: str | None = None) -> dict:
-    lo = _parse_bound(created_from, end=False) if created_from else None
-    hi = _parse_bound(created_to, end=True) if created_to else None
-
-    everything = sorted(store.all(), key=lambda r: r.created_at, reverse=True)
-    runs = everything
-    if mission_key:
-        needle = mission_key.strip().upper()
-        runs = [r for r in runs if needle in r.mission_key.upper()
-                or needle in r.run_id.upper()]
-    if pmo_ref:
-        runs = [r for r in runs if r.pmo_ref == pmo_ref]
-    if lo:
-        runs = [r for r in runs if r.created_at >= lo]
-    if hi:
-        runs = [r for r in runs if r.created_at < hi]
-
-    # a column no run contributed to stays None (rendered "—"): summing
-    # nothing to 0 would show an all-grok fleet "cache w: 0" over rows of
-    # "—", and a fleet with no cost data a fabricated $0.00
+def _accumulate_totals(runs: list[Run], cost_inputs: CostInputs) -> dict:
+    """Aggregate one set of runs (the grand totals row, or one mission
+    group's subtotal). A column no run contributed to stays None (rendered
+    "—"): summing nothing to 0 would show an all-grok fleet "cache w: 0"
+    over rows of "—", and a fleet with no cost data a fabricated $0.00."""
     totals: dict = {k: None for k in _TOKEN_SUMS}
     totals["runtime_seconds"] = 0
     cost = cost_est = cost_eff = tok_eff = None
@@ -129,23 +110,137 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
     totals["cost_usd_effective"] = (round(cost_eff, 6)
                                     if cost_eff is not None else None)
     totals["total_tokens_effective"] = tok_eff
+    return totals
 
-    page = []
-    for r in runs[offset:offset + limit]:
-        row = r.model_dump(include=_LIST_FIELDS)
-        row["pr_url"] = _pr_url_of(r)
-        row.update(_token_fields(r, cost_inputs))
-        page.append(row)
 
-    return {
-        "total": len(runs), "offset": offset, "limit": limit, "runs": page,
-        "totals": totals,
+# Sortable columns (docs/11): server-side over the WHOLE filtered set —
+# client-side sorting would only reorder the visible page and silently lie
+# about "most expensive". "started" keeps the default dispatch order
+# (created_at — started_at is null on not-yet-started runs, which must not
+# sink the newest activity to the bottom).
+_SORTABLE = {"started", "duration", "input_tokens", "output_tokens",
+             "cache_read_tokens", "cache_write_tokens", "cost"}
+
+
+def _run_sort_value(r: Run, key: str, cost_inputs: CostInputs, now: datetime):
+    if key == "started":
+        return r.created_at
+    if key == "duration":
+        if r.started_at is None:
+            return None
+        return ((r.ended_at or now) - r.started_at).total_seconds()
+    tr = r.token_report or {}
+    if key == "cost":
+        return costing.effective_cost(
+            tr.get("cost_usd"),
+            costing.estimate_cost_usd(tr, cost_inputs.rates), cost_inputs)
+    return tr.get(key)
+
+
+def _group_sort_value(subtotal: dict, latest: datetime, key: str):
+    if key == "started":
+        return latest                      # most recent activity in the group
+    if key == "duration":
+        return subtotal["runtime_seconds"]
+    if key == "cost":
+        return subtotal["cost_usd_effective"]
+    return subtotal[key]
+
+
+def _order(items: list, value_of, descending: bool) -> list:
+    """Nulls last in BOTH directions — an ascending cost sort must not lead
+    with a wall of token-less rows."""
+    valued = [(value_of(x), x) for x in items]
+    ranked = [t for t in valued if t[0] is not None]
+    ranked.sort(key=lambda t: t[0], reverse=descending)
+    return [x for _, x in ranked] + [x for v, x in valued if v is None]
+
+
+def _row(r: Run, cost_inputs: CostInputs) -> dict:
+    row = r.model_dump(include=_LIST_FIELDS)
+    row["pr_url"] = _pr_url_of(r)
+    row.update(_token_fields(r, cost_inputs))
+    return row
+
+
+def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
+                       offset: int = 0, mission_key: str | None = None,
+                       pmo_ref: str | None = None,
+                       created_from: str | None = None,
+                       created_to: str | None = None,
+                       sort: str | None = None,
+                       direction: str | None = None,
+                       group_by: str | None = None) -> dict:
+    if sort is not None and sort not in _SORTABLE:
+        raise HTTPException(400, f"invalid sort {sort!r} — one of "
+                                 f"{sorted(_SORTABLE)}")
+    if direction not in (None, "asc", "desc"):
+        raise HTTPException(400, f"invalid dir {direction!r} — asc or desc")
+    if group_by not in (None, "mission"):
+        raise HTTPException(400, f"invalid group_by {group_by!r} — mission")
+    descending = direction != "asc"
+    lo = _parse_bound(created_from, end=False) if created_from else None
+    hi = _parse_bound(created_to, end=True) if created_to else None
+
+    everything = sorted(store.all(), key=lambda r: r.created_at, reverse=True)
+    runs = everything
+    if mission_key:
+        needle = mission_key.strip().upper()
+        runs = [r for r in runs if needle in r.mission_key.upper()
+                or needle in r.run_id.upper()]
+    if pmo_ref:
+        runs = [r for r in runs if r.pmo_ref == pmo_ref]
+    if lo:
+        runs = [r for r in runs if r.created_at >= lo]
+    if hi:
+        runs = [r for r in runs if r.created_at < hi]
+
+    out = {
+        "offset": offset, "limit": limit,
+        "totals": _accumulate_totals(runs, cost_inputs),
+        "total_runs": len(runs),
         # from ALL runs, not the filtered set — the dropdown must not
         # collapse to the currently selected option
         "pmo_refs": sorted({r.pmo_ref for r in everything}),
         "rate_card": {"rate_card_id": cost_inputs.rate_card_id,
                       "override_native": cost_inputs.override_native},
     }
+
+    if group_by is None:
+        if sort is not None:
+            now = datetime.now(timezone.utc)
+            runs = _order(runs, lambda r: _run_sort_value(
+                r, sort, cost_inputs, now), descending)
+        out["total"] = len(runs)
+        out["runs"] = [_row(r, cost_inputs) for r in runs[offset:offset + limit]]
+        return out
+
+    # grouped mode: the pagination unit becomes the MISSION. Group key is
+    # (pmo_ref, mission_key) — mission keys are team-scoped, two PMOs may
+    # both have a DEV-1 that must not merge. The active sort orders GROUPS
+    # by their aggregate; runs inside a group stay in pipeline order.
+    clusters: dict[tuple[str, str], list[Run]] = {}
+    for r in runs:
+        clusters.setdefault((r.pmo_ref, r.mission_key), []).append(r)
+    groups = []
+    for (ref, key), members in clusters.items():
+        groups.append({
+            "pmo_ref": ref, "mission_key": key, "run_count": len(members),
+            "subtotal": _accumulate_totals(members, cost_inputs),
+            "_members": members,
+            "_latest": max(m.created_at for m in members),
+        })
+    groups = _order(groups, lambda g: _group_sort_value(
+        g["subtotal"], g["_latest"], sort or "started"), descending)
+    out["total"] = len(groups)
+    page = []
+    for g in groups[offset:offset + limit]:
+        members = sorted(g.pop("_members"),
+                         key=lambda m: (m.seq, m.attempt_of_step, m.created_at))
+        g.pop("_latest")
+        page.append({**g, "runs": [_row(m, cost_inputs) for m in members]})
+    out["groups"] = page
+    return out
 
 
 def run_detail(run: Run, cost_inputs: CostInputs) -> dict:

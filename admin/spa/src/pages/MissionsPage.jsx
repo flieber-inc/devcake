@@ -25,13 +25,20 @@ const SECTION_ORDER = [
   ...COLUMNS.map((c) => c.id).filter((id) => id !== "needs_human"),
 ];
 
-// The one reason every row in a bucket shares (e.g. "terminal — ignored" on
-// an all-terminal Done section) — hoisted into the section header so rows
-// only spell out deviations.
+// The MAJORITY reason of a bucket (e.g. "terminal — ignored" on a Done
+// section) — hoisted into the section header so rows only spell out
+// deviations. Majority, not unanimity: one odd row must not force the
+// other 29 to repeat the same line (it shows its own reason inline).
 function sharedReason(bucket) {
-  const reasons = bucket.map((r) => (r.reason && !r.schedulable ? r.reason : null));
-  const first = reasons.find(Boolean);
-  return first && reasons.every((r) => r === first) ? first : null;
+  const counts = new Map();
+  for (const r of bucket) {
+    if (r.reason && !r.schedulable) counts.set(r.reason, (counts.get(r.reason) || 0) + 1);
+  }
+  let best = null;
+  for (const [reason, n] of counts) {
+    if (n > bucket.length / 2 && (!best || n > counts.get(best))) best = reason;
+  }
+  return best;
 }
 
 // Copy shared with ConfirmDialog per DESIGN.md §7 (honest, sentence case).

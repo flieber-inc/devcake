@@ -50,7 +50,9 @@ function makeRows() {
         url: `https://linear.app/example/issue/${idx}`,
         updated_at: new Date(Date.now() - idx * 60_000).toISOString(),
         schedulable: seed.col === "backlog",
-        reason: seed.col === "done" ? DONE_REASON : "",
+        // one deviant done row: the header hoists the MAJORITY reason and
+        // only the odd row spells its own out inline
+        reason: seed.col === "done" ? (i === 0 ? "terminal — done" : DONE_REASON) : "",
       });
     }
   }
@@ -131,8 +133,14 @@ async function assertList(width, height) {
     const doneRows = () =>
       page.locator('section[aria-label="Done"] [role="button"]').count();
     check(`Done previews ${10} of 30 at ${width}`, (await doneRows()) === 10);
-    check(`Done header hoists the shared reason at ${width}`,
+    check(`Done header hoists the majority reason at ${width}`,
       (await page.locator(`section[aria-label="Done"] header:has-text("${DONE_REASON}")`).count()) === 1);
+    check(`rows never repeat the hoisted reason at ${width}`,
+      (await page.locator(`section[aria-label="Done"] [role="button"] :text-is("${DONE_REASON}")`).count()) === 0);
+    if (width >= 1024) {  // the inline reason column is lg-and-up
+      check(`the deviating row spells out its own reason at ${width}`,
+        (await page.locator('section[aria-label="Done"] [role="button"] :text-is("terminal — done")').count()) === 1);
+    }
     await page.click('section[aria-label="Done"] button:has-text("Show all 30")');
     check(`Show all unfolds the capped 30 at ${width}`, (await doneRows()) === 30);
     await page.click('section[aria-label="Done"] button:has-text("Show fewer")');

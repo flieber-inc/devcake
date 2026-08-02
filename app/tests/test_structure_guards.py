@@ -55,6 +55,27 @@ def _is_route(node) -> bool:
     return False
 
 
+def test_lifespan_never_awaits_the_forge_sweep():
+    """Incident 2026-08-01: `await refresh_forge_health()` inside lifespan
+    held the listen socket for O(N repos) of probe I/O and failed the compose
+    healthcheck. The sweep belongs to the poll task (before its first cycle);
+    this guard keeps the boot regression from coming back silently."""
+    tree = ast.parse(MAIN.read_text())
+    lifespan = next(node for node in ast.walk(tree)
+                    if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "lifespan")
+    offenders = [
+        node.lineno for node in ast.walk(lifespan)
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "refresh_forge_health"
+    ]
+    assert not offenders, (
+        "lifespan awaits refresh_forge_health again (lines "
+        f"{offenders}) — boot must not block on the forge sweep")
+
+
 def test_main_route_bodies_stay_thin():
     tree = ast.parse(MAIN.read_text())
     offenders = []

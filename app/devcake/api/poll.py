@@ -209,8 +209,13 @@ class PollRuntime:
             span.set_attribute("devcake.poll.cycle", cycle)
             try:
                 # a latched repo re-probes every cycle so a transient failure
-                # (or a rotated-back token) self-heals without an operator
-                if self.forge_runtime.breakers:
+                # (or a rotated-back token) self-heals without an operator.
+                # An unset last_full_probe_at means no full sweep has ever
+                # completed (loop()'s initial sweep still pending, or its
+                # budget expired mid-catalog) — retry until one lands, or
+                # /health `forge_probe` would report "pending" forever.
+                if (self.forge_runtime.breakers
+                        or self.forge_runtime.last_full_probe_at is None):
                     await self.refresh_forge_health()
                 # ADR-0018 — recompute the backend-degraded map. Placement is
                 # load-bearing in two ways, and BOTH fail silently if broken:
@@ -304,7 +309,27 @@ class PollRuntime:
 
     async def loop(self) -> None:
         """Periodic poll driver. Shares `lock` and the cycle counter with
-        `POST /api/v1/poll/run` — at most one cycle in flight."""
+        `POST /api/v1/poll/run` — at most one cycle in flight.
+
+        The initial full forge sweep runs here, NOT in lifespan (incident
+        2026-08-01: 319 sequential probes held the listen socket ~95s+ and
+        failed the compose healthcheck), but still before the first cycle:
+        schedule() gates on latched breakers, so a definitively bad
+        credential must latch before cycle 1 can burn an attempt on it.
+        Budget is 60s because a manual poll queued on this lock must resolve
+        inside the admin proxy's 60s window; on expiry the probes that did
+        land already updated health incrementally, last_full_probe_at stays
+        unset, and run_cycle retries the sweep next tick."""
+        async with self.lock:
+            try:
+                async with asyncio.timeout(60):
+                    await self.refresh_forge_health()
+            except TimeoutError:
+                log.warning(
+                    "initial forge sweep exceeded its 60s budget — "
+                    "%d/%d repos probed; retrying on the next poll cycle",
+                    len(self.forge_runtime.health),
+                    len(self.forge_runtime.forges))
         while True:
             async with self.lock:
                 await self.run_cycle(self.next_cycle_id())

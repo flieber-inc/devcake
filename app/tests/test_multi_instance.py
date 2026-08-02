@@ -180,7 +180,8 @@ def _rt(tmp_path, managers=None, store=None, order=None):
     return PollRuntime(
         config=AppConfig(), managers=managers, mappers={},
         store=store if store is not None else SimpleNamespace(active=lambda: [], all=lambda: []),
-        forge_runtime=SimpleNamespace(breakers={}),
+        forge_runtime=SimpleNamespace(breakers={},
+                                      last_full_probe_at=datetime.now(timezone.utc)),
         refresh_forge_health=_noop,
         managers_in_config_order=(order or (lambda: list(managers.values()))),
         owner_store=OwnerStore(tmp_path / "state" / "mission_owner.json"))

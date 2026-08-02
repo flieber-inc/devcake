@@ -58,6 +58,7 @@ The entrypoint pumps the harness's stdout line-by-line instead of buffering it (
 grok -p "$PROMPT" --output-format streaming-json --always-approve
 ```
 - **Verified on an installed CLI (v0.2.93, 2026-07):** binary is `grok` ("Grok Build TUI"); `-p/--single` is the headless mode; `--always-approve` auto-approves all tool executions (also available: `--permission-mode bypassPermissions|dontAsk|acceptEdits`, `--sandbox <PROFILE>` / `GROK_SANDBOX`, `--max-turns <N>`, `--json-schema` for schema-constrained output). Of these only `--max-turns` has been exercised at 0.2.112; the rest are unverified there.
+- **Headless resume verified at 0.2.117 (ADR-0022, `grok_resume_nudge_*` captures):** `grok -p "$NUDGE" -r <sessionId> --output-format streaming-json --always-approve` composes; the resumed `end` event carries the SAME `sessionId` (no fork), the stream carries only the new turn's events (no history replay), and `usage`/`num_turns` are per-invocation, not cumulative. Same capture also recorded stream drift vs 0.2.112: `stopReason` is now `"end_turn"` (was `"EndTurn"`) and new `available_commands`/`usage` event types appear — nothing branches on either (the stopReason enum is annotate-only by design; unknown event types are skipped), but it is this section's unpinned-CLI caveat made real.
 - The image is NOT pinned — xAI ships `install.sh` only (no versioned artifact), so the Dockerfile installs latest; re-verify the shapes below after rebuilds (ISSUES #29 residual). There is no `LABEL devcake.grok_cli_verified` in the image.
 - **What the entrypoint parses**, at 0.2.112: `text` deltas (concatenated into the result text, coalesced for the relay §1a) and the terminal `end` event, which carries `sessionId`, `stopReason`, `num_turns` and token `usage` (§5). A failing run emits `{"type":"error"}` with **no `sessionId`**, so it cannot be located on disk afterwards. The stream carries **no tool-call events at all**, which is why the transcript comes from `grok export` (§6) and not from stdout.
 - **`--output-format json` cannot be reached through `$DEVCAKE_EXTRA_ARGS`.** The invocation already passes `streaming-json`; a duplicate flag makes grok exit **2** with an empty stdout. The 0.2.93 blob shape `{text, stopReason, sessionId, requestId, thought}` is therefore unverified at 0.2.112 and unreachable from DevCake's own argv.
@@ -73,7 +74,7 @@ codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
 - **A pinned `-m` costs a benign error item.** When `-m` names a model codex has no metadata for — which is every local or OpenAI-compatible backend — an `item.completed` whose `item.type` is `error` precedes `turn.started` on every run. It is not a failure; anything counting `item.completed` as work must exclude it. Without `-m` the item is absent.
 - **codex has no turn cap** at 0.144.4 — no `--max-turns` equivalent and no config key for one — so the per-Mission-Type extra CLI args cannot bound a codex Dev the way they bound a claude or grok one. The only bound is DevCake's own run timeout (`07-dev-runtime.md`), which arrives as a signal kill.
 - Sandboxing: `--dangerously-bypass-approvals-and-sandbox` is the container invocation — its own help text says "intended solely for running in environments that are externally sandboxed", which is exactly the Dev container. The plan-substitute run uses `--sandbox read-only` instead. `--ephemeral` (no session files) and `--ignore-user-config` exist for hermetic runs.
-- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` — those four keys and **no others**, so a total must be summed, never read. Present even when the turn produced nothing. On `codex exec resume` these are cumulative; DevCake runs are single-session so this is naturally correct. No cost field in the stream → `cost_usd` is omitted (never guessed).
+- Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` — those four keys and **no others**, so a total must be summed, never read. Present even when the turn produced nothing. On `codex exec resume` these are **cumulative — now measured, not just documented** (`codex_resume_nudge_*` captures: the resumed `turn.completed` reports both invocations' tokens), which is why `RESUME_SPECS["codex"].usage_cumulative` makes the ADR-0022 token merge last-wins within a codex resume chain instead of summing. Headless resume composes as `codex exec resume <thread_id> "$NUDGE" --json -o …`; the resumed stream keeps the same `thread_id` and replays no history. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
 
 ## 2. Base images
@@ -166,6 +167,15 @@ the prompt, **a grok dump is never empty when a `sessionId` exists**, however
 little the run actually did — dump length is not evidence of work. When no
 `sessionId` exists (every `{"type":"error"}` path, §1) there is nothing to export
 and the dump is empty.
+
+**Continuations multiply `## User` sections (ADR-0022).** A resumed session's
+export is cumulative — it contains every exchange of the chain, so one export
+carries the original prompt AND each nudge as separate `## User` echoes; the
+entrypoint keeps only the LATEST export per chain (it supersedes its
+ancestors) and anchors the activity test on each invocation's OWN prompt (the
+attempt-numbered nudge), which is what keeps the echo separated from new
+work. Fresh-mode continuations open new sessions: their exports become
+additional, attempt-labeled transcript segments.
 
 ## 7. MCP registration syntax
 

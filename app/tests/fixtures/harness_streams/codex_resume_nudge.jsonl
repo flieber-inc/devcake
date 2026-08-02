@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"019fc494-5033-72d1-b90b-a8e17d1c825f"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Done. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. "}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":0,"output_tokens":24,"reasoning_output_tokens":0}}

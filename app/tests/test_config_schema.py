@@ -167,6 +167,51 @@ def test_recover_misplaced_result_defaults_on_and_round_trips():
     assert AppConfig.model_validate(merged).recover_misplaced_result is False
 
 
+def test_continuation_fields_default_and_round_trip():
+    """ADR-0022: in-container continuation is operator policy (Limits) —
+    policy `auto`, budget 2, both additive: a pre-ADR-0022 config file still
+    validates at schema v4 with no migration."""
+    base = _base()
+    assert "continuation_policy" in base               # dumped for the SPA draft
+    assert "max_continuations" in base
+    assert AppConfig().continuation_policy == "auto"
+    assert AppConfig().max_continuations == 2
+    del base["continuation_policy"]                    # pre-ADR-0022 config JSON
+    del base["max_continuations"]
+    loaded = AppConfig.model_validate(base)
+    assert loaded.continuation_policy == "auto"
+    assert loaded.max_continuations == 2
+    assert loaded.schema_version == 4                  # additive, not a migration
+    tuned = AppConfig.model_validate(
+        {**base, "continuation_policy": "fresh-only", "max_continuations": 50})
+    round_tripped = AppConfig.model_validate(tuned.model_dump())
+    assert round_tripped.continuation_policy == "fresh-only"
+    assert round_tripped.max_continuations == 50
+    # a patch touching an unrelated field must not reset the settings
+    from devcake.config import deep_merge
+    dumped = tuned.model_dump()
+    merged = deep_merge(dumped, {"repos": [
+        {**dumped["repos"][0], "auto_merge": True}]})
+    assert AppConfig.model_validate(merged).max_continuations == 50
+
+
+def test_continuation_fields_bounds():
+    """Budget: 0 (off) and LARGE values are both legal — founder decision
+    2026-08-02: 10/50-continuation experiments must validate; deliberately no
+    upper bound, unlike max_attempts. Negatives and unknown policies refused."""
+    base = _base()
+    for ok in (0, 1, 2, 10, 50, 500):
+        assert AppConfig.model_validate(
+            {**base, "max_continuations": ok}).max_continuations == ok
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "max_continuations": -1})
+    for ok in ("auto", "resume-only", "fresh-only", "off"):
+        assert AppConfig.model_validate(
+            {**base, "continuation_policy": ok}).continuation_policy == ok
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "continuation_policy": "always"})
+
+
 def test_cost_inputs_defaults_validation_and_round_trip():
     """ADR-0021: the operator rate card is additive config (no migration),
     validated (no negative rates, no duplicate prefixes), and deep_merge-

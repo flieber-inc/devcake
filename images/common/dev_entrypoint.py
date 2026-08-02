@@ -64,8 +64,28 @@ from devcake_dev.domain.fault import (  # noqa: E402
     _dict,
     _one_line,
 )
-from devcake_dev.harness.argv import harness_argv  # noqa: E402
-from devcake_dev.harness.continuation import terminal_evidence  # noqa: E402
+from devcake_dev.harness.argv import (  # noqa: E402
+    RESUME_SPECS,
+    ResumeSpec,
+    harness_argv,
+    harness_resume_argv,
+)
+from devcake_dev.harness.continuation import (  # noqa: E402
+    ContinuationConfig,
+    ContinuationDecision,
+    ContinuationState,
+    continuation_config,
+    export_sids,
+    fresh_nudge_prompt,
+    last_sid,
+    merge_token_reports,
+    merged_transcript_dump,
+    next_continuation,
+    record_session,
+    resume_nudge_prompt,
+    session_identity,
+    terminal_evidence,
+)
 from devcake_dev.harness.render import (  # noqa: E402
     BATCH_LINES,
     FLUSH_SECS,
@@ -101,6 +121,7 @@ from devcake_dev.workspace.forensics import (  # noqa: E402
     FORENSIC_STDERR_TAIL,
     bad_output_reason,
     find_result_json,
+    workspace_fingerprint,
     workspace_forensics,
     _git_tracked,
 )
@@ -276,236 +297,39 @@ def main() -> None:
     model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
     cmd = harness_argv(harness, prompt, plan_mode=plan_mode, model=model,
                        extra=extra)
-    harness_exit = 1
-    out_lines: list[str] = []
-    err_lines: list[str] = []
+    inv_prompt = prompt   # THIS invocation's prompt — the nudge on relaunches;
+    #                       it is what anchors grok_export_activity honestly
+
+    # ── continuation loop state (ADR-0022) ───────────────────────────────────
+    cont_cfg = continuation_config(env)
+    cont = ContinuationState()
+    mode = "initial"                   # "initial" | "resume" | "fresh"
+    chains: list[list[str]] = []       # session-id chains (fork tolerance)
+    inv_reports: list[dict] = []       # per-invocation token reports
+    inv_modes: list[str] = []          # index-aligned with inv_reports
+    dump_segments: list[str] = []      # grok: one per chain (resume REPLACES —
+    dump_labels: list[str] = []        #   the export is cumulative);
+    #                                      claude/codex: one per invocation
+    resume_spec = RESUME_SPECS.get(harness)
+    recovered_path, recovery_note = None, ""
+
     relay = LogRelay()
-    render = {"codex": render_codex,
-              "grok-build": GrokCoalescer()}.get(harness, render_claude)
-    with tracer.start_as_current_span("dev.run", context=ctx) as span:
-        span.set_attribute("devcake.run.id", RUN_ID)
-        span.set_attribute("devcake.dev_type", env.get("DEVCAKE_DEV_TYPE", ""))
-        span.set_attribute("devcake.harness", harness)
-        with tracer.start_as_current_span("harness.exec"):
-            # the freshness gate for misplaced-result recovery: anything older
-            # than this was in the clone before the harness ran (ADR-0018)
-            harness_started_at = time.time()
-            proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, bufsize=1)
-            relay.add(f"[devcake] {harness} started; waiting for model output",
-                      visible_output=False)
-            pumps = [threading.Thread(target=_pump, daemon=True, args=(
-                         proc.stdout, out_lines, render, relay, sys.stdout)),
-                     threading.Thread(target=_pump, daemon=True, args=(
-                         proc.stderr, err_lines, render_stderr, relay, sys.stderr))]
-            flusher = threading.Thread(target=relay.loop, daemon=True)
-            progress = threading.Thread(target=_progress_loop, daemon=True,
-                                        args=(proc, relay, harness))
-            for t in (*pumps, flusher, progress):
-                t.start()
-            harness_exit = proc.wait()
-            for t in pumps:
-                t.join(timeout=10)
-            relay.stop.set()
-            flusher.join(timeout=10)
-            progress.join(timeout=10)
-        span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
-    provider.force_flush()
-    out, err_text = "".join(out_lines), "".join(err_lines)
-    out_bytes, out_lines_n = len(out), len(out_lines)
-    # The list holds the same bytes as `out` PLUS per-line object overhead and a
-    # pointer array — the larger of the two live copies, and this is the moment
-    # the artifact path starts allocating. The pumps were joined above.
-    out_lines.clear()
-    err_lines.clear()
+    # ONE flusher for the whole loop: relay.stop is a one-shot Event, so it is
+    # set only at the very end (fail() or the success epilogue) — setting it
+    # between invocations would silence every later one.
+    flusher = threading.Thread(target=relay.loop, daemon=True)
+    flusher.start()
 
-    # ── token extraction + result text (docs/08 §5) ──────────────────────────
-    token_report = {"extraction_method": "unavailable", "model": harness}
-    result_text, transcript_body = "", ""
-    codex_last = ""      # RAW `-o` content: result_text is overwritten with a
-    #                      stdout tail on any parse failure, so the fault
-    #                      predicate must not read it (fixtures README)
-    if harness == "codex":
-        try:
-            last = WORKSPACE / "out" / "last_message.txt"
-            codex_last = last.read_text() if last.exists() else ""
-            result_text = codex_last
-            for line in out.splitlines():           # JSONL events (verified 0.144.1)
-                try:
-                    ev = json.loads(line)
-                except Exception:
-                    continue
-                if ev.get("type") == "turn.completed":
-                    u = ev.get("usage") or {}
-                    token_report = {
-                        "input_tokens": u.get("input_tokens"),
-                        "output_tokens": u.get("output_tokens"),
-                        "cache_read_tokens": u.get("cached_input_tokens"),
-                        "model": "codex",
-                        "extraction_method": "session_json",
-                        "notes": f"reasoning_output_tokens={u.get('reasoning_output_tokens')}",
-                    }
-            if not result_text:
-                result_text = out[-4000:]
-        except Exception:
-            result_text = out[-4000:]
-    elif harness == "grok-build":
-        sid, terminal = "", None    # `terminal`: the event carrying usage/turns
-        try:
-            parsed = grok_stream_parse(out)
-            if parsed is not None:
-                result_text, sid = parsed
-                terminal = grok_end_event(out)
-            else:  # EXTRA_ARGS overrode the format back to a plain json blob
-                j = json.loads(out)
-                result_text = j.get("text") or ""
-                sid = j.get("sessionId") or ""
-                terminal = j       # same {usage, num_turns, modelUsage} keys
-        except Exception:
-            result_text = out[-4000:]
-        # Token report — its own guard, because a failure here must cost only
-        # the report (INV-5 then posts "unavailable"), never the result text or
-        # the transcript. The `end` event is PREFERRED: at 0.2.112 it carries
-        # the full split inline, needing no session id and no filesystem read
-        # (docs/08 §5). `signals.json` stays as the fallback — its survival at
-        # this version is an uncommitted campaign note, so dropping it would be
-        # as much of a guess as relying on it.
-        try:
-            token_report = (grok_end_report(terminal)
-                            or grok_signals_report(sid) or token_report)
-        except Exception:  # noqa: BLE001 — the artifact path outranks its own token report
-            print("token extraction failed; reporting unavailable", file=sys.stderr)
-        try:
-            # no sessionId ⇒ nothing to export: an `error` event never carries
-            # one, and the export is the only grok dump source (docs/08 §6)
-            exp = (subprocess.run(["grok", "export", sid], capture_output=True,
-                                  text=True) if sid else None)
-            if exp is not None and exp.returncode == 0 and exp.stdout.strip():
-                transcript_body = exp.stdout
-        except Exception:  # noqa: BLE001 — no export ⇒ no dump; the fault predicate handles an empty one
-            print("grok export failed; transcript falls back to the agent report",
-                  file=sys.stderr)
-    else:
-        try:
-            # stream-json: the final result event carries the exact fields of
-            # the old --output-format json blob (verified live); blob fallback
-            # covers an EXTRA_ARGS format override
-            j = claude_result_event(out) or json.loads(out)
-            usage = j.get("usage") or {}
-            mu = j.get("modelUsage") or {}
-            def _weight(v):  # dominant model = the one that cost/produced the most
-                return (v.get("costUSD") or 0, v.get("outputTokens") or 0)                     if isinstance(v, dict) else (0, 0)
-            models = sorted(mu, key=lambda k: _weight(mu[k]), reverse=True)
-            token_report = {
-                "input_tokens": usage.get("input_tokens"),
-                "output_tokens": usage.get("output_tokens"),
-                "cache_read_tokens": usage.get("cache_read_input_tokens"),
-                "cache_write_tokens": usage.get("cache_creation_input_tokens"),
-                "cost_usd": j.get("total_cost_usd"),
-                "model": models[0] if models else "claude-code",
-                "extraction_method": "session_json",
-                "num_turns": j.get("num_turns"),
-                "duration_ms": j.get("duration_ms"),
-            }
-            result_text = j.get("result") or ""
-        except Exception:
-            result_text = out[-4000:]
+    # The freshness gate for misplaced-result recovery: anything older than
+    # this was in the clone before the harness FIRST ran. Pinned to the first
+    # launch across relaunches so a stray written by continuation N-1 stays
+    # adoptable at landing N (ADR-0018, ADR-0022).
+    harness_started_at = time.time()
 
-    # ADR-0014 D1: the full dump of assistant-visible text, per harness
-    # (grok: the `grok export` session already includes every message).
-    # Guarded like every other parse of `out` — a dump failure must never
-    # abort the artifact path (the no-dump fallback handles "").
-    try:
-        if harness == "codex":
-            dump = codex_text_dump(out)
-        elif harness == "grok-build":
-            dump = transcript_body
-        else:
-            dump = claude_text_dump(out)
-    except Exception:
-        dump = ""
-
-    # ── harness verdict (ADR-0018) ───────────────────────────────────────────
-    # Did the harness actually work? The process exit status alone cannot say:
-    # a saturated backend answering 200-with-nothing exits 0, and stderr — the
-    # channel classify_harness_failure reads — is empty on every failure we
-    # measured. Compute this BEFORE `out` is released.
-    fault = harness_fault(harness, out, harness_exit, dump=dump,
-                          last_message=codex_last, prompt=prompt)
-    # Every harness, not just claude: codex and grok expose no structured status
-    # field, so without this a 401 on either lands on 15 (excusable, correlation-
-    # eligible) instead of 12 (latch the auth breaker, tell the operator).
-    api_status = harness_api_error_status(harness, out)
-    forensics = workspace_forensics(WORKSPACE / "out", harness_exit, out_bytes,
-                                    out_lines_n, err_text[-FORENSIC_STDERR_TAIL:])
-    # ADR-0022 PR-1: names the terminal event on the exit-11 paths, where the
-    # exit status cannot distinguish "ended cleanly but early" (stopReason
-    # EndTurn — the narrate-and-stop shape) from a stream that just stopped.
-    # Computed here because `out` is released on the next statement.
-    terminal_ev = terminal_evidence(harness, out)
-    # `out` is not read again below; releasing the joined copy here keeps the
-    # peak off the artifact path, where the payload is serialized repeatedly.
-    out = ""
-
-    def fail(code: int, error_class: str, detail: str, transcript: str,
-             **extra) -> None:
-        payload = {"result": None, "exit_code": code, "error_class": error_class,
-                   "error_detail": _one_line(detail, 500), "evidence": forensics,
-                   "transcript_md": with_session(
-                       f"{transcript}\n\n```json\n"
-                       f"{json.dumps(forensics, indent=2)}\n```", dump),
-                   "token_report": token_report}
-        payload.update(extra)
-        send_artifacts(payload)
-        stop.set()
-        sys.exit(code)
-
-    if harness_exit != 0:
-        err = err_text[-1500:]
-        # the whole rule lives in the pure helper (docs/15 §4 asymmetry: a false
-        # 12 pauses an entire Dev Type) — this only renders it
-        code, error_class = classify_nonzero_exit(err, fault, api_status)
-        if code == 16:
-            fail(16, error_class, fault["detail"],
-                 f"harness exited {harness_exit} — turn budget exhausted\n\n"
-                 f"{fault['detail']}\n\n```\n{err}\n```")
-        if code == 12:
-            # a revoked credential leaves stderr EMPTY, so the in-band status is
-            # the only detail there is to name
-            fail(12, error_class, err or f"api_error_status={api_status}",
-                 f"harness exited {harness_exit}\n\n```\n{err}\n```")
-        if code == 15:
-            fail(15, error_class, fault["detail"],
-                 f"harness exited {harness_exit} — {fault['reason']}\n\n"
-                 f"{fault['detail']}\n\n```\n{err}\n```")
-        fail(10, error_class, err or f"harness exited {harness_exit}",
-             f"harness exited {harness_exit}\n\n```\n{err}\n```")
-
-    # ── result.json (docs/03 §6) ─────────────────────────────────────────────
-    # Plan mode is read-only — the harness cannot write files, so the entrypoint
-    # materializes PLAN.md and result.json from the returned plan text (docs/08 §3)
-    if plan_mode:
-        # The fault check runs BEFORE materialization: plan mode's result.json
-        # is synthesized from `result_text`, so a backend that returned junk
-        # would otherwise be laundered into a "planned" outcome.
-        if fault:
-            code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
-            cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
-            fail(code, cls, fault["detail"],
-                 f"plan mode: {fault['reason']}\n\n{fault['detail']}")
-        if len((result_text or "").strip()) < 200:  # a real plan is never this short
-            fail(11, "DEV_BAD_OUTPUT",
-                 f"plan mode returned {len(result_text or '')} chars",
-                 f"plan mode returned no usable plan "
-                 f"({len(result_text or '')} chars):\n\n{result_text}",
-                 bad_output_reason="empty_plan")
-        (WORKSPACE / "out" / "PLAN.md").write_text(result_text)
-        (WORKSPACE / "out" / "result.json").write_text(json.dumps({
-            "schema_version": 1, "outcome": "planned",
-            "summary": result_text.strip().splitlines()[0][:300]}))
+    # per-type legality (docs/03 §6) — loop-invariant; the nudge prompts name
+    # this legal outcome set. First-line defense only — the app enforces the
+    # same table authoritatively at finalization (missions.LEGAL_OUTCOMES).
     result_path = WORKSPACE / "out" / "result.json"
-    # per-type legality (docs/03 §6). First-line defense only — the app enforces
-    # the same table authoritatively at finalization (missions.LEGAL_OUTCOMES).
     legal_outcomes = {
         "ONBOARD": {"plan_needed", "decomposed", "human_needed"},
         "PLAN": {"planned"},
@@ -513,8 +337,10 @@ def main() -> None:
         "REVIEW": {"reviewed", "human_needed"},
         "MAPPER": {"relations_mapped"},
     }
-    legal = legal_outcomes.get(env.get("DEVCAKE_MISSION_TYPE", ""),
+    mission_type = env.get("DEVCAKE_MISSION_TYPE", "")
+    legal = legal_outcomes.get(mission_type,
                                set().union(*legal_outcomes.values()))
+
     def load_result(path):
         loaded = json.loads(pathlib.Path(path).read_text())
         assert loaded.get("outcome") in legal, \
@@ -522,54 +348,371 @@ def main() -> None:
         assert isinstance(loaded.get("summary"), str)
         return loaded
 
-    recovered_path, recovery_note = None, ""
-    try:
-        result = load_result(result_path)          # row 5 — canonical wins
-    except Exception as e:
-        reason = bad_output_reason(e)
-        # Diagnosis is UNCONDITIONAL: whether or not recovery is enabled, a
-        # misplaced result.json is named in the artifact, the transcript and the
-        # live run terminal, so the prompt can be fixed.
-        stray, note = find_result_json(WORKSPACE, workdir, harness_started_at)
-        if note:
-            print(note, file=sys.stderr)
+    # dev.run is opened WITHOUT `with`: fail() exits mid-loop via sys.exit, and
+    # the span must be ended + flushed on that path too — both exits close it
+    # explicitly. harness.exec children parent onto it via dev_ctx.
+    span = tracer.start_span("dev.run", context=ctx)
+    span.set_attribute("devcake.run.id", RUN_ID)
+    span.set_attribute("devcake.dev_type", env.get("DEVCAKE_DEV_TYPE", ""))
+    span.set_attribute("devcake.harness", harness)
+    dev_ctx = trace.set_span_in_context(span)
+
+    def run_once(argv_now, attempt):
+        """One harness invocation: fresh renderer (GrokCoalescer is stateful),
+        fresh line lists (they die with this frame), fresh pump and progress
+        threads (_progress_loop binds one proc and self-exits with it). The
+        relay and its flusher deliberately live outside the loop."""
+        out_lines: list[str] = []
+        err_lines: list[str] = []
+        render = {"codex": render_codex,
+                  "grok-build": GrokCoalescer()}.get(harness, render_claude)
+        with tracer.start_as_current_span("harness.exec", context=dev_ctx) as hspan:
+            hspan.set_attribute("devcake.continuation", attempt)
+            proc = subprocess.Popen(argv_now, cwd=workdir, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+            relay.add(f"[devcake] {harness} started; waiting for model output",
+                      visible_output=False)
+            pumps = [threading.Thread(target=_pump, daemon=True, args=(
+                         proc.stdout, out_lines, render, relay, sys.stdout)),
+                     threading.Thread(target=_pump, daemon=True, args=(
+                         proc.stderr, err_lines, render_stderr, relay, sys.stderr))]
+            progress = threading.Thread(target=_progress_loop, daemon=True,
+                                        args=(proc, relay, harness))
+            for t in (*pumps, progress):
+                t.start()
+            exit_code = proc.wait()
+            for t in pumps:
+                t.join(timeout=10)
+            progress.join(timeout=10)
+        joined_out = "".join(out_lines)
+        joined_err = "".join(err_lines)
+        n_bytes, n_lines = len(joined_out), len(out_lines)
+        # The list holds the same bytes as the joined copy PLUS per-line object
+        # overhead and a pointer array — the larger of the two live copies, and
+        # this is the moment the artifact path starts allocating.
+        out_lines.clear()
+        err_lines.clear()
+        return exit_code, joined_out, joined_err, n_bytes, n_lines
+
+    while True:
+        harness_exit, out, err_text, out_bytes, out_lines_n = run_once(
+            cmd, cont.used)
+        span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
+
+        # ── token extraction + result text (docs/08 §5) ──────────────────────
+        token_report = {"extraction_method": "unavailable", "model": harness}
+        result_text, transcript_body = "", ""
+        codex_last = ""  # RAW `-o` content: result_text is overwritten with a
+        #                  stdout tail on any parse failure, so the fault
+        #                  predicate must not read it (fixtures README)
+        if harness == "codex":
             try:
-                send("run.log", {"lines": [note]})
-            except Exception:  # noqa: BLE001 — advisory relay line; never fail a run over it
-                pass
-            reason = "misplaced"
-        # rows 6/7 — the harness's own verdict beats any recovered file, so a
-        # backend fault plus a stray can never manufacture a PMO transition
-        if fault:
-            code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
-            cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
-            fail(code, cls, f"{fault['detail']} | {note}" if note else fault["detail"],
-                 f"{fault['reason']}: no usable result.json ({e})\n\n"
-                 f"{note}\n\n{fault['detail']}" if note
-                 else f"{fault['reason']}: no usable result.json ({e})\n\n"
-                      f"{fault['detail']}")
-        # row 8 — recovery, opt-out via config (default on). `stray` can be the
-        # canonical path itself when that file exists but is unreadable/invalid;
-        # re-reading it would only reproduce the same error.
-        if (stray is not None and stray != result_path
-                and env.get("DEVCAKE_RECOVER_MISPLACED_RESULT")):
+                last = WORKSPACE / "out" / "last_message.txt"
+                codex_last = last.read_text() if last.exists() else ""
+                result_text = codex_last
+                for line in out.splitlines():       # JSONL events (verified 0.144.1)
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    if ev.get("type") == "turn.completed":
+                        u = ev.get("usage") or {}
+                        token_report = {
+                            "input_tokens": u.get("input_tokens"),
+                            "output_tokens": u.get("output_tokens"),
+                            "cache_read_tokens": u.get("cached_input_tokens"),
+                            "model": "codex",
+                            "extraction_method": "session_json",
+                            "notes": f"reasoning_output_tokens={u.get('reasoning_output_tokens')}",
+                        }
+                if not result_text:
+                    result_text = out[-4000:]
+            except Exception:
+                result_text = out[-4000:]
+        elif harness == "grok-build":
+            sid, terminal = "", None  # `terminal`: the event carrying usage/turns
             try:
-                result = load_result(stray)
-                recovered_path, recovery_note = str(stray), note
-                print(f"[devcake] recovered result.json from {stray}", file=sys.stderr)
-            except Exception as e2:                # the stray is no better
+                parsed = grok_stream_parse(out)
+                if parsed is not None:
+                    result_text, sid = parsed
+                    terminal = grok_end_event(out)
+                else:  # EXTRA_ARGS overrode the format back to a plain json blob
+                    j = json.loads(out)
+                    result_text = j.get("text") or ""
+                    sid = j.get("sessionId") or ""
+                    terminal = j   # same {usage, num_turns, modelUsage} keys
+            except Exception:
+                result_text = out[-4000:]
+            # Token report — its own guard, because a failure here must cost only
+            # the report (INV-5 then posts "unavailable"), never the result text or
+            # the transcript. The `end` event is PREFERRED: at 0.2.112 it carries
+            # the full split inline, needing no session id and no filesystem read
+            # (docs/08 §5). `signals.json` stays as the fallback — its survival at
+            # this version is an uncommitted campaign note, so dropping it would be
+            # as much of a guess as relying on it.
+            try:
+                token_report = (grok_end_report(terminal)
+                                or grok_signals_report(sid) or token_report)
+            except Exception:  # noqa: BLE001 — the artifact path outranks its own token report
+                print("token extraction failed; reporting unavailable", file=sys.stderr)
+            try:
+                # no sessionId ⇒ nothing to export: an `error` event never carries
+                # one, and the export is the only grok dump source (docs/08 §6)
+                exp = (subprocess.run(["grok", "export", sid], capture_output=True,
+                                      text=True) if sid else None)
+                if exp is not None and exp.returncode == 0 and exp.stdout.strip():
+                    transcript_body = exp.stdout
+            except Exception:  # noqa: BLE001 — no export ⇒ no dump; the fault predicate handles an empty one
+                print("grok export failed; transcript falls back to the agent report",
+                      file=sys.stderr)
+        else:
+            try:
+                # stream-json: the final result event carries the exact fields of
+                # the old --output-format json blob (verified live); blob fallback
+                # covers an EXTRA_ARGS format override
+                j = claude_result_event(out) or json.loads(out)
+                usage = j.get("usage") or {}
+                mu = j.get("modelUsage") or {}
+                def _weight(v):  # dominant model = the one that cost/produced the most
+                    return ((v.get("costUSD") or 0, v.get("outputTokens") or 0)
+                            if isinstance(v, dict) else (0, 0))
+                models = sorted(mu, key=lambda k: _weight(mu[k]), reverse=True)
+                token_report = {
+                    "input_tokens": usage.get("input_tokens"),
+                    "output_tokens": usage.get("output_tokens"),
+                    "cache_read_tokens": usage.get("cache_read_input_tokens"),
+                    "cache_write_tokens": usage.get("cache_creation_input_tokens"),
+                    "cost_usd": j.get("total_cost_usd"),
+                    "model": models[0] if models else "claude-code",
+                    "extraction_method": "session_json",
+                    "num_turns": j.get("num_turns"),
+                    "duration_ms": j.get("duration_ms"),
+                }
+                result_text = j.get("result") or ""
+            except Exception:
+                result_text = out[-4000:]
+
+        # ADR-0014 D1: the full dump of assistant-visible text, per harness
+        # (grok: the `grok export` session already includes every message).
+        # Guarded like every other parse of `out` — a dump failure must never
+        # abort the artifact path (the no-dump fallback handles "").
+        try:
+            if harness == "codex":
+                inv_dump = codex_text_dump(out)
+            elif harness == "grok-build":
+                inv_dump = transcript_body
+            else:
+                inv_dump = claude_text_dump(out)
+        except Exception:
+            inv_dump = ""
+
+        # ── continuation aggregation (ADR-0022) ──────────────────────────────
+        # Everything kept across invocations is SMALL (reports, sids, dump
+        # segments — bounded by the operator's budget); each invocation's
+        # `out` is released below exactly as before. With zero continuations
+        # every merged value is byte-identical to its single-invocation input.
+        inv_reports.append(token_report)
+        inv_modes.append(mode)
+        record_session(chains, session_identity(harness, out), mode)
+        if (harness == "grok-build" and mode == "resume" and dump_segments
+                and (inv_dump or "").strip()):
+            # the resumed export is cumulative over the chain — supersede
+            dump_segments[-1] = inv_dump
+            dump_labels[-1] = f"continuation {cont.used} (resume)"
+        else:
+            dump_segments.append(inv_dump)
+            dump_labels.append("initial" if mode == "initial"
+                               else f"continuation {cont.used} ({mode})")
+        token_report = merge_token_reports(
+            inv_reports, inv_modes,
+            resume_cumulative=resume_spec.usage_cumulative if resume_spec
+            else False)
+        dump = merged_transcript_dump(dump_segments, dump_labels)
+
+        # ── harness verdict (ADR-0018) ───────────────────────────────────────
+        # Did the harness actually work? The process exit status alone cannot
+        # say: a saturated backend answering 200-with-nothing exits 0, and
+        # stderr — the channel classify_harness_failure reads — is empty on
+        # every failure we measured. Judged per INVOCATION: this invocation's
+        # own dump and prompt (the nudge, on relaunches — what separates the
+        # export's echo from new work). Compute BEFORE `out` is released.
+        fault = harness_fault(harness, out, harness_exit, dump=inv_dump,
+                              last_message=codex_last, prompt=inv_prompt)
+        # Every harness, not just claude: codex and grok expose no structured
+        # status field, so without this a 401 on either lands on 15 (excusable,
+        # correlation-eligible) instead of 12 (latch the breaker, tell the operator).
+        api_status = harness_api_error_status(harness, out)
+        forensics = workspace_forensics(WORKSPACE / "out", harness_exit, out_bytes,
+                                        out_lines_n, err_text[-FORENSIC_STDERR_TAIL:])
+        # ADR-0022 PR-1: names the terminal event on the exit-11 paths, where the
+        # exit status cannot distinguish "ended cleanly but early" (stopReason
+        # EndTurn — the narrate-and-stop shape) from a stream that just stopped.
+        # Computed here because `out` is released on the next statement.
+        terminal_ev = terminal_evidence(harness, out)
+        # `out` is not read again below; releasing the joined copy here keeps the
+        # peak off the artifact path, where the payload is serialized repeatedly.
+        out = ""
+
+        def fail(code: int, error_class: str, detail: str, transcript: str,
+                 **extra) -> None:
+            # Shutdown order is load-bearing: end + flush the spans, drain the
+            # relay (its stop is one-shot — this is the only failure-path place
+            # it is set), THEN artifacts, exactly the drain-before-artifacts
+            # ordering the single-invocation flow had.
+            payload = {"result": None, "exit_code": code, "error_class": error_class,
+                       "error_detail": _one_line(detail, 500), "evidence": forensics,
+                       "transcript_md": with_session(
+                           f"{transcript}\n\n```json\n"
+                           f"{json.dumps(forensics, indent=2)}\n```", dump),
+                       "token_report": token_report,
+                       "continuations_used": cont.used}
+            payload.update(extra)
+            span.set_attribute("devcake.continuations", cont.used)
+            span.end()
+            provider.force_flush()
+            relay.stop.set()
+            flusher.join(timeout=10)
+            send_artifacts(payload)
+            stop.set()
+            sys.exit(code)
+
+        if harness_exit != 0:
+            err = err_text[-1500:]
+            # the whole rule lives in the pure helper (docs/15 §4 asymmetry: a
+            # false 12 pauses an entire Dev Type) — this only renders it
+            code, error_class = classify_nonzero_exit(err, fault, api_status)
+            if code == 16:
+                fail(16, error_class, fault["detail"],
+                     f"harness exited {harness_exit} — turn budget exhausted\n\n"
+                     f"{fault['detail']}\n\n```\n{err}\n```")
+            if code == 12:
+                # a revoked credential leaves stderr EMPTY, so the in-band status
+                # is the only detail there is to name
+                fail(12, error_class, err or f"api_error_status={api_status}",
+                     f"harness exited {harness_exit}\n\n```\n{err}\n```")
+            if code == 15:
+                fail(15, error_class, fault["detail"],
+                     f"harness exited {harness_exit} — {fault['reason']}\n\n"
+                     f"{fault['detail']}\n\n```\n{err}\n```")
+            fail(10, error_class, err or f"harness exited {harness_exit}",
+                 f"harness exited {harness_exit}\n\n```\n{err}\n```")
+
+        # ── result.json (docs/03 §6) ─────────────────────────────────────────
+        # Plan mode is read-only — the harness cannot write files, so the
+        # entrypoint materializes PLAN.md and result.json from the returned plan
+        # text (docs/08 §3). Plan mode NEVER continues (ADR-0022): it either
+        # fails here or materializes and succeeds through row 5 below.
+        if plan_mode:
+            # The fault check runs BEFORE materialization: plan mode's result.json
+            # is synthesized from `result_text`, so a backend that returned junk
+            # would otherwise be laundered into a "planned" outcome.
+            if fault:
+                code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
+                cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
+                fail(code, cls, fault["detail"],
+                     f"plan mode: {fault['reason']}\n\n{fault['detail']}")
+            if len((result_text or "").strip()) < 200:  # a real plan is never this short
+                fail(11, "DEV_BAD_OUTPUT",
+                     f"plan mode returned {len(result_text or '')} chars",
+                     f"plan mode returned no usable plan "
+                     f"({len(result_text or '')} chars):\n\n{result_text}",
+                     bad_output_reason="empty_plan")
+            (WORKSPACE / "out" / "PLAN.md").write_text(result_text)
+            (WORKSPACE / "out" / "result.json").write_text(json.dumps({
+                "schema_version": 1, "outcome": "planned",
+                "summary": result_text.strip().splitlines()[0][:300]}))
+
+        try:
+            result = load_result(result_path)      # row 5 — canonical wins
+            break
+        except Exception as e:
+            reason = bad_output_reason(e)
+            # Diagnosis is UNCONDITIONAL: whether or not recovery is enabled, a
+            # misplaced result.json is named in the artifact, the transcript and
+            # the live run terminal, so the prompt can be fixed.
+            stray, note = find_result_json(WORKSPACE, workdir, harness_started_at)
+            if note:
+                print(note, file=sys.stderr)
+                try:
+                    send("run.log", {"lines": [note]})
+                except Exception:  # noqa: BLE001 — advisory relay line; never fail a run over it
+                    pass
+                reason = "misplaced"
+            # rows 6/7 — the harness's own verdict beats any recovered file, so a
+            # backend fault plus a stray can never manufacture a PMO transition.
+            # A fault on a CONTINUATION invocation lands here too, classified
+            # exactly like a first invocation's (ADR-0022: fault machinery
+            # outranks the loop, even with budget left).
+            if fault:
+                code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
+                cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
+                fail(code, cls, f"{fault['detail']} | {note}" if note else fault["detail"],
+                     f"{fault['reason']}: no usable result.json ({e})\n\n"
+                     f"{note}\n\n{fault['detail']}" if note
+                     else f"{fault['reason']}: no usable result.json ({e})\n\n"
+                          f"{fault['detail']}")
+            # row 8 — recovery, opt-out via config (default on). `stray` can be
+            # the canonical path itself when that file exists but is unreadable/
+            # invalid; re-reading it would only reproduce the same error.
+            if (stray is not None and stray != result_path
+                    and env.get("DEVCAKE_RECOVER_MISPLACED_RESULT")):
+                try:
+                    result = load_result(stray)
+                    recovered_path, recovery_note = str(stray), note
+                    print(f"[devcake] recovered result.json from {stray}",
+                          file=sys.stderr)
+                    break
+                except Exception as e2:            # the stray is no better
+                    forensics["terminal"] = terminal_ev
+                    fail(11, "DEV_BAD_OUTPUT", f"{note} | recovered file invalid: {e2}",
+                         f"result.json missing/invalid: {e}\n\n{note}\n\n"
+                         f"recovered file also invalid: {e2}\n\n---\n\n{result_text}",
+                         bad_output_reason=bad_output_reason(e2))
+            # ── row 9 — the continuation decision point (ADR-0022) ───────────
+            # Exit 0, no fault, nothing to recover: the run looks healthy but
+            # is demonstrably unfinished. Fingerprints are taken ONLY here, so
+            # healthy runs pay nothing; the comparison is landing N vs N-1.
+            decision = next_continuation(
+                cont_cfg, cont, plan_mode=plan_mode,
+                session_id=last_sid(chains),
+                resume_supported=resume_spec is not None,
+                fingerprint=workspace_fingerprint(workdir))
+            if decision.action == "stop":
                 forensics["terminal"] = terminal_ev
-                fail(11, "DEV_BAD_OUTPUT", f"{note} | recovered file invalid: {e2}",
-                     f"result.json missing/invalid: {e}\n\n{note}\n\n"
-                     f"recovered file also invalid: {e2}\n\n---\n\n{result_text}",
-                     bad_output_reason=bad_output_reason(e2))
-        else:                                      # row 9
-            forensics["terminal"] = terminal_ev
-            fail(11, "DEV_BAD_OUTPUT", f"{e}{' | ' + note if note else ''}",
-                 f"result.json missing/invalid: {e}"
-                 + (f"\n\n{note}" if note else "")
-                 + f"\n\n---\n\n{result_text}",
-                 bad_output_reason=reason)
+                fail(11, "DEV_BAD_OUTPUT", f"{e}{' | ' + note if note else ''}",
+                     f"result.json missing/invalid: {e}"
+                     + (f"\n\n{note}" if note else "")
+                     + (f"\n\ncontinuation: {decision.reason}"
+                        if cont_cfg.max_continuations > 0 else "")
+                     + f"\n\n---\n\n{result_text}",
+                     bad_output_reason=reason)
+            if decision.action == "resume":
+                mode = "resume"
+                inv_prompt = resume_nudge_prompt(
+                    mission_type, legal, attempt=cont.used,
+                    budget=cont_cfg.max_continuations, stray_note=note)
+                cmd = harness_resume_argv(harness, last_sid(chains), inv_prompt,
+                                          model=model, extra=extra)
+            if decision.action == "fresh" or cmd is None:
+                # `cmd is None` is defensive only: a harness in RESUME_SPECS
+                # always has a builder arm — degrade to fresh, never crash
+                mode = "fresh"
+                inv_prompt = fresh_nudge_prompt(
+                    prompt, mission_type, legal, attempt=cont.used,
+                    budget=cont_cfg.max_continuations, stray_note=note)
+                cmd = harness_argv(harness, inv_prompt, plan_mode=False,
+                                   model=model, extra=extra)
+            relay.add(f"[devcake] continuation {cont.used}/"
+                      f"{cont_cfg.max_continuations} ({mode}): "
+                      f"{decision.reason} — relaunching {harness}",
+                      visible_output=False)
+
+    # ── success epilogue ─────────────────────────────────────────────────────
+    span.set_attribute("devcake.continuations", cont.used)
+    span.end()
+    provider.force_flush()
+    relay.stop.set()
+    flusher.join(timeout=10)
 
     plan_path = WORKSPACE / "out" / "PLAN.md"
     transcript = assemble_transcript(
@@ -578,9 +721,12 @@ def main() -> None:
         token_report=token_report, dump=dump, result_text=result_text,
         result=result)
     # ADR-0014 D1: the last message rides separately for the inline feed
-    # comment; the app treats a missing/empty key as "post the pointer only"
+    # comment; the app treats a missing/empty key as "post the pointer only".
+    # continuations_used (ADR-0022) rides success AND failure payloads — 0 on
+    # every run that never needed the loop.
     payload = {"result": result, "transcript_md": transcript,
-               "last_message_md": result_text, "token_report": token_report}
+               "last_message_md": result_text, "token_report": token_report,
+               "continuations_used": cont.used}
     if recovered_path:
         # The run succeeds, so there is no failure artifact to carry the
         # evidence — the transcript is the only durable surface, and it is

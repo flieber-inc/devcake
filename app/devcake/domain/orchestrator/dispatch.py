@@ -417,11 +417,13 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
                 blocker_repos=blocker_note),
         }[mtype]()
 
-        spec_env = _protocol_spec_env(mgr, 
+        spec_env = _protocol_spec_env(mgr,
             mission_id=mission.pmo_id, mission_key=mission.key,
             mission_type=mtype.value, dev_type=dev_type, seq=seq,
             extra_args=assignment.extra_cli_args, repo=repo, forge=forge,
-            recover_misplaced_result=mgr.config.recover_misplaced_result)
+            recover_misplaced_result=mgr.config.recover_misplaced_result,
+            continuation_policy=mgr.config.continuation_policy,
+            max_continuations=mgr.config.max_continuations)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
@@ -499,7 +501,9 @@ def append_required_skills(prompt: str, skills_required: list[str],
 def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        mission_type: str, dev_type: DevType, seq: int,
                        extra_args: str, repo, forge,
-                       recover_misplaced_result: bool = True) -> dict[str, str]:
+                       recover_misplaced_result: bool = True,
+                       continuation_policy: str = "auto",
+                       max_continuations: int = 2) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
     place so mission and mapper dispatches can never drift apart — a var
     missing on one path would crash the entrypoint's strict readers."""
@@ -522,6 +526,10 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         # flag impossible to switch off (ADR-0018)
         "DEVCAKE_RECOVER_MISPLACED_RESULT": (
             "1" if recover_misplaced_result else ""),
+        # ADR-0022 — a string enum and an int-string, not flags; the
+        # entrypoint's continuation_config parses defensively (garbage → off)
+        "DEVCAKE_CONTINUATION_POLICY": continuation_policy,
+        "DEVCAKE_MAX_CONTINUATIONS": str(max_continuations),
         "DEVCAKE_MODEL": (dev_type.model
                           or HARNESSES[dev_type.harness_template].default_model),
         # Devs export through the collector, credential-free (ISSUES #13)

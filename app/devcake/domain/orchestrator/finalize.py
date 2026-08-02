@@ -63,6 +63,12 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         payload.get("token_report") or {}, mgr.config.cost_inputs)
     plan_md = payload.get("plan_md")
     pmo_id = run.mission_pmo_id
+    # ADR-0022 — stamped before the span so success AND failure branches
+    # persist it; container-authored, so parsed defensively
+    try:
+        run.continuations_used = int(payload.get("continuations_used") or 0)
+    except (TypeError, ValueError):
+        run.continuations_used = 0
 
     ctx = None
     if run.traceparent:
@@ -86,6 +92,8 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                                token_report["cost_usd_estimated"])
             span.set_attribute("devcake.cost.rate_card",
                                str(token_report.get("rate_card_id")))
+        if run.continuations_used:                       # ADR-0022
+            span.set_attribute("devcake.continuations", run.continuations_used)
 
         # 1 — transcript (idempotent via finalized_steps)
         if "transcript" not in run.finalized_steps:
@@ -370,5 +378,9 @@ def _token_report_md(run: Run, tr: dict, cost_inputs=None) -> str:
         + (f"\ncost: ${cost:.4f}" if cost is not None else "")
         + (f"\ncost (estimated, {tr.get('rate_card_id')}): ${est:.4f}"
            if show_est else "")
+        # ADR-0022: only when the loop fired — zero-continuation reports (and
+        # every pre-ADR-0022 one) render byte-identically
+        + (f"\ncontinuations: {run.continuations_used}"
+           if run.continuations_used else "")
         + f"\nextraction: {fmt(tr.get('extraction_method'))}\nrun: {run.run_id}")
 

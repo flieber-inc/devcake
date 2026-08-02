@@ -401,6 +401,16 @@ vocabulary at the top of this file).
 - **Security-contract reading aid** (PR #53) + roadmap/observability alignment
   (PRs #51–#52): docs/14 §0a buckets, deferred iron-proxy radar. **built**
   (docs).
+- **In-container run continuation** (ADR-0022, 2026-08-02): the
+  narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
+  ~50% of long weak-model runs, hours lost late) is nudged instead of failed:
+  session resume (capture-verified for all three CLIs, `RESUME_SPECS` with
+  per-harness cumulative-usage facts) → fresh-session escalation on stall,
+  budget-only termination (`continuation_policy` / `max_continuations`,
+  Limits & traffic). Plus `TURN_DISCIPLINE` prompt epilogue, exit-11
+  `evidence.terminal` instrumentation, `continuations_used` on
+  Run/API/feed/OTel, rig `--resume-prompt-file` mode + six
+  `*_resume_nudge*` capture fixtures. **built**.
 
 ### Still open (residuals)
 

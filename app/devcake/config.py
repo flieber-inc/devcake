@@ -456,6 +456,21 @@ class AppConfig(BaseModel):
     # validation. The misplacement is recorded either way, so turning this off
     # costs diagnosis nothing — it only stops DevCake acting on the stray.
     recover_misplaced_result: bool = True
+    # ADR-0022 — when a harness exits 0 with no fault but never wrote
+    # result.json (the narrate-and-stop shape), the Dev entrypoint relaunches
+    # the harness in the same container with a contract-reminder nudge instead
+    # of failing the attempt. `auto` resumes the session when the harness has
+    # a capture-verified resume (RESUME_SPECS) and escalates permanently to a
+    # fresh session after a zero-progress continuation; the integer budget is
+    # the ONLY terminator (founder decision 2026-08-02 — stalls escalate,
+    # never stop, so large experimental budgets run to completion). Plan mode
+    # never continues. NOTE: each relaunch resets the CLI's own --max-turns,
+    # so the effective turn budget is (max_continuations + 1) × max-turns.
+    continuation_policy: Literal["auto", "resume-only", "fresh-only",
+                                 "off"] = "auto"
+    # deliberately no upper bound (unlike max_attempts): large budgets (10,
+    # 50) are a legitimate experiment, bounded by dev_timeout_minutes
+    max_continuations: int = Field(2, ge=0)
     # ge=1: used as a modulo cadence; 0 would ZeroDivisionError (ISSUES #8/#9)
     review_loop_warning_every: int = Field(3, ge=1)
     # After a REVIEW-approved merge, also zip the PR change set onto the PMO

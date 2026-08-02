@@ -1,12 +1,12 @@
 // Config page section anchors — shared by the sidebar sub-nav, the mobile
-// chip row, and the ConfigPage scrollspy.
+// chip row, and the ConfigPage scrollspy. Array order is load-bearing: the
+// first entry is where bare #/config lands. PMO is NOT here — it lives as
+// its own page (#/pmo) under the sidebar's Adapters item (2026-08-02).
 export const CONFIG_SECTIONS = [
-  { id: "pmo", label: "PMO" },
   { id: "dev-types", label: "Dev Types" },
+  { id: "mission-types", label: "Mission Types" },
   { id: "skills", label: "Skills" },
-  { id: "assignments", label: "Assignments" },
   { id: "prompts", label: "Prompts" },
+  { id: "limits", label: "Limits & traffic" },
   { id: "profiles", label: "Profiles & Export" },
-  { id: "limits", label: "Limits" },
-  { id: "traffic", label: "Traffic control" },
 ];

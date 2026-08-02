@@ -27,7 +27,7 @@ await withPage(async (page) => {
   await page.click('button[aria-label="System theme"]');   // leave as found
 
   // 4: help is a click-popover (works on touch/keyboard), Esc closes it
-  await gotoFresh(page, "#/config/pmo");
+  await gotoFresh(page, "#/pmo");
   await page.waitForSelector("#pmo");
   const help = page.locator('button[aria-label="Help"]').first();
   await help.click();

@@ -3,15 +3,15 @@
 > **Audience:** frontend implementer + app API implementer.
 > **Depends on:** `02-domain-model.md` (AppConfig, DevType), `10-persistence.md` (write path), `13-deployment.md` (proxy topology).
 
-Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router drives **six pages**: **Overview** (`#/overview`), **Missions** (`#/missions`), **Runs** (`#/runs`), **Repositories** (`#/repos`), **Configuration** (`#/config/<section>`), **Logs** (`#/logs`). Config sections (from `admin/spa/src/lib/nav.js`): `pmo`, `dev-types`, `skills`, `assignments`, `prompts`, `profiles` (**Profiles & Export**), `limits`, `traffic` — **repository is not a Configuration section** (repos live on `#/repos`; the old `#/config/repository` hash redirects there). The Dagu and OpenObserve UIs are **not** embedded: the Runs and Logs pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
+Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) served by nginx in the `admin` container, which reverse-proxies `/api/*` → `app:8000` (no CORS). A persistent **sidebar** hosts navigation and the mission-intake master switch; a tiny hash router drives **seven pages**: **Overview** (`#/overview`), **Missions** (`#/missions`), **Runs** (`#/runs`), the **Adapters item** — **Repositories** (`#/repos`) and **PMO** (`#/pmo`) — **Configuration** (`#/config/<section>`), and **Consoles** (`#/consoles`). Config sections (from `admin/spa/src/lib/nav.js`, in order): `dev-types`, `mission-types`, `skills`, `prompts`, `limits` (**Limits & traffic**), `profiles` (**Profiles & Export**) — **repositories and PMO connections are NOT Configuration sections** (they live under the Adapters item; every edit still rides the one shared draft). Legacy routes redirect: `#/config/repository`→`#/repos`, `#/config/pmo`→`#/pmo`, `#/config/traffic`→`#/config/limits`, `#/config/assignments`→`#/config/mission-types`, `#/logs`→`#/consoles`. The Dagu and OpenObserve UIs are **not** embedded: the Runs and Consoles pages open them in new browser tabs via buttons (confirmed decision — no iframes; their URLs reach the SPA as nginx-templated env vars `DAGU_UI_URL` / `OO_UI_URL` in `/config.js`, `13-deployment.md` §2). All confirmation dialogs are React components — never native `window.confirm`/`alert` (they block automation and the browser).
 
 **Health polling is honest by design:** the SPA polls `GET /api/v1/health` every 10 s, keeps the last-known data on failure, and renders an unreachable backend **RED** (never gray/unknown) — the failure itself is the signal (founder decision, 2026-07-13).
 
 ## 0. Sidebar (persistent shell)
 
-- Navigation to the six pages, with Config sub-entries for the sections above; collapsible to an icon rail.
+- Navigation to the seven pages — **Adapters** is a nav item exactly like Configuration: clicking it lands on Repositories, and its sub-entries (Repositories, PMO) render indented beneath it only while an adapter page is active. Sidebar collapsible to an icon rail; sub-entries are expanded-drawer-only, so the adapter pages carry their own mobile chip row (`AdapterTabs`, the ConfigPage section-chips precedent) to reach the sibling page.
 - **Mission-intake master switch** — THE operational control, so it lives in the sidebar (visible even collapsed, founder decision) and applies immediately (its own `PUT /config`, outside the Config draft): OFF pauses intake — no new runs start on **any** PMO (missions or mapper) while the operator rearranges missions. In-flight runs finish normally (pause freezes dispatch, not consequence) and the merge/tracking sweeps keep running; flipping back resumes on the next poll cycle. Disabled (with an explanatory tooltip) while the backend is unreachable or health is unknown; save errors surface inline — the toggle never fails silently.
-- **Per-PMO intake** — each *saved* PMO card on Configuration → PMO has an InstantZone toggle driven by `/health` (not the config draft). It calls `PUT /api/v1/config/pmos/{name}/intake` with `{paused}` — a narrow server-side flip that never rewrites the `pmos` list. Freezes only that instance's NEW dispatches; the sidebar master still freezes everything. Unsaved (draft-only) cards unlock the toggle after Save.
+- **Per-PMO intake** — each *saved* PMO card on the PMO page (`#/pmo`, Adapters item) has an InstantZone toggle driven by `/health` (not the config draft). It calls `PUT /api/v1/config/pmos/{name}/intake` with `{paused}` — a narrow server-side flip that never rewrites the `pmos` list. Freezes only that instance's NEW dispatches; the sidebar master still freezes everything. Unsaved (draft-only) cards unlock the toggle after Save.
 - Component health dots from the 10 s health poll: app / pmo / redis / dagu / **gitea** (`health.internal_forge`, grey when Gitea is unset) / logs (OpenObserve) — not a generic forge dot — plus a theme toggle.
 
 ## 1. REST API contract (`/api/v1`)
@@ -100,7 +100,7 @@ The landing dashboard, fed by the health poll + a short runs/dev-types poll. **S
 
 - **Masthead answer sentence** — display-face title that answers "do I need to do anything?": *"Nothing needs you."* / *"{N} things need you."* / critical-warning count when health is known; eyebrow line for service health ("all services healthy" / "a service is down — see the sidebar"). Subline: active Devs baking · intake ON/PAUSED · runs recorded.
 - **Let's get baking** checklist — first-run three-step card (Connect a PMO, Add a repository **or** use the internal forge, Give a Dev Type credentials). The repository step is satisfied by an external work-repo token, a healthy internal forge (`/health.internal_forge.ok`), or an explicit **I'll work with the internal forge** dismiss (persisted in `dismissed_alerts` as `setup-checklist:internal-forge`). Retires itself once all three pass.
-- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: **intake paused** · **dependency cycles** · **unprotected default branch** (`forge_protection`) · **`security_warnings`** · **`prompt_template_warnings`** · **`poll_degraded`** · **anomalies** (out-of-pipeline) · **circuit breakers** · **unused repositories** (`unused_repos` — adapters no PMO selects; points at Repositories → ⋯ → Remove unused repositories). **Not** `mapper_degraded` (that is the Traffic card only). Some alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
+- **Advisory alerts** — derived client-side (`lib/alerts.js`) from the health payload: **intake paused** · **dependency cycles** · **unprotected default branch** (`forge_protection`) · **`security_warnings`** · **`prompt_template_warnings`** · **`poll_degraded`** · **anomalies** (out-of-pipeline) · **circuit breakers** · **unused repositories** (`unused_repos` — adapters no PMO selects; points at Repositories → ⋯ → Remove unused repositories). **Not** `mapper_degraded` (that is the Relations-Mapper card on Limits & traffic only). Some alerts are **dismissible**; dismissals persist server-side as `AppConfig.dismissed_alerts` ("id:signature" strings — a changed signature resurfaces the alert; a "N dismissed" affordance restores them), with localStorage as a fallback while the PUT can't reach the backend.
 - **Needs Human Action** — unified panel of `merge_handoffs` (`DEVCAKE-MERGE`) and `needs_human` (`DEVCAKE-NEEDS-HUMAN`) rows (not separate "merge queue" / "needs attention" cards).
 - **Stats strip** — Active runs · Mission intake · Devs (available/running/broken color code) · Needs human count.
 - **In the oven** — active runs by stage (ONBOARD/PLAN/EXECUTE/REVIEW), linking into Runs.
@@ -141,9 +141,9 @@ removable — a stale name must never wedge the Save PUT), and an explicit
 empty-state note. Do not introduce checkbox lists or multi-select dropdowns
 for these.
 
-Sections (one section per `#/config/<id>` view, from `nav.js`): **PMO · Dev Types · Skills · Assignments · Prompts · Profiles & Export · Limits · Traffic control**. Repositories are **not** a Configuration section — use `#/repos`.
+Sections (one section per `#/config/<id>` view, from `nav.js`, in this order): **Dev Types · Mission Types · Skills · Prompts · Limits & traffic · Profiles & Export**. Repositories and PMO connections are **not** Configuration sections — they live under the sidebar's Adapters item (`#/repos`, `#/pmo`) and edit the same draft. The `limits` view renders BOTH the Limits card and the Traffic card (merged 2026-08-02; `#/config/traffic` redirects here).
 
-### Traffic control
+### Traffic control (rendered inside Limits & traffic)
 - **Decomposition depth** (`SettingRow` select, drafted like every scalar) — `max_decomposition_depth`: **1 level** (a decomposition child is never split again), **2 levels** (default — a Project's missions can each split once more), or **Unlimited** (stored as `0`; the ONBOARD Dev decides every time — removes the fission backstop, and the help copy says so). The schema accepts any depth ≥ 0; a value outside the offered three (set via API/YAML) renders as an extra "*N levels (set via API)*" option so it round-trips instead of being clobbered on the next save. `03-mission-lifecycle.md` §1.3, `adr/0012`.
 - **Relations Mapper card** — four controls: (a) **Run now** button → `POST /api/v1/relations-mapper/run`, showing the dispatched run id (or the 409/422 error) inline; (b) **interval in minutes**; (c) **Dev Type combobox** (defaults to the seeded `mapper`; required before enabling or running); (d) **Periodic service ON/OFF toggle** (default OFF — manual-only out of the box). Controls disable while a save is in flight (no stale-state races). The card shows the **degraded** state from `/health` (`mapper_degraded`). Deleting the mapper's Dev Type is refused with 409.
 
@@ -154,7 +154,7 @@ never echoed by `GET /config` or `secrets-check` (presence + timestamp only).
 `.env` is bootstrap-only. Paste guards use registry `secret_shape_prefixes`.
 Connection tests fail clearly when a required secret is absent.
 
-### PMO connection (anchor `#/config/pmo`)
+### PMO connection (own page: `#/pmo`, Adapters item — `#/config/pmo` redirects)
 Fields edit configured PMO instances (`02-domain-model.md` §9); section copy
 renders from `GET /connections/registry` and stays **PMO-neutral**.
 - System selector, instance name, team/workspace key.
@@ -182,7 +182,7 @@ The skill-store catalog: name / description / source badge (`store` = served fro
 
 Both validate server-side (name shape, required description, per-file 200 KB / total 1 MB caps, path-safety) and **refuse a name collision** with an existing store skill or a built-in unless the operator confirms **Overwrite** (409 → explicit confirm). Every row shows **View**; when the store is editable every row also shows a **Delete** control — live for operator/retired store skills, **disabled** for built-ins (they re-seed at boot; deselect on Dev Types instead; `DELETE` still 422s). Skills created here carry `metadata.source: operator (admin panel)`.
 
-### Assignments
+### Mission Types (anchor `#/config/mission-types`; renamed from Assignments 2026-08-02 — the API field stays `assignments`)
 Matrix: four Mission Types × (Dev-Type dropdown + **extra CLI args** textbox). The args are appended verbatim to the harness invocation for runs of that Mission Type — the mechanism for per-Mission-Type tuning like bounded-effort ONBOARD (`--max-turns 15` is the seeded default there for the claude-code harness). Harness-specific means capability-specific: `--max-turns` exists on claude-code and grok-build, but **codex 0.144.4 has no turn-cap flag at all**, so no args value bounds a codex Dev's effort (`08-harness-templates.md` §1, `15-errors-and-retries.md` §2a). The textbox shows a hint naming the assigned Dev Type's harness; **reassigning a Mission Type to a Dev Type with a different harness triggers a warning offering to keep or clear the args** (they are harness-specific by nature). Same trust class as the MCP command area: admin-only, executed in the Dev container. Inline validation (every type assigned; a Dev Type may hold several).
 
 Below the global matrix, **one override block per configured PMO instance** (ADR-0019): a tri-state select per Mission Type — the inherit option names the effective global Dev Type; choosing a type creates a wholesale override row with its **own** args textbox (fresh overrides start with empty args; the harness-mismatch warning applies per row). When EXECUTE and REVIEW share a Dev Type, a **performance tip** (not a security warning) notes that a distinct REVIEW type can carry review-focused skills/prompt — evaluated per instance on **effective** rows. Overrides save through the config draft (PUT `/config`, they are `pmos[*]` fields), not PUT `/assignments`.
@@ -221,7 +221,7 @@ backend.
   `result.json` (exit 11; no brake) — prefer grok-build or claude-code for those
   stages (`08-harness-templates.md` §8).
 
-### Profiles (anchor `#/config/profiles`)
+### Profiles (anchor `#/config/profiles`, deliberately the LAST section)
 Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely Instant** — profiles carry secret values, which never enter the client draft, so the section header carries the ImmediateBadge and the apply panel sits in an InstantZone. The UI deals in presence and counts only; a secret value never reaches the SPA.
 
 - **Save current as profile…** (the one primary): PromptDialog for the name; a 409 collision chains into an explicit red **Overwrite** confirm. Save warnings name configured instances whose secret is missing from the snapshot.
@@ -233,7 +233,7 @@ Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely
 ### Prompts (anchor `#/config/prompts`)
 Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{name}`) and per-Dev-Type **identifying-prompt templates** (`/devtype-prompts/{dev}/{name}`). Template create/edit/delete is **Immediate** (own Save in the modal); only the **active** selection per mission type / Dev Type rides the unified config draft (`active_prompt_templates` / `active_devtype_prompts`). Missing actives fall back to the built-in default; unresolved actives surface as `prompt_template_warnings` on `/health`. **View** uses the same **Rendered** / **Source** dialog as Skills (Markdown reading aid; unsubstituted `{var}` placeholders; Source is the stored template).
 
-### Limits
+### Limits (rendered inside Limits & traffic, above the Traffic card)
 - **Global max Devs** integer (help text: effective ceiling = min(global, sum of per-type caps)).
 - **Dev run timeout** minutes (default 120).
 - **Review-loop warning** cadence (every N rejections).
@@ -268,9 +268,9 @@ Operator impact: no new Devs start until clear finishes; OO stream delete can do
 
 **Preserved:** `/data/config`, `/data/secrets`, PMO/forge state, circuit breakers (credential health).
 
-## 5. Logs page
+## 5. Consoles page (`#/consoles`; renamed from Logs 2026-08-02 — `#/logs` redirects)
 
-A prominent **"Open OpenObserve ↗"** button (new tab, URL from `OO_UI_URL`). **Canned deep links (Errors last hour / Trace by mission key / Cost dashboard) are not implemented** in the SPA — only the Open OpenObserve action ships. No iframe.
+One card per external console, each with its own primary "Open ↗" action and a short what-lives-here pointer list: **OpenObserve** (traces, logs, token costs — URL from `OO_UI_URL`), **Dagu** (one DAG per run, step-level history — URL from `DAGU_UI_URL`), and **Gitea** (internal-forge repos + skill store — rendered only when `health.internal_forge` is present; URL from its `ui_url`). **Canned deep links (Errors last hour / Trace by mission key / Cost dashboard) are not implemented** — only the Open actions ship. No iframes. The Runs page keeps its own "Open Dagu" primary; the Consoles page documents, the context pages deep-link.
 
 ## 6. Auth and control-plane posture
 

@@ -49,7 +49,7 @@ await withPage(async (page) => {
     }
   });
 
-  await gotoFresh(page, "#/config/pmo");
+  await gotoFresh(page, "#/pmo");
   await page.waitForSelector("#pmo");
 
   const switches = page.locator(

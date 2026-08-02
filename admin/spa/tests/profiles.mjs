@@ -29,7 +29,7 @@ await withPage(async (page) => {
   await page.waitForSelector("#profiles");
   check("Profiles view renders the #profiles section",
     (await page.locator("#profiles").count()) === 1
-    && (await page.locator("#pmo").count()) === 0);
+    && (await page.locator("#dev-types").count()) === 0);
 
   // pre-clean any leftover throwaway rows from a prior aborted run
   await deleteIfPresent(page, NAME);

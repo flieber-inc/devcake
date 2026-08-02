@@ -57,7 +57,9 @@ instance-name-keyed sibling structure can drift against the instance list.
 
 ### 4 — Admin UI
 
-The Assignments section keeps the global table ("global defaults") and adds
+The Assignments section (labeled **Mission Types** in the UI since the
+2026-08-02 nav reorg; the config field stays `assignments`) keeps the global
+table ("global defaults") and adds
 one override block per configured PMO card: a tri-state select per mission
 type whose inherit option names the effective global Dev Type, an args input
 only when overridden, and the role-focus (EXECUTE vs REVIEW share a Dev Type —

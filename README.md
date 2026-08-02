@@ -166,7 +166,7 @@ PMO (Linear / Gitea Issues) ──poll / labels──► app (orchestrator)
 
 Self-hosted, single operator, loopback by default. Stack passwords live in
 `.env`; **operator secrets** (PMO keys, forge tokens, model credentials) are
-entered through the admin UI's Configuration and Repositories pages and stored
+entered through the admin UI's Configuration, Repositories and PMO pages and stored
 on the app volume — never echoed back.
 
 Agents are powerful by design. The app enforces outcome legality and never lets
@@ -192,7 +192,7 @@ cp .env.example .env
 ./up.sh --bake            # discovers DOCKER_GID, bakes all images, compose up -d
 # Later restarts (images already baked):  ./up.sh
 
-open http://localhost:8080   # basic auth → Config → secrets + connection tests
+open http://localhost:8080   # basic auth → Config / the Adapters pages → secrets + connection tests
 # Optional OO dashboard/alerts: python3 scripts/provision_oo.py
 ```
 

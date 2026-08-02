@@ -65,7 +65,7 @@ export default function AssignmentsSection() {
     );
 
   return (
-      <Section id="assignments" title="Assignments"
+      <Section id="mission-types" title="Mission Types"
         description={pmos.length
           ? "Which Dev Type handles each mission type. Per-PMO overrides below replace a row for that instance only."
           : "Which Dev Type handles each mission type."}>

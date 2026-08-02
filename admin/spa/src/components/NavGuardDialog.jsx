@@ -11,8 +11,8 @@ export default function NavGuardDialog({ open, count, errors, onStay, onDiscard,
     <Overlay className="max-w-lg p-6" onDismiss={onStay}>
         <h4 className="mb-2 text-base font-semibold tracking-tight">Unsaved changes</h4>
         <p className="mb-5 text-sm text-neutral-600 dark:text-neutral-300">
-          You have {count} unsaved change{count > 1 ? "s" : ""} on this page.
-          Leaving without saving discards them.
+          You have {count} unsaved change{count > 1 ? "s" : ""} in your
+          configuration draft. Leaving without saving discards them.
         </p>
         {errorList.length > 0 && (
           <p className="mb-4 text-xs text-red-600 dark:text-red-400">

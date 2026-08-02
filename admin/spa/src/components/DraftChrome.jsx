@@ -8,9 +8,9 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // The single home of the unified draft's chrome (v0.1.1 B4): DirtyBar,
 // SaveReviewDialog, NavGuardDialog, beforeunload, and doSave — rendered once
-// by App while a draft page (Configuration / Repositories) is active, so
-// config↔repos switches keep the draft and there is exactly ONE nav-guard
-// registration.
+// by App while a draft page (Configuration / Repositories / PMO) is active,
+// so switches between them keep the draft and there is exactly ONE
+// nav-guard registration.
 const DEFAULT_REPO_RE = /^cfg\.pmos\.\d+\.repos$/;
 
 export default function DraftChrome({ registerNavGuard, health }) {

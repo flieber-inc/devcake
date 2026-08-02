@@ -43,11 +43,11 @@ Open `http://localhost:8080` (admin basic auth). `/health` should show `app`,
 
 ## 2. Configure everything via the GUI
 
-- **Configuration → PMO** → Add PMO instance → name + team key → **Set** the API key (stored 0600, never echoed) → Test connection (expect ✓ team + labels).
-- **Repositories** (`#/repos`, not under Configuration) → Add repository → name + forge + URL → **Set** the write token (prefer RO + reviewer tokens too) → Test connection.
+- **PMO page** (`#/pmo`) → Add PMO instance → name + team key → **Set** the API key (stored 0600, never echoed) → Test connection (expect ✓ team + labels).
+- **Repositories** (`#/repos`, under Adapters) → Add repository → name + forge + URL → **Set** the write token (prefer RO + reviewer tokens too) → Test connection.
   *(Skip this to exercise the zero-repo / internal-forge path.)*
 - **Configuration → Dev Types** → for each harness key (e.g. `ANTHROPIC_API_KEY`) **Set** the value, or **Connect via OAuth** for subscription harnesses.
-- Set assignments; leave intake enabled (sidebar master switch). Sidebar health dots should go green.
+- Set Mission Types (assignments); leave intake enabled (sidebar master switch). Sidebar health dots should go green.
 
 The `.env` file is not touched by any of this.
 

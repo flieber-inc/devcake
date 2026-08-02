@@ -113,7 +113,9 @@ skill chips), not junior/main/senior theater and not one-to-one skill packs:
 | `implementer` | EXECUTE |
 | `mapper` | Relations Mapper default |
 
-Assignments (`AppConfig.assignments`) remain the Mission Type → Dev Type map.
+Assignments (`AppConfig.assignments`; labeled **Mission Types** in the UI
+since the 2026-08-02 nav reorg — the config field stays `assignments`) remain
+the Mission Type → Dev Type map.
 Skills attach freely across vehicles. Review ≠ Execute as separate *vehicles*
 remains a security **recommendation** (`docs/14`), not forced by skill design.
 

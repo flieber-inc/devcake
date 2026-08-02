@@ -45,7 +45,7 @@ proving a fresh machine works is the
 Rotation is four different motions depending on the secret:
 
 1. **PMO tokens** — mint the new token at the provider, paste it into the
-   **Configuration → PMO** secret field, **Save**, then run the named
+   **PMO** page's secret field (`#/pmo`), **Save**, then run the named
    connection test. **Forge tokens** — same motion on **Repositories**
    (`#/repos`). The write path hot-reloads adapters ([`11`](11-admin-panel.md)).
 2. **Model / harness credentials** — upload via the Dev Type card under

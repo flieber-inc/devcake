@@ -177,7 +177,7 @@ On every app boot, before the first poll cycle:
    - Dagu says failed/aborted, or has no such run → mark `orphaned`; counts as a failed attempt; the Mission (whose label never advanced — INV-3) reschedules naturally.
    - A `dispatched` Run with no Dagu run → the §3.1 crash window; mark `orphaned` (never re-trigger blindly — a duplicate `dagRunId` trigger returns 409 `already_exists`, verified).
 4. Reclaim pending Redis messages older than the consumer's dead-time (XAUTOCLAIM) and process them.
-5. Start the poll, ingress, and watchdog loops.
+5. Start the poll, ingress, and watchdog loops. The poll task runs the **initial full forge sweep** (bounded-parallel, `ForgeRuntime.refresh_all`) before its first cycle — off the boot critical path (a large catalog probed inside lifespan held the listen socket and failed the compose healthcheck, incident 2026-08-01) but still ahead of any dispatch, so a definitively bad repo credential latches its breaker before cycle 1 can burn an attempt. `/health.forge_probe` reports the sweep's progress; a sweep that misses its 60 s budget is retried each cycle until one completes.
 
 ## 7. Crash matrix (summary)
 

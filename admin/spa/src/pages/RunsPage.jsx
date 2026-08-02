@@ -99,11 +99,14 @@ export default function RunsPage() {
   const sortableTh = (key, label, extra = "") => {
     const active = sortKey === key;
     return (
-      <th className={extra ? `pr-3 ${extra}` : "pr-3"}
+      // whitespace-nowrap on th AND button: grouped mode's wide colSpan-4
+      // mission cells squeeze the numeric columns, and "cache r" / an
+      // active "started ▼" otherwise wrap into stacked header lines
+      <th className={`whitespace-nowrap pr-3 ${extra}`}
         aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending")
                           : undefined}>
         <button type="button" title={`Sort by ${label}`}
-          className="inline-flex items-center gap-0.5 rounded text-xs uppercase tracking-wide text-inherit hover:text-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:text-neutral-100"
+          className="inline-flex items-center gap-0.5 whitespace-nowrap rounded text-xs uppercase tracking-wide text-inherit hover:text-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:text-neutral-100"
           onClick={() => {
             // first click on a column sorts DESC (you click "cost" wanting
             // the most expensive first); clicking again flips

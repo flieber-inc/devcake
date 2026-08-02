@@ -104,12 +104,19 @@ function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRena
       </td>
       <td className="py-2 pr-4 text-right text-xs tabular-nums">{d.max_concurrency}</td>
       <td className="py-2 pr-4 text-right text-xs tabular-nums">{(d.skills || []).length}</td>
-      <td className="py-2 pr-4">
-        {/* always-rendered so the action column never shifts when a badge appears */}
-        <span className={`whitespace-nowrap text-xs font-medium text-amber-600 dark:text-amber-400 ${
-          edited ? "" : "invisible"}`}>
-          unsaved changes
+      <td className="py-2 pr-4 whitespace-nowrap text-xs">
+        {/* always informative: credential readiness (the avatar dot's meaning,
+            in words) — an empty-looking "status" column read as broken */}
+        <span className={ready
+          ? "text-green-700 dark:text-green-400"
+          : "text-amber-600 dark:text-amber-400"}>
+          {ready ? "ready" : "no credentials"}
         </span>
+        {edited && (
+          <span className="ml-1.5 font-medium text-amber-600 dark:text-amber-400">
+            · unsaved changes
+          </span>
+        )}
       </td>
       <td className="w-10 py-1 text-right" onClick={(e) => e.stopPropagation()}>
         <MoreMenu label={`More actions for ${name}`} items={[

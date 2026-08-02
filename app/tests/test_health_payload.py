@@ -61,6 +61,45 @@ def test_forge_probe_pending_then_complete(monkeypatch):
                    "probed": 2, "configured": 2}
 
 
+def test_unused_repo_names_and_payload_block(monkeypatch):
+    from devcake.config import PMOInstance, RepoInstance
+
+    cfg = AppConfig(
+        repos=[RepoInstance(name=n, url=f"https://github.com/o/{n}")
+               for n in ("work1", "work2", "refdocs", "orphan1", "orphan2")],
+        pmos=[
+            PMOInstance(name="alpha", team_key="A",
+                        repos=["work1"], reference_repos=["refdocs"]),
+            PMOInstance(name="beta", team_key="B", repos=["work2"]),
+        ])
+    assert health_mod.unused_repo_names(cfg) == ["orphan1", "orphan2"]
+
+    # zero-PMO config: every adapter is unused
+    lonely = AppConfig(repos=[RepoInstance(name="solo",
+                                           url="https://github.com/o/solo")])
+    assert health_mod.unused_repo_names(lonely) == ["solo"]
+    assert health_mod.unused_repo_names(AppConfig()) == []
+
+    async def _true(*a, **k):
+        return True
+
+    async def _ingest():
+        return {"ok": True, "detail": ""}
+
+    monkeypatch.setattr(health_mod, "_check_redis", _true)
+    monkeypatch.setattr(health_mod, "_check_http", _true)
+    monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
+    health_mod.reset_protection_cache()
+    payload = run_coro(health_mod.build_health_payload(
+        config=cfg, dev_types={}, managers={}, mappers={},
+        forge_runtime=_forge_runtime(), shared_breakers={},
+        store=SimpleNamespace(active=lambda: []),
+        internal_forge=None,
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+    assert payload["unused_repos"] == {
+        "count": 2, "names": ["orphan1", "orphan2"], "configured": 5}
+
+
 def test_branch_protection_probes_concurrently(monkeypatch):
     started = {"n": 0}
     all_started = asyncio.Event()

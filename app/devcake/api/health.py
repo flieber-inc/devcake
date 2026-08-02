@@ -111,6 +111,19 @@ async def _oo_ingest_check() -> dict:
     return result
 
 
+def unused_repo_names(config) -> list[str]:
+    """Configured repo adapters selected by NO PMO instance (neither work nor
+    reference). Dead weight with a latency price: every entry is rebuilt on
+    each config/secret reload and probed on each full forge sweep — 292 of
+    them turned the 2026-08-01 boot into a ~95s outage. Unconfigured (empty
+    url) entries count too: clutter either way."""
+    selected: set[str] = set()
+    for pmo in config.pmos:
+        selected.update(pmo.repos)
+        selected.update(pmo.reference_repos)
+    return sorted(r.name for r in config.repos if r.name not in selected)
+
+
 async def build_health_payload(*, config, dev_types, managers, mappers,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
@@ -211,4 +224,11 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
             prompt_templates.template_warnings(config)
             + prompt_templates.devtype_prompt_warnings(config, dev_types)),
         "security_warnings": security.security_warnings(config),
+        # adapters no PMO selects — SPA derives a dismissable hygiene alert
+        # and Repositories → ⋯ offers bulk removal (2026-08-01 incident)
+        "unused_repos": {
+            "count": len(names := unused_repo_names(config)),
+            "names": names,
+            "configured": len(config.repos),
+        },
     }

@@ -78,6 +78,26 @@ export default function deriveAlerts(health) {
     }
   }
 
+  // adapters no PMO selects (2026-08-01 incident): each one is rebuilt on
+  // every config/secret reload and probed on every full forge sweep — pure
+  // latency cost. Count in the title so a changed count resurfaces the alert.
+  const unused = health.unused_repos;
+  if (unused && unused.count > 0) {
+    const shown = unused.names.slice(0, 8).join(", ");
+    const more = unused.count > 8 ? ` and ${unused.count - 8} more` : "";
+    alerts.push({
+      id: "unused-repos",
+      severity: "warning",
+      dismissable: true,
+      title: `${unused.count} of ${unused.configured} configured repositories are unused`,
+      body:
+        `${shown}${more} — selected as work or reference repos on no PMO, ` +
+        "but still probed on every forge sweep. Remove them on Repositories " +
+        "→ ⋯ → Remove unused repositories (their stored tokens are deleted " +
+        "with them on Save).",
+    });
+  }
+
   // server-computed credential-posture warnings (ISSUES #13/#15): loud but
   // dismissable — the operator may accept the risk; a changed body (e.g. a
   // different missing credential) changes the key and resurfaces the alert

@@ -124,6 +124,27 @@ def test_totals_cover_the_whole_filtered_set(tmp_path):
     assert out["pmo_refs"] == ["alpha"]
 
 
+def test_totals_are_null_when_no_run_contributed(tmp_path):
+    """A column with zero contributions across the whole filtered set is
+    UNKNOWN, not zero — an all-grok history must show cache-write "—" in the
+    totals row (grok has no write counter), matching the per-row cells; a
+    set with no token reports at all shows no fabricated $0.00 either."""
+    store = _store(tmp_path, [_run(i, tr=GROK_TR) for i in range(1, 3)])
+    t = list_runs_response(store, CostInputs(), limit=25, offset=0)["totals"]
+    assert t["cache_write_tokens"] is None      # every grok row is null
+    assert t["input_tokens"] == 2_000_000       # contributed sums unaffected
+    assert t["cost_usd"] is None                # no native cost anywhere
+    assert t["cost_usd_estimated"] == round(2 * 5.60, 6)
+
+    bare = _store(tmp_path / "bare", [_run(1, tr=None), _run(2, tr=None)])
+    t = list_runs_response(bare, CostInputs(), limit=25, offset=0)["totals"]
+    for k in ("input_tokens", "output_tokens", "cache_read_tokens",
+              "cache_write_tokens", "total_tokens", "cost_usd",
+              "cost_usd_estimated", "cost_usd_effective"):
+        assert t[k] is None, k
+    assert t["runtime_seconds"] == 2 * 7 * 60   # durations stay real sums
+
+
 def test_totals_respect_override_native(tmp_path):
     both = dict(GROK_TR, cost_usd=3.0)
     store = _store(tmp_path, [_run(1, tr=both, minutes=1)])

@@ -88,25 +88,35 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
     if hi:
         runs = [r for r in runs if r.created_at < hi]
 
-    totals = {k: 0 for k in _TOKEN_SUMS}
+    # a column no run contributed to stays None (rendered "—"): summing
+    # nothing to 0 would show an all-grok fleet "cache w: 0" over rows of
+    # "—", and a fleet with no cost data a fabricated $0.00
+    totals: dict = {k: None for k in _TOKEN_SUMS}
     totals["runtime_seconds"] = 0
-    cost = cost_est = cost_eff = 0.0
+    cost = cost_est = cost_eff = None
     for r in runs:
         if r.started_at and r.ended_at:
             totals["runtime_seconds"] += int(
                 (r.ended_at - r.started_at).total_seconds())
         tr = r.token_report or {}
         for k in _TOKEN_SUMS:
-            totals[k] += tr.get(k) or 0
+            v = tr.get(k)
+            if v is not None:
+                totals[k] = (totals[k] or 0) + v
         native = tr.get("cost_usd")
         est = costing.estimate_cost_usd(tr, cost_inputs.rates)
         eff = costing.effective_cost(native, est, cost_inputs)
-        cost += native or 0
-        cost_est += est or 0
-        cost_eff += eff or 0
-    totals["cost_usd"] = round(cost, 6)
-    totals["cost_usd_estimated"] = round(cost_est, 6)
-    totals["cost_usd_effective"] = round(cost_eff, 6)
+        if native is not None:
+            cost = (cost or 0.0) + native
+        if est is not None:
+            cost_est = (cost_est or 0.0) + est
+        if eff is not None:
+            cost_eff = (cost_eff or 0.0) + eff
+    totals["cost_usd"] = round(cost, 6) if cost is not None else None
+    totals["cost_usd_estimated"] = (round(cost_est, 6)
+                                    if cost_est is not None else None)
+    totals["cost_usd_effective"] = (round(cost_eff, 6)
+                                    if cost_eff is not None else None)
 
     page = []
     for r in runs[offset:offset + limit]:

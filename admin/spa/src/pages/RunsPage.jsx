@@ -42,17 +42,27 @@ export default function RunsPage() {
   const [fromDate, setFromDate] = useState("");   // UTC calendar days —
   const [toDate, setToDate] = useState("");       // run timestamps are UTC
   const [costOpen, setCostOpen] = useState(false);
+  // server-side sort over the WHOLE filtered set (a client-side sort would
+  // only reorder the visible page); "started"/desc is the server default
+  const [sortKey, setSortKey] = useState("started");
+  const [sortDir, setSortDir] = useState("desc");
+  // aggregate-by-mission: pagination flips to missions; the active sort
+  // orders GROUPS by their aggregate (founder decision 2026-08-02)
+  const [grouped, setGrouped] = useState(false);
 
   const load = () => {
     const q = `/runs?limit=${PAGE}&offset=${offset}` +
       (query ? `&mission_key=${encodeURIComponent(query)}` : "") +
       (pmoRef ? `&pmo_ref=${encodeURIComponent(pmoRef)}` : "") +
       (fromDate ? `&created_from=${fromDate}` : "") +
-      (toDate ? `&created_to=${toDate}` : "");
+      (toDate ? `&created_to=${toDate}` : "") +
+      `&sort=${sortKey}&dir=${sortDir}` +
+      (grouped ? "&group_by=mission" : "");
     return get(q).then(setData).catch(() => {});
   };
 
-  usePoll(load, 10000, [offset, query, pmoRef, fromDate, toDate]);
+  usePoll(load, 10000, [offset, query, pmoRef, fromDate, toDate,
+                        sortKey, sortDir, grouped]);
 
   // per-run token magnitude for the cell tooltips: harness-reported total
   // when present, else the sum of the known splits (plain arithmetic —
@@ -85,6 +95,102 @@ export default function RunsPage() {
       </span>
     );
   };
+
+  const sortableTh = (key, label, extra = "") => {
+    const active = sortKey === key;
+    return (
+      // whitespace-nowrap on th AND button: grouped mode's wide colSpan-4
+      // mission cells squeeze the numeric columns, and "cache r" / an
+      // active "started ▼" otherwise wrap into stacked header lines
+      <th className={`whitespace-nowrap pr-3 ${extra}`}
+        aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending")
+                          : undefined}>
+        <button type="button" title={`Sort by ${label}`}
+          className="inline-flex items-center gap-0.5 whitespace-nowrap rounded text-xs uppercase tracking-wide text-inherit hover:text-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:text-neutral-100"
+          onClick={() => {
+            // first click on a column sorts DESC (you click "cost" wanting
+            // the most expensive first); clicking again flips
+            if (active) setSortDir(sortDir === "desc" ? "asc" : "desc");
+            else { setSortKey(key); setSortDir("desc"); }
+            setOffset(0);
+          }}>
+          {label}{active ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
+        </button>
+      </th>
+    );
+  };
+
+  const subtotalTitle = (t) =>
+    `native ${usd(t.cost_usd)} · estimated ${usd(t.cost_usd_estimated)}`;
+
+  const hasRows = grouped ? (data.groups || []).length > 0
+                          : (data.runs || []).length > 0;
+
+  // one renderer for both modes: flat rows and the runs inside a mission
+  // group (grouped mode keeps pipeline order — seq — whatever the sort)
+  const runRow = (r) => (
+    <tr key={r.run_id} onClick={() => setOpenRun(r)}
+      title="Click to open the run terminal"
+      className="cursor-pointer border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
+      <td className="max-w-[18rem] py-2 pr-3">
+        <span className="flex items-center gap-2">
+          {r.mission_type && <StageGlyph stage={r.mission_type} />}
+          <button type="button"
+            onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
+            title="Open the run terminal"
+            className="inline-flex items-center gap-1.5 rounded font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
+            <SquareTerminal size={12} className="shrink-0 text-neutral-500 dark:text-neutral-400" aria-hidden />
+            {r.run_id}
+          </button>
+        </span>
+        {(r.error || r.verdict) && (
+          <span
+            title={r.error || r.verdict}
+            className={`block truncate text-[11px] ${
+              r.error
+                ? "text-red-600 dark:text-red-400"
+                : "text-amber-600 dark:text-amber-400"
+            }`}
+          >
+            {r.error || r.verdict}
+          </span>
+        )}
+      </td>
+      <td className="pr-3">
+        {r.mission_key ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="font-mono text-xs">{r.mission_key}</span>
+            {r.mission_type && (
+              <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                {r.mission_type}
+              </span>
+            )}
+          </span>
+        ) : <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>}
+      </td>
+      <td className="pr-3"><StatusPill state={r.state} verdict={r.verdict} /></td>
+      <td className="whitespace-nowrap pr-3 text-xs text-neutral-500 dark:text-neutral-400"
+        title={fullTime(r.started_at)}>
+        {relTime(r.started_at)}
+      </td>
+      <td className="whitespace-nowrap pr-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+        {duration(r.started_at, r.ended_at)}
+      </td>
+      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
+      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.output_tokens)}</td>
+      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
+      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
+      <td className="pr-3 text-right text-xs tabular-nums">{costCell(r)}</td>
+      <td>
+        <a className="inline-flex items-center gap-0.5 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
+          href={traceUrl(r.run_id)}
+          onClick={(e) => e.stopPropagation()}
+          target="_blank" rel="noopener">
+          trace <ExternalLink size={10} aria-hidden />
+        </a>
+      </td>
+    </tr>
+  );
 
   const doClear = async () => {
     setClearing(true);
@@ -242,12 +348,21 @@ export default function RunsPage() {
               title="To (UTC calendar day, inclusive)" value={toDate}
               onChange={(e) => { setToDate(e.target.value); setOffset(0); }} />
           </span>
-          <span className="whitespace-nowrap text-xs text-neutral-500 dark:text-neutral-400">{data.total} runs</span>
+          <label className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs text-neutral-600 dark:text-neutral-300">
+            <input type="checkbox" checked={grouped}
+              onChange={(e) => { setGrouped(e.target.checked); setOffset(0); }} />
+            Aggregate by mission
+          </label>
+          <span className="whitespace-nowrap text-xs text-neutral-500 dark:text-neutral-400">
+            {grouped
+              ? `${data.total} missions · ${data.total_runs ?? 0} runs`
+              : `${data.total} runs`}
+          </span>
           <span className="ml-auto flex shrink-0 items-center gap-3">
             <Button kind="ghost" size="sm" icon={ChevronLeft} disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - PAGE))}>newer</Button>
             <span className="whitespace-nowrap text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-              {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}
+              {data.total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE, data.total)}`} of {data.total}{grouped ? " missions" : ""}
             </span>
             <Button kind="ghost" size="sm" disabled={offset + PAGE >= data.total}
               onClick={() => setOffset(offset + PAGE)}>
@@ -262,27 +377,27 @@ export default function RunsPage() {
                 <th className="py-1.5 pr-3">run</th>
                 <th className="pr-3">mission</th>
                 <th className="pr-3">state</th>
-                <th className="pr-3">started</th>
-                <th className="pr-3">duration</th>
-                <th className="pr-3 text-right">in</th>
-                <th className="pr-3 text-right">out</th>
-                <th className="pr-3 text-right">cache r</th>
-                <th className="pr-3 text-right">cache w</th>
-                <th className="pr-3 text-right">cost</th>
+                {sortableTh("started", "started")}
+                {sortableTh("duration", "duration")}
+                {sortableTh("input_tokens", "in", "text-right")}
+                {sortableTh("output_tokens", "out", "text-right")}
+                {sortableTh("cache_read_tokens", "cache r", "text-right")}
+                {sortableTh("cache_write_tokens", "cache w", "text-right")}
+                {sortableTh("cost", "cost", "text-right")}
                 <th>trace</th>
               </tr>
             </thead>
             <tbody>
-              {data.runs.length === 0 && (
+              {!hasRows && (
                 <tr><td colSpan={11} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
                   No runs{filter ? " match this filter" : " yet"}.
                 </td></tr>
               )}
-              {data.totals && data.runs.length > 0 && (
+              {data.totals && hasRows && (
                 <tr data-testid="runs-totals"
                   className="border-t border-neutral-200 bg-stone-50/70 text-xs font-medium dark:border-neutral-700 dark:bg-neutral-900/70">
                   <td className="py-2 pr-3" colSpan={4}>
-                    filtered totals — {data.total} run{data.total === 1 ? "" : "s"}
+                    filtered totals — {data.total_runs ?? data.total} run{(data.total_runs ?? data.total) === 1 ? "" : "s"}
                     {data.totals.total_tokens_effective != null && (
                       <span className="font-normal text-neutral-500 dark:text-neutral-400"
                         title="Reported totals where the harness gives one, summed splits where it doesn't">
@@ -305,69 +420,35 @@ export default function RunsPage() {
                   <td />
                 </tr>
               )}
-              {data.runs.map((r) => (
-                <tr key={r.run_id} onClick={() => setOpenRun(r)}
-                  title="Click to open the run terminal"
-                  className="cursor-pointer border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
-                  <td className="max-w-[18rem] py-2 pr-3">
-                    <span className="flex items-center gap-2">
-                      {r.mission_type && <StageGlyph stage={r.mission_type} />}
-                      <button type="button"
-                        onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
-                        title="Open the run terminal"
-                        className="inline-flex items-center gap-1.5 rounded font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
-                        <SquareTerminal size={12} className="shrink-0 text-neutral-500 dark:text-neutral-400" aria-hidden />
-                        {r.run_id}
-                      </button>
-                    </span>
-                    {(r.error || r.verdict) && (
-                      <span
-                        title={r.error || r.verdict}
-                        className={`block truncate text-[11px] ${
-                          r.error
-                            ? "text-red-600 dark:text-red-400"
-                            : "text-amber-600 dark:text-amber-400"
-                        }`}
-                      >
-                        {r.error || r.verdict}
+              {(grouped ? (data.groups || []) : []).map((g) => (
+                <React.Fragment key={`${g.pmo_ref}:${g.mission_key}`}>
+                  <tr data-testid="mission-group"
+                    className="border-t border-neutral-200 bg-stone-50/40 text-xs dark:border-neutral-700 dark:bg-neutral-900/40">
+                    <td className="py-1.5 pr-3" colSpan={4}>
+                      <span className="font-semibold">{g.mission_key}</span>
+                      <span className="text-neutral-500 dark:text-neutral-400">
+                        {" "}· {g.pmo_ref} · {g.run_count} run{g.run_count === 1 ? "" : "s"}
+                        {g.subtotal.total_tokens_effective != null &&
+                          <> · {tokens(g.subtotal.total_tokens_effective)} tokens</>}
                       </span>
-                    )}
-                  </td>
-                  <td className="pr-3">
-                    {r.mission_key ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="font-mono text-xs">{r.mission_key}</span>
-                        {r.mission_type && (
-                          <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                            {r.mission_type}
-                          </span>
-                        )}
-                      </span>
-                    ) : <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>}
-                  </td>
-                  <td className="pr-3"><StatusPill state={r.state} verdict={r.verdict} /></td>
-                  <td className="whitespace-nowrap pr-3 text-xs text-neutral-500 dark:text-neutral-400"
-                    title={fullTime(r.started_at)}>
-                    {relTime(r.started_at)}
-                  </td>
-                  <td className="whitespace-nowrap pr-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
-                    {duration(r.started_at, r.ended_at)}
-                  </td>
-                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.output_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
-                  <td className="pr-3 text-right text-xs tabular-nums">{costCell(r)}</td>
-                  <td>
-                    <a className="inline-flex items-center gap-0.5 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
-                      href={traceUrl(r.run_id)}
-                      onClick={(e) => e.stopPropagation()}
-                      target="_blank" rel="noopener">
-                      trace <ExternalLink size={10} aria-hidden />
-                    </a>
-                  </td>
-                </tr>
+                    </td>
+                    <td className="whitespace-nowrap pr-3 tabular-nums"
+                      title="Sum of this mission's completed runs' durations">
+                      {durationSeconds(g.subtotal.runtime_seconds)}
+                    </td>
+                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.input_tokens)}</td>
+                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.output_tokens)}</td>
+                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.cache_read_tokens)}</td>
+                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.cache_write_tokens)}</td>
+                    <td className="pr-3 text-right tabular-nums" title={subtotalTitle(g.subtotal)}>
+                      {usd(g.subtotal.cost_usd_effective)}
+                    </td>
+                    <td />
+                  </tr>
+                  {g.runs.map(runRow)}
+                </React.Fragment>
               ))}
+              {(grouped ? [] : data.runs || []).map(runRow)}
             </tbody>
           </table>
         </div>

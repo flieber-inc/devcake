@@ -171,6 +171,91 @@ def test_totals_respect_override_native(tmp_path):
     assert on["totals"]["cost_usd_effective"] == 5.60
 
 
+def test_sort_orders_whole_set_nulls_always_last(tmp_path):
+    """Sorting is server-side over the ENTIRE filtered set (client-side
+    would only reorder the visible page) and null-valued runs sink to the
+    bottom in BOTH directions — an ascending cost sort must not lead with
+    forty token-less OAuth rows."""
+    cheap = dict(GROK_TR, input_tokens=100_000, cache_read_tokens=100_000,
+                 output_tokens=10_000, total_tokens=210_000)
+    store = _store(tmp_path, [_run(1, tr=cheap, minutes=3),
+                              _run(2, tr=None, minutes=99),
+                              _run(3, tr=GROK_TR, minutes=1)])
+    by_cost = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                                 sort="cost", direction="desc")
+    assert [r["mission_key"] for r in by_cost["runs"]] == ["A-3", "A-1", "A-2"]
+    by_cost_asc = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                                     sort="cost", direction="asc")
+    assert [r["mission_key"] for r in by_cost_asc["runs"]] == ["A-1", "A-3", "A-2"]
+    by_dur = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                                sort="duration", direction="desc")
+    assert [r["mission_key"] for r in by_dur["runs"]] == ["A-2", "A-1", "A-3"]
+    by_in = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                               sort="input_tokens", direction="asc")
+    assert [r["mission_key"] for r in by_in["runs"]] == ["A-1", "A-3", "A-2"]
+
+
+def test_sort_by_cost_respects_override_and_bad_params_400(tmp_path):
+    both = dict(GROK_TR, cost_usd=9.0)     # native 9.0, estimate 5.6
+    other = dict(GROK_TR, cost_usd=6.0,
+                 input_tokens=2_000_000, total_tokens=4_500_000)  # est 7.6
+    store = _store(tmp_path, [_run(1, tr=both), _run(2, tr=other)])
+    off = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                             sort="cost", direction="desc")
+    assert [r["mission_key"] for r in off["runs"]] == ["A-1", "A-2"]   # 9 > 6
+    on = list_runs_response(store, CostInputs(override_native=True),
+                            limit=25, offset=0, sort="cost", direction="desc")
+    assert [r["mission_key"] for r in on["runs"]] == ["A-2", "A-1"]    # 7.6 > 5.6
+    for bad in ({"sort": "verdict"}, {"sort": "cost", "direction": "sideways"},
+                {"group_by": "dev_type"}):
+        with pytest.raises(HTTPException) as e:
+            list_runs_response(store, CostInputs(), limit=25, offset=0, **bad)
+        assert e.value.status_code == 400
+
+
+def test_group_by_mission_clusters_paginates_and_sorts_groups(tmp_path):
+    """Grouped mode: the pagination unit becomes the MISSION, groups carry
+    subtotals with the same null semantics as the grand totals, the active
+    sort orders GROUPS by their aggregate, and runs inside a group stay in
+    pipeline order (seq) regardless of that sort."""
+    def mrun(i, key, seq, tr, pmo_ref="alpha", minutes=5):
+        r = _run(i, tr=tr, minutes=minutes, key=key)
+        return r.model_copy(update={"seq": seq, "pmo_ref": pmo_ref,
+                                    "run_id": f"{key}-{seq}-X-{i:06d}"})
+
+    pricey = dict(GROK_TR)                                  # est 5.6/run
+    cheap = dict(GROK_TR, input_tokens=100_000, cache_read_tokens=100_000,
+                 output_tokens=10_000, total_tokens=210_000)  # est ~0.29
+    store = _store(tmp_path, [
+        mrun(1, "A-1", 2, pricey), mrun(2, "A-1", 1, pricey),
+        mrun(3, "A-2", 1, cheap),
+        mrun(4, "A-1", 1, cheap, pmo_ref="beta"),   # same key, other PMO
+    ])
+    out = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                             group_by="mission", sort="cost",
+                             direction="desc")
+    assert out["total"] == 3 and out["total_runs"] == 4
+    groups = out["groups"]
+    assert [(g["pmo_ref"], g["mission_key"]) for g in groups] == [
+        ("alpha", "A-1"), ("beta", "A-1"), ("alpha", "A-2")]   # by subtotal
+    assert groups[0]["subtotal"]["cost_usd_effective"] == round(2 * 5.6, 6)
+    assert groups[0]["subtotal"]["cache_write_tokens"] is None  # null rules
+    # pipeline order inside the group, not the cost sort
+    assert [r["seq"] for r in groups[0]["runs"]] == [1, 2]
+    for banned in ("spec_prompt", "result", "notes", "token_report"):
+        assert banned not in groups[0]["runs"][0]
+    # grand totals still cover every filtered run, not the page of groups
+    assert out["totals"]["cost_usd_effective"] == round(
+        2 * 5.6 + 2 * 0.29, 6)
+    # pagination walks GROUPS
+    page = list_runs_response(store, CostInputs(), limit=2, offset=2,
+                              group_by="mission", sort="cost",
+                              direction="desc")
+    assert [(g["pmo_ref"], g["mission_key"]) for g in page["groups"]] == [
+        ("alpha", "A-2")]
+    assert page["total"] == 3
+
+
 def test_rows_and_detail_never_leak_prompts_results_or_notes(tmp_path):
     store = _store(tmp_path, [_run(1, tr=GROK_TR)])
     out = list_runs_response(store, CostInputs(), limit=25, offset=0)

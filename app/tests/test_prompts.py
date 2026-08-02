@@ -108,6 +108,22 @@ def test_human_comments_note_everywhere():
         assert "🧑 HUMAN" in p
 
 
+def test_turn_discipline_in_result_writing_playbooks():
+    """ADR-0022 PR-1: weaker models end a turn to narrate an intention; a
+    turn without a tool call is the harness's end-of-run signal, so the run
+    dies as exit 11 mid-mission (docs/15 §2b). The epilogue rides every
+    playbook that must WRITE result.json — code-owned, so it survives
+    operator template overrides. PLAN is excluded: read-only, its final
+    message IS the deliverable, ending the turn is correct there."""
+    writing = (onboard_prompt("ID", M), execute_prompt("ID", M, "repo", GH_PR),
+               review_prompt("ID", M), mapper_prompt("ID", [M]))
+    for p in writing:
+        assert "Never end your turn" in p
+        assert "call a tool" in p
+        assert "verify that /workspace/out/result.json exists" in p
+    assert "Never end your turn" not in plan_prompt("ID", M)
+
+
 def test_mapper_prompt_embeds_missions():
     a = Mission(instance="linear", pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
                 description="x" * 500, status="backlog",

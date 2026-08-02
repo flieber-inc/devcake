@@ -109,7 +109,12 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 exit 0 with an empty or failed in-band terminal event, and stderr often carries
 no failure information — the entrypoint inspects the stream before deciding.
 Exits 10, 11, 15 and 16 carry `error_class`, `error_detail` and bounded
-workspace forensics. Scenario captures: `app/tests/fixtures/harness_streams/`.
+workspace forensics. On exit 11 the forensics additionally name the stream's
+terminal event under `terminal` (`continuation.terminal_evidence`): a clean
+early stop (grok `end`/`stopReason EndTurn` with `num_turns`, claude `result`,
+codex `turn.completed`) versus `null` for a stream that just stopped — the
+narrate-and-stop diagnosis at fleet scale. Scenario captures:
+`app/tests/fixtures/harness_streams/`.
 
 **Which harnesses can reach exit 16.** `claude-code` (`max_turns` /
 `error_max_turns`) and `grok-build` (`max_turns_reached` event) — see

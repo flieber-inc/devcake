@@ -65,6 +65,7 @@ from devcake_dev.domain.fault import (  # noqa: E402
     _one_line,
 )
 from devcake_dev.harness.argv import harness_argv  # noqa: E402
+from devcake_dev.harness.continuation import terminal_evidence  # noqa: E402
 from devcake_dev.harness.render import (  # noqa: E402
     BATCH_LINES,
     FLUSH_SECS,
@@ -437,6 +438,11 @@ def main() -> None:
     api_status = harness_api_error_status(harness, out)
     forensics = workspace_forensics(WORKSPACE / "out", harness_exit, out_bytes,
                                     out_lines_n, err_text[-FORENSIC_STDERR_TAIL:])
+    # ADR-0022 PR-1: names the terminal event on the exit-11 paths, where the
+    # exit status cannot distinguish "ended cleanly but early" (stopReason
+    # EndTurn — the narrate-and-stop shape) from a stream that just stopped.
+    # Computed here because `out` is released on the next statement.
+    terminal_ev = terminal_evidence(harness, out)
     # `out` is not read again below; releasing the joined copy here keeps the
     # peak off the artifact path, where the payload is serialized repeatedly.
     out = ""
@@ -552,11 +558,13 @@ def main() -> None:
                 recovered_path, recovery_note = str(stray), note
                 print(f"[devcake] recovered result.json from {stray}", file=sys.stderr)
             except Exception as e2:                # the stray is no better
+                forensics["terminal"] = terminal_ev
                 fail(11, "DEV_BAD_OUTPUT", f"{note} | recovered file invalid: {e2}",
                      f"result.json missing/invalid: {e}\n\n{note}\n\n"
                      f"recovered file also invalid: {e2}\n\n---\n\n{result_text}",
                      bad_output_reason=bad_output_reason(e2))
         else:                                      # row 9
+            forensics["terminal"] = terminal_ev
             fail(11, "DEV_BAD_OUTPUT", f"{e}{' | ' + note if note else ''}",
                  f"result.json missing/invalid: {e}"
                  + (f"\n\n{note}" if note else "")

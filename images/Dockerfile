@@ -123,12 +123,21 @@ ENV HOME=/home/dev \
 
 # Build-time proof the floor actually works AS THE DEV USER — above all that
 # the headless shell LAUNCHES (loads every shared lib; the exact failure the
-# unbaked images hit) and the doc/spreadsheet imports resolve.
+# unbaked images hit) and the doc/spreadsheet imports resolve. The shell
+# binary name depends on which mirror playwright used (classic build:
+# chrome-linux/headless_shell; Chrome-for-Testing fallback:
+# chrome-headless-shell-linux64/chrome-headless-shell) — the runtime registry
+# resolves both, so the smoke must accept both (measured: local bake pulled
+# classic, CI pulled CfT, same playwright pin).
 RUN su dev -s /bin/sh -c ' \
         set -e; \
         node --version && npx --version; \
         playwright --version; \
-        "$(find /opt/pw-browsers -name headless_shell -type f | head -1)" --version; \
+        shell="$(find /opt/pw-browsers -type f \
+            \( -name headless_shell -o -name chrome-headless-shell \) \
+            | head -1)"; \
+        test -n "$shell" || { echo "no headless shell under /opt/pw-browsers" >&2; exit 1; }; \
+        "$shell" --version; \
         python -c "import pandas, openpyxl"; \
         uv --version; \
         command -v jq rg pandoc pdftotext sqlite3 unzip zip gcc make >/dev/null'

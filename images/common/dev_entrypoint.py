@@ -64,8 +64,15 @@ from devcake_dev.domain.fault import (  # noqa: E402
     _dict,
     _one_line,
 )
-from devcake_dev.harness.argv import harness_argv  # noqa: E402
-from devcake_dev.harness.continuation import terminal_evidence  # noqa: E402
+from devcake_dev.harness.argv import (  # noqa: E402
+    RESUME_SPECS,
+    harness_argv,
+    harness_resume_argv,
+)
+from devcake_dev.harness.continuation import (  # noqa: E402
+    session_identity,
+    terminal_evidence,
+)
 from devcake_dev.harness.render import (  # noqa: E402
     BATCH_LINES,
     FLUSH_SECS,

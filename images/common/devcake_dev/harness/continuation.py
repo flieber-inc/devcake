@@ -28,6 +28,39 @@ def _grok_error_event(out: str):
     return found
 
 
+def session_identity(harness: str, out: str) -> str:
+    """The harness's session handle for a resume relaunch, or "".
+
+    grok: the LAST `sessionId` on any stream event (the `end` event carries
+    it; `error` events never do — docs/08 §1). claude: `session_id` on the
+    result event. codex: the `thread_id` of `thread.started`. An unknown
+    harness falls through to the claude arm, mirroring harness_fault."""
+    try:
+        if harness == "grok-build":
+            sid = ""
+            for line in out.splitlines():
+                try:
+                    ev = json.loads(line)
+                except Exception:  # noqa: BLE001 — one bad line never costs the handle
+                    continue
+                if isinstance(ev, dict) and ev.get("sessionId"):
+                    sid = str(ev["sessionId"])
+            return sid
+        if harness == "codex":
+            for line in out.splitlines():
+                try:
+                    ev = json.loads(line)
+                except Exception:  # noqa: BLE001 — as above
+                    continue
+                if (isinstance(ev, dict) and ev.get("type") == "thread.started"
+                        and ev.get("thread_id")):
+                    return str(ev["thread_id"])
+            return ""
+        return str(_dict(claude_result_event(out)).get("session_id") or "")
+    except Exception:  # noqa: BLE001 — no handle ⇒ fresh-mode degradation, never a crash
+        return ""
+
+
 def terminal_evidence(harness: str, out: str):
     """Small terminal-event summary for the exit-11 forensics dict, or None
     when the stream carries no terminal event at all — None IS evidence then

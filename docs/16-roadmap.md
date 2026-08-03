@@ -441,9 +441,10 @@ vocabulary at the top of this file).
   `run.started` is hardened dispatched-only (also fixing a latent
   finalizing-revert); mirror clones are credential-stripped with `-c lfs.url`
   pinned; LFS posture runs in both phases. SUPERSEDES ADR-0024 §5's ambient
-  mirror-read risk (agent ambient read surface now zero). The unset-phase
-  monolithic entrypoint branch is rollback-only — **remove once no old DAG can
-  be rolled back to** (small follow-up). **built**.
+  mirror-read risk (agent ambient read surface now zero). No single-container
+  fallback — the phase is mandatory and a missing/unknown one exits 20 loudly
+  (the initial ship carried a monolithic branch for one commit, deleted the
+  same day: pre-v1 does not carry rollback compat). **built**.
 - **In-container run continuation** (ADR-0022, 2026-08-02): the
   narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
   ~50% of long weak-model runs, hours lost late) is nudged instead of failed:

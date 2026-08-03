@@ -123,8 +123,8 @@ non-secret `spec_env`, the extras entries (mirrored ones are already
 tokenless), the activity-repo credential (provision clones it), and
 `DEVCAKE_FORGE_TOKEN` ONLY when the work repo direct-clones (`mirror_path`
 empty — internal repos). Credential files and harness/Dev-Type secret env
-never ride the provision reply. The harness phase (and the monolithic
-rollback path, which sends no phase) gets the full spec, as before. Honest
+never ride the provision reply. The harness phase gets the full spec, as
+before (a defensive no-phase request also gets the full spec). Honest
 scope of the claim: **the provision container runs no agent and receives no
 harness/model secret**; the forge token it may hold (direct-clone internal
 repos, or the activity token) is exactly what its clones need and no more.
@@ -148,10 +148,11 @@ container.
 
 ### 6 — Timing, phases, and the hello/OAuth shape
 
-`DEVCAKE_PHASE` ∈ `provision` | `harness` | unset ⇒ **monolithic** (the
-pre-split single-container flow, kept ONLY for old-DAG rollback — a
-`phase_of` helper + one test pin it so the branch cannot rot; docs/16 tracks
-its removal). Only the provision phase sends `run.started`; the harness phase
+`DEVCAKE_PHASE` ∈ `provision` | `harness` — the DAG always sets one, and the
+entrypoint exits 20 loudly on anything else (a `phase_of` helper + test pin
+this). There is **no** single-container fallback: rollback compat is not a
+pre-v1 concern (the initial ship carried a monolithic branch for one commit;
+it was deleted the same day). Only the provision phase sends `run.started`; the harness phase
 relies on its heartbeat (started **before** its `runspec.get`, so a phase-2
 boot fault keeps the liveness clock ticking). The `run.started` handler is
 hardened to accept ONLY the `dispatched→running` transition — every replay

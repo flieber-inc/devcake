@@ -253,9 +253,9 @@ class RunManager:
                 return
             # ADR-0025 R1: the provision step asks with {"phase":
             # "provision"} and gets a reduced, secret-free spec; the harness
-            # step (and the monolithic rollback path, which sends no phase)
-            # gets the full one. Stateless per request — both steps of one
-            # run ask independently.
+            # step asks with "harness" and gets the full one. Anything else
+            # (defensively) gets the full spec. Stateless per request — both
+            # steps of one run ask independently.
             if (payload or {}).get("phase") == "provision":
                 await self.messaging.reply(
                     run_id, "runspec.result",

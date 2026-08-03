@@ -393,9 +393,9 @@ def test_runspec_get_phase_provision_serves_reduced_spec():
     assert full["credential_files"]
     assert "FAKE_SECRET" in full["env"]
 
-    run_coro(mgr.handle(run.run_id, "runspec.get", {}))   # monolithic rollback
+    run_coro(mgr.handle(run.run_id, "runspec.get", {}))   # defensive no-phase
     _, _, legacy = messaging.replies[-1]
-    assert legacy["credential_files"]
+    assert legacy["credential_files"]                      # → full spec
     assert "FAKE_SECRET" in legacy["env"]
 
 

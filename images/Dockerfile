@@ -57,6 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps \
         ripgrep \
         sqlite3 \
+        tini \
         unzip \
         zip \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -98,14 +99,13 @@ RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # Browser floor (ADR-0023, class A — user-space can download a browser but
 # can NEVER apt-install its shared libraries): playwright's pinned headless
-# shell + its system deps, in a world-readable shared path so every user and
-# every matching-version playwright finds it without re-downloading. The
-# `playwright` CLI itself goes on PATH globally at the same pin.
+# shell + its system deps, in a shared path so every matching-version
+# playwright finds it without re-downloading. The `playwright` CLI itself
+# goes on PATH globally at the same pin.
 ARG PLAYWRIGHT_VERSION
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
     && playwright install --with-deps chromium-headless-shell \
-    && chmod -R a+rX /opt/pw-browsers \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
@@ -113,10 +113,14 @@ RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
 # Create user before setting HOME so installers (e.g. Grok CLI) can write $HOME.
 # The .npmrc prefix makes RUNTIME `npm i -g` a user-space self-serve (root
 # builds are unaffected: they run with HOME=/root above).
+# /opt/pw-browsers is DEV-OWNED (ADR-0023 fix round): PLAYWRIGHT_BROWSERS_PATH
+# points every install there, so a read-only dir would brick any browser the
+# base did not bake (measured: EACCES on __dirlock, AFTER the download).
+# Writable is safe — the container is disposable, corruption dies with the run.
 RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
     && mkdir -p /workspace /home/dev/.npm-global /home/dev/.local/bin \
     && printf 'prefix=/home/dev/.npm-global\n' > /home/dev/.npmrc \
-    && chown -R dev:dev /home/dev /workspace
+    && chown -R dev:dev /home/dev /workspace /opt/pw-browsers
 
 ENV HOME=/home/dev \
     PATH="/home/dev/.local/bin:/home/dev/.npm-global/bin:${PATH}"
@@ -138,9 +142,11 @@ RUN su dev -s /bin/sh -c ' \
             | head -1)"; \
         test -n "$shell" || { echo "no headless shell under /opt/pw-browsers" >&2; exit 1; }; \
         "$shell" --version; \
+        touch /opt/pw-browsers/.devcake-writable \
+            && rm /opt/pw-browsers/.devcake-writable; \
         python -c "import pandas, openpyxl"; \
         uv --version; \
-        command -v jq rg pandoc pdftotext sqlite3 unzip zip gcc make >/dev/null'
+        command -v tini jq rg pandoc pdftotext sqlite3 unzip zip gcc make >/dev/null'
 
 # Shared entrypoint façade + Dev-side package (domain/fault pure; more slices later).
 # Package root is `/` so `import devcake_dev` works; ENTRYPOINT path unchanged.
@@ -148,7 +154,12 @@ COPY common/devcake_dev /devcake_dev
 COPY common/dev_entrypoint.py /dev_entrypoint.py
 
 WORKDIR /workspace
-ENTRYPOINT ["python", "/dev_entrypoint.py"]
+# tini as PID 1 (ADR-0023 fix round): the entrypoint reaps nothing, and
+# browser process trees orphan children on unclean exits — over a multi-hour
+# run (longer still under ADR-0022 continuations) zombies and stray
+# headless-shells would otherwise accumulate. Dagu cannot pass --init
+# (container schema rejects HostConfig fields, docs/07 §7).
+ENTRYPOINT ["tini", "--", "python", "/dev_entrypoint.py"]
 
 # ── hello: CI stub — no git/forge CLIs needed ───────────────────────────────
 FROM ${PYTHON_IMAGE} AS hello

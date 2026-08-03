@@ -223,7 +223,7 @@ DevCake is **not** a multi-tenant sandbox product (`14-security.md` §6). Isolat
 
 - **Network:** full **outbound** internet (forge, packages, model APIs) plus membership in `devcake_runtime` for Redis, **otel-collector**, and optional internal Gitea. **OpenObserve is not on runtime.** The app/admin/Dagu control plane is not attached. Attachment mechanism in `13-deployment.md` §5.
 - **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md` §5).
-- **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root.
+- **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root. PID 1 is `tini` (ADR-0023 fix round): the entrypoint reaps no orphans, and browser process trees would otherwise accumulate zombies over multi-hour runs; Dagu cannot pass `--init` (see **Resources** below).
 - **MCP / extra CLI args:** admin-configured free-text commands run with `shell=True` / harness flags before/with the agent — **admin-equivalent ACE** inside the disposable container (`11-admin-panel.md`).
 - **Resources:** Dagu 2.10.5 step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container (**engineering debt**, `14` §11). Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps).
 
@@ -236,10 +236,13 @@ open-ended and runtime `apt` rightly does not exist (no root):
 - **Class A (root-only — baked or impossible):** `build-essential` (native
   pip/npm builds), and the browser stack: playwright's pinned headless
   Chromium shell + every system library it loads, at
-  `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` (world-readable), with the
-  `playwright` CLI on PATH at the same pin (`playwright --version` tells a
-  Dev which version finds the baked browser; a mismatched install falls back
-  to downloading its own — degraded, never broken).
+  `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` — **dev-owned**, because the
+  env var points every install there and a read-only dir would brick any
+  browser the base did not bake (measured; ADR-0023 fix round). Writable is
+  safe: the container is disposable. The `playwright` CLI is on PATH at the
+  same pin (`playwright --version` tells a Dev which version finds the baked
+  browser; a mismatched install downloads its own build alongside —
+  degraded, never broken).
 - **Class B (self-provisioning enablers):** Node/npm/npx (shared base — every
   harness, so a JS repo's dev server always starts), pip/venv, `uv`, and a
   PATH that honors user installs: `~/.local/bin` and `~/.npm-global/bin`

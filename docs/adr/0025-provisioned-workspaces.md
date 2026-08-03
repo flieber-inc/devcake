@@ -128,6 +128,15 @@ before (a defensive no-phase request also gets the full spec). Honest
 scope of the claim: **the provision container runs no agent and receives no
 harness/model secret**; the forge token it may hold (direct-clone internal
 repos, or the activity token) is exactly what its clones need and no more.
+The `phase` is **client-asserted**, not cryptographically bound (both steps
+share the run's one Redis ACL) — a compromised provision entrypoint could ask
+for the harness phase's full spec (AUD-009). This is honor-system by design:
+the provision container runs DevCake's own trusted entrypoint under the
+single-operator, dedicated-host model (`14` §2 zone B). The reduction hardens
+against accidental leakage and shrinks secret material in transit; it is not
+a defense against a subverted image. Binding replies to a provision-image
+hash, or separate ACL roles per step, is the heavier option if that model
+ever changes.
 
 ### 5 — LFS runs in both phases, credential-stripped, endpoint-pinned
 
@@ -181,10 +190,16 @@ runspec timeout, Redis auth) → the run is already `running`, so it is caught
 by stale-heartbeat at ≤ HEARTBEAT_GRACE (300 s) rather than STARTUP_GRACE
 (90 s) — the one detection-latency regression of the split, bounded and
 documented; heartbeat-before-runspec confines the 300 s case to a genuine
-container-create failure. WS disk exhaustion → gate at pre-create mkdir (the
-mission gates, retries), exit 13 at clone, or exit 20 at marker — plus a
-`/health.workspaces` disk alert, because otherwise it presents as DEV_FORGE
-retry churn.
+container-create failure. WS disk exhaustion / an unusable base → gated in
+`RunBootstrap.launch`, which raises `WorkspaceUnavailable` and the caller
+gates the mission cleanly — no attempt burned, reason on the missions row +
+`/health` — exactly like the mirror precondition (hardened per AUD-001/002; a
+latched boot `volume_error` fails fast before any ACL/record, and a transient
+create failure after the save unwinds both). This is what makes the SPA's
+"workspace base unusable — dispatch is frozen" alert TRUE rather than
+aspirational: dispatch really does gate. Also exit 13 at clone / exit 20 at
+marker for other WS troubles, plus a `/health.workspaces` disk alert, because
+otherwise disk exhaustion presents as DEV_FORGE retry churn.
 
 ### 8 — Security posture and consequences
 

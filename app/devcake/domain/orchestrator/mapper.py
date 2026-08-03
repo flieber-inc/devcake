@@ -13,6 +13,7 @@ from ...security import redact_value
 from ...config import DevType
 from .. import costing
 from ..model import LABEL_OPTIN, Mission
+from ..workspaces import WorkspaceUnavailable
 from . import dispatch
 from ..run import Run, utcnow
 
@@ -79,8 +80,16 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
         run.spec_prompt = dispatch.append_required_skills(
             mapper_prompt(dispatch._identifying_prompt(mgr, dev_type), eligible),
             dev_type.skills_required, run.spec_skills)
-        await mgr.runs.bootstrap.launch(
-            run, image=HARNESSES[dev_type.harness_template].image)
+        try:
+            await mgr.runs.bootstrap.launch(
+                run, image=HARNESSES[dev_type.harness_template].image)
+        except WorkspaceUnavailable as e:
+            # AUD-001: MAPPER is periodic and shares the poll segment — a bad
+            # workspace base must skip this run cleanly, never raise into the
+            # poll loop and mark the whole instance poll_degraded.
+            log.warning("mapper dispatch for %s skipped — workspace base "
+                        "unusable: %s", mgr.instance_name, e)
+            return None
         log.info("dispatched mapper %s (dev=%s, %d missions in prompt)",
                  run_id, dev_type.name, len(eligible))
         return run

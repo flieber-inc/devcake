@@ -25,6 +25,13 @@ Bake builds images; Compose runs the stack only (never builds `devcake/*`).
   `./workspaces`). Holds repo source + activity transcripts + agent output —
   treat like `gitea_data` (`14` §1); DevCake-exclusive (the sweep/wipe touch
   every run-id-shaped child) and excluded from backups (§8).
+- **Do NOT override `COMPOSE_PROJECT_NAME`** (AUD-020): the compose project is
+  fixed to `devcake` (`name: devcake`), which makes the mirror volume's real
+  name `devcake_mirrors` — the literal string `dev-run.yaml` mounts. A custom
+  project name would rename the volume (`<proj>_mirrors`) while the DAG still
+  mounts `devcake_mirrors`, so every provision step would fail to find the
+  mirrors. If a rename is ever required, `dev-run.yaml`'s volume name must
+  change in lockstep.
 - Networks:
   - **`devcake_control`:** `app`, `admin`, `dagu`, Redis, OpenObserve,
     fluent-bit, otel-collector, gitea.
@@ -323,7 +330,7 @@ Recommended operator setup:
 Forge connection test and `/health` surface protection state; amber warning when unprotected.
 - **Upgrade:** `docker compose pull` (third-party images only) → `docker buildx bake all` → `docker compose up -d`. State survives (volumes). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
 - **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker buildx bake all`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebaked.
-- **Deploy ordering under ADR-0025 — the DAG, compose, and env deploy lockstep.** `./dagu/dags` is a LIVE `:ro` bind-mount and Dagu re-reads the YAML per dispatch, so a new `dev-run.yaml` goes live at `git pull`, before `./up.sh`. In that window the old dagu container has no `DEVCAKE_WS_HOST` (the new bind source would expand empty → a root-owned junk dir at the host root), and images that predate the deploy mishandle `DEVCAKE_PHASE` (a post-ADR-0025 image without a phase exits 20 loudly — there is no single-container fallback). The deploy ritual closes the window: **`docker compose stop dagu` → `git pull` → `./up.sh --bake`** (upserts `DEVCAKE_WS_HOST`, bakes ALL images so the DAG and images match, `up -d` — which force-recreates dagu with the new env). In-flight DAG-runs are orphaned by the dagu recreate and reconcile-adopted at the next app boot.
+- **Deploy ordering under ADR-0025 — the DAG, compose, and env deploy lockstep.** `./dagu/dags` is a LIVE `:ro` bind-mount and Dagu re-reads the YAML per dispatch, so a new `dev-run.yaml` goes live at `git pull`, before `./up.sh`. In that window the old dagu container has no `DEVCAKE_WS_HOST` (the new bind source would expand empty → a root-owned junk dir at the host root), and images that predate the deploy mishandle `DEVCAKE_PHASE` (a post-ADR-0025 image without a phase exits 20 loudly — there is no single-container fallback). The deploy ritual closes the window: **`docker compose stop dagu` → `git pull` → `./up.sh --bake`**. `./up.sh --bake` now enforces the sharp edges itself (AUD-003/004): it stops dagu before the multi-minute bake (so a running dagu can't see the new DAG without the new env), resolves `DEVCAKE_TAG` once (shell env > `.env` > `latest`) and exports it for BOTH the bake and `compose up` so images and the running stack never desync, and upserts + `mkdir 0700`s `DEVCAKE_WS_HOST`. `up -d` force-recreates dagu with the new env. The explicit `stop dagu` before `git pull` is still recommended to close the brief pull→up window. In-flight DAG-runs are orphaned by the dagu recreate and reconcile-adopted at the next app boot.
 - **Kill a stuck Dev:** admin → Runs page → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
 - **Logs:** admin → Consoles page (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).

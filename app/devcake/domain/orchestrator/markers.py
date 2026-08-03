@@ -62,8 +62,9 @@ FEED_INLINE_MAX = 2048
 # so the state stays fully PMO-derivable (no local clocks or counters). The
 # comments carrying them are short by construction (< FEED_INLINE_MAX): the
 # markers must stay inline, never externalized to attachments. NOTE:
-# get_activity reads the newest 100 comments (docs/05 §3, v0 limit) — markers
-# could age out on an extremely chatty mission.
+# get_activity cursor-walks newest-first with a fail-loud ceiling of ~1,000
+# comments (10 pages, docs/05 §3) — markers could age out only on an
+# extraordinarily chatty mission, ~50× DevCake's post-hygiene comment rate.
 # Per-mission repo override (M10, founder decision): a backticked line
 # anywhere in the mission DESCRIPTION — `devcake-repo:<name>`. A description
 # marker, not a label: repo names are an open-ended operator-renamable set,

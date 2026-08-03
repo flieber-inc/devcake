@@ -58,7 +58,7 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
               <tr key={r.name} className="border-t border-neutral-200 dark:border-neutral-800">
                 <td className="py-1.5 pr-3 font-mono">{r.mission_key}</td>
                 <td className="pr-3">
-                  <a className="text-blue-600 hover:underline" href={r.html_url}
+                  <a className="text-accent-600 hover:underline" href={r.html_url}
                     target="_blank" rel="noreferrer">{r.name}</a>
                 </td>
                 <td className="pr-3">{Math.round(r.size_kb)} KB</td>
@@ -74,7 +74,7 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
       </div>
       )}
       {data.ui_url && (
-        <a className="mt-2 inline-block text-sm text-blue-600 hover:underline"
+        <a className="mt-2 inline-block text-sm text-accent-600 hover:underline"
           href={data.ui_url} target="_blank" rel="noreferrer">Open the Gitea UI →</a>
       )}
     </Section>

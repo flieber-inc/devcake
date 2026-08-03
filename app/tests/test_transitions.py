@@ -1364,6 +1364,86 @@ def test_sweep_window_expiry_hands_off_once(tmp_path):
                 if "`devcake:merge-handoff`" in c]) == 1
 
 
+def test_sweep_boolean_forge_conflict_hands_off_not_execute(tmp_path):
+    """AUD-010: on a boolean-only forge (Gitea, `mergeable_tristate=False`) a
+    failed merge with verdict False must NOT route to EXECUTE — a False can be
+    'not computed yet' there, so it hands off, IDENTICAL to finalize. Without
+    the capability check the sweep routed Gitea conflicts to rework while
+    finalize handed them off — the doctrine split the audit found."""
+    from types import SimpleNamespace
+    m, mgr, fake, forge = sweep_mgr(
+        tmp_path, mergeable_result=False,
+        merge_exc=ForgeError("409: conflict", status=409))
+    forge.capabilities = SimpleNamespace(mergeable_tristate=False)  # Gitea-like
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == [8]                          # merge WAS tried first
+    assert "DEVCAKE-EXECUTE" not in m.labels            # never routed to rework
+    assert not any("conflict-resolve" in c for c in fake.comments)
+    assert "DEVCAKE-MERGE" in m.labels                  # stays parked; retries
+
+
+def test_rearm_retained_when_parked_missions_pr_is_missing(tmp_path):
+    """AUD-005: a repo's OFF→ON re-arm must survive a cycle where the parked
+    mission's PR can't be found (forge lag) — otherwise the flag is cleared
+    unconditionally and the window is lost until another toggle."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+
+    async def _no_pr(_branch):
+        return None
+    forge.get_pr_by_branch = _no_pr          # PR not visible this cycle
+    mgr.rearm_merge_repos = {"main"}
+    run_coro(mgr.sweeps([m]))
+    assert mgr.rearm_merge_repos == {"main"}  # retained — not lost
+    assert m.pmo_id in mgr.blocked_reasons    # AUD-006: missing PR is VISIBLE
+    # once the PR appears, the rearm fires and the flag clears (one-shot)
+    async def _pr(_branch):
+        return PullRequest(number=8, url="https://forge/pr/8", state="open")
+    forge.get_pr_by_branch = _pr
+    fake.activity_entries = []
+    run_coro(mgr.sweeps([m]))
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert mgr.rearm_merge_repos == set()
+
+
+def _no_pr_forge(tmp_path, auto_merge, window=30):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    forge = FakeForge()
+
+    async def _none(_branch):
+        return None
+    forge.get_pr_by_branch = _none           # forge list lag at finalize
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    mgr.forges.instance("main").auto_merge = auto_merge
+    mgr.forges.instance("main").merge_retry_window_minutes = window
+    return m, mgr, fake
+
+
+def test_finalize_missing_pr_auto_merge_opens_deferred_window(tmp_path):
+    """AUD-006: auto_merge ON but no PR at REVIEW finalize (forge lag) must
+    open a deferred window (retry marker) — NOT pure human-await, which would
+    strand app-driven merge forever (the sweep silent-returns on a missing
+    PR and opens no window without a marker)."""
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=True)
+    run_coro(review.finalize_review(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"verdict": "approve", "report_md": "ok", "pr_url": "https://forge/pr/8"}))
+    assert "DEVCAKE-MERGE" in m.labels
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert not any("Awaiting human merge" in c for c in fake.comments)
+
+
+def test_finalize_missing_pr_manual_repo_keeps_human_await(tmp_path):
+    """Contrast: auto_merge OFF + no PR → the honest human-await copy, no
+    retry marker (the app was never going to merge it)."""
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    run_coro(review.finalize_review(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"verdict": "approve", "report_md": "ok", "pr_url": "https://forge/pr/8"}))
+    assert "DEVCAKE-MERGE" in m.labels
+    assert any("Awaiting human merge" in c for c in fake.comments)
+    assert not any("`devcake:merge-retry`" in c for c in fake.comments)
+
+
 def test_sweep_ignores_missions_without_retry_marker(tmp_path):
     # auto_merge-OFF parks carry no marker — the sweep must not touch them
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
@@ -1490,6 +1570,21 @@ def test_rearm_reopens_parked_mission_when_auto_merge_flips_on(tmp_path):
     run_coro(mgr.sweeps([m]))             # cycle 2: fresh marker → merge
     assert forge.merges == [8]
     assert m.status == "done"
+
+
+def test_apply_auto_merge_rearm_populates_set_off_to_on(tmp_path):
+    """AUD-024: the shared re-arm (config PUT AND bundle/profile apply both
+    call apply_auto_merge_rearm — settings_bundle.py, config_service.py)
+    unions OFF→ON repos into every manager's rearm set."""
+    from devcake.config import RepoInstance, apply_auto_merge_rearm
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    prev = [RepoInstance(name="main", url="https://github.com/o/r",
+                         auto_merge=False)]
+    new = [RepoInstance(name="main", url="https://github.com/o/r",
+                        auto_merge=True)]
+    flipped = apply_auto_merge_rearm(prev, new, {"linear": mgr})
+    assert flipped == {"main"}
+    assert "main" in mgr.rearm_merge_repos
 
 
 def test_rearm_reaches_missions_already_in_skip_set(tmp_path):

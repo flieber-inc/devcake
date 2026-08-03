@@ -68,7 +68,14 @@ async def reconcile_runs(manager) -> None:
                 # never the structured `error_class` — dev_failure_error's 15
                 # arm therefore labels the orphan and lets it contribute
                 # evidence, but never excuses its attempt (ADR-0018).
-                exit_m = re.search(r"exit status (13|14|15|16)", detail.lower())
+                # AUD-015: enrich the informational exit classes too (10/11/20
+                # → DEV_CRASH / DEV_BAD_OUTPUT, incl. the ADR-0025 exit-20
+                # sentinel/marker family), not just 13-16. Exit 12 is
+                # DELIBERATELY excluded — dev_failure_error latches the dev-type
+                # auth breaker for it, and a stale orphan post-mortem must never
+                # trip a breaker from reconcile.
+                exit_m = re.search(r"exit status (10|11|13|14|15|16|20)",
+                                   detail.lower())
                 if finalizer and exit_m:
                     r.error = finalizer.dev_failure_error(
                         r, {"exit_code": int(exit_m.group(1)),

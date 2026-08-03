@@ -126,6 +126,11 @@ class MissionManager:
         # marker opens a new episode. A human DELETING the hand-off comment
         # instead of swapping labels isn't noticed until restart.
         self._merge_window_closed: set[str] = set()
+        # AUD-005: per-cycle scratch — pmo_ids whose parked-merge window was
+        # actually driven this sweep, so a repo's OFF→ON re-arm is cleared only
+        # once every parked mission on it was reached (not on a PR-lookup miss).
+        # Reset at the top of each `sweeps()`.
+        self._rearm_satisfied: set[str] = set()
 
     def rotate_grace(self) -> None:
         self._grace, self._grace_next = self._grace_next, set()

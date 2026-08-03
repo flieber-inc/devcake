@@ -20,6 +20,7 @@ from ...config import DevType, assignment_for
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
+from ..workspaces import WorkspaceUnavailable
 from . import markers
 from . import schedule
 from .feed import _is_devcake_comment, _stage_of, _unquoted
@@ -464,8 +465,20 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         run.branch = mission_branch(mgr.instance_name, mission.key)
         run.stage_label_at_dispatch = _stage_of(live)
         run.mission_pmo_id = mission.pmo_id
-        await mgr.runs.bootstrap.launch(
-            run, image=HARNESSES[dev_type.harness_template].image)
+        try:
+            await mgr.runs.bootstrap.launch(
+                run, image=HARNESSES[dev_type.harness_template].image)
+        except WorkspaceUnavailable as e:
+            # AUD-001/002: the workspace base is unusable — gate exactly like
+            # the mirror precondition above (no attempt burned; the run was
+            # unwound in launch). Visible on the missions row + /health, and
+            # the SPA's "dispatch is frozen" alert is now backed by real
+            # gating. Retries next cycle.
+            mgr.blocked_reasons[live.pmo_id] = (
+                f"workspace base unusable — dispatch deferred: {e}")
+            log.warning("dispatch of %s deferred — %s", live.key,
+                        mgr.blocked_reasons[live.pmo_id])
+            return None
 
         if live.status == "backlog":
             await mgr.pmo.set_status(mission.ref, "in_progress")

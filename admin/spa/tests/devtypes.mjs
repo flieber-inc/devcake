@@ -1,4 +1,4 @@
-// Dev Types roster suite: the Buzz-style grid (compact tiles + dashed New
+// Dev Types roster suite: the roster grid (compact tiles + dashed New
 // tile) and the editor modal keep the draft semantics — edits ride the
 // page-level Save, never a per-modal save. All dialogs are cancelled and the
 // draft is discarded — nothing is ever saved or destroyed.
@@ -32,7 +32,7 @@ await withPage(async (page) => {
       (await page.locator('[role="dialog"] :text-is("Model")').count()) >= 1);
     check("editor keeps the credentials InstantZone",
       (await page.locator('[role="dialog"] :text("credentials store immediately")').count()) >= 1);
-    // Buzz-style first view: skills open, everything operational behind ONE
+    // first view: skills open, everything operational behind ONE
     // Advanced disclosure — credentials must be folded until expanded
     check("editor has exactly one Advanced disclosure",
       (await page.locator('[role="dialog"] summary:has-text("Advanced")').count()) === 1);

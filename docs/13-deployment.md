@@ -48,7 +48,7 @@ services:
     # no host ports — reach API only via admin proxy
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5   # PIN — see §4
+    image: ghcr.io/dagucloud/dagu:2.11.3   # PIN — see §4
     ports: [ "127.0.0.1:8525:8080" ]      # loopback only — docs/14
     environment:
       - DAGU_AUTH_MODE=basic
@@ -141,7 +141,7 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 
 ## 4. Dagu configuration
 
-- **Version pinned** (`2.10.5` at spec time — everything in this section was **verified live against v2.10.5**, source + running server, and exercised end-to-end at M1). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
+- **Version pinned** (`2.11.3` since ADR-0024 — originally verified live against v2.10.5 end-to-end at M1; the 2.11.3 bump re-measured the volume probes and audited the release notes: the v2.11.0 CORS hardening does not apply — DevCake calls the API server-side and the SPA only LINKS to Dagu's own same-origin UI — and the v2.10.6 token-TTL cap is moot under basic auth. Container cpu/memory/pids limits still do not exist at 2.11.3, so the `14` §11 debt stands. 2.11's controller/LLM/human-task DAG features are deliberately NOT adopted: all business logic stays in the app, the DAG remains a dumb launcher). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
 - **Auth (verified at M1):** v2.10.5 locks the API by default (401). We run `DAGU_AUTH_MODE=basic` with `DAGU_AUTH_BASIC_USERNAME/PASSWORD` (env names confirmed from the source's config loader); the app sends HTTP Basic on every call; `/api/v1/health` stays open for the compose healthcheck.
 - **docker.sock access (verified at M1):** the image's entrypoint always drops to uid 1000 via sudo, and its `DOCKER_GID` group setup is broken on the ubuntu base (alpine-only `addgroup`). Our `dagu/init/10-docker-group.sh` (mounted at `/etc/custom-init.d/`) creates the docker group with `groupadd`, so the daemon runs as `dagu:docker` — least privilege, no root daemon. Stock `/entrypoint.sh` only runs custom-init scripts that are `+x`, and the bind is `:ro`, so a non-executable host file is a silent skip → `sudo: unknown group #$DOCKER_GID` crash-loop. Compose therefore wraps the entrypoint and always invokes hooks via `sh` before handing off (does not depend on the host execute bit; git still tracks the script as `100755`).
 - **Step ids are `^[a-zA-Z][a-zA-Z0-9_]*$`** (verified) — underscores, not dashes: the DAG's step is `run_dev`.

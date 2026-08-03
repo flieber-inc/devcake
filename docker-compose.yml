@@ -52,7 +52,7 @@ services:
       start_period: 15s
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5@sha256:469840b0e3b8e82096eadc93f2bf27b7e7150b0eee8f14343fd545830c2bfa59  # docs/13 §4
+    image: ghcr.io/dagucloud/dagu:2.11.3@sha256:e5f06be4aed0b445028ec133f9c7d5b0c4275025d4b6db2bde41e918345d3901  # docs/13 §4 (ADR-0024 §7 rider)
     restart: unless-stopped
     ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open

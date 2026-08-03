@@ -524,13 +524,64 @@ def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     assert all(p["sha256"] == digest and p["of"] == len(sent) for _, p in sent)
 
 
-def test_clone_source_forces_file_transport_for_mirrors():
-    """ADR-0024, the depth footgun: plain-path local clones IGNORE --depth
-    and hardlink; file:// forces the smart transport (honors depth, carries
-    LFS via the standalone transfer). Passthrough when no mirror."""
-    assert ep.clone_source("/mirrors/alpha.git", "https://u@h/o/r.git") \
-        == "file:///mirrors/alpha.git"
-    assert ep.clone_source("", "https://u@h/o/r.git") == "https://u@h/o/r.git"
+def test_phase_of_unset_or_garbage_means_monolithic():
+    """ADR-0025 R12: the monolithic branch exists ONLY for old-DAG rollback
+    — an unset or unknown DEVCAKE_PHASE must select it, never crash."""
+    assert ep.phase_of({}) == "monolithic"
+    assert ep.phase_of({"DEVCAKE_PHASE": ""}) == "monolithic"
+    assert ep.phase_of({"DEVCAKE_PHASE": "banana"}) == "monolithic"
+    assert ep.phase_of({"DEVCAKE_PHASE": "provision"}) == "provision"
+    assert ep.phase_of({"DEVCAKE_PHASE": "harness"}) == "harness"
+
+
+def test_sentinel_and_marker_errors_carry_forensics(tmp_path):
+    """ADR-0025 R4: both checks verify run-id CONTENT (a green flag for the
+    wrong directory is the failure class they exist to close) and their
+    error text carries owner/mode/listing forensics."""
+    rid = "T-1-1-EXECUTE-AAAAAA"
+    assert "unreadable" in ep.sentinel_error(tmp_path, rid)
+    assert "uid=" in ep.sentinel_error(tmp_path, rid)     # forensics
+
+    dev = tmp_path / ".devcake"
+    dev.mkdir()
+    (dev / "created-by-app").write_text("OTHER-RUN")
+    err = ep.sentinel_error(tmp_path, rid)
+    assert "OTHER-RUN" in err and rid in err
+    (dev / "created-by-app").write_text(rid)
+    assert ep.sentinel_error(tmp_path, rid) is None
+
+    assert "missing" in ep.marker_error(tmp_path, rid)
+    (dev / "provisioned").write_text("OTHER-RUN")
+    assert rid in ep.marker_error(tmp_path, rid)
+    (dev / "provisioned").write_text(rid)
+    assert ep.marker_error(tmp_path, rid) is None
+
+
+def test_mirror_clone_argv_forces_file_transport_and_pins_lfs_url():
+    """ADR-0024's depth footgun + ADR-0025 R3: plain-path local clones
+    IGNORE --depth and hardlink — file:// forces the smart transport; and
+    `-c lfs.url=` pins the LFS endpoint to the clone's OWN mirror so a
+    repo-committed .lfsconfig cannot steer git-lfs anywhere else."""
+    assert ep.mirror_clone_argv("/mirrors/alpha.git", "/ws/repo/alpha") == \
+        ["git", "clone", "-c", "lfs.url=file:///mirrors/alpha.git",
+         "file:///mirrors/alpha.git", "/ws/repo/alpha"]
+    assert ep.mirror_clone_argv("/mirrors/beta.git", "/ws/repo/beta",
+                                depth=1) == \
+        ["git", "clone", "-c", "lfs.url=file:///mirrors/beta.git",
+         "--depth", "1", "file:///mirrors/beta.git", "/ws/repo/beta"]
+
+
+def test_mirror_clone_env_strips_credentials():
+    """ADR-0025 R3: a file:// clone needs no credential — the subprocess
+    env drops the askpass and token entirely (fail-closed), everything
+    else passes through."""
+    env = ep.mirror_clone_env({"GIT_ASKPASS": "/ws/.devcake/askpass.sh",
+                               "DEVCAKE_FORGE_TOKEN": "tok",
+                               "PATH": "/usr/bin", "HOME": "/home/dev"})
+    assert "GIT_ASKPASS" not in env
+    assert "DEVCAKE_FORGE_TOKEN" not in env
+    assert env["PATH"] == "/usr/bin"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
 def test_set_origin_cmd_shape():
@@ -550,8 +601,9 @@ def test_mirror_clone_error_class_is_never_auth():
 
 def test_clone_extra_repos_mirror_entries_file_url_depth_and_origin_rewrite():
     """ADR-0024 extras: mirror_path ⇒ file:// clone (still --depth 1), NO
-    token needed, then a best-effort origin rewrite to the real URL; a
-    rewrite failure stays a note, never fatal."""
+    token needed — the subprocess env is credential-STRIPPED and lfs.url
+    pinned (ADR-0025 R3) — then a best-effort origin rewrite to the real
+    URL; a rewrite failure stays a note, never fatal."""
     calls = []
 
     class R:
@@ -559,16 +611,20 @@ def test_clone_extra_repos_mirror_entries_file_url_depth_and_origin_rewrite():
             self.returncode, self.stderr = rc, stderr
 
     def runner(cmd, capture_output, text, env):
-        calls.append((cmd, env.get("DEVCAKE_FORGE_TOKEN", "")))
+        calls.append((cmd, env.get("DEVCAKE_FORGE_TOKEN", ""),
+                      "GIT_ASKPASS" in env))
         return R(0)
 
     extras = [{"name": "beta", "url": "https://gitlab.com/o/beta.git",
                "clone_user": "oauth2", "mirror_path": "/mirrors/beta.git"}]
     notes = ep.clone_extra_repos(extras, Path("/tmp/ws/repo"), runner=runner)
-    (clone_cmd, tok), (seturl_cmd, _) = calls
-    assert clone_cmd[:4] == ["git", "clone", "--depth", "1"]
-    assert clone_cmd[4] == "file:///mirrors/beta.git"
+    (clone_cmd, tok, askpass), (seturl_cmd, _, _) = calls
+    assert clone_cmd[:4] == ["git", "clone", "-c",
+                             "lfs.url=file:///mirrors/beta.git"]
+    assert clone_cmd[4:6] == ["--depth", "1"]
+    assert clone_cmd[6] == "file:///mirrors/beta.git"
     assert tok == ""                                   # no token in transit
+    assert askpass is False                            # R3: fully stripped
     assert seturl_cmd[:2] == ["git", "-C"]
     assert seturl_cmd[-1] == "https://oauth2@gitlab.com/o/beta.git"
     assert any("cloned read-only from mirror" in n for n in notes)

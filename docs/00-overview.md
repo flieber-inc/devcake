@@ -88,8 +88,8 @@ covered by automated tests (`16-roadmap.md`, M7).
                      ┌──────────────────── docker-compose (dedicated host) ────────────────────┐
                      │  devcake_control                              devcake_runtime            │
   ┌────────┐ GraphQL │  ┌──────────┐ REST  ┌──────┐ docker.sock  ┌ ─ ─ ─ ─ ─ ─ ─ ┐           │
-  │ Linear │◄────────┤  │ app      │──────►│ dagu │─────────────►│ dev-<run_id>  │           │
-  │ (PMO)  │  poll   │  │ FastAPI  │       └──────┘  siblings    │ harness       │           │
+  │ Linear │◄────────┤  │ app      │──────►│ dagu │─────────────►│ prov-/dev-    │           │
+  │ (PMO)  │  poll   │  │ FastAPI  │       └──────┘  siblings    │ <run_id>      │           │
   └────────┘         │  │          │◄── Redis Streams ───────────┤               │           │
   ┌────────┐ HTTPS   │  └────┬─────┘   (per-run ACL)             └───────┬───────┘           │
   │ Forge  │◄────────┤       │ /api/v1 (via admin)                       │ clone/push        │
@@ -115,7 +115,7 @@ A concrete end-to-end pass, naming the governing document at each hop:
 1. **A human creates an Issue** in the configured Linear team and labels it `DEVCAKE` (adoption is opt-in by default; an `opt_out` mode adopts everything in the team — `02-domain-model.md` §2). It sits in `Backlog`. Anyone who can write that ticket is inside the agent trust boundary (`14` §0).
 2. **The PMO Handler polls Linear** (default every 30 s) and normalizes the Issue into a Mission (`05-pmo-adapter.md`). Status `backlog` + no stage label ⇒ derived Mission Type = **ONBOARD** (`02-domain-model.md`).
 3. **The scheduler picks it** by priority (Urgent > High > Medium > Low; unset = Medium), checks the concurrency caps for the mapped Dev Type (`judgment`), and dispatches: writes a Run record, triggers Dagu's `dev-run` DAG, and marks the Mission `In Progress` in Linear (`04-orchestrator.md`).
-4. **Dagu spawns a Dev container.** The entrypoint prepares `/workspace/repo` (fresh clone), `/workspace/activity/ACTIVITY.md` (+ attachments), registers MCP servers, and launches Claude Code with the judgment identifying prompt + the ONBOARD playbook prompt (`07-dev-runtime.md`, `08-harness-templates.md`, `03-mission-lifecycle.md`).
+4. **Dagu spawns the run's two containers.** The **provision** container (`prov-<run_id>`) mounts the source mirrors read-only + this run's workspace, prepares `/workspace/repo` (fresh clone), `/workspace/activity/ACTIVITY.md` (+ attachments), and exits; then the **harness** container (`dev-<run_id>`) mounts ONLY the workspace — never the mirrors — registers MCP servers, and launches Claude Code with the judgment identifying prompt + the ONBOARD playbook prompt (ADR-0025; `07-dev-runtime.md`, `08-harness-templates.md`, `03-mission-lifecycle.md`).
 5. **The Dev assesses complexity** and, say, deems it *normal*. It writes `/workspace/out/result.json` with `outcome: "plan_needed"` and exits 0. The entrypoint publishes the transcript, token report, and result over Redis (`09-messaging.md`).
 6. **The app finalizes**: posts `1_ONBOARD.md` and the token report to the Linear activity feed, then — after re-reading the Mission live (compare-and-transition, `04-orchestrator.md` §4) — adds the `DEVCAKE-PLAN` label.
 7. **Next poll cycle**: status `started` + `DEVCAKE-PLAN` ⇒ Mission Type **PLAN** ⇒ judgment produces `PLAN.md`; the app uploads it, swaps the label to `DEVCAKE-EXECUTE`.

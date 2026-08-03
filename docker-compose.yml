@@ -33,9 +33,14 @@ services:
     restart: unless-stopped
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
-      # ADR-0024: bare source mirrors, app-writable; Dev containers mount the
-      # SAME volume read-only via dev-run.yaml (real name devcake_mirrors)
+      # ADR-0024: bare source mirrors, app-writable; the dev-run PROVISION
+      # step mounts the SAME volume read-only (real name devcake_mirrors) —
+      # agent containers never see it (ADR-0025)
       - mirrors:/mirrors
+      # ADR-0025: per-run workspace tree. Host bind (NOT a named volume —
+      # the DAG needs per-run subpaths); up.sh upserts the HOST-ABSOLUTE
+      # path into .env, `:?` fails loud if it is missing
+      - ${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}:/workspaces
       # test fixture only: tests/test_entrypoint_render.py exercises the Dev
       # entrypoint's renderers by path; the app never imports this at runtime
       - ./images/common:/srv/images/common:ro
@@ -62,6 +67,11 @@ services:
       # entrypoint runs dagu as uid 1000 with group $DOCKER_GID → docker.sock access
       # (least privilege; find yours with: stat -c %g /var/run/docker.sock)
       - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
+      # ADR-0025: dev-run.yaml expands $DEVCAKE_WS_HOST in its per-run
+      # workspace bind sources — resolved on the DAEMON host, so the value
+      # must be host-absolute (up.sh derives it; `:?` fails loud, because an
+      # EMPTY expansion would silently bind-mount junk at the host root)
+      - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}
     # Stock /entrypoint.sh only runs /etc/custom-init.d/* when the file is +x.
     # The bind is :ro, so a non-executable host file is a silent skip → alpine
     # `addgroup` fails on this ubuntu image → `sudo: unknown group #$DOCKER_GID`

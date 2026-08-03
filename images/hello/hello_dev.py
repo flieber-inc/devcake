@@ -115,6 +115,14 @@ def fetch_runspec() -> dict:
 
 
 def main() -> None:
+    # ADR-0025: the two-step DAG runs every image's entrypoint twice; hello
+    # has nothing to provision, so step 1 is a plain exit 0 (no Redis, no
+    # marker). Hello therefore reports run.started from step 2 BY DESIGN —
+    # STARTUP_GRACE absorbs both container creates.
+    if os.environ.get("DEVCAKE_PHASE") == "provision":
+        print(f"hello provision {RUN_ID}: nothing to do")
+        return
+
     spec = fetch_runspec()
     for key, value in spec.get("env", {}).items():
         os.environ[key] = value

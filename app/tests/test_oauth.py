@@ -90,3 +90,14 @@ def test_result_clears_breaker_for_that_dev_type(tmp_path, monkeypatch):
     run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
     run_coro(mgr._on_result_inner(run_id, {"content": "{}"}))
     assert "main-dev" not in mgr.breakers
+
+
+def test_result_cleans_run_workspace(tmp_path, monkeypatch):
+    """ADR-0025 Hook D: OAuth completion bypasses finalize AND kill — the
+    (empty) pre-created workspace dir is reclaimed on the success path."""
+    mgr = make_mgr(tmp_path, monkeypatch)
+    cleaned = []
+    mgr.runs.workspaces.cleanup = lambda rid: (cleaned.append(rid), True)[1]
+    run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
+    run_coro(mgr._on_result_inner(run_id, {"content": "{}"}))
+    assert cleaned == [run_id]

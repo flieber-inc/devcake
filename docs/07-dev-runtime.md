@@ -43,9 +43,10 @@ mirrors mounted RO at `/mirrors`, then exits; the **harness** container
 (`dev-<run_id>`, `DEVCAKE_PHASE=harness`) mounts ONLY this workspace —
 `/mirrors` does not exist in it — verifies the `provisioned` marker, and runs
 the agent. The agent therefore sees exactly `repo/`, `activity/`, `out/` and
-`.devcake/` — never the mirror, never another repo's bytes. (Unset
-`DEVCAKE_PHASE` = the pre-split monolithic flow, kept only for old-DAG
-rollback.)
+`.devcake/` — never the mirror, never another repo's bytes. There is no
+single-container fallback: the DAG always sets `DEVCAKE_PHASE`, and the
+entrypoint exits 20 loudly on any other value (a mismatched build /
+hand-run container — rollback compat is not a pre-v1 concern).
 
 There is **no** `/workspace/out/transcript/` directory. The entrypoint assembles the session transcript **in memory** (`assemble_transcript`) and ships it as `transcript_md` on the `run.artifacts` payload; the app posts it as `{seq}_{TYPE}.md` on the PMO feed.
 
@@ -83,7 +84,7 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | Variable | Stage | Meaning |
 |---|---|---|
 | `DEVCAKE_RUN_ID` | 1 | Human-readable run id (`02-domain-model.md` §7, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ`); the run's two containers are named `prov-{DEVCAKE_RUN_ID}` and `dev-{DEVCAKE_RUN_ID}` (ADR-0025). |
-| `DEVCAKE_PHASE` | 1 | `provision \| harness` (ADR-0025) — which step of the two-step `dev-run` DAG this container is. Unset ⇒ the pre-split monolithic flow (old-DAG rollback only). Selects the reduced vs full runspec and gates credential-file writes to the harness phase. |
+| `DEVCAKE_PHASE` | 1 | `provision \| harness` (ADR-0025) — which step of the two-step `dev-run` DAG this container is; the DAG always sets it, and the entrypoint exits 20 on any other value (no single-container fallback). Selects the reduced vs full runspec and gates credential-file writes to the harness phase. |
 | `TRACEPARENT` | 1 | W3C trace context — links the Dev's spans into the dispatch trace (`12-observability.md`). |
 | `REDIS_URL` | 1 | `redis://redis:6379/0`. |
 | `REDIS_USER` / `REDIS_PASSWORD` | 1 | Per-run scoped ACL credential (`09-messaging.md` §1a); doubles as the envelope `auth` token. |
@@ -164,8 +165,8 @@ mounted RO, verifies the app-written `created-by-app` sentinel first, writes
 the `provisioned` marker last, and exits. **Harness** (`dev-<run_id>`,
 `DEVCAKE_PHASE=harness`, no `/mirrors`) verifies the marker, then runs steps
 4-10. `run.started` is sent by provision only; the harness step starts its
-heartbeat before fetching the runspec. A single unset-`DEVCAKE_PHASE`
-container runs the whole sequence 0-10 (monolithic rollback path).
+heartbeat before fetching the runspec. There is no single-container flow —
+a missing/unknown `DEVCAKE_PHASE` exits 20 loudly.
 
 ```
 PROVISION container (prov-<run_id>, DEVCAKE_PHASE=provision, /mirrors RO)

@@ -162,13 +162,12 @@ def forge_dialect(env: dict) -> tuple:
     return (env["DEVCAKE_CLONE_USER"], env["DEVCAKE_GIT_NAME"],
             env["DEVCAKE_GIT_EMAIL"], cli_envs)
 
-def _fetch_spec(phase: str | None) -> dict:
-    """runspec over the bus. The app serves the provision phase a REDUCED
-    spec — no credential files, no harness/Dev-Type secret env (ADR-0025
-    R1). None = no phase field: the monolithic rollback path asks exactly
-    like the pre-split entrypoint did."""
+def _fetch_spec(phase: str) -> dict:
+    """runspec over the bus, tagged with the caller's phase (ADR-0025 R1):
+    the app serves the provision phase a REDUCED spec — no credential files,
+    no harness/Dev-Type secret env — and the harness phase the full spec."""
     spec = request_reply("runspec.get", "runspec.result",
-                         payload={"phase": phase} if phase else None)
+                         payload={"phase": phase})
     send("runspec.ack", {})
     return spec
 
@@ -261,9 +260,8 @@ def _oauth_login(env: dict, stop: threading.Event) -> None:
 
 def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
     """Workspace materialization (docs/07 §1): dirs, askpass, activity,
-    identity/LFS posture, work-repo clone (mirror or direct), extras.
-    Shared by the provision phase and the monolithic rollback path; every
-    failure exit is identical to the pre-split flow."""
+    identity/LFS posture, work-repo clone (mirror or direct), extras. Runs in
+    the provision phase; every failure exit is a pre-harness exit 13/20."""
     (WORKSPACE / "out").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / "activity").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / ".devcake").mkdir(parents=True, exist_ok=True)
@@ -371,66 +369,61 @@ def provision_main() -> None:
 
 
 def main() -> None:
-    # Phase dispatch (ADR-0025): the two-step DAG sets DEVCAKE_PHASE per
-    # step; unset means an OLD single-step DAG → monolithic rollback path.
+    # Phase dispatch (ADR-0025): the two-step dev-run DAG sets DEVCAKE_PHASE
+    # on every step. There is NO single-container fallback — a missing/unknown
+    # phase is a mismatched build or a hand-run container, and crashes loudly
+    # (house style: forge_dialect's KeyError philosophy; app + images deploy
+    # in lockstep, docs/13 §8).
     phase = phase_of(os.environ)
     if phase == "provision":
         provision_main()
-        return
-    harness_main(monolithic=phase == "monolithic")
-
-
-def harness_main(monolithic: bool) -> None:
-    if monolithic:
-        # rollback-only (ADR-0025 R12): an old single-step DAG runs the
-        # pre-split flow in one container, order preserved exactly
-        spec = _fetch_spec(None)
-        env = spec.get("env", {})
-        os.environ.update(env)
-        _write_credential_files(spec)
-        prompt = spec.get("prompt", "")
-        send("run.started", {"container_hostname": os.uname().nodename})
-        stop = _start_heartbeats()
+    elif phase == "harness":
+        harness_main()
     else:
-        # heartbeat FIRST (ADR-0025 R5): the first beat is immediate, so a
-        # phase-2 boot fault (runspec timeout, Redis trouble) keeps the
-        # liveness clock ticking on a run already marked running
-        stop = _start_heartbeats()
-        spec = _fetch_spec("harness")
-        env = spec.get("env", {})
-        os.environ.update(env)
-        _write_credential_files(spec)
-        prompt = spec.get("prompt", "")
-        # NO run.started here — provision sent it; the app's dispatched-only
-        # guard would drop a second send anyway
+        print("DEVCAKE_PHASE must be 'provision' or 'harness' (set by the "
+              f"dev-run DAG); got {os.environ.get('DEVCAKE_PHASE')!r} — "
+              "mismatched build or a container run outside the DAG",
+              file=sys.stderr)
+        sys.exit(20)
+
+
+def harness_main() -> None:
+    # heartbeat FIRST (ADR-0025 R5): the first beat is immediate, so a
+    # phase-2 boot fault (runspec timeout, Redis trouble) keeps the liveness
+    # clock ticking on a run provision already marked running
+    stop = _start_heartbeats()
+    spec = _fetch_spec("harness")
+    env = spec.get("env", {})
+    os.environ.update(env)
+    _write_credential_files(spec)
+    prompt = spec.get("prompt", "")
+    # NO run.started here — provision sent it; the app's dispatched-only
+    # guard would drop a second send anyway
 
     # ── OAuth helper mode (docs/08 §4): device-code login, not a mission run ──
+    # (provision exited 0 early for OAuth; the login runs here, no workspace)
     if env.get("DEVCAKE_OAUTH_MODE"):
         _oauth_login(env, stop)
         return
 
-    if monolithic:
-        workdir = _provision_workspace(spec, env)
-    else:
-        err = (sentinel_error(WORKSPACE, RUN_ID)
-               or marker_error(WORKSPACE, RUN_ID))
-        if err:
-            # distinguishes operator-rm/daemon-recreate (root-owned, empty)
-            # from a half-finished provision — forensics ride the artifact
-            _fail_20(stop, "workspace not provisioned", err)
-        repo_url = env["DEVCAKE_REPO_URL"]
-        repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
-        workdir = WORKSPACE / "repo" / repo_name
-        # re-adopt the provision step's askpass; recompute what a fresh
-        # container forgot (the spec env is authoritative — docs/07 §3)
-        askpass = WORKSPACE / ".devcake" / "askpass.sh"
-        os.environ["GIT_ASKPASS"] = str(askpass)
-        os.environ["GIT_TERMINAL_PROMPT"] = "0"
-        _cu, _gn, _ge, cli_envs = forge_dialect(env)
-        if env.get("DEVCAKE_FORGE_TOKEN"):
-            for var in cli_envs:
-                os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]
-        _git_identity_and_lfs(env)   # C1: fresh HOME — posture again
+    err = sentinel_error(WORKSPACE, RUN_ID) or marker_error(WORKSPACE, RUN_ID)
+    if err:
+        # distinguishes operator-rm/daemon-recreate (root-owned, empty) from a
+        # half-finished provision — forensics ride the artifact
+        _fail_20(stop, "workspace not provisioned", err)
+    repo_url = env["DEVCAKE_REPO_URL"]
+    repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+    workdir = WORKSPACE / "repo" / repo_name
+    # re-adopt the provision step's askpass; recompute what a fresh container
+    # forgot (the spec env is authoritative — docs/07 §3)
+    askpass = WORKSPACE / ".devcake" / "askpass.sh"
+    os.environ["GIT_ASKPASS"] = str(askpass)
+    os.environ["GIT_TERMINAL_PROMPT"] = "0"
+    _cu, _gn, _ge, cli_envs = forge_dialect(env)
+    if env.get("DEVCAKE_FORGE_TOKEN"):
+        for var in cli_envs:
+            os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]
+    _git_identity_and_lfs(env)   # C1: fresh HOME — posture again
 
     # skill store: materialize selected skills into the harness's registry-
     # declared skills dir — NOT into the repo clone (the Dev would commit

@@ -524,14 +524,15 @@ def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     assert all(p["sha256"] == digest and p["of"] == len(sent) for _, p in sent)
 
 
-def test_phase_of_unset_or_garbage_means_monolithic():
-    """ADR-0025 R12: the monolithic branch exists ONLY for old-DAG rollback
-    — an unset or unknown DEVCAKE_PHASE must select it, never crash."""
-    assert ep.phase_of({}) == "monolithic"
-    assert ep.phase_of({"DEVCAKE_PHASE": ""}) == "monolithic"
-    assert ep.phase_of({"DEVCAKE_PHASE": "banana"}) == "monolithic"
+def test_phase_of_returns_only_the_two_valid_phases():
+    """ADR-0025: the two-step DAG always sets DEVCAKE_PHASE; there is no
+    single-container fallback, so anything but provision/harness is "" — and
+    main() crashes loudly on "" (mismatched build / hand-run container)."""
     assert ep.phase_of({"DEVCAKE_PHASE": "provision"}) == "provision"
     assert ep.phase_of({"DEVCAKE_PHASE": "harness"}) == "harness"
+    assert ep.phase_of({}) == ""
+    assert ep.phase_of({"DEVCAKE_PHASE": ""}) == ""
+    assert ep.phase_of({"DEVCAKE_PHASE": "banana"}) == ""
 
 
 def test_sentinel_and_marker_errors_carry_forensics(tmp_path):

@@ -10,11 +10,13 @@ MARKER_REL = ".devcake/provisioned"
 
 
 def phase_of(environ) -> str:
-    """DEVCAKE_PHASE → provision | harness | monolithic (unset/unknown).
-    Monolithic is the rollback-only branch: an OLD single-step dev-run.yaml
-    sets no phase and must get the pre-split single-container flow."""
+    """DEVCAKE_PHASE → 'provision' | 'harness'; "" for anything else. The
+    two-step dev-run DAG (ADR-0025) always sets one — there is no
+    single-container fallback (rollback compat is not a pre-v1 concern), so
+    the entrypoint crashes loudly on "" (a mismatched build / hand-run
+    container)."""
     p = environ.get("DEVCAKE_PHASE", "")
-    return p if p in ("provision", "harness") else "monolithic"
+    return p if p in ("provision", "harness") else ""
 
 
 def _describe(workspace: pathlib.Path) -> str:

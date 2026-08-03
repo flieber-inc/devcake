@@ -1,6 +1,9 @@
 # ADR-0024 — Mandatory repo source mirror
 
-- **Status:** accepted (2026-08-03)
+- **Status:** accepted (2026-08-03); §5's "ambient mirror read" accepted risk
+  SUPERSEDED by ADR-0025 — the mirrors are now mounted RO into the **provision**
+  container only, never the agent's harness container, so the deployment-wide
+  ambient read surface named below no longer exists.
 - **Context:** A production stress test ran a multi-repo instance with 27
   GitLab repositories; every run re-cloned all of them (~300 MB) from the
   external forge — 25 mission steps ≈ 7.5 GB of redundant egress, plus

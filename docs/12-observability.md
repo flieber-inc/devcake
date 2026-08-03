@@ -52,7 +52,7 @@ observability gap.
 Deliberately span-free besides heartbeats: the watchdog's quiet 10 s scan (its
 *actions* — kills and Dagu status probes — are all spanned or auto-instrumented).
 
-**Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3), and every app-side consumer of a run message re-extracts it; one trace therefore spans dispatch → container execution → ingress handling → finalization (or kill). This is the primary debugging view: "show me everything about run X" is one trace ID.
+**Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3), and every app-side consumer of a run message re-extracts it; `TRACEPARENT` rides params into BOTH of a run's containers (provision and harness, ADR-0025), so one trace spans dispatch → provision → harness execution → ingress handling → finalization (or kill). This is the primary debugging view: "show me everything about run X" is one trace ID.
 
 ## 3. Attribute registry (normative — spelled exactly)
 

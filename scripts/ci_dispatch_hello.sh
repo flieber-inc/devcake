@@ -10,7 +10,9 @@ set -euo pipefail
 
 BASE_URL="${DEVCAKE_BASE_URL:-http://localhost:8080}"
 SLEEP_SECS="${DEVCAKE_HELLO_SLEEP:-2}"
-MAX_POLLS="${DEVCAKE_HELLO_POLLS:-30}"
+# 45 not 30 (ADR-0025): the two-step DAG spends a second container cycle
+# (provision guard-exit) before hello's real work starts
+MAX_POLLS="${DEVCAKE_HELLO_POLLS:-45}"
 POLL_SLEEP="${DEVCAKE_HELLO_POLL_SLEEP:-3}"
 
 echo "── stub-harness smoke: POST ${BASE_URL}/api/v1/debug/dispatch-hello"

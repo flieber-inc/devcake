@@ -48,6 +48,7 @@ from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
 from ..domain.forge_runtime import ForgeRuntime
 from ..domain.reconcile import reconcile_runs
 from ..domain.repo_mirror import RepoCache
+from ..domain.workspaces import WorkspaceStore
 from ..domain.runs import RunManager
 from ..domain.skills import SkillService, SkillStoreError
 from ..domain.watchdog import watchdog_loop
@@ -79,7 +80,10 @@ prompt_templates.seed_devtype_prompts(dev_types)   # per-dev-type (2026-07-15)
 store = RunStore()
 messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
 executor = DaguExecutor()
-manager = RunManager(store, messaging, executor)
+# ADR-0025: per-run workspace tree on the host bind (compose mounts
+# $DEVCAKE_WS_HOST here rw; the dev-run DAG binds per-run subdirs)
+workspaces = WorkspaceStore("/workspaces")
+manager = RunManager(store, messaging, executor, workspaces=workspaces)
 
 # ── multi-instance wiring (schema v3, ADR-0009; repos plural per M10) ───────
 # One MissionManager per CONFIGURED PMO instance; shared state is injected:
@@ -273,6 +277,10 @@ async def lifespan(app: FastAPI):
             await messaging.delete_run_user(run_id)
         with contextlib.suppress(Exception):
             await messaging.delete_reply_stream(run_id)
+        # ADR-0025 Hook F: a quarantined record is FORGOTTEN — its dir would
+        # otherwise only fall to the sweep's record-absent predicate later
+        with contextlib.suppress(Exception):
+            workspaces.cleanup(run_id)
     # internal fallback forge (M11): provision org + service accounts. Best
     # effort — a Gitea outage degrades only zero-repo missions, never boot
     if internal_forge is not None:
@@ -304,6 +312,9 @@ async def lifespan(app: FastAPI):
     # ADR-0024: synchronous writability probe only (no network, no sync) —
     # mirror warm-up belongs to the poll task, NEVER awaited at boot
     repo_cache.verify_writable()
+    # ADR-0025: same probe for the workspace base — first-touched-by-dockerd
+    # (or a uid≠1000 mkdir) means root-owned and every dispatch would fail
+    workspaces.verify_writable()
     tasks = [
         asyncio.create_task(poll_rt.loop(), name="poll_loop"),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
@@ -338,7 +349,8 @@ async def health():
         mappers=mappers, forge_runtime=forge_runtime,
         shared_breakers=shared_breakers, store=store,
         internal_forge=internal_forge, poll_rt=poll_rt,
-        backend_degraded=shared_backend_degraded, repo_cache=repo_cache)
+        backend_degraded=shared_backend_degraded, repo_cache=repo_cache,
+        workspaces=workspaces)
 
 
 @app.get("/api/v1/health/live")

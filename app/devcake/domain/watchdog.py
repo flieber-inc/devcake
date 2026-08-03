@@ -27,7 +27,18 @@ STALL_CHECK_INTERVAL = 60
 
 async def watchdog_loop(mgr: RunManager) -> None:
     last_stall_check = -float("inf")
+    last_ws_sweep = -float("inf")
     while True:
+        # ADR-0025 Hook G (periodic half): the sweep is the reclamation
+        # guarantee behind every best-effort cleanup hook — kill races,
+        # partial rmtrees, daemon-created husks. Cheap (one scandir + store
+        # lookups), so the stall-check cadence is plenty.
+        if time.monotonic() - last_ws_sweep >= STALL_CHECK_INTERVAL:
+            last_ws_sweep = time.monotonic()
+            try:
+                mgr.workspaces.sweep(mgr.store)
+            except Exception:
+                log.exception("workspace sweep failed")
         try:
             stalled_finalizing = []
             for run in mgr.store.active():

@@ -51,7 +51,10 @@ class OAuthManager:
                              dev_type.harness_template.split("-")[0].upper())
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
                   pmo_ref="sys",   # not the legacy-marker default "main" (A29)
-                  dev_type=dev_type.name, seq=1, timeout_seconds=600,
+                  # 660 not 600 (ADR-0025 R6): the two-step DAG spends one
+                  # extra container cycle (provision exits 0 early for OAuth)
+                  # before the device-code window opens for the human
+                  dev_type=dev_type.name, seq=1, timeout_seconds=660,
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
                             "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
@@ -97,6 +100,9 @@ class OAuthManager:
         self.runs.store.save(run)
         await self.messaging.delete_run_user(run_id)
         await self.messaging.delete_reply_stream(run_id)
+        # ADR-0025 Hook D: OAuth completion bypasses finalize AND kill, so
+        # its (empty) workspace dir is reclaimed right here
+        self.runs.workspaces.cleanup(run_id)
         # a fresh credential clears any auth breaker for this dev type (docs/15 §4)
         if self.breakers is not None:
             self.breakers.pop(s["dev_type"], None)

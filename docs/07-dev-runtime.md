@@ -27,8 +27,25 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
     result.json          # REQUIRED structured outcome (schema: 03-mission-lifecycle.md §6)
     PLAN.md              # PLAN runs only: the produced plan
   .devcake/              # entrypoint scratch: credentials, MCP setup logs, relay socket info.
-                         #   Excluded from transcripts and never uploaded.
+                         #   Excluded from transcripts and never uploaded. Also holds two
+                         #   ADR-0025 control files: `created-by-app` (the app writes the
+                         #   run id at pre-create — provision verifies it) and `provisioned`
+                         #   (the provision step writes the run id last — the harness step
+                         #   verifies it before doing anything).
 ```
+
+**One run, two containers, one workspace (ADR-0025).** `/workspace` is a
+host-bind directory (`$DEVCAKE_WS_HOST/<run_id>` on the daemon host) the app
+pre-creates at dispatch and deletes at run end. It is mounted rw into BOTH of
+a run's containers: the **provision** container (`prov-<run_id>`,
+`DEVCAKE_PHASE=provision`) materializes everything above with the source
+mirrors mounted RO at `/mirrors`, then exits; the **harness** container
+(`dev-<run_id>`, `DEVCAKE_PHASE=harness`) mounts ONLY this workspace —
+`/mirrors` does not exist in it — verifies the `provisioned` marker, and runs
+the agent. The agent therefore sees exactly `repo/`, `activity/`, `out/` and
+`.devcake/` — never the mirror, never another repo's bytes. (Unset
+`DEVCAKE_PHASE` = the pre-split monolithic flow, kept only for old-DAG
+rollback.)
 
 There is **no** `/workspace/out/transcript/` directory. The entrypoint assembles the session transcript **in memory** (`assemble_transcript`) and ships it as `transcript_md` on the `run.artifacts` payload; the app posts it as `{seq}_{TYPE}.md` on the PMO feed.
 
@@ -61,11 +78,12 @@ The mirror is strictly chronological and complete — *all* the current activity
 Delivery happens in two stages, because Dagu trigger params are visible unmasked in its UI (verified — `13-deployment.md` §4):
 
 - **Stage 1 — container env from the Dagu DAG:** `DEVCAKE_RUN_ID`, `TRACEPARENT`, `REDIS_URL`, and the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD` — the one deliberate param-borne secret, `09-messaging.md` §1a).
-- **Stage 2 — the run spec, fetched by the entrypoint** over Redis (`runspec.get` → keyed by run id, `09-messaging.md` §4): everything else below, including all secrets, scoped to exactly what this run's Dev Type needs. The entrypoint exports these as env vars (or writes credential files) **before** launching the harness — so from the harness's point of view the full table is simply its environment.
+- **Stage 2 — the run spec, fetched by the entrypoint** over Redis (`runspec.get` → keyed by run id, `09-messaging.md` §4): everything else below, including all secrets, scoped to exactly what this run's Dev Type needs. The entrypoint exports these as env vars (or writes credential files) **before** launching the harness — so from the harness's point of view the full table is simply its environment. Under ADR-0025 the `runspec.get` payload carries the caller's `phase`: the **provision** step receives a REDUCED spec (no credential files, no harness/model or Dev-Type secret env; the forge token only for direct-clone internal repos) — it runs no agent and needs only what cloning needs; the **harness** step receives the full table below (`09-dev-protocol.md` §4).
 
 | Variable | Stage | Meaning |
 |---|---|---|
-| `DEVCAKE_RUN_ID` | 1 | Human-readable run id (`02-domain-model.md` §7, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ`); container is named `dev-{DEVCAKE_RUN_ID}`. |
+| `DEVCAKE_RUN_ID` | 1 | Human-readable run id (`02-domain-model.md` §7, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ`); the run's two containers are named `prov-{DEVCAKE_RUN_ID}` and `dev-{DEVCAKE_RUN_ID}` (ADR-0025). |
+| `DEVCAKE_PHASE` | 1 | `provision \| harness` (ADR-0025) — which step of the two-step `dev-run` DAG this container is. Unset ⇒ the pre-split monolithic flow (old-DAG rollback only). Selects the reduced vs full runspec and gates credential-file writes to the harness phase. |
 | `TRACEPARENT` | 1 | W3C trace context — links the Dev's spans into the dispatch trace (`12-observability.md`). |
 | `REDIS_URL` | 1 | `redis://redis:6379/0`. |
 | `REDIS_USER` / `REDIS_PASSWORD` | 1 | Per-run scoped ACL credential (`09-messaging.md` §1a); doubles as the envelope `auth` token. |
@@ -140,20 +158,38 @@ App-side timeout is **not** an entrypoint exit code: the watchdog kills the run 
 
 ## 5. Lifecycle
 
+The DAG is two dependent container steps (ADR-0025). **Provision**
+(`prov-<run_id>`, `DEVCAKE_PHASE=provision`) runs steps 0-3 with `/mirrors`
+mounted RO, verifies the app-written `created-by-app` sentinel first, writes
+the `provisioned` marker last, and exits. **Harness** (`dev-<run_id>`,
+`DEVCAKE_PHASE=harness`, no `/mirrors`) verifies the marker, then runs steps
+4-10. `run.started` is sent by provision only; the harness step starts its
+heartbeat before fetching the runspec. A single unset-`DEVCAKE_PHASE`
+container runs the whole sequence 0-10 (monolithic rollback path).
+
 ```
-entrypoint start
-  │ 0. fetch run spec via `runspec.get` (req/reply; retries with backoff;
-  │      `runspec.error` → exit 20; timeout → exit 20);
-  │      export stage-2 env, write credential material (0600)
+PROVISION container (prov-<run_id>, DEVCAKE_PHASE=provision, /mirrors RO)
+  │ 0. fetch run spec via `runspec.get` {phase: provision} → REDUCED spec
+  │      (no harness/model secrets, no credential files); export stage-2 env
+  │ 0a. verify `.devcake/created-by-app` names THIS run (else exit 20 +
+  │      forensics — wrong bind dir: daemon autocreate or WS_HOST drift)
   │ 1. emit `run.started` on Redis  ──────────────►  app marks Run "running"
-  │      (runspec.get first, then run.started — never the reverse)
+  │      (the SOLE run.started sender; heartbeat sidecar starts here too)
   │ 2. clone the mission's activity-* repo into /workspace/activity (full history);
   │      fallback: `activity.get` (req/reply) → materialize MISSION.md + ACTIVITY.md + attachments
   │ 3. git clone → /workspace/repo — from the RO source mirror
-  │      (file://$DEVCAKE_MIRROR_PATH, ADR-0024 §5b below) for configured
+  │      (file://$DEVCAKE_MIRROR_PATH, ADR-0024 §5b below; credential-stripped,
+  │      `-c lfs.url` pinned to the own mirror — ADR-0025 §5) for configured
   │      repos, then `git remote set-url origin <real URL>`; direct from the
   │      forge only for internal repos (credential helper from run-spec
   │      token; token never in URL on disk)
+  │ 3z. write `.devcake/provisioned` (this run id) → exit 0
+  ▼
+HARNESS container (dev-<run_id>, DEVCAKE_PHASE=harness, workspace ONLY)
+  │ 3a. heartbeat sidecar starts, THEN fetch run spec `{phase: harness}` →
+  │      full spec; verify sentinel + `provisioned` marker (else exit 20 WITH
+  │      artifacts — forensic owner/mode/listing); re-adopt the askpass +
+  │      git identity/LFS posture (fresh HOME)
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
   │ 4b. install skill-store skills from the runspec `skills` field → the
   │      harness's skills dir from runspec `skills_dir` (home-relative;
@@ -273,14 +309,19 @@ successful app-side sync is a fail-closed DISPATCH precondition: a mission
 whose mirrors cannot be freshened (per `cfg.repo_mirror.sync_max_age_seconds`,
 default 0 = every dispatch) does not dispatch that cycle — no container, no
 attempt burned, reason on the missions row + `/health` — and retries next
-poll. In-container the mirror is invisible to the Dev: origin is rewritten to
-the real forge, so push/PR/mid-run fetch behave exactly as a direct clone. A
-mirror clone failure is exit 13 `DEV_FORGE` (never `DEV_FORGE_AUTH`).
-Exceptions (by design, not configuration): internal-forge synthesized repos
-and activity repos stay direct — their isolation is per-mission token scope
-(`14` §2 Zone B) and must not ride a deployment-shared volume. LFS: pointer
-files by default; `cfg.repo_mirror.lfs` upgrades to real content served from
-the mirror's own LFS store (probe-verified standalone `file://` transfer).
+poll. **`/mirrors` is mounted ONLY in the provision container (ADR-0025)** —
+the harness container the agent runs in has no `/mirrors` at all, so there is
+no bare-pack duplicate of the work repo and no visibility of any other repo's
+source. Origin is rewritten to the real forge, so push/PR/mid-run fetch
+behave exactly as a direct clone. A mirror clone failure is exit 13
+`DEV_FORGE` (never `DEV_FORGE_AUTH`); mirror clones run credential-stripped
+with `-c lfs.url` pinned to the own mirror (ADR-0025 §5). Exceptions (by
+design, not configuration): internal-forge synthesized repos and activity
+repos stay direct — their isolation is per-mission token scope (`14` §2
+Zone B) and must not ride a deployment-shared volume. LFS: pointer files by
+default; `cfg.repo_mirror.lfs` upgrades to real content served from the
+mirror's own LFS store (probe-verified standalone `file://` transfer) — the
+posture is installed in BOTH containers, since checkout smudges in each.
 
 ## 8. Building a new Dev image (checklist)
 

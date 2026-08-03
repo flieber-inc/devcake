@@ -15,7 +15,7 @@
 | `PMO_GONE` | *taxonomy residual* — no dedicated code path today (a mid-run delete surfaces as ordinary PMO read failure / EXTERNAL_TRANSITION at finalize, not a named `PMO_GONE` branch) | external, informational |
 | `FORGE_TRANSIENT` | forge 429/5xx/network; probe-classified transient failures | retryable |
 | `FORGE_PERMANENT` | auth failure, branch protection blocks merge | config problem |
-| `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint); vanished container | counted attempt |
+| `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint — incl. the ADR-0025 sentinel/marker family: provision found the wrong bind dir, or the harness step found no/mismatched `provisioned` marker — the artifact carries owner/mode/listing forensics); vanished container | counted attempt |
 | `DEV_MCP_SETUP` | exit 14: an `mcp_setup_commands` entry failed or hit the 300 s per-command cap; `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | app watchdog kill via Dagu stop → Run `timed_out` (not an entrypoint exit code) | counted attempt |
 | `DEV_AUTH` | exit 12 — harness credential failure per the §4 precedence contract (stream 401/403 and/or distinctive stderr markers; generic markers only when no in-band fault already explains the run) | circuit breaker (§4) — **not** a counted attempt |

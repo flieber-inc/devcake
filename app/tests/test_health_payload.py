@@ -27,7 +27,7 @@ def _forge_runtime(*, last_full_probe_at=None, health=None, forges=None):
     )
 
 
-def _payload(fr, monkeypatch, repo_cache=None):
+def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
     async def _true(*a, **k):
         return True
 
@@ -44,7 +44,7 @@ def _payload(fr, monkeypatch, repo_cache=None):
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,
         poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={}),
-        repo_cache=repo_cache))
+        repo_cache=repo_cache, workspaces=workspaces))
 
 
 def test_forge_probe_pending_then_complete(monkeypatch):
@@ -156,3 +156,28 @@ def test_repo_mirror_block_shape(monkeypatch):
     # no cache injected (default) → block still serves, empty
     bare = _payload(fr, monkeypatch)["repo_mirror"]
     assert bare["mirrors"] == {} and bare["volume_error"] is None
+
+
+def test_workspaces_block_shape(monkeypatch):
+    """ADR-0025: leaked count + volume probe + disk; None-safe without a
+    store (tests, hypothetical consumers)."""
+    from devcake.domain.workspaces import NullWorkspaceStore
+
+    class WS(NullWorkspaceStore):
+        def __init__(self):
+            super().__init__()
+            self.volume_error = "EACCES: base not writable"
+
+        def leaked_count(self, store):
+            return 2
+
+        def disk_stats(self):
+            return {"total_bytes": 100, "free_bytes": 9}
+
+    fr = _forge_runtime()
+    got = _payload(fr, monkeypatch, workspaces=WS())["workspaces"]
+    assert got["volume_error"] == "EACCES: base not writable"
+    assert got["leaked"] == 2
+    assert got["disk"] == {"total_bytes": 100, "free_bytes": 9}
+    bare = _payload(fr, monkeypatch)["workspaces"]
+    assert bare == {"volume_error": None, "leaked": 0, "disk": None}

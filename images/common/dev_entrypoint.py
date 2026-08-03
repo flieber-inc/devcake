@@ -117,9 +117,16 @@ from devcake_dev.workspace.activity import (  # noqa: E402
 from devcake_dev.workspace.clone import (  # noqa: E402
     clone_error_class,
     clone_extra_repos,
-    clone_source,
     mirror_clone_error_class,
     set_origin_cmd,
+)
+from devcake_dev.workspace.provision import (  # noqa: E402
+    MARKER_REL,
+    marker_error,
+    mirror_clone_argv,
+    mirror_clone_env,
+    phase_of,
+    sentinel_error,
 )
 from devcake_dev.workspace.forensics import (  # noqa: E402
     FORENSIC_LISTING_BUDGET,
@@ -155,58 +162,108 @@ def forge_dialect(env: dict) -> tuple:
     return (env["DEVCAKE_CLONE_USER"], env["DEVCAKE_GIT_NAME"],
             env["DEVCAKE_GIT_EMAIL"], cli_envs)
 
-def main() -> None:
-    spec = request_reply("runspec.get", "runspec.result")
+def _fetch_spec(phase: str | None) -> dict:
+    """runspec over the bus. The app serves the provision phase a REDUCED
+    spec — no credential files, no harness/Dev-Type secret env (ADR-0025
+    R1). None = no phase field: the monolithic rollback path asks exactly
+    like the pre-split entrypoint did."""
+    spec = request_reply("runspec.get", "runspec.result",
+                         payload={"phase": phase} if phase else None)
     send("runspec.ack", {})
-    env = spec.get("env", {})
-    os.environ.update(env)
+    return spec
+
+
+def _write_credential_files(spec: dict) -> None:
     for f in spec.get("credential_files", []):
         p = pathlib.Path(os.path.expanduser(f["path_hint"]))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(f["content"])
         p.chmod(0o600)
-    prompt = spec.get("prompt", "")
 
-    send("run.started", {"container_hostname": os.uname().nodename})
+
+def _start_heartbeats() -> threading.Event:
     stop = threading.Event()
     threading.Thread(target=heartbeat_loop, args=(stop,), daemon=True).start()
+    return stop
 
-    # ── OAuth helper mode (docs/08 §4): device-code login, not a mission run ──
-    if env.get("DEVCAKE_OAUTH_MODE"):
-        import re as _re
-        cmd = env["DEVCAKE_OAUTH_LOGIN_CMD"].split()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
-        ansi = _re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
-        url = code = None
-        for raw in proc.stdout:
-            print(raw, end="")
-            line = ansi.sub("", raw)                 # harness CLIs colorize output
-            if url is None:
-                m = _re.search(r"https://[^\s\x1b]+", line)
-                if m and ("user_code=" in m.group(0) or "device" in m.group(0)):
-                    url = m.group(0).rstrip(".,)")
-                    cm = _re.search(r"user_code=([A-Z0-9-]+)", url)
-                    code = cm.group(1) if cm else None
-            if code is None:                         # codex prints the code on its own line
-                cm = _re.search(r"\b([A-Z0-9]{4,8}-[A-Z0-9]{4,8})\b", line)
-                if cm and "http" not in line:
-                    code = cm.group(1)
-            if url and (code or "user_code=" in url) and not getattr(main, "_sent", False):
-                main._sent = True
-                send("run.log", {"oauth_url": url, "code": code})
-        proc.wait()
-        if proc.returncode != 0:
-            send("run.log", {"oauth_error": f"login exited {proc.returncode}"})
-            stop.set()
-            sys.exit(12)
-        auth = pathlib.Path(os.path.expanduser(env["DEVCAKE_OAUTH_AUTH_PATH"]))
-        send("oauth.result", {"content": auth.read_text()})
+
+def _fail_20(stop: threading.Event | None, headline: str, detail: str) -> None:
+    """Entrypoint-fault exit WITH artifacts (ADR-0025): sentinel/marker
+    failures must reach finalize promptly (DEV_CRASH) instead of waiting
+    out the watchdog's heartbeat grace."""
+    print(f"{headline}: {detail[-500:]}", file=sys.stderr)
+    send_artifacts({"result": None, "exit_code": 20, "error_class": "DEV_CRASH",
+                    "error_detail": detail[-500:],
+                    "transcript_md": f"{headline}:\n\n```\n{detail}\n```",
+                    "token_report": {"extraction_method": "unavailable",
+                                     "model": None}})
+    if stop is not None:
         stop.set()
-        print("oauth login captured")
-        return
+    sys.exit(20)
 
-    # ── workspace prep (docs/07 §1) ──────────────────────────────────────────
+
+def _git_identity_and_lfs(env: dict) -> None:
+    """Git identity + LFS smudge posture, in $HOME. Runs in BOTH phases
+    (ADR-0025 C1): smudge fires at clone/checkout time, so the provision
+    container needs the posture for its clones, and the harness container
+    (fresh HOME) needs it again for mid-run pulls and checkouts."""
+    subprocess.run(["git", "config", "--global", "user.name",
+                    env["DEVCAKE_GIT_NAME"]], capture_output=True)
+    subprocess.run(["git", "config", "--global", "user.email",
+                    env["DEVCAKE_GIT_EMAIL"]], capture_output=True)
+    # ADR-0024: with DEVCAKE_LFS off, --skip-smudge keeps pointer files as
+    # pointers (mirrors carry no LFS content, and this is byte-identical to
+    # the pre-git-lfs images); with it on, the full filter pulls real
+    # content from the mirror's LFS store via git-lfs's standalone file://
+    # transfer (probe-verified 2026-08-03).
+    subprocess.run(["git", "lfs", "install"]
+                   + ([] if env.get("DEVCAKE_LFS") else ["--skip-smudge"]),
+                   capture_output=True)
+
+
+def _oauth_login(env: dict, stop: threading.Event) -> None:
+    """OAuth helper mode (docs/08 §4): device-code login, not a mission run.
+    Runs in the HARNESS step (the captured credential lives in that
+    container's HOME); the provision step exits 0 early for OAuth runs."""
+    import re as _re
+    cmd = env["DEVCAKE_OAUTH_LOGIN_CMD"].split()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    ansi = _re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+    url = code = None
+    sent = False
+    for raw in proc.stdout:
+        print(raw, end="")
+        line = ansi.sub("", raw)                 # harness CLIs colorize output
+        if url is None:
+            m = _re.search(r"https://[^\s\x1b]+", line)
+            if m and ("user_code=" in m.group(0) or "device" in m.group(0)):
+                url = m.group(0).rstrip(".,)")
+                cm = _re.search(r"user_code=([A-Z0-9-]+)", url)
+                code = cm.group(1) if cm else None
+        if code is None:                         # codex prints the code on its own line
+            cm = _re.search(r"\b([A-Z0-9]{4,8}-[A-Z0-9]{4,8})\b", line)
+            if cm and "http" not in line:
+                code = cm.group(1)
+        if url and (code or "user_code=" in url) and not sent:
+            sent = True
+            send("run.log", {"oauth_url": url, "code": code})
+    proc.wait()
+    if proc.returncode != 0:
+        send("run.log", {"oauth_error": f"login exited {proc.returncode}"})
+        stop.set()
+        sys.exit(12)
+    auth = pathlib.Path(os.path.expanduser(env["DEVCAKE_OAUTH_AUTH_PATH"]))
+    send("oauth.result", {"content": auth.read_text()})
+    stop.set()
+    print("oauth login captured")
+
+
+def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
+    """Workspace materialization (docs/07 §1): dirs, askpass, activity,
+    identity/LFS posture, work-repo clone (mirror or direct), extras.
+    Shared by the provision phase and the monolithic rollback path; every
+    failure exit is identical to the pre-split flow."""
     (WORKSPACE / "out").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / "activity").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / ".devcake").mkdir(parents=True, exist_ok=True)
@@ -224,7 +281,7 @@ def main() -> None:
                                      request_reply):
         print(note)
 
-    clone_user, git_name, git_email, cli_envs = forge_dialect(env)
+    clone_user, _gn, _ge, cli_envs = forge_dialect(env)
     clone_url = repo_url.replace("https://", f"https://{clone_user}@")
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
@@ -233,18 +290,7 @@ def main() -> None:
     if env.get("DEVCAKE_FORGE_TOKEN"):
         for var in cli_envs:
             os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]
-    subprocess.run(["git", "config", "--global", "user.name", git_name],
-                   capture_output=True)
-    subprocess.run(["git", "config", "--global", "user.email", git_email],
-                   capture_output=True)
-    # ADR-0024: LFS smudge posture BEFORE any clone. With DEVCAKE_LFS off,
-    # --skip-smudge keeps pointer files as pointers (mirrors carry no LFS
-    # content, and this is byte-identical to the pre-git-lfs images); with
-    # it on, the full filter pulls real content from the mirror's LFS store
-    # via git-lfs's standalone file:// transfer (probe-verified 2026-08-03).
-    subprocess.run(["git", "lfs", "install"]
-                   + ([] if env.get("DEVCAKE_LFS") else ["--skip-smudge"]),
-                   capture_output=True)
+    _git_identity_and_lfs(env)
 
     def clone_failed(detail: str, error_class: str, headline: str) -> None:
         print(f"{headline}:", detail[-500:], file=sys.stderr)
@@ -255,10 +301,17 @@ def main() -> None:
         sys.exit(13)
 
     mirror_path = env.get("DEVCAKE_MIRROR_PATH", "")
-    clone = subprocess.run(
-        ["git", "clone", clone_source(mirror_path, clone_url),
-         str(repo_dir / repo_name)],
-        capture_output=True, text=True)
+    if mirror_path:
+        # ADR-0025 R3: credential-stripped (a file:// clone needs none) with
+        # the LFS endpoint pinned to the run's OWN mirror — repo-committed
+        # .lfsconfig cannot steer git-lfs anywhere else
+        clone = subprocess.run(
+            mirror_clone_argv(mirror_path, str(repo_dir / repo_name)),
+            capture_output=True, text=True, env=mirror_clone_env(os.environ))
+    else:
+        clone = subprocess.run(
+            ["git", "clone", clone_url, str(repo_dir / repo_name)],
+            capture_output=True, text=True)
     if clone.returncode != 0:
         detail = clone.stderr[-2000:]
         if mirror_path:
@@ -282,6 +335,102 @@ def main() -> None:
     # playbook's repo_options section names them; failures are non-fatal
     for note in clone_extra_repos(spec.get("extra_repos") or [], repo_dir):
         print(note)
+    return workdir
+
+
+def provision_main() -> None:
+    """ADR-0025 step 1: trusted entrypoint code, no agent. Mounts /mirrors
+    RO plus this run's workspace, clones everything, writes the marker,
+    exits 0. The ONLY dev_entrypoint sender of run.started (the harness
+    step's liveness signal is its heartbeat), and never a credential-file
+    writer — the app serves this phase a reduced spec (R1)."""
+    spec = _fetch_spec("provision")
+    env = spec.get("env", {})
+    os.environ.update(env)
+    err = sentinel_error(WORKSPACE, RUN_ID)
+    if err:
+        # wrong directory (daemon autocreate / WS_HOST drift) — never
+        # provision into it (R4)
+        _fail_20(None, "workspace sentinel check failed", err)
+    send("run.started", {"container_hostname": os.uname().nodename})
+    stop = _start_heartbeats()
+    if env.get("DEVCAKE_OAUTH_MODE"):
+        # nothing to provision — the login runs in the harness step
+        print("provision: oauth run, workspace not needed")
+        stop.set()
+        return
+    workdir = _provision_workspace(spec, env)
+    marker = WORKSPACE / MARKER_REL
+    try:
+        marker.write_text(RUN_ID)
+    except OSError as e:
+        _fail_20(stop, "provision marker write failed",
+                 f"{marker}: {type(e).__name__}: {e}")
+    stop.set()
+    print(f"provision {RUN_ID} done: {workdir} ready")
+
+
+def main() -> None:
+    # Phase dispatch (ADR-0025): the two-step DAG sets DEVCAKE_PHASE per
+    # step; unset means an OLD single-step DAG → monolithic rollback path.
+    phase = phase_of(os.environ)
+    if phase == "provision":
+        provision_main()
+        return
+    harness_main(monolithic=phase == "monolithic")
+
+
+def harness_main(monolithic: bool) -> None:
+    if monolithic:
+        # rollback-only (ADR-0025 R12): an old single-step DAG runs the
+        # pre-split flow in one container, order preserved exactly
+        spec = _fetch_spec(None)
+        env = spec.get("env", {})
+        os.environ.update(env)
+        _write_credential_files(spec)
+        prompt = spec.get("prompt", "")
+        send("run.started", {"container_hostname": os.uname().nodename})
+        stop = _start_heartbeats()
+    else:
+        # heartbeat FIRST (ADR-0025 R5): the first beat is immediate, so a
+        # phase-2 boot fault (runspec timeout, Redis trouble) keeps the
+        # liveness clock ticking on a run already marked running
+        stop = _start_heartbeats()
+        spec = _fetch_spec("harness")
+        env = spec.get("env", {})
+        os.environ.update(env)
+        _write_credential_files(spec)
+        prompt = spec.get("prompt", "")
+        # NO run.started here — provision sent it; the app's dispatched-only
+        # guard would drop a second send anyway
+
+    # ── OAuth helper mode (docs/08 §4): device-code login, not a mission run ──
+    if env.get("DEVCAKE_OAUTH_MODE"):
+        _oauth_login(env, stop)
+        return
+
+    if monolithic:
+        workdir = _provision_workspace(spec, env)
+    else:
+        err = (sentinel_error(WORKSPACE, RUN_ID)
+               or marker_error(WORKSPACE, RUN_ID))
+        if err:
+            # distinguishes operator-rm/daemon-recreate (root-owned, empty)
+            # from a half-finished provision — forensics ride the artifact
+            _fail_20(stop, "workspace not provisioned", err)
+        repo_url = env["DEVCAKE_REPO_URL"]
+        repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        workdir = WORKSPACE / "repo" / repo_name
+        # re-adopt the provision step's askpass; recompute what a fresh
+        # container forgot (the spec env is authoritative — docs/07 §3)
+        askpass = WORKSPACE / ".devcake" / "askpass.sh"
+        os.environ["GIT_ASKPASS"] = str(askpass)
+        os.environ["GIT_TERMINAL_PROMPT"] = "0"
+        _cu, _gn, _ge, cli_envs = forge_dialect(env)
+        if env.get("DEVCAKE_FORGE_TOKEN"):
+            for var in cli_envs:
+                os.environ[var] = env["DEVCAKE_FORGE_TOKEN"]
+        _git_identity_and_lfs(env)   # C1: fresh HOME — posture again
 
     # skill store: materialize selected skills into the harness's registry-
     # declared skills dir — NOT into the repo clone (the Dev would commit

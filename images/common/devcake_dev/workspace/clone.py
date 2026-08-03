@@ -5,15 +5,6 @@ import os
 import subprocess
 
 
-def clone_source(mirror_path: str, clone_url: str) -> str:
-    """Where a clone reads from (ADR-0024): the read-only mirror when the
-    app served one, else the authenticated forge URL. `file://` (never the
-    bare path) is LOAD-BEARING: plain-path local clones ignore --depth and
-    try hardlinks; file:// forces the smart transport, which honors depth
-    and carries LFS content via git-lfs's standalone file transfer."""
-    return f"file://{mirror_path}" if mirror_path else clone_url
-
-
 def set_origin_cmd(dest: str, clone_url: str) -> list:
     """Post-mirror-clone origin rewrite: the workspace's remote must be the
     REAL forge (clone_user@ form — askpass supplies the token, docs/03 §3)
@@ -32,12 +23,15 @@ def mirror_clone_error_class(stderr: str) -> str:  # noqa: ARG001 — signature 
 def clone_extra_repos(extras, repo_dir, runner=None):
     """Read-only sibling clones for multi-repo ONBOARD triage (item 2 full
     scope). Mirrored entries (ADR-0024: `mirror_path`, no token) clone from
-    the RO volume and get their origin rewritten to the real URL; direct
-    entries ride their OWN read token via the shared askpass script
-    (per-clone env override). Shallow (--depth 1) — assessment only.
-    A failed extra clone is deliberately NON-fatal: triage proceeds on what
-    cloned, and the failures are returned for the transcript/log."""
+    the RO volume — credential-stripped with their LFS endpoint pinned to
+    their own mirror (ADR-0025 R3); direct entries ride their OWN read token
+    via the shared askpass script (per-clone env override). Shallow
+    (--depth 1) — assessment only. A failed extra clone is deliberately
+    NON-fatal: triage proceeds on what cloned, and the failures are
+    returned for the transcript/log."""
     import re as _re
+
+    from .provision import mirror_clone_argv, mirror_clone_env
     runner = runner or subprocess.run
     notes = []
     for x in extras:
@@ -49,9 +43,13 @@ def clone_extra_repos(extras, repo_dir, runner=None):
         slug = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         env = {**os.environ, "DEVCAKE_FORGE_TOKEN": x.get("token") or ""}
         dest = str(repo_dir / slug)
-        r = runner(["git", "clone", "--depth", "1",
-                    clone_source(mirror, clone_url), dest],
-                   capture_output=True, text=True, env=env)
+        if mirror:
+            r = runner(mirror_clone_argv(mirror, dest, depth=1),
+                       capture_output=True, text=True,
+                       env=mirror_clone_env(os.environ))
+        else:
+            r = runner(["git", "clone", "--depth", "1", clone_url, dest],
+                       capture_output=True, text=True, env=env)
         if r.returncode != 0:
             notes.append(f"extra repo {x.get('name', slug)}: clone failed "
                          f"({(r.stderr or '')[-200:]})")

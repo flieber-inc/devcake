@@ -1,7 +1,7 @@
 """RepoCache against REAL git (ADR-0024) — the mechanics the fake runner
 cannot vouch for: init/fetch/prune behavior, bare-HEAD, and the depth
 contract over file:// (plain-path clones IGNORE --depth — the footgun the
-entrypoint's clone_source exists to avoid).
+entrypoint's mirror_clone_argv exists to avoid).
 
 Runs wherever git exists — the app-test image ships it (app/Dockerfile),
 so CI covers this; skipped gracefully elsewhere.
@@ -146,7 +146,7 @@ def test_url_change_reinitializes_against_the_new_origin(rig, tmp_path):
 def test_depth_contract_file_url_honors_depth_plain_path_does_not(rig):
     """THE footgun: `git clone --depth 1 /path` silently ignores depth
     (local-transport hardlink copy); file:// forces the smart transport.
-    clone_source() must therefore always emit file:// for mirrors."""
+    mirror_clone_argv() must therefore always emit file:// for mirrors."""
     origin, cache, tmp = rig
     assert run_coro(cache.sync_one("alpha")).ok
     m = cache.mirror_path("alpha")

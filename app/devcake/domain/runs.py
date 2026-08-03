@@ -25,6 +25,7 @@ from ..telemetry import OTEL_COLLECTOR_URL
 from .ids import make_run_id
 from .run import Run, auth_digest, utcnow
 from .run_bootstrap import RunBootstrap
+from .workspaces import NullWorkspaceStore
 
 log = logging.getLogger("devcake.runs")
 tracer = trace.get_tracer("devcake")
@@ -69,6 +70,30 @@ def failure_record(run: "Run", outcome: str, reason: str,
     }
 
 
+def provision_runspec_reply(run: "Run", secret: dict) -> dict:
+    """ADR-0025 R1 — the REDUCED spec served to a `runspec.get` that names
+    phase "provision". The provision container runs trusted code but sits
+    in the same image on the same network, so it gets only what cloning
+    needs: the run's non-secret spec_env, the extras entries (mirrored ones
+    are already tokenless), the activity-repo credential, and the forge
+    token ONLY when the work repo direct-clones (mirror_path empty —
+    internal repos). Harness/model keys, Dev-Type secret env and credential
+    FILE content never ride this reply."""
+    env = dict(run.spec_env)
+    if not env.get("DEVCAKE_MIRROR_PATH", ""):
+        tok = (secret.get("env") or {}).get("DEVCAKE_FORGE_TOKEN")
+        if tok:
+            env["DEVCAKE_FORGE_TOKEN"] = tok
+    return {"env": env,
+            "credential_files": [],
+            "extra_repos": secret.get("extra_repos") or [],
+            "skills": [],
+            "skills_dir": "",
+            "mcp_setup_commands": [],
+            "activity_repo": secret.get("activity_repo") or None,
+            "prompt": ""}
+
+
 class RunManager:
     def __init__(
         self,
@@ -76,11 +101,16 @@ class RunManager:
         messaging: MessagingPort,
         executor: ExecutorPort,
         finalizer: RunFinalizer | None = None,
+        workspaces=None,
     ):
         self.store = store
         self.messaging = messaging
         self.executor = executor
-        self.bootstrap = RunBootstrap(store, messaging, executor)
+        # ADR-0025: per-run workspace lifecycle (Null default keeps every
+        # existing construction — tests included — a no-op, like NullRepoCache)
+        self.workspaces = workspaces or NullWorkspaceStore()
+        self.bootstrap = RunBootstrap(store, messaging, executor,
+                                      workspaces=self.workspaces)
         self.finalizer = finalizer  # MissionManager (or fake); optional for hello-only
         self.oauth_mgr = None       # wired by main (OAuthManager)
         self.runlog = None          # wired by main (RunLogStore)
@@ -200,12 +230,15 @@ class RunManager:
             run.last_heartbeat = utcnow()
             self.store.save(run)
         elif kind == "run.started":
-            # terminal guard (mirrors run.artifacts below): a run killed while
-            # its container was still booting must NOT be resurrected to
-            # 'running' by an in-flight run.started — it would re-enter
-            # store.active(), hold the mission's in-flight slot, and only
-            # self-heal at the watchdog's heartbeat grace (audit D5 #10).
-            if run.state in ("finished", "failed", "timed_out", "orphaned"):
+            # ADR-0025: accept ONLY the dispatched→running transition. Any
+            # replay (ingress redelivery, the bus's XADD retry, a Dagu-UI
+            # re-run) previously overwrote started_at — corrupting the Runs
+            # page's runtime metric — and even reverted a `finalizing` run
+            # to `running`; and under the two-step DAG only the provision
+            # step sends run.started, so anything else is a replay by
+            # construction. (Supersedes the narrower terminal-only guard,
+            # audit D5 #10.)
+            if run.state != "dispatched":
                 return
             run.state, run.started_at = "running", utcnow()
             self.store.save(run)
@@ -217,6 +250,16 @@ class RunManager:
                     run_id, "runspec.error",
                     {"error": "run is not active, its dev type was deleted, or its repo was removed from config"},
                 )
+                return
+            # ADR-0025 R1: the provision step asks with {"phase":
+            # "provision"} and gets a reduced, secret-free spec; the harness
+            # step (and the monolithic rollback path, which sends no phase)
+            # gets the full one. Stateless per request — both steps of one
+            # run ask independently.
+            if (payload or {}).get("phase") == "provision":
+                await self.messaging.reply(
+                    run_id, "runspec.result",
+                    provision_runspec_reply(run, secret))
                 return
             await self.messaging.reply(
                 run_id, "runspec.result",
@@ -300,6 +343,16 @@ class RunManager:
                 await self._finalize(run, payload)
             if self.runlog is not None:
                 self.runlog.close(run.run_id)  # end any live log followers
+            # ADR-0025 Hook A: one cleanup covers every finalize exit
+            # (mission success/failure, mapper, hello) — but ONLY once the
+            # run is actually terminal. A finalize crash leaves `finalizing`
+            # and the workspace intact for artifact redelivery / the
+            # stalled-finalize killer to reach later. The container already
+            # exited (artifacts are the dying words) — no mount race.
+            fresh = self.store.get(run_id)
+            if fresh is None or fresh.state in ("finished", "failed",
+                                                "timed_out", "orphaned"):
+                self.workspaces.cleanup(run_id)
         else:
             log.warning("unknown message kind %s for %s", kind, run_id)
 
@@ -409,6 +462,16 @@ class RunManager:
             # already out of store.active() so nothing re-kills it.
             if self.store.get(run.run_id) is not None:
                 self.store.save(run)
+            # ADR-0025 Hook B: every kill path (watchdog ×3, reconcile
+            # orphan, operator stop, clear drain) funnels through this
+            # teardown. Best-effort by doctrine — the dying container can
+            # hold the bind through Dagu's stop grace and keep writing; the
+            # sweep guarantees reclamation. cleanup() never raises, but this
+            # block is the fail-safe teardown, so belt-and-suspenders.
+            try:
+                self.workspaces.cleanup(run.run_id)
+            except Exception:
+                log.exception("workspace cleanup failed for %s", run.run_id)
         if self.finalizer and run.mission_pmo_id:
             try:
                 await self.finalizer.restore_after_failure(run)

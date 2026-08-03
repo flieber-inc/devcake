@@ -9,16 +9,17 @@
 | Service | Image | Role |
 |---|---|---|
 | `app` | built from `app/` (Python 3.12, FastAPI + asyncio) | PMO Handler (poll loop), scheduler, ingress consumer/finalizer, watchdog, `/api/v1`, all PMO+forge writes |
-| `dagu` | `ghcr.io/dagucloud/dagu:<pinned>` | Executor: runs the single parameterized `dev-run` DAG; spawns Dev containers as siblings via host `docker.sock` (**root-equivalent** — dedicated host only, `14` §5) |
+| `dagu` | `ghcr.io/dagucloud/dagu:<pinned>` | Executor: runs the single parameterized `dev-run` DAG (two dependent steps per run — provision then harness, ADR-0025); spawns Dev containers as siblings via host `docker.sock` (**root-equivalent** — dedicated host only, `14` §5) |
 | `redis` | `redis:7-alpine` | Streams transport between Devs and app (`09-messaging.md`); AOF persistence; on **control + runtime** |
 | `openobserve` | `public.ecr.aws/zinclabs/openobserve:<pinned>` | Logs, traces, metrics, cost dashboards — **control network only** (not reachable from Devs) |
 | `otel-collector` | contrib collector (pinned) | Dev-side OTLP receiver (unauthenticated on runtime); forwards to OO with ingest credentials (`12-observability.md`) |
 | `fluentbit` | fluent-bit (pinned) | Ships container stdout to OO |
 | `gitea` | gitea (pinned, rootless) | Internal fallback forge for zero-repo missions; **control + runtime** (ADR-0010) |
 | `admin` | nginx + static SPA (React/Vite/Tailwind) | Admin panel UI; reverse-proxies `/api`→app; links out to Dagu/OO/Gitea UIs (buttons, no iframes); loopback `:8080` |
-| `dev-{run_id}` *(ephemeral)* | harness images from Bake | One Mission Step, then exit (`07-dev-runtime.md`); **runtime network only** |
+| `prov-{run_id}` *(ephemeral)* | harness images from Bake | Provision step (ADR-0025): mounts the mirrors RO + the run's workspace, clones everything, exits; **runtime network only** |
+| `dev-{run_id}` *(ephemeral)* | harness images from Bake | Harness step: one Mission Step then exit (`07-dev-runtime.md`), mounting ONLY its own workspace — never the mirrors; **runtime network only** |
 
-Two container levels: the compose stack, and Dev containers Dagu spawns via `docker.sock`. Dev siblings attach only to `devcake_runtime`; app/admin/Dagu/OpenObserve live on `devcake_control` (`13-deployment.md` §5).
+Two container levels: the compose stack, and Dev containers Dagu spawns via `docker.sock`. Each run is two sequential Dev containers (provision → harness, ADR-0025). Dev siblings attach only to `devcake_runtime`; app/admin/Dagu/OpenObserve live on `devcake_control` (`13-deployment.md` §5).
 
 ## 2. Interaction matrix
 

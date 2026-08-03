@@ -11,11 +11,13 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from .run import Run, auth_digest
+from .workspaces import NullWorkspaceStore
 
 if TYPE_CHECKING:
     from ..ports.executor import ExecutorPort
     from ..ports.messaging import MessagingPort
     from ..ports.state import StatePort
+    from .workspaces import WorkspaceStore
 
 
 class RunBootstrap:
@@ -24,10 +26,12 @@ class RunBootstrap:
         store: StatePort,
         messaging: MessagingPort,
         executor: ExecutorPort,
+        workspaces: "WorkspaceStore | None" = None,
     ) -> None:
         self.store = store
         self.messaging = messaging
         self.executor = executor
+        self.workspaces = workspaces or NullWorkspaceStore()
         # THE serialization point for every dispatch flavor (audit re-audit
         # #0/#6): clear-runs holds this lock across its whole wipe, so no run
         # can create a `dev-<run_id>` ACL user or start a container while the
@@ -52,6 +56,16 @@ class RunBootstrap:
             wipe_gen = int(getattr(self.store, "wipe_generation", 0) or 0)
             run.store_gen = wipe_gen
             self.store.save(run)  # durable intent BEFORE the trigger
+            # ADR-0025 Hook C — pre-create AFTER the save (record-before-dir:
+            # a dir whose name has no record is always garbage, which makes
+            # the sweep predicate sound without locks) and BEFORE the start
+            # (an absent bind source would be dockerd-created root-owned).
+            # A create failure raises out of launch: no container, the
+            # mission gates and retries next cycle. An executor.start
+            # failure deliberately does NOT rm here — a start timeout/409 is
+            # ambiguous, and the watchdog's STARTUP_GRACE kill reaches Hook
+            # B within ~2 minutes either way.
+            self.workspaces.create(run.run_id)
             await self.executor.start(
                 params={
                     "RUN_ID": run.run_id,

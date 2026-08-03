@@ -175,6 +175,10 @@ docker buildx bake images
 
 # Full lockstep (app + admin + all Dev images) — required when protocol/entrypoint changes
 docker buildx bake all && docker compose up -d
+
+# ADR-0025: dev-run.yaml + compose + .env (DEVCAKE_WS_HOST) also deploy in
+# lockstep. dagu/dags is a LIVE :ro bind, so a new DAG goes live at `git pull`
+# before ./up.sh — stop dagu first: docker compose stop dagu && ./up.sh --bake
 ```
 
 Optional tag pin (bake and compose must match):

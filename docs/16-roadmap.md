@@ -429,6 +429,21 @@ vocabulary at the top of this file).
   depth 1). Dagu bumped 2.10.5 → 2.11.3 as a severable rider (probes green;
   CORS/token-TTL breaking changes verified non-applicable; controller/LLM
   DAG features explicitly NOT adopted). **built**.
+- **Provisioned workspaces** (ADR-0025, 2026-08-03): ADR-0024 mounted the
+  whole mirror volume RO into every Dev, reopening the context-control problem
+  (agent saw `/mirrors` bare-pack duplicates of its own repo + every other
+  repo). Now one run is TWO dependent Dagu container steps sharing a per-run
+  host-bind workspace: `provision` (trusted code, `/mirrors` RO, clones, exits)
+  then `run_dev` (the agent, workspace ONLY — no `/mirrors`). The runspec is
+  phase-scoped (provision gets no harness/model secrets); an app-written
+  sentinel + a provision marker fence the daemon-root-autocreate and
+  WS_HOST-drift edges; cleanup is best-effort with a sweep as the guarantee;
+  `run.started` is hardened dispatched-only (also fixing a latent
+  finalizing-revert); mirror clones are credential-stripped with `-c lfs.url`
+  pinned; LFS posture runs in both phases. SUPERSEDES ADR-0024 §5's ambient
+  mirror-read risk (agent ambient read surface now zero). The unset-phase
+  monolithic entrypoint branch is rollback-only — **remove once no old DAG can
+  be rolled back to** (small follow-up). **built**.
 - **In-container run continuation** (ADR-0022, 2026-08-02): the
   narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
   ~50% of long weak-model runs, hours lost late) is nudged instead of failed:

@@ -214,6 +214,34 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // ADR-0025: per-run workspace base (host bind). An unusable base freezes
+  // dispatch exactly like the mirror volume; leaked dirs mean the cleanup
+  // hooks AND the sweep are losing to something (disk fills → DEV_FORGE
+  // retry churn), so both surface loudly.
+  const ws = health.workspaces || {};
+  if (ws.volume_error) {
+    alerts.push({
+      id: "workspaces-volume",
+      severity: "critical",
+      title: "Workspace base is unusable — dispatch is frozen",
+      body: ws.volume_error,
+    });
+  }
+  if ((ws.leaked || 0) > 0) {
+    alerts.push({
+      id: "workspaces-leaked",
+      severity: "warning",
+      title:
+        ws.leaked === 1
+          ? "1 leaked run workspace on disk"
+          : `${ws.leaked} leaked run workspaces on disk`,
+      body:
+        "Terminal runs left workspace directories behind that the periodic " +
+        "sweep could not remove — check $DEVCAKE_WS_HOST permissions and " +
+        "free disk (docs/13 §8).",
+    });
+  }
+
   const breakers = Object.entries(health.circuit_breakers || {});
   if (breakers.length > 0) {
     // Per-ENTRY remediation. The old single trailing sentence was chosen by one

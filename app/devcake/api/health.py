@@ -128,7 +128,7 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
                                backend_degraded: dict | None = None,
-                               repo_cache=None) -> dict:
+                               repo_cache=None, workspaces=None) -> dict:
     """The /api/v1/health body (docs/11 §0). All deps explicit — unit-testable
     with fakes; the route in main.py is a one-line forward."""
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -241,5 +241,13 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
             "volume_error": getattr(repo_cache, "volume_error", None),
             "mirrors": repo_cache.health_map() if repo_cache else {},
             "disk": repo_cache.disk_stats() if repo_cache else None,
+        },
+        # ADR-0025: per-run workspace base (host bind). leaked > 0 means the
+        # cleanup hooks AND the sweep are losing to something; disk
+        # exhaustion here otherwise presents as DEV_FORGE retry churn.
+        "workspaces": {
+            "volume_error": getattr(workspaces, "volume_error", None),
+            "leaked": workspaces.leaked_count(store) if workspaces else 0,
+            "disk": workspaces.disk_stats() if workspaces else None,
         },
     }

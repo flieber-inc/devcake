@@ -84,3 +84,11 @@ async def reconcile_runs(manager) -> None:
         await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
     except Exception:
         log.exception("pending-entry reclaim failed")
+    # ADR-0025 Hook G (boot half): reclaim leaked workspace dirs from runs
+    # that terminalled while the app was down. Safe by construction — the
+    # lifespan runs reconcile before the poll/ingress/watchdog tasks start
+    # and before uvicorn serves, so no dispatch can race it.
+    try:
+        manager.workspaces.sweep(manager.store)
+    except Exception:
+        log.exception("boot workspace sweep failed")

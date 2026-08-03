@@ -22,13 +22,24 @@ from pathlib import Path
 
 log = logging.getLogger("devcake.workspaces")
 
-# Same charset as make_run_id output (docs/02 §7); the fence keeps the sweep
-# and the clear-runs wipe from ever touching an operator's stray file if the
-# base is misconfigured onto a shared directory (ADR-0025 R10).
-RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Same charset AND length as make_run_id output + the DAG precondition
+# (docs/02 §7: `re:^[A-Za-z0-9_-]{6,64}$`) — one fence, spelled identically in
+# all three places, so a value the DAG would reject never gets a workspace dir
+# (AUD-011). Also keeps the sweep / clear-runs wipe from touching an operator's
+# stray file if the base is misconfigured onto a shared directory (R10).
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 SENTINEL_REL = ".devcake/created-by-app"
 TERMINAL_STATES = ("finished", "failed", "timed_out", "orphaned")
 SWEEP_AGE_SECONDS = 600  # belt-and-suspenders on top of record-before-dir
+
+
+class WorkspaceUnavailable(RuntimeError):
+    """The per-run workspace base could not host this run (AUD-001): a
+    persistent `volume_error` (root-owned base) or a create failure after the
+    durable save (disk full). Raised by `RunBootstrap.launch` BEFORE any
+    container is started and AFTER any partial side effect is unwound, so a
+    caller can gate the mission cleanly — no attempt burned, no phantom
+    record — exactly like the mirror's fail-closed dispatch precondition."""
 
 
 class WorkspaceStore:

@@ -263,6 +263,31 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                     "review:merge_failed")
                             mgr.runs.store.save(run)
                         await _fail_path()
+        elif inst.auto_merge and inst.merge_retry_window_minutes > 0 \
+                and "review:merge_deferred" not in run.finalized_steps \
+                and "review:awaiting_merge" not in run.finalized_steps:
+            # AUD-006: auto_merge is ON but the PR wasn't visible at finalize
+            # (forge list lag / branch-naming miss). Pure human-await copy
+            # would strand app-driven merge FOREVER — the sweep silent-returns
+            # on a missing PR and opens no window without a marker. Open a
+            # deferred window instead: the sweep drives the merge the moment
+            # the PR surfaces, and the window bounds the wait before handing
+            # back. Never pure human-await when auto_merge is ON.
+            async def _defer_missing_pr():
+                await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                          remove={LABEL_REVIEW}, add={LABEL_MERGE})
+                await mgr._feed(
+                    pmo_id, "issue",
+                    f"⏳ REVIEW approved but the PR isn't visible yet — DevCake "
+                    f"will auto-merge it once it appears, retrying for up to "
+                    f"{inst.merge_retry_window_minutes} minutes before handing "
+                    f"back to you. You can merge {pr_url} manually at any time. "
+                    f"{MERGE_RETRY_MARKER}")
+                mgr._audit(pmo_id, "review_approve_defer_missing_pr", pr_url)
+                mgr._merge_window_closed.discard(pmo_id)
+                run.finalized_steps.append("review:merge_deferred")
+                mgr.runs.store.save(run)
+            await _defer_missing_pr()
         elif "review:awaiting_merge" not in run.finalized_steps:
             async def _await_merge():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),

@@ -21,6 +21,7 @@ from devcake.domain.workspaces import (
     SWEEP_AGE_SECONDS,
     NullWorkspaceStore,
     WorkspaceStore,
+    WorkspaceUnavailable,
 )
 
 # Shared module loop — NEVER asyncio.run(): it closes+unsets the loop and
@@ -48,6 +49,9 @@ class InMemoryStore:
     def get(self, run_id: str) -> Run | None:
         r = self._runs.get(run_id)
         return r.model_copy(deep=True) if r else None
+
+    def delete(self, run_id: str) -> None:
+        self._runs.pop(run_id, None)
 
     def all(self) -> list[Run]:
         return [r.model_copy(deep=True) for r in self._runs.values()]
@@ -151,7 +155,9 @@ def test_create_writes_0700_dir_and_run_id_sentinel(tmp_path):
 
 def test_create_rejects_invalid_run_ids(tmp_path):
     ws = WorkspaceStore(tmp_path)
-    for bad in ("", "../escape", "a/b", "x" * 65, "spaced name"):
+    for bad in ("", "short", "../escape", "a/b", "x" * 65, "spaced name"):
+        # AUD-011: "short" (5 chars) is rejected — the fence is {6,64},
+        # matching the DAG precondition and docs/02, not the old {1,64}
         with pytest.raises(ValueError):
             ws.create(bad)
     assert list(tmp_path.iterdir()) == []
@@ -482,16 +488,52 @@ def test_launch_orders_save_then_create_then_start():
     assert sequence == ["save", "create", "start"]
 
 
-def test_launch_create_failure_gates_before_the_executor():
+def test_launch_create_failure_unwinds_and_gates_without_burning_attempt():
+    """AUD-001: a create failure AFTER the durable save must unwind the ACL
+    user + the record and raise WorkspaceUnavailable — no phantom `dispatched`
+    run for the watchdog to kill 90 s later (attempt burn), no container."""
     store = InMemoryStore()
+    deleted = []
+
+    class TrackingMsg(FakeMessaging):
+        async def delete_run_user(self, run_id):
+            deleted.append(run_id)
 
     class FailingWS(RecordingWS):
         def create(self, run_id):
             raise OSError("disk full")
 
     executor = FakeExecutor()
-    mgr = RunManager(store, FakeMessaging(), executor, workspaces=FailingWS())
+    mgr = RunManager(store, TrackingMsg(), executor, workspaces=FailingWS())
     run = _run("R-1-1-EXECUTE-NOSPC0")
-    with pytest.raises(OSError):
+    with pytest.raises(WorkspaceUnavailable):
         run_coro(mgr.bootstrap.launch(run, image="devcake/dev-x:latest"))
     assert executor.starts == []          # no container was ever asked for
+    assert store.get(run.run_id) is None  # record unwound — no attempt burned
+    assert deleted == [run.run_id]        # ACL user unwound
+
+
+def test_launch_gates_on_volume_error_before_any_side_effect():
+    """AUD-001/002: a persistent unusable base (volume_error latched at boot)
+    fails fast — no ACL user, no record, no container — so dispatch gates
+    cleanly and the SPA's 'dispatch is frozen' alert is backed by real
+    gating rather than being aspirational."""
+    store = InMemoryStore()
+    created = []
+
+    class TrackingMsg(FakeMessaging):
+        async def create_run_user(self, run_id):
+            created.append(run_id)
+            return "pw"
+
+    ws = RecordingWS()
+    ws.volume_error = "EACCES: base not writable by uid 1000"
+    executor = FakeExecutor()
+    mgr = RunManager(store, TrackingMsg(), executor, workspaces=ws)
+    run = _run("R-1-1-EXECUTE-FROZEN")
+    with pytest.raises(WorkspaceUnavailable):
+        run_coro(mgr.bootstrap.launch(run, image="devcake/dev-x:latest"))
+    assert created == []                   # not even an ACL user
+    assert store.get(run.run_id) is None
+    assert executor.starts == []
+    assert ws.created == []                 # create() never reached

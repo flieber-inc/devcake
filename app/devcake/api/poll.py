@@ -27,6 +27,10 @@ from ..ports.pmo import PMOTransient
 log = logging.getLogger("devcake")
 tracer = trace.get_tracer("devcake")
 
+# Budget for a forge-health sweep, shared by the boot sweep and the in-cycle
+# re-probe (AUD-007) so neither can hold the poll lock unbounded.
+FORGE_SWEEP_BUDGET_S = 60
+
 
 def _claim_missions(mgr: MissionManager, fetched: list,
                     owner: dict[str, str]) -> list:
@@ -219,7 +223,22 @@ class PollRuntime:
                 # /health `forge_probe` would report "pending" forever.
                 if (self.forge_runtime.breakers
                         or self.forge_runtime.last_full_probe_at is None):
-                    await self.refresh_forge_health()
+                    # AUD-007: the same 60 s budget as the boot sweep. Without
+                    # it, a large or sick catalog re-probes the WHOLE set every
+                    # cycle under the poll lock — and a partial first sweep
+                    # leaves last_full_probe_at unset, so this fires unbounded
+                    # forever, serializing force-poll / clear-runs behind a
+                    # multi-minute sweep. A timeout leaves it "pending" and the
+                    # next cycle retries — never a stuck lock.
+                    try:
+                        async with asyncio.timeout(FORGE_SWEEP_BUDGET_S):
+                            await self.refresh_forge_health()
+                    except TimeoutError:
+                        log.warning("in-cycle forge sweep exceeded its %ds "
+                                    "budget — %d/%d probed; retrying next cycle",
+                                    FORGE_SWEEP_BUDGET_S,
+                                    len(self.forge_runtime.health),
+                                    len(self.forge_runtime.forges))
                 # ADR-0018 — recompute the backend-degraded map. Placement is
                 # load-bearing in two ways, and BOTH fail silently if broken:
                 #   * UNCONDITIONAL, at this indent. One level deeper it would
@@ -325,7 +344,7 @@ class PollRuntime:
         unset, and run_cycle retries the sweep next tick."""
         async with self.lock:
             try:
-                async with asyncio.timeout(60):
+                async with asyncio.timeout(FORGE_SWEEP_BUDGET_S):
                     await self.refresh_forge_health()
             except TimeoutError:
                 log.warning(

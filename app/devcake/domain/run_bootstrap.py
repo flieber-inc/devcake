@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+import contextlib
+
 from .run import Run, auth_digest
-from .workspaces import NullWorkspaceStore
+from .workspaces import NullWorkspaceStore, WorkspaceUnavailable
 
 if TYPE_CHECKING:
     from ..ports.executor import ExecutorPort
@@ -46,8 +48,17 @@ class RunBootstrap:
 
         Mutates ``run.auth_digest`` from the freshly created ACL password.
         Callers must fully populate mission/dev fields (and optional
-        ``traceparent``) before calling.
+        ``traceparent``) before calling. Raises ``WorkspaceUnavailable`` if
+        the workspace base cannot host the run (AUD-001) — BEFORE any
+        container starts and AFTER any partial side effect is unwound, so
+        the caller gates cleanly (no attempt burned, no phantom record).
         """
+        # AUD-001/002: a persistent unusable base (root-owned mount → the
+        # boot writability probe latched `volume_error`) fails fast BEFORE
+        # any ACL user or durable record — nothing to unwind. This is the
+        # fail-closed precondition the "dispatch is frozen" alert promises.
+        if self.workspaces.volume_error:
+            raise WorkspaceUnavailable(self.workspaces.volume_error)
         async with self.dispatch_lock:
             password = await self.messaging.create_run_user(run.run_id)
             run.auth_digest = auth_digest(password)
@@ -60,12 +71,22 @@ class RunBootstrap:
             # a dir whose name has no record is always garbage, which makes
             # the sweep predicate sound without locks) and BEFORE the start
             # (an absent bind source would be dockerd-created root-owned).
-            # A create failure raises out of launch: no container, the
-            # mission gates and retries next cycle. An executor.start
-            # failure deliberately does NOT rm here — a start timeout/409 is
-            # ambiguous, and the watchdog's STARTUP_GRACE kill reaches Hook
-            # B within ~2 minutes either way.
-            self.workspaces.create(run.run_id)
+            try:
+                self.workspaces.create(run.run_id)
+            except OSError as e:
+                # AUD-001: a transient create failure (disk full mid-op, a
+                # race) AFTER the save must not strand a `dispatched` record +
+                # ACL user for the watchdog to kill 90 s later (burning an
+                # attempt and, via the raise, degrading the whole instance).
+                # Unwind both, then gate like the pre-check above.
+                self.store.delete(run.run_id)
+                with contextlib.suppress(Exception):
+                    await self.messaging.delete_run_user(run.run_id)
+                raise WorkspaceUnavailable(
+                    f"workspace create failed: {e}") from e
+            # An executor.start failure deliberately does NOT rm here — a
+            # start timeout/409 is ambiguous, and the watchdog's STARTUP_GRACE
+            # kill reaches Hook B within ~2 minutes either way.
             await self.executor.start(
                 params={
                     "RUN_ID": run.run_id,

@@ -124,6 +124,17 @@ if [[ "$WS_HOST" != /* ]]; then
 fi
 echo "── DEVCAKE_WS_HOST=${WS_HOST}"
 
+# AUD-004: bake and compose MUST agree on the image tag. `docker buildx bake`
+# reads DEVCAKE_TAG from the PROCESS env / HCL default — never from .env — so a
+# pinned `.env` tag would bake `:latest` while compose runs the pin, silently
+# dispatching dev-* images that were never baked this round (pull_policy:
+# missing). Resolve ONCE and export for both. Precedence: an already-exported
+# DEVCAKE_TAG (the `export DEVCAKE_TAG=$(git rev-parse --short HEAD)` release
+# ritual) > .env > "latest".
+TAG="${DEVCAKE_TAG:-$(grep -E '^DEVCAKE_TAG=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)}"
+TAG="${TAG:-latest}"
+echo "── DEVCAKE_TAG=${TAG}  (bake + compose lockstep)"
+
 if [[ ! -f .env ]]; then
   if [[ -f .env.example ]]; then
     echo "── creating .env from .env.example"
@@ -141,10 +152,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "── would upsert DOCKER_GID=${GID} in .env"
   echo "── would upsert DEVCAKE_WS_HOST=${WS_HOST} in .env (+ mkdir -p, chmod 700)"
   if [[ "$DO_BAKE" -eq 1 ]]; then
+    echo "── would: docker compose stop dagu (deploy window — ADR-0025 R9)"
     if [[ ${#BAKE_TARGETS[@]} -eq 0 ]]; then
-      echo "── would: docker buildx bake all"
+      echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake all"
     else
-      echo "── would: docker buildx bake ${BAKE_TARGETS[*]}"
+      echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake ${BAKE_TARGETS[*]}"
     fi
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
@@ -155,11 +167,22 @@ upsert_env_var DOCKER_GID "$GID" .env
 upsert_env_var DEVCAKE_WS_HOST "$WS_HOST" .env
 mkdir -p "$WS_HOST"
 chmod 700 "$WS_HOST"
-# Export so this shell's compose invocation sees it even if env_file order is odd.
+# Export so this shell's bake + compose invocations all see the same values
+# even if env_file order is odd (AUD-004: DEVCAKE_TAG for the bake too).
 export DOCKER_GID="$GID"
 export DEVCAKE_WS_HOST="$WS_HOST"
+export DEVCAKE_TAG="$TAG"
 
 if [[ "$DO_BAKE" -eq 1 ]]; then
+  # AUD-003: a --bake is a DEPLOY. `./dagu/dags` is a LIVE :ro bind, so a
+  # pulled two-step DAG is already visible to a running dagu that may lack the
+  # new env (empty $DEVCAKE_WS_HOST → dockerd creates a root-owned junk dir at
+  # the host root). Stop dagu BEFORE the multi-minute bake to close that
+  # window; `up -d` below recreates it with the current env (ADR-0025 R9).
+  if [[ -n "$(docker compose ps -q dagu 2>/dev/null)" ]]; then
+    echo "── stopping dagu before bake (deploy window — ADR-0025 R9)"
+    docker compose stop dagu || true
+  fi
   if [[ ${#BAKE_TARGETS[@]} -eq 0 ]]; then
     echo "── docker buildx bake all"
     docker buildx bake all

@@ -152,6 +152,18 @@ class RunStore:
                 moved.append(path.stem)
         return moved
 
+    def delete(self, run_id: str) -> None:
+        """Remove a single run record (AUD-001 unwind): a dispatch that
+        aborts after the durable save — a workspace create failure — must
+        leave no phantom `dispatched` record behind to burn an attempt.
+        Best-effort; also drops the parse-cache entry."""
+        path = self.root / f"{run_id}.json"
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        self._parse_cache.pop(f"{run_id}.json", None)
+
     def clear(self) -> int:
         """Delete every run record. Returns how many files were removed.
 

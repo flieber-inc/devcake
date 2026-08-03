@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Full-fidelity backup of the internal Gitea (ADR-0013 decision 5): the
 # gitea_data volume holds repo content WITH git history/branches/PRs plus
-# Gitea's sqlite DB — the app container has no git binary and API snapshots
-# would be lossy, so the volume IS the backup.
+# Gitea's sqlite DB — API snapshots would be lossy, so the volume IS the
+# backup. (The app's git binary, added by ADR-0024, exists for the source
+# mirrors only — devcake_mirrors is a disposable cache and is deliberately
+# NOT part of the backup set, docs/13 §8.)
 #
 # The tarball contains every internal repo AND Gitea's credential DB:
 # treat it exactly like a /data backup — a password-manager export.

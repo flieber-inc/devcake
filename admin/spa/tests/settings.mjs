@@ -134,11 +134,18 @@ await withPage(async (page) => {
     (await page.locator("text=Unsaved changes").count()) === 0);
 });
 
-// 9b: ADR-0022 continuation controls — both live in Limits & traffic and
-// label their save-review rows. Ends in Cancel + Discard (iron rule).
+// 9b: ADR-0022 continuation + ADR-0024 mirror controls — all live in
+// Limits & traffic and label their save-review rows. Ends in Cancel +
+// Discard (iron rule).
 await withPage(async (page) => {
   await gotoFresh(page, "#/config/limits");
   await page.waitForSelector("#limits");
+  const maxAge = page.locator('input[aria-label="Mirror sync max age (seconds)"]');
+  check("Limits view renders the mirror sync max-age input",
+    (await maxAge.count()) === 1);
+  check("Limits view renders the mirror LFS toggle",
+    (await page.locator('button[aria-label="Mirror LFS content"], [role="switch"][aria-label="Mirror LFS content"]').count()) >= 1 ||
+    (await page.locator('text=Mirror LFS content').count()) >= 1);
   const policy = page.locator('select[aria-label="Continuation policy"]');
   const maxc = page.locator('input[aria-label="Max continuations per run"]');
   check("Limits view renders the continuation policy select",
@@ -149,6 +156,8 @@ await withPage(async (page) => {
   await policy.selectOption(policyBefore === "fresh-only" ? "auto" : "fresh-only");
   const maxcBefore = await maxc.inputValue();
   await maxc.fill(String(Number(maxcBefore) + 48));  // large budgets are legal
+  const maxAgeBefore = await maxAge.inputValue();
+  await maxAge.fill(String(Number(maxAgeBefore) + 30));
   await page.waitForSelector('span:has-text("Unsaved changes")');
   await page.click('button:has-text("Save changes…")');
   await page.waitForSelector('[role="dialog"]');
@@ -157,6 +166,8 @@ await withPage(async (page) => {
     (await review.locator("text=Continuation policy").count()) >= 1);
   check("save review labels the max continuations row",
     (await review.locator("text=Max continuations per run").count()) >= 1);
+  check("save review labels the mirror sync max-age row",
+    (await review.locator("text=Mirror sync max age").count()) >= 1);
   await review.locator('button:has-text("Cancel")').click();
   await page.click('button:has-text("Discard changes")');
   await page.waitForTimeout(150);

@@ -195,6 +195,35 @@ def test_continuation_fields_default_and_round_trip():
     assert AppConfig.model_validate(merged).max_continuations == 50
 
 
+def test_repo_mirror_defaults_and_round_trip():
+    """ADR-0024: the mirror is MANDATORY (no enable field exists — its
+    absence IS the contract); the two knobs default to sync-every-dispatch
+    and LFS off, additive at schema v4 with no migration."""
+    base = _base()
+    assert "repo_mirror" in base                       # dumped for the SPA draft
+    assert "enabled" not in base["repo_mirror"]        # no off switch, by design
+    assert AppConfig().repo_mirror.sync_max_age_seconds == 0
+    assert AppConfig().repo_mirror.lfs is False
+    del base["repo_mirror"]                            # pre-ADR-0024 config JSON
+    loaded = AppConfig.model_validate(base)
+    assert loaded.repo_mirror.sync_max_age_seconds == 0
+    assert loaded.schema_version == 4                  # additive, not a migration
+    tuned = AppConfig.model_validate(
+        {**base, "repo_mirror": {"sync_max_age_seconds": 300, "lfs": True}})
+    round_tripped = AppConfig.model_validate(tuned.model_dump())
+    assert round_tripped.repo_mirror.sync_max_age_seconds == 300
+    assert round_tripped.repo_mirror.lfs is True
+    with pytest.raises(Exception):
+        AppConfig.model_validate(
+            {**base, "repo_mirror": {"sync_max_age_seconds": -1}})
+    # a nested partial patch must not reset the sibling knob
+    from devcake.config import deep_merge
+    merged = deep_merge(tuned.model_dump(), {"repo_mirror": {"lfs": False}})
+    got = AppConfig.model_validate(merged)
+    assert got.repo_mirror.lfs is False
+    assert got.repo_mirror.sync_max_age_seconds == 300
+
+
 def test_continuation_fields_bounds():
     """Budget: 0 (off) and LARGE values are both legal — founder decision
     2026-08-02: 10/50-continuation experiments must validate; deliberately no

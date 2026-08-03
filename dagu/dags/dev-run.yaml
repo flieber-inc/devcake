@@ -42,6 +42,12 @@ steps:
       pull_policy: missing
       keep_container: false
       startup: entrypoint
+      # ADR-0024: the app-maintained source mirrors, READ-ONLY (kernel-
+      # enforced — the cache has no Dev write path). Real docker volume name
+      # on purpose: Dagu speaks the raw daemon API (network: precedent).
+      # volumes: support + :ro enforcement measured on 2.10.5 AND 2.11.3.
+      volumes:
+        - devcake_mirrors:/mirrors:ro
       env:
         DEVCAKE_RUN_ID: ${params.RUN_ID}
         TRACEPARENT: ${params.TRACEPARENT}

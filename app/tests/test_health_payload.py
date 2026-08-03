@@ -27,7 +27,7 @@ def _forge_runtime(*, last_full_probe_at=None, health=None, forges=None):
     )
 
 
-def _payload(fr, monkeypatch):
+def _payload(fr, monkeypatch, repo_cache=None):
     async def _true(*a, **k):
         return True
 
@@ -43,7 +43,8 @@ def _payload(fr, monkeypatch):
         forge_runtime=fr, shared_breakers={},
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,
-        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={}),
+        repo_cache=repo_cache))
 
 
 def test_forge_probe_pending_then_complete(monkeypatch):
@@ -95,7 +96,8 @@ def test_unused_repo_names_and_payload_block(monkeypatch):
         forge_runtime=_forge_runtime(), shared_breakers={},
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,
-        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={}),
+        repo_cache=None))
     assert payload["unused_repos"] == {
         "count": 2, "names": ["orphan1", "orphan2"], "configured": 5}
 
@@ -125,3 +127,32 @@ def test_branch_protection_probes_concurrently(monkeypatch):
     out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
     assert out == {f"r{i}": {"rendezvous": True} for i in range(3)}
     health_mod.reset_protection_cache()   # don't leak the fake into others
+
+
+def test_repo_mirror_block_shape(monkeypatch):
+    """ADR-0024: knobs echoed, ledger + volume probe surfaced; None-safe
+    without a cache (tests, hypothetical consumers)."""
+    from devcake.domain.repo_mirror import NullRepoCache
+
+    class Cache(NullRepoCache):
+        def __init__(self):
+            super().__init__()
+            self.volume_error = "EACCES: not writable"
+
+        def health_map(self):
+            return {"alpha": {"ok": False, "detail": "fetch: 500",
+                              "synced_at": None, "attempted_at": None,
+                              "auth": False}}
+
+        def disk_stats(self):
+            return {"total_bytes": 100, "free_bytes": 50}
+
+    fr = _forge_runtime()
+    got = _payload(fr, monkeypatch, repo_cache=Cache())["repo_mirror"]
+    assert got["volume_error"] == "EACCES: not writable"
+    assert got["mirrors"]["alpha"]["ok"] is False
+    assert got["disk"] == {"total_bytes": 100, "free_bytes": 50}
+    assert got["lfs"] is False and got["sync_max_age_seconds"] == 0
+    # no cache injected (default) → block still serves, empty
+    bare = _payload(fr, monkeypatch)["repo_mirror"]
+    assert bare["mirrors"] == {} and bare["volume_error"] is None

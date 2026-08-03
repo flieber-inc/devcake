@@ -303,7 +303,7 @@ world-writable DAG trees on the host.
 Intentional controls:
 
 - Non-root harness user (uid 1000).
-- No `docker.sock`; no host/volume secret mounts (runspec delivery).
+- No `docker.sock`; no host/volume SECRET mounts (runspec delivery) — the ADR-0024 mirror volume carries repo CONTENT read-only, never secret material (deployment-wide read surface = the accepted-risk row in §5a).
 - Attach only to `devcake_runtime`: Redis, otel-collector, internal Gitea.
   App/admin/Dagu/OpenObserve stay on `devcake_control` (OO left runtime — A23).
 - Outbound network **enabled** (forge, packages, model APIs).
@@ -427,6 +427,7 @@ occurrence.
 | Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) | Accepted — the capability is design; per-run outcome is weather |
 | Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) | Verify — set the RO PAT (§9) |
 | Open egress | Exfil of env | Design | Accepted |
+| Shared RO mirror mount (ADR-0024) | Every Dev can READ every configured repo's source (repos are deployment-global; not multi-tenant §6); write path: none — `:ro` kernel-enforced | Design | Accepted; the passive-Gitea transport (per-credential read scoping) is the documented alternative if mutually-distrustful instances ever exist |
 | No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) | Accepted — tracked debt (§11) |
 | Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) | Accepted |
 | `activity-*` repos: past transcripts greppable by every future Dev until Clear | Cross-mission exposure of anything choke-point redaction missed (§1, ADR-0014) | Design (single-operator) + operator (Clear cadence) | Accepted |

@@ -54,6 +54,13 @@ const EXACT = {
     group: "Limits & traffic", label: "Accept misplaced result files", format: onOff,
   },
   "cfg.continuation_policy": { group: "Limits & traffic", label: "Continuation policy" },
+  "cfg.repo_mirror.sync_max_age_seconds": {
+    group: "Limits & traffic", label: "Mirror sync max age (s)",
+    format: (v) => (v === 0 ? "every dispatch" : String(v)),
+  },
+  "cfg.repo_mirror.lfs": {
+    group: "Limits & traffic", label: "Mirror LFS content", format: onOff,
+  },
   "cfg.max_continuations": {
     group: "Limits & traffic", label: "Max continuations per run",
     format: (v) => (v === 0 ? "off" : String(v)),

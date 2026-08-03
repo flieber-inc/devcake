@@ -16,6 +16,8 @@ Bake builds images; Compose runs the stack only (never builds `devcake/*`).
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,
   `fluentbit`, `gitea` (internal fallback forge).
 - Volumes: `devcake_data` (→ `app:/data` — **secrets + config + state**),
+  `devcake_mirrors` (→ `app:/mirrors` rw + Dev containers `:ro` — ADR-0024
+  source mirrors; DISPOSABLE cache, excluded from backups, §8),
   `dagu_data`, `redis_data`, `oo_data`, `gitea_data`.
 - Networks:
   - **`devcake_control`:** `app`, `admin`, `dagu`, Redis, OpenObserve,
@@ -191,7 +193,7 @@ steps:
         REDIS_PASSWORD: ${params.REDIS_PASSWORD}
 ```
 
-> Notes from the live verification: no `volumes:` are needed (credentials arrive via `runspec.get`, not bind mounts — and bind-mount sources would resolve on the *daemon host*, not inside the Dagu container). The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the 2.10.5 ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix (always invoked via `sh` by the compose entrypoint wrapper, so host `+x` is not required) creates the docker group so the daemon runs as `dagu:docker` (not root / not `user: "0:0"`). In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
+> Notes from the live verification: no SECRET `volumes:` are needed (credentials arrive via `runspec.get`, never mounts). ADR-0024 added exactly ONE mount — `devcake_mirrors:/mirrors:ro`, a NAMED volume by real docker name precisely because bind-mount sources would resolve on the *daemon host*; `volumes:` support + `:ro` enforcement measured on 2.10.5 and 2.11.3. The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the 2.10.5 ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix (always invoked via `sh` by the compose entrypoint wrapper, so host `+x` is not required) creates the docker group so the daemon runs as `dagu:docker` (not root / not `user: "0:0"`). In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
 
 ## 5. Two-level containers and networking
 
@@ -219,7 +221,7 @@ match.
 2. Do not run on a shared multi-tenant Docker host.
 3. Treat `/data` volume backups as **secret dumps** — likewise `gitea_data` backups (repo content + Gitea's credential DB) and any settings-export bundle containing secrets or setup values (ADR-0013).
 4. Before first real EXECUTE: branch protection + team membership + checklist in `14` §9.
-5. Mount `./dagu/dags` **read-only** into Dagu (compose does: `:ro`).
+5. Mount `./dagu/dags` **read-only** into Dagu (compose does: `:ro`). The dev-run DAG's own `devcake_mirrors:/mirrors:ro` mount is likewise non-negotiable — the `:ro` is the mirror-poisoning defense (ADR-0024).
 
 ## 6. Image build matrix (Bake only — `docker-bake.hcl`)
 

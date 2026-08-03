@@ -114,7 +114,13 @@ from devcake_dev.workspace.activity import (  # noqa: E402
     write_activity_payload,
     _safe_activity_relpath,
 )
-from devcake_dev.workspace.clone import clone_error_class, clone_extra_repos  # noqa: E402
+from devcake_dev.workspace.clone import (  # noqa: E402
+    clone_error_class,
+    clone_extra_repos,
+    clone_source,
+    mirror_clone_error_class,
+    set_origin_cmd,
+)
 from devcake_dev.workspace.forensics import (  # noqa: E402
     FORENSIC_LISTING_BUDGET,
     FORENSIC_MAX_ENTRIES,
@@ -231,19 +237,46 @@ def main() -> None:
                    capture_output=True)
     subprocess.run(["git", "config", "--global", "user.email", git_email],
                    capture_output=True)
+    # ADR-0024: LFS smudge posture BEFORE any clone. With DEVCAKE_LFS off,
+    # --skip-smudge keeps pointer files as pointers (mirrors carry no LFS
+    # content, and this is byte-identical to the pre-git-lfs images); with
+    # it on, the full filter pulls real content from the mirror's LFS store
+    # via git-lfs's standalone file:// transfer (probe-verified 2026-08-03).
+    subprocess.run(["git", "lfs", "install"]
+                   + ([] if env.get("DEVCAKE_LFS") else ["--skip-smudge"]),
+                   capture_output=True)
+
+    def clone_failed(detail: str, error_class: str, headline: str) -> None:
+        print(f"{headline}:", detail[-500:], file=sys.stderr)
+        send_artifacts({"result": None, "exit_code": 13,
+                        "error_class": error_class, "error_detail": detail,
+                        "transcript_md": f"{headline}:\n{detail}",
+                        "token_report": {"extraction_method": "unavailable", "model": None}})
+        sys.exit(13)
+
+    mirror_path = env.get("DEVCAKE_MIRROR_PATH", "")
     clone = subprocess.run(
-        ["git", "clone", clone_url, str(repo_dir / repo_name)],
+        ["git", "clone", clone_source(mirror_path, clone_url),
+         str(repo_dir / repo_name)],
         capture_output=True, text=True)
     if clone.returncode != 0:
         detail = clone.stderr[-2000:]
-        error_class = clone_error_class(detail)
-        print("clone failed:", detail[-500:], file=sys.stderr)
-        send_artifacts({"result": None, "exit_code": 13,
-                        "error_class": error_class, "error_detail": detail,
-                        "transcript_md": f"clone failed:\n{detail}",
-                        "token_report": {"extraction_method": "unavailable", "model": None}})
-        sys.exit(13)
+        if mirror_path:
+            # never DEV_FORGE_AUTH: a mirror clone failure is infrastructure
+            # (volume unmounted, corrupt pack), and the detail names it
+            clone_failed(f"mirror clone failed ({mirror_path}): {detail}",
+                         mirror_clone_error_class(detail),
+                         "mirror clone failed")
+        clone_failed(detail, clone_error_class(detail), "clone failed")
     workdir = repo_dir / repo_name
+    if mirror_path:
+        # origin must be the REAL forge — push/PR/mid-run fetch identical to
+        # a direct clone; the Dev never learns where the bytes came from
+        rewrite = subprocess.run(set_origin_cmd(str(workdir), clone_url),
+                                 capture_output=True, text=True)
+        if rewrite.returncode != 0:
+            clone_failed(f"origin rewrite failed: {rewrite.stderr[-1500:]}",
+                         "DEV_FORGE", "origin rewrite failed")
 
     # multi-repo ONBOARD triage (item 2): sibling read-only clones — the
     # playbook's repo_options section names them; failures are non-fatal

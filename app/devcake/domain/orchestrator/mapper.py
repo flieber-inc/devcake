@@ -60,6 +60,9 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
             recover_misplaced_result=mgr.config.recover_misplaced_result,
             continuation_policy=mgr.config.continuation_policy,
             max_continuations=mgr.config.max_continuations,
+            mirror_path=(str(mgr.repo_cache.mirror_path(repo_name))
+                         if mgr.repo_cache.eligible(repo_name) else ""),
+            lfs=mgr.config.repo_mirror.lfs,
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
             dev_type=dev_type, seq=seq, extra_args="",
             repo=repo, forge=forge)

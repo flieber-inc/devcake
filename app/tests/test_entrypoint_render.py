@@ -524,6 +524,67 @@ def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     assert all(p["sha256"] == digest and p["of"] == len(sent) for _, p in sent)
 
 
+def test_clone_source_forces_file_transport_for_mirrors():
+    """ADR-0024, the depth footgun: plain-path local clones IGNORE --depth
+    and hardlink; file:// forces the smart transport (honors depth, carries
+    LFS via the standalone transfer). Passthrough when no mirror."""
+    assert ep.clone_source("/mirrors/alpha.git", "https://u@h/o/r.git") \
+        == "file:///mirrors/alpha.git"
+    assert ep.clone_source("", "https://u@h/o/r.git") == "https://u@h/o/r.git"
+
+
+def test_set_origin_cmd_shape():
+    assert ep.set_origin_cmd("/ws/repo/r", "https://oauth2@gitlab.com/o/r.git") \
+        == ["git", "-C", "/ws/repo/r", "remote", "set-url", "origin",
+            "https://oauth2@gitlab.com/o/r.git"]
+
+
+def test_mirror_clone_error_class_is_never_auth():
+    """A file:// clone from the RO volume cannot be a credential failure —
+    DEV_FORGE_AUTH here would latch the repo breaker over infrastructure
+    trouble (missing volume, corrupt pack)."""
+    for stderr in ("authentication failed", "repository not found",
+                   "No such file or directory", ""):
+        assert ep.mirror_clone_error_class(stderr) == "DEV_FORGE"
+
+
+def test_clone_extra_repos_mirror_entries_file_url_depth_and_origin_rewrite():
+    """ADR-0024 extras: mirror_path ⇒ file:// clone (still --depth 1), NO
+    token needed, then a best-effort origin rewrite to the real URL; a
+    rewrite failure stays a note, never fatal."""
+    calls = []
+
+    class R:
+        def __init__(self, rc, stderr=""):
+            self.returncode, self.stderr = rc, stderr
+
+    def runner(cmd, capture_output, text, env):
+        calls.append((cmd, env.get("DEVCAKE_FORGE_TOKEN", "")))
+        return R(0)
+
+    extras = [{"name": "beta", "url": "https://gitlab.com/o/beta.git",
+               "clone_user": "oauth2", "mirror_path": "/mirrors/beta.git"}]
+    notes = ep.clone_extra_repos(extras, Path("/tmp/ws/repo"), runner=runner)
+    (clone_cmd, tok), (seturl_cmd, _) = calls
+    assert clone_cmd[:4] == ["git", "clone", "--depth", "1"]
+    assert clone_cmd[4] == "file:///mirrors/beta.git"
+    assert tok == ""                                   # no token in transit
+    assert seturl_cmd[:2] == ["git", "-C"]
+    assert seturl_cmd[-1] == "https://oauth2@gitlab.com/o/beta.git"
+    assert any("cloned read-only from mirror" in n for n in notes)
+
+    calls.clear()
+
+    def rewrite_fails(cmd, capture_output, text, env):
+        calls.append(cmd)
+        return R(1, "boom") if "set-url" in cmd else R(0)
+
+    notes = ep.clone_extra_repos(extras, Path("/tmp/ws/repo"),
+                                 runner=rewrite_fails)
+    assert any("origin rewrite failed" in n for n in notes)
+    assert any("cloned read-only from mirror" in n for n in notes)  # still non-fatal
+
+
 def test_clone_extra_repos_per_repo_token_and_nonfatal():
     """Multi-repo ONBOARD triage (item 2 full scope): each sibling clone
     rides its OWN read token via the askpass env; failures are non-fatal

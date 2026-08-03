@@ -126,6 +126,9 @@ max_attempts: 3
 recover_misplaced_result: true       # ADR-0018: accept a stray result file written during the run
 continuation_policy: auto            # ADR-0022: auto | resume-only | fresh-only | off (07 §5a)
 max_continuations: 2                 # ADR-0022: nudge relaunches per run; 0 = off; no upper bound
+repo_mirror:                         # ADR-0024: source-mirror knobs (the mirror itself has no off switch)
+  sync_max_age_seconds: 0            #   0 = sync before every dispatch (fail-closed gate, 07 §7b)
+  lfs: false                         #   true = mirrors also carry LFS content
 review_loop_warning_every: 3
 attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)

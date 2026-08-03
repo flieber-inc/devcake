@@ -76,6 +76,26 @@ def test_lifespan_never_awaits_the_forge_sweep():
         f"{offenders}) — boot must not block on the forge sweep")
 
 
+def test_lifespan_never_awaits_mirror_warmup():
+    """ADR-0024: a cold 27-repo warm-up clones for minutes — it belongs to a
+    background task started by the poll loop; awaiting any RepoCache sync in
+    lifespan would recreate the 2026-08-01 boot-blocking incident shape."""
+    tree = ast.parse(MAIN.read_text())
+    lifespan = next(node for node in ast.walk(tree)
+                    if isinstance(node, ast.AsyncFunctionDef)
+                    and node.name == "lifespan")
+    offenders = [
+        node.lineno for node in ast.walk(lifespan)
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr in ("warm_all", "ensure_fresh", "sync_one")
+    ]
+    assert not offenders, (
+        f"lifespan awaits a RepoCache sync (lines {offenders}) — mirror "
+        "warm-up must ride a background task, never boot")
+
+
 def test_main_route_bodies_stay_thin():
     tree = ast.parse(MAIN.read_text())
     offenders = []

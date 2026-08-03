@@ -236,6 +236,22 @@ class RelationsMapper(BaseModel):
     dev_type: str | None = "mapper"
 
 
+class RepoMirror(BaseModel):
+    """Mandatory repo source mirror (ADR-0024). NO on/off switch by design
+    (founder decision 2026-08-03): configured repos always clone from the
+    app-maintained mirror volume; a fresh sync is a fail-closed dispatch
+    precondition. These are the only knobs:
+    - sync_max_age_seconds: 0 (default) = sync before EVERY dispatch; N > 0
+      accepts a mirror synced within the last N seconds (fewer forge
+      requests between rapid-fire mission steps, bounded staleness).
+    - lfs: also fetch Git LFS content (default-branch scope) into the
+      mirror so Devs get real files instead of pointer files. Default off:
+      LFS content can be large, and pointers-without-content is exactly
+      today's behavior (dev images gained git-lfs with ADR-0024)."""
+    sync_max_age_seconds: int = Field(0, ge=0)
+    lfs: bool = False
+
+
 class ModelRate(BaseModel):
     """One operator rate-card row: USD per 1M tokens, keyed by model prefix
     (longest prefix wins at estimation time — domain/costing.rate_for).
@@ -489,6 +505,8 @@ class AppConfig(BaseModel):
     # the fission backstop by explicit operator choice (docs/03 §1.3)
     max_decomposition_depth: int = Field(2, ge=0)
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    # ADR-0024 — mandatory source mirror; see the RepoMirror docstring
+    repo_mirror: RepoMirror = Field(default_factory=RepoMirror)
     # operator rate card + display-override switch for app-side cost
     # estimates (ADR-0021); edited via the Runs page "Cost inputs" modal
     cost_inputs: CostInputs = Field(default_factory=CostInputs)

@@ -85,6 +85,8 @@ Delivery happens in two stages, because Dagu trigger params are visible unmasked
 | `DEVCAKE_RECOVER_MISPLACED_RESULT` | 2 | Misplaced-result recovery flag (ADR-0018, `cfg.recover_misplaced_result`). Wire format `"1"`/`""` — the entrypoint reads it with bare truthiness, so `str(bool)` would be unswitchable. |
 | `DEVCAKE_CONTINUATION_POLICY` | 2 | Continuation policy string (ADR-0022, `cfg.continuation_policy`): `auto \| resume-only \| fresh-only \| off`. Parsed defensively in-container (unknown → `auto`). |
 | `DEVCAKE_MAX_CONTINUATIONS` | 2 | Continuation budget as `str(int)` (ADR-0022, `cfg.max_continuations`); `"0"`/absent/garbage → loop off. |
+| `DEVCAKE_MIRROR_PATH` | 2 | The work repo's source mirror inside the RO `/mirrors` mount (ADR-0024), e.g. `/mirrors/<name>.git`; `""` = direct clone (internal repos only). The entrypoint clones `file://<path>` then rewrites origin to `DEVCAKE_REPO_URL`. |
+| `DEVCAKE_LFS` | 2 | `"1"`/`""` (ADR-0022 flag convention): full LFS smudge (real content from the mirror's LFS store) vs `--skip-smudge` (pointer files — the pre-ADR-0024 behavior). From `cfg.repo_mirror.lfs`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 2 | OTLP endpoint = the stack's `otel-collector` on `devcake_runtime`. **Unauthenticated**: Devs hold no OO credentials at all; the collector alone authenticates upstream (`12-observability.md` §1, ISSUES #13). |
 | *harness credentials* | 2 | Per Dev Type: e.g. `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, `XAI_API_KEY`, `CODEX_API_KEY` — or credential-file **content** in the run spec, written by the entrypoint to the harness-specific path, 0600 (`08-harness-templates.md` §4). |
 | *forge credentials* | 2 | `DEVCAKE_FORGE_TOKEN` (the active work repo's token for this run). |
@@ -147,7 +149,11 @@ entrypoint start
   │      (runspec.get first, then run.started — never the reverse)
   │ 2. clone the mission's activity-* repo into /workspace/activity (full history);
   │      fallback: `activity.get` (req/reply) → materialize MISSION.md + ACTIVITY.md + attachments
-  │ 3. git clone → /workspace/repo (credential helper from run-spec token; token never in URL on disk)
+  │ 3. git clone → /workspace/repo — from the RO source mirror
+  │      (file://$DEVCAKE_MIRROR_PATH, ADR-0024 §5b below) for configured
+  │      repos, then `git remote set-url origin <real URL>`; direct from the
+  │      forge only for internal repos (credential helper from run-spec
+  │      token; token never in URL on disk)
   │ 4. install harness credentials (env passthrough or credential-file content → harness path)
   │ 4b. install skill-store skills from the runspec `skills` field → the
   │      harness's skills dir from runspec `skills_dir` (home-relative;
@@ -258,6 +264,23 @@ tail is per-Dev-Type via `mcp_setup_commands` or runtime user-space
 installs. The base build ends with a smoke RUN **as uid 1000** proving the
 floor (headless shell launches, imports resolve, binaries exist) — CI's
 image bake asserts it on every PR.
+
+### 7b. Source mirror (ADR-0024, normative)
+
+Every configured repo clones from the app-maintained bare mirror on the
+read-only `devcake_mirrors` volume (`/mirrors`) — MANDATORY, no toggle. A
+successful app-side sync is a fail-closed DISPATCH precondition: a mission
+whose mirrors cannot be freshened (per `cfg.repo_mirror.sync_max_age_seconds`,
+default 0 = every dispatch) does not dispatch that cycle — no container, no
+attempt burned, reason on the missions row + `/health` — and retries next
+poll. In-container the mirror is invisible to the Dev: origin is rewritten to
+the real forge, so push/PR/mid-run fetch behave exactly as a direct clone. A
+mirror clone failure is exit 13 `DEV_FORGE` (never `DEV_FORGE_AUTH`).
+Exceptions (by design, not configuration): internal-forge synthesized repos
+and activity repos stay direct — their isolation is per-mission token scope
+(`14` §2 Zone B) and must not ride a deployment-shared volume. LFS: pointer
+files by default; `cfg.repo_mirror.lfs` upgrades to real content served from
+the mirror's own LFS store (probe-verified standalone `file://` transfer).
 
 ## 8. Building a new Dev image (checklist)
 

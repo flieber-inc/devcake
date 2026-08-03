@@ -76,6 +76,25 @@ export default function LimitsSection() {
               aria-label="Max continuations per run"
               onChange={(e) => setField("cfg.max_continuations", Number(e.target.value))} />
           </SettingRow>
+          <SettingRow label="Mirror sync max age"
+            desc={Number(cfg.repo_mirror?.sync_max_age_seconds) === 0
+              ? "0 — mirrors sync before every dispatch."
+              : `Mirrors synced within ${cfg.repo_mirror?.sync_max_age_seconds}s count as fresh.`}
+            help="Every configured repository is served to Devs from an app-maintained mirror (mandatory — there is no off switch). A successful sync is a fail-closed precondition: a mission whose mirrors cannot be freshened does not dispatch that cycle and retries on the next poll. 0 (default) syncs before every dispatch; a higher value reduces forge requests between rapid-fire mission steps at the cost of bounded staleness.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.repo_mirror?.sync_max_age_seconds ?? 0}
+              aria-label="Mirror sync max age (seconds)"
+              onChange={(e) => setField("cfg.repo_mirror.sync_max_age_seconds", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Mirror LFS content"
+            desc={cfg.repo_mirror?.lfs
+              ? "ON — Devs receive real LFS files from the mirror."
+              : "OFF — LFS pointers ride as-is (status quo)."}
+            help="With this on, mirror syncs also fetch Git LFS content (default-branch scope) so Devs get real files instead of pointer files — at the cost of mirror disk and initial download. Off keeps exactly the previous behavior: LFS repos clone with pointer files.">
+            <Toggle on={!!cfg.repo_mirror?.lfs}
+              label="Mirror LFS content"
+              onClick={() => setField("cfg.repo_mirror.lfs", !cfg.repo_mirror?.lfs)} />
+          </SettingRow>
           <SettingRow label="Service auto-restart"
             desc="Long-lived services restart unless stopped (compose-managed)."
             help='Services use restart: unless-stopped in docker-compose.yml. This panel cannot rewrite compose — set restart: "no" in the file to disable.'>

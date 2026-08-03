@@ -356,14 +356,34 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         log.warning("dispatch of %s refused — %s", live.key, e)
         return None
 
+    # RO mounts of done blockers' work repos (snapshot for runspec + prompt).
+    # Hoisted above the activity push (ADR-0024): the mirror gate needs the
+    # blocker set, and gating AFTER the push would write one activity
+    # snapshot commit per gated poll cycle. resolve_blocker_work is
+    # side-effect-free (store + locator reads only).
+    all_runs = mgr.runs.store.all()
+    blocker_entries, blocker_skips = await resolve_blocker_work(
+        mgr, live, repo_name, all_runs)
+
+    # ADR-0024: fail-closed mirror precondition (docs/07 §5a). NOT a run
+    # failure — no container launches, no attempt burns; the reason lands on
+    # the missions row via the shared gate dict and retries next cycle.
+    needed = mgr.repo_cache.needed_for(
+        work_repo=repo_name, mission_type=mtype.value,
+        instance=mgr.instance, blocker_entries=blocker_entries)
+    ok, why = await mgr.repo_cache.ensure_fresh(needed)
+    if not ok:
+        mgr.blocked_reasons[live.pmo_id] = (
+            "repository mirror not fresh — dispatch deferred: "
+            + "; ".join(f"{n}: {r}" for n, r in sorted(why.items())))
+        log.warning("dispatch of %s deferred — %s", live.key,
+                    mgr.blocked_reasons[live.pmo_id])
+        return None
+
     # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
     # repo records what this Dev actually receives. NEVER gates dispatch.
     await _push_activity_repo(mgr, live, mtype, seq)
 
-    # RO mounts of done blockers' work repos (snapshot for runspec + prompt)
-    all_runs = mgr.runs.store.all()
-    blocker_entries, blocker_skips = await resolve_blocker_work(
-        mgr, live, repo_name, all_runs)
     blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips)
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
@@ -423,7 +443,10 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             extra_args=assignment.extra_cli_args, repo=repo, forge=forge,
             recover_misplaced_result=mgr.config.recover_misplaced_result,
             continuation_policy=mgr.config.continuation_policy,
-            max_continuations=mgr.config.max_continuations)
+            max_continuations=mgr.config.max_continuations,
+            mirror_path=(str(mgr.repo_cache.mirror_path(repo_name))
+                         if mgr.repo_cache.eligible(repo_name) else ""),
+            lfs=mgr.config.repo_mirror.lfs)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
@@ -503,7 +526,9 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        extra_args: str, repo, forge,
                        recover_misplaced_result: bool = True,
                        continuation_policy: str = "auto",
-                       max_continuations: int = 2) -> dict[str, str]:
+                       max_continuations: int = 2,
+                       mirror_path: str = "",
+                       lfs: bool = False) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
     place so mission and mapper dispatches can never drift apart — a var
     missing on one path would crash the entrypoint's strict readers."""
@@ -530,6 +555,10 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         # entrypoint's continuation_config parses defensively (garbage → off)
         "DEVCAKE_CONTINUATION_POLICY": continuation_policy,
         "DEVCAKE_MAX_CONTINUATIONS": str(max_continuations),
+        # ADR-0024 — the work repo's mirror ("" = direct clone: internal
+        # repos only); LFS flag rides the "1"/"" convention (never str(bool))
+        "DEVCAKE_MIRROR_PATH": mirror_path,
+        "DEVCAKE_LFS": "1" if lfs else "",
         "DEVCAKE_MODEL": (dev_type.model
                           or HARNESSES[dev_type.harness_template].default_model),
         # Devs export through the collector, credential-free (ISSUES #13)
@@ -625,6 +654,15 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
         forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
             continue         # removed mid-flight — proceed on what remains
+        if mgr.repo_cache.eligible(name):
+            # ADR-0024: mirrored — the clone needs NO token (fewer secrets in
+            # transit), and the tokenless-omit rule below must not apply: the
+            # mirror gate already proved fetchability, and omitting here while
+            # the gate blocks on the same repo would be incoherent
+            extras.append({"name": name, "url": inst_x.url,
+                           "clone_user": forge_x.descriptor.clone_user,
+                           "mirror_path": str(mgr.repo_cache.mirror_path(name))})
+            continue
         token = inst_x.token_ro or inst_x.token
         if not token:
             continue
@@ -652,6 +690,15 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
             forge_x = mgr.forges.get(name)
             if inst_x is None or forge_x is None:
                 continue     # cleared / vanished — non-fatal omit
+            if mgr.repo_cache.eligible(name):
+                # ADR-0024: configured blocker-work repos ride the mirror
+                # like every other configured card (same rationale as above)
+                extras.append({"name": name, "url": inst_x.url,
+                               "clone_user": forge_x.descriptor.clone_user,
+                               "mirror_path": str(
+                                   mgr.repo_cache.mirror_path(name))})
+                seen.add(name)
+                continue
             token = inst_x.token_ro or inst_x.token
             if not token:
                 continue

@@ -52,7 +52,7 @@ def inherit_pmo_intake(body: dict, current: dict) -> dict:
 
 
 async def apply_config_patch(body: dict, *, config, dev_types, managers,
-                             reload) -> dict:
+                             reload, repo_cache=None) -> dict:
     """Validate + apply a config PUT in place; hot-reload adapters; restore
     the previous config if the reload fails. `reload` is the composition
     root's reload_connections."""
@@ -105,6 +105,14 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
         except Exception:  # noqa: BLE001 — cleanup is best-effort: the config change is APPLIED; a failure must not 500 it (audit A21); orphan named in the log
             log.exception("could not delete stored secrets of removed "
                           "%s instance %r", scope, name)
+        if scope == "repo" and repo_cache is not None:
+            # ADR-0024: the removed card's mirror goes with it (same
+            # best-effort contract as the secret deletion above)
+            try:
+                repo_cache.delete_mirror(name)
+            except Exception:  # noqa: BLE001 — cleanup only; the config change is APPLIED
+                log.exception("could not delete mirror of removed repo %r",
+                              name)
     # Per-repo auto_merge OFF→ON (founder request 2026-07-15, ADR-0020):
     # re-arm the deferred-merge window only for missions whose work repo
     # flipped — the next sweep posts a fresh window entry for those.

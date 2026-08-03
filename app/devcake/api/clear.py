@@ -341,5 +341,6 @@ async def clear_all(
         "redis": redis_info,
         "activity_repos": activity,
         "preserved": ["config", "secrets", "pmo", "operator repos",
-                      "skill-store", "work repos (devcake-internal)"],
+                      "skill-store", "work repos (devcake-internal)",
+                      "repo mirrors"],
     }

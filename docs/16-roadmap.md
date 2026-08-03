@@ -417,6 +417,18 @@ vocabulary at the top of this file).
   (browser process trees vs a non-reaping entrypoint) + docs/ADR truth
   sweep incl. `14` §11 browser-injection radar + memory-budget notes.
   **built**.
+- **Mandatory repo source mirror** (ADR-0024, 2026-08-03): a 27-repo prod
+  stress instance re-cloned ~300 MB per run; now the app maintains bare
+  mirrors on `devcake_mirrors` (heads+tags, gc.auto=0, per-sync HEAD; git +
+  git-lfs = the app's first subprocess seam), sync is a FAIL-CLOSED dispatch
+  precondition (no toggle — founder decision; reason on missions row via the
+  shared gate dict; auth failures latch the repo breaker), Devs clone
+  `file://` from the RO mount and get origin rewritten to the real forge
+  (Dev-invisible; extras drop read tokens from the runspec). LFS = capability
+  toggle (standalone file:// transfer probe-verified, 2 MB bit-exact at
+  depth 1). Dagu bumped 2.10.5 → 2.11.3 as a severable rider (probes green;
+  CORS/token-TTL breaking changes verified non-applicable; controller/LLM
+  DAG features explicitly NOT adopted). **built**.
 - **In-container run continuation** (ADR-0022, 2026-08-02): the
   narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
   ~50% of long weak-model runs, hours lost late) is nudged instead of failed:

@@ -248,6 +248,7 @@ Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{n
 - **Accept misplaced result files** toggle (ADR-0018, `recover_misplaced_result`, default on).
 - **Continuation policy** select (ADR-0022, `continuation_policy`): Auto / Resume only / Fresh only / Off; the help text states that resume-only fails as before when resume is unavailable and that plan runs never continue.
 - **Max continuations per run** integer (ADR-0022, `max_continuations`, default 2, `0` = off, no upper bound): the help text names the two operator-relevant facts — the budget is the ONLY terminator (stalls escalate resume→fresh, never stop), and each relaunch resets the harness's own `--max-turns` (effective turn budget = (budget + 1) × max-turns).
+- **Mirror sync max age** seconds (ADR-0024, `repo_mirror.sync_max_age_seconds`, default 0 = every dispatch) and **Mirror LFS content** toggle (`repo_mirror.lfs`, default off). The mirror itself is mandatory — these only tune it; the help text states the fail-closed dispatch gate.
 - Service auto-restart is compose-managed (read-only note). **`max_attempts` is a config field** (`config.yaml` / `PUT /config`) but is **not** exposed on the Limits UI today — edit via API/YAML or leave the default 3.
 
 ## 4. Runs page

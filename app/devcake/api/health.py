@@ -127,7 +127,8 @@ def unused_repo_names(config) -> list[str]:
 async def build_health_payload(*, config, dev_types, managers, mappers,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
-                               backend_degraded: dict | None = None) -> dict:
+                               backend_degraded: dict | None = None,
+                               repo_cache=None) -> dict:
     """The /api/v1/health body (docs/11 §0). All deps explicit — unit-testable
     with fakes; the route in main.py is a one-line forward."""
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -230,5 +231,15 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
             "count": len(names := unused_repo_names(config)),
             "names": names,
             "configured": len(config.repos),
+        },
+        # ADR-0024: per-mirror sync state + the volume probe. A failing
+        # mirror freezes dispatch for every mission touching it (fail-closed
+        # precondition), so the SPA derives a NON-dismissable alert.
+        "repo_mirror": {
+            "lfs": config.repo_mirror.lfs,
+            "sync_max_age_seconds": config.repo_mirror.sync_max_age_seconds,
+            "volume_error": getattr(repo_cache, "volume_error", None),
+            "mirrors": repo_cache.health_map() if repo_cache else {},
+            "disk": repo_cache.disk_stats() if repo_cache else None,
         },
     }

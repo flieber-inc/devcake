@@ -76,8 +76,11 @@ class PollRuntime:
     def __init__(self, *, config, managers: dict[str, MissionManager],
                  mappers: dict, store, forge_runtime, refresh_forge_health,
                  managers_in_config_order, owner_store: OwnerStore | None = None,
-                 backend_degraded: dict[str, str] | None = None):
+                 backend_degraded: dict[str, str] | None = None,
+                 repo_cache=None):
         self.config = config
+        # ADR-0024: warm-up owner. None only in tests (loop() guards).
+        self.repo_cache = repo_cache
         self.managers = managers                    # live reference
         self.mappers = mappers                      # live reference
         self.store = store
@@ -330,6 +333,16 @@ class PollRuntime:
                     "%d/%d repos probed; retrying on the next poll cycle",
                     len(self.forge_runtime.health),
                     len(self.forge_runtime.forges))
+        # ADR-0024: mirror warm-up — background, UNBOUNDED, never under the
+        # poll lock and never awaited (a cold 27-repo deployment clones for
+        # minutes); a dispatch needing repo X coalesces onto the in-flight
+        # sync via RepoCache's per-name lock.
+        if self.repo_cache is not None:
+            warm = asyncio.create_task(self.repo_cache.warm_all(),
+                                       name="mirror_warmup")
+            warm.add_done_callback(
+                lambda t: t.cancelled() or t.exception() is None or log.error(
+                    "mirror warm-up died: %r", t.exception()))
         while True:
             async with self.lock:
                 await self.run_cycle(self.next_cycle_id())

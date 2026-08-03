@@ -203,6 +203,7 @@ def test_clear_all_threads_internal_forge(tmp_path: Path, monkeypatch):
     assert forge.deleted == ["activity-a-b"]
     assert out["ok"] is True
     assert "work repos (devcake-internal)" in out["preserved"]
+    assert "repo mirrors" in out["preserved"]      # ADR-0024: cache is config-keyed, not run state
 
     out2 = run_coro(clear_mod.clear_all(store, None, None,
                                         internal_forge=None))

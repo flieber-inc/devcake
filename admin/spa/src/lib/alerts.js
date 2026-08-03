@@ -183,6 +183,37 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // ADR-0024: repo source mirrors. Fail-closed dispatch precondition, so a
+  // failing mirror silently FREEZES every mission touching that repo — same
+  // honesty argument as poll-degraded: not dismissable.
+  const mirror = health.repo_mirror || {};
+  if (mirror.volume_error) {
+    alerts.push({
+      id: "mirror-volume",
+      severity: "critical",
+      title: "Repo mirror volume is unusable — dispatch is frozen",
+      body: mirror.volume_error,
+    });
+  }
+  const badMirrors = Object.entries(mirror.mirrors || {}).filter(
+    ([, st]) => st && st.ok === false,
+  );
+  if (badMirrors.length > 0) {
+    alerts.push({
+      id: "mirror-sync",
+      severity: "warning",
+      title:
+        badMirrors.length === 1
+          ? `Repo mirror '${badMirrors[0][0]}' is not syncing`
+          : `${badMirrors.length} repo mirrors are not syncing`,
+      body:
+        badMirrors.map(([name, st]) => `${name}: ${st.detail || "sync failed"}`).join(" · ") +
+        " — missions needing these repositories will not dispatch until the " +
+        "sync succeeds (retried every poll cycle). Auth failures also latch " +
+        "the repository's circuit breaker below.",
+    });
+  }
+
   const breakers = Object.entries(health.circuit_breakers || {});
   if (breakers.length > 0) {
     // Per-ENTRY remediation. The old single trailing sentence was chosen by one

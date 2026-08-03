@@ -47,6 +47,7 @@ from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
                                    MapperUnconfigured, MissionManager)
 from ..domain.forge_runtime import ForgeRuntime
 from ..domain.reconcile import reconcile_runs
+from ..domain.repo_mirror import RepoCache
 from ..domain.runs import RunManager
 from ..domain.skills import SkillService, SkillStoreError
 from ..domain.watchdog import watchdog_loop
@@ -94,6 +95,9 @@ shared_backend_degraded: dict[str, str] = {}
 managers: dict[str, MissionManager] = {}
 mappers: dict[str, MapperService] = {}
 forge_runtime = ForgeRuntime()
+# ADR-0024: the ONE deployment-wide source mirror (repos are deployment-
+# global, so the mirror is too — same shared-runtime idiom as forge_runtime)
+repo_cache = RepoCache(config, forge_runtime)
 # the bundled internal fallback forge (M11): provisioner is admin-credentialed
 # (GITEA_ADMIN_*); None disables the zero-repo un-gating when Gitea is absent
 internal_forge = make_internal_forge() if os.environ.get("GITEA_ADMIN_PASSWORD") else None
@@ -133,13 +137,14 @@ def build_managers() -> None:
             mgr.internal_forge = internal_forge
             mgr.skills = skill_service
             mgr.blocker_locator = blocker_locator
+            mgr.repo_cache = repo_cache
         else:
             managers[name] = MissionManager(
                 config, dev_types, p, forge_runtime, manager, messaging,
                 instance=inst, breakers=shared_breakers,
                 internal_forge=internal_forge, skills=skill_service,
                 backend_degraded=shared_backend_degraded,
-                blocker_locator=blocker_locator)
+                blocker_locator=blocker_locator, repo_cache=repo_cache)
             mappers[name] = MapperService(config, dev_types, managers[name])
 
 
@@ -197,7 +202,7 @@ poll_rt = PollRuntime(
     config=config, managers=managers, mappers=mappers, store=store,
     forge_runtime=forge_runtime, refresh_forge_health=refresh_forge_health,
     managers_in_config_order=_managers_in_config_order,
-    backend_degraded=shared_backend_degraded)
+    backend_degraded=shared_backend_degraded, repo_cache=repo_cache)
 
 
 def _refuse_insecure_passwords() -> None:
@@ -296,6 +301,9 @@ async def lifespan(app: FastAPI):
     # the listen socket O(N repos) and failed the compose healthcheck) — the
     # poll task runs it before its first cycle; /health `forge_probe` tracks it
     await reconcile_runs(manager)
+    # ADR-0024: synchronous writability probe only (no network, no sync) —
+    # mirror warm-up belongs to the poll task, NEVER awaited at boot
+    repo_cache.verify_writable()
     tasks = [
         asyncio.create_task(poll_rt.loop(), name="poll_loop"),
         asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
@@ -330,7 +338,7 @@ async def health():
         mappers=mappers, forge_runtime=forge_runtime,
         shared_breakers=shared_breakers, store=store,
         internal_forge=internal_forge, poll_rt=poll_rt,
-        backend_degraded=shared_backend_degraded)
+        backend_degraded=shared_backend_degraded, repo_cache=repo_cache)
 
 
 @app.get("/api/v1/health/live")
@@ -518,7 +526,8 @@ async def get_config():
 @app.put("/api/v1/config")
 async def put_config(body: dict):
     return await apply_config_patch(body, config=config, dev_types=dev_types,
-                                    managers=managers, reload=reload_connections)
+                                    managers=managers, reload=reload_connections,
+                                    repo_cache=repo_cache)
 
 
 @app.put("/api/v1/config/pmos/{name}/intake")

@@ -33,6 +33,9 @@ services:
     restart: unless-stopped
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
+      # ADR-0024: bare source mirrors, app-writable; Dev containers mount the
+      # SAME volume read-only via dev-run.yaml (real name devcake_mirrors)
+      - mirrors:/mirrors
       # test fixture only: tests/test_entrypoint_render.py exercises the Dev
       # entrypoint's renderers by path; the app never imports this at runtime
       - ./images/common:/srv/images/common:ro
@@ -49,7 +52,7 @@ services:
       start_period: 15s
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5@sha256:469840b0e3b8e82096eadc93f2bf27b7e7150b0eee8f14343fd545830c2bfa59  # docs/13 §4
+    image: ghcr.io/dagucloud/dagu:2.11.3@sha256:e5f06be4aed0b445028ec133f9c7d5b0c4275025d4b6db2bde41e918345d3901  # docs/13 §4 (ADR-0024 §7 rider)
     restart: unless-stopped
     ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open
@@ -240,3 +243,7 @@ volumes:
   dagu_data: {}
   redis_data: {}
   oo_data: {}
+  # ADR-0024: disposable source-mirror cache (safe to `docker volume rm` —
+  # the app re-warms). Real name devcake_mirrors (project prefix); the
+  # dev-run DAG mounts it by that literal name, network-precedent style.
+  mirrors: {}

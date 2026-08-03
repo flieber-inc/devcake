@@ -46,6 +46,18 @@ def test_deleted_files_leave_the_cache(tmp_path):
     assert store.all() == []
 
 
+def test_clear_empties_parse_cache_immediately(tmp_path):
+    """AUD-018: clear() must drop cached parses at once, not wait for the next
+    all() to prune by absent-file — an intervening read must not see wiped
+    runs from the cache."""
+    store = RunStore(tmp_path / "runs")
+    store.save(_run(1))
+    store.all()                                   # populate the parse cache
+    assert store._parse_cache                       # non-empty
+    store.clear()
+    assert store._parse_cache == {}                 # emptied by clear() itself
+
+
 def test_corrupt_files_stay_skipped_on_every_call(tmp_path):
     store = RunStore(tmp_path / "runs")
     store.save(_run(1))

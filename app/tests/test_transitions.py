@@ -1572,6 +1572,21 @@ def test_rearm_reopens_parked_mission_when_auto_merge_flips_on(tmp_path):
     assert m.status == "done"
 
 
+def test_apply_auto_merge_rearm_populates_set_off_to_on(tmp_path):
+    """AUD-024: the shared re-arm (config PUT AND bundle/profile apply both
+    call apply_auto_merge_rearm — settings_bundle.py, config_service.py)
+    unions OFF→ON repos into every manager's rearm set."""
+    from devcake.config import RepoInstance, apply_auto_merge_rearm
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    prev = [RepoInstance(name="main", url="https://github.com/o/r",
+                         auto_merge=False)]
+    new = [RepoInstance(name="main", url="https://github.com/o/r",
+                        auto_merge=True)]
+    flipped = apply_auto_merge_rearm(prev, new, {"linear": mgr})
+    assert flipped == {"main"}
+    assert "main" in mgr.rearm_merge_repos
+
+
 def test_rearm_reaches_missions_already_in_skip_set(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []

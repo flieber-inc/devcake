@@ -50,6 +50,21 @@ def test_missing_any_split_field_means_no_estimate():
     assert costing.estimate_cost_usd(totals_only, GROK_45) is None
 
 
+def test_non_numeric_token_fields_yield_no_estimate_not_500():
+    """AUD-017: a malformed token report (a string count from some harness)
+    must return None, never TypeError on the multiply — which would 500
+    GET /runs at read-time repricing."""
+    for hole in ("input_tokens", "cache_read_tokens", "output_tokens"):
+        assert costing.estimate_cost_usd(
+            _grok_report(**{hole: "lots"}), GROK_45) is None
+    # a bool is an int subclass but a nonsense count — also rejected
+    assert costing.estimate_cost_usd(
+        _grok_report(input_tokens=True), GROK_45) is None
+    # a non-numeric cache_write degrades to 0, never crashes (still estimates)
+    assert costing.estimate_cost_usd(
+        _grok_report(cache_write_tokens="oops"), GROK_45) is not None
+
+
 def test_null_cache_write_prices_as_zero_not_blocking():
     with_write = costing.estimate_cost_usd(
         _grok_report(cache_write_tokens=1_000_000),

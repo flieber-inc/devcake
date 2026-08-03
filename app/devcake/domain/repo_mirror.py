@@ -217,6 +217,15 @@ class RepoCache:
                 # DIFFERENT repo now — rebuild rather than fetch into it
                 log.info("mirror %s: remote changed — re-initializing", name)
                 self.delete_mirror(name)
+                if p.is_dir():
+                    # AUD-013: delete_mirror is best-effort (rename/rmtree can
+                    # fail on a locked/permission-odd dir). Recursing while the
+                    # stale dir persists would loop forever on the same
+                    # mismatch — fail loud once instead; the ledger + /health
+                    # name it and dispatch stays gated on this repo.
+                    return await fail(
+                        f"mirror rebuild blocked: could not remove stale "
+                        f"mirror dir for {name} (its origin URL changed)")
                 return await self.sync_one(name)
 
         # fetch — heads+tags ONLY (never +refs/*: GitHub's refs/pull/* would

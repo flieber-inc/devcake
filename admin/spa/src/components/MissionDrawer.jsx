@@ -174,7 +174,7 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
         {/* Scrollable body */}
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {flash && (
-            <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/60 dark:text-blue-200">
+            <p className="rounded-md border border-accent-200 bg-accent-50 px-3 py-2 text-xs text-accent-800 dark:border-accent-900 dark:bg-accent-950/60 dark:text-accent-200">
               {flash}
             </p>
           )}

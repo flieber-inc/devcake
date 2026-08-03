@@ -178,4 +178,8 @@ class RunStore:
                 n += 1
             except OSError:
                 continue
+        # AUD-018: drop cached parses immediately rather than waiting for the
+        # next all() to prune by absent-file — a read between clear() and the
+        # next all() would otherwise still see wiped runs from the cache.
+        self._parse_cache.clear()
         return n

@@ -244,7 +244,7 @@ export default function MissionsPage() {
         {cadenceLine}
       </p>
       {flash && (
-        <p className="rounded-card border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/60 dark:text-blue-200">
+        <p className="rounded-card border border-accent-200 bg-accent-50 px-3 py-2 text-sm text-accent-800 dark:border-accent-900 dark:bg-accent-950/60 dark:text-accent-200">
           {flash}
         </p>
       )}
@@ -293,7 +293,7 @@ export default function MissionsPage() {
                 onClick={() =>
                   document.getElementById(`stage-${col.id}`)
                     ?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
                   hot
                     ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
                     : "border-accent-300 bg-accent-50 text-accent-800 hover:bg-accent-100 dark:border-accent-800 dark:bg-accent-950/60 dark:text-accent-200"
@@ -344,7 +344,7 @@ export default function MissionsPage() {
                   <button
                     type="button"
                     onClick={() => setShowAllDone((v) => !v)}
-                    className="ml-auto shrink-0 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
+                    className="ml-auto shrink-0 rounded text-xs text-accent-700 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-accent-300"
                   >
                     {showAllDone ? "Show fewer" : `Show all ${bucket.length}`}
                   </button>

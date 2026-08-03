@@ -41,12 +41,21 @@ def estimate_cost_usd(token_report: dict,
     rate = rate_for(token_report.get("model"), rates)
     if rate is None:
         return None
-    inp = token_report.get("input_tokens")
-    cache_read = token_report.get("cache_read_tokens")
-    out = token_report.get("output_tokens")
+
+    def _num(key):
+        # AUD-017: a token field must be a real number. `None` (missing split)
+        # → no estimate; a NON-numeric value (a harness that emitted a string
+        # count) would otherwise TypeError on the multiply and 500 GET /runs.
+        # bool is an int subclass — reject it too, a True count is nonsense.
+        v = token_report.get(key)
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    inp = _num("input_tokens")
+    cache_read = _num("cache_read_tokens")
+    out = _num("output_tokens")
     if inp is None or cache_read is None or out is None:
         return None
-    cache_write = token_report.get("cache_write_tokens") or 0
+    cache_write = _num("cache_write_tokens") or 0
     return round((inp * rate.input_per_mtok
                   + cache_read * rate.cache_read_per_mtok
                   + cache_write * rate.cache_write_per_mtok

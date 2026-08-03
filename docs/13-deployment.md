@@ -25,6 +25,13 @@ Bake builds images; Compose runs the stack only (never builds `devcake/*`).
   `./workspaces`). Holds repo source + activity transcripts + agent output —
   treat like `gitea_data` (`14` §1); DevCake-exclusive (the sweep/wipe touch
   every run-id-shaped child) and excluded from backups (§8).
+- **Do NOT override `COMPOSE_PROJECT_NAME`** (AUD-020): the compose project is
+  fixed to `devcake` (`name: devcake`), which makes the mirror volume's real
+  name `devcake_mirrors` — the literal string `dev-run.yaml` mounts. A custom
+  project name would rename the volume (`<proj>_mirrors`) while the DAG still
+  mounts `devcake_mirrors`, so every provision step would fail to find the
+  mirrors. If a rename is ever required, `dev-run.yaml`'s volume name must
+  change in lockstep.
 - Networks:
   - **`devcake_control`:** `app`, `admin`, `dagu`, Redis, OpenObserve,
     fluent-bit, otel-collector, gitea.

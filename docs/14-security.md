@@ -455,7 +455,11 @@ Items that improve safety or hygiene **without** changing the adult-operator
 contract:
 
 - Docker HostConfig CPU/memory/PID limits on Dev containers (when Dagu supports
-  them, or via another spawn path).
+  them, or via another spawn path). The ADR-0023 browser floor raises the
+  ceiling a run CAN reach — RAM is spent only when a Dev actually launches
+  the browser (headless shell idle ≈150 MB, active pages 300–800 MB), so
+  budget `concurrency × browser working set` for browser-using fleets until
+  hard limits exist.
 - Protocol hardens: ~~credential-upload filename allowlist + size cap~~
   (`secrets.require_credential_ref` + `MAX_CREDENTIAL_FILE_BYTES` + atomic
   `write_credential_file`); ~~PMO `download_asset` host allowlist / redirect
@@ -468,7 +472,10 @@ contract:
   deny-list remains open.
 - Optional: gVisor/Kata for Devs; egress allowlists / credential-injection
   proxy (e.g. [iron-proxy](https://github.com/ironsh/iron-proxy) class —
-  deferred radar in `16-roadmap.md`); OIDC if you must expose the admin UI
+  deferred radar in `16-roadmap.md`; note the ADR-0023 baked browser widens
+  the injection intake beyond curl — a Dev live-testing pages renders
+  arbitrary third-party content straight into its context, same open-egress
+  accept, bigger funnel); OIDC if you must expose the admin UI
   beyond loopback; OTLP bearer auth on the collector (low priority on a
   dedicated single-tenant host).
 

@@ -51,14 +51,23 @@ chosen by *who is able to provide the capability*:
 `playwright@1.61.1` (pinned to the same family as the repo's own admin UI
 suite — one browser stack for the whole codebase) with
 `install --with-deps chromium-headless-shell` at build time, browsers in
-the world-readable `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, and the
-`playwright` CLI on PATH at the same pin. Rationale over the
-alternatives: deps-only (per-run 170 MB browser downloads — the turn tax
-again) and Debian `chromium` (executablePath plumbing friction, no
-savings) both lose. The shared-base placement means the ~0.6 GB stack
-exists ONCE on disk across all three harness images. A Dev that installs
-a mismatched playwright version falls back to downloading its own build —
-degraded, never broken; the baked pin is discoverable via
+`PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers`, and the `playwright` CLI on
+PATH at the same pin. Rationale over the alternatives: deps-only (per-run
+170 MB browser downloads — the turn tax again) and Debian `chromium`
+(executablePath plumbing friction, no savings) both lose. The shared-base
+placement means the ~0.6 GB stack exists ONCE on disk across all three
+harness images.
+
+**`/opt/pw-browsers` is dev-owned — corrected by the fix round.** The env
+var points EVERY playwright install at that path, so as first shipped
+(root-owned, `a+rX`) any browser the base did not bake — another
+playwright version's revision, full Chromium, Firefox, WebKit — was
+uninstallable: measured `EACCES` on `__dirlock`, and only *after* the
+download completed. Ownership by `dev` restores self-healing (a
+mismatched pin downloads its own build beside the baked one — degraded,
+never broken); it is safe because the container is disposable, so a run
+that corrupts the shared stack corrupts only itself. The build smoke
+asserts writability. The baked pin stays discoverable via
 `playwright --version`.
 
 ### 3 — Build-time proof, not hope
@@ -86,10 +95,34 @@ image bake therefore asserts the floor on every PR that touches images.
 
 ## Consequences
 
-- Image weight: base grows to roughly 1.4 GB (browser stack ~0.6 GB,
-  build-essential ~0.25 GB, Node ~0.15 GB, the rest small); harness
-  images share the base layers, local bake only, no registry push. First
-  bake is slow; layer cache absorbs the rest.
+- Image weight: harness images land at ~1.9–2.1 GB, base layers shared,
+  local bake only, no registry push — DISK, not RAM (founder note
+  2026-08-02); stale per-SHA tags are the only growth, so periodic
+  `docker image prune` matters more than before. First bake is slow;
+  layer cache absorbs the rest.
+- Memory is a CAPABILITY cost, not a standing one: the browser consumes
+  RAM only when a run launches it (headless shell idle ≈150 MB, active
+  page loads 300–800 MB). The `14` §11 no-hard-container-limits debt is
+  unchanged; its reachable ceiling grew — budget
+  `concurrency × browser working set` for browser-using fleets.
+- `tini` is PID 1 (fix round): the entrypoint reaps nothing, and browser
+  process trees orphan children on unclean exits — without a reaper,
+  multi-hour runs (longer under ADR-0022 continuations) accumulate
+  zombies and stray headless-shells. Dagu cannot pass `--init`.
+- PATH precedence (`~/.npm-global/bin` before `/usr/local/bin`) lets a
+  run shadow binaries the entrypoint itself later invokes (`grok export`,
+  continuation relaunches). No privilege or capability is gained — a Dev
+  already authors its own result.json, and `14` treats Dev output as
+  untrusted; the vector pre-existed on grok (`~/.grok/bin` is dev-owned).
+  Accepted; absolute-path resolution in the entrypoint is the hardening
+  candidate if transcript-evidence integrity ever tightens.
+- A live browser is a wider prompt-injection intake than curl: rendered
+  third-party pages enter the model's context wholesale. Same class as
+  the existing open-egress accepts (`14` §5a); named on the `14` §11
+  egress-allowlist radar.
+- Screenshots of CJK/emoji-heavy pages render tofu (`--with-deps` ships
+  Latin fonts only); `fonts-noto-cjk` (~60 MB) is the add if a fleet
+  needs it.
 - grok Devs gain Node — the silent "cannot even start the dev server"
   failure class disappears.
 - The `08` §7 PATH warning inverts into a guarantee; plugin registration

@@ -410,7 +410,13 @@ vocabulary at the top of this file).
   poppler/pandas/openpyxl document-and-spreadsheet floor (class C, founder
   decision). Build-time smoke proves the floor AS uid 1000 (headless shell
   must launch). Out by doctrine: sudo, docker, DBs, vendor CLIs,
-  LibreOffice. Base ~1.4 GB, shared layers. **built**.
+  LibreOffice. Base ~1.4 GB, shared layers. **built**. Skeptical-review fix
+  round same day: `/opt/pw-browsers` dev-owned (as shipped, the env var +
+  read-only dir bricked every non-baked browser — measured EACCES after
+  the download; disposable container ⇒ writable is safe) + `tini` as PID 1
+  (browser process trees vs a non-reaping entrypoint) + docs/ADR truth
+  sweep incl. `14` §11 browser-injection radar + memory-budget notes.
+  **built**.
 - **In-container run continuation** (ADR-0022, 2026-08-02): the
   narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
   ~50% of long weak-model runs, hours lost late) is nudged instead of failed:

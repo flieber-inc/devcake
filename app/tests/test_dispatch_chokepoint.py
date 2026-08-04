@@ -104,8 +104,9 @@ def test_prod_wires_a_real_workspace_store():
     no-op) so the existing suite stays untouched — therefore prod composition
     MUST inject the real WorkspaceStore, or every dispatch would run onto an
     unmanaged workspace with no pre-create, cleanup, or fail-closed gate.
-    Guard the wiring so dropping it fails CI rather than silently degrading."""
-    src = (ROOT / "api" / "main.py").read_text()
+    Guard the wiring so dropping it fails CI rather than silently degrading.
+    ADR-0028: the composition root lives in api/services.py now."""
+    src = (ROOT / "api" / "services.py").read_text()
     assert "WorkspaceStore(" in src, "prod must construct a real WorkspaceStore"
     assert "workspaces=workspaces" in src, \
         "RunManager must be wired with the real workspace store"

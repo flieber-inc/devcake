@@ -1,215 +1,65 @@
-"""DevCake main app: wiring, lifespan (startup reconciliation), and the API.
+"""DevCake main app: the API surface and the startup lifespan.
 
 Loops: poll cycle (derive + dispatch + sweeps), ingress consumer, watchdog.
 Endpoints: health, config, connections, missions, runs, credentials/OAuth,
 and the hello debug dispatch (permanent CI fixture — scripts/ci_suite.sh).
+
+ADR-0028: importing this module builds NOTHING — the service graph lives in
+`api/services.build_services()`, called once by the lifespan. Module scope
+is defs + pure wiring (the AST guard in test_structure_guards pins it), so
+a corrupt config.yaml now crashes at STARTUP, not import — same
+fail-loudly, new log position. Routes reach the graph through `svc()`; an
+authenticated request before the lifespan completes would get its named
+RuntimeError (a 500), which is unreachable in prod — uvicorn serves only
+after startup — and intended in tests, where the graph is installed via
+`fakes.make_services(...)`. After shutdown `services` stays bound: teardown
+paths (and tests driving the lifespan directly) may still read it.
 """
 
 import asyncio
-import base64
 import contextlib
 import logging
 import os
-import re
-import time
-from datetime import datetime, timezone
 
-import httpx
-import yaml
-import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
+from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from ..adapters.dagu import DAGU_URL, DaguExecutor, DuplicateRun
-from ..adapters.files import RunLogStore, RunStore
-from ..adapters.redis import Messaging
-from ..adapters.registry import make_forge, make_internal_forge, make_pmo
-from .. import profiles as profiles_store
+from ..adapters.dagu import DuplicateRun
 from .. import secrets as secrets_store
 from .. import security
-from ..settings_bundle import (BundleError, MAX_BUNDLE_BYTES, SETUP_ENV_VARS,
-                               apply_bundle, audit_event, diff_bundle,
-                               dry_run_adapters, generate_env_file,
-                               protect_bundle, serialize_current,
-                               unprotect_bundle, validate_bundle,
-                               validate_config_semantics)
-from ..settings_crypto import MIN_PASSPHRASE_LEN, DecryptError
-from ..config import (HARNESS_VAR_PATTERN, AppConfig, Assignment, DevType,
-                      _INSTANCE_NAME_RE, deep_merge, delete_dev_type,
-                      load_config, load_dev_types, reject_stale_patch,
-                      save_config, save_dev_type)
-from ..domain.blocker_locator import BlockerLocator
-from ..domain.model import ALL_LABELS, derive
-from ..domain.oauth import OAuthManager
-from ..domain.orchestrator import (FinalizerRouter, MapperBusy, MapperService,
-                                   MapperUnconfigured, MissionManager)
-from ..domain.forge_runtime import ForgeRuntime
+from ..domain.model import ALL_LABELS
+from ..domain.orchestrator import MapperBusy, MapperUnconfigured
 from ..domain.reconcile import reconcile_runs
-from ..domain.repo_mirror import RepoCache
-from ..domain.workspaces import WorkspaceStore
-from ..domain.runs import RunManager
-from ..domain.skills import SkillService, SkillStoreError
 from ..domain.watchdog import watchdog_loop
-from ..harness import HARNESSES, dev_type_status
-from ..ports.forge import mission_branch
 from ..prompts import templates as prompt_templates
-from ..ports.pmo import PMOTransient
-from ..telemetry import OO_URL, setup_telemetry
+from ..telemetry import setup_telemetry
 from ..telemetry.oo_provision import ensure_oo_ingest_user_at_boot
 from .auth import credentials_configured, enforce_control_plane_auth
 from . import (connections_service, devtypes_service, internal_repos_service,
                profiles_service, settings_transfer)
 from .config_service import apply_config_patch, set_pmo_intake
-from .health import build_health_payload, reset_protection_cache
-from .poll import PollRuntime
+from .health import build_health_payload
+from .services import Services, _log_task_death, build_services
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("devcake")
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+# ProxyTracer (api/poll.py precedent): resolves the real provider per span
+# start, so module scope needs no telemetry install
+tracer = trace.get_tracer("devcake")
 
-tracer = setup_telemetry()
-
-config = load_config()
-dev_types = load_dev_types()
-prompt_templates.seed_default_templates()   # /data defaults (v0.1.1)
-prompt_templates.seed_devtype_prompts(dev_types)   # per-dev-type (2026-07-15)
-store = RunStore()
-messaging = Messaging(REDIS_URL, REDIS_PASSWORD)
-executor = DaguExecutor()
-# ADR-0025: per-run workspace tree on the host bind (compose mounts
-# $DEVCAKE_WS_HOST here rw; the dev-run DAG binds per-run subdirs)
-workspaces = WorkspaceStore("/workspaces")
-manager = RunManager(store, messaging, executor, workspaces=workspaces)
-
-# ── multi-instance wiring (schema v3, ADR-0009; repos plural per M10) ───────
-# One MissionManager per CONFIGURED PMO instance; shared state is injected:
-# the RunManager/store (global concurrency), ONE dev-type breakers dict
-# (credentials are DevCake-global), and ONE ForgeRuntime (repos belong to
-# the deployment — missions from any instance can route to any repo).
-shared_breakers: dict[str, str] = {}
-# dev_type → reason (ADR-0018). Same injected-shared-dict idiom as
-# shared_breakers, but a DIFFERENT thing: it throttles a dev type to one probe
-# run when its model backend looks sick, and clears itself when runs succeed.
-# PollRuntime is the sole writer; managers only read it.
-shared_backend_degraded: dict[str, str] = {}
-managers: dict[str, MissionManager] = {}
-mappers: dict[str, MapperService] = {}
-forge_runtime = ForgeRuntime()
-# ADR-0024: the ONE deployment-wide source mirror (repos are deployment-
-# global, so the mirror is too — same shared-runtime idiom as forge_runtime)
-repo_cache = RepoCache(config, forge_runtime)
-# the bundled internal fallback forge (M11): provisioner is admin-credentialed
-# (GITEA_ADMIN_*); None disables the zero-repo un-gating when Gitea is absent
-internal_forge = make_internal_forge() if os.environ.get("GITEA_ADMIN_PASSWORD") else None
-# skill store (docs/16 skill store v1): store-first reads via the internal
-# forge; bundled copies keep built-in skills working forge-less
-skill_service = SkillService(internal_forge)
+services: Services | None = None
 
 
-def _mission_owner_of(bid: str) -> str | None:
-    """PollRuntime's durable claim map, read at call time — `poll_rt` is
-    defined below (module-global late binding: blocker resolution only runs
-    inside poll/dispatch, long after startup)."""
-    return poll_rt.mission_owner.get(bid)
-
-
-# Deployment-wide blocker resolution (ADR-0009 amendment): ONE locator over
-# the LIVE managers dict, so a native blocked_by edge to a peer instance's
-# mission gates and inherits exactly like a local one (Linear v1; read-only —
-# never claims, never writes). Same live-reference pattern as FinalizerRouter.
-blocker_locator = BlockerLocator(managers, _mission_owner_of)
-
-
-def build_managers() -> None:
-    """(Re)build the manager set IN PLACE to match config.pmos: existing
-    managers keep their advisory state (grace, anomalies, merge windows) and
-    get repointed adapters; removed instances drop theirs — never leaked."""
-    live = {i.name: i for i in config.pmos if i.configured}
-    for name in [n for n in managers if n not in live]:
-        managers.pop(name)
-        mappers.pop(name, None)
-    for name, inst in live.items():
-        p = make_pmo(inst)
-        if name in managers:
-            mgr = managers[name]
-            mgr.pmo, mgr.forges, mgr.config = p, forge_runtime, config
-            mgr.instance, mgr.instance_name = inst, name
-            mgr.internal_forge = internal_forge
-            mgr.skills = skill_service
-            mgr.blocker_locator = blocker_locator
-            mgr.repo_cache = repo_cache
-        else:
-            managers[name] = MissionManager(
-                config, dev_types, p, forge_runtime, manager, messaging,
-                instance=inst, breakers=shared_breakers,
-                internal_forge=internal_forge, skills=skill_service,
-                backend_degraded=shared_backend_degraded,
-                blocker_locator=blocker_locator, repo_cache=repo_cache)
-            mappers[name] = MapperService(config, dev_types, managers[name])
-
-
-def _managers_in_config_order() -> list[MissionManager]:
-    return [managers[i.name] for i in config.pmos if i.name in managers]
-
-
-forge_runtime.rebuild(config.repos, make_forge)
-build_managers()
-router = FinalizerRouter(managers, store, messaging)
-manager.set_finalizer(router)  # RunFinalizer seam: routes on run.pmo_ref
-
-
-async def refresh_forge_health() -> dict[str, dict]:
-    """Probe every configured repo; the runtime latches/clears per repo."""
-    return await forge_runtime.refresh_all()
-
-
-def _log_task_death(t: asyncio.Task) -> None:
-    if not t.cancelled() and t.exception():
-        log.error("background task %s DIED", t.get_name(), exc_info=t.exception())
-
-
-def reload_connections() -> None:
-    """Hot-reload adapters after a config PUT: rebuild the forge, reconcile
-    the manager set, and re-ensure the managed labels per instance —
-    bootstrap is otherwise startup-only, so a hot-swapped team_key would run
-    unlabeled until restart."""
-    forge_runtime.rebuild(config.repos, make_forge)
-    build_managers()
-    reset_protection_cache()               # repos may have changed — reprobe
-    # the adapter set feeds secret_env_vars (descriptor env lists), so the
-    # redaction scan cache must rebuild with it (2026-08 F17)
-    security.invalidate_secret_scan()
-
-    async def _ensure():
-        for mgr in list(managers.values()):
-            try:
-                await mgr.pmo.ensure_labels(mgr.instance.team_key, ALL_LABELS)
-            except Exception:
-                log.exception("ensure_labels after config reload failed for "
-                              "instance %s — ensured on next restart",
-                              mgr.instance_name)
-        await refresh_forge_health()
-    asyncio.create_task(_ensure(), name="ensure_labels_reload") \
-        .add_done_callback(_log_task_death)
-oauth_mgr = OAuthManager(manager, messaging, dev_types,
-                         breakers=shared_breakers)
-manager.oauth_mgr = oauth_mgr
-runlog = RunLogStore()
-manager.runlog = runlog
-
-# The poll machinery (ownership claims, cycle driver, missions cache, loop)
-# lives in api/poll.py — constructed ONCE with live references and never
-# rebuilt on config reload (ADR-0015 Decision 2). `poll_rt.missions_cache`
-# keeps one stable list identity; /api/v1/missions serves it by reference.
-poll_rt = PollRuntime(
-    config=config, managers=managers, mappers=mappers, store=store,
-    forge_runtime=forge_runtime, refresh_forge_health=refresh_forge_health,
-    managers_in_config_order=_managers_in_config_order,
-    backend_degraded=shared_backend_degraded, repo_cache=repo_cache)
+def svc() -> Services:
+    if services is None:
+        raise RuntimeError(
+            "service graph not built — the lifespan has not run; tests "
+            "install one via fakes.make_services(...)")
+    return services
 
 
 def _refuse_insecure_passwords() -> None:
@@ -262,9 +112,9 @@ def _refuse_insecure_passwords() -> None:
             "dashboard/alerts).")
 
 
-def _security_warnings() -> list[dict]:
+def _security_warnings(config) -> list[dict]:
     """Credential-posture warnings — body lives in security.security_warnings
-    so the copy is testable without this module's singletons (F1 tripwire)."""
+    so the copy is testable without the service graph (F1 tripwire)."""
     return security.security_warnings(config)
 
 
@@ -273,12 +123,22 @@ async def lifespan(app: FastAPI):
     if not credentials_configured():
         raise RuntimeError("ADMIN_USER and ADMIN_PASSWORD must both be configured")
     _refuse_insecure_passwords()
+    # telemetry BEFORE the graph: httpx instrumentation must wrap the
+    # adapter clients build_services constructs (idempotent — TestClient
+    # lifespans re-enter this)
+    setup_telemetry()
+    global services
+    services = build_services()
+    s = services
     secrets_store.register_all()   # redaction coverage for GUI-stored secrets (M12)
+    # /data template seeding, moved here from import time (ADR-0028)
+    prompt_templates.seed_default_templates()   # /data defaults (v0.1.1)
+    prompt_templates.seed_devtype_prompts(s.dev_types)   # per-dev-type (2026-07-15)
     log.info("boot: schema_version=%s dagu pull_policy=missing image tags "
              "devcake/dev-*:%s — re-run `docker buildx bake all` lockstep "
-             "with app upgrades", config.schema_version,
+             "with app upgrades", s.config.schema_version,
              os.environ.get("DEVCAKE_TAG", "latest"))
-    for warn in _security_warnings():   # loud at boot; dismissable in the SPA
+    for warn in _security_warnings(s.config):   # loud at boot; dismissable in the SPA
         log.warning("%s — %s", warn["title"], warn["body"])
     # OpenObserve ingest service account (ISSUES #13): non-negotiable.
     # Compose only seeds root; boot creates/resyncs OO_INGEST_* so telemetry
@@ -288,34 +148,35 @@ async def lifespan(app: FastAPI):
     # corrupt run records must never wedge boot; a quarantined record is
     # FORGOTTEN, so best-effort teardown of anything it may have left live
     # (container, per-run ACL user, reply stream) — the run id is the handle
-    for run_id in store.quarantine_unreadable():
+    for run_id in s.store.quarantine_unreadable():
         with contextlib.suppress(Exception):
-            await executor.stop(run_id)
+            await s.executor.stop(run_id)
         with contextlib.suppress(Exception):
-            await messaging.delete_run_user(run_id)
+            await s.messaging.delete_run_user(run_id)
         with contextlib.suppress(Exception):
-            await messaging.delete_reply_stream(run_id)
+            await s.messaging.delete_reply_stream(run_id)
         # ADR-0025 Hook F: a quarantined record is FORGOTTEN — its dir would
         # otherwise only fall to the sweep's record-absent predicate later
         with contextlib.suppress(Exception):
-            workspaces.cleanup(run_id)
+            s.workspaces.cleanup(run_id)
     # internal fallback forge (M11): provision org + service accounts. Best
     # effort — a Gitea outage degrades only zero-repo missions, never boot
-    if internal_forge is not None:
+    if s.internal_forge is not None:
         try:
-            await internal_forge.ensure_service_accounts()
+            await s.internal_forge.ensure_service_accounts()
             log.info("internal forge: service accounts ensured")
         except Exception:
             log.exception("internal forge provisioning failed — zero-repo "
                           "missions will retry once Gitea is reachable")
         try:
-            await internal_forge.ensure_skill_store(skill_service.builtin_seed())
+            await s.internal_forge.ensure_skill_store(
+                s.skill_service.builtin_seed())
             log.info("internal forge: skill store ensured")
         except Exception:
             log.exception("skill store seeding failed — skills fall back to "
                           "bundled copies (POST /api/v1/skills/sync re-seeds)")
     # startup reconciliation (docs/04 §6) — labels per configured instance
-    for mgr in list(managers.values()):
+    for mgr in list(s.managers.values()):
         try:
             await mgr.pmo.ensure_labels(mgr.instance.team_key, ALL_LABELS)   # step 2
             log.info("labels ensured in team %s (instance %s)",
@@ -326,18 +187,19 @@ async def lifespan(app: FastAPI):
     # forge sweep deliberately NOT awaited here (incident 2026-08-01: it held
     # the listen socket O(N repos) and failed the compose healthcheck) — the
     # poll task runs it before its first cycle; /health `forge_probe` tracks it
-    await reconcile_runs(manager)
+    await reconcile_runs(s.manager)
     # ADR-0024: synchronous writability probe only (no network, no sync) —
     # mirror warm-up belongs to the poll task, NEVER awaited at boot
-    repo_cache.verify_writable()
+    s.repo_cache.verify_writable()
     # ADR-0025: same probe for the workspace base — first-touched-by-dockerd
     # (or a uid≠1000 mkdir) means root-owned and every dispatch would fail
-    workspaces.verify_writable()
+    s.workspaces.verify_writable()
     tasks = [
-        asyncio.create_task(poll_rt.loop(), name="poll_loop"),
-        asyncio.create_task(messaging.consume_forever(manager.handle, manager.verify_auth),
-                            name="ingress_consumer"),
-        asyncio.create_task(watchdog_loop(manager), name="watchdog"),
+        asyncio.create_task(s.poll_rt.loop(), name="poll_loop"),
+        asyncio.create_task(
+            s.messaging.consume_forever(s.manager.handle, s.manager.verify_auth),
+            name="ingress_consumer"),
+        asyncio.create_task(watchdog_loop(s.manager), name="watchdog"),
     ]
     for t in tasks:
         t.add_done_callback(_log_task_death)
@@ -362,13 +224,14 @@ FastAPIInstrumentor.instrument_app(app)
 
 @app.get("/api/v1/health")
 async def health():
+    s = svc()
     return await build_health_payload(
-        config=config, dev_types=dev_types, managers=managers,
-        mappers=mappers, forge_runtime=forge_runtime,
-        shared_breakers=shared_breakers, store=store,
-        internal_forge=internal_forge, poll_rt=poll_rt,
-        backend_degraded=shared_backend_degraded, repo_cache=repo_cache,
-        workspaces=workspaces)
+        config=s.config, dev_types=s.dev_types, managers=s.managers,
+        mappers=s.mappers, forge_runtime=s.forge_runtime,
+        shared_breakers=s.shared_breakers, store=s.store,
+        internal_forge=s.internal_forge, poll_rt=s.poll_rt,
+        backend_degraded=s.shared_backend_degraded, repo_cache=s.repo_cache,
+        workspaces=s.workspaces)
 
 
 @app.get("/api/v1/health/live")
@@ -381,9 +244,10 @@ async def list_missions():
     """Current derived Missions (poll-cycle snapshot; advisory cache — INV-1)."""
     # rows carry per-instance provenance ("instance"/"team" fields);
     # `teams` maps every configured instance for group-by consumers
-    return {"teams": {i.name: i.team_key for i in config.pmos if i.configured},
-            "adoption_mode": config.adoption_mode,
-            "missions": poll_rt.missions_cache}
+    s = svc()
+    return {"teams": {i.name: i.team_key for i in s.config.pmos if i.configured},
+            "adoption_mode": s.config.adoption_mode,
+            "missions": s.poll_rt.missions_cache}
 
 
 @app.get("/api/v1/runs")
@@ -393,7 +257,8 @@ async def list_runs(limit: int = 25, offset: int = 0,
                     created_to: str | None = None, sort: str | None = None,
                     dir: str | None = None, group_by: str | None = None):
     from .runs_service import list_runs_response
-    return list_runs_response(store, config.cost_inputs, limit=limit,
+    s = svc()
+    return list_runs_response(s.store, s.config.cost_inputs, limit=limit,
                               offset=offset, mission_key=mission_key,
                               pmo_ref=pmo_ref, created_from=created_from,
                               created_to=created_to, sort=sort,
@@ -403,10 +268,10 @@ async def list_runs(limit: int = 25, offset: int = 0,
 @app.get("/api/v1/runs/{run_id}")
 async def get_run(run_id: str):
     from .runs_service import run_detail
-    run = store.get(run_id)
+    run = svc().store.get(run_id)
     if run is None:
         raise HTTPException(404)
-    return run_detail(run, config.cost_inputs)
+    return run_detail(run, svc().config.cost_inputs)
 
 
 TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
@@ -429,8 +294,10 @@ class _SteeringBody(BaseModel):
 async def mission_action(pmo_id: str, body: _MissionActionBody):
     """Retry / park / unpark / resume via label swap. Returns projected labels."""
     from .mission_actions import label_action
+    s = svc()
     return await label_action(pmo_id, body.action,
-                              missions_cache=poll_rt.missions_cache, managers=managers)
+                              missions_cache=s.poll_rt.missions_cache,
+                              managers=s.managers)
 
 
 @app.post("/api/v1/missions/{pmo_id}/comment")
@@ -438,8 +305,10 @@ async def mission_comment(pmo_id: str, body: _SteeringBody):
     """Post an operator steering comment. NOT signed with the DevCake sentinel —
     the next poll classifies it as HUMAN and resets the attempt counter."""
     from .mission_actions import post_steering
+    s = svc()
     return await post_steering(pmo_id, body.body,
-                               missions_cache=poll_rt.missions_cache, managers=managers)
+                               missions_cache=s.poll_rt.missions_cache,
+                               managers=s.managers)
 
 
 @app.post("/api/v1/poll/run")
@@ -455,25 +324,28 @@ async def force_poll_route():
     anyway. Mirrors `POST /api/v1/relations-mapper/run` (docs/11 §1).
     """
     from .mission_actions import force_poll_now
+    rt = svc().poll_rt
     return await force_poll_now(
-        lock=poll_rt.lock,
-        next_cycle_id=poll_rt.next_cycle_id,
-        run_cycle=poll_rt.run_cycle)
+        lock=rt.lock,
+        next_cycle_id=rt.next_cycle_id,
+        run_cycle=rt.run_cycle)
 
 
 @app.post("/api/v1/runs/{run_id}/stop")
 async def stop_run_route(run_id: str):
     """Kill an in-flight run (counts as a failed attempt — UI copy says so)."""
     from .mission_actions import stop_run
-    return await stop_run(run_id, run_manager=manager, run_store=store)
+    s = svc()
+    return await stop_run(run_id, run_manager=s.manager, run_store=s.store)
 
 
 @app.get("/api/v1/runs/{run_id}/log")
 async def get_run_log(run_id: str, tail: int | None = None):
     """Condensed harness output relayed live by the Dev (docs/11 §2a)."""
-    if store.get(run_id) is None:
+    s = svc()
+    if s.store.get(run_id) is None:
         raise HTTPException(404)
-    _seq, text = runlog.read(run_id, tail)
+    _seq, text = s.runlog.read(run_id, tail)
     return PlainTextResponse(text)
 
 
@@ -481,15 +353,16 @@ async def get_run_log(run_id: str, tail: int | None = None):
 async def stream_run_log(run_id: str):
     """SSE follow: replays the stored log, then live lines until the run ends.
     X-Accel-Buffering disables nginx proxy buffering for this response."""
-    if store.get(run_id) is None:
+    s = svc()
+    if s.store.get(run_id) is None:
         raise HTTPException(404)
 
     def is_terminal() -> bool:
-        r = store.get(run_id)
+        r = s.store.get(run_id)
         return r is None or r.state in TERMINAL_STATES
 
     return StreamingResponse(
-        runlog.stream(run_id, is_terminal),
+        s.runlog.stream(run_id, is_terminal),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -500,7 +373,8 @@ async def stop_runs_route():
     """Stop every in-flight run without wiping anything (Clear-Runs
     hardening): finalizing runs are skipped and named in the response."""
     from .mission_actions import stop_all_runs
-    return await stop_all_runs(run_manager=manager, run_store=store)
+    s = svc()
+    return await stop_all_runs(run_manager=s.manager, run_store=s.store)
 
 
 @app.post("/api/v1/system/clear-runs")
@@ -511,6 +385,7 @@ async def clear_runs():
     In-flight Devs are stopped first. See docs/11 §3 and docs/10 §5.
     """
     from .clear import clear_all
+    s = svc()
     with tracer.start_as_current_span("system.clear_runs") as span:
         # Serialize the wipe against EVERY dispatch path (audit D5 #2/#8 +
         # re-audit #0/#6). Two locks, acquired in a fixed order:
@@ -524,18 +399,18 @@ async def clear_runs():
         # Order poll_rt.lock → dispatch_lock matches the poll loop's own order
         # (run_cycle holds poll_rt.lock, then launch takes dispatch_lock), so
         # there is no lock-ordering inversion / deadlock.
-        async with poll_rt.lock, manager.bootstrap.dispatch_lock:
-            result = await clear_all(store, executor, messaging, runlog,
-                                     internal_forge=internal_forge,
-                                     run_manager=manager)
-        poll_rt.missions_cache.clear()
-        for mgr in managers.values():
+        async with s.poll_rt.lock, s.manager.bootstrap.dispatch_lock:
+            result = await clear_all(s.store, s.executor, s.messaging, s.runlog,
+                                     internal_forge=s.internal_forge,
+                                     run_manager=s.manager)
+        s.poll_rt.missions_cache.clear()
+        for mgr in s.managers.values():
             mgr._grace.clear()
             mgr._grace_next.clear()
         # ADR-0018: the backend-degraded map IS run history, so "start fresh"
         # legitimately forgets it — and clearing it now avoids throttling with
         # zero evidence until the next poll cycle recomputes.
-        shared_backend_degraded.clear()
+        s.shared_backend_degraded.clear()
         # auth breakers stay — they reflect live credential health, not run history
         span.set_attribute("devcake.clear.runs_deleted",
                            int((result.get("local") or {}).get("runs_deleted") or 0))
@@ -549,46 +424,53 @@ async def clear_runs():
 
 @app.get("/api/v1/config")
 async def get_config():
-    data = config.model_dump()
+    data = svc().config.model_dump()
     return data
 
 
 @app.put("/api/v1/config")
 async def put_config(body: dict):
-    return await apply_config_patch(body, config=config, dev_types=dev_types,
-                                    managers=managers, reload=reload_connections,
-                                    repo_cache=repo_cache)
+    s = svc()
+    return await apply_config_patch(body, config=s.config, dev_types=s.dev_types,
+                                    managers=s.managers,
+                                    reload=s.reload_connections,
+                                    repo_cache=s.repo_cache)
 
 
 @app.put("/api/v1/config/pmos/{name}/intake")
 async def put_pmo_intake(name: str, body: dict):
     """Flip one PMO's intake switch without rewriting the pmos list (docs/11)."""
-    return set_pmo_intake(name=name, paused=body.get("paused"), config=config)
+    return set_pmo_intake(name=name, paused=body.get("paused"),
+                          config=svc().config)
 
 
 # ── config profiles (ADR-0013): named snapshots — bodies in profiles_service ─
 
 @app.get("/api/v1/profiles")
 async def list_profiles():
-    return profiles_service.list_profiles_rows(config, dev_types)
+    s = svc()
+    return profiles_service.list_profiles_rows(s.config, s.dev_types)
 
 
 @app.get("/api/v1/profiles/{name}")
 async def get_profile(name: str):
-    return profiles_service.get_profile_payload(name, config, dev_types)
+    s = svc()
+    return profiles_service.get_profile_payload(name, s.config, s.dev_types)
 
 
 @app.post("/api/v1/profiles")
 async def save_profile(body: dict):
-    return profiles_service.save_profile_body(body, config, dev_types)
+    s = svc()
+    return profiles_service.save_profile_body(body, s.config, s.dev_types)
 
 
 @app.post("/api/v1/profiles/{name}/apply")
 async def apply_profile(name: str):
+    s = svc()
     return profiles_service.apply_profile_body(
-        name, config=config, dev_types=dev_types, store=store,
-        reload=reload_connections, shared_breakers=shared_breakers,
-        forge_breakers=forge_runtime.breakers, managers=managers)
+        name, config=s.config, dev_types=s.dev_types, store=s.store,
+        reload=s.reload_connections, shared_breakers=s.shared_breakers,
+        forge_breakers=s.forge_runtime.breakers, managers=s.managers)
 
 
 @app.post("/api/v1/profiles/{name}/rename")
@@ -605,25 +487,29 @@ async def delete_profile(name: str):
 
 @app.post("/api/v1/settings/export")
 async def export_settings(body: dict):
+    s = svc()
     return await settings_transfer.export_settings_body(
-        body, config=config, dev_types=dev_types, skill_service=skill_service)
+        body, config=s.config, dev_types=s.dev_types,
+        skill_service=s.skill_service)
 
 
 @app.get("/api/v1/settings/export/summary")
 async def export_summary():
-    return await settings_transfer.export_summary_body(skill_service=skill_service)
+    return await settings_transfer.export_summary_body(
+        skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/settings/import/preview")
 async def import_preview(body: dict):
-    return settings_transfer.import_preview_body(body, config=config,
-                                                 dev_types=dev_types)
+    s = svc()
+    return settings_transfer.import_preview_body(body, config=s.config,
+                                                 dev_types=s.dev_types)
 
 
 @app.post("/api/v1/settings/import")
 async def import_settings(body: dict):
     return await settings_transfer.import_settings_body(
-        body, skill_service=skill_service)
+        body, skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/settings/import/env")
@@ -632,12 +518,13 @@ async def import_env(body: dict):
 
 
 # ── per-Mission-Type prompt templates (v0.1.1) + Dev Types — bodies in
-# devtypes_service; forwards pass the singletons at call time ────────────────
+# devtypes_service; forwards pass the graph's objects at call time ───────────
 
 @app.get("/api/v1/prompt-templates")
 async def get_prompt_templates():
-    return await devtypes_service.get_prompt_templates(config=config,
-                                                       dev_types=dev_types)
+    s = svc()
+    return await devtypes_service.get_prompt_templates(config=s.config,
+                                                       dev_types=s.dev_types)
 
 
 @app.put("/api/v1/prompt-templates/{mission_type}/{name}")
@@ -648,19 +535,19 @@ async def put_prompt_template(mission_type: str, name: str, body: dict):
 @app.delete("/api/v1/prompt-templates/{mission_type}/{name}")
 async def delete_prompt_template(mission_type: str, name: str):
     return await devtypes_service.delete_prompt_template(mission_type, name,
-                                                         config=config)
+                                                         config=svc().config)
 
 
 @app.put("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def put_devtype_prompt(dev_type: str, name: str, body: dict):
-    return await devtypes_service.put_devtype_prompt(dev_type, name, body,
-                                                     dev_types=dev_types)
+    return await devtypes_service.put_devtype_prompt(
+        dev_type, name, body, dev_types=svc().dev_types)
 
 
 @app.delete("/api/v1/devtype-prompts/{dev_type}/{name}")
 async def delete_devtype_prompt(dev_type: str, name: str):
     return await devtypes_service.delete_devtype_prompt(dev_type, name,
-                                                        config=config)
+                                                        config=svc().config)
 
 
 @app.get("/api/v1/harnesses")
@@ -670,44 +557,48 @@ async def list_harnesses():
 
 @app.get("/api/v1/dev-types")
 async def list_dev_types():
-    return await devtypes_service.list_dev_types(dev_types=dev_types)
+    return await devtypes_service.list_dev_types(dev_types=svc().dev_types)
 
 
 @app.post("/api/v1/dev-types")
 @app.put("/api/v1/dev-types/{name}")
 async def upsert_dev_type(body: dict, name: str | None = None):
     return await devtypes_service.upsert_dev_type(body, name,
-                                                  dev_types=dev_types)
+                                                  dev_types=svc().dev_types)
 
 
 @app.post("/api/v1/dev-types/{name}/rename")
 async def rename_dev_type(name: str, body: dict):
+    s = svc()
     return await devtypes_service.rename_dev_type(
-        name, body, config=config, dev_types=dev_types,
-        shared_breakers=shared_breakers)
+        name, body, config=s.config, dev_types=s.dev_types,
+        shared_breakers=s.shared_breakers)
 
 
 @app.delete("/api/v1/dev-types/{name}")
 async def remove_dev_type(name: str):
-    return await devtypes_service.remove_dev_type(name, config=config,
-                                                  dev_types=dev_types)
+    s = svc()
+    return await devtypes_service.remove_dev_type(name, config=s.config,
+                                                  dev_types=s.dev_types)
 
 
 @app.post("/api/v1/dev-types/{name}/credentials")
 async def upload_credentials(name: str, body: dict):
+    s = svc()
     return await devtypes_service.upload_credentials(
-        name, body, dev_types=dev_types, shared_breakers=shared_breakers)
+        name, body, dev_types=s.dev_types, shared_breakers=s.shared_breakers)
 
 
 @app.get("/api/v1/assignments")
 async def get_assignments():
-    return await devtypes_service.get_assignments(config=config)
+    return await devtypes_service.get_assignments(config=svc().config)
 
 
 @app.put("/api/v1/assignments")
 async def put_assignments(body: dict):
-    return await devtypes_service.put_assignments(body, config=config,
-                                                  dev_types=dev_types)
+    s = svc()
+    return await devtypes_service.put_assignments(body, config=s.config,
+                                                  dev_types=s.dev_types)
 
 
 # ── GUI-stored secrets (M12, F5) + connection tests — bodies (and the
@@ -715,22 +606,25 @@ async def put_assignments(body: dict):
 
 @app.put("/api/v1/secrets/{scope}/{instance}/{field}")
 async def put_secret(scope: str, instance: str, field: str, body: dict):
+    s = svc()
     return await connections_service.put_secret(
         scope, instance, field, body,
-        forge_runtime=forge_runtime, reload=reload_connections)
+        forge_runtime=s.forge_runtime, reload=s.reload_connections)
 
 
 @app.delete("/api/v1/secrets/{scope}/{instance}/{field}")
 async def delete_secret(scope: str, instance: str, field: str):
+    s = svc()
     return await connections_service.delete_secret(
         scope, instance, field,
-        forge_runtime=forge_runtime, reload=reload_connections)
+        forge_runtime=s.forge_runtime, reload=s.reload_connections)
 
 
 @app.put("/api/v1/harness-secrets/{var}")
 async def put_harness_secret(var: str, body: dict):
+    s = svc()
     return await connections_service.put_harness_secret(
-        var, body, dev_types=dev_types, shared_breakers=shared_breakers)
+        var, body, dev_types=s.dev_types, shared_breakers=s.shared_breakers)
 
 
 @app.delete("/api/v1/harness-secrets/{var}")
@@ -752,9 +646,11 @@ async def secrets_inventory():
 @app.post("/api/v1/secrets/clear")
 async def clear_secrets(body: dict):
     """Delete operator-selected secrets (harness / connections / credential files)."""
+    s = svc()
     return await connections_service.clear_secrets(
-        body, forge_runtime=forge_runtime, reload=reload_connections,
-        config=config, shared_breakers=shared_breakers, dev_types=dev_types)
+        body, forge_runtime=s.forge_runtime, reload=s.reload_connections,
+        config=s.config, shared_breakers=s.shared_breakers,
+        dev_types=s.dev_types)
 
 
 @app.get("/api/v1/connections/registry")
@@ -764,14 +660,16 @@ async def connections_registry():
 
 @app.post("/api/v1/connections/pmo/{name}/test")
 async def test_pmo(name: str):
-    return await connections_service.test_pmo(name, config=config,
-                                              managers=managers)
+    s = svc()
+    return await connections_service.test_pmo(name, config=s.config,
+                                              managers=s.managers)
 
 
 @app.post("/api/v1/connections/forge/{name}/test")
 async def test_forge(name: str):
-    return await connections_service.test_forge(name, config=config,
-                                                forge_runtime=forge_runtime)
+    s = svc()
+    return await connections_service.test_forge(name, config=s.config,
+                                                forge_runtime=s.forge_runtime)
 
 
 # ── internal-forge repos + skill store (M11, docs/16) — bodies in
@@ -780,55 +678,58 @@ async def test_forge(name: str):
 @app.get("/api/v1/internal-repos")
 async def list_internal_repos():
     return await internal_repos_service.list_internal_repos(
-        internal_forge=internal_forge)
+        internal_forge=svc().internal_forge)
 
 
 @app.post("/api/v1/internal-repos/create")
 async def create_internal_repo(body: dict):
     return await internal_repos_service.create_internal_repo(
-        body, internal_forge=internal_forge)
+        body, internal_forge=svc().internal_forge)
 
 
 @app.get("/api/v1/skills")
 async def list_skills():
-    return await internal_repos_service.list_skills(skill_service=skill_service)
+    return await internal_repos_service.list_skills(
+        skill_service=svc().skill_service)
 
 
 @app.get("/api/v1/skills/{name}")
 async def get_skill(name: str):
     return await internal_repos_service.get_skill(
-        name, skill_service=skill_service)
+        name, skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/skills")
 async def create_skill(body: dict):
     return await internal_repos_service.create_skill(
-        body, skill_service=skill_service)
+        body, skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/skills/import")
 async def import_skill(body: dict):
     return await internal_repos_service.import_skill(
-        body, skill_service=skill_service)
+        body, skill_service=svc().skill_service)
 
 
 @app.delete("/api/v1/skills/{name}")
 async def delete_skill_endpoint(name: str):
     return await internal_repos_service.delete_skill_endpoint(
-        name, skill_service=skill_service)
+        name, skill_service=svc().skill_service)
 
 
 @app.post("/api/v1/skills/sync")
 async def sync_skills():
+    s = svc()
     return await internal_repos_service.sync_skills(
-        internal_forge=internal_forge, skill_service=skill_service)
+        internal_forge=s.internal_forge, skill_service=s.skill_service)
 
 
 @app.delete("/api/v1/internal-repos/{name}")
 async def delete_internal_repo(name: str):
+    s = svc()
     return await internal_repos_service.delete_internal_repo(
-        name, internal_forge=internal_forge, store=store,
-        forge_runtime=forge_runtime)
+        name, internal_forge=s.internal_forge, store=s.store,
+        forge_runtime=s.forge_runtime)
 
 
 @app.post("/api/v1/relations-mapper/run")
@@ -836,14 +737,15 @@ async def run_mapper(instance: str | None = None):
     """Manual trigger (docs/11): works regardless of the enabled toggle — the
     toggle governs only the periodic service. Requires a valid dev_type.
     ?instance= selects the PMO instance; default = the first configured."""
-    names = [i.name for i in config.pmos if i.name in mappers]
+    s = svc()
+    names = [i.name for i in s.config.pmos if i.name in s.mappers]
     if not names:
         raise HTTPException(422, "no configured PMO instance")
     target = instance or names[0]
-    if target not in mappers:
+    if target not in s.mappers:
         raise HTTPException(404, f"no PMO instance named {target!r}")
     try:
-        run = await mappers[target].run_now()
+        run = await s.mappers[target].run_now()
     except MapperUnconfigured as e:
         raise HTTPException(422, str(e))
     except MapperBusy as e:
@@ -858,14 +760,14 @@ async def oauth_start(name: str):
     """Per-dev-type device-code login: the credential lands in THIS Dev Type's
     /data/secrets dir (two Dev Types on one harness = two accounts)."""
     try:
-        return await oauth_mgr.start(name)
+        return await svc().oauth_mgr.start(name)
     except ValueError as e:
         raise HTTPException(422, str(e))
 
 
 @app.get("/api/v1/oauth/status/{run_id}")
 async def oauth_status(run_id: str):
-    s = oauth_mgr.status(run_id)
+    s = svc().oauth_mgr.status(run_id)
     if s is None:
         raise HTTPException(404)
     return s
@@ -877,7 +779,7 @@ async def dispatch_hello(sleep: int = 3, payload_kb: int = 1,
     """Dispatches the hello stub Dev through the full pipeline (Dagu → container
     → Redis → finalize). Permanent debug/CI fixture — scripts/ci_suite.sh."""
     try:
-        run = await manager.dispatch_hello(sleep, payload_kb, timeout_seconds)
+        run = await svc().manager.dispatch_hello(sleep, payload_kb, timeout_seconds)
     except DuplicateRun as e:
         raise HTTPException(409, f"duplicate dagRunId {e}")
     return {"run_id": run.run_id, "state": run.state}

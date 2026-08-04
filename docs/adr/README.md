@@ -22,7 +22,7 @@
 | [0012](0012-decomposition-depth-and-edge-inheritance.md) | Decomposition depth + edge inheritance | Accepted |
 | [0013](0013-settings-bundle-profiles-and-export.md) | Settings bundle, profiles, export | Accepted |
 | [0014](0014-activity-feed-fidelity-and-activity-repos.md) | Activity feed fidelity + activity repos | Accepted |
-| [0015](0015-orchestrator-module-functions-and-api-composition.md) | Orchestrator module functions + composition root | Accepted. Close-out inventory drifted (the guard test allows seven residual forwards, the prose said nine — the ratchet is the truth) |
+| [0015](0015-orchestrator-module-functions-and-api-composition.md) | Orchestrator module functions + composition root | Accepted, **amended by ADR-0028** (the composition root moved behind `build_services()`; the route-forward ratchet is unchanged). Close-out inventory drifted (the guard test allows seven residual forwards, the prose said nine — the ratchet is the truth) |
 | [0016](0016-skills-and-prompt-assembly.md) | Skills and prompt assembly | Accepted |
 | [0017](0017-blocker-work-ro-mounts-and-optional-pmo-zip.md) | Blocker work "RO mounts" + optional PMO zip | Accepted, **amended** (cross-instance). Read the body, not the title: the mechanism is an RO **token** + prompt contract in ordinary writable clone dirs — falling back to the write token when no `token_ro` is configured — not a filesystem mount |
 | [0018](0018-harness-fault-classification-and-backend-brake.md) | Harness fault classification + backend brake | Accepted. The exit-11 "known gap" is now an operator toggle (ADR-0026) |
@@ -35,4 +35,5 @@
 | [0025](0025-provisioned-workspaces.md) | Provisioned workspaces | Accepted — supersedes ADR-0024 §5's risk posture |
 | [0026](0026-attempt-reset-policy-and-bad-output-brake.md) | Attempt-reset policy + opt-in bad-output brake | Accepted (2026-08-04) |
 | [0027](0027-failure-taxonomy-as-data.md) | Failure taxonomy as data | Accepted (2026-08-04) |
+| [0028](0028-composition-root-factory.md) | Composition-root factory (`build_services()` + wiring-only main.py) | Accepted (2026-08-04); amends ADR-0015 |
 | [0029](0029-normalized-result-shapes.md) | Normalized result shapes (TokenReport v1 + SQL-readiness) | Accepted (2026-08-04). Numbered 0029 but landed before 0028: it touches finalize/costing/runs_service, which the composition-root rewrite then leaves alone |

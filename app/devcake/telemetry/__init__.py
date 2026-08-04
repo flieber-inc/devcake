@@ -52,6 +52,15 @@ async def push_oo_log(stream: str, record: dict) -> bool:
 
 
 def setup_telemetry() -> trace.Tracer:
+    # ADR-0028: idempotent — the call moved from import time into the app
+    # lifespan, so every `with TestClient(app)` re-enters it. Without this
+    # guard each entry would install another BatchSpanProcessor WORKER
+    # THREAD and re-instrument httpx (the SDK ignores a second
+    # set_tracer_provider anyway, logging an error). A real provider
+    # already installed means telemetry is up: return the tracer and touch
+    # nothing.
+    if isinstance(trace.get_tracer_provider(), TracerProvider):
+        return trace.get_tracer("devcake")
     provider = TracerProvider(resource=Resource.create({"service.name": SERVICE_NAME}))
     exporter = OTLPSpanExporter(
         endpoint=f"{OO_URL}/api/{OO_ORG}/v1/traces",

@@ -92,4 +92,38 @@ await withPage(async (page) => {
     (await page.locator('[role="dialog"]').count()) === 0);
 });
 
+// ── per-run Stop (2026-08 reviewer round): the MissionDrawer's Stop lifted
+// onto the table — rendered ONLY on dispatched/running rows, behind the same
+// honest confirm. Mocked rows; the dialog is CANCELLED, nothing is stopped. ──
+await withPage(async (page) => {
+  const runs = [
+    { run_id: "T-9-1-EXECUTE-RUNNIN", mission_key: "T-9", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "running",
+      started_at: new Date(Date.now() - 60000).toISOString(), ended_at: null },
+    { run_id: "T-8-1-EXECUTE-DONEXX", mission_key: "T-8", mission_type: "EXECUTE",
+      dev_type: "senior-dev", seq: 1, state: "finished",
+      started_at: new Date(Date.now() - 120000).toISOString(),
+      ended_at: new Date(Date.now() - 60000).toISOString() },
+  ];
+  await page.route(/\/api\/v1\/runs(?:\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ total: 2, total_runs: 2, runs, totals: null,
+                             pmo_refs: [], rate_card: {} }) }));
+  await gotoFresh(page, "#/runs");
+  await page.waitForSelector("table tbody tr");
+  check("running row carries a Stop button",
+    (await page.locator('button[aria-label="Stop run T-9-1-EXECUTE-RUNNIN"]').count()) === 1);
+  check("finished row carries NO Stop button",
+    (await page.locator('button[aria-label="Stop run T-8-1-EXECUTE-DONEXX"]').count()) === 0);
+  await page.click('button[aria-label="Stop run T-9-1-EXECUTE-RUNNIN"]');
+  await page.waitForSelector('[role="dialog"]');
+  const text = await page.locator('[role="dialog"]').innerText();
+  check("stop confirm owns the retry-limit truth",
+    text.includes("Stop this run?") && text.includes("counts toward the retry limit"));
+  await page.click('[role="dialog"] button:has-text("Cancel")');
+  await page.waitForTimeout(100);
+  check("cancel closes without stopping",
+    (await page.locator('[role="dialog"]').count()) === 0);
+});
+
 summary("costs");

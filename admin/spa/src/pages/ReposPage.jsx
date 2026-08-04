@@ -191,13 +191,33 @@ export default function ReposPage({ onHealthChange }) {
   const [presence, setPresence] = useState({});   // "repo:name:field" → {present}
   const draftRepoNames = (dr.draft?.cfg.repos || []).map((r) => r.name);
   // filter + cap engage only past CARD_CAP — small fleets keep every card,
-  // and a leftover filter can never hide cards while its input is hidden
-  const filterActive = draftRepoNames.length > CARD_CAP;
+  // and a leftover filter can never hide cards while its input is hidden.
+  // 2026-08 reviewer round: the input now appears past 5 repos (it used to
+  // wait for the 30-card cap); the hard render cap stays at CARD_CAP.
+  const filterActive = draftRepoNames.length > 5;
   const fq = filterActive ? query.trim().toLowerCase() : "";
-  const visibleNames = filterActive
-    ? draftRepoNames.filter((n) => !fq || n.toLowerCase().includes(fq)).slice(0, CARD_CAP)
+  const matchedNames = filterActive
+    ? draftRepoNames.filter((n) => !fq || n.toLowerCase().includes(fq))
     : draftRepoNames;
+  const visibleNames = draftRepoNames.length > CARD_CAP
+    ? matchedNames.slice(0, CARD_CAP)
+    : matchedNames;
   const visibleKey = visibleNames.join(",");
+
+  // 2026-08 reviewer round: collapsed summary rows — one ~350px card per
+  // repo meant 2-3 fit a screen. Each card collapses to a one-line summary
+  // (name · forge · URL host · merge posture); expansion is per-operator
+  // ephemeral view state. ≤3 repos start expanded; a newly added repo opens
+  // expanded (its form needs filling).
+  // (keyed by INDEX, not name — a rename mid-edit must not collapse the
+  // card being typed in; indexes only shift on the rare remove)
+  const [expandedRepos, setExpandedRepos] = useState(() => new Set(
+    draftRepoNames.length <= 3 ? draftRepoNames.map((_, i) => i) : []));
+  const toggleRepoCard = (i) => setExpandedRepos((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
   useEffect(() => {
     const refs = visibleNames.filter(Boolean).flatMap((n) =>
       [`repo:${n}:token`, `repo:${n}:token_ro`, `repo:${n}:reviewer_token`]);
@@ -321,10 +341,45 @@ export default function ReposPage({ onHealthChange }) {
         {cfg.repos.map((repo, idx) => {
           if (!visibleSet.has(repo.name)) return null;
           const tr = testResult[`forge:${repo.name}`];
+          if (!expandedRepos.has(idx)) {
+            let host = "";
+            try { host = repo.url ? new URL(repo.url).host : ""; } catch { host = ""; }
+            return (
+              <button key={`${idx}-${secretsEpoch}`} type="button"
+                data-testid="repo-summary-row"
+                aria-label={`Expand repository ${repo.name}`}
+                onClick={() => toggleRepoCard(idx)}
+                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
+                <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{repo.forge}</span>
+                {host && <span className="min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-400">{host}</span>}
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                    {repo.auto_merge ? "auto-merge" : "merge hand-off"}
+                  </span>
+                  {tr && (
+                    <span className={`text-xs ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                      {tr.ok ? "✓" : "✗"}
+                    </span>
+                  )}
+                  <span aria-hidden className="text-xs text-neutral-400">▸</span>
+                </span>
+              </button>
+            );
+          }
           return (
             <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                <span className="flex items-center gap-2">
+                  <button type="button"
+                    aria-label={`Collapse repository ${repo.name}`}
+                    title="Collapse to a summary row"
+                    onClick={() => toggleRepoCard(idx)}
+                    className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
+                    ▾
+                  </button>
+                  <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                </span>
                 {cfg.repos.length > 0 && (
                   <Button kind="danger-ghost" onClick={() => {
                     const doRemove = () => {
@@ -490,6 +545,7 @@ export default function ReposPage({ onHealthChange }) {
         <Button kind="ghost" onClick={() => {
           const name = nextFreeName("repo", cfg.repos, dr.server.cfg.repos);
           newNames.track(name);
+          setExpandedRepos((prev) => new Set(prev).add(cfg.repos.length));
           setField("cfg.repos", [...cfg.repos,
             { name, forge: "github", url: "",
               api_base: null, default_branch: "main",

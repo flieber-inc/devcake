@@ -30,6 +30,18 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
   const [intakeBusy, setIntakeBusy] = useState({});
   const [intakeErr, setIntakeErr] = useState({});
+  // 2026-08 reviewer round: collapsed summary rows + a name filter past 5
+  // instances — the ReposPage pattern (index-keyed expansion so a rename
+  // mid-edit never collapses the card being typed in; ≤3 start expanded)
+  const [pmoFilter, setPmoFilter] = useState("");
+  const [expandedPmos, setExpandedPmos] = useState(() => new Set(
+    (dr.draft?.cfg.pmos || []).length <= 3
+      ? (dr.draft?.cfg.pmos || []).map((_, i) => i) : []));
+  const togglePmoCard = (i) => setExpandedPmos((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
   // repos WITHOUT a stored Access (write) token cannot join a PMO's WORK
   // set (founder request 2026-07-15) — EXECUTE would fail at push; they
   // remain selectable as reference repos
@@ -146,8 +158,49 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
         {clearReloadErr && (
           <p className="text-sm text-red-600 dark:text-red-400">✗ {clearReloadErr}</p>
         )}
+        {cfg.pmos.length > 5 && (
+          <span className="relative block w-64">
+            <Input className="pr-7" value={pmoFilter}
+              placeholder={`Filter ${cfg.pmos.length} PMO instances…`}
+              aria-label="Filter PMO instances by name"
+              onChange={(e) => setPmoFilter(e.target.value)} />
+            {pmoFilter && (
+              <button type="button" aria-label="Clear PMO filter"
+                onClick={() => setPmoFilter("")}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                ✕
+              </button>
+            )}
+          </span>
+        )}
         {cfg.pmos.map((inst, idx) => {
+          const fq = cfg.pmos.length > 5 ? pmoFilter.trim().toLowerCase() : "";
+          if (fq && !(inst.name || "").toLowerCase().includes(fq)) return null;
           const tr = testResult[`pmo:${inst.name}`];
+          if (!expandedPmos.has(idx)) {
+            return (
+              <button key={`${idx}-${secretsEpoch}`} type="button"
+                data-testid="pmo-summary-row"
+                aria-label={`Expand PMO instance ${inst.name}`}
+                onClick={() => togglePmoCard(idx)}
+                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
+                <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{inst.system}</span>
+                {inst.team_key && (
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">{inst.team_key}</span>
+                )}
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                    {(inst.repos || []).length} repo{(inst.repos || []).length === 1 ? "" : "s"}
+                  </span>
+                  {(health.pmo_instances || {})[inst.name]?.intake_paused && (
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400">intake paused</span>
+                  )}
+                  <span aria-hidden className="text-xs text-neutral-400">▸</span>
+                </span>
+              </button>
+            );
+          }
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
             || { needs_api_base: false, team_key_label: "Team key",
                  team_key_help: "", api_base_help: "" };
@@ -164,7 +217,16 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           return (
             <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                <span className="flex items-center gap-2">
+                  <button type="button"
+                    aria-label={`Collapse PMO instance ${inst.name}`}
+                    title="Collapse to a summary row"
+                    onClick={() => togglePmoCard(idx)}
+                    className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
+                    ▾
+                  </button>
+                  <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                </span>
                 {cfg.pmos.length > 1 && (
                   <Button kind="danger-ghost" onClick={() => {
                     const doRemove = () => {
@@ -299,6 +361,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
         <Button kind="ghost" onClick={() => {
           const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
           newPmoNames.track(name);
+          setExpandedPmos((prev) => new Set(prev).add(cfg.pmos.length));
           const defaultSystem = (registry.pmo_systems || [])[0]?.id || "linear";
           setField("cfg.pmos", [...cfg.pmos,
             { name, system: defaultSystem,

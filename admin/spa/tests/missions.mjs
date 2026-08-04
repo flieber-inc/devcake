@@ -186,4 +186,34 @@ await withPage(async (page) => {
     state.present && state.disabled === false, `disabled=${state.disabled}`);
 }, { width: 1280, height: 900 });
 
+// ── stage visibility (2026-08 reviewer round): Hide collapses a section to
+// its strip pill (dimmed, count kept — never invisible-invisible); the pill
+// shows it again; the choice persists in localStorage ────────────────────────
+await withPage(async (page) => {
+  await mockMissions(page, makeRows());
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector('[data-testid="mission-list"] section');
+
+  await page.click('button[aria-label="Hide the Backlog section"]');
+  await page.waitForTimeout(100);
+  check("Hide removes the stage section from the list",
+    (await page.locator('section[aria-label="Backlog"]').count()) === 0);
+  const pill = page.locator('button[aria-label*="hidden, click to show"]');
+  check("hidden stage keeps a dimmed strip pill with its count",
+    (await pill.count()) === 1 && /Backlog\s*\d+/.test(await pill.innerText()));
+
+  // persists across a reload (localStorage, per-operator view state)
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector('[data-testid="mission-list"] section');
+  check("hidden stage stays hidden after a reload",
+    (await page.locator('section[aria-label="Backlog"]').count()) === 0);
+
+  await page.click('button[aria-label*="hidden, click to show"]');
+  await page.waitForTimeout(100);
+  check("clicking the dimmed pill shows the section again",
+    (await page.locator('section[aria-label="Backlog"]').count()) === 1);
+  // cleanup: leave no persisted preference behind for later suites
+  await page.evaluate(() => localStorage.removeItem("devcake-missions-hidden"));
+});
+
 summary("missions");

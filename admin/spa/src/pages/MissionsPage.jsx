@@ -25,6 +25,25 @@ const SECTION_ORDER = [
   ...COLUMNS.map((c) => c.id).filter((id) => id !== "needs_human"),
 ];
 
+// 2026-08 reviewer round: per-operator stage visibility. Hiding a stage
+// removes its SECTION from the list only — the strip pill stays, dimmed,
+// still carrying the live count, so a stage with work in it can never
+// become invisible-invisible; clicking the dimmed pill shows it again.
+// Persisted per browser (localStorage, the devcake-sidebar precedent) —
+// a view preference, never config.
+const HIDDEN_STAGES_KEY = "devcake-missions-hidden";
+
+function readHiddenStages() {
+  try {
+    const v = JSON.parse(localStorage.getItem(HIDDEN_STAGES_KEY) || "[]");
+    return Array.isArray(v)
+      ? v.filter((id) => COLUMNS.some((c) => c.id === id))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 // The MAJORITY reason of a bucket (e.g. "terminal — ignored" on a Done
 // section) — hoisted into the section header so rows only spell out
 // deviations. Majority, not unanimity: one odd row must not force the
@@ -83,6 +102,17 @@ export default function MissionsPage() {
   const [pending, setPending] = useState({});
   const [openMission, setOpenMission] = useState(null);
   const [showAllDone, setShowAllDone] = useState(false);
+  const [hiddenStages, setHiddenStages] = useState(readHiddenStages);
+  const toggleStage = (id) =>
+    setHiddenStages((prev) => {
+      const next = prev.includes(id)
+        ? prev.filter((x) => x !== id)
+        : [...prev, id];
+      try {
+        localStorage.setItem(HIDDEN_STAGES_KEY, JSON.stringify(next));
+      } catch { /* storage unavailable — the toggle still works this session */ }
+      return next;
+    });
   const [confirmAction, setConfirmAction] = useState(null); // {pmo_id, action}
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [flash, setFlash] = useState("");
@@ -285,6 +315,25 @@ export default function MissionsPage() {
               );
             }
             const hot = col.id === "needs_human";
+            if (hiddenStages.includes(col.id)) {
+              // hidden stage: the pill stays, dimmed, with the LIVE count —
+              // never invisible-invisible; clicking shows the section again
+              return (
+                <button
+                  key={col.id}
+                  type="button"
+                  aria-label={`${col.label}: ${n} — hidden, click to show`}
+                  onClick={() => toggleStage(col.id)}
+                  className={`rounded-full border border-dashed px-2.5 py-1 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
+                    hot
+                      ? "border-amber-300 text-amber-700/70 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300/70 dark:hover:bg-amber-950/40"
+                      : "border-neutral-300 text-neutral-400 hover:bg-stone-50 dark:border-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-900"
+                  }`}
+                >
+                  {col.label} <span className="tabular-nums">{n}</span>
+                </button>
+              );
+            }
             return (
               <button
                 key={col.id}
@@ -306,7 +355,9 @@ export default function MissionsPage() {
         </div>
       )}
       <div data-testid="mission-list" className="space-y-4 pb-4">
-        {SECTION_ORDER.filter((id) => buckets[id].length > 0).map((id) => {
+        {SECTION_ORDER.filter(
+          (id) => buckets[id].length > 0 && !hiddenStages.includes(id),
+        ).map((id) => {
           const col = COLUMNS.find((c) => c.id === id);
           const bucket = buckets[id];
           const shared = sharedReason(bucket);
@@ -340,15 +391,26 @@ export default function MissionsPage() {
                     — {shared}
                   </span>
                 )}
-                {id === "done" && bucket.length > DONE_PREVIEW && (
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                  {id === "done" && bucket.length > DONE_PREVIEW && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllDone((v) => !v)}
+                      className="rounded text-xs text-accent-700 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-accent-300"
+                    >
+                      {showAllDone ? "Show fewer" : `Show all ${bucket.length}`}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setShowAllDone((v) => !v)}
-                    className="ml-auto shrink-0 rounded text-xs text-accent-700 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-accent-300"
+                    aria-label={`Hide the ${col.label} section`}
+                    title="Hide this stage from the list — its strip pill keeps the count"
+                    onClick={() => toggleStage(id)}
+                    className="rounded text-xs text-neutral-400 underline underline-offset-2 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300"
                   >
-                    {showAllDone ? "Show fewer" : `Show all ${bucket.length}`}
+                    Hide
                   </button>
-                )}
+                </span>
               </header>
               <div>
                 {shown.map((row) => (

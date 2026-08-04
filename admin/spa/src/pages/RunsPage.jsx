@@ -36,6 +36,11 @@ export default function RunsPage() {
   const [clearing, setClearing] = useState(false);
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
+  // per-run stop (2026-08 reviewer round): the MissionDrawer's Stop, lifted
+  // onto the table — same endpoint, same eligibility, same copy
+  const [stopTarget, setStopTarget] = useState(null);
+  const [stopOneBusy, setStopOneBusy] = useState(false);
+  const [stopOneErr, setStopOneErr] = useState("");
   const [clearMsg, setClearMsg] = useState("");
   const [clearErr, setClearErr] = useState("");
   const [pmoRef, setPmoRef] = useState("");
@@ -189,6 +194,17 @@ export default function RunsPage() {
           trace <ExternalLink size={10} aria-hidden />
         </a>
       </td>
+      <td className="pl-2 text-right">
+        {/* dispatched/running only — finalizing hides Stop too: the Dev has
+            already exited and the backend 409s a stop there by design */}
+        {["dispatched", "running"].includes(r.state) && (
+          <Button size="sm" kind="danger-ghost"
+            aria-label={`Stop run ${r.run_id}`}
+            onClick={(e) => { e.stopPropagation(); setStopOneErr(""); setStopTarget(r); }}>
+            Stop
+          </Button>
+        )}
+      </td>
     </tr>
   );
 
@@ -236,6 +252,21 @@ export default function RunsPage() {
       setClearErr(String(e.message || e));
     } finally {
       setClearing(false);
+    }
+  };
+
+  const doStopOne = async () => {
+    if (!stopTarget) return;
+    setStopOneBusy(true);
+    setStopOneErr("");
+    try {
+      await send("POST", "/runs/" + encodeURIComponent(stopTarget.run_id) + "/stop");
+      setStopTarget(null);
+      load();
+    } catch (e) {
+      setStopOneErr(String(e.message || e));
+    } finally {
+      setStopOneBusy(false);
     }
   };
 
@@ -385,11 +416,12 @@ export default function RunsPage() {
                 {sortableTh("cache_write_tokens", "cache w", "text-right")}
                 {sortableTh("cost", "cost", "text-right")}
                 <th>trace</th>
+                <th aria-label="run actions" />
               </tr>
             </thead>
             <tbody>
               {!hasRows && (
-                <tr><td colSpan={11} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
+                <tr><td colSpan={12} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
                   No runs{filter ? " match this filter" : " yet"}.
                 </td></tr>
               )}
@@ -418,6 +450,7 @@ export default function RunsPage() {
                     {usd(data.totals.cost_usd_effective)}
                   </td>
                   <td />
+                  <td />
                 </tr>
               )}
               {(grouped ? (data.groups || []) : []).map((g) => (
@@ -444,6 +477,7 @@ export default function RunsPage() {
                       {usd(g.subtotal.cost_usd_effective)}
                     </td>
                     <td />
+                  <td />
                   </tr>
                   {g.runs.map(runRow)}
                 </React.Fragment>
@@ -457,6 +491,21 @@ export default function RunsPage() {
       {costOpen && (
         <CostInputsModal onClose={() => setCostOpen(false)} onSaved={load} />
       )}
+      <ConfirmDialog
+        open={!!stopTarget}
+        title="Stop this run?"
+        body={
+          "The Dev container is stopped and this run is recorded as failed.\n" +
+          "It counts toward the retry limit. The mission keeps its labels and " +
+          "is picked up again on a later cycle — park it first if you don't " +
+          "want that."
+        }
+        confirmLabel="Stop run"
+        busy={stopOneBusy}
+        error={stopOneErr}
+        onConfirm={doStopOne}
+        onCancel={() => !stopOneBusy && (setStopTarget(null), setStopOneErr(""))}
+      />
       <ConfirmDialog
         open={stopConfirmOpen}
         title="Stop all in-flight runs?"

@@ -8,6 +8,14 @@
 
 ## 1. Error classes
 
+The `DEV_*` family below is **authoritative in code**: one row per class in
+`domain/failure_taxonomy.py` (ADR-0027), from which the consumers (finalize
+ladder, reconcile's post-mortem regex, the counting/brake/kill membership
+sets) are derived — and `test_failure_taxonomy.py` pins this section's class
+set against that table, so adding a class means a table row AND a row here.
+The non-`DEV_*` rows are flow outcomes, not Run-record classes; they stay
+prose.
+
 | Class | Examples / mapping | Nature |
 |---|---|---|
 | `PMO_TRANSIENT` | Linear 429/`RATELIMITED`, 5xx, network — adapters signal it by raising `PMOTransient` (`ports/pmo.py`) | retryable |
@@ -18,6 +26,9 @@
 | `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint — incl. the ADR-0025 sentinel/marker family: provision found the wrong bind dir, or the harness step found no/mismatched `provisioned` marker — the artifact carries owner/mode/listing forensics); vanished container | counted attempt |
 | `DEV_MCP_SETUP` | exit 14: an `mcp_setup_commands` entry failed or hit the 300 s per-command cap; `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | app watchdog kill via Dagu stop → Run `timed_out` (not an entrypoint exit code) | counted attempt |
+| `DEV_ORPHANED` | reconciliation found the Dagu run dead while the app was away → Run `orphaned` (post-mortem enrichment may then upgrade `run.error` to a classified exit — §2 note); also stamped by the multi-instance router on a run whose PMO instance is no longer configured (state `failed`, deliberately — the condition is a genuine orphan) | counted attempt |
+| `DEV_KILLED` | the kill-chokepoint **catch-all** (`_kill_inner`): any kill path that names no more specific state/class lands here, so a future kill site cannot produce an unclassified run | counted attempt |
+| `DEV_OPERATOR_STOP` | operator-initiated stop (admin UI stop run / stop all, clear-runs drain) — passed explicitly by those callers, never a default | counted attempt — a stopped attempt burns like a failed one; pause or re-label the mission if that is not what you want |
 | `DEV_AUTH` | exit 12 — harness credential failure per the §4 precedence contract (stream 401/403 and/or distinctive stderr markers; generic markers only when no in-band fault already explains the run) | circuit breaker (§4) — **not** a counted attempt |
 | `DEV_FORGE` | exit 13 without the structured `DEV_FORGE_AUTH` class (transient forge/clone/push failure, or auth-ish wording without the structured class) | counted only after per-step excusals are spent (§4a) — **not** a latched breaker |
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
@@ -41,6 +52,9 @@
 | `DEV_CRASH` | yes — by natural rescheduling (INV-3) | **yes** | scheduler (next cycle) | after cap: `DEVCAKE-FAILED` (§3) |
 | `DEV_MCP_SETUP` | yes — same (a transient install/network failure deserves retries; the deterministic missing-secret case never dispatches at all, `14` §8) | **yes** | scheduler | same |
 | `DEV_TIMEOUT` | yes — same | **yes** | scheduler | same |
+| `DEV_ORPHANED` | yes — same (the mission's label never advanced) | **yes** | scheduler | same |
+| `DEV_KILLED` | yes — same | **yes** | scheduler | same |
+| `DEV_OPERATOR_STOP` | yes — the mission stays schedulable; stop the *mission*, not just the run, to prevent re-dispatch | **yes** | scheduler | Runs page names the operator stop |
 | `DEV_BAD_OUTPUT` | yes — same | **yes** | scheduler | same |
 | `DEV_HARNESS_FAULT` | yes — same | **yes**, unless correlated (§4a) | scheduler | `dev_backend_degraded` in `/health` + SPA warning while throttled |
 | `DEV_TURN_BUDGET` | yes — but retrying the same cap cannot help; raise `--max-turns` (claude-code and grok-build take it; **codex has none** — §2a) or assign a stronger Dev Type | **yes** | scheduler | `run.error` names the cap and where to change it |

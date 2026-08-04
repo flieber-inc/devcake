@@ -17,6 +17,7 @@ from ...harness import HARNESSES, missing_referenced_secret_env
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType, assignment_for
+from .. import failure_taxonomy
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
@@ -809,17 +810,19 @@ def _last_giveup_at(pmo_id: str) -> datetime | None:
 
 # ADR-0018 — classes whose failures NEVER burn a mission's attempts. Both latch
 # a breaker, so the mission stops being dispatched at all and cannot livelock:
-# that pairing is what makes "uncounted" safe.
+# that pairing is what makes "uncounted" safe — and since ADR-0027 it is an
+# executable invariant over the taxonomy table (`counting == "never" ⇒
+# breaker`), from which this set is derived.
 #
 # DEV_FORGE is deliberately NOT here. Making it unconditionally uncounted was
 # the founder's call, but plain exit 13 latches no breaker (only the
 # DEV_FORGE_AUTH arm calls forges.latch), so it would re-dispatch every poll
 # interval forever on a bad branch name, a DNS failure or a 500 — the exact
 # livelock `excusals_left` exists to bound. It gets the bounded treatment
-# instead: uncounted while the step has excusals, counted once they are spent,
-# so a forge outage costs no attempts but a permanent misconfiguration still
-# reaches DEVCAKE-FAILED.
-UNCOUNTED_CLASSES = frozenset({"DEV_AUTH", "DEV_FORGE_AUTH"})
+# instead ("forge-bounded" in the table): uncounted while the step has
+# excusals, counted once they are spent, so a forge outage costs no attempts
+# but a permanent misconfiguration still reaches DEVCAKE-FAILED.
+UNCOUNTED_CLASSES = failure_taxonomy.UNCOUNTED_CLASSES
 
 
 def counts_toward_attempts(r) -> bool:

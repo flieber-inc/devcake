@@ -17,6 +17,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from .. import failure_taxonomy
 from ..run import Run, utcnow
 
 if TYPE_CHECKING:
@@ -61,7 +62,7 @@ class FinalizerRouter:
         # it stamps its own class. The state is "failed" but the condition is a
         # genuine orphan (the run's PMO instance is gone from config) — the
         # state/class mismatch is pre-existing and deliberate.
-        run.error_class = "DEV_ORPHANED"
+        run.error_class = failure_taxonomy.DEV_ORPHANED
         run.ended_at = utcnow()
         self._store.save(run)
 

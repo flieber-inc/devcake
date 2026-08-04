@@ -33,6 +33,7 @@ from typing import Any, Awaitable, Callable, Protocol
 
 from fastapi import HTTPException
 
+from ..domain import failure_taxonomy
 from ..domain.model import MissionRef
 from ..ports.pmo import PMOTransient
 from ..security import redact
@@ -231,8 +232,9 @@ async def stop_run(
                    "DevCake is finishing bookkeeping; it completes or fails "
                    "on its own")
 
-    await run_manager.kill(run, "failed", "stopped by operator from the admin UI",
-                           error_class="DEV_OPERATOR_STOP")
+    await run_manager.kill(
+        run, "failed", "stopped by operator from the admin UI",
+        error_class=failure_taxonomy.DEV_OPERATOR_STOP)
     return {"ok": True, "run_id": run_id, "state": "failed"}
 
 
@@ -268,8 +270,9 @@ async def stop_all_runs(
             skipped.append(run.run_id)                  # finalizing/terminal
             continue
         try:
-            await run_manager.kill(run, "failed", "stopped by operator (stop all)",
-                                   error_class="DEV_OPERATOR_STOP")
+            await run_manager.kill(
+                run, "failed", "stopped by operator (stop all)",
+                error_class=failure_taxonomy.DEV_OPERATOR_STOP)
             stopped.append(run.run_id)
         except Exception as e:  # noqa: BLE001 — one kill failure must not abort the batch or lose accounting; recorded per-run
             log.exception("stop_all_runs: kill failed for %s", run.run_id)

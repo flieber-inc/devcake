@@ -9,7 +9,7 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ...security import redact, redact_value
-from .. import backend_health, costing
+from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, utcnow
 from . import transitions
@@ -161,13 +161,13 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                 await mgr.messaging.delete_reply_stream(run.run_id)
                 run.result = redact_value(result)
                 run.state = "failed"
-                run.error = redact(f"DEV_BAD_OUTPUT: {e}")
+                run.error = redact(f"{failure_taxonomy.DEV_BAD_OUTPUT}: {e}")
                 # ADR-0018: this path bypasses dev_failure_error, so it stamps
                 # its own class. It matters more here than elsewhere — `e` can
                 # embed Dev-authored text verbatim (decomposition.py raises with
                 # the Dev's blocked_by list), which is exactly the injection the
                 # structured field exists to defeat.
-                run.error_class = "DEV_BAD_OUTPUT"
+                run.error_class = failure_taxonomy.DEV_BAD_OUTPUT
                 run.ended_at = utcnow()
                 mgr.runs.store.save(run)
                 span.set_attribute("devcake.verdict", f"failed: {run.error}")
@@ -200,113 +200,133 @@ def dev_failure_error(mgr, run: Run, payload: dict) -> str:
     """Classify a Dev failure artifact into `run.error`, and stamp the
     STRUCTURED `run.error_class` / `run.attempt_counted` (ADR-0018).
 
-    Every branch stamps a class. Stamping only the new ones would leave 12/13/14
+    ADR-0027: which row an exit code resolves to — including the exit-13
+    structured/bare split — comes from `failure_taxonomy.classify`; only the
+    genuinely behavioral arms (breaker trips, the correlated-excusal
+    accounting) live here, keyed on the row. Adding a code/class is a table
+    row plus, at most, a handler.
+
+    Every row stamps a class. Stamping only the new ones would leave 12/13/14
     at `error_class == ""` post-upgrade, dropping them into the legacy
     `error`-prefix branch of `attempt_number` — where `DEV_FORGE` matches
     nothing and keeps counting, making `UNCOUNTED_CLASSES` dead code.
     """
     # public: part of the RunFinalizer port (reconcile enriches pre-harness orphans)
     exit_code = payload.get("exit_code")
-    if exit_code == 12:
-        run.error_class = "DEV_AUTH"
-        mgr._trip_breaker(run.dev_type, f"auth failure in {run.run_id}")
-        return "DEV_AUTH (does not count toward attempts; breaker tripped)"
     detail = redact(str(payload.get("error_detail") or ""))
     detail = " ".join(detail.split())[:500]
-    error_class = str(payload.get("error_class") or "")
-    if exit_code == 13 and error_class == "DEV_FORGE_AUTH":
-        # ONLY the structured Dev classification gets this class — and with it
-        # the breaker latch AND the unconditional exemption of
-        # UNCOUNTED_CLASSES. The pairing is the whole safety argument
-        # (dispatch.py: "both latch a breaker … cannot livelock"), so the class
-        # may never be stamped on evidence that latches nothing: a bare
-        # "403"/"401" can be a push rate limit or an incidental URL fragment,
-        # and a pre-taxonomy image sends no class at all — either way the run
-        # would be uncounted, breaker-less and re-dispatched FOREVER. Auth
-        # *wording* alone therefore falls through to the bounded exit-13 branch
-        # below (the detail still names it), which terminates.
-        run.error_class = "DEV_FORGE_AUTH"
-        # latch only THIS run's repo (M10): a bad credential on repo A
-        # must never stop repo B's missions
-        mgr.forges.latch(
-            run.repo_ref, f"repository credential rejected in {run.run_id}")
-        return "DEV_FORGE_AUTH: " + (detail or "repository credential rejected")
-    if exit_code == 13:
-        # Uncounted while the step has excusals — a forge outage should not burn
-        # missions — but bounded, because plain exit 13 latches no breaker and
-        # would otherwise re-dispatch forever on a permanent misconfiguration.
-        # An orphaned or skew-dropped GENUINE credential failure lands here too:
-        # a terminating path is the safe-by-construction degradation.
-        run.error_class = "DEV_FORGE"
-        run.attempt_counted = not backend_health.excusals_left(
-            mgr.runs.store.all(), run, error_class="DEV_FORGE")
-        return "DEV_FORGE: " + (detail or "clone/push setup failed")
-    if exit_code == 14:
-        # operator-configured MCP setup failed in-container (docs/15 §1,
-        # counted attempt): the detail names the command + stderr tail so
-        # the fix is obvious from the Runs page
-        run.error_class = "DEV_MCP_SETUP"
-        return "DEV_MCP_SETUP: " + (detail or "MCP setup command failed")
-    if exit_code == 16:
-        # Deterministic by nature: the harness hit a turn cap WE configured, so
-        # retrying against the same cap cannot help and this must never be
-        # mistaken for a transient shared fault. Always counted, never evidence.
-        run.error_class = "DEV_TURN_BUDGET"
-        return "DEV_TURN_BUDGET: " + (
-            detail or "harness stopped at its configured turn cap")
-    if exit_code == 15:
-        run.error_class = "DEV_HARNESS_FAULT"
-        # Correlation — and therefore excusing an attempt — requires the
-        # STRUCTURED class from the container. A reconcile-synthesized orphan
-        # payload carries the numeric code only: it earns the label and the
-        # evidence, and contributes to future correlation, but is never itself
-        # excused. That is the skew-safe direction.
-        if error_class == "DEV_HARNESS_FAULT":
-            runs = mgr.runs.store.all()
-            correlated = backend_health.backend_correlated(
-                runs, run.dev_type,
-                classes=backend_health.fault_classes(
-                    mgr.config.brake_on_bad_output))
-            # Count when the failure is NOT correlated, OR when this step has
-            # spent its excusals. The operator must be `or`: with `and`,
-            # exhausting the budget would produce MORE excusing (inverting the
-            # escape hatch) and a solitary failure on an exhausted step would
-            # stop counting.
-            run.attempt_counted = (correlated is None
-                                   or not backend_health.excusals_left(runs, run))
-            if correlated and not run.attempt_counted:
-                return ("DEV_HARNESS_FAULT (correlated fleet failure; does not "
-                        "count toward attempts): "
-                        + (detail or "model backend unavailable"))
-        return "DEV_HARNESS_FAULT: " + (detail or "model backend unavailable")
-    if exit_code in (10, 20):
-        run.error_class = "DEV_CRASH"
-        return "DEV_CRASH: " + (
-            detail or f"harness or entrypoint failure (exit {exit_code})")
-    if exit_code == 11:
-        run.error_class = "DEV_BAD_OUTPUT"
-        # ADR-0026 (opt-in): with the brake widened to exit 11, a correlated
-        # fleet-wide bad-output cascade excuses attempts exactly like exit 15.
-        # Unlike 15 there is NO container-class precondition: exit 11 has no
-        # in-band structured class — the exit code IS the classification
-        # (app-side), so a reconcile-synthesized orphan carries the same
-        # evidence value as a live finalize. Excusals bound the loop per step.
-        if mgr.config.brake_on_bad_output:
-            runs = mgr.runs.store.all()
-            correlated = backend_health.backend_correlated(
-                runs, run.dev_type,
-                classes=backend_health.fault_classes(True))
-            run.attempt_counted = (correlated is None
-                                   or not backend_health.excusals_left(
-                                       runs, run,
-                                       error_class="DEV_BAD_OUTPUT"))
-            if correlated and not run.attempt_counted:
-                return ("DEV_BAD_OUTPUT (correlated fleet failure; does not "
-                        "count toward attempts): "
-                        + (detail or "result.json missing or invalid"))
-        return "DEV_BAD_OUTPUT: " + (detail or "result.json missing or invalid")
-    run.error_class = run.error_class or "DEV_CRASH"
-    return f"dev failure artifact (exit {exit_code})"
+    structured = str(payload.get("error_class") or "")
+    row = failure_taxonomy.classify(exit_code, structured)
+    if row is None:
+        run.error_class = run.error_class or failure_taxonomy.DEV_CRASH
+        return f"dev failure artifact (exit {exit_code})"
+    run.error_class = row.error_class
+    return _ROW_HANDLERS.get(row.error_class, _detail_only)(
+        mgr, run, row, detail, structured, exit_code)
+
+
+def _detail_only(mgr, run, row, detail, structured, exit_code):
+    """Rows with no behavior beyond the stamp (14 MCP setup; 16 turn budget —
+    deterministic by nature: retrying the same cap cannot help, so the table
+    marks it always-counted and never brake evidence)."""
+    return f"{row.error_class}: " + (detail or row.default_detail)
+
+
+def _auth(mgr, run, row, detail, structured, exit_code):
+    mgr._trip_breaker(run.dev_type, f"auth failure in {run.run_id}")
+    return (f"{row.error_class} (does not count toward attempts; "
+            "breaker tripped)")
+
+
+def _forge_auth(mgr, run, row, detail, structured, exit_code):
+    # The row is structured_only: ONLY the container's structured
+    # classification reaches this handler — and with it the breaker latch AND
+    # the unconditional exemption of UNCOUNTED_CLASSES. The pairing is the
+    # whole safety argument (dispatch.py: "both latch a breaker … cannot
+    # livelock"), so the class may never be stamped on evidence that latches
+    # nothing: a bare "403"/"401" can be a push rate limit or an incidental
+    # URL fragment, and a pre-taxonomy image sends no class at all — either
+    # way the run would be uncounted, breaker-less and re-dispatched FOREVER.
+    # Auth *wording* alone therefore falls through to the bounded DEV_FORGE
+    # row (classify's bare-sibling rule; the detail still names it), which
+    # terminates.
+    #
+    # latch only THIS run's repo (M10): a bad credential on repo A
+    # must never stop repo B's missions
+    mgr.forges.latch(
+        run.repo_ref, f"repository credential rejected in {run.run_id}")
+    return f"{row.error_class}: " + (detail or row.default_detail)
+
+
+def _forge(mgr, run, row, detail, structured, exit_code):
+    # "forge-bounded": uncounted while the step has excusals — a forge outage
+    # should not burn missions — but bounded, because plain exit 13 latches no
+    # breaker and would otherwise re-dispatch forever on a permanent
+    # misconfiguration. An orphaned or skew-dropped GENUINE credential failure
+    # lands here too: a terminating path is the safe-by-construction
+    # degradation.
+    run.attempt_counted = not backend_health.excusals_left(
+        mgr.runs.store.all(), run, error_class=row.error_class)
+    return f"{row.error_class}: " + (detail or row.default_detail)
+
+
+def _correlated_excusal(mgr, run, row, detail, structured, exit_code):
+    """The ADR-0018 §4a accounting, shared by exits 15 and 11 — the rows
+    differ only in table fields, which encode two deliberate asymmetries:
+
+    * `excusal_requires_structured_class` (15 True, 11 False): for 15,
+      correlation — and therefore excusing an attempt — requires the
+      STRUCTURED class from the container. A reconcile-synthesized orphan
+      payload carries the numeric code only: it earns the label and the
+      evidence, and contributes to future correlation, but is never itself
+      excused. That is the skew-safe direction. Exit 11 has no in-band
+      structured class — the exit code IS the classification (app-side), so
+      an orphan carries the same evidence value as a live finalize (ADR-0026).
+    * `brake_evidence` (15 "always", 11 "opt-in"): the 11 arm runs only under
+      `brake_on_bad_output`, widening the brake to a correlated fleet-wide
+      bad-output cascade exactly like exit 15. Excusals bound the loop per
+      step either way.
+    """
+    enabled = (row.brake_evidence == "always"
+               or (row.brake_evidence == "opt-in"
+                   and mgr.config.brake_on_bad_output))
+    skew_ok = (not row.excusal_requires_structured_class
+               or structured == row.error_class)
+    if enabled and skew_ok:
+        runs = mgr.runs.store.all()
+        correlated = backend_health.backend_correlated(
+            runs, run.dev_type,
+            classes=backend_health.fault_classes(
+                mgr.config.brake_on_bad_output))
+        # Count when the failure is NOT correlated, OR when this step has
+        # spent its excusals. The operator must be `or`: with `and`,
+        # exhausting the budget would produce MORE excusing (inverting the
+        # escape hatch) and a solitary failure on an exhausted step would
+        # stop counting.
+        run.attempt_counted = (
+            correlated is None
+            or not backend_health.excusals_left(
+                runs, run, error_class=row.error_class))
+        if correlated and not run.attempt_counted:
+            return (f"{row.error_class} (correlated fleet failure; does not "
+                    "count toward attempts): "
+                    + (detail or row.default_detail))
+    return f"{row.error_class}: " + (detail or row.default_detail)
+
+
+def _crash(mgr, run, row, detail, structured, exit_code):
+    return f"{row.error_class}: " + (
+        detail or f"harness or entrypoint failure (exit {exit_code})")
+
+
+_ROW_HANDLERS = {
+    failure_taxonomy.DEV_AUTH: _auth,
+    failure_taxonomy.DEV_FORGE_AUTH: _forge_auth,
+    failure_taxonomy.DEV_FORGE: _forge,
+    failure_taxonomy.DEV_HARNESS_FAULT: _correlated_excusal,
+    failure_taxonomy.DEV_BAD_OUTPUT: _correlated_excusal,
+    failure_taxonomy.DEV_CRASH: _crash,
+}
 
 
 async def restore_after_failure(mgr, run: Run) -> None:

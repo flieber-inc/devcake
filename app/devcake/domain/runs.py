@@ -22,6 +22,7 @@ from ..ports.finalizer import RunFinalizer
 from ..ports.messaging import MessagingPort
 from ..ports.state import StatePort
 from ..telemetry import OTEL_COLLECTOR_URL
+from . import failure_taxonomy
 from .ids import make_run_id
 from .run import Run, auth_digest, utcnow
 from .run_bootstrap import RunBootstrap
@@ -43,8 +44,8 @@ RUN_FAILURES_STREAM = "run_failures"
 # for a future one nobody remembers to add), so no kill path can leave a run
 # unclassified and silently fall back to the legacy `error`-prefix matching in
 # `attempt_number`. Operator-initiated stops pass DEV_OPERATOR_STOP explicitly.
-KILL_CLASSES = {"timed_out": "DEV_TIMEOUT", "orphaned": "DEV_ORPHANED",
-                "failed": "DEV_KILLED"}
+# ADR-0027: the mapping is the taxonomy table's `kill_state` column.
+KILL_CLASSES = failure_taxonomy.KILL_CLASSES
 
 
 def failure_record(run: "Run", outcome: str, reason: str,
@@ -486,7 +487,8 @@ class RunManager:
                 # default plus the DEV_KILLED catch-all means a future kill
                 # site cannot silently produce an unclassified run.
                 run.error_class = (error_class
-                                   or KILL_CLASSES.get(new_state, "DEV_KILLED"))
+                                   or KILL_CLASSES.get(
+                                       new_state, failure_taxonomy.DEV_KILLED))
                 if current is not None:
                     self.store.save(run)
             # ADR-0025 Hook B: every kill path (watchdog ×3, reconcile

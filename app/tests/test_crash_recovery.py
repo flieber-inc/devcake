@@ -603,6 +603,52 @@ def test_recon_enriches_exit14_mcp_setup(tmp_path):
     assert saved.error == "DEV_MCP_SETUP: claude mcp add …: exit 1"
 
 
+@pytest.mark.parametrize("code,recovered", [
+    (10, True), (11, True), (20, True), (12, False)])
+def test_recon_enrichment_regex_membership(tmp_path, code, recovered):
+    """ADR-0027 gap-closure pin, taken BEFORE the regex became a table
+    derivation: the informational exits 10/11/20 ARE recovered from Dagu's
+    post-mortem string (AUD-015), and exit 12 is REFUSED — dev_failure_error
+    latches the dev-type auth breaker for 12, and a stale orphan post-mortem
+    must never trip a breaker from reconcile. The 13/14 arms are pinned by
+    the two tests above; membership itself was previously untested."""
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {"status": "failed",
+                                      "statusLabel": "failed"}}
+
+        async def node_errors(self, rid):
+            return [{"step": "run_dev", "status": "failed",
+                     "error": f"exit status {code}: boom"}]
+
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    seen = []
+
+    class MM:
+        def dev_failure_error(self, run, payload):
+            seen.append(payload["exit_code"])
+            return f"enriched exit {payload['exit_code']}"
+
+    dead = _make_run(store, state="running", run_id=f"DEAD-{code}")
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr.set_finalizer(MM())
+    run_coro(reconcile_runs(mgr))
+    saved = store.get(dead.run_id)
+    assert saved.state == "orphaned"
+    assert (seen == [code]) is recovered, (
+        f"exit {code}: enrichment {'expected' if recovered else 'FORBIDDEN'}")
+
+
 def test_recon_reclaims_even_when_a_kill_blows_up(tmp_path):
     """A raising executor.status/kill must not stop reconciliation — the other
     runs are still processed and reclaim still happens."""

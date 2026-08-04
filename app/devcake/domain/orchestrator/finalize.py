@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -58,7 +57,7 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
     transcript = payload.get("transcript_md", "")
     # ADR-0021: stamp the app-side rate-card estimate (cost_usd_estimated +
     # rate_card_id) before OTel/feed/persist all read the same dict. The
-    # harness never estimates; native cost_usd is never touched.
+    # harness never estimates; native cost_usd_native is never touched.
     token_report = costing.stamp_estimate(
         payload.get("token_report") or {}, mgr.config.cost_inputs)
     plan_md = payload.get("plan_md")
@@ -79,12 +78,16 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         span.set_attribute("devcake.run.id", run.run_id)
         span.set_attribute("devcake.outcome", outcome)
         for k in ("input_tokens", "output_tokens", "total_tokens",
-                  "cache_read_tokens", "cache_write_tokens"):
+                  "cache_read_tokens", "cache_write_tokens",
+                  "reasoning_tokens"):
             if token_report.get(k) is not None:
                 span.set_attribute(f"devcake.tokens.{k.removesuffix('_tokens')}",
                                    token_report[k])
-        if token_report.get("cost_usd") is not None:
-            span.set_attribute("devcake.cost.usd", token_report["cost_usd"])
+        # devcake.cost.usd keeps its NAME (docs/12 contract) over the v1 key:
+        # it still means "billed as reported by the harness"
+        if token_report.get("cost_usd_native") is not None:
+            span.set_attribute("devcake.cost.usd",
+                               token_report["cost_usd_native"])
         # ADR-0021: the estimate rides its OWN attribute — devcake.cost.usd
         # keeps meaning "billed as reported by the harness", never a guess
         if token_report.get("cost_usd_estimated") is not None:
@@ -397,13 +400,12 @@ def _token_report_md(run: Run, tr: dict, cost_inputs=None) -> str:
     so pre-ADR-0021 reports render byte-identically."""
     def fmt(v):  # noqa: ANN001
         return "—" if v is None else v
-    cost = tr.get("cost_usd")
+    cost = tr.get("cost_usd_native")
     est = tr.get("cost_usd_estimated")
-    # reasoning is informational (a subset of output, never priced) — grok
-    # and codex report it only inside `notes`
-    m = re.search(r"(?:reasoning_tokens|reasoning_output_tokens)=(\d+)",
-                  str(tr.get("notes") or ""))
-    reasoning = f" · reasoning: {m.group(1)}" if m else ""
+    # reasoning is informational (a subset of output, never priced) — a
+    # first-class v1 scalar (ADR-0029; pre-v1 it hid in a `notes` regex)
+    reasoning = (f" · reasoning: {tr['reasoning_tokens']}"
+                 if tr.get("reasoning_tokens") is not None else "")
     # estimated line: fills the native gap by default; with override_native
     # on, it appears ALONGSIDE the native line (both shown — honest)
     show_est = est is not None and (
@@ -424,5 +426,5 @@ def _token_report_md(run: Run, tr: dict, cost_inputs=None) -> str:
         # every pre-ADR-0022 one) render byte-identically
         + (f"\ncontinuations: {run.continuations_used}"
            if run.continuations_used else "")
-        + f"\nextraction: {fmt(tr.get('extraction_method'))}\nrun: {run.run_id}")
+        + f"\nextraction: {fmt(tr.get('source'))}\nrun: {run.run_id}")
 

@@ -63,7 +63,9 @@ def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     tr = run.token_report or {}
     out = {k: tr.get(k) for k in _TOKEN_SUMS}
     out["model"] = tr.get("model")
-    out["cost_usd"] = tr.get("cost_usd")
+    # the API row key stays `cost_usd` (SPA contract); the stored v1 key
+    # names its provenance (ADR-0029)
+    out["cost_usd"] = tr.get("cost_usd_native")
     out["cost_usd_estimated"] = costing.estimate_cost_usd(tr, cost_inputs.rates)
     return out
 
@@ -96,7 +98,7 @@ def _accumulate_totals(runs: list[Run], cost_inputs: CostInputs) -> dict:
             run_total = sum(known) if known else None
         if run_total is not None:
             tok_eff = (tok_eff or 0) + run_total
-        native = tr.get("cost_usd")
+        native = tr.get("cost_usd_native")
         est = costing.estimate_cost_usd(tr, cost_inputs.rates)
         eff = costing.effective_cost(native, est, cost_inputs)
         if native is not None:
@@ -133,7 +135,7 @@ def _run_sort_value(r: Run, key: str, cost_inputs: CostInputs, now: datetime):
     tr = r.token_report or {}
     if key == "cost":
         return costing.effective_cost(
-            tr.get("cost_usd"),
+            tr.get("cost_usd_native"),
             costing.estimate_cost_usd(tr, cost_inputs.rates), cost_inputs)
     return tr.get(key)
 

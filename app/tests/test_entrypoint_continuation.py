@@ -315,18 +315,19 @@ def test_record_session_chains_and_export():
 
 # ── merge_token_reports ───────────────────────────────────────────────────────
 
-R1 = {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110,
-      "cost_usd": None, "model": "m", "extraction_method": "end_event",
-      "num_turns": 4}
-R2 = {"input_tokens": 50, "output_tokens": 5, "total_tokens": 55,
-      "cost_usd": None, "model": "m", "extraction_method": "end_event",
-      "num_turns": 2}
+# loading ep above put images/common on sys.path (the entrypoint's own boot)
+from devcake_dev.harness.tokens import token_report_v1 as _v1  # noqa: E402
+
+R1 = _v1(input_tokens=100, output_tokens=10, total_tokens=110,
+         model="m", source="end_event", num_turns=4)
+R2 = _v1(input_tokens=50, output_tokens=5, total_tokens=55,
+         model="m", source="end_event", num_turns=2)
 
 
 def test_single_report_is_returned_unchanged():
-    """The zero-continuation payload stays byte-identical — including keys
-    the merge would drop (notes)."""
-    solo = {**R1, "notes": "reasoning_tokens=7"}
+    """The zero-continuation payload stays byte-identical — including its
+    scalar extras (reasoning_tokens)."""
+    solo = {**R1, "reasoning_tokens": 7}
     assert ep.merge_token_reports([solo], ["initial"],
                                   resume_cumulative=False) == solo
 
@@ -335,18 +336,20 @@ def test_non_cumulative_chains_sum_fieldwise():
     merged = ep.merge_token_reports([R1, R2], ["initial", "resume"],
                                     resume_cumulative=False)
     assert merged["input_tokens"] == 150 and merged["num_turns"] == 6
-    assert merged["cost_usd"] is None                  # all-None stays None, not 0
-    assert merged["model"] == "m" and merged["extraction_method"] == "end_event"
+    assert merged["cost_usd_native"] is None           # all-None stays None, not 0
+    assert merged["model"] == "m" and merged["source"] == "end_event"
 
 
 def test_cumulative_resume_chain_is_last_wins_but_chains_still_sum():
     """codex: a resumed terminal event already contains the whole chain —
-    summing would double-count; a later FRESH chain still adds."""
+    summing would double-count; a later FRESH chain still adds. The chain
+    report names the cumulative provenance (ADR-0029)."""
     cumulative = {**R2, "input_tokens": 150, "output_tokens": 15,
                   "total_tokens": 165, "num_turns": 6}
     merged = ep.merge_token_reports([R1, cumulative], ["initial", "resume"],
                                     resume_cumulative=True)
     assert merged["input_tokens"] == 150               # last-wins, not 250
+    assert merged["source"] == "cumulative"
     fresh = {**R1, "input_tokens": 30, "output_tokens": 3, "total_tokens": 33,
              "num_turns": 1}
     merged = ep.merge_token_reports([R1, cumulative, fresh],
@@ -356,13 +359,13 @@ def test_cumulative_resume_chain_is_last_wins_but_chains_still_sum():
 
 
 def test_merge_is_none_safe_and_handles_the_unavailable_stub():
-    stub = {"extraction_method": "unavailable", "model": None}
+    stub = ep.unavailable_report()
     merged = ep.merge_token_reports([R1, stub], ["initial", "fresh"],
                                     resume_cumulative=False)
     assert merged["input_tokens"] == 100               # sum of the values present
-    assert merged["extraction_method"] == "mixed"
+    assert merged["source"] == "mixed"
     assert ep.merge_token_reports([], [], resume_cumulative=False)[
-        "extraction_method"] == "unavailable"
+        "source"] == "unavailable"
 
 
 # ── merged_transcript_dump ────────────────────────────────────────────────────

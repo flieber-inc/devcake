@@ -903,7 +903,7 @@ def _mission_cost(mgr, pmo_id: str) -> float:
             continue
         tr = r.token_report or {}
         eff = costing.effective_cost(
-            tr.get("cost_usd"), tr.get("cost_usd_estimated"), ci)
+            tr.get("cost_usd_native"), tr.get("cost_usd_estimated"), ci)
         if eff is not None:
             total += eff
     return total

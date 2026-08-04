@@ -35,3 +35,4 @@
 | [0025](0025-provisioned-workspaces.md) | Provisioned workspaces | Accepted — supersedes ADR-0024 §5's risk posture |
 | [0026](0026-attempt-reset-policy-and-bad-output-brake.md) | Attempt-reset policy + opt-in bad-output brake | Accepted (2026-08-04) |
 | [0027](0027-failure-taxonomy-as-data.md) | Failure taxonomy as data | Accepted (2026-08-04) |
+| [0029](0029-normalized-result-shapes.md) | Normalized result shapes (TokenReport v1 + SQL-readiness) | Accepted (2026-08-04). Numbered 0029 but landed before 0028: it touches finalize/costing/runs_service, which the composition-root rewrite then leaves alone |

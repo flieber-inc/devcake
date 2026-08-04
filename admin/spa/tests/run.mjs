@@ -25,6 +25,7 @@ const SUITES = [
   "redesign.mjs",
   "missions.mjs",
   "missions_deps.mjs",
+  "new_mission.mjs",
   "profiles.mjs",
   "pmo_intake.mjs",
   "markdown.mjs",

@@ -41,6 +41,12 @@ class Run(BaseModel):
     # [{repo_ref, mission_key}] — tokens are attached at runspec time.
     # Empty on legacy / MAPPER / no-blocker runs.
     blocker_work: list[dict[str, str]] = Field(default_factory=list)
+    # The mirror gate's needed_for set, snapshotted at dispatch (2026-08
+    # evaluation F12): which repos this run's extras serve via mirror_path is
+    # decided ONCE, when the gate proved them fresh — exactly like the
+    # primary's DEVCAKE_MIRROR_PATH in spec_env. Empty on legacy records
+    # (pre-field) → runspec falls back to the live derivation.
+    mirror_repos: list[str] = Field(default_factory=list)
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on

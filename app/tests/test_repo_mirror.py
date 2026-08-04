@@ -403,6 +403,130 @@ def test_dispatch_direct_clone_for_ineligible_repo(tmp_path):
     assert run.spec_env["DEVCAKE_MIRROR_PATH"] == ""
 
 
+# ── the runspec serves EXACTLY what the gate proved (2026-08 eval F12) ───────
+
+class TmpRootCache(NullRepoCache):
+    """Real mirror paths under tmp, so a mirror's presence is a per-test
+    fact — the belt check in dispatch._mirrored is part of the contract."""
+
+    def __init__(self, root, eligible=()):
+        super().__init__()
+        self._root = Path(root)
+        self._eligible = set(eligible)
+
+    def mirror_path(self, name):
+        return self._root / f"{name}.git"
+
+    def eligible(self, name):
+        return name in self._eligible
+
+
+def _extras_rig(tmp_path, monkeypatch):
+    """A manager whose forges hold a work repo (alpha) + reference repo
+    (beta, RO token stored) and whose repo_cache roots under tmp."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.domain.forge_runtime import ForgeRuntime
+    from devcake.adapters.registry import make_forge
+    from devcake import secrets as s
+    from fakes import make_mission_manager
+    s.write_connection_secret("repo", "beta", "token_ro", "beta-read")
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="alpha", url="https://github.com/o/a"),
+                RepoInstance(name="beta", url="https://github.com/o/b")],
+               make_forge)
+    mgr = make_mission_manager(tmp_path)
+    mgr.forges = rt
+    mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["alpha"],
+                               reference_repos=["beta"])
+    mgr.repo_cache = TmpRootCache(tmp_path / "mirrors",
+                                  eligible={"alpha", "beta"})
+    return mgr
+
+
+def _execute_run(**kw):
+    from devcake.domain.run import Run
+    base = dict(run_id="LINEAR-T-B-1-EXECUTE-AAAAAA", mission_key="T-B",
+                mission_type="EXECUTE", dev_type="judgment", seq=1,
+                repo_ref="alpha", pmo_ref="linear")
+    base.update(kw)
+    return Run(**base)
+
+
+def test_runspec_serves_the_dispatch_snapshot(tmp_path, monkeypatch):
+    """A snapshot member with a live mirror rides the mirror: mirror_path,
+    no token in transit (the ADR-0024 rationale)."""
+    from devcake.domain.orchestrator import dispatch
+    mgr = _extras_rig(tmp_path, monkeypatch)
+    mgr.repo_cache.mirror_path("beta").mkdir(parents=True)
+    run = _execute_run(mirror_repos=["alpha", "beta"])
+    item = next(x for x in dispatch._extra_repos_for(mgr, run)
+                if x["name"] == "beta")
+    assert item["mirror_path"].endswith("beta.git")
+    assert "token" not in item
+
+
+def test_repo_added_after_dispatch_never_gets_a_mirror_path(tmp_path,
+                                                            monkeypatch):
+    """THE race regression (2026-08 eval F12): a repo added to the instance
+    between dispatch and runspec.get is NOT in the gate's snapshot, so it
+    must never be served a mirror_path the gate never proved — even when a
+    mirror directory happens to exist. It rides its token instead."""
+    from devcake.domain.orchestrator import dispatch
+    mgr = _extras_rig(tmp_path, monkeypatch)
+    mgr.repo_cache.mirror_path("beta").mkdir(parents=True)   # exists, unproven
+    run = _execute_run(mirror_repos=["alpha"])   # beta joined after dispatch
+    item = next(x for x in dispatch._extra_repos_for(mgr, run)
+                if x["name"] == "beta")
+    assert "mirror_path" not in item
+    assert item["token"] == "beta-read"
+
+
+def test_vanished_mirror_falls_back_to_token_clone(tmp_path, monkeypatch):
+    """Belt: a snapshot member whose mirror was wiped mid-flight must not
+    hand the Dev a dead file:// URL — the token path is the graceful
+    degradation (extra-clone failures are non-fatal in the entrypoint, but
+    real context beats a confusing failure note)."""
+    from devcake.domain.orchestrator import dispatch
+    mgr = _extras_rig(tmp_path, monkeypatch)
+    run = _execute_run(mirror_repos=["alpha", "beta"])   # no dir on disk
+    item = next(x for x in dispatch._extra_repos_for(mgr, run)
+                if x["name"] == "beta")
+    assert "mirror_path" not in item
+    assert item["token"] == "beta-read"
+
+
+def test_legacy_run_without_snapshot_keeps_live_derivation(tmp_path,
+                                                           monkeypatch):
+    """A pre-field record (empty mirror_repos) keeps the pre-fix behavior:
+    live eligibility decides, so an upgrade never strands in-flight runs."""
+    from devcake.domain.orchestrator import dispatch
+    mgr = _extras_rig(tmp_path, monkeypatch)
+    mgr.repo_cache.mirror_path("beta").mkdir(parents=True)
+    run = _execute_run()                                  # mirror_repos == []
+    item = next(x for x in dispatch._extra_repos_for(mgr, run)
+                if x["name"] == "beta")
+    assert item["mirror_path"].endswith("beta.git")
+
+
+def test_dispatch_snapshots_the_gate_set_on_the_run(tmp_path):
+    """The producing side of the parity contract: dispatch() records
+    needed_for's exact output on run.mirror_repos."""
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.domain.model import MissionType
+
+    class SnapshottingCache(GrantingCache):
+        def needed_for(self, *, work_repo, **_kw):
+            return [work_repo]
+
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, FakeInternalForge())
+    mgr.repo_cache = SnapshottingCache()
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    assert run is not None
+    assert run.mirror_repos == ["main"]
+
+
 # ── the Null stand-in keeps the rest of the suite honest ─────────────────────
 
 def test_null_repo_cache_is_always_fresh_and_never_mirrors():

@@ -457,6 +457,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             traceparent=traceparent,
             spec_env=spec_env,
             blocker_work=list(blocker_entries),
+            mirror_repos=list(needed),
         )
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
@@ -641,6 +642,29 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     return payload
 
 
+def _mirrored(mgr, run: Run, name: str) -> bool:
+    """Whether an extra rides the mirror — decided ONCE, at dispatch (2026-08
+    evaluation F12). The gate's `needed_for` set is snapshotted on
+    `run.mirror_repos`, exactly like the primary's DEVCAKE_MIRROR_PATH in
+    spec_env; re-deriving here from live config let a repo added to the
+    instance between dispatch and runspec.get receive a mirror_path the gate
+    never created (the Dev would `git clone file://` a nonexistent path).
+    Legacy records (empty snapshot, pre-field) keep the live derivation.
+    Belt: a snapshot member whose mirror vanished mid-flight (operator rm)
+    falls back to the token path instead of a dead file:// URL — extra-clone
+    failures are non-fatal in the entrypoint, but a silent context omission
+    beats a confusing one."""
+    snapshot = run.mirror_repos or []
+    decided = (name in snapshot) if snapshot else mgr.repo_cache.eligible(name)
+    if not decided:
+        return False
+    if not mgr.repo_cache.mirror_path(name).is_dir():
+        log.warning("mirror for %r vanished between dispatch and runspec of "
+                    "%s — falling back to a token clone", name, run.run_id)
+        return False
+    return True
+
+
 def _extra_repos_for(mgr, run: Run) -> list[dict]:
     """Read-only sibling clones for a run, built at request time (nothing
     secret at rest); read tokens preferred, write fallback (same rule as
@@ -667,7 +691,7 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
         forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
             continue         # removed mid-flight — proceed on what remains
-        if mgr.repo_cache.eligible(name):
+        if _mirrored(mgr, run, name):
             # ADR-0024: mirrored — the clone needs NO token (fewer secrets in
             # transit), and the tokenless-omit rule below must not apply: the
             # mirror gate already proved fetchability, and omitting here while
@@ -703,7 +727,7 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
             forge_x = mgr.forges.get(name)
             if inst_x is None or forge_x is None:
                 continue     # cleared / vanished — non-fatal omit
-            if mgr.repo_cache.eligible(name):
+            if _mirrored(mgr, run, name):
                 # ADR-0024: configured blocker-work repos ride the mirror
                 # like every other configured card (same rationale as above)
                 extras.append({"name": name, "url": inst_x.url,

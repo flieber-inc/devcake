@@ -11,6 +11,16 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+# Pre-schema-v3 run records carry no real instance ref: `pmo_ref` is "" or
+# the old "main" default, and such records always count as LOCAL (hiding
+# them would orphan pre-v3 blocker work). THE one definition (2026-08
+# cleanup — copies had drifted into router/ports and could diverge);
+# consumers: MissionManager._run_is_ours, the blocker locator's locality
+# set, FinalizerRouter's single-manager fallback, ports.forge.run_branch's
+# legacy branch naming. (dispatch's blocker-mount guard deliberately checks
+# only "main" — there it is a synthetic REPO name, not a pmo_ref.)
+LEGACY_PMO_REFS = frozenset({"", "main"})
+
 RunState = Literal[
     "dispatched", "running", "finalizing", "finished", "failed", "timed_out", "orphaned"
 ]

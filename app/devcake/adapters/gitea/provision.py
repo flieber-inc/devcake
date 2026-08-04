@@ -614,3 +614,27 @@ class GiteaProvisioner:
         if svc:
             self._register(svc)
         return svc
+
+    def mission_repo_binding(self, creds):
+        """(RepoInstance row, app-side adapter) for a provisioned mission
+        repo (port contract). Vendor knowledge stays HERE (2026-08 F9): the
+        app-side adapter uses the devcake-app SERVICE token (org owner:
+        write:issue for PR comments + write:repository for merge), NOT the
+        mission's Dev write token (write:repository only → issue-scope 403s;
+        review finding #1) — the mission's pair is the Dev's, via runspec.
+        model_construct: internal repo names carry hyphens / exceed the
+        operator-name pattern by design — synthesized, not input. Always
+        auto-merge: the zip deliverable only posts after merge, and no human
+        watches the internal Gitea (operators wanting doctrine control
+        create the repo as a config card instead — ADR-0020)."""
+        from ...config import RepoInstance
+        from ..registry import make_gitea_adapter   # keeps redaction registration
+        svc = self.service_tokens() or {}
+        adapter = make_gitea_adapter(creds.clone_url, svc.get("app_token"),
+                                     svc.get("reviewer_token"))
+        inst = RepoInstance.model_construct(
+            name=creds.repo_name, forge="gitea", url=creds.clone_url,
+            default_branch="main", api_base=None,
+            auto_merge=True, auto_resolve_merge_conflicts=True,
+            merge_retry_window_minutes=30)
+        return inst, adapter

@@ -30,6 +30,10 @@ class FakePMO:
         from devcake.domain.model import MissionRef
         assert isinstance(ref, MissionRef), f"port called with {ref!r}, not a MissionRef"
 
+    def capabilities(self):
+        from fakes import fake_pmo_capabilities
+        return fake_pmo_capabilities()   # global_ids=True — peer path enabled
+
     def __init__(self, mission):
         self.mission = mission
         self.comments = []
@@ -2235,3 +2239,4 @@ def test_explicit_error_class_wins_over_the_state_default(tmp_path):
     run_coro(mgr.runs.kill(run, "failed", "stopped by operator (stop all)",
                            error_class="DEV_OPERATOR_STOP"))
     assert store.get(run.run_id).error_class == "DEV_OPERATOR_STOP"
+

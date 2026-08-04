@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("devcake.router")
 
-_LEGACY_REFS = ("", "main")
+from ..run import LEGACY_PMO_REFS
 
 
 class FinalizerRouter:
@@ -38,7 +38,7 @@ class FinalizerRouter:
 
     def _mgr(self, run: Run) -> "MissionManager | None":
         mgr = self._managers.get(run.pmo_ref)
-        if mgr is None and run.pmo_ref in _LEGACY_REFS and len(self._managers) == 1:
+        if mgr is None and run.pmo_ref in LEGACY_PMO_REFS and len(self._managers) == 1:
             mgr = next(iter(self._managers.values()))
         return mgr
 

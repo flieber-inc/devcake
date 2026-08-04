@@ -31,15 +31,15 @@ from .model import Mission, MissionRef
 # self-healing next cycle).
 PEER_GET_TIMEOUT_S = 5.0
 
-# Systems whose pmo_ids are globally unique across the vendor environment
-# (Linear UUIDs). Only these may resolve via PEER adapters, and only these
-# may accept peer run history on a locally-resolved foreign id. Colliding-id
-# systems (gitea_issues) never cross instances — hard refuse, not best-effort.
-GLOBAL_ID_SYSTEMS = frozenset({"linear"})
+# Whether a system's pmo_ids are globally unique (⇒ peer resolution legal)
+# is now the adapter-declared `PMOCapabilities.global_ids` (2026-08
+# evaluation F10): the old GLOBAL_ID_SYSTEMS vendor-name literal meant
+# adding a PMO required editing domain policy.
 
-# Pre-schema-v3 run records ("", "main") always count as local — hiding them
-# would orphan pre-v3 blocker work (mirrors MissionManager._run_is_ours).
-LEGACY_PMO_REFS = frozenset({"", "main"})
+# Pre-schema-v3 run records always count as local — hiding them would orphan
+# pre-v3 blocker work (mirrors MissionManager._run_is_ours). Definition lives
+# with the Run model; re-exported here for existing importers.
+from .run import LEGACY_PMO_REFS  # noqa: E402,F401 — deliberate re-export
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,10 @@ class BlockerLocator:
 
     async def _resolve_uncached(self, bid: str, local_mgr) -> Resolved | None:
         system = local_mgr.instance.system
-        peers_allowed = system in GLOBAL_ID_SYSTEMS
+        try:
+            peers_allowed = bool(local_mgr.pmo.capabilities().global_ids)
+        except Exception:  # noqa: BLE001 — a capability probe failure must fail CLOSED (no peer resolution), never crash the locator
+            peers_allowed = False
         owner = self._owner_of(bid) if peers_allowed else None
         if peers_allowed:
             peer = self._managers.get(owner) if owner else None

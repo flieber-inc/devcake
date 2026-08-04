@@ -465,6 +465,10 @@ def test_locator_sees_owner_after_claim(tmp_path):
         def __init__(self, missions):
             self.missions = missions
 
+        def capabilities(self):
+            from fakes import fake_pmo_capabilities
+            return fake_pmo_capabilities()   # global_ids=True (linear-shaped)
+
         async def get(self, ref):
             m = self.missions.get(ref.pmo_id)
             if m is None:

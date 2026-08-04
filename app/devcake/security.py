@@ -178,7 +178,33 @@ def _file_values(p) -> list[str]:
     return found
 
 
+# Result cache for _known_values (2026-08 evaluation F17): the glob + a stat
+# per file on EVERY redact() call was O(store size) on the finalize path,
+# which redacts multi-MB transcripts. The app is the store's only writer, so
+# event-driven invalidation from secrets.py's write choke point (and from
+# reload_connections, whose descriptor set feeds secret_env_vars) is EXACT in
+# the direction that matters: a just-stored value rescans before the next
+# redact. Deletions deliberately do NOT invalidate — "unregistering a
+# just-revoked value is the risky direction" — so a deleted file's values
+# keep masking until the next write-triggered rescan, strictly LONGER than
+# the old per-call glob ever kept them. NOT a TTL: a timer would open a
+# just-saved-secret-unmasked window, which is the one direction forbidden.
+_known_cache: tuple[str, list[str]] | None = None   # (scanned dir, values)
+
+
+def invalidate_secret_scan() -> None:
+    """Drop the _known_values result cache. Called by secrets.py's atomic
+    write choke point and by connection reloads; cheap and idempotent."""
+    global _known_cache
+    _known_cache = None
+
+
 def _known_values() -> list[str]:
+    global _known_cache
+    # keyed by the scanned dir so a monkeypatched _SECRETS_DIR (tests) can
+    # never serve another dir's scan
+    if _known_cache is not None and _known_cache[0] == str(_SECRETS_DIR):
+        return _known_cache[1]
     values = [v for var in secret_env_vars() if (v := os.environ.get(var, "").strip())]
     # credential file key material: every long-ish string value in stored JSONs
     live_paths = set()
@@ -191,7 +217,9 @@ def _known_values() -> list[str]:
             continue
     for stale in set(_scan_cache) - live_paths:      # deleted files drop out
         del _scan_cache[stale]
-    return sorted(set(values), key=len, reverse=True)  # longest first
+    result = sorted(set(values), key=len, reverse=True)  # longest first
+    _known_cache = (str(_SECRETS_DIR), result)
+    return result
 
 
 def redact(text: str, extra_values: list[str] | None = None) -> str:

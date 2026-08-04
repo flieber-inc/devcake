@@ -147,6 +147,53 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return ids
 
 
+def test_no_vendor_name_literals_in_domain():
+    """2026-08 evaluation F9/F10: the host-literal scan above missed
+    `forge=\"gitea\"` in dispatch and `GLOBAL_ID_SYSTEMS = {\"linear\"}` in
+    the blocker locator — the tripwire's predicate didn't match its stated
+    invariant. Domain code may not name a vendor AT ALL: identity-shaped
+    decisions belong to capabilities (ForgeCapabilities /
+    PMOCapabilities.global_ids) or to the adapter itself
+    (InternalForgePort.mission_repo_binding)."""
+    vendors = {"gitea", "github", "gitlab", "linear", "gitea_issues"}
+    offenders = []
+    for path in _package_files():
+        rel = path.relative_to(PKG_ROOT)
+        if rel.parts[0] != "domain":
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        doc_ids = _docstring_nodes(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and id(node) not in doc_ids and node.value in vendors:
+                offenders.append(f"{rel}:{node.lineno}: {node.value!r}")
+    assert not offenders, (
+        "vendor-name literals in domain/ — express the difference as a "
+        "capability or move it into the adapter:\n" + "\n".join(offenders))
+
+
+def test_no_vendor_factory_imports_in_domain():
+    """Companion tripwire: the registry module is exempt from the adapter-
+    import scan, so a vendor-NAMED factory (make_gitea_adapter) imported
+    into domain threaded straight through it (F9). Vendor-neutral factories
+    (make_pmo, make_forge, make_internal_forge) stay legal."""
+    import re as _re
+    vendor_named = _re.compile(r"make_(gitea|github|gitlab|linear)\w*")
+    offenders = []
+    for path in _package_files():
+        rel = path.relative_to(PKG_ROOT)
+        if rel.parts[0] != "domain":
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if vendor_named.fullmatch(alias.name):
+                        offenders.append(f"{rel}:{node.lineno}: {alias.name}")
+    assert not offenders, (
+        "vendor-named factory imports in domain/ (F9):\n" + "\n".join(offenders))
+
+
 def test_no_forge_host_literals_outside_adapters():
     hosts = ("github.com", "gitlab.com")
     offenders = []

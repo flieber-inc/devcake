@@ -130,3 +130,45 @@ def at_decomposition_limit(mission, limit: int) -> bool:
     return depth is None or depth >= limit
 
 AUDIT_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "events.jsonl"
+
+# ── give-up watermark reader (2026-08 evaluation F8) ─────────────────────────
+# The old reader re-parsed the ENTIRE append-only audit log once per candidate
+# mission per poll cycle — O(missions × log size) JSON on a file only
+# clear-runs ever truncates. This incremental reader parses only the appended
+# tail: the module-level state carries (path, byte offset, per-pmo marks) and
+# resets itself when the path changes (tests monkeypatch AUDIT_PATH) or the
+# file shrank (clear-runs truncation). Safe without locks: the writer
+# (feed._audit) is synchronous inside the one event loop, so a reader never
+# observes a partial line.
+_GIVEUP_STATE: dict = {"path": None, "offset": 0, "marks": {}}
+
+
+def last_giveup_at(pmo_id: str):
+    """Timestamp of the newest `devcake_failed` audit event for pmo_id, or
+    None. Incremental over AUDIT_PATH (see block comment)."""
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+    st = _GIVEUP_STATE
+    path = AUDIT_PATH
+    try:
+        size = path.stat().st_size
+    except OSError:
+        st.update(path=path, offset=0, marks={})
+        return None
+    if st["path"] != path or size < st["offset"]:
+        st.update(path=path, offset=0, marks={})
+    if size > st["offset"]:
+        with open(path) as f:
+            f.seek(st["offset"])
+            for line in f:
+                try:
+                    e = _json.loads(line)
+                    if e.get("action") == "devcake_failed":
+                        ts = _dt.fromisoformat(e["ts"])
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=_tz.utc)
+                        st["marks"][e.get("pmo_id")] = ts
+                except Exception:  # noqa: BLE001 — one bad audit line must never halt scheduling
+                    continue
+            st["offset"] = f.tell()
+    return st["marks"].get(pmo_id)

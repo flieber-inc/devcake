@@ -31,13 +31,14 @@ retry_policy:
 preconditions:
   - condition: "${params.RUN_ID}"
     expected: "re:^[A-Za-z0-9_-]{6,64}$"
-  # AUD-003's unimplemented half (2026-08 evaluation): a dagu container
-  # created before ADR-0025 has no DEVCAKE_WS_HOST, so the bind source
-  # expands to "/<RUN_ID>" and dockerd creates a ROOT-OWNED dir at the host
-  # filesystem root before the in-container sentinel can catch anything.
-  # Refuse to run at all unless the base is a non-root absolute path.
-  - condition: "${DEVCAKE_WS_HOST}"
-    expected: "re:^/.+"
+  # NO ${DEVCAKE_WS_HOST} precondition — attempted 2026-08-04 (AUD-003's
+  # missing half) and REVERTED the same hour: Dagu 2.11.3 expands service
+  # env in bind strings but NOT in precondition `condition:` fields, so the
+  # literal never matched and every dev-run sat `dispatched` until the
+  # startup grace killed it (measured live, SYS-HELLO-5). The empty/relative
+  # WS_HOST edge stays guarded by up.sh's absolute-path assert + the
+  # in-container sentinel (exit 20); the daemon-autocreate residue remains
+  # tracked debt (docs/14 §11).
 
 # Best-effort DAG-run resource budget (process cgroup where supported).
 resources:

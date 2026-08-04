@@ -129,6 +129,9 @@ Without branch protection, a Dev that holds the write token can often merge (or 
    the PR is merged (normally by you); then Done. Branch protection is what
    stops Devs from merging on their own — see above.
 5. Steer with comments and label swaps; stop everything with `DEVCAKE-SKIP`.
+   (Comments steer the *next run*; granting a failing step **fresh attempts**
+   takes the literal `DEVCAKE-RETRY` in a comment, or a label op — the strict
+   default keeps bot comments from resetting the budget. ADR-0026.)
 
 Details and interventions: [Tutorial 2](docs/tutorials/02-operating-devcake.md).
 

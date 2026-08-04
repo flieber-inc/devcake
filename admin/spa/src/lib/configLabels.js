@@ -40,29 +40,39 @@ const EXACT = {
   "cfg.attach_merged_changeset_to_pmo": {
     group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
   },
-  "cfg.relations_mapper.dev_type": { group: "Limits & traffic", label: "Mapper Dev Type", format: orEmpty },
-  "cfg.relations_mapper.interval_minutes": { group: "Limits & traffic", label: "Mapper interval (minutes)" },
-  "cfg.relations_mapper.enabled": { group: "Limits & traffic", label: "Mapper periodic service", format: onOff },
+  "cfg.relations_mapper.dev_type": { group: "Limits & Traffic", label: "Mapper Dev Type", format: orEmpty },
+  "cfg.relations_mapper.interval_minutes": { group: "Limits & Traffic", label: "Mapper interval (minutes)" },
+  "cfg.relations_mapper.enabled": { group: "Limits & Traffic", label: "Mapper periodic service", format: onOff },
   "cfg.max_decomposition_depth": {
-    group: "Limits & traffic", label: "Decomposition depth",
+    group: "Limits & Traffic", label: "Decomposition depth",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
-  "cfg.concurrency.global_max": { group: "Limits & traffic", label: "Global max Devs" },
-  "cfg.dev_timeout_minutes": { group: "Limits & traffic", label: "Dev run timeout (min)" },
-  "cfg.review_loop_warning_every": { group: "Limits & traffic", label: "Loop warning every N rejections" },
+  "cfg.concurrency.global_max": { group: "Limits & Traffic", label: "Global max Devs" },
+  "cfg.dev_timeout_minutes": { group: "Limits & Traffic", label: "Dev run timeout (min)" },
+  "cfg.review_loop_warning_every": { group: "Limits & Traffic", label: "Loop warning every N rejections" },
   "cfg.recover_misplaced_result": {
-    group: "Limits & traffic", label: "Accept misplaced result files", format: onOff,
+    group: "Limits & Traffic", label: "Accept misplaced result files", format: onOff,
   },
-  "cfg.continuation_policy": { group: "Limits & traffic", label: "Continuation policy" },
+  "cfg.continuation_policy": { group: "Limits & Traffic", label: "Continuation policy" },
+  "cfg.attempt_reset": {
+    group: "Limits & Traffic", label: "Attempt reset policy",
+    format: (v) => ({ "label-ops": "strict (DEVCAKE-RETRY / labels)",
+                      "any-comment": "any comment",
+                      unlimited: "unlimited (never give up)" }[v] || String(v)),
+  },
+  "cfg.brake_on_bad_output": {
+    group: "Limits & Traffic", label: "Brake on missing results (exit 11)",
+    format: onOff,
+  },
   "cfg.repo_mirror.sync_max_age_seconds": {
-    group: "Limits & traffic", label: "Mirror sync max age (s)",
+    group: "Limits & Traffic", label: "Mirror sync max age (s)",
     format: (v) => (v === 0 ? "every dispatch" : String(v)),
   },
   "cfg.repo_mirror.lfs": {
-    group: "Limits & traffic", label: "Mirror LFS content", format: onOff,
+    group: "Limits & Traffic", label: "Mirror LFS content", format: onOff,
   },
   "cfg.max_continuations": {
-    group: "Limits & traffic", label: "Max continuations per run",
+    group: "Limits & Traffic", label: "Max continuations per run",
     format: (v) => (v === 0 ? "off" : String(v)),
   },
   "cfg.cost_inputs.override_native": {
@@ -93,7 +103,7 @@ const ASSIGNMENT_FIELDS = {
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
   "PMO", "Repository", "Dev Types", "Mission Types",
-  "Prompts", "Limits & traffic", "Cost", "Other",
+  "Prompts", "Limits & Traffic", "Cost", "Other",
 ];
 
 // the instance LISTS diff atomically when a card is added/removed — show the

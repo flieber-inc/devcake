@@ -7,6 +7,6 @@ export const CONFIG_SECTIONS = [
   { id: "mission-types", label: "Mission Types" },
   { id: "skills", label: "Skills" },
   { id: "prompts", label: "Prompts" },
-  { id: "limits", label: "Limits & traffic" },
+  { id: "limits", label: "Limits & Traffic" },
   { id: "profiles", label: "Profiles & Export" },
 ];

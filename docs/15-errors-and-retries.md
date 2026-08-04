@@ -23,7 +23,7 @@
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.144.4, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
-| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid **after the in-container continuation budget is spent, when the loop is enabled** (ADR-0022; `07-dev-runtime.md` §5a); app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 only, so it covers neither |
+| `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid **after the in-container continuation budget is spent, when the loop is enabled** (ADR-0022; `07-dev-runtime.md` §5a); app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 by default, with `brake_on_bad_output` (ADR-0026, default off) widening it to cover exactly this cascade |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
 | `EXTERNAL_TRANSITION` | human changed status/label mid-run (`04-orchestrator.md` §4) | **not an error** — first-class outcome |
@@ -90,8 +90,9 @@ with **exit 0** — byte-identical in shape to a clean success, no
 There is no signal anywhere that the run was truncated.
 
 **Why it matters.** A weak or overloaded model that loops on one command can
-hit this path on many missions at once. `DEV_BAD_OUTPUT` has no brake: every
-attempt counts, nothing is excused, nothing is throttled (§4a keys on exit 15).
+hit this path on many missions at once. `DEV_BAD_OUTPUT` has no brake by
+default: every attempt counts, nothing is excused, nothing is throttled (§4a
+keys on exit 15 unless `brake_on_bad_output` is on — ADR-0026).
 
 **What it is not.** It is **not** a turn cap and `--max-turns` is not the lever:
 a run with `--max-turns 30` halts at the same 16 because the cap is never reached
@@ -133,7 +134,11 @@ After `max_attempts` (default 3) counted failures of the **same step** (mission 
 3. Stop scheduling the Mission (derivation row 8).
 4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event count toward the next give-up (advisory local state — `10-persistence.md` §5).
 
-The counter is **seq-independent** (failed runs post transcripts and advance `seq`, so per-seq counting could retry forever) and resets at the newest of three anchors: the give-up watermark above, **any finished run for the mission** (a later step completing implies the failing step was resolved, possibly by hand), or **the latest human feed comment** (non-sentinel-signed — a human touching the mission is an intervention, and the step deserves fresh attempts).
+The counter is **seq-independent** (failed runs post transcripts and advance `seq`, so per-seq counting could retry forever) and resets at the newest of its anchors. Two are policy-independent: the give-up watermark above, and **any finished run for the mission** (a later step completing implies the failing step was resolved, possibly by hand). What comments do is the operator's `attempt_reset` policy (ADR-0026, Limits & Traffic):
+
+- **`label-ops` (default, strict):** only a non-DevCake comment containing the literal `DEVCAKE-RETRY` resets — the deliberate human gesture. Ordinary comments, human or bot, do not: the pre-0026 rule let any chatty integration (a Linear↔GitHub sync bot, a CI notifier) keep the counter at 1 forever, defeating `max_attempts` entirely.
+- **`any-comment`:** the pre-0026 rule — any non-sentinel-signed comment is an intervention and grants fresh attempts. For boards with no integration traffic.
+- **`unlimited`:** the app never applies `DEVCAKE-FAILED` at all (comment rule as `label-ops`). An explicit homelab choice for operators whose token cost is measured in watts; a cumulative-cost warning posts to the feed every `review_loop_warning_every` consecutive failures so the mode stays loud. Breakers and `DEVCAKE-SKIP` still act.
 
 ## 3a. `DEVCAKE-NEEDS-HUMAN` semantics (not an error class)
 
@@ -194,11 +199,21 @@ explicitly that no credential change is needed. Span: `dev.backend_degraded`, on
 transition into degradation only (never `breaker.trip`, which alerts mean "a
 human must fix a credential").
 
-**What it does not cover (known gap).** Both predicates key on
-`error_class == "DEV_HARNESS_FAULT"`. Failures that still produce text or tools
-but no `result.json` land on `DEV_BAD_OUTPUT` (exit 11) — counted, unexcused,
-unthrottled. Operator-visible cases: codex inventing tool syntax as prose
-(`08-harness-templates.md` §8); grok silent non-progress halt (§2b).
+**What it covers is now an operator choice (ADR-0026).** By default both
+predicates key on `error_class == "DEV_HARNESS_FAULT"` — failures that still
+produce text or tools but no `result.json` land on `DEV_BAD_OUTPUT` (exit 11):
+counted, unexcused, unthrottled. Operator-visible cases: codex inventing tool
+syntax as prose (`08-harness-templates.md` §8); grok silent non-progress halt
+(§2b). `brake_on_bad_output` (Limits & Traffic, default **off**) widens the
+evidence set of every arm to `{DEV_HARNESS_FAULT, DEV_BAD_OUTPUT}`, so a
+fleet-wide bad-output cascade — including MIXED evidence, some containers
+exiting 15 and others 11 — reads as one backend event: correlated exit-11
+attempts are excused on their own per-step ledger (same 3-excusal bound) and
+the Dev Type throttles to the probe. Unlike exit 15 there is no
+container-class precondition — exit 11 has no in-band structured class (the
+exit code IS the classification, stamped app-side), so orphan-enriched runs
+carry the same evidence value. Off by default because the continuation loop
+(ADR-0022) already absorbs most solitary narrate-and-stop exit-11s.
 
 **Who this protects.** Strongest for multi-mission fleets. A deployment running
 one mission per Dev Type can never satisfy the ≥2-mission rule, so it gets

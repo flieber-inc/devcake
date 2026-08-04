@@ -258,7 +258,9 @@ class PollRuntime:
                 known = {name for mgr in self.managers.values()
                          for name in mgr.dev_types}
                 for dev_type in backend_health.refresh_degraded(
-                        self.store.all(), self.backend_degraded, known):
+                        self.store.all(), self.backend_degraded, known,
+                        classes=backend_health.fault_classes(
+                            self.config.brake_on_bad_output)):
                     with tracer.start_as_current_span("dev.backend_degraded") as bspan:
                         bspan.set_attribute("devcake.dev_type", dev_type)
                         bspan.set_attribute("devcake.reason",

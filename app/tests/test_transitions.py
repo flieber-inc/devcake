@@ -11,7 +11,7 @@ from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.orchestrator import decomposition, review, transitions
-from devcake.domain.model import Activity, ActivityEntry, Mission
+from devcake.domain.model import Activity, ActivityEntry, Mission, MissionType
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
 from devcake.domain import backend_health
@@ -392,9 +392,23 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
     assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 1
 
 
-def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
-    """A human comment on the mission is an intervention: the step gets fresh
-    attempts. DevCake's own sentinel-signed comments never reset."""
+def _failed_execute_runs(store, t0, n=2):
+    from datetime import timedelta
+    for i in range(1, n + 1):
+        r = _run("EXECUTE", None)
+        r.run_id = f"T-1-{i}-EXECUTE-FAIL"
+        r.state = "failed"
+        r.error = "DEV_BAD_OUTPUT"
+        r.created_at = t0 + timedelta(seconds=i)
+        store.save(r)
+
+
+def test_attempts_ignore_plain_comments_under_default_policy(tmp_path, monkeypatch):
+    """ADR-0026 regression (critical evaluation 2026-08-04): under the strict
+    default (`label-ops`) an ordinary comment — human or integration bot —
+    does NOT reset the attempt count. The pre-0026 rule let any chatty
+    integration (Linear↔GitHub sync, CI notifier) keep the counter at 1
+    forever, defeating max_attempts and unbounding token spend."""
     from datetime import timedelta
     import devcake.domain.orchestrator as orchestrator_mod
 
@@ -402,14 +416,45 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
     mgr, _fake, store = make_mgr(tmp_path, m)
     monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
                         tmp_path / "no-audit.jsonl")
+    assert mgr.config.attempt_reset == "label-ops"   # the shipped default
     t0 = datetime.now(timezone.utc)
-    for i in (1, 2):
-        r = _run("EXECUTE", None)
-        r.run_id = f"T-1-{i}-EXECUTE-FAIL"
-        r.state = "failed"
-        r.error = "DEV_BAD_OUTPUT"
-        r.created_at = t0 + timedelta(seconds=i)
-        store.save(r)
+    _failed_execute_runs(store, t0)
+
+    bot = ActivityEntry(ts=t0 + timedelta(seconds=20), author="sync-bot",
+                        kind="comment", body="Synced from GitHub · #4711")
+    human = ActivityEntry(ts=t0 + timedelta(seconds=30), author="felix",
+                          kind="comment", body="resolved this by hand, carry on")
+    activity = Activity(mission=m, entries=[bot, human])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 3
+
+    # the deliberate gesture DOES reset — and the sentinel guard still holds:
+    # a DevCake-authored post mentioning the token is not an intervention
+    devcake_echo = ActivityEntry(
+        ts=t0 + timedelta(seconds=40), author="devcake",
+        kind="comment", body="mention of DEVCAKE-RETRY\n\n`devcake:v1`")
+    activity = Activity(mission=m, entries=[bot, human, devcake_echo])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 3
+
+    retry = ActivityEntry(ts=t0 + timedelta(seconds=50), author="felix",
+                          kind="comment", body="fixed the fixture — DEVCAKE-RETRY")
+    activity = Activity(mission=m, entries=[bot, human, devcake_echo, retry])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
+
+
+def test_attempts_reset_on_any_comment_when_opted_in(tmp_path, monkeypatch):
+    """`attempt_reset: any-comment` restores the pre-0026 rule: a human
+    comment is an intervention and grants fresh attempts. DevCake's own
+    sentinel-signed comments never reset."""
+    from datetime import timedelta
+    import devcake.domain.orchestrator as orchestrator_mod
+
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    mgr.config.attempt_reset = "any-comment"
+    monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
+                        tmp_path / "no-audit.jsonl")
+    t0 = datetime.now(timezone.utc)
+    _failed_execute_runs(store, t0)
 
     devcake_note = ActivityEntry(ts=t0 + timedelta(seconds=10), author="devcake",
                                  kind="comment", body="posted\n\n`devcake:v1`")
@@ -422,6 +467,43 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
                           kind="comment", body="resolved this by hand, carry on")
     activity = Activity(mission=m, entries=[devcake_note, old_human, human])
     assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
+
+
+def test_unlimited_never_gives_up_and_warns_at_cadence(tmp_path, monkeypatch):
+    """`attempt_reset: unlimited` (ADR-0026): the app never applies
+    DEVCAKE-FAILED — the gate proceeds past max_attempts, posting a loud
+    cumulative-cost warning every review_loop_warning_every failures, deduped
+    across poll cycles."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    mgr.config.attempt_reset = "unlimited"
+    mgr.config.max_attempts = 1
+    mgr.config.review_loop_warning_every = 3
+    dispatch._UNLIMITED_WARNED.clear()
+
+    # attempt 4 = 3 failures → warning cadence hit; gate still proceeds
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 4)) is True
+    assert fake.swaps == []                       # DEVCAKE-FAILED never applied
+    assert any("Unlimited-attempts mode" in c and "$" in c
+               for c in fake.comments)
+    warned = len(fake.comments)
+
+    # same attempt recurring (a later gate deferred the dispatch) → no spam
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 4)) is True
+    assert len(fake.comments) == warned
+
+    # off-cadence failure count → silent, still proceeds
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 5)) is True
+    assert len(fake.comments) == warned
+
+    # the default policy still gives up: gate refuses and applies the label
+    mgr.config.attempt_reset = "label-ops"
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 4)) is False
+    assert any("DEVCAKE-FAILED" in str(add) for _rm, add in fake.swaps)
 
 
 def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
@@ -1928,6 +2010,63 @@ def test_orphan_payload_without_a_structured_class_is_never_excused(tmp_path):
     mgr.dev_failure_error(run, {"exit_code": 15})       # numeric only
     assert run.error_class == "DEV_HARNESS_FAULT"
     assert run.attempt_counted is True
+
+
+def test_bad_output_counts_even_when_correlated_by_default(tmp_path):
+    """ADR-0026 default: brake_on_bad_output off keeps the ADR-0018 design —
+    a fleet-wide exit-11 cascade still burns attempts (2026-07-24 behavior)."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    assert mgr.config.brake_on_bad_output is False    # the shipped default
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_BAD_OUTPUT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_BAD_OUTPUT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {"exit_code": 11})
+    assert error.startswith("DEV_BAD_OUTPUT")
+    assert run.error_class == "DEV_BAD_OUTPUT"
+    assert run.attempt_counted is True
+
+
+def test_bad_output_correlated_is_excused_when_opted_in(tmp_path):
+    """brake_on_bad_output on: exit-11 evidence across ≥2 missions excuses the
+    attempt exactly like exit 15 — no container-class precondition, because
+    exit 11 has no in-band structured class (the code IS the classification)."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    mgr.config.brake_on_bad_output = True
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_BAD_OUTPUT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_BAD_OUTPUT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {"exit_code": 11})
+    assert run.attempt_counted is False
+    assert "does not count toward attempts" in error
+
+
+def test_bad_output_solitary_counts_when_opted_in(tmp_path):
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    mgr.config.brake_on_bad_output = True
+    _save_failed(store, "T-1-1-EXECUTE-OLD", error_class="DEV_BAD_OUTPUT")
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 11})
+    assert run.attempt_counted is True
+
+
+def test_bad_output_excusals_run_out_when_opted_in(tmp_path):
+    """The same escape hatch as exit 15, on the DEV_BAD_OUTPUT ledger."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    mgr.config.brake_on_bad_output = True
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_BAD_OUTPUT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_BAD_OUTPUT",
+                 mission="p3")
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-EXECUTE-EX{i}",
+                     error_class="DEV_BAD_OUTPUT", counted=False)
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 11})
+    assert run.attempt_counted is True, "exhausted excusals must start counting"
 
 
 def test_dev_forge_no_longer_counts_toward_attempts(tmp_path):

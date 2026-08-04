@@ -7,6 +7,17 @@ import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 const CONTINUATION_POLICIES = ["auto", "resume-only", "fresh-only", "off"];
 
+const ATTEMPT_RESET_POLICIES = ["label-ops", "any-comment", "unlimited"];
+
+const ATTEMPT_RESET_DESC = {
+  "label-ops":
+    "Strict — ordinary comments don't grant fresh attempts; a comment with DEVCAKE-RETRY does.",
+  "any-comment":
+    "Any human comment resets the step's attempt count (pre-2026-08 behavior).",
+  unlimited:
+    "Never gives up — DevCake retries failed steps indefinitely and warns about cost.",
+};
+
 export default function LimitsSection() {
   const { dr } = useSharedDraft();
   const cfg = dr.draft.cfg;
@@ -29,6 +40,35 @@ export default function LimitsSection() {
             <Input type="number" className="w-24" value={cfg.dev_timeout_minutes}
               aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Attempt reset"
+            desc={ATTEMPT_RESET_DESC[cfg.attempt_reset] || `${cfg.attempt_reset} (set via API)`}
+            help="A DevCake idiosyncrasy worth understanding: each pipeline step retries up to the attempt limit, and certain events grant FRESH attempts — the count restarts. Removing DEVCAKE-FAILED and a later step finishing always reset. What else resets is this policy. Strict (default): only a comment containing the literal DEVCAKE-RETRY — the deliberate human gesture. Any comment: every non-DevCake comment resets, which reads naturally ('a human intervened') but lets a chatty integration (a Linear↔GitHub sync bot, a CI notifier) keep the counter at 1 forever — the mission then never fails AND never stops, retrying at token cost indefinitely. Unlimited: DevCake never applies DEVCAKE-FAILED at all — an explicit choice for self-hosted models where retries cost watts, not dollars; a cumulative-cost warning posts to the mission feed at the review-loop cadence so the mode stays loud. DEVCAKE-SKIP always stops a mission regardless of policy.">
+            <Select className="w-44" value={cfg.attempt_reset}
+              aria-label="Attempt reset policy"
+              onChange={(e) => setField("cfg.attempt_reset", e.target.value)}>
+              {!ATTEMPT_RESET_POLICIES.includes(cfg.attempt_reset) && (
+                // an API/YAML-set policy outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={cfg.attempt_reset}>
+                  {cfg.attempt_reset} (set via API)
+                </option>
+              )}
+              <option value="label-ops">Strict (DEVCAKE-RETRY / labels)</option>
+              <option value="any-comment">Any comment</option>
+              <option value="unlimited">Unlimited (never give up)</option>
+            </Select>
+          </SettingRow>
+          <SettingRow label="Brake on missing results"
+            desc={cfg.brake_on_bad_output
+              ? "ON — repeated no-result runs (exit 11) count as backend-brake evidence."
+              : "OFF — only harness faults (exit 15) engage the backend brake (default)."}
+            help="Another nuance: when a model backend degrades fleet-wide, every container may fail the same way at once. DevCake's backend brake correlates such failures — the same failure class across two or more missions in the recent window — and responds by excusing those attempts (they don't count toward the limit) and throttling the Dev Type to a single probe run until two clean runs clear it. By default only harness faults (exit 15: the CLI reported an API/backend error) are brake evidence. This switch adds exit 11 — the run ended without writing its result file — which is also the signature of a backend returning garbage to every container at once. It stays off by default because the continuation loop already recovers most solitary no-result runs, and a genuinely confused model should burn its attempts honestly. Note: at a per-type concurrency of 1 the throttle arm changes nothing — only the attempt-excusal arm acts.">
+            <Toggle on={!!cfg.brake_on_bad_output}
+              label="Brake on missing results"
+              onClick={() => setField("cfg.brake_on_bad_output",
+                !cfg.brake_on_bad_output)} />
           </SettingRow>
           <SettingRow label="Review-loop warning"
             desc="Warn after every N rejections of EXECUTE's work."

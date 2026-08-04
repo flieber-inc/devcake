@@ -195,6 +195,38 @@ def test_continuation_fields_default_and_round_trip():
     assert AppConfig.model_validate(merged).max_continuations == 50
 
 
+def test_attempt_reset_and_brake_fields_default_and_round_trip():
+    """ADR-0026: spend discipline is operator policy (Limits & Traffic) —
+    strict `label-ops` default, brake widening OFF, both additive: a
+    pre-ADR-0026 config file still validates at schema v4 with no migration."""
+    base = _base()
+    assert "attempt_reset" in base                     # dumped for the SPA draft
+    assert "brake_on_bad_output" in base
+    assert AppConfig().attempt_reset == "label-ops"
+    assert AppConfig().brake_on_bad_output is False
+    del base["attempt_reset"]                          # pre-ADR-0026 config JSON
+    del base["brake_on_bad_output"]
+    loaded = AppConfig.model_validate(base)
+    assert loaded.attempt_reset == "label-ops"
+    assert loaded.brake_on_bad_output is False
+    assert loaded.schema_version == 4                  # additive, not a migration
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "attempt_reset": "sometimes"})
+    tuned = AppConfig.model_validate(
+        {**base, "attempt_reset": "unlimited", "brake_on_bad_output": True})
+    round_tripped = AppConfig.model_validate(tuned.model_dump())
+    assert round_tripped.attempt_reset == "unlimited"
+    assert round_tripped.brake_on_bad_output is True
+    # a patch touching an unrelated field must not reset the settings
+    from devcake.config import deep_merge
+    dumped = tuned.model_dump()
+    merged = deep_merge(dumped, {"repos": [
+        {**(dumped["repos"][0] if dumped["repos"] else
+            {"name": "main", "url": "https://github.com/o/r"}),
+         "auto_merge": True}]})
+    assert AppConfig.model_validate(merged).attempt_reset == "unlimited"
+
+
 def test_repo_mirror_defaults_and_round_trip():
     """ADR-0024: the mirror is MANDATORY (no enable field exists — its
     absence IS the contract); the two knobs default to sync-every-dispatch

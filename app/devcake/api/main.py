@@ -233,6 +233,21 @@ def _refuse_insecure_passwords() -> None:
         raise RuntimeError(
             f"refusing to start with empty/default passwords for: {', '.join(bad)}. "
             f"Set strong values in .env, or DEVCAKE_ALLOW_INSECURE=1 for local sandbox only.")
+    # ADMIN_PASSWORD gets a LENGTH floor on top of the deny-list (2026-08
+    # evaluation, docs/14 §11 backlog item): admin basic auth is
+    # host-root-equivalent — one authenticated settings-export request
+    # returns DAGU_PASSWORD, and dagu holds docker.sock — yet a 3-char
+    # password booted fine. 12 is a floor, not advice; the deny-list alone
+    # cannot express it. DELIBERATE BREAKING CHANGE for short-password
+    # deployments: fail-loudly at boot with the exact remedy (pre-v1
+    # doctrine, release-noted).
+    if len(os.environ.get("ADMIN_PASSWORD", "").strip()) < 12:
+        raise RuntimeError(
+            "ADMIN_PASSWORD must be at least 12 characters — it is "
+            "host-root-equivalent (settings export carries the Dagu "
+            "credential, and Dagu holds docker.sock — docs/14 §3). Set a "
+            "longer value in .env, or DEVCAKE_ALLOW_INSECURE=1 for local "
+            "sandbox only.")
     # the password check above can't catch a blank USER half of the OO
     # service account — an empty email encodes ':password' and 401s every
     # telemetry write silently (collector, fluentbit, log-push)

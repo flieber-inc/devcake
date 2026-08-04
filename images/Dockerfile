@@ -224,8 +224,15 @@ FROM base AS grok-build
 LABEL org.opencontainers.image.title="devcake-dev-grok-build"
 
 USER dev
-# Official installer (docs/08 §2; CLI verified ~v0.2.93)
-RUN curl -fsSL https://x.ai/cli/install.sh | bash
+# VENDORED official installer (2026-08 evaluation: `curl | bash` from a
+# moving URL was the one unpinned fetch in an otherwise digest-pinned tree —
+# and sha-pinning the URL would break every bake the moment x.ai updates it).
+# The checked-in copy is reviewed on bump like any other dependency:
+#   curl -fsSL https://x.ai/cli/install.sh -o images/vendor/grok-install.sh
+# then diff-review + commit. Installs the current stable channel CLI (the
+# installer supports an explicit version arg if pinning becomes desirable).
+COPY --chown=dev:dev vendor/grok-install.sh /tmp/grok-install.sh
+RUN bash /tmp/grok-install.sh && rm /tmp/grok-install.sh
 
 # base's PATH already carries ~/.local/bin and ~/.npm-global/bin (ADR-0023)
 ENV PATH="/home/dev/.grok/bin:${PATH}" \

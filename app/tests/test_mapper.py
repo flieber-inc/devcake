@@ -364,18 +364,19 @@ def test_activity_payload_materializes_mission_attachments(tmp_path):
 
 
 def test_activity_payload_project_brief_is_mission_md(tmp_path):
+    # project-fidelity fix: the project branch rides get_activity(full=True)
+    # (updates/documents mirror); the brief still lands in MISSION.md and an
+    # empty feed renders the honest placeholder, not the pre-fix stub
     proj = Mission(pmo_id="p9", pmo_kind="project", key="P-1", title="proj",
                    status="backlog", description="the project brief",
                    updated_at=NOW)
-    pmo = MapPMO([], activity=None)
-
-    async def _get(ref):
-        return proj
-    pmo.get = _get
+    pmo = MapPMO([], activity=Activity(mission=proj, entries=[]))
     mgr = make_mgr(tmp_path, pmo)
     payload = run_coro(mgr.activity_payload("p9", "project"))
+    assert pmo.activity_calls == [True]
     assert "the project brief" in payload["mission_md"]
-    assert "no comment feed" in payload["activity_md"]
+    assert "(no project updates yet" in payload["activity_md"]
+    assert "no comment feed" not in payload["activity_md"]
 
 
 def test_activity_payload_renders_truncation_banner(tmp_path):

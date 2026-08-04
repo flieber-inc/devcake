@@ -46,15 +46,21 @@ class PMOCapabilities(BaseModel):
 class PMOPort(Protocol):
     """Every operation DevCake needs from a PMO system. Contract notes:
 
-    - `get_activity` on a ref without a comment feed (Linear projects) returns
-      the mission with `entries=[]` — never raises.
+    - `get_activity` SHALLOW on a ref without an issue-style comment feed
+      (Linear projects) returns the mission with `entries=[]` — never raises.
+      The shallow project path has no production caller (marker scans are
+      issue-only) and must stay cheap.
     - `get_activity(full=True)` (ADR-0014 D3, the activity-folder builder's
       mode) walks the ENTIRE feed history, carries reply structure
       (`entry_id`/`parent_id`) and mission-level attachments (description
       assets + the vendor's native attachment list), and sets
-      `Activity.truncated` on its hard stop instead of raising. Default
-      (shallow) mode keeps the cheap recent-window query — the marker-scan
-      call paths must never pay full-history cost.
+      `Activity.truncated` on its hard stop instead of raising. On a
+      `projects_supported` vendor, full mode on a project ref mirrors the
+      project-NATIVE feed (updates + their comments), long-form documents
+      (`Activity.documents`), and external links/attachments; the enrichment
+      is fail-open (a failure degrades to the brief alone — the mission must
+      still dispatch). Default (shallow) mode keeps the cheap recent-window
+      query — the marker-scan call paths must never pay full-history cost.
     - `post_feed` targets the kind-appropriate channel (issue comment /
       project update). Feed POLICY (redaction, sentinel, suppression) is the
       orchestrator's job; transport is the adapter's.

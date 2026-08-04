@@ -181,3 +181,25 @@ def test_transient_errors_typed_from_port():
     pmo = LinearAdapter("k", transport=mock)
     with pytest.raises(PMOTransient):
         run(pmo.get(MissionRef("x", "issue")))
+
+
+def test_get_activity_full_on_project_mirrors_native_feed():
+    # project-fidelity fix: FULL mode on a project ref pays the enrichment
+    # queries (documents/updates/links); shallow stays pinned cheap by
+    # test_get_activity_on_project_returns_empty_entries above
+    empty = {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []}
+    upd = {"id": "u1", "body": "hello", "createdAt": "2026-07-13T00:00:00Z",
+           "user": {"name": "alice"}, "comments": dict(empty)}
+    rec = Recorder({
+        "documents(first:": {"project": {
+            "documents": {**empty, "nodes": [
+                {"id": "d1", "title": "Spec", "content": "# s", "url": "u"}]},
+            "projectUpdates": {**empty, "nodes": [upd]},
+            "externalLinks": dict(empty), "attachments": dict(empty)}},
+        "project(": {"project": PROJECT_NODE}})
+    pmo = LinearAdapter("k", transport=httpx.MockTransport(rec.handler))
+    act = run(pmo.get_activity(MissionRef("uuid-p1", "project"), full=True))
+    assert [d.title for d in act.documents] == ["Spec"]
+    assert [e.entry_id for e in act.entries] == ["u1"]
+    assert act.entries[0].author == "alice (project update)"
+    assert any("projectUpdates" in q for q in rec.queries)

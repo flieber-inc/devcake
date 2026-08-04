@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import datetime  # noqa: F401 — type context for Activity entries
 from pathlib import Path
 
@@ -171,7 +172,7 @@ async def push_activity_repo(mgr, mission, mtype, seq: int) -> None:
                     f"{mission.key}: {type(e).__name__}: {str(e)[:180]}")
 
 
-def _mission_md(m, attachment_lines=()) -> str:
+def _mission_md(m, attachment_lines=(), document_lines=()) -> str:
     """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;
     every step playbook points here."""
     lines = [
@@ -179,29 +180,52 @@ def _mission_md(m, attachment_lines=()) -> str:
         f"> Kind: {m.pmo_kind} · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
         f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
         "## Description", m.description or "(none)"]
+    if document_lines:
+        lines += ["", "## Project documents", *document_lines]
     if attachment_lines:
         lines += ["", "## Mission attachments", *attachment_lines]
     return "\n".join(lines)
+
+
+def _doc_filename(title: str) -> str:
+    """One safe path segment from a vendor document title: path separators
+    and control chars collapse to spaces; leading/trailing dots stripped so
+    `.`/`..` can never form; empty falls back. Length-capped like the URL
+    basename fallback in _materialize."""
+    seg = re.sub(r"[\\/\x00-\x1f]+", " ", title or "").strip().strip(".").strip()
+    return (seg or "untitled")[:80]
 
 
 async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
     """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
     of the feed — full bodies inline (never externalized), attachments by
     name in feed order, reply nesting; every attachment's bytes ride as
-    sibling files."""
-    if kind == "project":
-        # projects have no comments/attachments: the brief IS the payload
-        m = await mgr.pmo.get(MissionRef(pmo_id, "project"))
-        md = "\n".join([
-            f"# {m.key}: {m.title}",
-            "> The mission brief lives in MISSION.md (same folder).", "",
-            "## Activity", "(projects carry no comment feed — see child issues)"])
-        return {"mission_md": _mission_md(m), "activity_md": md,
-                "attachments": []}
-    act = await mgr.pmo.get_activity(MissionRef(pmo_id, "issue"), full=True)
+    sibling files. Project refs (project-fidelity fix): the feed is the
+    project-update mirror, and project Documents materialize under docs/."""
+    act = await mgr.pmo.get_activity(MissionRef(pmo_id, kind), full=True)
     m = act.mission
     attachments = []
     used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed
+
+    # Documents FIRST (before mission/feed attachments): their docs/… paths
+    # then live in `used`, so a later flat attachment literally named `docs`
+    # suffixes to docs-2 instead of colliding file-vs-dir (unrepresentable
+    # in the snapshot's git tree)
+    document_lines = []
+    try:
+        doc_cap = mgr._attachment_cap()
+    except Exception:  # noqa: BLE001 — cap is advisory; fixed budget fallback
+        doc_cap = 50 * 1024 * 1024
+    for doc in act.documents:
+        content = (doc.content or "").encode()
+        if len(content) > doc_cap:
+            document_lines.append(
+                f"[document too large to mirror: {doc.title}]({doc.url})")
+            continue
+        fname = _unique_name(f"docs/{_doc_filename(doc.title)}.md", used)
+        attachments.append({"filename": fname,
+                            "content_b64": base64.b64encode(content).decode()})
+        document_lines.append(f"[document: {fname}]")
 
     async def _materialize(att):
         """Download one file attachment into the folder; return its index
@@ -266,6 +290,11 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
         "Entries marked 🧑 HUMAN are instructions/steering from a person — they",
         "are authoritative. Entries marked 🤖 DevCake are DevCake's own records.",
     ]
+    if kind == "project" and not act.entries:
+        # self-explanatory empty mirror (the pre-fix stub said projects carry
+        # no feed at all — no longer true; they carry project updates)
+        lines += ["", "(no project updates yet — the project-native feed is "
+                      "mirrored here once updates exist)"]
     by_id = {e.entry_id: e for e in act.entries if e.entry_id}
     for e in act.entries:
         body = e.body or ""
@@ -282,6 +311,6 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
         for att in e.attachments:
             lines.append(await _materialize(att))
         lines.append("")
-    return {"mission_md": _mission_md(m, mission_lines),
+    return {"mission_md": _mission_md(m, mission_lines, document_lines),
             "activity_md": "\n".join(lines), "attachments": attachments}
 

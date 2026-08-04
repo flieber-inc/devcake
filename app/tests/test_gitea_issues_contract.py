@@ -461,3 +461,12 @@ def test_download_asset_allows_same_host_redirect():
         transport=httpx.MockTransport(handler))
     body = run(pmo.download_asset("http://gitea:3000/attachments/start"))
     assert body == b"payload-bytes"
+
+
+def test_get_activity_full_project_ref_stays_empty():
+    # projects_supported=False: the non-issue branch answers without any
+    # HTTP and the project-fidelity fields stay defaulted
+    pmo = GiteaIssuesAdapter("http://gitea:3000", "tok", "o/r")
+    act = run(pmo.get_activity(MissionRef("9", "project"), full=True))
+    assert act.entries == [] and act.documents == []
+    assert act.mission_attachments == [] and act.truncated is False

@@ -3,7 +3,7 @@
 
 Claude cases run against REAL captured streams in fixtures/harness_streams/.
 The codex and grok cases here stay synthetic on purpose — they vary one field at
-a time to pin an arm's boundary; the real codex-cli 0.144.4 and grok 0.2.112
+a time to pin an arm's boundary; the real codex-cli 0.146.0 and grok 0.2.112
 captures are asserted end-to-end in test_harness_captures.py.
 """
 

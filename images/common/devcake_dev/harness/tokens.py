@@ -193,6 +193,10 @@ def codex_token_report(out: str):
                 input_tokens=u.get("input_tokens"),
                 output_tokens=u.get("output_tokens"),
                 cache_read_tokens=u.get("cached_input_tokens"),
+                # NEW at codex 0.146.0 (capture-verified): 0.144.4 had no
+                # write counter at all — absent key reads None, so pre-bump
+                # streams keep rendering "—", never a fabricated 0
+                cache_write_tokens=u.get("cache_write_input_tokens"),
                 reasoning_tokens=u.get("reasoning_output_tokens"),
                 raw=u)
     return report

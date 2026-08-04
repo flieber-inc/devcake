@@ -33,7 +33,7 @@ prose.
 | `DEV_FORGE` | exit 13 without the structured `DEV_FORGE_AUTH` class (transient forge/clone/push failure, or auth-ish wording without the structured class) | counted only after per-step excusals are spent (§4a) — **not** a latched breaker |
 | `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
-| `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.144.4, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
+| `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.146.0, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid **after the in-container continuation budget is spent, when the loop is enabled** (ADR-0022; `07-dev-runtime.md` §5a); app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 by default, with `brake_on_bad_output` (ADR-0026, default off) widening it to cover exactly this cascade |
 | `ILLEGAL_OUTCOME` | outcome not in `LEGAL_OUTCOMES` for the run type (`03` §6) — includes forged outcomes (e.g. EXECUTE claiming `reviewed`) | park with `DEVCAKE-SKIP` + comment; audit `illegal_outcome`; never acted on, never retried |
 | `LABEL_CONFLICT` | ≥2 stage labels (derivation row 6) | human-resolve |
@@ -75,7 +75,7 @@ against each CLI (`adr/0018-harness-fault-classification-and-backend-brake.md`, 
 |---|---|---|
 | `claude-code` | `--max-turns <N>` | **yes** — on `terminal_reason:"max_turns"` / `subtype:"error_max_turns"` |
 | `grok-build` (0.2.112) | `--max-turns <N>` | **yes** — it emits a dedicated `{"type":"max_turns_reached"}` event **and** `end` `stopReason:"Cancelled"`, exits 1, and the predicate fires on that event type (`grok_turn_budget`). It landed on `DEV_CRASH` (exit 10) until the ADR-0018 fix round added the arm |
-| `codex` (0.144.4) | **none** | **no** — no `--max-turns` equivalent and no config key for one, so the class is unreachable |
+| `codex` (0.146.0) | **none** | **no** — no `--max-turns` equivalent and no config key for one, so the class is unreachable |
 
 Consequences for the operator. On a **claude-code** or **grok-build** Dev, raising
 `--max-turns` in that Mission Type's extra CLI args (`11-admin-panel.md` §3) is
@@ -85,7 +85,7 @@ is stopped only by `dev_timeout_minutes` (`config.py:343`, default 120 — a
 **global** setting, so lowering it to fence one Dev Type shortens every run) and
 it arrives as a signal kill reported `DEV_TIMEOUT`, never `DEV_TURN_BUDGET`. The
 levers there are a smaller task, a different Dev Type, or accepting the timeout as
-the bound. Do not go looking for a codex turn flag; at 0.144.4 there is not one.
+the bound. Do not go looking for a codex turn flag; at 0.146.0 there is not one (re-probed at the bump).
 
 **grok's cap has no default**, so nothing sits above the value you set: measured
 2026-07-25 it stops exactly where it is told (`grok_loop_varying_cap20` at 20;

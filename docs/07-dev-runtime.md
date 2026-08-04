@@ -149,7 +149,7 @@ narrate-and-stop diagnosis at fleet scale. Scenario captures:
 
 **Which harnesses can reach exit 16.** `claude-code` (`max_turns` /
 `error_max_turns`) and `grok-build` (`max_turns_reached` event) — see
-`test_harness_captures.py` and ADR-0018. `codex` 0.144.4 has no turn cap, so
+`test_harness_captures.py` and ADR-0018. `codex` 0.146.0 has no turn cap, so
 exit 16 is unreachable; extra CLI args cannot invent one (`02` §9).
 
 **Grok non-progress halt → exit 11, not 16.** A repeated identical tool call can

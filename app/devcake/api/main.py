@@ -180,6 +180,9 @@ def reload_connections() -> None:
     forge_runtime.rebuild(config.repos, make_forge)
     build_managers()
     reset_protection_cache()               # repos may have changed — reprobe
+    # the adapter set feeds secret_env_vars (descriptor env lists), so the
+    # redaction scan cache must rebuild with it (2026-08 F17)
+    security.invalidate_secret_scan()
 
     async def _ensure():
         for mgr in list(managers.values()):

@@ -22,6 +22,10 @@ class DepPMO:
         self.fail_ids = set(fail_ids)
         self.live_fetches = []
 
+    def capabilities(self):
+        from fakes import fake_pmo_capabilities
+        return fake_pmo_capabilities()   # global_ids=True — peer path enabled
+
     async def get(self, ref):
         self.live_fetches.append(ref.pmo_id)
         if ref.pmo_id in self.fail_ids:
@@ -310,3 +314,4 @@ def test_foreign_resolution_uses_peer_adapter_and_memoizes(tmp_path):
     assert dispatched == []
     assert cs_pmo.live_fetches == ["u1"]
     assert eng_pmo.live_fetches == []
+

@@ -7,6 +7,8 @@ from typing import ClassVar, Literal, Optional, Protocol
 
 from pydantic import BaseModel
 
+from ..domain.run import LEGACY_PMO_REFS
+
 # THE branch-naming convention: one definition, imported by the orchestrator
 # and the prompt templates alike (docs/06 §2).
 BRANCH_PREFIX = "devcake/"
@@ -39,7 +41,7 @@ def run_branch(run) -> str:
     (pre-v3) records derive the unprefixed convention their Devs pushed."""
     if getattr(run, "branch", ""):
         return run.branch
-    if run.pmo_ref in ("", "main"):
+    if run.pmo_ref in LEGACY_PMO_REFS:
         return legacy_branch(run.mission_key)
     return mission_branch(run.pmo_ref, run.mission_key)
 

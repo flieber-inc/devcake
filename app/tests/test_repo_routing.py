@@ -284,6 +284,20 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
                 repo_name=name, clone_url=f"http://gitea:3000/devcake-internal/{name}.git",
                 username=f"svc-{name}", token_write="w-tok", token_read="r-tok")
 
+        def mission_repo_binding(self, creds):
+            # port contract (2026-08 F9) — the REAL row doctrine is pinned by
+            # test_gitea_mission_repo_binding_row against the gitea adapter;
+            # this fake mirrors it so resolve_repo_live's registration path
+            # stays observable
+            from types import SimpleNamespace
+            from devcake.config import RepoInstance
+            inst = RepoInstance.model_construct(
+                name=creds.repo_name, forge="gitea", url=creds.clone_url,
+                default_branch="main", api_base=None,
+                auto_merge=True, auto_resolve_merge_conflicts=True,
+                merge_retry_window_minutes=30)
+            return inst, SimpleNamespace(name="fake-internal-adapter")
+
     class RT(FakeForgeRuntime):
         def register_internal(self, name, inst, forge):
             self.instances[name] = inst
@@ -308,7 +322,8 @@ def test_resolve_repo_live_ungates_zero_repo_to_internal(tmp_path, monkeypatch):
         runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
     )
 
-    # zero-repo mission → internal (always auto-merge, ADR-0020)
+    # zero-repo mission → internal (always auto-merge, ADR-0020; the row
+    # doctrine itself is pinned by test_gitea_mission_repo_binding_row)
     name, reason = run_coro(mgr.resolve_repo_live(_m()))
     assert name == "linear-t-1" and reason is None
     assert provisioned == [("linear", "T-1")]
@@ -746,3 +761,30 @@ def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch
     out = execute_prompt("ID", m, "a", "pr {branch}", reference_repos=note)
     assert "Reference repositories (read-only)" in out
     assert "Reference repositories" in plan_prompt("ID", m, reference_repos=note)
+
+
+def test_gitea_mission_repo_binding_row(monkeypatch):
+    """2026-08 F9: the internal mission-repo row doctrine moved from domain
+    into the gitea adapter — pin it at its new home. Always auto-merge (the
+    zip deliverable only posts after merge; no human watches the internal
+    Gitea), synthesized name via model_construct, app-side adapter on the
+    service token."""
+    from devcake.adapters.gitea.provision import GiteaProvisioner
+    from devcake.ports.internal_forge import MissionRepoCredentials
+
+    prov = GiteaProvisioner(url="http://gitea:3000", admin_user="a",
+                            admin_password="p")
+    monkeypatch.setattr(prov, "service_tokens",
+                        lambda: {"app_token": "app-tok",
+                                 "reviewer_token": "rev-tok"})
+    creds = MissionRepoCredentials(
+        repo_name="linear-t-9",
+        clone_url="http://gitea:3000/devcake-internal/linear-t-9.git",
+        username="svc-linear-t-9", token_write="w", token_read="r")
+    inst, adapter = prov.mission_repo_binding(creds)
+    assert inst.name == "linear-t-9"
+    assert inst.url == creds.clone_url
+    assert inst.auto_merge is True
+    assert inst.auto_resolve_merge_conflicts is True
+    assert inst.merge_retry_window_minutes == 30
+    assert adapter is not None and hasattr(adapter, "merge")

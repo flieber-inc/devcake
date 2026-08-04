@@ -84,6 +84,14 @@ class InternalForgePort(Protocol):
         attempts and rework (the M4 PR-reuse mechanics carry over)."""
         ...
 
+    def mission_repo_binding(self, creds: MissionRepoCredentials):
+        """(RepoInstance row, app-side ForgePort adapter) for a provisioned
+        mission repo — ready for ForgeRuntime.register_internal. Lives on the
+        port because ONLY the internal forge knows its own vendor: the old
+        call site built a named gitea adapter inside domain code, threading
+        the F1 tripwire's registry exemption (2026-08 evaluation F9)."""
+        ...
+
     def mission_credentials(self, repo_name: str) -> MissionRepoCredentials | None:
         """The stored per-mission token pair (runspec source; sync read)."""
         ...

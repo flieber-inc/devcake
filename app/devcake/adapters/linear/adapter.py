@@ -69,16 +69,21 @@ class LinearAdapter:
         self._headers = {"Authorization": api_key, "Content-Type": "application/json"}
         self._team_cache: dict[str, dict[str, Any]] = {}
         self._transport = transport  # tests inject a MockTransport (contract test 9)
+        from ..http import PooledClient
+        self._http = PooledClient(timeout=20, transport=transport)  # F16: keep-alive
         # the configured PMO-instance name this adapter serves (schema v3):
         # stamped on every Mission at normalization, so provenance can never
         # be missed by a fetch path
         self._instance = instance
 
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
     async def _gql(self, query: str, variables: dict | None = None) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=20, transport=self._transport) as client:
-                resp = await client.post(API, headers=self._headers,
-                                         json={"query": query, "variables": variables or {}})
+            resp = await self._http.get().post(   # pooled (F16)
+                API, headers=self._headers,
+                json={"query": query, "variables": variables or {}})
         except httpx.HTTPError as e:
             raise PMOTransient(f"network: {e}") from e
         if resp.status_code == 429 or resp.status_code >= 500:
@@ -752,7 +757,8 @@ class LinearAdapter:
         return PMOCapabilities(projects_supported=True, project_labels_supported=True,
                                attachment_max_bytes=50 * 1024 * 1024,
                                native_label_swap_atomic=True,
-                               relations_supported=True)
+                               relations_supported=True,
+                               global_ids=True)   # Linear pmo_ids are UUIDs
 
     # ── normalization ────────────────────────────────────────────────────────
 

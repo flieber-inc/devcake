@@ -63,6 +63,13 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
         _fsync_dir(path.parent)          # make the rename itself durable
+        # 2026-08 evaluation F17: every store write funnels through here, so
+        # this ONE call keeps security's _known_values result cache exact in
+        # the direction that matters — a just-stored value is rescanned
+        # before the next redact(). Deletes deliberately do not invalidate
+        # (stale-extra masking is the safe direction).
+        from .security import invalidate_secret_scan
+        invalidate_secret_scan()
     except Exception:  # noqa: BLE001 — temp cleanup then re-raise (atomic write contract)
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)

@@ -182,3 +182,16 @@ def make_mission_manager(
     if noop_audit:
         mgr._audit = lambda *a, **k: None  # type: ignore[method-assign]
     return mgr
+
+
+def fake_pmo_capabilities(*, global_ids=True):
+    """Shared capability row for the test fakes. Default is Linear-shaped
+    (global ids ON, so peer-resolution tests exercise the allowed path);
+    colliding-id scenarios pass global_ids=False — the capability replaced
+    GLOBAL_ID_SYSTEMS in the 2026-08 cleanups."""
+    from devcake.ports.pmo import PMOCapabilities
+    return PMOCapabilities(
+        projects_supported=True, project_labels_supported=True,
+        attachment_max_bytes=50 * 1024 * 1024,
+        native_label_swap_atomic=True, relations_supported=True,
+        global_ids=global_ids)

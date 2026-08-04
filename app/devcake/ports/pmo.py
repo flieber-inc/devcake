@@ -34,6 +34,13 @@ class PMOCapabilities(BaseModel):
     attachment_max_bytes: int
     native_label_swap_atomic: bool
     relations_supported: bool = False
+    # pmo_ids are globally unique across the vendor environment (Linear
+    # UUIDs) — only such systems may resolve blockers via PEER adapters or
+    # accept peer run history on a locally-resolved foreign id. Colliding-id
+    # systems (gitea_issues issue numbers) never cross instances. Declared
+    # here so the blocker locator branches on a CAPABILITY, not a vendor
+    # name (2026-08 evaluation F10 — adding a PMO no longer edits domain).
+    global_ids: bool = False
 
 
 class PMOPort(Protocol):

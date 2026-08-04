@@ -54,6 +54,8 @@ class GitHubForge:
         self.token = token
         self.reviewer_token = reviewer_token or None
         self._transport = transport        # tests inject MockTransport
+        from ..http import PooledClient
+        self._http = PooledClient(timeout=20, transport=transport)  # F16: keep-alive
 
     def _headers(self, reviewer: bool = False) -> dict[str, str]:
         token = self.reviewer_token if reviewer else self.token
@@ -67,14 +69,17 @@ class GitHubForge:
 
     async def _req(self, method: str, path: str, *, reviewer: bool = False,
                    **kwargs) -> Any:
-        async with httpx.AsyncClient(timeout=20, transport=self._transport) as client:
-            resp = await client.request(
-                method, f"{self.api}/repos/{self.owner}/{self.repo}{path}",
-                headers=self._headers(reviewer), **kwargs)
-            if resp.status_code >= 400:
-                raise ForgeError(f"{method} {path} → {resp.status_code}: "
-                                 f"{resp.text[:200]}", status=resp.status_code)
-            return resp.json() if resp.text else None
+        client = self._http.get()   # pooled (F16); adapter aclose() owns it
+        resp = await client.request(
+            method, f"{self.api}/repos/{self.owner}/{self.repo}{path}",
+            headers=self._headers(reviewer), **kwargs)
+        if resp.status_code >= 400:
+            raise ForgeError(f"{method} {path} → {resp.status_code}: "
+                             f"{resp.text[:200]}", status=resp.status_code)
+        return resp.json() if resp.text else None
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
 
     async def health_probe(self) -> ForgeHealth:
         repository = f"{self.owner}/{self.repo}"

@@ -74,6 +74,15 @@ class ForgeRuntime:
             if name in self.forges and name not in live:
                 live[name] = self.forges[name]
                 insts[name] = self.instances[name]
+        # F16: the outgoing adapters hold pooled keep-alive clients — close
+        # them (fire-and-forget) instead of leaking sockets on every config
+        # PUT / secret write. Carried-over internal entries are the SAME
+        # objects in `live`, so only truly replaced adapters close.
+        outgoing = [f for n, f in self.forges.items()
+                    if live.get(n) is not f]
+        if outgoing:
+            from ..adapters.http import aclose_adapters
+            aclose_adapters(outgoing)
         self.forges, self.instances = live, insts
         for name in list(self.health):
             if name not in live:

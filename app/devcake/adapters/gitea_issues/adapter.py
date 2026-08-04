@@ -64,6 +64,8 @@ class GiteaIssuesAdapter:
         self._instance = instance
         self._token = token or ""
         self._transport = transport
+        from ..http import PooledClient
+        self._http = PooledClient(timeout=30, transport=transport)  # F16: keep-alive
         base = (api_base or "").strip().rstrip("/")
         if not base:
             # constructed only when configured; empty base fails loud on use
@@ -151,6 +153,9 @@ class GiteaIssuesAdapter:
             raise PMOTransient("gitea_issues: API token missing")
         return {"Authorization": f"token {self._token}"}
 
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
     async def _req(
         self,
         method: str,
@@ -167,11 +172,9 @@ class GiteaIssuesAdapter:
         url = f"{self._api}{path}"
         hdrs = {**self._headers(), **(headers or {})}
         try:
-            async with httpx.AsyncClient(
-                    timeout=30, transport=self._transport) as client:
-                resp = await client.request(
-                    method, url, params=params, json=json, content=content,
-                    headers=hdrs)
+            resp = await self._http.get().request(   # pooled (F16)
+                method, url, params=params, json=json, content=content,
+                headers=hdrs)
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitea_issues network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):

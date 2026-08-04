@@ -215,10 +215,12 @@ def test_dev_type_secret_env_values_redacted(tmp_path, monkeypatch):
 
 
 def test_known_values_cache_invalidates_on_change(tmp_path, monkeypatch):
-    """Audit A28: redact() re-globbed and re-parsed every /data/secrets JSON
-    on every call (the hot path grows with mission count — M11 adds one file
-    per internal mission). The mtime/size cache must still see changed,
-    added, and removed files immediately."""
+    """Audit A28 + 2026-08 F17: the per-file mtime/size cache still sees
+    changed, added, and removed files — but the RESULT cache in front of it
+    (the glob+stat per redact() call is gone) rescans only on
+    invalidate_secret_scan(), which the store's atomic writer calls. Direct
+    file writes (this test) must invalidate explicitly — outside the app's
+    single-writer contract, that is the documented deal."""
     import json as _json
     from devcake import security
     monkeypatch.setattr(security, "_SECRETS_DIR", tmp_path / "secrets")
@@ -226,12 +228,33 @@ def test_known_values_cache_invalidates_on_change(tmp_path, monkeypatch):
     d.mkdir(parents=True)
     f = d / "repo-main.json"
     f.write_text(_json.dumps({"token": "first-secret-value-123"}))
+    security.invalidate_secret_scan()
     assert "first-secret-value-123" not in security.redact("x first-secret-value-123")
     f.write_text(_json.dumps({"token": "second-secret-value-98765"}))
+    security.invalidate_secret_scan()
     assert "second-secret-value-98765" not in security.redact("x second-secret-value-98765")
     f.unlink()
-    # removed file's values drop out of the scan (runtime registry unaffected)
+    # a removed file's values persist in the RESULT cache until the next
+    # write-triggered rescan — deliberately the SAFE direction (stale-extra
+    # masking; "unregistering a just-revoked value is the risky direction")
+    assert "second-secret-value-98765" not in security.redact("x second-secret-value-98765")
+    security.invalidate_secret_scan()
+    # after a rescan the removed file's values drop out of the scan
     assert "first-secret-value-123" in security.redact("x first-secret-value-123")
+
+
+def test_store_writes_invalidate_the_scan_cache(tmp_path, monkeypatch):
+    """The load-bearing half of F17: a value stored through secrets.py must
+    be redacted IMMEDIATELY — no manual invalidation, no TTL window. The
+    atomic write choke point owns the cache flush."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s, security
+    monkeypatch.setattr(security, "_SECRETS_DIR", tmp_path / "secrets")
+    security.redact("warm the cache")                       # populate
+    s.write_connection_secret("repo", "hot", "token",
+                              "just-stored-value-45678901")
+    assert "just-stored-value-45678901" not in security.redact(
+        "x just-stored-value-45678901")
 
 
 def test_register_all_boot_coverage_and_key_scheme(tmp_path, monkeypatch):

@@ -35,10 +35,15 @@ def _mission(pmo_id, key, status="done", instance=""):
 
 
 class CountingPMO:
-    def __init__(self, missions=None, fail=False):
+    def __init__(self, missions=None, fail=False, global_ids=True):
         self.missions = missions or {}
         self.fail = fail
+        self.global_ids = global_ids
         self.gets: list[str] = []
+
+    def capabilities(self):
+        from fakes import fake_pmo_capabilities
+        return fake_pmo_capabilities(global_ids=self.global_ids)
 
     async def get(self, ref):
         self.gets.append(ref.pmo_id)
@@ -51,10 +56,13 @@ class CountingPMO:
 
 
 def _mgr(name, system="linear", missions=None, fail=False):
+    # global_ids rides the adapter capability now (2026-08 F10): the linear
+    # shape declares it, the colliding-id shape (gitea_issues) does not
     return SimpleNamespace(
         instance=SimpleNamespace(name=name, system=system),
         instance_name=name,
-        pmo=CountingPMO(missions, fail=fail))
+        pmo=CountingPMO(missions, fail=fail,
+                        global_ids=(system == "linear")))
 
 
 def _locator(managers, owner=None):

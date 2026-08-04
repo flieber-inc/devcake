@@ -102,11 +102,14 @@ from devcake_dev.harness.render import (  # noqa: E402
 )
 from devcake_dev.harness.tokens import (  # noqa: E402
     claude_text_dump,
+    claude_token_report,
     codex_text_dump,
+    codex_token_report,
     grok_end_event,
     grok_end_report,
     grok_signals_report,
     grok_stream_parse,
+    unavailable_report,
 )
 from devcake_dev.workspace.activity import (  # noqa: E402
     clone_activity_repo,
@@ -194,8 +197,7 @@ def _fail_20(stop: threading.Event | None, headline: str, detail: str) -> None:
     send_artifacts({"result": None, "exit_code": 20, "error_class": "DEV_CRASH",
                     "error_detail": detail[-500:],
                     "transcript_md": f"{headline}:\n\n```\n{detail}\n```",
-                    "token_report": {"extraction_method": "unavailable",
-                                     "model": None}})
+                    "token_report": unavailable_report()})
     if stop is not None:
         stop.set()
     sys.exit(20)
@@ -295,7 +297,7 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
         send_artifacts({"result": None, "exit_code": 13,
                         "error_class": error_class, "error_detail": detail,
                         "transcript_md": f"{headline}:\n{detail}",
-                        "token_report": {"extraction_method": "unavailable", "model": None}})
+                        "token_report": unavailable_report()})
         sys.exit(13)
 
     mirror_path = env.get("DEVCAKE_MIRROR_PATH", "")
@@ -445,7 +447,7 @@ def harness_main() -> None:
                         "error_detail": f"{cmd}: {detail}",
                         "transcript_md": (f"MCP setup command failed:\n`{cmd}`"
                                           f"\n\n```\n{detail}\n```"),
-                        "token_report": {"extraction_method": "unavailable", "model": None}})
+                        "token_report": unavailable_report()})
         sys.exit(14)
 
     # ── telemetry (stage-2 creds — docs/07 §3) ───────────────────────────────
@@ -575,7 +577,7 @@ def harness_main() -> None:
         span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
 
         # ── token extraction + result text (docs/08 §5) ──────────────────────
-        token_report = {"extraction_method": "unavailable", "model": harness}
+        token_report = unavailable_report(model=harness)
         result_text, transcript_body = "", ""
         codex_last = ""  # RAW `-o` content: result_text is overwritten with a
         #                  stdout tail on any parse failure, so the fault
@@ -585,21 +587,7 @@ def harness_main() -> None:
                 last = WORKSPACE / "out" / "last_message.txt"
                 codex_last = last.read_text() if last.exists() else ""
                 result_text = codex_last
-                for line in out.splitlines():       # JSONL events (verified 0.144.1)
-                    try:
-                        ev = json.loads(line)
-                    except Exception:
-                        continue
-                    if ev.get("type") == "turn.completed":
-                        u = ev.get("usage") or {}
-                        token_report = {
-                            "input_tokens": u.get("input_tokens"),
-                            "output_tokens": u.get("output_tokens"),
-                            "cache_read_tokens": u.get("cached_input_tokens"),
-                            "model": "codex",
-                            "extraction_method": "session_json",
-                            "notes": f"reasoning_output_tokens={u.get('reasoning_output_tokens')}",
-                        }
+                token_report = codex_token_report(out) or token_report
                 if not result_text:
                     result_text = out[-4000:]
             except Exception:
@@ -646,23 +634,7 @@ def harness_main() -> None:
                 # the old --output-format json blob (verified live); blob fallback
                 # covers an EXTRA_ARGS format override
                 j = claude_result_event(out) or json.loads(out)
-                usage = j.get("usage") or {}
-                mu = j.get("modelUsage") or {}
-                def _weight(v):  # dominant model = the one that cost/produced the most
-                    return ((v.get("costUSD") or 0, v.get("outputTokens") or 0)
-                            if isinstance(v, dict) else (0, 0))
-                models = sorted(mu, key=lambda k: _weight(mu[k]), reverse=True)
-                token_report = {
-                    "input_tokens": usage.get("input_tokens"),
-                    "output_tokens": usage.get("output_tokens"),
-                    "cache_read_tokens": usage.get("cache_read_input_tokens"),
-                    "cache_write_tokens": usage.get("cache_creation_input_tokens"),
-                    "cost_usd": j.get("total_cost_usd"),
-                    "model": models[0] if models else "claude-code",
-                    "extraction_method": "session_json",
-                    "num_turns": j.get("num_turns"),
-                    "duration_ms": j.get("duration_ms"),
-                }
+                token_report = claude_token_report(j)
                 result_text = j.get("result") or ""
             except Exception:
                 result_text = out[-4000:]

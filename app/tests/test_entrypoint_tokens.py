@@ -79,14 +79,15 @@ def test_end_event_fills_the_report_from_stdout(name):
     want = WITH_END_EVENT[name]
     assert exit_code(name) == want["exit"]           # the capture is what we think
     report = ep.grok_end_report(ep.grok_end_event(stream(name)))
-    assert report["extraction_method"] == "end_event"
+    assert report["source"] == "end_event"
     assert report["input_tokens"] == want["in"]
     assert report["output_tokens"] == want["out"]
     assert report["cache_read_tokens"] == 0
     assert report["total_tokens"] == want["total"]
     assert report["num_turns"] == want["turns"]
     assert report["model"] == "stub-model"           # from modelUsage, not argv
-    assert report["notes"] == "reasoning_tokens=0"
+    # ADR-0029: first-class scalar, no longer a `notes` string to regex
+    assert report["reasoning_tokens"] == 0
 
 
 def test_a_failed_run_reports_in_full():
@@ -95,7 +96,7 @@ def test_a_failed_run_reports_in_full():
     # only for cleanly-ended sessions (fixtures README).
     assert exit_code("grok_turn_budget") == 1
     report = ep.grok_end_report(ep.grok_end_event(stream("grok_turn_budget")))
-    assert report["extraction_method"] == "end_event"
+    assert report["source"] == "end_event"
     assert report["output_tokens"] == 48 and report["num_turns"] == 2
 
 
@@ -103,8 +104,8 @@ def test_cost_is_none_because_grok_reports_none():
     # A 0 here would read as "this run was free" in the feed report and would
     # aggregate as real spend on devcake.cost.usd.
     report = ep.grok_end_report(ep.grok_end_event(stream("grok_healthy")))
-    assert report["cost_usd"] is None
-    assert report["cost_usd"] != 0
+    assert report["cost_usd_native"] is None
+    assert report["cost_usd_native"] != 0
 
 
 @pytest.mark.parametrize("name", sorted(WITH_END_EVENT) + WITHOUT_END_EVENT)
@@ -179,11 +180,13 @@ def test_signals_json_still_reports_when_there_is_no_end_event(tmp_path):
                                   "modelsUsed": ["grok-code-fast-1"],
                                   "contextWindowTokens": 256000})
     report = ep.grok_signals_report("sess-1", home=tmp_path)
-    assert report["extraction_method"] == "session_json"   # names its own path
+    # ADR-0029: names its ACTUAL path — pre-v1 this masqueraded as
+    # "session_json", indistinguishable from the claude/codex extraction
+    assert report["source"] == "signals"
     assert report["total_tokens"] == 22006
     assert report["num_turns"] == 3
     assert report["model"] == "grok-code-fast-1"
-    assert report.get("cost_usd") is None                  # totals only, no cost
+    assert report["cost_usd_native"] is None               # totals only, no cost
 
 
 def test_signals_json_falls_back_to_total_tokens_key(tmp_path):

@@ -18,14 +18,14 @@ T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 
 GROK_TR = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
            "cache_write_tokens": None, "output_tokens": 500_000,
-           "total_tokens": 3_500_000, "cost_usd": None,
+           "total_tokens": 3_500_000, "cost_usd_native": None,
            "cost_usd_estimated": 5.60, "rate_card_id": "builtin-v1",
-           "model": "grok-4.5-build", "extraction_method": "end_event",
-           "notes": "reasoning_tokens=20616"}
+           "reasoning_tokens": 20616,
+           "model": "grok-4.5-build", "source": "end_event"}
 CLAUDE_TR = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
              "cache_write_tokens": 2_000, "output_tokens": 1_000,
-             "total_tokens": None, "cost_usd": 0.1234,
-             "model": "claude-opus-5", "extraction_method": "session_json"}
+             "total_tokens": None, "cost_usd_native": 0.1234,
+             "model": "claude-opus-5", "source": "session_json"}
 
 
 def _run(i, *, pmo_ref="alpha", created=None, tr=None, minutes=7,
@@ -162,7 +162,7 @@ def test_totals_are_null_when_no_run_contributed(tmp_path):
 
 
 def test_totals_respect_override_native(tmp_path):
-    both = dict(GROK_TR, cost_usd=3.0)
+    both = dict(GROK_TR, cost_usd_native=3.0)
     store = _store(tmp_path, [_run(1, tr=both, minutes=1)])
     off = list_runs_response(store, CostInputs(), limit=25, offset=0)
     assert off["totals"]["cost_usd_effective"] == 3.0
@@ -196,8 +196,8 @@ def test_sort_orders_whole_set_nulls_always_last(tmp_path):
 
 
 def test_sort_by_cost_respects_override_and_bad_params_400(tmp_path):
-    both = dict(GROK_TR, cost_usd=9.0)     # native 9.0, estimate 5.6
-    other = dict(GROK_TR, cost_usd=6.0,
+    both = dict(GROK_TR, cost_usd_native=9.0)     # native 9.0, estimate 5.6
+    other = dict(GROK_TR, cost_usd_native=6.0,
                  input_tokens=2_000_000, total_tokens=4_500_000)  # est 7.6
     store = _store(tmp_path, [_run(1, tr=both), _run(2, tr=other)])
     off = list_runs_response(store, CostInputs(), limit=25, offset=0,

@@ -19,7 +19,8 @@ import dataclasses
 import json
 
 from devcake_dev.domain.fault import _dict, _one_line, claude_result_event
-from devcake_dev.harness.tokens import grok_end_event
+from devcake_dev.harness.tokens import (grok_end_event, token_report_v1,
+                                        unavailable_report)
 
 POLICY_AUTO = "auto"
 POLICY_RESUME_ONLY = "resume-only"
@@ -199,24 +200,27 @@ def last_sid(chains: list) -> str:
 # ── aggregation across invocations ───────────────────────────────────────────
 
 _SUMMED_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens",
-                  "cache_write_tokens", "total_tokens", "cost_usd",
-                  "num_turns", "duration_ms")
+                  "cache_write_tokens", "total_tokens", "reasoning_tokens",
+                  "cost_usd_native", "num_turns", "duration_ms")
 
 
 def _sum_reports(reports: list) -> dict:
-    out = {}
+    sums = {}
     for field in _SUMMED_FIELDS:
         vals = [r.get(field) for r in reports
                 if isinstance(r.get(field), (int, float))
                 and not isinstance(r.get(field), bool)]
-        out[field] = sum(vals) if vals else None
+        sums[field] = sum(vals) if vals else None
     models = [r.get("model") for r in reports if r.get("model")]
-    out["model"] = models[-1] if models else None
-    methods = {r.get("extraction_method") for r in reports
-               if r.get("extraction_method")}
-    out["extraction_method"] = (methods.pop() if len(methods) == 1
-                                else "mixed" if methods else "unavailable")
-    return out
+    sources = {r.get("source") for r in reports if r.get("source")}
+    return token_report_v1(
+        model=models[-1] if models else None,
+        source=(sources.pop() if len(sources) == 1
+                else "mixed" if sources else "unavailable"),
+        # fidelity across the merge: each invocation's vendor payload, in
+        # order — the summed scalars above remain reconstructible
+        raw={"invocations": [_dict(r.get("raw")) for r in reports]},
+        **sums)
 
 
 def merge_token_reports(reports, modes, *, resume_cumulative: bool) -> dict:
@@ -231,7 +235,7 @@ def merge_token_reports(reports, modes, *, resume_cumulative: bool) -> dict:
     unchanged — the zero-continuation payload stays byte-identical."""
     reports = [r if isinstance(r, dict) else {} for r in (reports or [])]
     if not reports:
-        return {"extraction_method": "unavailable", "model": None}
+        return unavailable_report()
     if len(reports) == 1:
         return dict(reports[0])
     groups = []
@@ -240,8 +244,17 @@ def merge_token_reports(reports, modes, *, resume_cumulative: bool) -> dict:
             groups[-1].append(report)
         else:
             groups.append([report])
-    per_chain = [(dict(g[-1]) if resume_cumulative else _sum_reports(g))
-                 if len(g) > 1 else dict(g[0]) for g in groups]
+
+    def _chain(g):
+        if len(g) == 1:
+            return dict(g[0])
+        if resume_cumulative:
+            # last-wins: the harness's counters are cumulative over the
+            # chain, and the shape names that provenance (ADR-0029)
+            return {**g[-1], "source": "cumulative"}
+        return _sum_reports(g)
+
+    per_chain = [_chain(g) for g in groups]
     return _sum_reports(per_chain) if len(per_chain) > 1 else per_chain[0]
 
 

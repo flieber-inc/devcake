@@ -1044,13 +1044,13 @@ def test_finalize_stamps_rate_card_estimate(tmp_path):
     run = _saved_run(store)
     grok_report = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
                    "cache_write_tokens": None, "output_tokens": 500_000,
-                   "total_tokens": 3_500_000, "cost_usd": None,
-                   "model": "grok-4.5-build", "extraction_method": "end_event"}
+                   "total_tokens": 3_500_000, "cost_usd_native": None,
+                   "model": "grok-4.5-build", "source": "end_event"}
     run_coro(mgr.finalize(run, _finalize_payload(token_report=grok_report)))
     saved = store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60      # $2/$0.30/$6 per 1M
     assert saved["rate_card_id"] == "builtin-v1"
-    assert saved["cost_usd"] is None
+    assert saved["cost_usd_native"] is None
 
 
 def test_finalize_leaves_unmapped_model_unstamped(tmp_path):
@@ -1059,22 +1059,22 @@ def test_finalize_leaves_unmapped_model_unstamped(tmp_path):
     run = _saved_run(store)
     claude_report = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
                      "cache_write_tokens": 2_000, "output_tokens": 1_000,
-                     "total_tokens": 18_000, "cost_usd": 0.1234,
+                     "total_tokens": 18_000, "cost_usd_native": 0.1234,
                      "model": "claude-opus-5",
-                     "extraction_method": "session_json"}
+                     "source": "session_json"}
     run_coro(mgr.finalize(run, _finalize_payload(token_report=claude_report)))
     saved = store.get(run.run_id).token_report
     assert "cost_usd_estimated" not in saved
     assert "rate_card_id" not in saved
-    assert saved["cost_usd"] == 0.1234              # native untouched
+    assert saved["cost_usd_native"] == 0.1234       # native untouched
 
 
 def _grok_shaped_report(**over):
     base = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
             "cache_write_tokens": None, "output_tokens": 500_000,
-            "total_tokens": 3_500_000, "cost_usd": None,
-            "model": "grok-4.5-build", "extraction_method": "end_event",
-            "notes": "reasoning_tokens=20616"}
+            "total_tokens": 3_500_000, "cost_usd_native": None,
+            "model": "grok-4.5-build", "source": "end_event",
+            "reasoning_tokens": 20616}
     base.update(over)
     return base
 
@@ -1082,7 +1082,8 @@ def _grok_shaped_report(**over):
 def test_feed_shows_estimated_cost_and_reasoning(tmp_path):
     """docs/03 §8 + ADR-0021: native cost absent + estimate stamped → the
     labeled estimated line appears (never the bare native line), and the
-    reasoning counter surfaces from notes without being priced."""
+    reasoning counter surfaces (a v1 scalar, ADR-0029) without being
+    priced."""
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
@@ -1094,18 +1095,19 @@ def test_feed_shows_estimated_cost_and_reasoning(tmp_path):
     assert "reasoning: 20616" in report
 
 
-def test_feed_native_only_report_stays_byte_stable(tmp_path):
-    """A pre-ADR-0021-shaped report (native cost, unmapped model, no notes
-    counter) renders exactly the historical layout — no estimated line, no
-    reasoning segment."""
+def test_feed_native_only_report_renders_without_estimate_or_reasoning(tmp_path):
+    """Native cost + unmapped model + no reasoning counter → the plain
+    historical layout: no estimated line, no reasoning segment. (Pre-v1
+    on-disk records render their unknown keys as "—" — accepted, docs/10
+    advisory-state doctrine; this pin covers the v1 shape.)"""
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
     run_coro(mgr.finalize(run, _finalize_payload(token_report={
         "input_tokens": 10_000, "cache_read_tokens": 5_000,
         "cache_write_tokens": 2_000, "output_tokens": 1_000,
-        "total_tokens": 18_000, "cost_usd": 0.1234,
-        "model": "claude-opus-5", "extraction_method": "session_json"})))
+        "total_tokens": 18_000, "cost_usd_native": 0.1234,
+        "model": "claude-opus-5", "source": "session_json"})))
     report = next(c for c in fake.comments if "token report" in c)
     assert "\ncost: $0.1234" in report
     assert "estimated" not in report
@@ -1120,7 +1122,7 @@ def test_feed_override_native_shows_both_cost_lines(tmp_path):
     mgr.config.cost_inputs.override_native = True
     run = _saved_run(store)
     run_coro(mgr.finalize(run, _finalize_payload(
-        token_report=_grok_shaped_report(cost_usd=4.4321))))
+        token_report=_grok_shaped_report(cost_usd_native=4.4321))))
     report = next(c for c in fake.comments if "token report" in c)
     assert "\ncost: $4.4321" in report
     assert "cost (estimated, builtin-v1): $5.6000" in report

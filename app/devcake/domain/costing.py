@@ -1,8 +1,8 @@
 """Pure app-side cost estimation from the operator rate card (ADR-0021).
 
 The harness layer never estimates (docs/08 §5): grok reports token splits
-with cost_usd null, and inventing dollars there would pollute the native
-`devcake.cost.usd` accounting. This module prices an already-extracted
+with cost_usd_native null, and inventing dollars there would pollute the
+native `devcake.cost.usd` accounting. This module prices an already-extracted
 token_report against config.cost_inputs — labeled, separate, revocable.
 
 Honesty rules (feedback 2026-08-01):
@@ -65,8 +65,8 @@ def estimate_cost_usd(token_report: dict,
 def stamp_estimate(token_report: dict, cost_inputs: "CostInputs") -> dict:
     """Return the report with `cost_usd_estimated` + `rate_card_id` added
     when an estimate is computable; the input dict is never mutated and
-    native `cost_usd` is never touched. Estimates are stamped even when
-    native cost exists — the override_native display mode needs both."""
+    native `cost_usd_native` is never touched. Estimates are stamped even
+    when native cost exists — the override_native display mode needs both."""
     est = estimate_cost_usd(token_report, cost_inputs.rates)
     if est is None:
         return token_report

@@ -349,7 +349,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
                     continue
                 tr = r.token_report or {}
-                native = tr.get("cost_usd")
+                native = tr.get("cost_usd_native")
                 estimated = tr.get("cost_usd_estimated")
                 eff = costing.effective_cost(native, estimated, ci)
                 if eff is None:

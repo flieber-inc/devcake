@@ -139,6 +139,16 @@ class Services:
         security.invalidate_secret_scan()
 
         async def _ensure():
+            # ADR-0030: opportunistic board repair — a config PUT or secret
+            # write is a natural moment to heal a board that was missing at
+            # boot (Gitea down). No-op when already healthy, so the reload
+            # it can itself trigger terminates immediately.
+            try:
+                from .default_board import ensure_default_board
+                await ensure_default_board(self)
+            except Exception:
+                log.exception("default board re-ensure failed — retried at "
+                              "the next reload or boot")
             for mgr in list(self.managers.values()):
                 try:
                     await mgr.pmo.ensure_labels(mgr.instance.team_key,

@@ -274,11 +274,15 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 - **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified).
 - **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
-### 9.4 Operator setup (bundled Gitea)
+### 9.4 The default board (ADR-0030) — and manual setup for external Gitea
 
-1. UI `http://localhost:3300` → create org/repo e.g. `devcake-pmo/missions` (empty git repo is fine).
+**Bundled stacks get a board for free.** Whenever `GITEA_ADMIN_PASSWORD` is set, boot (and every config reload, opportunistically) runs `GiteaProvisioner.ensure_pmo_board()`: org **`devcake-pmo`** (a third org — unreachable by the `devcake-internal` lifecycle sweeps and the `devcake-repos` activity sweep), repo **`missions`** (adopt-don't-refuse), issue dependencies enabled **under admin** (the board PAT cannot PATCH the repo), service user **`devcake-board`** with a repo-scoped PAT (`write:issue` + `write:repository`, liveness-checked by `token_last_eight`, re-minted only on definitive death) stored as the ordinary connection secret `pmo-board.json` — then registers the persisted **managed `board` instance** (`reconcile_managed_pmos` keeps it alive across config PUTs and bundle applies; the SPA shows it as a normal-but-marked card, pausable, not removable while the provisioner exists). Credential separation (§9.1) holds: board PAT ≠ forge tokens ≠ `GITEA_ADMIN_*`. An operator instance already targeting `devcake-pmo/missions` is **adopted** — no managed row is injected. The provisioner never constructs or wraps a PMO adapter — the board is an ordinary `gitea_issues` instance through `make_pmo`.
+
+**Manual setup remains the path for an EXTERNAL Gitea** (or a second board):
+
+1. Gitea UI → create org/repo e.g. `myteam/missions` (empty git repo is fine).
 2. Mint a PAT with issue write on that repo.
-3. Admin → PMO page (`#/pmo`, under Adapters) → system **Gitea Issues**, api base `http://gitea:3000`, issues repo `devcake-pmo/missions`, paste PAT → Save → Test connection (expect 10/10 managed labels).
+3. Admin → PMO page (`#/pmo`, under Adapters) → system **Gitea Issues**, api base of that Gitea, issues repo `myteam/missions`, paste PAT → Save → Test connection (expect 10/10 managed labels).
 4. Label an issue `DEVCAKE` (opt-in) and poll.
 
 Work forge remains independent (GitHub/GitLab/Gitea repo cards, or empty → per-mission internal forge).

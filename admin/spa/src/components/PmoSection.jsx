@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { get, send } from "../api.js";
 import { Section } from "./Card.jsx";
-import { Field, SecretField, Input } from "./Field.jsx";
+import { Field, Help, SecretField, Input } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Button from "./Button.jsx";
 import Toggle from "./Toggle.jsx";
@@ -186,6 +186,11 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
                 <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
                 <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{inst.system}</span>
+                {inst.managed && (
+                  <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                    Bundled board
+                  </span>
+                )}
                 {inst.team_key && (
                   <span className="text-xs text-neutral-500 dark:text-neutral-400">{inst.team_key}</span>
                 )}
@@ -226,8 +231,17 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     ▾
                   </button>
                   <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                  {inst.managed && (
+                    <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                      Bundled board
+                      <Help text="The auto-provisioned issues board on the bundled Gitea (ADR-0030). Its identity and API key are app-managed and self-healing — a config save that omits it puts it back. Intake, repositories, and staffing stay yours." />
+                    </span>
+                  )}
                 </span>
-                {cfg.pmos.length > 1 && (
+                {/* the managed board is not removable while the bundled
+                    provisioner exists — the next boot would resurrect it and
+                    deleting would orphan its app-minted PAT (ADR-0030) */}
+                {cfg.pmos.length > 1 && !(inst.managed && health.internal_forge) && (
                   <Button kind="danger-ghost" onClick={() => {
                     const doRemove = () => {
                       newPmoNames.untrack(inst.name);
@@ -291,8 +305,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 <Field label="System"
                   help="PMO product this instance talks to. Driven by the adapter registry — adding an adapter does not require SPA edits.">
                   <select
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+                    className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-950"
                     value={inst.system || "linear"}
+                    disabled={!!inst.managed}
                     onChange={(e) => setField(`cfg.pmos.${idx}.system`, e.target.value)}
                     aria-label="PMO system"
                   >
@@ -303,21 +318,31 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 </Field>
                 <Field label={sysMeta.team_key_label || "Team key"}
                   help={sysMeta.team_key_help || ""}>
-                  <Input value={inst.team_key}
+                  <Input value={inst.team_key} disabled={!!inst.managed}
                   onChange={(e) => setField(`cfg.pmos.${idx}.team_key`, e.target.value)} /></Field>
                 {sysMeta.needs_api_base && (
                   <Field label="API base"
                     help={sysMeta.api_base_help || "Origin of the PMO API reachable from the app container."}>
-                    <Input value={inst.api_base || ""}
+                    <Input value={inst.api_base || ""} disabled={!!inst.managed}
                       placeholder="http://gitea:3000"
                       onChange={(e) => setField(`cfg.pmos.${idx}.api_base`,
                         e.target.value.trim() || null)} />
                   </Field>
                 )}
-                <SecretField label="API key"
-                  help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
-                  refKey={`pmo:${inst.name}:api_key`} paste
-                  locked={!pmoNameLocked(inst.name, idx)} />
+                {inst.managed ? (
+                  <Field label="API key">
+                    <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                      App-minted and self-healing — a revoked or lost key is
+                      re-minted at the next boot or config save. Nothing to
+                      paste here.
+                    </p>
+                  </Field>
+                ) : (
+                  <SecretField label="API key"
+                    help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
+                    refKey={`pmo:${inst.name}:api_key`} paste
+                    locked={!pmoNameLocked(inst.name, idx)} />
+                )}
                 <RepoChips label="Repositories"
                   help="The ORDERED set of repos this instance's missions may target — only repos with a stored Access token qualify (work needs push). Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
                   all={cfg.repos} selected={inst.repos || []}

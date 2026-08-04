@@ -49,6 +49,15 @@ ACTIVITY_RO_USER = "devcake-activity-ro"  # shared RO clone account for
 # (no hyphen — config._INSTANCE_NAME_RE).
 SKILL_REPO = "skill-store"
 
+# ADR-0030: the default PMO board. A THIRD org, deliberately: the mission
+# lifecycle sweeps walk devcake-internal, and clear-runs deletes activity-*
+# in devcake-repos — a separate org makes the board structurally unreachable
+# by every sweep. The board credential is a dedicated service user's PAT
+# (docs/05 §9.1 separation: PMO PAT ≠ forge tokens ≠ GITEA_ADMIN_*).
+PMO_ORG = "devcake-pmo"
+BOARD_REPO = "missions"
+BOARD_USER = "devcake-board"
+
 
 def _secrets_dir() -> Path:
     return Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets" / "internal_forge"
@@ -244,6 +253,57 @@ class GiteaProvisioner:
         self._register_mission(creds)
         log.info("internal repo provisioned: %s (user %s)", repo, svc_user)
         return creds
+
+    async def ensure_pmo_board(self) -> dict:
+        """ADR-0030: idempotent default-board provisioning — org + repo
+        (adopt-don't-refuse), issue dependencies enabled UNDER ADMIN (the
+        board PAT is a write collaborator and cannot PATCH the repo), the
+        devcake-board service user, and its repo-scoped PAT written to the
+        secret store as the `board` instance's api_key. PAT liveness rides
+        token_last_eight (the recreated-volume self-heal, review finding #6);
+        re-mint happens only on definitive death. The PMO side stays an
+        ORDINARY gitea_issues instance through make_pmo — this method never
+        constructs or wraps a PMO adapter (docs/05 §9)."""
+        from ... import secrets as secrets_store
+        from ...config import MANAGED_BOARD_NAME
+        await self._req("POST", "/orgs", tolerate=(409, 422),
+                        json={"username": PMO_ORG, "visibility": "private"})
+        adopted = await self._req("GET", f"/repos/{PMO_ORG}/{BOARD_REPO}",
+                                  tolerate=(404,)) is not None
+        if not adopted:
+            await self._req("POST", f"/orgs/{PMO_ORG}/repos",
+                            json={"name": BOARD_REPO, "private": True,
+                                  "auto_init": True, "default_branch": "main"})
+        # dependencies are off by default and gate blocked_by (docs/05 §9)
+        await self._req("PATCH", f"/repos/{PMO_ORG}/{BOARD_REPO}",
+                        json={"internal_tracker": {
+                            "enable_time_tracker": False,
+                            "allow_only_contributors_to_track_time": False,
+                            "enable_issue_dependencies": True,
+                        }})
+        await self._req("POST", "/admin/users", tolerate=(409, 422),
+                        json={"username": BOARD_USER,
+                              "email": f"{BOARD_USER}@devcake.example",
+                              "password": f"Xx1!{pysecrets.token_urlsafe(24)}",
+                              "must_change_password": False})
+        await self._req("PUT",
+                        f"/repos/{PMO_ORG}/{BOARD_REPO}/collaborators/{BOARD_USER}",
+                        json={"permission": "write"})
+        stored = secrets_store.read_connection_secret(
+            "pmo", MANAGED_BOARD_NAME, "api_key")
+        minted = False
+        if not await self._service_token_live(BOARD_USER, "devcake-board",
+                                              stored or None):
+            token = await self._mint(BOARD_USER, "devcake-board",
+                                     ["write:issue", "write:repository"])
+            secrets_store.write_connection_secret(
+                "pmo", MANAGED_BOARD_NAME, "api_key", token)
+            minted = True
+        log.info("pmo board %s: %s/%s (user %s; PAT %s)",
+                 "adopted" if adopted else "created", PMO_ORG, BOARD_REPO,
+                 BOARD_USER, "minted" if minted else "live")
+        return {"team_key": f"{PMO_ORG}/{BOARD_REPO}", "api_base": self.url,
+                "minted": minted, "adopted": adopted}
 
     async def create_operator_repo(self, name: str) -> dict:
         """Operator-created repo on the bundled Gitea (item 4): the target of

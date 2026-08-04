@@ -19,6 +19,9 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
     profiles/{name}.yaml        # config profiles: section A of a settings bundle + metadata (ADR-0013)
   secrets/
     connections/{scope}-{instance}.json  # GUI-stored PMO/repo secret VALUES (ADR-0011); 0600
+                                         #   pmo-board.json is APP-MINTED (ADR-0030: the default
+                                         #   board's PAT) and self-healing — re-minted at boot/reload
+                                         #   when revoked or lost; never operator-entered
     harness/{VAR}.json          # GUI-stored harness/model keys; 0600
     internal_forge/*.json       # bundled-Gitea service/mission tokens (ADR-0010); 0600
     profiles/{name}.json        # a profile's secret snapshot (section B); 0600, covered by the redaction glob

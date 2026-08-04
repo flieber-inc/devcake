@@ -175,6 +175,15 @@ async def lifespan(app: FastAPI):
         except Exception:
             log.exception("skill store seeding failed — skills fall back to "
                           "bundled copies (POST /api/v1/skills/sync re-seeds)")
+        # ADR-0030: the default PMO board — same best-effort contract; a
+        # Gitea outage leaves the board red in /health and retried at the
+        # next boot or config reload
+        try:
+            from .default_board import ensure_default_board
+            await ensure_default_board(s)
+        except Exception:
+            log.exception("default board provisioning failed — retried at "
+                          "the next boot or config reload")
     # startup reconciliation (docs/04 §6) — labels per configured instance
     for mgr in list(s.managers.values()):
         try:

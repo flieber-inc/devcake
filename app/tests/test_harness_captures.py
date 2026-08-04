@@ -143,7 +143,7 @@ CAPTURES = [
     ("claude_healthy", NO_FAULT),
     ("claude_refusal", NO_FAULT),
 
-    # ── codex-cli 0.144.4 ────────────────────────────────────────────────────
+    # ── codex-cli 0.146.0 ────────────────────────────────────────────────────
     # Reaches empty_completion only because error items are bucketed apart from
     # tool activity: with `-m` naming a model the backend does not advertise,
     # codex emits an `item.completed` whose item type is "error" (`Model
@@ -237,7 +237,7 @@ CAPTURES = [
     #     → usage_cumulative=False.
     ("claude_resume_nudge", NO_FAULT),
     ("claude_resume_nudge_resume", NO_FAULT),
-    #   codex 0.144.4: `exec resume THREAD P` composes headless; same
+    #   codex 0.146.0: `exec resume THREAD P` composes headless; same
     #     thread_id, no replay, and usage is CUMULATIVE over the session —
     #     leg 2's turn.completed reports input 240/output 48, both calls'
     #     worth (docs/08 §5's `codex exec resume` caveat, now measured)

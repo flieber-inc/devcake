@@ -69,8 +69,8 @@ resume; none forks the session; none replays history):
 | harness | composition | usage on a resumed terminal event |
 |---|---|---|
 | grok-build 0.2.117 | `-p P -r SID` | per-invocation → sum |
-| claude-code 2.1.210 | `-p P --resume SID` | per-invocation → sum |
-| codex 0.144.4 | `exec resume THREAD P` | **cumulative** → last-wins |
+| claude-code 2.1.210 (re-verified 2.1.221) | `-p P --resume SID` | per-invocation → sum |
+| codex 0.144.4 (re-verified 0.146.0) | `exec resume THREAD P` | **cumulative** → last-wins |
 
 `usage_cumulative` is a per-harness fact, measured not assumed — a global
 flag would have double-counted codex or under-counted the others.

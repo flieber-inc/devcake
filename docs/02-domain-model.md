@@ -255,21 +255,27 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 
 Produced once per Dev run by the harness template's extraction strategy (`08-harness-templates.md` §5) and (a) posted to the activity feed as a message (INV-5), (b) attached to the `dev.run` span and metrics (`12-observability.md`).
 
+Since `adr/0029` this is **TokenReport v1**: one CLOSED shape from every
+extractor — every key always present (`None` = unknown, never an absent key),
+provenance as the `source` field instead of key-presence folklore.
+
 | Field | Type | Notes |
 |---|---|---|
+| `schema` | `1` | The shape version. |
+| `model` | `str \| None` | Dominant model per `modelUsage` where reported, else the harness name. |
 | `input_tokens` | `int \| None` | |
 | `output_tokens` | `int \| None` | |
 | `cache_read_tokens` | `int \| None` | |
-| `cache_write_tokens` | `int \| None` | |
-| `total_tokens` | `int \| None` | For harnesses that expose a total; filled alongside or instead of the split. Grok fills **both**: at **0.2.112** its `end` event carries `usage {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `num_turns` and `modelUsage` inline (captured 2026-07-25), and that is what the entrypoint reads (`08-harness-templates.md` §1/§5). Total-only is therefore version-scoped, not a property of the harness: it is what the retained `signals.json` fallback yields (`contextTokensUsed`, verified **v0.2.93**) when a stream carries no usable `end` event. Field names and their presence are CLI evidence; the captured numbers came from a stub backend and are not. Tokens are the primary cost signal; billed cost is best-effort on top. |
-| `cost_usd` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed **by the harness layer** — neither `codex` 0.144.4 nor `grok` 0.2.112 emits any cost field, so it stays null for both, forever untouched by estimation (`adr/0021`). |
-| `cost_usd_estimated` | `float \| None` | **App-side** rate-card estimate (`domain/costing.py`, `adr/0021`), stamped at finalize when the full input/cache-read/output split exists AND `config.cost_inputs.rates` maps the model — absent otherwise (totals-only fallbacks and unmapped models are never priced). Kept strictly separate from `cost_usd`; reasoning tokens are a subset of output and never priced on top. |
-| `rate_card_id` | `str \| None` | Which rate-card vintage priced `cost_usd_estimated`: `builtin-v1` (shipped defaults) or `operator:<hash8>` (edited card). Present iff the estimate is. |
-| `model` | `str` | |
-| `extraction_method` | `"session_json" \| "end_event" \| "unavailable"` | The entrypoint records which path actually filled the report — `end_event` is grok's terminal stdout event, `session_json` the harness's own JSON (claude/codex streams, grok's `signals.json` fallback); silence is never acceptable (INV-5). |
-| `num_turns` | `int \| None` | Harness-reported turn count (claude/grok `end`/result events; codex none). |
+| `cache_write_tokens` | `int \| None` | claude `cache_creation_input_tokens`; codex `cache_write_input_tokens` (**new at 0.146.0** — earlier codex streams read None, never a fabricated 0); grok has no write counter. |
+| `total_tokens` | `int \| None` | REPORTED-only (never derived by the harness layer). Grok fills **both** total and split: at **0.2.112** its `end` event carries `usage {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `num_turns` and `modelUsage` inline, and that is what the entrypoint reads (`08-harness-templates.md` §1/§5). Total-only is what the retained `signals.json` fallback yields (`contextTokensUsed`, verified **v0.2.93**). Field names and their presence are CLI evidence; captured numbers came from a stub backend and are not. |
+| `reasoning_tokens` | `int \| None` | A SUBSET of `output_tokens`, informational, never priced (pre-v1 it hid in a regex-parsed `notes` string). |
+| `num_turns` | `int \| None` | Harness-reported turn count (claude/grok terminal events; codex none). |
 | `duration_ms` | `int \| None` | Harness-reported wall time (claude result event; others none). |
-| `notes` | `str \| None` | e.g. which fallback triggered, or a counter with no field of its own: `reasoning_output_tokens` for codex, `reasoning_tokens` for grok. |
+| `cost_usd_native` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed **by the harness layer** — neither `codex` 0.146.0 nor `grok` 0.2.112 emits any cost field, so it stays null for both, forever untouched by estimation (`adr/0021`). |
+| `cost_usd_estimated` | `float \| None` | Ships `None` from the image; the **app-side** rate-card estimate (`domain/costing.py`, `adr/0021`) fills it at finalize when the full input/cache-read/output split exists AND `config.cost_inputs.rates` maps the model. Kept strictly separate from `cost_usd_native`. |
+| `rate_card_id` | `str \| None` | App-stamped alongside the estimate: `builtin-v1` (shipped defaults) or `operator:<hash8>` (edited card). Present iff the estimate is. |
+| `source` | `"session_json" \| "end_event" \| "signals" \| "cumulative" \| "mixed" \| "unavailable"` | Which path actually filled the report — `end_event` grok's terminal stdout event, `session_json` the harness's own JSON (claude/codex), `signals` grok's session-file fallback, `cumulative` a codex resume chain (the harness's counters are cumulative; last-wins), `mixed` a multi-chain merge with disagreeing inputs; silence is never acceptable (INV-5 — `unavailable` is explicit). |
+| `raw` | `dict` | The vendor usage payload, untouched (fidelity); merges carry `{"invocations": [...]}`. The only nested field. |
 
 ## 11. Decomposition drafts
 

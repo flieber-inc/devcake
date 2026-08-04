@@ -236,7 +236,7 @@ def codex_run_fault(out: str, harness_exit: int, *, last_message: str = ""):
             error_msg = error_msg or f"unrecognized terminal event {kind!r}"
         elif kind == "item.completed":
             item = _dict(ev.get("item"))
-            item_type = item.get("item_type") or item.get("type")  # 0.144.4: type
+            item_type = item.get("item_type") or item.get("type")  # 0.144.4+: type
             if item_type == "agent_message":
                 if str(item.get("text") or "").strip():
                     messages += 1

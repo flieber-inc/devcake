@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019f99fd-3b9b-7271-9362-76e0be5e14f2"}
+{"type":"thread.started","thread_id":"019fcdc7-3d3e-7f82-a841-deb48c9ce64d"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: stub injected HTTP 401, url: http://devcake-capture-stub-codex:8080/s/http_401/v1/responses)"}

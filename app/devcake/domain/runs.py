@@ -419,6 +419,10 @@ class RunManager:
 
     async def _kill_inner(self, run: Run, new_state: str, reason: str, *,
                           error_class: str | None = None) -> None:
+        # The state the killer DECIDED on, captured before any await in this
+        # method: the teardown below yields repeatedly, and finalize can claim
+        # or finish the run in those windows (2026-08 evaluation TOCTOU).
+        prior_state = run.state
         # Fail-safe teardown (ISSUES #3): stop/_ship_failure may raise on
         # transport errors; ACL delete + terminal state MUST still run so the
         # run leaves store.active() and the watchdog does not re-kill forever.
@@ -442,26 +446,49 @@ class RunManager:
                 await self.messaging.delete_reply_stream(run.run_id)
             except Exception:
                 log.exception("delete_reply_stream failed for %s", run.run_id)
-            run.state = new_state  # type: ignore[assignment]
-            run.ended_at = utcnow()
-            from ..security import redact
-            run.error = redact(reason)
-            # ADR-0018: classify HERE, not at the call sites. Seven callers
-            # across watchdog / reconcile / clear / stop-run / stop-all funnel
-            # through this method, and two earlier attempts to enumerate them
-            # in a table both missed one. The state-keyed default plus the
-            # DEV_KILLED catch-all means a future kill site cannot silently
-            # produce an unclassified run.
-            run.error_class = error_class or KILL_CLASSES.get(new_state, "DEV_KILLED")
-            # Do not RESURRECT a record a concurrent clear-runs wipe just
-            # deleted (re-audit #31 #1/#2): get()+save() with no await between
-            # is atomic under asyncio's cooperative scheduling, so this fully
-            # closes the phantom-record race for EVERY killer — watchdog,
-            # stop-run, stop-all, and clear's own drain all funnel through
-            # here. A record clear already unlinked reads None → we skip; it is
-            # already out of store.active() so nothing re-kills it.
-            if self.store.get(run.run_id) is not None:
-                self.store.save(run)
+            # Two guards on one FRESH read, no await before save (atomic under
+            # asyncio's cooperative scheduling):
+            # 1. Do not RESURRECT a record a concurrent clear-runs wipe just
+            #    deleted (re-audit #31 #1/#2): a record clear already unlinked
+            #    reads None → skip; it is already out of store.active() so
+            #    nothing re-kills it.
+            # 2. Do not OVERWRITE a run whose state moved under the kill
+            #    (2026-08 evaluation): the teardown awaits above are yield
+            #    points where finalize can claim (running → finalizing) or
+            #    finish the run — stamping timed_out/failed then would revert
+            #    a landed PMO transition or race the in-flight finalize.
+            #    Comparing against `prior_state` (what the killer decided on)
+            #    keeps the stalled-finalize path legal: it re-reads and
+            #    passes a run still in `finalizing`, so the states match.
+            #    NOTE: the record object stays UNMUTATED on the skip path —
+            #    `run` may be the store's shared parse-cache instance
+            #    (store.all()), and a dead killer must not scribble on an
+            #    object other coroutines are reading.
+            current = self.store.get(run.run_id)
+            state_moved = current is not None and current.state != prior_state
+            if state_moved:
+                # The record object stays UNMUTATED on this path — `run` may
+                # be the store's shared parse-cache instance (store.all()),
+                # and a dead killer must not scribble on an object other
+                # coroutines are reading.
+                log.info("kill of %s aborted at save: state moved %s → %s "
+                         "under the kill — the mover wins", run.run_id,
+                         prior_state, current.state)
+            else:
+                run.state = new_state  # type: ignore[assignment]
+                run.ended_at = utcnow()
+                from ..security import redact
+                run.error = redact(reason)
+                # ADR-0018: classify HERE, not at the call sites. Seven callers
+                # across watchdog / reconcile / clear / stop-run / stop-all
+                # funnel through this method, and two earlier attempts to
+                # enumerate them in a table both missed one. The state-keyed
+                # default plus the DEV_KILLED catch-all means a future kill
+                # site cannot silently produce an unclassified run.
+                run.error_class = (error_class
+                                   or KILL_CLASSES.get(new_state, "DEV_KILLED"))
+                if current is not None:
+                    self.store.save(run)
             # ADR-0025 Hook B: every kill path (watchdog ×3, reconcile
             # orphan, operator stop, clear drain) funnels through this
             # teardown. Best-effort by doctrine — the dying container can
@@ -472,7 +499,13 @@ class RunManager:
                 self.workspaces.cleanup(run.run_id)
             except Exception:
                 log.exception("workspace cleanup failed for %s", run.run_id)
-        if self.finalizer and run.mission_pmo_id:
+        # state_moved: the kill lost the race — the run's mover (finalize, or
+        # another killer) now owns the mission transition, and restoring the
+        # dispatch-time status here would revert it underneath the live
+        # finalize (the exact hazard clear.py's drain guards against). The
+        # record-deleted (clear-wipe) path keeps restoring as before: "start
+        # fresh" legitimately hands missions back.
+        if self.finalizer and run.mission_pmo_id and not state_moved:
             try:
                 await self.finalizer.restore_after_failure(run)
             except Exception:

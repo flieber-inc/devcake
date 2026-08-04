@@ -129,14 +129,18 @@ services:
     # - aclfile + ACL SAVE (from the app on every SETUSER/DELUSER): per-run
     #   Dev users survive a redis-only restart, so in-flight runs reconnect
     #   and finish instead of stranding until the heartbeat grace kills
-    #   them. The file must EXIST at boot (redis refuses to start on a
-    #   missing aclfile), hence the touch. GOTCHA (docs/13): after the
-    #   first ACL SAVE the default user rides the aclfile too — changing
-    #   REDIS_PASSWORD in .env then also needs `ACL SETUSER default
-    #   >newpass` + `ACL SAVE` (or deleting /data/users.acl) or the old
-    #   password wins on restart.
+    #   them. MEASURED 2026-08-04: with --aclfile configured redis IGNORES
+    #   --requirepass entirely — an empty aclfile left the default user
+    #   password-LESS (the CI smoke caught it: the app's authed connection
+    #   failed with "AUTH called without any password configured"). The
+    #   default user therefore lives IN the aclfile, regenerated from .env
+    #   on every boot (grep drops the old default line, dev-* lines are
+    #   preserved) — which also makes REDIS_PASSWORD rotation just work.
+    #   The file must exist at boot (redis refuses a missing aclfile).
+    #   Plaintext password rides /data/users.acl inside the volume — same
+    #   exposure class as the AOF, docs/14 volume-theft row.
     entrypoint: ["sh", "-c",
-                 "touch /data/users.acl && exec docker-entrypoint.sh redis-server --appendonly yes --appendfsync everysec --maxmemory 1gb --maxmemory-policy noeviction --aclfile /data/users.acl --requirepass \"$${REDIS_PASSWORD}\""]
+                 "touch /data/users.acl && grep -v \"^user default \" /data/users.acl > /tmp/acl.new; cat /tmp/acl.new > /data/users.acl; echo \"user default on >$${REDIS_PASSWORD} ~* &* +@all\" >> /data/users.acl && exec docker-entrypoint.sh redis-server --appendonly yes --appendfsync everysec --maxmemory 1gb --maxmemory-policy noeviction --aclfile /data/users.acl"]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}   # runtime shell expansion — the exec-array quoting safety the old command form had
     volumes: [ redis_data:/data ]

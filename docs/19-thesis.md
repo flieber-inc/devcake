@@ -76,10 +76,10 @@ psychology, but as an engineering checklist:
 | Condition for deep work | DevCake mechanism (held) | Where |
 |---|---|---|
 | A clear goal | The Mission spec and its PLAN artifact — one goal per session | `03-mission-lifecycle.md` |
-| A task sized to ability | Bounded decomposition: work is cut until a unit fits one session | ADR-0012 |
-| Ordered, uncontaminated information | Fresh container per step; a curated activity mirror; quoting quarantine; read-only mounts of exactly the relevant upstream trees | ADR-0014, ADR-0017, INV-6 |
+| A task sized to ability | Bounded decomposition: work is cut toward session-sized units, to a configured depth (default two generations — a bound, not a proof of fit) | ADR-0012 |
+| Ordered, uncontaminated information | Fresh container per step; a curated activity mirror; quoting quarantine; curated clones of exactly the relevant upstream trees, held read-only by token scope and prompt contract (the only kernel-RO mount is the provision-phase source mirror — ADR-0025) | ADR-0014, ADR-0017, INV-6 |
 | Immediate feedback | The workspace's own compilers and tests; a skeptical REVIEW step | `03`, `17` §1 |
-| No interruption mid-task | Intervention lands only at step boundaries — a human edit always beats an in-flight agent *between* steps, never by breaking into one | INV-3 |
+| No interruption mid-task | Intervention lands only at step boundaries — a human edit always beats an in-flight agent *between* steps, never by breaking into one. One deliberate carve-out (ADR-0022): an in-container *continuation* re-prompts inside a step, by design — it fires only after a clean stop with no result, a nudge at a natural pause, not a poke into flight | INV-3 |
 
 Two disciplines keep the conditions true at the seams:
 
@@ -87,9 +87,11 @@ Two disciplines keep the conditions true at the seams:
 it. Decomposition conserves scope — children may neither invent work their
 parent never asked for nor drop work it did. Summaries match the outbound
 signal to what the next session can absorb — a raw context dump into the next
-step is a mismatch, and we removed exactly that (ADR-0014). Read-only mounts
-are one-way valves — downstream work can never push mutations into upstream
-truth. Mismatches at these seams do not fail loudly at the boundary; they
+step is a mismatch, and we removed exactly that (ADR-0014). Read-only upstream
+context is a one-way valve — downstream work can never push mutations into
+upstream truth (the valve is credential scope plus instruction, not
+filesystem mode — stated here because this document must not claim a
+stronger mechanism than the code holds). Mismatches at these seams do not fail loudly at the boundary; they
 *reflect*, surfacing later as retries, review rejections, and rework. That
 reflection is measurable, and §4 says how.
 
@@ -99,10 +101,13 @@ before a step, review after a step, never a poke inside one.
 
 **Status, honestly.** The mechanisms above are held — they are how the system
 is built, and a large test suite pins them. The *conclusion* — that this
-envelope produces better deep work than the alternatives — is observed: daily
-internal use on this project's own development, and early trials on
-non-software deep work that went qualitatively better than we expected. None
-of it is blind-judged or baselined. A controlled comparison — same task, same
+envelope produces better deep work than the alternatives — is observed:
+DevCake is exercised on portions of its own board, and early trials on
+non-software deep work went qualitatively better than we expected. To be
+precise about provenance: the majority of this project's own development is
+the founder driving harness sessions directly — DevCake did not build
+DevCake, and this document must not imply it did. None of the observations
+are blind-judged or baselined. A controlled comparison — same task, same
 model, envelope on versus off — is the planned instrument, and until it
 exists, this section is a belief we act on, not a result we report.
 

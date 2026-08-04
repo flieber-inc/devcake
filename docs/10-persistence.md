@@ -3,7 +3,7 @@
 > **Audience:** implementers and operators.
 > **Decision record:** `adr/0002-file-based-persistence.md` (files over a database), `adr/0003-pmo-as-single-source-of-truth.md`.
 
-All local app data lives as plain files on one named volume (`devcake_data`, mounted at `/data`) so it is trivially inspectable, diffable, and recoverable. **Backup story: back up `/data`; everything else is reconstructible.**
+All local app **state** lives as plain files on the `devcake_data` volume (mounted at `/data`) so it is trivially inspectable, diffable, and recoverable. Since ADR-0024/0025 the app also holds two **non-state** stores this document is not the authority on: the `/mirrors` volume (bare source mirrors — a DISPOSABLE cache that re-warms) and the `$DEVCAKE_WS_HOST` host bind (`/workspaces` in-container — per-run scratch, reclaimed at run end). **Backup story: back up `/data` (via `scripts/backup_data.sh`) AND `gitea_data`; mirrors and workspaces are reconstructible and deliberately excluded** — the full story, including why the excluded trees still deserve host-snapshot care (they hold repo source), is `13-deployment.md` §8.
 
 Run records are accessed through **`StatePort`** (`ports/state.py`); the production adapter is `adapters/files/run_store.py`. A future SQLite (or other) store is an adapter swap behind that port (`adr/0002`, `16-roadmap.md`) — not a domain change.
 
@@ -167,3 +167,5 @@ Direct file edits are tolerated but take effect on the next app start, when `loa
 | `/data/secrets` | Dev Types whose harness credential files / harness secret VALUES lived here fail auth (exit 12 → circuit breaker) until re-uploaded or re-entered. GUI-stored connection secrets and profile secret snapshots are gone — re-enter via the Configuration page or re-import a bundle. |
 | `/data/config` | The app blocks startup pending reconfiguration (admin panel first-run flow). |
 | `/data/config/profiles` + `/data/secrets/profiles` | Saved profile snapshots are gone; **live settings are untouched** (profiles are fire-and-forget snapshots, ADR-0013). |
+| the `/mirrors` volume (`docker volume rm devcake_mirrors`, stack stopped) | Nothing durable lost — the mirror is a mandatory but DISPOSABLE cache (ADR-0024): the next dispatch's fail-closed freshness gate re-clones every needed repo (one full re-fetch per repo of cost). Deleting it while the stack runs instead trips the volume error → dispatch refuses with a visible reason until `verify_writable` clears. |
+| the `$DEVCAKE_WS_HOST` tree | Per-run scratch only (ADR-0025). In-flight runs' containers lose their bind and fail (counted per docs/15); terminal residue is exactly what the periodic sweep reclaims anyway. Never part of the backup set. |

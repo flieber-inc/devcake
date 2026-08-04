@@ -72,8 +72,11 @@ The complete set of ten managed labels is defined in `02-domain-model.md` §5 an
 ## 4. Core invariants
 
 These are **behavioral** contracts (not the full security model — that is
-`14-security.md`). They are referenced by ID (`INV-n`) throughout the docs and
-covered by automated tests (`16-roadmap.md`, M7).
+`14-security.md`). They are referenced by ID (`INV-n`) throughout the docs;
+the *behaviors* they name are pinned by the unit suite (`16-roadmap.md`, M7),
+though there is no invariant-indexed test map — coverage is by behavior, not
+by `INV-n` key (2026-08 truth sweep: the earlier wording implied an index
+that does not exist).
 
 - **INV-1 — The PMO System is the single source of truth.** All Mission status, labels, and priority are read live from the PMO System. No local data is ever deemed current; local state (`/data/state`) is advisory telemetry that can be wiped without corrupting the system (consequences of a wipe are documented in `10-persistence.md`).
 - **INV-2 — At most one stage label per Mission.** A Mission carrying two or more stage labels is in conflict: DevCake refuses to schedule it (`LABEL_CONFLICT` — unschedulable gate reason only; no auto-comment; `15-errors-and-retries.md`).
@@ -167,5 +170,5 @@ Operating duties — once at setup and recurring — live in
 | `17-positioning.md` | Outward voice — must not outclaim `14` |
 | `18-operator-contract.md` | What the operator owns — setup pointer + recurring duties + rotation |
 | `19-thesis.md` | Why DevCake — the thesis: four claims with evidence status, scope doctrine (ordering vs originating), falsifiers |
-| `adr/` | Records of significant architectural decisions |
+| `adr/` | Records of significant architectural decisions — index with per-ADR status: [`adr/README.md`](adr/README.md) |
 | `tutorials/` | Operator path (includes supply-chain checklist) |

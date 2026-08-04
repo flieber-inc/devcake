@@ -19,3 +19,11 @@ Plain files on one `/data` volume: YAML for human-edited config, JSON-per-file f
 ## Consequences
 
 Backup = copy `/data`. Every consumer must use the atomic-write recipe. Escape hatch documented: if run history outgrows files, `state/runs/` swaps to SQLite behind `StatePort` without touching anything else (post-v0 backlog).
+
+> **Amendment (2026-08-04):** "backup = copy `/data`" predates the app's two
+> non-state stores — the `/mirrors` volume (ADR-0024, disposable cache) and
+> the `$DEVCAKE_WS_HOST` workspace bind (ADR-0025, per-run scratch). The
+> file-over-database decision stands unchanged; the backup sentence is
+> superseded by `13-deployment.md` §8 (back up `/data` + `gitea_data`;
+> mirrors/workspaces excluded by design), with `scripts/backup_data.sh` as
+> the shipped vehicle.

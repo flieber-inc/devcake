@@ -220,9 +220,10 @@ class RepoInstance(BaseModel):
 
 
 class Concurrency(BaseModel):
-    # concurrency caps are the real host-protection throttle: Dagu 2.10.5
-    # cannot apply Docker HostConfig limits to Dev containers (docs/07 §7);
-    # per-container hard limits return with Dagu host-config support (v0.1)
+    # concurrency caps are the real host-protection throttle: Dagu (measured
+    # at 2.10.5, re-verified at the pinned 2.11.3) cannot apply Docker
+    # HostConfig limits to Dev containers (docs/07 §7); per-container hard
+    # limits return with Dagu host-config support
     global_max: int = Field(3, ge=1)
 
 

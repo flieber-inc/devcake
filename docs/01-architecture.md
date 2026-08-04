@@ -45,14 +45,28 @@ app/devcake/
   domain/          # pure logic — depends on ports, not adapters
     model.py       #   entities, Mission Type derivation, label set (02)
     run.py         #   Run record + state machine
-    run_bootstrap.py#  dispatch spine: ACL → digest → durable save → executor.start (04 §3.1)
+    run_bootstrap.py#  dispatch spine: workspace gate → ACL → digest → durable
+                   #   save → workspace dir → executor.start (04 §3.1, ADR-0025)
     orchestrator/  #   package: MissionManager (DI + verbs) + module functions (04, ADR-0015)
                    #     manager, schedule, dispatch, finalize, transitions,
                    #     review, decomposition, sweeps, feed, markers, mapper
     mapper_service.py  # Relations Mapper cadence (ADR-0007; ISSUES #36 first cut)
     runs.py        #   ingress, kill, hello dispatch; holds RunBootstrap + RunFinalizer
     oauth.py       #   harness OAuth flows (launches via RunBootstrap)
-    watchdog.py    #   timeout/zombie detection
+    watchdog.py    #   timeout/zombie detection + workspace sweep cadence
+    reconcile.py   #   boot reconciliation: adopt/orphan runs vs the Dagu API (04 §6)
+    workspaces.py  #   WorkspaceStore — per-run host-bind tree, fail-closed
+                   #   volume gate, sweep (ADR-0025)
+    repo_mirror.py #   RepoCache — mandatory source mirrors, freshness gate,
+                   #   needed_for (ADR-0024)
+    forge_runtime.py   # ForgeRuntime — live adapter set, per-repo breakers,
+                   #   bounded health sweeps (M10)
+    repo_routing.py    # mission → work-repo resolution (M10 markers)
+    blocker_locator.py #  deployment-wide blocked_by resolution (ADR-0009)
+    backend_health.py  #  model-backend brake predicates (ADR-0018/0026)
+    skills.py      #   skill store reads + prompt assembly (ADR-0016)
+    costing.py     #   app-side cost estimation vs the rate card (ADR-0021)
+    asset_fetch.py #   PMO attachment/zip fetching for activity repos (ADR-0014/0017)
     ids.py         #   id generation
   ports/           # Protocols + the DTOs that cross them
     pmo.py         #   PMOPort, PMOHealth, PMOCapabilities, PMOTransient (05)
@@ -79,7 +93,10 @@ app/devcake/
                    #   mission_actions.py, clear.py, config_service.py,
                    #   profiles_service.py, settings_transfer.py,
                    #   devtypes_service.py, connections_service.py,
-                   #   internal_repos_service.py
+                   #   internal_repos_service.py, runs_service.py,
+                   #   auth.py (basic-auth + intent-header middleware —
+                   #   attached in main.py; load-bearing, tested via
+                   #   tests/test_api_surface.py)
   telemetry/       # OTel setup, devcake.* attribute helpers (12)
   prompts/         # playbook prompt templates (03 §7)
   config.py        # single pydantic schema authority for config.yaml (root-level:

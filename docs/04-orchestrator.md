@@ -71,10 +71,20 @@ Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by t
 ```
 def launch(run, *, image):                         # RunBootstrap — all four flavors
   async with dispatch_lock:                        # clear-runs holds this for the full wipe
-    password = messaging.create_run_user(run.run_id)  # MessagingPort
+    if workspaces.volume_error:                       # (0) ADR-0025 fail-closed gate:
+        raise WorkspaceUnavailable(...)               #     an unusable workspace base
+        # refuses BEFORE any side effect — callers (dispatch, mapper) catch
+        # this and surface a blocked_reason; NO attempt burns, NO
+        # poll_degraded (the AUD-001/002 fix — fail-closed for real)
+    password = messaging.create_run_user(run.run_id)  # MessagingPort (+ ACL SAVE, 09 §1a)
     run.auth_digest = sha256(password)                # never persist the raw ACL secret
     run.store_gen = store.wipe_generation             # clear-runs generation guard
     state.save(run)                                   # (1) durable intent BEFORE side effects
+    try:
+        workspaces.create(run.run_id)                 # (1b) per-run host-bind dir, 0700
+    except OSError:                                   #      record-BEFORE-dir makes the
+        state.delete(run); messaging.delete_run_user  #      sweep predicate sound; a create
+        raise WorkspaceUnavailable(...)               #      failure UNWINDS record + ACL
     executor.start(params={                           # (2) ExecutorPort (Dagu in prod)
         "RUN_ID": run.run_id, "IMAGE": image,         #     non-secret params only (13 §4)
         "TRACEPARENT": run.traceparent or "",
@@ -93,10 +103,16 @@ def dispatch(mission, dev_type):                   # MissionManager — mission 
               spec_env=protocol_spec_env(...), ...)
     run.spec_prompt = resolve_prompt(mission, dev_type)  # includes {blocker_repos}
     run.blocker_work = resolve_blocker_work(...)         # ADR-0017: done blockers' repo_refs
+    run.mirror_repos = needed                            # the mirror gate's proven set,
+    #                                                      snapshotted (2026-08: the runspec
+    #                                                      serves mirrors from THIS, never
+    #                                                      from live config — 09 §3)
     bootstrap.launch(run, image=harness_image(dev_type))
-    # launch = ACL user → durable Run file BEFORE the Dagu trigger; the image
-    # param is a plain tag (e.g. devcake/dev-claude-code:latest — no digest
-    # pinning; 13-deployment.md §6), and Dagu receives only non-secret params
+    # launch = workspace gate → ACL user → durable Run file → workspace dir
+    # BEFORE the Dagu trigger (WorkspaceUnavailable at any of those steps is
+    # an unschedulable reason, not a failed attempt); the image param is a
+    # plain tag (e.g. devcake/dev-claude-code:latest — no digest pinning;
+    # 13-deployment.md §6), and Dagu receives only non-secret params
     # runspec later attaches RO tokens for blocker_work as extra_repos
     if live.status == "backlog":
         pmo.set_status(mission.ref, "in_progress")      # (3) reflect pull in PMO

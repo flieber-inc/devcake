@@ -20,14 +20,17 @@
 > **⏳ live-pending** = built, live end-to-end still owed ·
 > milestone `[x]` checkboxes mark exit criteria verified at that milestone's close.
 >
-> **Where we are (2026-07-26):** layers 1–2 closed through tag **v0.2** (and
-> patch tags through `v0.2.4` on `main`). The product loop (poll → dispatch →
-> harness → finalize → forge/PMO) is operational with three harness templates
-> (`claude-code`, `grok-build`, `codex`), multi-PMO / multi-repo / internal
-> Gitea, skills (ADR-0016), settings profiles/export (ADR-0013), fault
-> classification + backend brake (ADR-0018), and a package-split Dev entrypoint
-> (`images/common/devcake_dev/`). Unit suite is on the order of **~800+** tests
-> (815 counted 2026-07-26; do not treat any single count as a permanent claim).
+> **Where we are (2026-08-04):** layers 1–2 closed through tag **v0.2**;
+> release tags through **v0.2.5 "Hummingbird"** on `main`. The product loop
+> (poll → dispatch → harness → finalize → forge/PMO) is operational with three
+> harness templates (`claude-code`, `grok-build`, `codex`), multi-PMO /
+> multi-repo / internal Gitea, skills (ADR-0016), settings profiles/export
+> (ADR-0013), fault classification + backend brake (ADR-0018/0026), mandatory
+> source mirrors + provisioned workspaces (ADR-0024/0025), in-container
+> continuation (ADR-0022), and the 2026-08 evaluation fix campaign (spend
+> discipline, TOCTOU guards, composition-root tests, ops hardening — entries
+> below). Unit suite is on the order of **~1400+** tests (1421 counted
+> 2026-08-04; do not treat any single count as a permanent claim).
 > Ongoing append-only tracking: [Living log (after v0.2)](#living-log-after-v02).
 
 ## History — Layer 1: Milestone era (M0–M12)
@@ -456,6 +459,56 @@ vocabulary at the top of this file).
   Run/API/feed/OTel, rig `--resume-prompt-file` mode + six
   `*_resume_nudge*` capture fixtures. **built**.
 
+- **External audit + evaluation fix campaign** (2026-08-03…04): Grok's
+  tag-range audit (AUD-001…AUD-034; its report file was deleted from the
+  root 2026-08-03 — **this entry is the AUD-ID ledger** code comments
+  resolve against) landed as PR #81; the four-review critical evaluation
+  (architecture / tests / docs drift / ops) then drove PRs #82–#87:
+  - **ADR-0026 spend discipline** (#82): `attempt_reset` (strict
+    `label-ops` default + `DEVCAKE-RETRY` gesture / `any-comment` /
+    `unlimited` with cumulative-cost warnings) closing the
+    chatty-integration attempt-reset hole; opt-in `brake_on_bad_output`;
+    first-class Limits & Traffic UX. **Deliberate behavior change**
+    (strict default) — release-noted. **built**.
+  - **TOCTOU + parity** (#83): watchdog timeout/liveness kill branches
+    re-read before killing; `_kill_inner` aborts save + restore when the
+    state moved (the mover wins); the mirror gate's `needed_for` set is
+    snapshotted on `run.mirror_repos` and the runspec serves mirrors from
+    the snapshot only. **built**.
+  - **Enforcement** (#84): `test_api_surface.py` (TestClient over the real
+    app — 401/403 on every route; the auth middleware is finally
+    load-bearing), `test_repo_structural.py` (+RO mounts in both pytest
+    runners: /mirrors isolation, workspace binds, RUN_ID fence, no Dagu
+    auto-retry, single-uvicorn-worker premise), CI contract lane (compose
+    smoke stack + bundled Gitea runs BOTH batteries per PR), UI-suite
+    honesty (15 tautologies → `checked()` predicates, helpers suites wired
+    into check:ui). **built**.
+  - **Ops hardening** (#86 + hotfix #87): redis aclfile + per-op `ACL SAVE`
+    (dev users survive a redis-only restart — drill-verified; with an
+    aclfile redis IGNORES --requirepass, measured, so the default user
+    lives in the file, boot-regenerated from .env), `maxmemory 1gb +
+    noeviction` flood backstop, `chmod 600 .env` enforced, bake-failure
+    dagu-restart trap, `backup_data.sh`/`restore_data.sh`, vendored grok
+    installer, ADMIN_PASSWORD ≥12 (**deliberate breaking change**,
+    release-noted). #87 also REVERTED the attempted WS_HOST DAG
+    precondition: Dagu 2.11.3 loads but never expands service env in
+    `condition:` — every dev-run sat `dispatched` to the startup-grace
+    kill (measured live); an inverse structural test bars unverified
+    reintroduction. **built**.
+  - **AUD disposition:** fixed in #81 (`df08c9a`): AUD-001/002 (workspace
+    fail-closed real), 003 (stop-dagu-before-bake half; the DAG-precondition
+    half was attempted in #86 and reverted in #87 — the daemon-autocreate
+    residue is tracked debt again), 004 (tag lockstep), 005/006 (merge
+    wedges), 007 (sweep budget), 008 (doc overclaim deleted), 010
+    (tristate trust in sweep), 011 (fence `{6,64}`), 017 (costing bool
+    guard), 018 (parse-cache clear). Fixed in this campaign: 015-adjacent
+    kill/finalize races (#83), backup-pair gap (§ above), 029 (vendored
+    installer). Still open, honestly: **AUD-009** (provision phase is
+    honor-system — accepted, documented), **AUD-012** (relative WS_HOST via
+    plain `docker compose up` — up.sh asserts, compose alone does not),
+    **AUD-020** (hard-coded `devcake_mirrors` volume name — doc warning
+    only), **AUD-022** (no Dev cgroup HostConfig — docs/14 §11 debt).
+
 ### Still open (residuals)
 
 Not new features — demos or proofs still owed from Layers 1–2 (milestones or
@@ -641,6 +694,20 @@ long-lived incomplete dialect API.
 
 ### Deferred (later / conditional)
 
+- **2026-08 evaluation candidates** (recorded with the campaign entry above;
+  file:line evidence in the evaluation ledger): **per-run Dev networks**
+  (closes cross-Dev reachability incl. the post-ADR-0023 DevTools scenario —
+  ICC-off measured broken: it severs Dev→Redis) · **per-run ingress
+  streams** (closes the malicious-`MAXLEN` trim vector for good) · **brake
+  cycle-skip backoff** so the ADR-0018 throttle arm acts at
+  `max_concurrency: 1` (founder kept current design) · **composition-root
+  decomposition** (`api/main.py` builds 15+ import-time singletons) ·
+  **unifying the three failure-taxonomy encodings** (numeric exit /
+  `error_class` string / reconcile's stderr regex) · **config-PUT lock**
+  (a poll cycle can read mixed old/new config across awaits) ·
+  **conftest.py / event-loop test hygiene** (module-import loop ownership) ·
+  **`${VAR:-default}`-guarded volume name in dev-run.yaml** (AUD-020 —
+  verify Dagu expansion support first; see the #87 lesson).
 - **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
   polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
   among deferred items, independent of any harness-platform work.

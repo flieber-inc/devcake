@@ -2,7 +2,7 @@
 // rest behind a ⋯ MoreMenu whose items still reach their confirm/prompt
 // dialogs, and full keyboard operation of the menu. All dialogs are
 // cancelled — nothing destructive ever runs.
-import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
+import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
   // 1: no bare secondary/destructive buttons on the redesigned surfaces
@@ -28,14 +28,22 @@ await withPage(async (page) => {
   } else {
     await devMenu.click();
     await page.click('[role="menuitem"]:has-text("Rename")');
-    await page.waitForSelector('[role="dialog"]:has-text("Rename Dev Type")');
-    check("⋯ → Rename reaches the prompt dialog", true);
+    await checked("⋯ → Rename reaches the prompt dialog", async () => {
+      await page.waitForSelector('[role="dialog"]:has-text("Rename Dev Type")',
+        { timeout: 8000 });
+      return (await page.locator(
+        '[role="dialog"]:has-text("Rename Dev Type")').count()) === 1;
+    });
     await page.click('[role="dialog"] button:has-text("Cancel")');
 
     await devMenu.click();
     await page.click('[role="menuitem"]:has-text("Delete Dev Type")');
-    await page.waitForSelector('[role="dialog"]:has-text("Delete dev type")');
-    check("⋯ → Delete reaches the confirm dialog", true);
+    await checked("⋯ → Delete reaches the confirm dialog", async () => {
+      await page.waitForSelector('[role="dialog"]:has-text("Delete dev type")',
+        { timeout: 8000 });
+      return (await page.locator(
+        '[role="dialog"]:has-text("Delete dev type")').count()) === 1;
+    });
     await page.click('[role="dialog"] button:has-text("Cancel")');
 
     // 4: keyboard operation — open, arrows move focus, Esc returns to trigger
@@ -68,8 +76,12 @@ await withPage(async (page) => {
     (await page.locator('a:has-text("Open Dagu")').count()) === 1);
   await page.click('button[aria-label="More run actions"]');
   await page.click('[role="menuitem"]:has-text("Clear run history")');
-  await page.waitForSelector('[role="dialog"]:has-text("Clear all run history?")');
-  check("⋯ → Clear run history still confirms", true);
+  await checked("⋯ → Clear run history still confirms", async () => {
+    await page.waitForSelector(
+      '[role="dialog"]:has-text("Clear all run history?")', { timeout: 8000 });
+    return (await page.locator(
+      '[role="dialog"]:has-text("Clear all run history?")').count()) === 1;
+  });
   await page.click('[role="dialog"] button:has-text("Cancel")');
 
   // 6: Skills header — one primary; secondary actions in ⋯ or a lone ghost

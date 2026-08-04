@@ -7,7 +7,7 @@
 // page never scrolls horizontally at ANY width, and the sidebar collapse
 // toggle works on Missions (the force-collapse exception died with the
 // board). Read-only — everything is route-mocked or a plain GET.
-import { check, gotoFresh, summary, withPage } from "./harness.mjs";
+import { check, checked, gotoFresh, summary, withPage } from "./harness.mjs";
 
 const LONG_KEY = "PLATFORM-999999";
 const LONG_TITLE =
@@ -148,8 +148,12 @@ async function assertList(width, height) {
 
     // row click opens the drawer (drawer itself unchanged)
     await page.locator('section[aria-label="Done"] [role="button"]').first().click();
-    await page.waitForSelector('button[aria-label="Close drawer"]', { timeout: 5000 });
-    check(`row click opens the mission drawer at ${width}`, true);
+    await checked(`row click opens the mission drawer at ${width}`, async () => {
+      await page.waitForSelector('button[aria-label="Close drawer"]',
+        { timeout: 5000 });
+      return (await page.locator(
+        'button[aria-label="Close drawer"]').count()) === 1;
+    });
     await page.click('button[aria-label="Close drawer"]');
   }, { width, height });
 }

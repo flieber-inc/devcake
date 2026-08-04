@@ -3,7 +3,7 @@
 // 2026-08-02 nav reorg), legacy-route redirects, nav guard, mobile chips.
 // Never confirms a Save — every flow ends in Cancel/Discard so live config
 // is untouched.
-import { BASE, check, gotoFresh, summary, withPage } from "./harness.mjs";
+import { BASE, check, checked, gotoFresh, summary, withPage } from "./harness.mjs";
 
 const POLL = 'input[aria-label="Poll interval (seconds)"]';
 const GLOBAL_MAX = 'input[aria-label="Global max Devs"]';
@@ -114,8 +114,12 @@ await withPage(async (page) => {
 
   // 8: nav guard on leaving Config dirty; Esc = Stay
   await page.click('aside a[href="#/runs"]');
-  await page.waitForSelector("text=You have 2 unsaved changes");
-  check("nav guard appears when leaving Config dirty", true);
+  await checked("nav guard appears when leaving Config dirty", async () => {
+    await page.waitForSelector("text=You have 2 unsaved changes",
+      { timeout: 8000 });
+    return (await page.locator(
+      "text=You have 2 unsaved changes").count()) >= 1;
+  });
   await page.keyboard.press("Escape");
   await page.waitForTimeout(150);
   check("Esc on the nav guard stays on Config",
@@ -143,8 +147,12 @@ await withPage(async (page) => {
   await poll2.fill(String(Number(await poll2.inputValue()) + 1));
   await page.waitForSelector('span:has-text("Unsaved changes")');
   await page.click('aside a[href="#/runs"]');
-  await page.waitForSelector("text=You have 1 unsaved change");
-  check("nav guard also fires leaving the PMO page dirty", true);
+  await checked("nav guard also fires leaving the PMO page dirty", async () => {
+    await page.waitForSelector("text=You have 1 unsaved change",
+      { timeout: 8000 });
+    return (await page.locator(
+      "text=You have 1 unsaved change").count()) >= 1;
+  });
   await page.click('button:has-text("Discard & leave")');
   await page.waitForTimeout(200);
   check("discard-and-leave lands on Runs with a clean draft",

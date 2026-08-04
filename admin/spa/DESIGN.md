@@ -282,10 +282,15 @@ A UI change is done when you have personally seen:
 3. `npm --prefix admin/spa run check:ui` green — the committed behavioral
    suite (`admin/spa/tests/`: settings model, action hierarchy, redesign
    invariants; it boots vite itself and needs the live backend on :8080).
-   It never confirms a Save and cancels every destructive dialog, so it is
-   safe against live config. New interactions get assertions added here
-   (menu opens, dialog reached, draft counts edits), not just screenshots.
-   Local-only for now — CI has no live stack to run it against.
+   It cancels every destructive dialog, and every suite except one never
+   confirms a Save — the honest exception is `pmo_intake.mjs`, which
+   REALLY saves (a poll-interval tweak plus intake flips, restoring both
+   to as-found) to prove the save-revert regression; run it against
+   stacks whose config you own. New interactions get
+   real predicates added here (`checked(name, fn)` — never `check(name,
+   true)` after a bare wait), not just screenshots. Local-only for now —
+   CI has no live stack to run it against; the pure-node helper suites
+   (markdown/format) ride every run and need nothing live.
 4. For prod: `docker buildx bake admin && docker compose up -d admin` + load.
 
 Name anything left unproven (OAuth wizard, real save-PUT, etc.) instead of

@@ -1,7 +1,7 @@
 // Redesign suite: masthead answers first, oven strip, manual dark mode,
 // click-popover help, and the RunTerminal dialog behavior (when the stack
 // has runs). Read-only — no config edits, no destructive actions.
-import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
+import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
   // 1: Overview opens with the answer masthead + eyebrow, not a status dump
@@ -47,8 +47,12 @@ await withPage(async (page) => {
     skip("RunTerminal dialog behavior", "no runs recorded on this stack");
   } else {
     await runBtn.click();
-    await page.waitForSelector('[role="dialog"][aria-label^="Run terminal"]');
-    check("run id opens the terminal dialog", true);
+    await checked("run id opens the terminal dialog", async () => {
+      await page.waitForSelector('[role="dialog"][aria-label^="Run terminal"]',
+        { timeout: 8000 });
+      return (await page.locator(
+        '[role="dialog"][aria-label^="Run terminal"]').count()) === 1;
+    });
     await page.keyboard.press("Escape");
     await page.waitForTimeout(100);
     check("Esc closes the terminal",

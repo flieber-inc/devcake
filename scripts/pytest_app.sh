@@ -35,6 +35,8 @@ docker run --rm \
   "${NET_ARGS[@]}" \
   "${ENV_ARGS[@]}" \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
+  -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \
+  -v "$(pwd)/app/Dockerfile:/srv/app.Dockerfile:ro" \
   -w /srv \
   "devcake/app-test:${TAG}" \
   python -m pytest tests/ -q "$@"

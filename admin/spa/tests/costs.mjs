@@ -2,7 +2,7 @@
 // the Cost Inputs modal reached from the ⋯ menu. Asserts STRUCTURE, never
 // specific rate values (the live stack's card may be operator-edited), and
 // always CANCELS — this suite never saves rates, never mutates config.
-import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
+import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 await withPage(async (page) => {
   await gotoFresh(page, "#/runs");
@@ -55,7 +55,8 @@ await withPage(async (page) => {
   if ((await page.locator('[data-testid="mission-group"]').count()) === 0) {
     skip("grouped mode clusters runs under mission rows", "no runs on this stack");
   } else {
-    check("grouped mode clusters runs under mission rows", true);
+    check("grouped mode clusters runs under mission rows",
+      (await page.locator('[data-testid="mission-group"]').count()) >= 1);
     check("pagination speaks missions when grouped",
       /of \d+ missions/.test(await page.innerText("main")));
   }

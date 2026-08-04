@@ -227,7 +227,7 @@ branch protection is weak or absent**, or exfiltrating tokens.
 
 1. Secrets never in images, never in git, never in Run JSON, and **never in Dagu
    DAG params or YAML** — trigger params are rendered unmasked in the Dagu UI
-   (verified on v2.10.5). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus
+   (verified on v2.10.5, unchanged at the pinned 2.11.3). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus
    one deliberate exception: the per-run scoped Redis ACL credential, revoked at
    finalization. Secret material is rebuilt on authenticated `runspec.get`
    (`09-messaging.md` §§3, 5).
@@ -318,8 +318,9 @@ Not claimed:
 
 - Multi-tenant isolation between hostile customers.
 - Egress allowlists (optional future ops hardening, §11).
-- **Docker HostConfig** CPU/memory/PID limits on the Dev container — Dagu 2.10.5
-  `container:` schema has no HostConfig fields; DAG `resources.limits` is
+- **Docker HostConfig** CPU/memory/PID limits on the Dev container — Dagu's
+  `container:` schema has no HostConfig fields (measured at 2.10.5, re-verified
+  at the pinned 2.11.3); DAG `resources.limits` is
   process-cgroup only. That is **engineering debt** (noisy-neighbor / fork bomb
   on the dedicated host), not adult-operator philosophy.
 - MCP free-text commands and harness “skip permissions” flags are powerful on

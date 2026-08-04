@@ -57,6 +57,11 @@ services:
     env_file: .env                       # bootstrap secrets ONLY (schema v4)
     volumes:
       - devcake_data:/data               # NO docker.sock — kill/reconcile via Dagu API
+      - mirrors:/mirrors                 # ADR-0024 source mirrors (app = only writer)
+      - ${DEVCAKE_WS_HOST}:/workspaces   # ADR-0025 per-run workspace base (host bind)
+      - ./images/common:/srv/images/common:ro   # TEST FIXTURE ONLY — entrypoint-render
+                                         #   tests read the real Dev entrypoint tree;
+                                         #   the running app never imports from it
     networks: [control]
     # no host ports — reach API only via admin proxy
 

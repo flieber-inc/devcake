@@ -27,6 +27,7 @@ observability gap.
 | Span | Parent | Emitted by | Content |
 |---|---|---|---|
 | `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `PMO_TRANSIENT`/`cycle_error` outcomes |
+| `poll.instance` | `poll.cycle` | app | one child per configured PMO instance (`devcake.instance`); a per-instance failure marks THIS span, not the cycle |
 | `mission.dispatch` | `poll.cycle` (mapper runs: `mapper.periodic`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
 | `mission.give_up` | `poll.cycle` | app | ERROR status; covers the `DEVCAKE-FAILED` label write + feed post |
 | `sweep.merge` | `poll.cycle` | app | emitted only when the sweep acts (`merged`/`closed`); covers the PMO writes |

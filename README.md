@@ -170,7 +170,12 @@ PMO (Linear / Gitea Issues) ──poll / labels──► app (orchestrator)
 Self-hosted, single operator, loopback by default. Stack passwords live in
 `.env`; **operator secrets** (PMO keys, forge tokens, model credentials) are
 entered through the admin UI's Configuration, Repositories and PMO pages and stored
-on the app volume — never echoed back.
+on the app volume — never echoed back. Be clear-eyed about what "GUI secret
+store" means: values rest as **plaintext files (mode 0600) on the `/data`
+volume** — there is no vault and no at-rest encryption (a key would have to
+live on the same host); anyone with host root or a volume backup reads
+everything. Treat `/data` backups like a password-manager export
+([`docs/14-security.md`](docs/14-security.md) §4).
 
 Agents are powerful by design. The app enforces outcome legality and never lets
 Devs write the PMO directly; it **warns** on weak posture (write token on every

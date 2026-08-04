@@ -1,6 +1,6 @@
 # 07 — Dev Runtime: The Container Contract
 
-> **Audience:** implementers and harness-image authors. Anyone should be able to build a new Dev image from this document alone.
+> **Audience:** implementers and harness-image authors. This document plus `08-harness-templates.md` and `09-messaging.md` are the complete image contract — build against the three together (the 2026-08 truth sweep retired the older "this document alone" claim; the protocol payloads live in 09).
 > **Depends on:** `02-domain-model.md` (Run, DevType), `03-mission-lifecycle.md` (`result.json`), `08-harness-templates.md` (per-harness specifics), `09-messaging.md` (Redis protocol).
 
 A **Dev container** is an ephemeral Docker container that performs exactly one Mission Step and exits. It is spawned by Dagu as a sibling of the compose stack (`13-deployment.md`), named `dev-{run_id}`, and attached to the **`devcake_runtime`** network so it reaches `redis`, `otel-collector`, and (when used) internal Gitea by service name. **OpenObserve is not on the runtime network** — Devs export OTLP to the collector only (`12-observability.md`, `14` §10).
@@ -14,6 +14,13 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
   repo/                  # fresh `git clone` of the configured repository, directory named
                          #   exactly after the repository (standard clone output).
                          #   The ONLY place the harness may do its work (INV-6).
+    {slug}/              # ZERO OR MORE extra clones (ADR-0017/0024): the routing
+                         #   set's other repos (ONBOARD), the instance's reference
+                         #   repos (every stage), and done blockers' work repos —
+                         #   cloned by provision from `extra_repos` (mirror file://
+                         #   or RO-token https). Read-only BY TOKEN + prompt
+                         #   contract, not by filesystem mode; extra-clone
+                         #   failures are non-fatal (noted, run proceeds).
   activity/
     MISSION.md           # the brief: key/title/meta/labels, FULL description, mission
                          #   attachments (ADR-0014 — every playbook points here)
@@ -188,10 +195,15 @@ PROVISION container (prov-<run_id>, DEVCAKE_PHASE=provision, /mirrors RO)
   ▼
 HARNESS container (dev-<run_id>, DEVCAKE_PHASE=harness, workspace ONLY)
   │ 3a. heartbeat sidecar starts, THEN fetch run spec `{phase: harness}` →
-  │      full spec; verify sentinel + `provisioned` marker (else exit 20 WITH
-  │      artifacts — forensic owner/mode/listing); re-adopt the askpass +
-  │      git identity/LFS posture (fresh HOME)
-  │ 4. install harness credentials (env passthrough or credential-file content → harness path)
+  │      full spec
+  │ 4. install harness credentials (env passthrough or credential-file
+  │      content → harness path). NOTE the order (2026-08 truth sweep):
+  │      credentials land BEFORE the workspace identity check below —
+  │      they go to $HOME, not the workspace, so a wrong-bind exit never
+  │      leaves secrets in the disputed tree
+  │ 4a. verify sentinel + `provisioned` marker (else exit 20 WITH artifacts —
+  │      forensic owner/mode/listing); re-adopt the askpass + git
+  │      identity/LFS posture (fresh HOME)
   │ 4b. install skill-store skills from the runspec `skills` field → the
   │      harness's skills dir from runspec `skills_dir` (home-relative;
   │      default ~/.claude/skills — never into the repo clone, the Dev would
@@ -268,7 +280,7 @@ DevCake is **not** a multi-tenant sandbox product (`14-security.md` §6). Isolat
 - **No `docker.sock`:** Dev containers never receive the Docker socket (`14-security.md` §5).
 - **User:** the entire entrypoint runs as a non-root user (uid 1000) — verified hard requirement at M3: Claude Code refuses `--dangerously-skip-permissions` under root. PID 1 is `tini` (ADR-0023 fix round): the entrypoint reaps no orphans, and browser process trees would otherwise accumulate zombies over multi-hour runs; Dagu cannot pass `--init` (see **Resources** below).
 - **MCP / extra CLI args:** admin-configured free-text commands run with `shell=True` / harness flags before/with the agent — **admin-equivalent ACE** inside the disposable container (`11-admin-panel.md`).
-- **Resources:** Dagu 2.10.5 step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container (**engineering debt**, `14` §11). Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps).
+- **Resources:** Dagu step `container:` does **not** support Docker HostConfig CPU/memory/PID fields (schema `additionalProperties: false`; measured at 2.10.5 and re-verified at the pinned 2.11.3 — `13-deployment.md`). The DAG sets best-effort process-level `resources.limits` (`cpu: "2"`, `memory: "4g"`) where the host enforces cgroups on the DAG run process — this is **not** a guaranteed limit on the sibling Dev container (**engineering debt**, `14` §11). Primary throttle is app concurrency (`concurrency.global_max` + per-Dev-Type caps).
 
 ### 7a. Toolchain floor (ADR-0023, normative — identical across harness images)
 

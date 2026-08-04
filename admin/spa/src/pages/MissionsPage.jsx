@@ -112,6 +112,7 @@ export default function MissionsPage() {
     last_poll_at: null,
     poll_interval_seconds: 30,
     poll_degraded: {},
+    dependency_cycles: [],
   });
   const [error, setError] = useState("");
   // per-mission optimistic overrides (pmo_id → { labels, syncing:true }).
@@ -160,6 +161,7 @@ export default function MissionsPage() {
           last_poll_at: healthBody.last_poll_at || null,
           poll_interval_seconds: healthBody.poll_interval_seconds || 30,
           poll_degraded: healthBody.poll_degraded || {},
+          dependency_cycles: healthBody.dependency_cycles || [],
         });
       }
       setPending((prev) => {
@@ -516,9 +518,17 @@ export default function MissionsPage() {
       </div>
       {openMission && (
         <MissionDrawer
+          // key forces a full remount when chain navigation swaps the
+          // mission — a half-typed guidance draft must never post to the
+          // newly opened mission
+          key={`${openMission.instance}:${openMission.pmo_id}`}
           mission={openMission}
           multiPmo={multiPmo}
           syncing={!!pending[openMission.pmo_id]?.syncing}
+          rows={rows}
+          adoptionMode={data.adoption_mode}
+          cycles={pollState.dependency_cycles}
+          onOpenMission={(row) => setOpenMission(row)}
           onClose={() => setOpenMission(null)}
           onAction={(action) => requestAction(openMission.pmo_id, action)}
         />

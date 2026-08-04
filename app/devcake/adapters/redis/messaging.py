@@ -6,6 +6,7 @@
 - envelope auth verification (forgery guard) and chunked-payload reassembly
 """
 
+import asyncio
 import json
 import hashlib
 import logging
@@ -17,7 +18,9 @@ from typing import Any, Awaitable, Callable, Optional
 import redis.asyncio as aioredis
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
-from redis.exceptions import ResponseError
+from redis.exceptions import (ConnectionError as RedisConnectionError,
+                              ResponseError,
+                              TimeoutError as RedisTimeoutError)
 
 from ...security import MASK, register_runtime_secret, unregister_runtime_secret
 
@@ -160,9 +163,28 @@ class Messaging:
         await self.setup()
         last_reclaim = time.monotonic()
         while True:
-            entries = await self.redis.xreadgroup(
-                GROUP, CONSUMER, {INGRESS: ">"}, count=10, block=5000
-            )
+            # Connection-level failures must not kill the loop (2026-08
+            # redis-restart drill: a `compose restart redis` raised
+            # ConnectionError out of the blocking XREADGROUP, the task died
+            # silently, and every later run.artifacts sat unconsumed — runs
+            # parked in `running` forever while the aclfile durability work
+            # kept their CREDENTIALS alive). The client reconnects on the
+            # next call; setup() re-ensures the group (BUSYGROUP-tolerant)
+            # in case the restart lost an un-AOF'd group create.
+            try:
+                entries = await self.redis.xreadgroup(
+                    GROUP, CONSUMER, {INGRESS: ">"}, count=10, block=5000
+                )
+            # redis-py's ConnectionError does NOT subclass the builtin —
+            # a bare `except ConnectionError` silently misses it (measured)
+            except (RedisConnectionError, RedisTimeoutError, OSError) as e:
+                log.warning("ingress: redis unavailable (%s) — retrying in 2s", e)
+                await asyncio.sleep(2)
+                try:
+                    await self.setup()
+                except Exception:  # noqa: BLE001 — still down; next loop retries
+                    pass
+                continue
             for _stream, messages in entries or []:
                 for entry_id, fields in messages:
                     try:

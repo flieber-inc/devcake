@@ -14,7 +14,9 @@ Bake builds images; Compose runs the stack only (never builds `devcake/*`).
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,
-  `fluentbit`, `gitea` (internal fallback forge).
+  `fluentbit`, `gitea` (internal fallback forge). Long-lived services carry
+  `restart: unless-stopped` in compose — a compose fact, not an app knob
+  (there is deliberately no UI control for it).
 - Volumes: `devcake_data` (→ `app:/data` — **secrets + config + state**),
   `devcake_mirrors` (→ `app:/mirrors` rw + the Dev **provision** container
   `:ro` — ADR-0024 source mirrors; DISPOSABLE cache, excluded from backups,

@@ -242,6 +242,11 @@ Named snapshots of the runtime settings AND secret values (ADR-0013). **Entirely
 Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{name}`) and per-Dev-Type **identifying-prompt templates** (`/devtype-prompts/{dev}/{name}`). Template create/edit/delete is **Immediate** (own Save in the modal); only the **active** selection per mission type / Dev Type rides the unified config draft (`active_prompt_templates` / `active_devtype_prompts`). Missing actives fall back to the built-in default; unresolved actives surface as `prompt_template_warnings` on `/health`. **View** uses the same **Rendered** / **Source** dialog as Skills (Markdown reading aid; unsubstituted `{var}` placeholders; Source is the stored template).
 
 ### Limits (rendered inside Limits & Traffic, above the Traffic card)
+
+Four story-grouped cards since the 2026-08 reviewer round (same knobs, same
+fields, same route): **Concurrency & timeouts**, **Attempts & retries**,
+**Result recovery**, **Repository mirrors**.
+
 - **Global max Devs** integer (help text: effective ceiling = min(global, sum of per-type caps)).
 - **Dev run timeout** minutes (default 120).
 - **Review-loop warning** cadence (every N rejections; also the cadence of the `unlimited` attempt-reset warning below).
@@ -251,7 +256,7 @@ Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{n
 - **Continuation policy** select (ADR-0022, `continuation_policy`): Auto / Resume only / Fresh only / Off; the help text states that resume-only fails as before when resume is unavailable and that plan runs never continue.
 - **Max continuations per run** integer (ADR-0022, `max_continuations`, default 2, `0` = off, no upper bound): the help text names the two operator-relevant facts — the budget is the ONLY terminator (stalls escalate resume→fresh, never stop), and each relaunch resets the harness's own `--max-turns` (effective turn budget = (budget + 1) × max-turns).
 - **Mirror sync max age** seconds (ADR-0024, `repo_mirror.sync_max_age_seconds`, default 0 = every dispatch) and **Mirror LFS content** toggle (`repo_mirror.lfs`, default off). The mirror itself is mandatory — these only tune it; the help text states the fail-closed dispatch gate.
-- Service auto-restart is compose-managed (read-only note). **`max_attempts` is a config field** (`config.yaml` / `PUT /config`) but is **not** exposed on the Limits UI today — edit via API/YAML or leave the default 3.
+- **`max_attempts` is a config field** (`config.yaml` / `PUT /config`) but is **not** exposed on the Limits UI today — edit via API/YAML or leave the default 3. (The old "Service auto-restart" read-only row is gone — a knob-shaped non-knob; container restart policy is compose's, `13-deployment.md` §1.)
 
 ## 4. Runs page
 

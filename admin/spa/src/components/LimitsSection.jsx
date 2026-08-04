@@ -18,14 +18,21 @@ const ATTEMPT_RESET_DESC = {
     "Never gives up — DevCake retries failed steps indefinitely and warns about cost.",
 };
 
+// 2026-08 reviewer round: one 11-row scroll became four story-grouped
+// sections — what bounds the fleet, what burns attempts, what rescues a
+// result-less run, and how source mirrors stay fresh. Same knobs, same
+// fields, same route (#/config/limits); the informational "Service
+// auto-restart" row is gone (it was a knob-shaped non-knob — the restart
+// policy is compose's, documented in docs/13).
 export default function LimitsSection() {
   const { dr } = useSharedDraft();
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
 
   return (
-      <Section id="limits" title="Limits"
-        description="Global concurrency and safety ceilings.">
+    <>
+      <Section id="limits" title="Concurrency & timeouts"
+        description="What bounds the Dev fleet at any moment.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Global max Devs"
             desc="Effective ceiling = min(global, Σ per-type caps)."
@@ -41,6 +48,12 @@ export default function LimitsSection() {
               aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
           </SettingRow>
+        </div>
+      </Section>
+
+      <Section id="limits-attempts" title="Attempts & retries"
+        description="What burns a step's attempts, what grants fresh ones, and when DevCake warns.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Attempt reset"
             desc={ATTEMPT_RESET_DESC[cfg.attempt_reset] || `${cfg.attempt_reset} (set via API)`}
             help="A DevCake idiosyncrasy worth understanding: each pipeline step retries up to the attempt limit, and certain events grant FRESH attempts — the count restarts. Removing DEVCAKE-FAILED and a later step finishing always reset. What else resets is this policy. Strict (default): only a comment containing the literal DEVCAKE-RETRY — the deliberate human gesture. Any comment: every non-DevCake comment resets, which reads naturally ('a human intervened') but lets a chatty integration (a Linear↔GitHub sync bot, a CI notifier) keep the counter at 1 forever — the mission then never fails AND never stops, retrying at token cost indefinitely. Unlimited: DevCake never applies DEVCAKE-FAILED at all — an explicit choice for self-hosted models where retries cost watts, not dollars; a cumulative-cost warning posts to the mission feed at the review-loop cadence so the mode stays loud. DEVCAKE-SKIP always stops a mission regardless of policy.">
@@ -77,6 +90,12 @@ export default function LimitsSection() {
               aria-label="Review-loop warning every N rejections"
               onChange={(e) => setField("cfg.review_loop_warning_every", Number(e.target.value))} />
           </SettingRow>
+        </div>
+      </Section>
+
+      <Section id="limits-recovery" title="Result recovery"
+        description="What happens when a run ends without its result file.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Accept misplaced result files"
             desc={cfg.recover_misplaced_result
               ? "ON — a result file written elsewhere in the workspace still counts."
@@ -116,11 +135,17 @@ export default function LimitsSection() {
               aria-label="Max continuations per run"
               onChange={(e) => setField("cfg.max_continuations", Number(e.target.value))} />
           </SettingRow>
+        </div>
+      </Section>
+
+      <Section id="limits-mirrors" title="Repository mirrors"
+        description="How the app-maintained source mirrors stay fresh.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Mirror sync max age"
             desc={Number(cfg.repo_mirror?.sync_max_age_seconds) === 0
               ? "0 — mirrors sync before every dispatch."
               : `Mirrors synced within ${cfg.repo_mirror?.sync_max_age_seconds}s count as fresh.`}
-            help="Every configured repository is served to Devs from an app-maintained mirror (mandatory — there is no off switch). A successful sync is a fail-closed precondition: a mission whose mirrors cannot be freshened does not dispatch that cycle and retries on the next poll. 0 (default) syncs before every dispatch; a higher value reduces forge requests between rapid-fire mission steps at the cost of bounded staleness.">
+            help="Every configured repository is served to Devs from an app-maintained mirror. A successful sync is a fail-closed precondition: a mission whose mirrors cannot be freshened does not dispatch that cycle and retries on the next poll. 0 (default) syncs before every dispatch; a higher value reduces forge requests between rapid-fire mission steps at the cost of bounded staleness.">
             <Input type="number" className="w-24" min={0}
               value={cfg.repo_mirror?.sync_max_age_seconds ?? 0}
               aria-label="Mirror sync max age (seconds)"
@@ -135,12 +160,8 @@ export default function LimitsSection() {
               label="Mirror LFS content"
               onClick={() => setField("cfg.repo_mirror.lfs", !cfg.repo_mirror?.lfs)} />
           </SettingRow>
-          <SettingRow label="Service auto-restart"
-            desc="Long-lived services restart unless stopped (compose-managed)."
-            help='Services use restart: unless-stopped in docker-compose.yml. This panel cannot rewrite compose — set restart: "no" in the file to disable.'>
-            <span className="text-sm text-neutral-500 dark:text-neutral-400">managed in compose</span>
-          </SettingRow>
         </div>
       </Section>
+    </>
   );
 }

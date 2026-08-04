@@ -50,6 +50,19 @@ await withPage(async (page) => {
     await page.locator("#limits").count() === 1 &&
     await page.locator("#traffic").count() === 1 &&
     await page.locator("#dev-types").count() === 0);
+  // 2026-08 reviewer round: the one 11-row scroll became four story-grouped
+  // cards; the knob-shaped non-knob ("Service auto-restart" / "managed in
+  // compose") is gone; the mirror help no longer scolds about the off switch
+  check("Limits view renders the four story-grouped cards",
+    await page.locator("#limits").count() === 1 &&
+    await page.locator("#limits-attempts").count() === 1 &&
+    await page.locator("#limits-recovery").count() === 1 &&
+    await page.locator("#limits-mirrors").count() === 1);
+  check("the Service auto-restart informational row is gone",
+    (await page.locator("text=managed in compose").count()) === 0 &&
+    (await page.locator("text=Service auto-restart").count()) === 0);
+  check("mirror help no longer says 'no off switch'",
+    (await page.locator("text=there is no off switch").count()) === 0);
 
   // 4b: ADR-0026 spend-discipline rows render with explainer help and the
   // shipped defaults (strict reset, brake off) — the nuance lives in `help`,

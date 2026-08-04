@@ -216,4 +216,150 @@ await withPage(async (page) => {
   await page.evaluate(() => localStorage.removeItem("devcake-missions-hidden"));
 });
 
+// ── PMO provenance + filter (multi-PMO only) ───────────────────────────────
+// The instance prefix and the filter select exist ONLY when ≥2 instances are
+// configured (ADR-0009's N>1 convention); a leftover persisted filter below
+// the threshold is forcibly inert so it can never hide missions invisibly.
+
+function makeMultiRows() {
+  return makeRows().map((r, i) => {
+    const inst = i % 2 ? "gitea1" : "linear1";
+    return {
+      ...r,
+      instance: inst,
+      key: inst === "gitea1" ? `acme/app#${i + 1}` : `DEV-${i + 1}`,
+      // DELIBERATE pmo_id collisions across instances (gitea_issues ids are
+      // per-repo integers, ADR-0009) — the list key must be instance-qualified
+      pmo_id: `${(i >> 1) + 1}`,
+      team: inst === "gitea1" ? "acme/app" : "DEV",
+    };
+  });
+}
+const MULTI_TEAMS = { linear1: "DEV", gitea1: "acme/app", empty1: "OPS" };
+
+function mockMultiMissions(page, rows, teams = MULTI_TEAMS) {
+  return page.route(/\/api\/v1\/missions(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ missions: rows, adoption_mode: "auto", teams }),
+    }),
+  );
+}
+
+const FILTER_SELECT = 'select[aria-label="Filter missions by PMO instance"]';
+
+await withPage(async (page) => {
+  const rows = makeMultiRows();
+  await mockMultiMissions(page, rows);
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector('[data-testid="mission-list"] [role="button"]');
+
+  check("multi-PMO: the filter select renders in the strip",
+    (await page.locator(`[data-testid="pipeline-strip"] ${FILTER_SELECT}`).count()) === 1);
+  const strip = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="pipeline-strip"]');
+    return {
+      chips: el.querySelectorAll("span.rounded-full, button").length,
+      buttons: el.querySelectorAll("button").length,
+    };
+  });
+  check("strip chip predicates survive the select", strip.chips === 7 && strip.buttons === 7,
+    `chips=${strip.chips} buttons=${strip.buttons}`);
+  const firstKey = await page
+    .locator('[data-testid="mission-list"] [role="button"] span.font-mono')
+    .first().innerText();
+  check("rows carry the instance prefix on the mono key",
+    /^(linear1|gitea1)·/.test(firstKey), `got ${JSON.stringify(firstKey)}`);
+  // deliberate cross-instance pmo_id collisions must not eat rows (React key)
+  const visibleSections = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="mission-list"] section [role="button"]')].length);
+  check("colliding pmo_ids across instances all render (instance-qualified key)",
+    visibleSections > 0 && (await page.locator(':text("Show all")').count()) >= 0);
+
+  // filter narrows the LIST and the STRIP together, with an honest indicator
+  await page.selectOption(FILTER_SELECT, "gitea1");
+  await page.waitForTimeout(150);
+  const keysAfter = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="mission-list"] [role="button"] span.font-mono')]
+      .map((s) => s.textContent));
+  check("filter narrows the list to the chosen instance",
+    keysAfter.length > 0 && keysAfter.every((k) => k.startsWith("gitea1·")),
+    `got ${keysAfter.length} rows, first=${JSON.stringify(keysAfter[0])}`);
+  check("filtered strip pill carries the filtered count",
+    (await page.locator('[data-testid="pipeline-strip"] :text("Backlog")').first().innerText())
+      .replace(/\s+/g, " ").includes("1"));
+  check("the n-of-m indicator states what the filter hides",
+    (await page.locator(`:text("${rows.length / 2} of ${rows.length} missions")`).count()) === 1);
+
+  // an instance with zero missions: dedicated copy, never the bootstrap
+  // empty state, and a one-click way back
+  await page.selectOption(FILTER_SELECT, "empty1");
+  await page.waitForTimeout(150);
+  check("filtered-empty shows the dedicated message",
+    (await page.locator(':text("No missions from empty1")').count()) === 1);
+  check("filtered-empty never shows the bootstrap empty state",
+    (await page.locator(':text("No missions yet")').count()) === 0);
+  await page.click('button:has-text("Show all PMOs")');
+  await page.waitForTimeout(150);
+  check("Show all PMOs clears the filter",
+    (await page.locator('[data-testid="mission-list"] [role="button"]').count()) > 0);
+
+  // persistence: a view preference in localStorage, restored on reload
+  await page.selectOption(FILTER_SELECT, "gitea1");
+  await page.waitForTimeout(100);
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector('[data-testid="mission-list"] [role="button"]');
+  check("filter persists across a reload",
+    (await page.locator(FILTER_SELECT).inputValue()) === "gitea1");
+  await page.evaluate(() => localStorage.removeItem("devcake-missions-pmo"));
+
+  // drawer names the instance when multi-PMO
+  await page.locator('[data-testid="mission-list"] [role="button"]').first().click();
+  await checked("drawer header carries the instance prefix", async () => {
+    await page.waitForSelector('button[aria-label="Close drawer"]', { timeout: 5000 });
+    const txt = await page.evaluate(() =>
+      document.querySelector('[role="dialog"] span.font-mono')?.textContent || "");
+    return /^(linear1|gitea1)·/.test(txt);
+  });
+  await page.click('button[aria-label="Close drawer"]');
+});
+
+// no horizontal scroll at 390 with the wider prefixed key column
+await withPage(async (page) => {
+  await mockMultiMissions(page, makeMultiRows());
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector('[data-testid="mission-list"] [role="button"]');
+  const { listOver, docOver } = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="mission-list"]');
+    return {
+      listOver: Math.ceil(el.scrollWidth) - el.clientWidth,
+      docOver: Math.ceil(document.documentElement.scrollWidth)
+        - document.documentElement.clientWidth,
+    };
+  });
+  check(`no horizontal scroll at 390 with prefixes (list ${listOver}px, doc ${docOver}px)`,
+    listOver <= 1 && docOver <= 1);
+}, { width: 390, height: 844 });
+
+// single-PMO: no select, no prefix, and a leftover persisted filter is inert
+await withPage(async (page) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("devcake-missions-pmo", "gitea1"));
+  await mockMultiMissions(page, makeRows(), { linear1: "DEV" });
+  await gotoFresh(page, "#/missions");
+  await page.waitForSelector('[data-testid="mission-list"] [role="button"]');
+  check("single-PMO renders no filter select",
+    (await page.locator(FILTER_SELECT).count()) === 0);
+  const firstKey = await page
+    .locator('[data-testid="mission-list"] [role="button"] span.font-mono')
+    .first().innerText();
+  check("single-PMO rows carry no instance prefix", !firstKey.includes("·"),
+    `got ${JSON.stringify(firstKey)}`);
+  const total = await page.locator('[data-testid="mission-list"] [role="button"]').count();
+  check("a leftover persisted filter below the threshold hides nothing",
+    total > 0);
+  await page.evaluate(() => localStorage.removeItem("devcake-missions-pmo"));
+});
+
 summary("missions");

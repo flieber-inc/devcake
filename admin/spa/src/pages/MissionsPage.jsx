@@ -5,6 +5,7 @@ import Button from "../components/Button.jsx";
 import MissionRow from "../components/MissionRow.jsx";
 import MissionDrawer from "../components/MissionDrawer.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
+import { Select } from "../components/Field.jsx";
 import { get, send } from "../api.js";
 import usePoll from "../lib/usePoll.js";
 import { bucketize, COLUMNS } from "../lib/board.js";
@@ -41,6 +42,22 @@ function readHiddenStages() {
       : [];
   } catch {
     return [];
+  }
+}
+
+// Per-operator PMO filter (view preference, never config — the
+// devcake-missions-hidden precedent). The stored value is validated against
+// the CURRENT teams map at render time, so a leftover filter for a deleted/
+// renamed instance — or any filter on a single-PMO deployment — is forcibly
+// inert and can never hide missions invisibly (docs/11 §2b rule).
+const PMO_FILTER_KEY = "devcake-missions-pmo";
+
+function readPmoFilter() {
+  try {
+    const v = localStorage.getItem(PMO_FILTER_KEY) || "";
+    return typeof v === "string" ? v : "";
+  } catch {
+    return "";
   }
 }
 
@@ -103,6 +120,13 @@ export default function MissionsPage() {
   const [openMission, setOpenMission] = useState(null);
   const [showAllDone, setShowAllDone] = useState(false);
   const [hiddenStages, setHiddenStages] = useState(readHiddenStages);
+  const [pmoFilter, setPmoFilterState] = useState(readPmoFilter);
+  const setPmoFilter = (name) => {
+    setPmoFilterState(name);
+    try {
+      localStorage.setItem(PMO_FILTER_KEY, name);
+    } catch { /* storage unavailable — the filter still works this session */ }
+  };
   const toggleStage = (id) =>
     setHiddenStages((prev) => {
       const next = prev.includes(id)
@@ -164,9 +188,26 @@ export default function MissionsPage() {
     });
   }, [data.missions, pending]);
 
+  // Provenance surfaces only when there is more than one PMO to tell apart
+  // (ADR-0009's N>1 convention; a fleet-wide-identical badge has no scan
+  // value). `teams` lists exactly the CONFIGURED instances and rides the
+  // same fetch as the rows, so gate and options can't be a poll out of sync.
+  const teamNames = Object.keys(data.teams || {});
+  const multiPmo = teamNames.length >= 2;
+  const activeFilter = multiPmo && teamNames.includes(pmoFilter) ? pmoFilter : "";
+
+  // Filter UPSTREAM of bucketize so the strip counts follow: the pills are
+  // jump-buttons to sections — a pill claiming 5 over a section rendering 2
+  // reads as a bug. The visible "n of m" indicator keeps the fleet size
+  // honest while the filter narrows.
+  const filteredRows = useMemo(
+    () => (activeFilter ? rows.filter((r) => r.instance === activeFilter) : rows),
+    [rows, activeFilter]
+  );
+
   const buckets = useMemo(
-    () => bucketize(rows, data.adoption_mode),
-    [rows, data.adoption_mode]
+    () => bucketize(filteredRows, data.adoption_mode),
+    [filteredRows, data.adoption_mode]
   );
 
   const doAction = async (pmo_id, action) => {
@@ -352,6 +393,47 @@ export default function MissionsPage() {
               </button>
             );
           })}
+          {multiPmo && (
+            <span className="ml-auto flex shrink-0 items-center gap-2">
+              {activeFilter && (
+                <span className="text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+                  {filteredRows.length} of {rows.length} missions
+                </span>
+              )}
+              <span className="w-36 shrink-0">
+                <Select
+                  aria-label="Filter missions by PMO instance"
+                  value={activeFilter}
+                  onChange={(e) => setPmoFilter(e.target.value)}
+                >
+                  <option value="">all PMOs</option>
+                  {teamNames.sort().map((name) => (
+                    <option key={name} value={name} title={`${name} — team ${data.teams[name]}`}>
+                      {name}
+                    </option>
+                  ))}
+                </Select>
+              </span>
+            </span>
+          )}
+        </div>
+      )}
+      {activeFilter && filteredRows.length === 0 && rows.length > 0 && (
+        // dedicated filtered-empty copy — never the bootstrap empty state,
+        // which would lie about an empty fleet
+        <div className="rounded-card border border-neutral-200 bg-surface-raised px-4 py-6 text-center text-sm text-neutral-500 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-400">
+          <p>
+            No missions from {activeFilter} — {rows.length}{" "}
+            {rows.length === 1 ? "mission" : "missions"} from other PMOs{" "}
+            {rows.length === 1 ? "is" : "are"} hidden by this filter.
+          </p>
+          <button
+            type="button"
+            onClick={() => setPmoFilter("")}
+            className="mt-2 rounded text-xs text-accent-700 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-accent-300"
+          >
+            Show all PMOs
+          </button>
         </div>
       )}
       <div data-testid="mission-list" className="space-y-4 pb-4">
@@ -415,8 +497,12 @@ export default function MissionsPage() {
               <div>
                 {shown.map((row) => (
                   <MissionRow
-                    key={row.pmo_id}
+                    // instance-qualified: gitea_issues pmo_ids are per-repo
+                    // integers (ADR-0009), so bare pmo_id collides across a
+                    // multi-gitea fleet
+                    key={`${row.instance}:${row.pmo_id}`}
                     row={row}
+                    multiPmo={multiPmo}
                     syncing={!!pending[row.pmo_id]?.syncing}
                     sectionReason={shared}
                     onOpen={() => setOpenMission(row)}
@@ -431,6 +517,7 @@ export default function MissionsPage() {
       {openMission && (
         <MissionDrawer
           mission={openMission}
+          multiPmo={multiPmo}
           syncing={!!pending[openMission.pmo_id]?.syncing}
           onClose={() => setOpenMission(null)}
           onAction={(action) => requestAction(openMission.pmo_id, action)}

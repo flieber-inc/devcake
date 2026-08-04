@@ -88,8 +88,11 @@ app/devcake/
     dagu/          #   ExecutorPort impl
     files/         #   StatePort impl (+ runlog.py, owner_store.py) (10)
     redis/         #   MessagingPort impl — ingress + replies (09)
-  api/             # FastAPI (11, ADR-0015): main.py = composition root +
-                   #   ≤4-statement route forwards; behavior in service
+  api/             # FastAPI (11, ADR-0015/0028): services.py = the
+                   #   composition root (Services graph + build_services(),
+                   #   called by the lifespan — importing main.py builds
+                   #   NOTHING); main.py = ≤4-statement route forwards via
+                   #   svc(); behavior in service
                    #   modules — poll.py (PollRuntime), health.py,
                    #   mission_actions.py, clear.py, config_service.py,
                    #   profiles_service.py, settings_transfer.py,
@@ -108,7 +111,7 @@ app/devcake/
 
 The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.
 
-**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files, Redis Streams; `MissionManager` satisfies `RunFinalizer`. Composition root (`api/main.py`) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, mapper, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
+**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files, Redis Streams; `MissionManager` satisfies `RunFinalizer`. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, mapper, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
 
 **Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). Domain modules depend on **port Protocols**, not adapter packages.
 

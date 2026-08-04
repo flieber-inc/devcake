@@ -466,6 +466,31 @@ class AppConfig(BaseModel):
     poll_interval_seconds: int = Field(30, ge=1, le=3600)
     dev_timeout_minutes: int = Field(120, ge=1, le=24 * 60)
     max_attempts: int = Field(3, ge=1, le=50)
+    # ADR-0026 — what grants a step FRESH attempts (and whether give-up exists
+    # at all). The pre-0026 rule — ANY non-DevCake comment resets the count —
+    # let any chatty integration (a sync bot, a CI notifier) keep the counter
+    # at 1 forever, defeating max_attempts and unbounding token spend.
+    #   label-ops (default): only removing DEVCAKE-FAILED or a later step
+    #     finishing resets the count — plus a comment containing the literal
+    #     DEVCAKE-RETRY, the deliberate human gesture integrations never emit
+    #     (pre-give-up there is no label to remove, so strict mode needs one).
+    #   any-comment: the pre-0026 behavior, for boards with no bot traffic.
+    #   unlimited: the app NEVER applies DEVCAKE-FAILED (breakers still act;
+    #     DEVCAKE-SKIP still stops everything). A loop-style warning with
+    #     cumulative cost posts every review_loop_warning_every failures so
+    #     the mode is loud. For operators whose token cost is measured in
+    #     watts, by explicit choice.
+    attempt_reset: Literal["label-ops", "any-comment",
+                           "unlimited"] = "label-ops"
+    # ADR-0026 — widen the backend brake (ADR-0018) to exit-11 DEV_BAD_OUTPUT
+    # evidence. Default OFF (founder decision 2026-08-04: current design
+    # stands unless the operator opts in). ON makes a shared-backend garbage
+    # cascade (the 2026-07-24 shape: every container talks but none writes
+    # result.json) correlate across missions — excusing attempts and
+    # throttling to one probe — instead of burning the board to
+    # DEVCAKE-FAILED. The continuation loop (ADR-0022) already absorbs most
+    # solitary narrate-and-stop exit-11s; this covers what survives it.
+    brake_on_bad_output: bool = False
     # ADR-0018 — Devs are told to write /workspace/out/result.json. With this on,
     # a result file the Dev wrote elsewhere in its workspace is still accepted,
     # but only when it was created during that run and passes the same

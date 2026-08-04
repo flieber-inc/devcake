@@ -25,7 +25,7 @@ await withPage(async (page) => {
   check("#/config/pmo redirects to the PMO page", page.url().endsWith("#/pmo"));
   await gotoFresh(page, "#/config/traffic");
   await page.waitForSelector("#traffic");
-  check("#/config/traffic redirects to the merged Limits & traffic view",
+  check("#/config/traffic redirects to the merged Limits & Traffic view",
     page.url().endsWith("#/config/limits"));
   await gotoFresh(page, "#/config/assignments");
   await page.waitForSelector("#mission-types");
@@ -46,10 +46,28 @@ await withPage(async (page) => {
     await page.locator("#skills").count() === 0);
   await gotoFresh(page, "#/config/limits");
   await page.waitForSelector("#limits");
-  check("Limits & traffic view renders both merged sections",
+  check("Limits & Traffic view renders both merged sections",
     await page.locator("#limits").count() === 1 &&
     await page.locator("#traffic").count() === 1 &&
     await page.locator("#dev-types").count() === 0);
+
+  // 4b: ADR-0026 spend-discipline rows render with explainer help and the
+  // shipped defaults (strict reset, brake off) — the nuance lives in `help`,
+  // so the rows must actually carry it, not just exist
+  const attemptSelect = page.locator('select[aria-label="Attempt reset policy"]');
+  check("Attempt reset row renders with a legal policy selected",
+    (await attemptSelect.count()) === 1 &&
+    ["label-ops", "any-comment", "unlimited"]
+      .includes(await attemptSelect.inputValue()));
+  check("Attempt reset offers all three ADR-0026 policies",
+    (await attemptSelect.locator('option[value="label-ops"]').count()) === 1 &&
+    (await attemptSelect.locator('option[value="any-comment"]').count()) === 1 &&
+    (await attemptSelect.locator('option[value="unlimited"]').count()) === 1);
+  const brakeToggle = page.locator(
+    'button[role="switch"][aria-label="Brake on missing results"]');
+  check("Brake-on-missing-results switch renders with a boolean state",
+    (await brakeToggle.count()) === 1 &&
+    ["true", "false"].includes(await brakeToggle.getAttribute("aria-checked")));
 
   // 5: sidebar sub-nav highlight is route-driven
   const activeLink = page.locator('aside a[href="#/config/limits"]');
@@ -81,7 +99,7 @@ await withPage(async (page) => {
   const gmax = page.locator(GLOBAL_MAX);
   const gmaxBefore = await gmax.inputValue();
   await gmax.fill(String(Number(gmaxBefore) + 1));
-  check("edit in Limits & traffic joins the same draft (2)", (await dirtyCount()) === "2");
+  check("edit in Limits & Traffic joins the same draft (2)", (await dirtyCount()) === "2");
 
   // 7: Save opens the review dialog listing both edits — then Cancel
   await page.click('button:has-text("Save changes…")');
@@ -135,7 +153,7 @@ await withPage(async (page) => {
 });
 
 // 9b: ADR-0022 continuation + ADR-0024 mirror controls — all live in
-// Limits & traffic and label their save-review rows. Ends in Cancel +
+// Limits & Traffic and label their save-review rows. Ends in Cancel +
 // Discard (iron rule).
 await withPage(async (page) => {
   await gotoFresh(page, "#/config/limits");

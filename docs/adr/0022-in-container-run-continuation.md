@@ -44,7 +44,7 @@ correlation can excuse a backend fault; a nudge cannot).
 | **Workspace continuation** | new | kept | kept |
 | **Attempt restart** (pre-existing backstop, unchanged) | new | new | new |
 
-`continuation_policy` (global, Limits & traffic): `auto` (default) —
+`continuation_policy` (global, Limits & Traffic): `auto` (default) —
 resume when the harness has a verified resume, escalate PERMANENTLY to
 fresh after a zero-progress continuation; `resume-only` — never fresh;
 when resume is unavailable this **stops** (fails as today: the operator
@@ -162,6 +162,6 @@ so a stray written by continuation N−1 remains adoptable at landing N.
 - Evidence: `app/tests/fixtures/harness_streams/*_resume_nudge*` (the
   Phase-0 pairs), `grok_loop_*` (the trigger shape),
   `app/tests/test_entrypoint_continuation.py`.
-- Operator: `11-admin-panel.md` (Limits & traffic), `07-dev-runtime.md`
+- Operator: `11-admin-panel.md` (Limits & Traffic), `07-dev-runtime.md`
   §§3-5, `08-harness-templates.md` §§1,5,6, `15-errors-and-retries.md`
   §§1-2.

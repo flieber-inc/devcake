@@ -336,11 +336,12 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     else:
         activity = await mgr.pmo.get_activity(mission.ref)
         seq = _derive_seq(activity)
-    # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3),
-    # a later step finishes, or a human comments on the mission
+    # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3), a
+    # later step finishes, or — per `attempt_reset` (ADR-0026) — a human
+    # comment (any, or only one carrying DEVCAKE-RETRY). `unlimited` never
+    # gives up; it warns loudly instead.
     attempt = attempt_number(mgr, mission.pmo_id, mtype.value, activity)
-    if attempt > mgr.config.max_attempts:
-        await _give_up(mgr, live, mtype, attempt - 1)
+    if not await _attempt_gate(mgr, live, mtype, attempt):
         return None
 
     assignment = assignment_for(mgr.config, mgr.instance, mtype.value)
@@ -932,14 +933,24 @@ def counts_toward_attempts(r) -> bool:
     return not any((r.error or "").startswith(c) for c in UNCOUNTED_CLASSES)
 
 
+# ADR-0026 — the explicit human retry gesture recognized under `label-ops`.
+# A literal token, not a label: pre-give-up there is no DEVCAKE-FAILED to
+# remove, so strict mode needs a comment-shaped escape hatch that chatty
+# integrations (sync bots, CI notifiers) never emit by accident.
+RETRY_TOKEN = "DEVCAKE-RETRY"
+
+
 def attempt_number(mgr, pmo_id: str, mission_type: str,
                     activity: Activity | None = None) -> int:
     """Count consecutive counted failures, independent of transcript seq.
 
     The count resets at the newest of: the last give-up event, ANY finished
     run for this mission (a later step finishing implies earlier failures
-    were resolved), or the latest human feed comment (a human touching the
-    mission is an intervention — the step deserves fresh attempts)."""
+    were resolved), and — policy-dependent (ADR-0026, `attempt_reset`) — a
+    human feed comment. Under `any-comment` every non-DevCake comment is an
+    intervention (the pre-0026 rule; a chatty integration defeats
+    max_attempts). Under `label-ops` and `unlimited` only a comment carrying
+    the literal `DEVCAKE-RETRY` resets — the deliberate gesture."""
     all_runs = [r for r in mgr.runs.store.all()
                 if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r)]
     history = [r for r in all_runs if r.mission_type == mission_type]
@@ -947,9 +958,12 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
                            *(_aware(r.created_at) for r in all_runs
                              if r.state == "finished")] if t]
     if activity is not None:
+        policy = mgr.config.attempt_reset
         anchors += [_aware(e.ts) for e in activity.entries
                     if e.kind == "comment"
-                    and not _is_devcake_comment(e.body)]
+                    and not _is_devcake_comment(e.body)
+                    and (policy == "any-comment"
+                         or RETRY_TOKEN in (e.body or ""))]
     since = max(anchors, default=None)
     return 1 + sum(
         1 for r in history
@@ -957,6 +971,75 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
         and counts_toward_attempts(r)
         and (since is None or _aware(r.created_at) > since)
     )
+
+
+# Process-local dedup for `unlimited` warnings: the SAME attempt number recurs
+# across poll cycles whenever a later gate (mirror freshness, blockers) defers
+# the dispatch, and a duplicate warning per cycle would be feed spam. A restart
+# may repeat at most one warning — harmless in the loud direction.
+_UNLIMITED_WARNED: set[tuple[str, str, int]] = set()
+
+
+def _mission_cost(mgr, pmo_id: str) -> float:
+    """Cumulative effective cost of a mission's runs (ADR-0021 semantics —
+    native harness cost when reported, else the finalize-stamped estimate).
+    Mirrors the REVIEW loop warning's arithmetic (review._reject_loop_warn)."""
+    from .. import costing
+    ci = mgr.config.cost_inputs
+    total = 0.0
+    for r in mgr.runs.store.all():
+        if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
+            continue
+        tr = r.token_report or {}
+        eff = costing.effective_cost(
+            tr.get("cost_usd"), tr.get("cost_usd_estimated"), ci)
+        if eff is not None:
+            total += eff
+    return total
+
+
+async def _attempt_gate(mgr, mission: Mission, mtype: MissionType,
+                        attempt: int) -> bool:
+    """True when dispatch may proceed past the attempt budget (ADR-0026).
+
+    `unlimited` always proceeds — warning loudly at cadence instead of ever
+    applying DEVCAKE-FAILED; every other policy gives up past max_attempts."""
+    if attempt <= mgr.config.max_attempts:
+        return True
+    if mgr.config.attempt_reset == "unlimited":
+        await _unlimited_warn(mgr, mission, mtype, attempt)
+        return True
+    await _give_up(mgr, mission, mtype, attempt - 1)
+    return False
+
+
+async def _unlimited_warn(mgr, mission: Mission, mtype: MissionType,
+                          attempt: int) -> None:
+    """ADR-0026 `unlimited` guardrail: the mode deliberately builds the
+    livelock `excusals_left`'s docstring warns about (no give-up, ever-growing
+    run store), so it must be LOUD — a feed warning with cumulative cost every
+    `review_loop_warning_every` consecutive failures."""
+    failures = attempt - 1
+    every = mgr.config.review_loop_warning_every
+    if every < 1 or failures % every != 0:
+        return
+    key = (mission.pmo_id, mtype.value, failures)
+    if key in _UNLIMITED_WARNED:
+        return
+    _UNLIMITED_WARNED.add(key)
+    cost = _mission_cost(mgr, mission.pmo_id)
+    await mgr._feed(
+        mission.pmo_id, mission.pmo_kind,
+        f"⚠️ **Unlimited-attempts mode:** this mission's {mtype.value} step "
+        f"has failed {failures} consecutive times, and `attempt_reset: "
+        f"unlimited` means DevCake will keep retrying indefinitely. "
+        f"Cumulative recorded cost so far: ${cost:.2f}. Add `DEVCAKE-SKIP` "
+        f"to stop this mission, or change Limits & Traffic → Attempt reset "
+        f"to restore give-up.")
+    mgr._audit(mission.pmo_id, "unlimited_loop_warning",
+               f"{mtype.value} x{failures}")
+    log.warning("unlimited-attempts warning for %s (%s): %d failures",
+                mission.key, mtype.value, failures)
 
 
 async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> None:

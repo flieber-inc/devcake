@@ -263,7 +263,10 @@ def dev_failure_error(mgr, run: Run, payload: dict) -> str:
         # excused. That is the skew-safe direction.
         if error_class == "DEV_HARNESS_FAULT":
             runs = mgr.runs.store.all()
-            correlated = backend_health.backend_correlated(runs, run.dev_type)
+            correlated = backend_health.backend_correlated(
+                runs, run.dev_type,
+                classes=backend_health.fault_classes(
+                    mgr.config.brake_on_bad_output))
             # Count when the failure is NOT correlated, OR when this step has
             # spent its excusals. The operator must be `or`: with `and`,
             # exhausting the budget would produce MORE excusing (inverting the
@@ -282,6 +285,25 @@ def dev_failure_error(mgr, run: Run, payload: dict) -> str:
             detail or f"harness or entrypoint failure (exit {exit_code})")
     if exit_code == 11:
         run.error_class = "DEV_BAD_OUTPUT"
+        # ADR-0026 (opt-in): with the brake widened to exit 11, a correlated
+        # fleet-wide bad-output cascade excuses attempts exactly like exit 15.
+        # Unlike 15 there is NO container-class precondition: exit 11 has no
+        # in-band structured class — the exit code IS the classification
+        # (app-side), so a reconcile-synthesized orphan carries the same
+        # evidence value as a live finalize. Excusals bound the loop per step.
+        if mgr.config.brake_on_bad_output:
+            runs = mgr.runs.store.all()
+            correlated = backend_health.backend_correlated(
+                runs, run.dev_type,
+                classes=backend_health.fault_classes(True))
+            run.attempt_counted = (correlated is None
+                                   or not backend_health.excusals_left(
+                                       runs, run,
+                                       error_class="DEV_BAD_OUTPUT"))
+            if correlated and not run.attempt_counted:
+                return ("DEV_BAD_OUTPUT (correlated fleet failure; does not "
+                        "count toward attempts): "
+                        + (detail or "result.json missing or invalid"))
         return "DEV_BAD_OUTPUT: " + (detail or "result.json missing or invalid")
     run.error_class = run.error_class or "DEV_CRASH"
     return f"dev failure artifact (exit {exit_code})"

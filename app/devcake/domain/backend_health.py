@@ -20,6 +20,21 @@ DEGRADED_CONCURRENCY = 1    # the probe that makes the condition self-clearing
 MAX_EXCUSALS_PER_STEP = 3   # escape hatch: bounds the livelock (see below)
 
 FAULT_CLASS = "DEV_HARNESS_FAULT"
+BAD_OUTPUT_CLASS = "DEV_BAD_OUTPUT"
+DEFAULT_CLASSES = frozenset({FAULT_CLASS})
+
+
+def fault_classes(brake_on_bad_output: bool) -> frozenset[str]:
+    """Evidence classes the brake correlates on (ADR-0026).
+
+    The set is shared by every arm — window faults, correlation, degradation —
+    so a mixed cascade (some containers exit 15, others 11) reads as ONE
+    backend event when the operator opts in. Off keeps the ADR-0018 design:
+    exit 11 is invisible to the brake.
+    """
+    if brake_on_bad_output:
+        return frozenset({FAULT_CLASS, BAD_OUTPUT_CLASS})
+    return DEFAULT_CLASSES
 
 # Successes are INCLUDED on purpose: they are what evicts fault evidence from the
 # window, which is the entire clearing mechanism ("two greens clear it"). The
@@ -45,11 +60,12 @@ def _window(runs, dev_type: str, limit: int = WINDOW, *,
     return rows[:limit]
 
 
-def _faults(window: list) -> list:
-    return [r for r in window if getattr(r, "error_class", "") == FAULT_CLASS]
+def _faults(window: list, classes: frozenset[str] = DEFAULT_CLASSES) -> list:
+    return [r for r in window if getattr(r, "error_class", "") in classes]
 
 
-def backend_correlated(runs, dev_type: str):
+def backend_correlated(runs, dev_type: str,
+                       classes: frozenset[str] = DEFAULT_CLASSES):
     """Reason string when the recent evidence implicates the BACKEND rather than
     any one mission, else None. Only this predicate may excuse an attempt.
 
@@ -61,17 +77,18 @@ def backend_correlated(runs, dev_type: str):
     strength of a run that belongs to no mission at all.
     """
     window = _window(runs, dev_type)
-    faults = _faults(window)
+    faults = _faults(window, classes)
     missions = {r.mission_pmo_id for r in faults if getattr(r, "mission_pmo_id", "")}
     if len(faults) >= 2 and len(missions) >= MIN_DISTINCT_MISSIONS:
         newest = faults[0]
         return (f"{len(faults)} of the last {len(window)} {dev_type} runs failed with "
-                f"{FAULT_CLASS} across {len(missions)} missions "
+                f"{'/'.join(sorted(classes))} across {len(missions)} missions "
                 f"(latest: {newest.error or 'no detail'})")
     return None
 
 
-def backend_degraded(runs, dev_type: str):
+def backend_degraded(runs, dev_type: str,
+                     classes: frozenset[str] = DEFAULT_CLASSES):
     """Reason string when dispatch for this dev type should be throttled to a
     single probe run, else None. Superset of `backend_correlated`.
 
@@ -88,7 +105,7 @@ def backend_degraded(runs, dev_type: str):
     one PMO-less run (a Relations Mapper sharing the dev type) capped the list
     at 2 forever, so the streak could never be reached.
     """
-    correlated = backend_correlated(runs, dev_type)
+    correlated = backend_correlated(runs, dev_type, classes)
     if correlated:
         return correlated
     # mission-bearing only: three MAPPER faults (mission_pmo_id == "") must not
@@ -98,12 +115,13 @@ def backend_degraded(runs, dev_type: str):
     # ONE mission: multi-mission evidence belongs to `backend_correlated` above,
     # which also excuses — this arm stays strictly the solitary fallback.
     missions = {r.mission_pmo_id for r in solo}
-    if (len(solo) == SOLO_THROTTLE_STREAK and len(_faults(solo)) == len(solo)
+    if (len(solo) == SOLO_THROTTLE_STREAK
+            and len(_faults(solo, classes)) == len(solo)
             and len(missions) == 1):
         return (f"{len(solo)} consecutive mission-bearing {dev_type} runs failed "
-                f"with {FAULT_CLASS} (latest: {solo[0].error or 'no detail'}) — "
-                f"throttled to one probe; these failures still count toward "
-                f"attempts")
+                f"with {'/'.join(sorted(classes))} (latest: "
+                f"{solo[0].error or 'no detail'}) — throttled to one probe; "
+                f"these failures still count toward attempts")
     return None
 
 
@@ -135,7 +153,8 @@ def excusals_left(runs, run, limit: int = MAX_EXCUSALS_PER_STEP,
     return used < limit
 
 
-def refresh_degraded(runs, degraded: dict, known: set[str]) -> list:
+def refresh_degraded(runs, degraded: dict, known: set[str],
+                     classes: frozenset[str] = DEFAULT_CLASSES) -> list:
     """Recompute the shared degraded map IN PLACE and return the dev types that
     newly entered degradation (for the transition span).
 
@@ -156,7 +175,7 @@ def refresh_degraded(runs, degraded: dict, known: set[str]) -> list:
     for dev_type in {getattr(r, "dev_type", None) for r in runs}:
         if not dev_type or dev_type not in known:
             continue
-        reason = backend_degraded(runs, dev_type)
+        reason = backend_degraded(runs, dev_type, classes)
         if reason:
             fresh[dev_type] = reason
     entered = [k for k in fresh if k not in degraded]

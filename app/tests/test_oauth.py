@@ -101,3 +101,40 @@ def test_result_cleans_run_workspace(tmp_path, monkeypatch):
     run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
     run_coro(mgr._on_result_inner(run_id, {"content": "{}"}))
     assert cleaned == [run_id]
+
+
+def test_result_stamps_ended_at(tmp_path, monkeypatch):
+    """2026-08 reviewer catch: the OAuth success path was the ONE terminal
+    transition in the codebase that omitted ended_at, so every successful
+    login's runtime grew monotonically forever in the Runs tab
+    ((ended_at or now) - started_at, repriced on every 10 s poll) and
+    permanently topped the duration sort."""
+    mgr = make_mgr(tmp_path, monkeypatch)
+    run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
+    run_coro(mgr._on_result_inner(run_id, {"content": "{}"}))
+    saved = mgr.runs.store.get(run_id)
+    assert saved.state == "finished"
+    assert saved.ended_at is not None
+
+
+def test_late_result_does_not_resurrect_a_terminal_run(tmp_path, monkeypatch):
+    """A credential landing AFTER the watchdog's 660 s kill (slow human on
+    the device-code page) must still be stored — the login DID succeed — but
+    the run record's history is not rewritten: pre-guard, the late
+    oauth.result flipped a timed_out run back to "finished" while racing the
+    kill's own save."""
+    mgr = make_mgr(tmp_path, monkeypatch)
+    run_id = run_coro(mgr._start_inner("main-dev"))["run_id"]
+    killed = mgr.runs.store.get(run_id)
+    killed.state = "timed_out"
+    from devcake.domain.run import utcnow
+    killed.ended_at = utcnow()
+    mgr.runs.store.save(killed)
+
+    run_coro(mgr._on_result_inner(run_id, {"content": '{"late": 1}'}))
+    p = tmp_path / "secrets" / "main-dev" / "grok-auth.json"
+    assert p.read_text() == '{"late": 1}'          # credential still lands
+    assert mgr.sessions[run_id]["state"] == "completed"
+    saved = mgr.runs.store.get(run_id)
+    assert saved.state == "timed_out"              # history not rewritten
+    assert saved.ended_at == killed.ended_at

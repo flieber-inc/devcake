@@ -34,3 +34,4 @@
 | [0024](0024-mandatory-repo-source-mirror.md) | Mandatory repo source mirror | Accepted; **§5's ambient mirror-read superseded by ADR-0025** (banner in-body) |
 | [0025](0025-provisioned-workspaces.md) | Provisioned workspaces | Accepted — supersedes ADR-0024 §5's risk posture |
 | [0026](0026-attempt-reset-policy-and-bad-output-brake.md) | Attempt-reset policy + opt-in bad-output brake | Accepted (2026-08-04) |
+| [0027](0027-failure-taxonomy-as-data.md) | Failure taxonomy as data | Accepted (2026-08-04) |

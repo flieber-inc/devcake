@@ -64,6 +64,7 @@ app/devcake/
     repo_routing.py    # mission → work-repo resolution (M10 markers)
     blocker_locator.py #  deployment-wide blocked_by resolution (ADR-0009)
     backend_health.py  #  model-backend brake predicates (ADR-0018/0026)
+    failure_taxonomy.py #  THE DEV_* failure table — consumers derive from it (ADR-0027)
     skills.py      #   skill store reads + prompt assembly (ADR-0016)
     costing.py     #   app-side cost estimation vs the rate card (ADR-0021)
     asset_fetch.py #   PMO attachment/zip fetching for activity repos (ADR-0014/0017)

@@ -1903,8 +1903,10 @@ def _save_failed(store, run_id, *, error_class, mission="p1", mtype="EXECUTE",
     ({"exit_code": 10}, "DEV_CRASH"),
     ({"exit_code": 20}, "DEV_CRASH"),
     ({"exit_code": 11}, "DEV_BAD_OUTPUT"),
+    ({"exit_code": 12}, "DEV_AUTH"),
     ({"exit_code": 13}, "DEV_FORGE"),
     ({"exit_code": 14}, "DEV_MCP_SETUP"),
+    ({"exit_code": 15}, "DEV_HARNESS_FAULT"),
     ({"exit_code": 16}, "DEV_TURN_BUDGET"),
 ])
 def test_every_exit_code_stamps_a_structured_class(tmp_path, payload, expected_class):

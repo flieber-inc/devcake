@@ -13,19 +13,22 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from . import failure_taxonomy
+
 WINDOW = 3                  # most recent TERMINAL runs of a dev type
 MIN_DISTINCT_MISSIONS = 2   # correlation needs evidence from ≥2 missions
 SOLO_THROTTLE_STREAK = 3    # consecutive faults on one mission ⇒ throttle only
 DEGRADED_CONCURRENCY = 1    # the probe that makes the condition self-clearing
 MAX_EXCUSALS_PER_STEP = 3   # escape hatch: bounds the livelock (see below)
 
-FAULT_CLASS = "DEV_HARNESS_FAULT"
-BAD_OUTPUT_CLASS = "DEV_BAD_OUTPUT"
-DEFAULT_CLASSES = frozenset({FAULT_CLASS})
+FAULT_CLASS = failure_taxonomy.DEV_HARNESS_FAULT
+BAD_OUTPUT_CLASS = failure_taxonomy.DEV_BAD_OUTPUT
+DEFAULT_CLASSES = failure_taxonomy.BRAKE_ALWAYS_CLASSES
 
 
 def fault_classes(brake_on_bad_output: bool) -> frozenset[str]:
-    """Evidence classes the brake correlates on (ADR-0026).
+    """Evidence classes the brake correlates on (ADR-0026), derived from the
+    taxonomy table's `brake_evidence` column (ADR-0027).
 
     The set is shared by every arm — window faults, correlation, degradation —
     so a mixed cascade (some containers exit 15, others 11) reads as ONE
@@ -33,8 +36,9 @@ def fault_classes(brake_on_bad_output: bool) -> frozenset[str]:
     exit 11 is invisible to the brake.
     """
     if brake_on_bad_output:
-        return frozenset({FAULT_CLASS, BAD_OUTPUT_CLASS})
-    return DEFAULT_CLASSES
+        return (failure_taxonomy.BRAKE_ALWAYS_CLASSES
+                | failure_taxonomy.BRAKE_OPT_IN_CLASSES)
+    return failure_taxonomy.BRAKE_ALWAYS_CLASSES
 
 # Successes are INCLUDED on purpose: they are what evicts fault evidence from the
 # window, which is the entire clearing mechanism ("two greens clear it"). The

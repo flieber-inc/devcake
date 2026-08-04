@@ -9,6 +9,29 @@ from __future__ import annotations
 import json
 import re as _re
 
+# ── the declared exit contract (ADR-0027) ─────────────────────────────────
+# Every (exit code, error class) pair a Dev container can hand the app in a
+# failure artifact. This is the IMAGE side's single source: the app-side
+# taxonomy table (`domain/failure_taxonomy.py`) is asserted EQUAL to it by
+# test_failure_taxonomy's parity test — real objects across the version-skew
+# boundary, no text scraping — and an AST honesty check keeps this manifest
+# true against dev_entrypoint.py's actual exit sites. Future HarnessDialect
+# modules keep it. Two artifact-less bare exits ride codes already listed:
+# dev_entrypoint's oauth-login exit 12 and unknown-phase exit 20 send no
+# artifact, so they carry no class of their own (BARE_EXIT_CODES).
+PRODUCED = frozenset({
+    (10, "DEV_CRASH"),
+    (11, "DEV_BAD_OUTPUT"),
+    (12, "DEV_AUTH"),
+    (13, "DEV_FORGE"),
+    (13, "DEV_FORGE_AUTH"),
+    (14, "DEV_MCP_SETUP"),
+    (15, "DEV_HARNESS_FAULT"),
+    (16, "DEV_TURN_BUDGET"),
+    (20, "DEV_CRASH"),
+})
+BARE_EXIT_CODES = frozenset({12, 20})
+
 # ── stderr auth classification (docs/15 §4) ───────────────────────────────
 # Word-boundary regexes, NOT substrings: plain `"signed out" in text` matches
 # "de|signed out|put"; a false 12 pauses the whole Dev Type — never over-match.

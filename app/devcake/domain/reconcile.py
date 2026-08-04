@@ -4,7 +4,16 @@ lifespan so the ordering contract is unit-testable (ISSUES #26)."""
 import logging
 import re
 
+from . import failure_taxonomy
+
 log = logging.getLogger("devcake.reconcile")
+
+# ADR-0027: the recoverable-code list is a table derivation, not a hand-list.
+# Exit 12's absence is a table FIELD (orphan_recoverable=False on DEV_AUTH) —
+# see the enrichment comment below for why — and test_crash_recovery pins the
+# membership (10/11/20 recovered, 12 refused) independently of this regex.
+_EXIT_RE = re.compile(r"exit status (%s)" % "|".join(
+    str(c) for c in failure_taxonomy.ORPHAN_RECOVERABLE_EXIT_CODES))
 
 
 def _restamp_store_gen(store, run) -> None:
@@ -74,8 +83,7 @@ async def reconcile_runs(manager) -> None:
                 # DELIBERATELY excluded — dev_failure_error latches the dev-type
                 # auth breaker for it, and a stale orphan post-mortem must never
                 # trip a breaker from reconcile.
-                exit_m = re.search(r"exit status (10|11|13|14|15|16|20)",
-                                   detail.lower())
+                exit_m = _EXIT_RE.search(detail.lower())
                 if finalizer and exit_m:
                     r.error = finalizer.dev_failure_error(
                         r, {"exit_code": int(exit_m.group(1)),

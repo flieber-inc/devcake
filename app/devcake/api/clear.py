@@ -18,6 +18,7 @@ import httpx
 from ..adapters.dagu import DaguExecutor
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import INGRESS, Messaging
+from ..domain import failure_taxonomy
 from ..telemetry import OO_ORG, OO_URL
 
 log = logging.getLogger("devcake.clear")
@@ -62,8 +63,9 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
         if run is None or run.state not in ("dispatched", "running"):
             continue                                    # gone / finalizing / terminal
         try:
-            await run_manager.kill(run, "failed", "operator clear-runs",
-                                   error_class="DEV_OPERATOR_STOP")
+            await run_manager.kill(
+                run, "failed", "operator clear-runs",
+                error_class=failure_taxonomy.DEV_OPERATOR_STOP)
             stopped.append(run.run_id)
         except Exception:  # noqa: BLE001 — best-effort teardown: a kill failure is logged; the drain below still waits on Dagu's view
             log.exception("clear: kill failed for %s — continuing", run.run_id)

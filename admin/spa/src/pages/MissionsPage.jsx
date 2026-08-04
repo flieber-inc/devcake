@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import Button from "../components/Button.jsx";
 import MissionRow from "../components/MissionRow.jsx";
 import MissionDrawer from "../components/MissionDrawer.jsx";
+import NewMissionDialog from "../components/NewMissionDialog.jsx";
 import { ConfirmDialog } from "../components/Modal.jsx";
 import { Select } from "../components/Field.jsx";
 import { get, send } from "../api.js";
@@ -142,6 +143,23 @@ export default function MissionsPage() {
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [flash, setFlash] = useState("");
   const [pollBusy, setPollBusy] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+
+  // post-create honesty: name what exists WHERE, disclose any failed
+  // attachment by name (the mission exists either way — ADR-0030), then
+  // fire the existing 409-tolerant poll so it appears in seconds not ~30s
+  const onMissionCreated = (result) => {
+    setComposerOpen(false);
+    const fails = result.attachment_failures || [];
+    const failNote = fails.length
+      ? ` ${fails.length} attachment${fails.length === 1 ? "" : "s"} failed (${fails.map((f) => f.name).join(", ")}) — attach ${fails.length === 1 ? "it" : "them"} in the PMO.`
+      : "";
+    setFlash(`${result.key} created in ${result.instance} — appears on the board after the next poll.${failNote}`);
+    setTimeout(() => setFlash(""), 8000);
+    // silent poll (not doPoll — its own flash would clobber the creation
+    // notice); 409 = a cycle is already running = picked up anyway
+    send("POST", "/poll/run", {}).then(() => load()).catch(() => {});
+  };
   // 1s ticker so "Last polled Ns ago" counts up between fetches
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -303,14 +321,24 @@ export default function MissionsPage() {
         title="Missions"
         subtitle="Every DevCake mission across your configured PMOs — the PMO is the source of truth; click a mission to open its drawer"
         actions={
-          <Button
-            icon={RefreshCw}
-            onClick={doPoll}
-            disabled={pollBusy}
-            title="Force a PMO poll cycle now (the server polls automatically every ~30s)"
-          >
-            {pollBusy ? "Polling…" : "Poll now"}
-          </Button>
+          <span className="flex items-center gap-2">
+            {/* one visually primary action per header (DESIGN.md §3): with a
+                composer, creating work is the thing the operator comes to
+                do; Poll now stays visible as a ghost — a cadence nudge the
+                cadence line already narrates, never buried in a menu */}
+            <Button
+              kind="ghost"
+              icon={RefreshCw}
+              onClick={doPoll}
+              disabled={pollBusy}
+              title="Force a PMO poll cycle now (the server polls automatically every ~30s)"
+            >
+              {pollBusy ? "Polling…" : "Poll now"}
+            </Button>
+            <Button icon={Plus} onClick={() => setComposerOpen(true)}>
+              New mission
+            </Button>
+          </span>
         }
       />
       <p className={cadenceClass} aria-live="polite">
@@ -328,8 +356,9 @@ export default function MissionsPage() {
       )}
       {rows.length === 0 && !error && (
         <p className="rounded-card border border-neutral-200 bg-surface-raised px-4 py-6 text-center text-sm text-neutral-500 dark:border-neutral-800 dark:bg-surface-raised-dark dark:text-neutral-400">
-          No missions yet — waiting for the first PMO poll. Missions are born in your PMO;
-          create one there and DevCake will pick it up on the next cycle.
+          No missions yet — waiting for the first PMO poll. Missions live in your PMO;
+          create one there — or right here with New mission — and DevCake picks it
+          up on the next cycle.
         </p>
       )}
       {/* Pipeline strip + grouped list (2026-08-02 board re-decision,
@@ -542,6 +571,13 @@ export default function MissionsPage() {
           busy={confirmBusy}
           onConfirm={confirmProceed}
           onCancel={() => !confirmBusy && setConfirmAction(null)}
+        />
+      )}
+      {composerOpen && (
+        <NewMissionDialog
+          adoptionMode={data.adoption_mode}
+          onClose={() => setComposerOpen(false)}
+          onCreated={onMissionCreated}
         />
       )}
     </div>

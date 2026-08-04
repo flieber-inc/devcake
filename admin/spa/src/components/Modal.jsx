@@ -67,8 +67,12 @@ export function Overlay({ children, className = "", surfaceClass, onDismiss, ari
 // so only the explicit buttons may resolve the dialog. `children` renders
 // between body and buttons (e.g. an apply-preview diff); `error` keeps the
 // dialog open with the failure visible so the operator can retry or cancel.
+// confirmKind: destructive confirms keep the red default; a CREATIVE confirm
+// (the mission composer, ADR-0030) passes "primary" — a red "Create mission"
+// button would mislabel the action as destructive (§7 honesty).
 export function ConfirmDialog({ open, title, body, confirmLabel, busy, error,
-                                children, onConfirm, onCancel }) {
+                                children, onConfirm, onCancel,
+                                confirmKind = "danger" }) {
   if (!open) return null;
   return (
     <Overlay className="max-w-lg p-6">
@@ -84,7 +88,7 @@ export function ConfirmDialog({ open, title, body, confirmLabel, busy, error,
       )}
       <div className="mt-5 flex justify-end gap-2">
         <Button kind="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
-        <Button kind="danger" disabled={busy} onClick={onConfirm}>
+        <Button kind={confirmKind} disabled={busy} onClick={onConfirm}>
           {busy ? "Working…" : confirmLabel}
         </Button>
       </div>

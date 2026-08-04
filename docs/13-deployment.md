@@ -110,6 +110,9 @@ services:
       - ADMIN_USER=${ADMIN_USER}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     networks: [control]
+    # nginx /api/ proxies with client_max_body_size 96m (ADR-0030: base64
+    # composer attachments + >1MB settings-bundle imports; nginx's 1MB
+    # default silently 413'd both — server-side caps stay authoritative)
 
   gitea:
     ports: [ "127.0.0.1:3300:3000" ]

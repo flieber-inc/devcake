@@ -26,6 +26,10 @@ class PMOSystemInfo(BaseModel):
         "The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). "
         "This instance watches only this team. Empty = instance stays idle.")
     api_base_help: str = ""
+    # ADR-0030 composer: whether create_mission honors a priority (forge-
+    # issue systems normalize everything to medium — the SPA hides the
+    # Priority field instead of offering a control that silently does nothing)
+    supports_priority: bool = True
 
 
 PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
@@ -57,6 +61,7 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
             "Gitea origin reachable from the app container. Bundled stack: "
             "http://gitea:3000 (browser UI is http://localhost:3300). "
             "External: https://gitea.example.com"),
+        supports_priority=False,   # forge-issue: priority always medium (§9.2)
     ),
 }
 

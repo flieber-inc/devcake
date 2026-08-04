@@ -299,6 +299,35 @@ class _SteeringBody(BaseModel):
     body: str
 
 
+class _CreateAttachment(BaseModel):
+    name: str
+    content_b64: str
+
+
+class _CreateMissionBody(BaseModel):
+    instance: str          # REQUIRED — multi-PMO implicit routing is a footgun
+    title: str
+    description: str = ""
+    priority: str = "medium"
+    adopt: bool = True     # honored only under opt_in adoption
+    attachments: list[_CreateAttachment] = []
+
+
+@app.post("/api/v1/missions")
+async def mission_create(body: _CreateMissionBody):
+    """ADR-0030: transcribe an operator-originated mission onto the PMO
+    board (write-through; no local record — INV-1). Partial attachment
+    failure returns 200 with `attachment_failures` — the mission EXISTS."""
+    from .mission_actions import create_mission
+    s = svc()
+    return await create_mission(
+        instance=body.instance, title=body.title,
+        description=body.description, priority=body.priority,
+        adopt=body.adopt,
+        attachments=[a.model_dump() for a in body.attachments],
+        managers=s.managers, adoption_mode=s.config.adoption_mode)
+
+
 @app.post("/api/v1/missions/{pmo_id}/actions")
 async def mission_action(pmo_id: str, body: _MissionActionBody):
     """Retry / park / unpark / resume via label swap. Returns projected labels."""

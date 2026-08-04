@@ -165,6 +165,12 @@ fi
 
 upsert_env_var DOCKER_GID "$GID" .env
 upsert_env_var DEVCAKE_WS_HOST "$WS_HOST" .env
+# 2026-08 evaluation: .env holds every bootstrap password (and the admin
+# password is host-root-equivalent via settings export — docs/14 §3), yet a
+# file created before up.sh existed kept whatever mode it was born with —
+# 0644 observed in the wild. Upserts above preserve-by-reference, so enforce
+# the floor every run, not only at creation.
+chmod 600 .env
 mkdir -p "$WS_HOST"
 chmod 700 "$WS_HOST"
 # Export so this shell's bake + compose invocations all see the same values
@@ -182,6 +188,13 @@ if [[ "$DO_BAKE" -eq 1 ]]; then
   if [[ -n "$(docker compose ps -q dagu 2>/dev/null)" ]]; then
     echo "── stopping dagu before bake (deploy window — ADR-0025 R9)"
     docker compose stop dagu || true
+    # 2026-08 evaluation: under `set -e` a failed bake (network blip pulling
+    # a base layer, upstream installer change) used to abort the script HERE
+    # — with dagu silently stopped, the app healthy, and every dispatch
+    # failing until an operator noticed. Restart dagu on ANY error exit for
+    # as long as the bake window is open; cleared right after the bake so it
+    # can never fire spuriously later.
+    trap 'echo "── bake failed: restarting dagu (half-down stack guard)" >&2; docker compose start dagu || true' ERR
   fi
   if [[ ${#BAKE_TARGETS[@]} -eq 0 ]]; then
     echo "── docker buildx bake all"
@@ -190,6 +203,7 @@ if [[ "$DO_BAKE" -eq 1 ]]; then
     echo "── docker buildx bake ${BAKE_TARGETS[*]}"
     docker buildx bake "${BAKE_TARGETS[@]}"
   fi
+  trap - ERR
 fi
 
 if [[ ${#COMPOSE_ARGS[@]} -gt 0 ]]; then

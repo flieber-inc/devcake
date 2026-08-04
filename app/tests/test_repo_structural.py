@@ -58,6 +58,16 @@ def test_run_id_precondition_fences_the_charset():
         "the RUN_ID charset fence must match WorkspaceStore/docs (AUD-011)"
 
 
+def test_ws_host_precondition_requires_an_absolute_base():
+    """AUD-003's unimplemented half: an empty/relative DEVCAKE_WS_HOST must
+    refuse the DAG run entirely — dockerd would otherwise create a root-owned
+    junk dir at the host filesystem root before any in-container check."""
+    doc = _dag()
+    pres = {p.get("condition"): p.get("expected") for p in doc["preconditions"]}
+    assert pres.get("${DEVCAKE_WS_HOST}") == "re:^/.+", \
+        "the workspace base fence is the host-root-pollution guard"
+
+
 def test_no_dagu_auto_retry():
     """retry_policy limit 0 — Dagu retries would fight DevCake's own attempt
     counting (M1 field note)."""

@@ -119,8 +119,26 @@ services:
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec",
-              "--requirepass", "${REDIS_PASSWORD}"]  # default user = app-only; per-run ACLs for Devs (docs/09 §1a)
+    # 2026-08 evaluation hardening:
+    # - maxmemory 1gb + noeviction: the flood backstop. The app XACK+XDELs
+    #   ingress entries after every handled batch, so legit load stays far
+    #   below the cap; a Dev flooding XADD faster than the app drains gets
+    #   write ERRORS instead of OOMing the whole control plane. noeviction
+    #   on purpose — evicting stream entries would silently lose run
+    #   artifacts; erroring the writer is the honest failure.
+    # - aclfile + ACL SAVE (from the app on every SETUSER/DELUSER): per-run
+    #   Dev users survive a redis-only restart, so in-flight runs reconnect
+    #   and finish instead of stranding until the heartbeat grace kills
+    #   them. The file must EXIST at boot (redis refuses to start on a
+    #   missing aclfile), hence the touch. GOTCHA (docs/13): after the
+    #   first ACL SAVE the default user rides the aclfile too — changing
+    #   REDIS_PASSWORD in .env then also needs `ACL SETUSER default
+    #   >newpass` + `ACL SAVE` (or deleting /data/users.acl) or the old
+    #   password wins on restart.
+    entrypoint: ["sh", "-c",
+                 "touch /data/users.acl && exec docker-entrypoint.sh redis-server --appendonly yes --appendfsync everysec --maxmemory 1gb --maxmemory-policy noeviction --aclfile /data/users.acl --requirepass \"$${REDIS_PASSWORD}\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}   # runtime shell expansion — the exec-array quoting safety the old command form had
     volumes: [ redis_data:/data ]
     depends_on:
       fluentbit: { condition: service_started }

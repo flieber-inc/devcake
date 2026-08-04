@@ -3,7 +3,7 @@
 // assignment wholesale, an inherit row follows the global table. Never
 // confirms a Save — the flow restores the original selection so the dirty
 // bar clears and live config is untouched.
-import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
+import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 const MTS = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 
@@ -41,8 +41,12 @@ await withPage(async (page) => {
       skip("override flip", "only one dev type configured — nothing to flip to");
     } else {
       await sel.selectOption(target);
-      await page.waitForSelector('span:has-text("Unsaved changes")');
-      check("setting an override dirties the draft", true);
+      await checked("setting an override dirties the draft", async () => {
+        await page.waitForSelector('span:has-text("Unsaved changes")',
+          { timeout: 8000 });
+        return (await page.locator(
+          'span:has-text("Unsaved changes")').count()) >= 1;
+      });
       check("an overridden row exposes its own CLI-args input",
         (await page.locator("#mission-types table").nth(1)
           .locator('input[placeholder="e.g. --max-turns 15"]').count()) >= 1);
@@ -56,9 +60,13 @@ await withPage(async (page) => {
       await dlg.locator('button:has-text("Cancel")').click();
 
       await sel.selectOption(original);
-      await page.waitForSelector('span:has-text("Unsaved changes")',
-        { state: "detached", timeout: 5000 });
-      check("restoring the selection clears the dirty bar (symmetric diff)", true);
+      await checked("restoring the selection clears the dirty bar (symmetric diff)",
+        async () => {
+          await page.waitForSelector('span:has-text("Unsaved changes")',
+            { state: "detached", timeout: 5000 });
+          return (await page.locator(
+            'span:has-text("Unsaved changes")').count()) === 0;
+        });
     }
   }
 });

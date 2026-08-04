@@ -48,6 +48,17 @@ export function check(name, ok, detail = "") {
   else { failures += 1; console.error(`  ✗ ${name}${detail ? ` — ${detail}` : ""}`); }
 }
 
+// Predicate-with-containment (2026-08 evaluation): a throwing predicate —
+// selector timeout, detached element — records a NAMED failure instead of
+// crashing the file and silently skipping every later check.
+export async function checked(name, fn, detail = "") {
+  try {
+    check(name, await fn(), detail);
+  } catch (e) {
+    check(name, false, String(e).split("\n")[0]);
+  }
+}
+
 export function skip(name, why) {
   skips += 1;
   console.log(`  - ${name} (skipped: ${why})`);
@@ -72,6 +83,13 @@ export async function withPage(fn, { width = 1280, height = 900 } = {}) {
   });
   try {
     await fn(page);
+  } catch (e) {
+    // An escape from the suite body is a recorded failure, not a crash: the
+    // suite's summary() still runs, later suites are unaffected, and the
+    // report names what broke instead of a bare stack trace (2026-08
+    // evaluation — a throw used to abort the file and silently skip every
+    // remaining check).
+    check("suite body ran to completion", false, String(e).split("\n")[0]);
   } finally {
     await browser.close();
   }

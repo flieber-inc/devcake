@@ -98,6 +98,15 @@ fi
 SERVICES=(fluentbit openobserve redis dagu otel-collector app admin)
 THIRD_PARTY=(fluentbit openobserve redis dagu otel-collector)
 
+# Opt-in Gitea (CI contract-battery lane, 2026-08 evaluation): the forge +
+# PMO batteries run inside the app container against the bundled instance —
+# zero external tokens — but need gitea up. Off by default to keep the
+# dispatch smoke minimal.
+if [[ "${CI_COMPOSE_WITH_GITEA:-0}" == "1" ]]; then
+  SERVICES+=(gitea)
+  THIRD_PARTY+=(gitea)
+fi
+
 # Resolve compose image refs once (digest-pinned in docker-compose.yml).
 # Prints "service<TAB>image" lines for the given service names.
 _third_party_images() {
@@ -188,6 +197,9 @@ wait_service redis healthy 40
 wait_service dagu healthy 40
 wait_service app healthy 60
 wait_service admin healthy 40
+if [[ "${CI_COMPOSE_WITH_GITEA:-0}" == "1" ]]; then
+  wait_service gitea healthy 60
+fi
 
 echo "── wait for authenticated control plane via admin :8080"
 BASE_URL="${DEVCAKE_BASE_URL:-http://127.0.0.1:8080}"

@@ -11,6 +11,12 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const spa = join(here, "..");
 const SUITES = [
+  // Pure-node helper suites first (no browser, no backend): previously only
+  // reachable via `npm run test:helpers`, which nothing invoked — including
+  // the safeHref XSS guard (2026-08 evaluation). Now every check:ui run
+  // carries them.
+  "markdown_helpers.mjs",
+  "format_helpers.mjs",
   "settings.mjs",
   "hierarchy.mjs",
   "devtypes.mjs",

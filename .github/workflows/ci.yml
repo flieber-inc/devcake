@@ -91,6 +91,8 @@ jobs:
             -e REDIS_URL=redis://redis:6379/0 \
             -e REDIS_PASSWORD=ci-redis-pass \
             -v "${{ github.workspace }}/images/common:/srv/images/common:ro" \
+            -v "${{ github.workspace }}/dagu/dags:/srv/dagu-dags:ro" \
+            -v "${{ github.workspace }}/app/Dockerfile:/srv/app.Dockerfile:ro" \
             -w /srv \
             "devcake/app-test:${DEVCAKE_TAG}" \
             python -m pytest tests/ -q --tb=short
@@ -114,6 +116,9 @@ jobs:
           export DEVCAKE_TAG="${DEVCAKE_TAG}"
           export DOCKER_GID
           DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+          # 2026-08 evaluation: the contract batteries ride this same stack,
+          # so it now includes the bundled Gitea (zero external tokens)
+          export CI_COMPOSE_WITH_GITEA=1
           chmod +x scripts/ci_compose_for_dispatch.sh scripts/ci_dispatch_hello.sh
           ./scripts/ci_compose_for_dispatch.sh
 
@@ -126,6 +131,16 @@ jobs:
           # Cold CI: allow more polls (30 × 3s default may be tight under load)
           export DEVCAKE_HELLO_POLLS=40
           ./scripts/ci_dispatch_hello.sh
+
+      - name: Forge + PMO contract batteries (bundled Gitea lane)
+        run: |
+          set -euo pipefail
+          # The strongest integration artifacts in the repo, previously run
+          # only from a hand-raised local stack (2026-08 evaluation): real
+          # repos, PRs, merges, labels — inside the app container, against
+          # the bundled Gitea, zero external tokens. Exit code is the verdict.
+          docker compose exec -T app python - < scripts/contract_tests_forge.py
+          docker compose exec -T app python - < scripts/contract_tests_pmo.py
 
       - name: Teardown compose stack
         if: always()

@@ -38,7 +38,8 @@ from pydantic import ValidationError
 
 from . import secrets as secrets_store
 from .config import (AppConfig, DevType, _INSTANCE_NAME_RE, delete_dev_type,
-                     reject_stale_patch, save_config, save_dev_type)
+                     reconcile_managed_pmos, reject_stale_patch, save_config,
+                     save_dev_type)
 from .prompts import PLAYBOOK_VARS
 from .prompts import templates as prompt_templates
 from .security import redact
@@ -723,6 +724,20 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     warnings = list(parsed["warnings"])
     new_cfg: AppConfig | None = parsed["config"]
     if new_cfg is not None and not _is_rollback:
+        # ADR-0030: profiles saved BEFORE the managed-board feature carry no
+        # board row — applying one must not delete the instance (and, at the
+        # next boot's provisioning, resurrect it with a fresh identity while
+        # its PAT still exists). Rollback re-applies serialize_current output,
+        # which already carries the row — skip there.
+        incoming = [p.model_dump() for p in new_cfg.pmos]
+        reconciled = reconcile_managed_pmos(
+            [p.model_dump() for p in config.pmos], incoming,
+            internal_forge_present=bool(
+                os.environ.get("GITEA_ADMIN_PASSWORD")))
+        if reconciled != incoming:
+            new_cfg = AppConfig.model_validate(
+                {**new_cfg.model_dump(), "pmos": reconciled})
+            parsed["config"] = new_cfg
         dry_run_adapters(new_cfg)
 
     previous = serialize_current(

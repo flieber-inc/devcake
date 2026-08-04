@@ -168,4 +168,33 @@ await withPage(async (page) => {
   }
 });
 
+// ── managed board card (ADR-0030) — soft-skips until the live stack has
+// provisioned one (the markdown.mjs catalog precedent) ─────────────────────
+await withPage(async (page) => {
+  await gotoFresh(page, "#/pmo");
+  await page.waitForSelector("#pmo");
+  await page.waitForTimeout(400);
+  const badge = page.locator('#pmo :text("Bundled board")');
+  if ((await badge.count()) === 0) {
+    skip("managed board card", "no managed board instance on this stack");
+  } else {
+    // expand the board card if it rendered as a summary row
+    const row = page.locator('button[aria-label="Expand PMO instance board"]');
+    if (await row.count()) await row.click();
+    await page.waitForTimeout(200);
+    check("managed card carries the Bundled board badge",
+      (await page.locator('#pmo :text("Bundled board")').count()) >= 1);
+    check("managed card hides its own Remove while the provisioner exists",
+      await page.evaluate(() => {
+        // Remove may exist for OTHER cards — none inside the board card
+        const cards = [...document.querySelectorAll("#pmo .space-y-3")];
+        const board = cards.find((c) => c.textContent.includes("Bundled board"));
+        return board ? ![...board.querySelectorAll("button")]
+          .some((b) => b.textContent.trim() === "Remove") : false;
+      }));
+    check("managed card explains the app-minted key (no paste field)",
+      (await page.locator('#pmo :text("App-minted and self-healing")').count()) >= 1);
+  }
+});
+
 summary("pmo_intake");

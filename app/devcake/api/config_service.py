@@ -8,12 +8,13 @@ would orphan every holder of the old object).
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import HTTPException
 
 from .. import secrets as secrets_store
 from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
-                      reject_stale_patch, save_config)
+                      reconcile_managed_pmos, reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
 from ..settings_bundle import (BundleError, dry_run_adapters,
                                validate_config_semantics)
@@ -62,6 +63,14 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
         # defaults would land if we waited until after model_validate
         current = config.model_dump()
         body = inherit_pmo_intake(body, current)
+        # ADR-0030: managed rows survive the wholesale list replace — and
+        # this MUST precede the removed-instance computation below, or a PUT
+        # omitting the board row would delete pmo-board.json with it
+        if isinstance(body.get("pmos"), list):
+            body = {**body, "pmos": reconcile_managed_pmos(
+                current.get("pmos") or [], body["pmos"],
+                internal_forge_present=bool(
+                    os.environ.get("GITEA_ADMIN_PASSWORD")))}
         merged = AppConfig.model_validate(deep_merge(current, body))
     except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
         raise HTTPException(422, str(e))

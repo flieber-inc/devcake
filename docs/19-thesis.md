@@ -204,6 +204,12 @@ scope; DevCake honors `blocked_by` edges but never draws one of its own
 volition (ADR-0007 — an external agent, human or otherwise, owns the edges);
 summaries never address an external audience.
 
+One carve-out, precise by construction (ADR-0030): DevCake may **transcribe**
+operator-originated missions onto the board — a pass-through form writing
+straight to the PMO through the port, keeping no local record — because
+there the *operator* originates the intent and DevCake only holds the pen.
+It still never originates one.
+
 The moment a proposed feature originates intent or holds a conversation, it
 belongs above the membrane, and the answer is no — however useful it would
 be. This section exists to be cited in that argument.

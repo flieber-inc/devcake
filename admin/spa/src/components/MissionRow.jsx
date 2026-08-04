@@ -19,7 +19,7 @@ const PRIORITY_DOT = {
 // 2026-08-02, admin/spa/DESIGN.md §2: the kanban card's five stacked rows
 // collapse to one so the title gets the page's width). Click anywhere opens
 // the drawer; the ⋯ menu and the ↗ link stop propagation.
-export default function MissionRow({ row, syncing, sectionReason, onOpen, onAction }) {
+export default function MissionRow({ row, multiPmo, syncing, sectionReason, onOpen, onAction }) {
   const badge = needsHumanReason(row.labels);
   const items = contextActions(row);
   // Park is destructive-ish (stops scheduling) — surface it as a `danger`
@@ -57,10 +57,17 @@ export default function MissionRow({ row, syncing, sectionReason, onOpen, onActi
       <span className="flex w-3.5 shrink-0 justify-center">
         {row.mission_type && <StageGlyph stage={row.mission_type} />}
       </span>
+      {/* PMO provenance rides the machine identifier as a dimmed mono
+          prefix (branch/run-id convention, ADR-0009) — only when there is
+          more than one PMO to tell apart; a chip would repeat fleet-wide
+          with no scan value (the priority-dot argument, DESIGN.md §2). */}
       <span
-        className="w-32 shrink-0 truncate font-mono text-xs text-neutral-500 dark:text-neutral-400"
-        title={row.key}
+        className={`${multiPmo ? "w-40" : "w-32"} shrink-0 truncate font-mono text-xs text-neutral-500 dark:text-neutral-400`}
+        title={multiPmo ? `${row.instance} · ${row.key}` : row.key}
       >
+        {multiPmo && (
+          <span className="text-neutral-400 dark:text-neutral-500">{row.instance}·</span>
+        )}
         {row.key}
       </span>
       <span

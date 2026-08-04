@@ -25,7 +25,7 @@ const STOP_COPY = {
 // a Devin-style session: label chips, action row, live run history, per-run
 // terminal (opens on top of the drawer — its overlay stacks OK; focus
 // restores on close via the Overlay component's restore logic).
-export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
+export default function MissionDrawer({ mission, multiPmo, syncing, onClose, onAction }) {
   const [runs, setRuns] = useState({ runs: [] });
   const [openRun, setOpenRun] = useState(null);
   const [comment, setComment] = useState("");
@@ -111,7 +111,17 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
           <div className="min-w-0 grow">
             <div className="mb-1 flex items-center gap-2">
               {mission.mission_type && <StageGlyph stage={mission.mission_type} />}
-              <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
+              <span
+                className="font-mono text-xs text-neutral-500 dark:text-neutral-400"
+                title={multiPmo
+                  ? `PMO instance ${mission.instance} · team ${mission.team}`
+                  : undefined}
+              >
+                {multiPmo && (
+                  <span className="text-neutral-400 dark:text-neutral-500">
+                    {mission.instance}·
+                  </span>
+                )}
                 {mission.key}
               </span>
               {syncing && (

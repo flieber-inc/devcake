@@ -92,7 +92,7 @@ services:
     networks: [control, runtime]
 
   openobserve:
-    image: public.ecr.aws/zinclabs/openobserve:v0.91.1
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.5
     ports: [ "127.0.0.1:5080:5080" ]
     networks: [control]                  # NOT on runtime
 

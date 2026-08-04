@@ -87,6 +87,28 @@ def test_mutating_routes_require_intent_header(monkeypatch, method, path,
         f"{method} {template} mutated without the intent header"
 
 
+def test_admin_password_length_floor(monkeypatch):
+    """2026-08 evaluation: admin basic auth is host-root-equivalent (settings
+    export carries DAGU_PASSWORD → docker.sock), so a deny-list-only policy —
+    under which a 3-char password booted — is not a policy. 12-char floor,
+    fail-loudly at boot; ALLOW_INSECURE keeps the sandbox path."""
+    from devcake.api import main as app_main
+    monkeypatch.delenv("DEVCAKE_ALLOW_INSECURE", raising=False)
+    strong = {"REDIS_PASSWORD": "x" * 16, "DAGU_PASSWORD": "x" * 16,
+              "OO_ROOT_PASSWORD": "x" * 16, "OO_INGEST_PASSWORD": "x" * 16,
+              "GITEA_ADMIN_PASSWORD": "x" * 16, "OO_INGEST_EMAIL": "a@b.c"}
+    for k, v in strong.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("ADMIN_PASSWORD", "short-pw")     # 8 < 12
+    with pytest.raises(RuntimeError, match="at least 12 characters"):
+        app_main._refuse_insecure_passwords()
+    monkeypatch.setenv("ADMIN_PASSWORD", "long-enough-pw")   # 14
+    app_main._refuse_insecure_passwords()                    # must not raise
+    monkeypatch.setenv("ADMIN_PASSWORD", "short-pw")
+    monkeypatch.setenv("DEVCAKE_ALLOW_INSECURE", "1")
+    app_main._refuse_insecure_passwords()                    # sandbox escape
+
+
 def test_unconfigured_credentials_fail_closed(monkeypatch):
     """Empty ADMIN env answers 401 even to an empty-credential probe — the
     _valid_basic_auth 'bool(expected…)' term, exercised through the app."""

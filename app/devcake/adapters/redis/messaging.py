@@ -79,6 +79,7 @@ class Messaging:
             f"%W~{INGRESS}", f"%RW~{reply_stream(run_id)}",
             "+xadd", "+xread", "+xlen", "+ping", "+client|setinfo",
         )
+        await self._acl_save()
         # the only place the plaintext exists app-side — register it here so
         # redact() masks it in everything PMO-bound (docs/14 §5)
         register_runtime_secret(run_id, password)
@@ -86,7 +87,24 @@ class Messaging:
 
     async def delete_run_user(self, run_id: str) -> None:
         await self.redis.execute_command("ACL", "DELUSER", f"dev-{run_id}")
+        await self._acl_save()
         unregister_runtime_secret(run_id)
+
+    async def _acl_save(self) -> None:
+        """Persist ACL users to the configured aclfile (2026-08 evaluation):
+        SETUSER lives in redis MEMORY only — without this, a redis-only
+        restart (OOM, image bump, operator `compose restart redis`) stranded
+        every in-flight run: containers survived but instantly lost auth,
+        hung to the heartbeat grace, and burned an attempt on finished work.
+
+        Best-effort by design: a deployment without `aclfile` configured
+        (pre-hardening compose, bare dev redis) answers an error — the run
+        must still dispatch there, it just keeps the old restart exposure."""
+        try:
+            await self.redis.execute_command("ACL", "SAVE")
+        except ResponseError as e:
+            log.warning("ACL SAVE unavailable (no aclfile configured?) — "
+                        "per-run users will not survive a redis restart: %s", e)
 
     # ── replies (app → one Dev) ──────────────────────────────────────────────
 

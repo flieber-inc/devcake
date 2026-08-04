@@ -13,7 +13,8 @@ from typing import Any, Optional
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
-                             Mission, MissionRef, NormalizedStatus, Priority)
+                             Mission, MissionDocument, MissionRef,
+                             NormalizedStatus, Priority)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
 
 log = logging.getLogger("devcake.linear")
@@ -31,12 +32,14 @@ PROJECT_STATUS_MAP: dict[str, NormalizedStatus] = {
     "backlog": "backlog", "planned": "backlog", "started": "in_progress",
     "completed": "done", "canceled": "canceled", "paused": "backlog",
 }
-_ASSET_RE = re.compile(r"https://uploads\.linear\.app/[^\s)\]]+")
+_ASSET_RE = re.compile(r"https://uploads\.linear\.app/[^\s)\]>]+")
 # markdown-link form of the same asset URLs — recovers the human filename the
 # feed carried, so ActivityEntry attachments arrive named (the domain never
-# parses vendor asset URLs)
+# parses vendor asset URLs). Both regexes tolerate the angle-bracket URL form
+# `[name](<url>)` — Linear's DOCUMENT serializer emits it (verified live
+# 2026-08-04 on the sandbox; comment bodies keep the plain form)
 _NAMED_ASSET_RE = re.compile(
-    r"\[([^\]]+\.\w{1,8})\]\((https://uploads\.linear\.app/\S+?)\)")
+    r"\[([^\]]+\.\w{1,8})\]\(<?(https://uploads\.linear\.app/[^\s)>]+?)>?\)")
 
 # inverseRelations page size: Linear returns ALL relation types and we filter
 # for `blocks` client-side, so an undersized page can silently evict a blocker
@@ -61,6 +64,17 @@ MAX_COMMENT_PAGES = 10
 # Activity.truncated so the builder renders a loud banner (never raises:
 # a raise would starve the Dev's activity.get reply)
 MAX_COMMENT_PAGES_FULL = 100
+
+# Project full-mode enrichment ceilings (project-fidelity fix). Small pages
+# because document/update bodies are unbounded text — the budget concern is
+# response SIZE, not query complexity (the combined first-page query measured
+# x-complexity 1349 live, ~7× under the ~10k budget that blew the team query).
+PROJECT_DOCS_PAGE = 25
+MAX_PROJECT_DOC_PAGES = 4      # 100 documents fail-loud ceiling
+PROJECT_UPDATES_PAGE = 25
+MAX_PROJECT_UPDATE_PAGES = 20  # 500 updates — feed semantics: trips truncated
+UPDATE_COMMENTS_PAGE = 50
+MAX_UPDATE_COMMENT_PAGES = 10  # per update, on the overflow walk
 
 
 class LinearAdapter:
@@ -320,8 +334,12 @@ class LinearAdapter:
         project["labels"] = {"nodes": nodes, "pageInfo": page_info}
 
     async def get_activity(self, ref: MissionRef, full: bool = False) -> Activity:
-        """Issue: the comment feed. Project: mission + entries=[] — Linear
-        projects have no issue-style comments API (verified live).
+        """Issue: the comment feed. Project shallow: mission + entries=[] —
+        projects have no issue-style comments API, and no production caller
+        rides the shallow project path (marker scans are issue-only). Project
+        FULL (project-fidelity fix): mirrors the project-native feed — updates
+        + their comments as entries, documents inline, externalLinks + native
+        attachments + content-embedded uploads as mission_attachments.
 
         Shallow (default): the cheap recent-window query the marker-scan call
         paths ride — FIELD-identical to the pre-ADR-0014 query (whitespace
@@ -331,6 +349,8 @@ class LinearAdapter:
         Activity.truncated instead of raising (a raise would starve the Dev's
         activity.get reply)."""
         if ref.kind == "project":
+            if full:
+                return await self._get_project_activity_full(ref.pmo_id)
             return Activity(mission=await self._get_project(ref.pmo_id), entries=[])
         pmo_id = ref.pmo_id
         # Cursor-paginated like every other list read (docs/05 §3; a single
@@ -405,21 +425,25 @@ class LinearAdapter:
                         truncated=truncated)
 
     @staticmethod
-    def _mission_attachments(issue: dict) -> list[AttachmentRef]:
-        """ADR-0014 D3: assets the mission itself references — description-
-        embedded uploads (named via markdown links) + the native attachments
-        connection, url-deduped. uploads.linear.app = downloadable file;
-        anything else in the native list is an external link."""
+    def _collect_attachment_refs(texts: list[str],
+                                 native_nodes: list[dict],
+                                 native_overflow: bool) -> list[AttachmentRef]:
+        """ADR-0014 D3 core: text-embedded uploads (named via markdown links)
+        + a native attachment/link node list, url-deduped in that order.
+        uploads.linear.app = downloadable file; anything else in the native
+        list is an external link. Shared by the issue path (description +
+        attachments connection) and the project full path (content + document
+        bodies + externalLinks + project attachments)."""
         seen: set[str] = set()
         refs: list[AttachmentRef] = []
-        desc = issue.get("description") or ""
-        names = {url: name for name, url in _NAMED_ASSET_RE.findall(desc)}
-        for u in _ASSET_RE.findall(desc):
-            if u not in seen:
-                seen.add(u)
-                refs.append(AttachmentRef(url=u, name=names.get(u), kind="file"))
-        conn = issue.get("attachments") or {}
-        for node in (conn.get("nodes") or []):
+        for text in texts:
+            text = text or ""
+            names = {url: name for name, url in _NAMED_ASSET_RE.findall(text)}
+            for u in _ASSET_RE.findall(text):
+                if u not in seen:
+                    seen.add(u)
+                    refs.append(AttachmentRef(url=u, name=names.get(u), kind="file"))
+        for node in native_nodes:
             u = (node or {}).get("url") or ""
             if not u or u in seen:
                 continue
@@ -427,10 +451,197 @@ class LinearAdapter:
             refs.append(AttachmentRef(
                 url=u, name=node.get("title"),
                 kind="file" if _ASSET_RE.match(u) else "link"))
-        if (conn.get("pageInfo") or {}).get("hasNextPage"):  # never silent
+        if native_overflow:  # never silent
             log.warning("get_activity: native attachment list exceeds 50 — "
                         "remainder omitted from the activity folder")
         return refs
+
+    @classmethod
+    def _mission_attachments(cls, issue: dict) -> list[AttachmentRef]:
+        """ADR-0014 D3: assets the mission itself references — description-
+        embedded uploads + the native attachments connection, url-deduped."""
+        conn = issue.get("attachments") or {}
+        return cls._collect_attachment_refs(
+            [issue.get("description") or ""],
+            list(conn.get("nodes") or []),
+            bool((conn.get("pageInfo") or {}).get("hasNextPage")))
+
+    # ── project full-history mode (project-fidelity fix) ─────────────────────
+
+    async def _get_project_activity_full(self, pmo_id: str) -> Activity:
+        """Full-history mode for project refs: the project-native feed
+        (updates + their comments) as entries, Documents inline, and
+        externalLinks + native attachments + content/document-embedded
+        uploads as mission_attachments.
+
+        The base project read stays FAIL-CLOSED (an unreadable mission must
+        not dispatch — same as issues). The enrichment is FAIL-OPEN: any
+        failure degrades to an empty section with a loud warning, because
+        the mission must still dispatch and a raise would starve the Dev's
+        activity.get reply (the gitea_issues best-effort asset read is the
+        precedent). All field spellings verified live 2026-08-04
+        (x-complexity 1349 for the combined first-page query — the budget
+        concern here is response SIZE, hence the small pages)."""
+        mission = await self._get_project(pmo_id)
+        try:
+            data = await self._gql(
+                """query($id: String!) { project(id: $id) {
+                     documents(first: %d) { pageInfo { hasNextPage endCursor }
+                       nodes { id title content url } }
+                     projectUpdates(first: %d, orderBy: createdAt) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { id body createdAt user { name }
+                         comments(first: 10) { pageInfo { hasNextPage endCursor }
+                           nodes { id parent { id } body createdAt user { name } } } } }
+                     externalLinks(first: 50) { pageInfo { hasNextPage }
+                       nodes { url label } }
+                     attachments(first: 50) { pageInfo { hasNextPage }
+                       nodes { url title } }
+                } }""" % (PROJECT_DOCS_PAGE, PROJECT_UPDATES_PAGE),
+                {"id": pmo_id})
+            project = data["project"]
+            doc_nodes = await self._walk_project_documents(pmo_id, project)
+            update_nodes, truncated = await self._walk_project_updates(pmo_id, project)
+        except Exception as e:  # noqa: BLE001 — fail-open: dispatch with the brief alone
+            log.warning("project %s: activity enrichment failed (%s: %s) — "
+                        "dispatching with the brief only; documents/updates/"
+                        "links omitted from the activity folder",
+                        pmo_id, type(e).__name__, str(e)[:180])
+            return Activity(mission=mission, entries=[])
+
+        entries: list[ActivityEntry] = []
+        for u in update_nodes:
+            body = u.get("body") or ""
+            names = {url: name for name, url in _NAMED_ASSET_RE.findall(body)}
+            entries.append(ActivityEntry(
+                ts=u["createdAt"],
+                # author is free text; provenance stays sentinel-based
+                # (docs/03 §8a), so the suffix is annotation, not identity
+                author=f"{(u.get('user') or {}).get('name') or 'unknown'} (project update)",
+                kind="comment", body=body,
+                attachments=[AttachmentRef(url=url, name=names.get(url))
+                             for url in _ASSET_RE.findall(body)],
+                entry_id=u.get("id"), parent_id=None,
+            ))
+            for c in (u.get("comments") or {}).get("nodes") or []:
+                cbody = c.get("body") or ""
+                cnames = {url: name for name, url in _NAMED_ASSET_RE.findall(cbody)}
+                entries.append(ActivityEntry(
+                    ts=c["createdAt"],
+                    author=(c.get("user") or {}).get("name") or "unknown",
+                    kind="comment", body=cbody,
+                    attachments=[AttachmentRef(url=url, name=cnames.get(url))
+                                 for url in _ASSET_RE.findall(cbody)],
+                    entry_id=c.get("id"),
+                    # threaded replies keep their comment parent; top-level
+                    # update comments thread under the update itself
+                    parent_id=(c.get("parent") or {}).get("id") or u.get("id"),
+                ))
+        entries.sort(key=lambda e: e.ts)
+
+        documents = [MissionDocument(title=d.get("title") or "untitled",
+                                     content=d.get("content") or "",
+                                     url=d.get("url") or "")
+                     for d in doc_nodes]
+        ext = project.get("externalLinks") or {}
+        att = project.get("attachments") or {}
+        native = ([{"url": n.get("url"), "title": n.get("label")}
+                   for n in (ext.get("nodes") or [])]
+                  + list(att.get("nodes") or []))
+        overflow = bool((ext.get("pageInfo") or {}).get("hasNextPage")
+                        or (att.get("pageInfo") or {}).get("hasNextPage"))
+        refs = self._collect_attachment_refs(
+            # mission.description is `content or description` (normalization);
+            # document bodies are scanned too so their embedded uploads land
+            [mission.description] + [d.content for d in documents],
+            native, overflow)
+        return Activity(mission=mission, entries=entries,
+                        mission_attachments=refs, documents=documents,
+                        truncated=truncated)
+
+    async def _walk_project_documents(self, pmo_id: str, project: dict) -> list[dict]:
+        """Cursor-walk documents past the first page, fail-loud ceiling."""
+        conn = project.get("documents") or {}
+        nodes = list(conn.get("nodes") or [])
+        page_info = conn.get("pageInfo") or {}
+        for _ in range(MAX_PROJECT_DOC_PAGES - 1):
+            if not page_info.get("hasNextPage"):
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { project(id: $id) {
+                     documents(first: %d, after: $after) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { id title content url }
+                     } } }""" % PROJECT_DOCS_PAGE,
+                {"id": pmo_id, "after": page_info["endCursor"]})
+            conn = page["project"]["documents"]
+            nodes.extend(conn.get("nodes") or [])
+            page_info = conn.get("pageInfo") or {}
+        if page_info.get("hasNextPage"):  # never silent
+            log.warning("project %s: document ceiling (%d) hit — remainder "
+                        "omitted from the activity folder", pmo_id,
+                        PROJECT_DOCS_PAGE * MAX_PROJECT_DOC_PAGES)
+        return nodes
+
+    async def _walk_project_updates(self, pmo_id: str,
+                                    project: dict) -> tuple[list[dict], bool]:
+        """Cursor-walk the update feed (+ per-update comment overflow).
+        The update feed carries FEED semantics: tripping its ceiling sets
+        Activity.truncated so the builder renders the loud banner."""
+        conn = project.get("projectUpdates") or {}
+        nodes = list(conn.get("nodes") or [])
+        page_info = conn.get("pageInfo") or {}
+        for _ in range(MAX_PROJECT_UPDATE_PAGES - 1):
+            if not page_info.get("hasNextPage"):
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { project(id: $id) {
+                     projectUpdates(first: %d, after: $after, orderBy: createdAt) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { id body createdAt user { name }
+                         comments(first: 10) { pageInfo { hasNextPage endCursor }
+                           nodes { id parent { id } body createdAt user { name } } } }
+                     } } }""" % PROJECT_UPDATES_PAGE,
+                {"id": pmo_id, "after": page_info["endCursor"]})
+            conn = page["project"]["projectUpdates"]
+            nodes.extend(conn.get("nodes") or [])
+            page_info = conn.get("pageInfo") or {}
+        truncated = False
+        if page_info.get("hasNextPage"):
+            truncated = True
+            log.error("project %s: update-feed hard stop (%d updates) — the "
+                      "activity folder is INCOMPLETE", pmo_id,
+                      PROJECT_UPDATES_PAGE * MAX_PROJECT_UPDATE_PAGES)
+        for u in nodes:
+            cconn = u.get("comments") or {}
+            if (cconn.get("pageInfo") or {}).get("hasNextPage"):
+                await self._walk_update_comments(u)
+        return nodes, truncated
+
+    async def _walk_update_comments(self, update: dict) -> None:
+        """Overflow walk for one update's comment thread via the top-level
+        projectUpdate(id:) query (verified live: id is String!)."""
+        conn = update.get("comments") or {}
+        nodes = list(conn.get("nodes") or [])
+        page_info = conn.get("pageInfo") or {}
+        for _ in range(MAX_UPDATE_COMMENT_PAGES):
+            if not page_info.get("hasNextPage"):
+                break
+            page = await self._gql(
+                """query($id: String!, $after: String!) { projectUpdate(id: $id) {
+                     comments(first: %d, after: $after) {
+                       pageInfo { hasNextPage endCursor }
+                       nodes { id parent { id } body createdAt user { name } }
+                     } } }""" % UPDATE_COMMENTS_PAGE,
+                {"id": update["id"], "after": page_info["endCursor"]})
+            conn = page["projectUpdate"]["comments"]
+            nodes.extend(conn.get("nodes") or [])
+            page_info = conn.get("pageInfo") or {}
+        if page_info.get("hasNextPage"):  # never silent
+            log.warning("project update %s: comment ceiling (%d) hit — "
+                        "remainder omitted", update.get("id"),
+                        UPDATE_COMMENTS_PAGE * MAX_UPDATE_COMMENT_PAGES)
+        update["comments"] = {"nodes": nodes, "pageInfo": page_info}
 
     # ── writes ───────────────────────────────────────────────────────────────
 

@@ -12,6 +12,7 @@ from devcake.domain.repo_routing import (REASON_ZERO_REPO, marker_repo,
                                          resolve_repo)
 from devcake.domain.run import Run
 from devcake.domain.orchestrator import dispatch, sweeps
+from devcake.domain.orchestrator.markers import DELIVERABLE_MARKER
 
 
 def run_coro(c):
@@ -431,7 +432,7 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
     assert "report/REPORT.md" in names and "report/data.bin" in names
     assert "gone.txt" not in names                 # removed files excluded
     assert z.read("report/data.bin") == b"\x00\x01\x02"   # binary intact
-    assert any("Deliverable attached" in f for f in feed)
+    assert any(DELIVERABLE_MARKER in f for f in feed)
     assert "deliver:zip" in run.finalized_steps    # idempotency recorded
     # idempotent: a second call does nothing
     uploaded.clear()
@@ -496,7 +497,7 @@ def test_mission_zip_delivery_ignores_quoted_deliverable_marker(tmp_path):
         tmp_path, "> attaching `T-1-deliverable.zip` next\n`devcake:v1`")
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert "T-1-deliverable.zip" in uploaded
-    assert any("Deliverable attached" in f for f in feed)
+    assert any(DELIVERABLE_MARKER in f for f in feed)
 
 
 def test_mission_zip_delivery_skips_on_unquoted_marker(tmp_path):
@@ -573,7 +574,7 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
     run_coro(mgr.deliver_internal_zip(run, pr))
     assert "T-1-deliverable.zip" in uploaded
     assert "deliver:zip" in run.finalized_steps
-    assert any("Deliverable attached" in f for f in feed)
+    assert any(DELIVERABLE_MARKER in f for f in feed)
 
 
 def test_external_mission_zip_respects_toggle(tmp_path):
@@ -742,3 +743,16 @@ def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch
     out = execute_prompt("ID", m, "a", "pr {branch}", reference_repos=note)
     assert "Reference repositories (read-only)" in out
     assert "Reference repositories" in plan_prompt("ID", m, reference_repos=note)
+
+
+def test_deliverable_note_is_marked_and_honest(tmp_path):
+    """The feed note opens with DELIVERABLE_MARKER (concierge classifies on
+    startswith) and says what the zip IS — the audit copy — so no reader,
+    human or bot, mistakes it for the mission's answer."""
+    mgr, uploaded, feed, m, pr = _mission_delivery_setup(
+        tmp_path, "unrelated earlier comment")
+    run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
+    note = next(f for f in feed if DELIVERABLE_MARKER in f)
+    assert note.startswith(DELIVERABLE_MARKER)
+    assert "T-1-deliverable.zip" in note
+    assert "audit copy, not the answer" in note

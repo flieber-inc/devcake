@@ -180,7 +180,8 @@ def _rt(tmp_path, managers=None, store=None, order=None):
     return PollRuntime(
         config=AppConfig(), managers=managers, mappers={},
         store=store if store is not None else SimpleNamespace(active=lambda: [], all=lambda: []),
-        forge_runtime=SimpleNamespace(breakers={}),
+        forge_runtime=SimpleNamespace(breakers={},
+                                      last_full_probe_at=datetime.now(timezone.utc)),
         refresh_forge_health=_noop,
         managers_in_config_order=(order or (lambda: list(managers.values()))),
         owner_store=OwnerStore(tmp_path / "state" / "mission_owner.json"))
@@ -399,25 +400,25 @@ def test_config_put_survives_secret_cleanup_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     from devcake.api import main as app_main
     from devcake.api import config_service
-    from devcake.config import RepoInstance
+    from devcake.config import AppConfig, RepoInstance
+    from fakes import make_services
 
     def boom(scope, name):
         raise RuntimeError("disk error")
 
-    monkeypatch.setattr(app_main, "reload_connections", lambda: None)
     # save_config is called by config_service after the C5 split — patch it
     # THERE, not on app_main (audit D5 #3: the app_main patch is dead, so the
     # PUT persisted repos:[] to the real config path).
     monkeypatch.setattr(config_service, "save_config", lambda c: None)
     monkeypatch.setattr(app_main.secrets_store, "delete_connection_instance", boom)
-    original_repos = app_main.config.repos
-    app_main.config.repos = [RepoInstance(name="gone",
-                                          url="https://github.com/o/r")]
-    try:
-        out = run_coro(app_main.put_config({"repos": []}))   # must not raise
-        assert out["repos"] == []
-    finally:
-        app_main.config.repos = original_repos
+    # ADR-0028: a fresh per-test graph — no module-global repos to restore
+    monkeypatch.setattr(app_main, "services", make_services(
+        config=AppConfig(repos=[RepoInstance(name="gone",
+                                             url="https://github.com/o/r")]),
+        dev_types={}, managers={}, repo_cache=None,
+        reload_connections=lambda: None))
+    out = run_coro(app_main.put_config({"repos": []}))   # must not raise
+    assert out["repos"] == []
 
 
 def test_hello_and_oauth_runs_stamp_sys_pmo_ref():
@@ -464,6 +465,10 @@ def test_locator_sees_owner_after_claim(tmp_path):
         def __init__(self, missions):
             self.missions = missions
 
+        def capabilities(self):
+            from fakes import fake_pmo_capabilities
+            return fake_pmo_capabilities()   # global_ids=True (linear-shaped)
+
         async def get(self, ref):
             m = self.missions.get(ref.pmo_id)
             if m is None:
@@ -490,14 +495,14 @@ def test_main_wires_one_shared_locator():
     """build_managers must hand the ONE shared locator to BOTH branches
     (create + reconcile) — a missed branch is the silent 'half multi-PMO'
     wiring bug the required-dependency rule exists to prevent. Source-pinned
-    (the dispatch-stamp precedent above) without importing api.main's
-    import-time singletons."""
+    against api/services.py (ADR-0028: the composition root moved there;
+    importing it stays side-effect-free)."""
     from pathlib import Path
     import devcake
-    src = (Path(devcake.__file__).parent / "api" / "main.py").read_text()
-    assert "blocker_locator = BlockerLocator(managers, _mission_owner_of)" in src
-    assert "mgr.blocker_locator = blocker_locator" in src        # reconcile
-    assert "blocker_locator=blocker_locator" in src              # create
+    src = (Path(devcake.__file__).parent / "api" / "services.py").read_text()
+    assert "s.blocker_locator = BlockerLocator(" in src
+    assert "mgr.blocker_locator = self.blocker_locator" in src   # reconcile
+    assert "blocker_locator=self.blocker_locator" in src         # create
 
 
 def test_merged_cache_resolves_foreign_blocker_keys(tmp_path):

@@ -17,11 +17,14 @@ from ...harness import HARNESSES, missing_referenced_secret_env
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType, assignment_for
+from .. import failure_taxonomy
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
 from ..run import Run, utcnow
+from ..workspaces import WorkspaceUnavailable
 from . import markers
 from . import schedule
+from .activity_payload import push_activity_repo
 from .feed import _is_devcake_comment, _stage_of, _unquoted
 from .markers import STEP_MARKER
 
@@ -141,7 +144,9 @@ async def resolve_blocker_work(
             continue
         if r.mission_type in ("MAPPER", "HELLO", "OAUTH"):
             continue
-        # legacy default "main" is not a real resolved work repo name on the
+        # legacy default "main" (see run.LEGACY_PMO_REFS — here it is a
+        # synthetic REPO name, deliberately narrower: "" is never a repo
+        # ref) is not a real resolved work repo name on the
         # sticky path (configured names are operator-chosen; internal names
         # are {instance}-{key}); skip the synthetic default so a pre-v3
         # record cannot invent a mount target.
@@ -335,11 +340,12 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     else:
         activity = await mgr.pmo.get_activity(mission.ref)
         seq = _derive_seq(activity)
-    # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3),
-    # a later step finishes, or a human comments on the mission
+    # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3), a
+    # later step finishes, or — per `attempt_reset` (ADR-0026) — a human
+    # comment (any, or only one carrying DEVCAKE-RETRY). `unlimited` never
+    # gives up; it warns loudly instead.
     attempt = attempt_number(mgr, mission.pmo_id, mtype.value, activity)
-    if attempt > mgr.config.max_attempts:
-        await _give_up(mgr, live, mtype, attempt - 1)
+    if not await _attempt_gate(mgr, live, mtype, attempt):
         return None
 
     assignment = assignment_for(mgr.config, mgr.instance, mtype.value)
@@ -356,14 +362,34 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         log.warning("dispatch of %s refused — %s", live.key, e)
         return None
 
-    # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
-    # repo records what this Dev actually receives. NEVER gates dispatch.
-    await _push_activity_repo(mgr, live, mtype, seq)
-
-    # RO mounts of done blockers' work repos (snapshot for runspec + prompt)
+    # RO mounts of done blockers' work repos (snapshot for runspec + prompt).
+    # Hoisted above the activity push (ADR-0024): the mirror gate needs the
+    # blocker set, and gating AFTER the push would write one activity
+    # snapshot commit per gated poll cycle. resolve_blocker_work is
+    # side-effect-free (store + locator reads only).
     all_runs = mgr.runs.store.all()
     blocker_entries, blocker_skips = await resolve_blocker_work(
         mgr, live, repo_name, all_runs)
+
+    # ADR-0024: fail-closed mirror precondition (docs/07 §5a). NOT a run
+    # failure — no container launches, no attempt burns; the reason lands on
+    # the missions row via the shared gate dict and retries next cycle.
+    needed = mgr.repo_cache.needed_for(
+        work_repo=repo_name, mission_type=mtype.value,
+        instance=mgr.instance, blocker_entries=blocker_entries)
+    ok, why = await mgr.repo_cache.ensure_fresh(needed)
+    if not ok:
+        mgr.blocked_reasons[live.pmo_id] = (
+            "repository mirror not fresh — dispatch deferred: "
+            + "; ".join(f"{n}: {r}" for n, r in sorted(why.items())))
+        log.warning("dispatch of %s deferred — %s", live.key,
+                    mgr.blocked_reasons[live.pmo_id])
+        return None
+
+    # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
+    # repo records what this Dev actually receives. NEVER gates dispatch.
+    await push_activity_repo(mgr, live, mtype, seq)
+
     blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips)
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
@@ -417,11 +443,16 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
                 blocker_repos=blocker_note),
         }[mtype]()
 
-        spec_env = _protocol_spec_env(mgr, 
+        spec_env = _protocol_spec_env(mgr,
             mission_id=mission.pmo_id, mission_key=mission.key,
             mission_type=mtype.value, dev_type=dev_type, seq=seq,
             extra_args=assignment.extra_cli_args, repo=repo, forge=forge,
-            recover_misplaced_result=mgr.config.recover_misplaced_result)
+            recover_misplaced_result=mgr.config.recover_misplaced_result,
+            continuation_policy=mgr.config.continuation_policy,
+            max_continuations=mgr.config.max_continuations,
+            mirror_path=(str(mgr.repo_cache.mirror_path(repo_name))
+                         if mgr.repo_cache.eligible(repo_name) else ""),
+            lfs=mgr.config.repo_mirror.lfs)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
             pmo_kind=mission.pmo_kind,
@@ -431,6 +462,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             traceparent=traceparent,
             spec_env=spec_env,
             blocker_work=list(blocker_entries),
+            mirror_repos=list(needed),
         )
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
@@ -439,8 +471,20 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         run.branch = mission_branch(mgr.instance_name, mission.key)
         run.stage_label_at_dispatch = _stage_of(live)
         run.mission_pmo_id = mission.pmo_id
-        await mgr.runs.bootstrap.launch(
-            run, image=HARNESSES[dev_type.harness_template].image)
+        try:
+            await mgr.runs.bootstrap.launch(
+                run, image=HARNESSES[dev_type.harness_template].image)
+        except WorkspaceUnavailable as e:
+            # AUD-001/002: the workspace base is unusable — gate exactly like
+            # the mirror precondition above (no attempt burned; the run was
+            # unwound in launch). Visible on the missions row + /health, and
+            # the SPA's "dispatch is frozen" alert is now backed by real
+            # gating. Retries next cycle.
+            mgr.blocked_reasons[live.pmo_id] = (
+                f"workspace base unusable — dispatch deferred: {e}")
+            log.warning("dispatch of %s deferred — %s", live.key,
+                        mgr.blocked_reasons[live.pmo_id])
+            return None
 
         if live.status == "backlog":
             await mgr.pmo.set_status(mission.ref, "in_progress")
@@ -499,7 +543,11 @@ def append_required_skills(prompt: str, skills_required: list[str],
 def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        mission_type: str, dev_type: DevType, seq: int,
                        extra_args: str, repo, forge,
-                       recover_misplaced_result: bool = True) -> dict[str, str]:
+                       recover_misplaced_result: bool = True,
+                       continuation_policy: str = "auto",
+                       max_continuations: int = 2,
+                       mirror_path: str = "",
+                       lfs: bool = False) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
     place so mission and mapper dispatches can never drift apart — a var
     missing on one path would crash the entrypoint's strict readers."""
@@ -522,6 +570,14 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         # flag impossible to switch off (ADR-0018)
         "DEVCAKE_RECOVER_MISPLACED_RESULT": (
             "1" if recover_misplaced_result else ""),
+        # ADR-0022 — a string enum and an int-string, not flags; the
+        # entrypoint's continuation_config parses defensively (garbage → off)
+        "DEVCAKE_CONTINUATION_POLICY": continuation_policy,
+        "DEVCAKE_MAX_CONTINUATIONS": str(max_continuations),
+        # ADR-0024 — the work repo's mirror ("" = direct clone: internal
+        # repos only); LFS flag rides the "1"/"" convention (never str(bool))
+        "DEVCAKE_MIRROR_PATH": mirror_path,
+        "DEVCAKE_LFS": "1" if lfs else "",
         "DEVCAKE_MODEL": (dev_type.model
                           or HARNESSES[dev_type.harness_template].default_model),
         # Devs export through the collector, credential-free (ISSUES #13)
@@ -591,6 +647,29 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     return payload
 
 
+def _mirrored(mgr, run: Run, name: str) -> bool:
+    """Whether an extra rides the mirror — decided ONCE, at dispatch (2026-08
+    evaluation F12). The gate's `needed_for` set is snapshotted on
+    `run.mirror_repos`, exactly like the primary's DEVCAKE_MIRROR_PATH in
+    spec_env; re-deriving here from live config let a repo added to the
+    instance between dispatch and runspec.get receive a mirror_path the gate
+    never created (the Dev would `git clone file://` a nonexistent path).
+    Legacy records (empty snapshot, pre-field) keep the live derivation.
+    Belt: a snapshot member whose mirror vanished mid-flight (operator rm)
+    falls back to the token path instead of a dead file:// URL — extra-clone
+    failures are non-fatal in the entrypoint, but a silent context omission
+    beats a confusing one."""
+    snapshot = run.mirror_repos or []
+    decided = (name in snapshot) if snapshot else mgr.repo_cache.eligible(name)
+    if not decided:
+        return False
+    if not mgr.repo_cache.mirror_path(name).is_dir():
+        log.warning("mirror for %r vanished between dispatch and runspec of "
+                    "%s — falling back to a token clone", name, run.run_id)
+        return False
+    return True
+
+
 def _extra_repos_for(mgr, run: Run) -> list[dict]:
     """Read-only sibling clones for a run, built at request time (nothing
     secret at rest); read tokens preferred, write fallback (same rule as
@@ -617,6 +696,15 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
         forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
             continue         # removed mid-flight — proceed on what remains
+        if _mirrored(mgr, run, name):
+            # ADR-0024: mirrored — the clone needs NO token (fewer secrets in
+            # transit), and the tokenless-omit rule below must not apply: the
+            # mirror gate already proved fetchability, and omitting here while
+            # the gate blocks on the same repo would be incoherent
+            extras.append({"name": name, "url": inst_x.url,
+                           "clone_user": forge_x.descriptor.clone_user,
+                           "mirror_path": str(mgr.repo_cache.mirror_path(name))})
+            continue
         token = inst_x.token_ro or inst_x.token
         if not token:
             continue
@@ -644,6 +732,15 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
             forge_x = mgr.forges.get(name)
             if inst_x is None or forge_x is None:
                 continue     # cleared / vanished — non-fatal omit
+            if _mirrored(mgr, run, name):
+                # ADR-0024: configured blocker-work repos ride the mirror
+                # like every other configured card (same rationale as above)
+                extras.append({"name": name, "url": inst_x.url,
+                               "clone_user": forge_x.descriptor.clone_user,
+                               "mirror_path": str(
+                                   mgr.repo_cache.mirror_path(name))})
+                seen.add(name)
+                continue
             token = inst_x.token_ro or inst_x.token
             if not token:
                 continue
@@ -698,114 +795,6 @@ def _derive_seq(activity) -> int:
     return (max(steps) + 1) if steps else 1
 
 
-def _tree_conflict(cand: str, used: set[str]) -> bool:
-    """True when `cand` cannot coexist with `used` as one file tree: exact
-    duplicate, `cand` names a file where used paths already form a directory,
-    or an ancestor directory of `cand` is already a file. A file and a
-    directory sharing a name is unrepresentable in a git tree and crashes
-    the entrypoint's mkdir/write."""
-    if cand in used:
-        return True
-    pre = cand + "/"
-    if any(u.startswith(pre) for u in used):
-        return True
-    parts = cand.split("/")
-    return any("/".join(parts[:i]) in used for i in range(1, len(parts)))
-
-
-def _unique_name(name: str, used: set[str]) -> str:
-    """docs/07 §2 collision rule: later duplicates get -2, -3, … suffixes.
-    A flat name also conflicts with an existing extraction DIRECTORY of the
-    same name (file-vs-dir is unrepresentable — `_tree_conflict`); the
-    suffix rule resolves that identically. Callers pass flat (basenamed)
-    names; extraction paths are reserved directly by the expansion loop."""
-    stem, dot, ext = name.rpartition(".")
-    cand, i = name, 1
-    while cand in used or any(u.startswith(cand + "/") for u in used):
-        i += 1
-        cand = f"{stem}-{i}.{ext}" if dot else f"{name}-{i}"
-    used.add(cand)
-    return cand
-
-
-def safe_activity_relpath(path: str) -> str | None:
-    """Normalize a feed-controllable relative path for the activity folder.
-    Rejects empty, absolute, `..`, and over-deep/long names (zip-slip)."""
-    if not path or not isinstance(path, str):
-        return None
-    raw = path.replace("\\", "/").strip()
-    if not raw or raw.startswith("/") or raw.startswith("~"):
-        return None
-    parts = [p for p in raw.split("/") if p not in ("", ".")]
-    if not parts or ".." in parts:
-        return None
-    if len(parts) > 20 or any(len(p) > 200 for p in parts):
-        return None
-    return "/".join(parts)
-
-
-def expand_zip_attachment(zip_name: str, data: bytes, *,
-                          max_bytes: int,
-                          max_files: int = 500) -> list[tuple[str, bytes]]:
-    """Extract zip members under `{stem}/…`. Best-effort: corrupt/oversize/
-    slip members are skipped; never raises into the payload builder."""
-    import io
-    import zipfile
-    from pathlib import PurePosixPath
-
-    stem = PurePosixPath(zip_name.replace("\\", "/")).name
-    if stem.lower().endswith(".zip"):
-        stem = stem[:-4]
-    stem = stem or "archive"
-    # stem itself must be a single safe segment
-    if safe_activity_relpath(stem) is None or "/" in stem:
-        stem = "archive"
-    out: list[tuple[str, bytes]] = []
-    emitted: set[str] = set()
-    used = 0
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
-    except (zipfile.BadZipFile, OSError):
-        return []
-    try:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            if len(out) >= max_files:
-                break
-            member = safe_activity_relpath(info.filename)
-            if member is None:
-                continue
-            full = safe_activity_relpath(f"{stem}/{member}")
-            if full is None:
-                continue
-            # a crafted zip can hold both `x` and `x/y` (or duplicate
-            # names) — later members that conflict with an already-emitted
-            # path are dropped, keeping the extraction one valid file tree
-            if _tree_conflict(full, emitted):
-                continue
-            # Pre-check declared uncompressed size before read — a zip bomb
-            # must not force a multi-GB decompress into memory first. The
-            # header can lie; the post-read check below is the hard stop.
-            declared = getattr(info, "file_size", 0) or 0
-            if declared < 0:
-                continue
-            if declared and used + declared > max_bytes:
-                break
-            try:
-                content = zf.read(info)
-            except Exception:  # noqa: BLE001 — one bad member must not abort the rest
-                continue
-            if used + len(content) > max_bytes:
-                break
-            used += len(content)
-            emitted.add(full)
-            out.append((full, content))
-    finally:
-        zf.close()
-    return out
-
-
 def _aware(ts: datetime) -> datetime:
     """Anchor timestamps come from three sources (audit log, run records,
     PMO comments); a stray naive one must not crash the scheduler."""
@@ -813,36 +802,27 @@ def _aware(ts: datetime) -> datetime:
 
 
 def _last_giveup_at(pmo_id: str) -> datetime | None:
-    try:
-        ts = None
-        with open(markers.AUDIT_PATH) as f:
-            for line in f:
-                try:
-                    e = json.loads(line)
-                    if e.get("pmo_id") == pmo_id \
-                            and e.get("action") == "devcake_failed":
-                        ts = _aware(datetime.fromisoformat(e["ts"]))
-                except Exception:  # noqa: BLE001 — one bad audit line must never halt scheduling
-                    log.debug("_last_giveup_at: skipping unparseable audit line")
-                    continue
-        return ts
-    except FileNotFoundError:
-        return None
+    """Delegates to the incremental audit-tail reader (markers.last_giveup_at
+    — 2026-08 evaluation F8: the full-file rescan per candidate per cycle is
+    gone). Kept as a seam: tests and attempt_number call through here."""
+    return markers.last_giveup_at(pmo_id)
 
 
 # ADR-0018 — classes whose failures NEVER burn a mission's attempts. Both latch
 # a breaker, so the mission stops being dispatched at all and cannot livelock:
-# that pairing is what makes "uncounted" safe.
+# that pairing is what makes "uncounted" safe — and since ADR-0027 it is an
+# executable invariant over the taxonomy table (`counting == "never" ⇒
+# breaker`), from which this set is derived.
 #
 # DEV_FORGE is deliberately NOT here. Making it unconditionally uncounted was
 # the founder's call, but plain exit 13 latches no breaker (only the
 # DEV_FORGE_AUTH arm calls forges.latch), so it would re-dispatch every poll
 # interval forever on a bad branch name, a DNS failure or a 500 — the exact
 # livelock `excusals_left` exists to bound. It gets the bounded treatment
-# instead: uncounted while the step has excusals, counted once they are spent,
-# so a forge outage costs no attempts but a permanent misconfiguration still
-# reaches DEVCAKE-FAILED.
-UNCOUNTED_CLASSES = frozenset({"DEV_AUTH", "DEV_FORGE_AUTH"})
+# instead ("forge-bounded" in the table): uncounted while the step has
+# excusals, counted once they are spent, so a forge outage costs no attempts
+# but a permanent misconfiguration still reaches DEVCAKE-FAILED.
+UNCOUNTED_CLASSES = failure_taxonomy.UNCOUNTED_CLASSES
 
 
 def counts_toward_attempts(r) -> bool:
@@ -864,14 +844,24 @@ def counts_toward_attempts(r) -> bool:
     return not any((r.error or "").startswith(c) for c in UNCOUNTED_CLASSES)
 
 
+# ADR-0026 — the explicit human retry gesture recognized under `label-ops`.
+# A literal token, not a label: pre-give-up there is no DEVCAKE-FAILED to
+# remove, so strict mode needs a comment-shaped escape hatch that chatty
+# integrations (sync bots, CI notifiers) never emit by accident.
+RETRY_TOKEN = "DEVCAKE-RETRY"
+
+
 def attempt_number(mgr, pmo_id: str, mission_type: str,
                     activity: Activity | None = None) -> int:
     """Count consecutive counted failures, independent of transcript seq.
 
     The count resets at the newest of: the last give-up event, ANY finished
     run for this mission (a later step finishing implies earlier failures
-    were resolved), or the latest human feed comment (a human touching the
-    mission is an intervention — the step deserves fresh attempts)."""
+    were resolved), and — policy-dependent (ADR-0026, `attempt_reset`) — a
+    human feed comment. Under `any-comment` every non-DevCake comment is an
+    intervention (the pre-0026 rule; a chatty integration defeats
+    max_attempts). Under `label-ops` and `unlimited` only a comment carrying
+    the literal `DEVCAKE-RETRY` resets — the deliberate gesture."""
     all_runs = [r for r in mgr.runs.store.all()
                 if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r)]
     history = [r for r in all_runs if r.mission_type == mission_type]
@@ -879,9 +869,12 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
                            *(_aware(r.created_at) for r in all_runs
                              if r.state == "finished")] if t]
     if activity is not None:
+        policy = mgr.config.attempt_reset
         anchors += [_aware(e.ts) for e in activity.entries
                     if e.kind == "comment"
-                    and not _is_devcake_comment(e.body)]
+                    and not _is_devcake_comment(e.body)
+                    and (policy == "any-comment"
+                         or RETRY_TOKEN in (e.body or ""))]
     since = max(anchors, default=None)
     return 1 + sum(
         1 for r in history
@@ -889,6 +882,75 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
         and counts_toward_attempts(r)
         and (since is None or _aware(r.created_at) > since)
     )
+
+
+# Process-local dedup for `unlimited` warnings: the SAME attempt number recurs
+# across poll cycles whenever a later gate (mirror freshness, blockers) defers
+# the dispatch, and a duplicate warning per cycle would be feed spam. A restart
+# may repeat at most one warning — harmless in the loud direction.
+_UNLIMITED_WARNED: set[tuple[str, str, int]] = set()
+
+
+def _mission_cost(mgr, pmo_id: str) -> float:
+    """Cumulative effective cost of a mission's runs (ADR-0021 semantics —
+    native harness cost when reported, else the finalize-stamped estimate).
+    Mirrors the REVIEW loop warning's arithmetic (review._reject_loop_warn)."""
+    from .. import costing
+    ci = mgr.config.cost_inputs
+    total = 0.0
+    for r in mgr.runs.store.all():
+        if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
+            continue
+        tr = r.token_report or {}
+        eff = costing.effective_cost(
+            tr.get("cost_usd_native"), tr.get("cost_usd_estimated"), ci)
+        if eff is not None:
+            total += eff
+    return total
+
+
+async def _attempt_gate(mgr, mission: Mission, mtype: MissionType,
+                        attempt: int) -> bool:
+    """True when dispatch may proceed past the attempt budget (ADR-0026).
+
+    `unlimited` always proceeds — warning loudly at cadence instead of ever
+    applying DEVCAKE-FAILED; every other policy gives up past max_attempts."""
+    if attempt <= mgr.config.max_attempts:
+        return True
+    if mgr.config.attempt_reset == "unlimited":
+        await _unlimited_warn(mgr, mission, mtype, attempt)
+        return True
+    await _give_up(mgr, mission, mtype, attempt - 1)
+    return False
+
+
+async def _unlimited_warn(mgr, mission: Mission, mtype: MissionType,
+                          attempt: int) -> None:
+    """ADR-0026 `unlimited` guardrail: the mode deliberately builds the
+    livelock `excusals_left`'s docstring warns about (no give-up, ever-growing
+    run store), so it must be LOUD — a feed warning with cumulative cost every
+    `review_loop_warning_every` consecutive failures."""
+    failures = attempt - 1
+    every = mgr.config.review_loop_warning_every
+    if every < 1 or failures % every != 0:
+        return
+    key = (mission.pmo_id, mtype.value, failures)
+    if key in _UNLIMITED_WARNED:
+        return
+    _UNLIMITED_WARNED.add(key)
+    cost = _mission_cost(mgr, mission.pmo_id)
+    await mgr._feed(
+        mission.pmo_id, mission.pmo_kind,
+        f"⚠️ **Unlimited-attempts mode:** this mission's {mtype.value} step "
+        f"has failed {failures} consecutive times, and `attempt_reset: "
+        f"unlimited` means DevCake will keep retrying indefinitely. "
+        f"Cumulative recorded cost so far: ${cost:.2f}. Add `DEVCAKE-SKIP` "
+        f"to stop this mission, or change Limits & Traffic → Attempt reset "
+        f"to restore give-up.")
+    mgr._audit(mission.pmo_id, "unlimited_loop_warning",
+               f"{mtype.value} x{failures}")
+    log.warning("unlimited-attempts warning for %s (%s): %d failures",
+                mission.key, mtype.value, failures)
 
 
 async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> None:
@@ -910,162 +972,6 @@ async def _give_up(mgr, mission: Mission, mtype: MissionType, attempts: int) -> 
     log.warning("DEVCAKE-FAILED applied to %s (%s)", mission.key, mtype.value)
 
 
-def _activity_snapshot_files(payload: dict) -> list[dict]:
-    """Activity payload → the file list a snapshot commit mirrors
-    (identical layout to the Dev's /workspace/activity). Attachment paths
-    may be nested (zip extracts under `{stem}/…`); only safe relative
-    paths are kept."""
-    files = []
-    if payload.get("mission_md"):
-        files.append({"path": "MISSION.md", "content_b64": base64.b64encode(
-            payload["mission_md"].encode()).decode()})
-    files.append({"path": "ACTIVITY.md", "content_b64": base64.b64encode(
-        payload.get("activity_md", "").encode()).decode()})
-    for a in payload.get("attachments", []):
-        raw = a.get("filename") or "attachment.bin"
-        rel = safe_activity_relpath(raw)
-        if rel is None:
-            rel = Path(str(raw).replace("\\", "/")).name or "attachment.bin"
-            if rel in (".", ".."):
-                rel = "attachment.bin"
-        files.append({"path": rel, "content_b64": a["content_b64"]})
-    return files
-
-
-async def _push_activity_repo(mgr, mission, mtype, seq: int) -> None:
-    """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
-    audited loudly and swallowed — the run proceeds on the Redis fallback;
-    Gitea down degrades to pre-ADR behavior, never to a halt."""
-    if mgr.internal_forge is None:
-        return
-    try:
-        payload = await activity_payload(mgr, mission.pmo_id, mission.pmo_kind)
-        name = await mgr.internal_forge.ensure_activity_repo(
-            mgr.instance_name, mission.key)
-        await mgr.internal_forge.push_activity_snapshot(
-            name, _activity_snapshot_files(payload),
-            f"step {seq} {mtype.value} dispatch")
-        log.info("activity repo %s: snapshot for step %d", name, seq)
-    except Exception as e:
-        log.exception("activity repo push failed for %s", mission.key)
-        mgr._audit(mission.pmo_id, "activity_repo_push_failed",
-                    f"{mission.key}: {type(e).__name__}: {str(e)[:180]}")
-
-
-def _mission_md(m, attachment_lines=()) -> str:
-    """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;
-    every step playbook points here."""
-    lines = [
-        f"# {m.key}: {m.title}",
-        f"> Kind: {m.pmo_kind} · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
-        f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
-        "## Description", m.description or "(none)"]
-    if attachment_lines:
-        lines += ["", "## Mission attachments", *attachment_lines]
-    return "\n".join(lines)
-
-
-async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
-    """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
-    of the feed — full bodies inline (never externalized), attachments by
-    name in feed order, reply nesting; every attachment's bytes ride as
-    sibling files."""
-    if kind == "project":
-        # projects have no comments/attachments: the brief IS the payload
-        m = await mgr.pmo.get(MissionRef(pmo_id, "project"))
-        md = "\n".join([
-            f"# {m.key}: {m.title}",
-            "> The mission brief lives in MISSION.md (same folder).", "",
-            "## Activity", "(projects carry no comment feed — see child issues)"])
-        return {"mission_md": _mission_md(m), "activity_md": md,
-                "attachments": []}
-    act = await mgr.pmo.get_activity(MissionRef(pmo_id, "issue"), full=True)
-    m = act.mission
-    attachments = []
-    used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed
-
-    async def _materialize(att):
-        """Download one file attachment into the folder; return its index
-        line. The adapter resolves names (AttachmentRef.name) — the domain
-        never parses vendor asset URLs. `.zip` attachments are kept whole
-        and also extracted under `{stem}/` (zip-slip hardened, size-capped)."""
-        try:
-            data = await mgr.pmo.download_asset(att.url)
-        except Exception:  # noqa: BLE001 — attachment fetch degrades to an inline "unavailable" marker; the mirror build continues
-            return f"[attachment unavailable: {att.url}]"
-        # basename BEFORE dedupe: a slash-bearing link text ([v1/r.md](…))
-        # must yield the same name in the index, the snapshot commit, and
-        # the folder — a path-y name would desync them and trip the
-        # snapshot dup-path guard forever (full-diff review finding)
-        raw = (Path(att.name).name if att.name
-               else att.url.rsplit("/", 1)[-1][:80])
-        fname = _unique_name(raw or "attachment.bin", used)
-        attachments.append({"filename": fname,
-                            "content_b64": base64.b64encode(data).decode()})
-        if fname.lower().endswith(".zip"):
-            try:
-                cap = mgr._attachment_cap()
-            except Exception:  # noqa: BLE001 — expand is advisory; fall back to a fixed budget
-                cap = 50 * 1024 * 1024
-            pairs = expand_zip_attachment(fname, data, max_bytes=cap)
-            if pairs:
-                # the extraction dir must not collide with an existing flat
-                # name (file-vs-dir: unrepresentable in the snapshot's git
-                # tree, and a crash in the entrypoint's mkdir) — remap the
-                # whole extraction to `{stem}-2/…`, `-3/…` when it would
-                stem = pairs[0][0].split("/", 1)[0]
-                final, i = stem, 1
-                while _tree_conflict(final, used):
-                    i += 1
-                    final = f"{stem}-{i}"
-                for rel, content in pairs:
-                    rel = final + rel[len(stem):]
-                    if rel in used:      # unreachable once stems are unique
-                        continue
-                    used.add(rel)        # later attachments cannot collide
-                    attachments.append({
-                        "filename": rel,
-                        "content_b64": base64.b64encode(content).decode()})
-        return f"[attachment: {fname}]"
-
-    mission_lines = []
-    for att in act.mission_attachments:
-        if att.kind == "link":
-            mission_lines.append(f"[link: {att.name or att.url}]({att.url})")
-        else:
-            mission_lines.append(await _materialize(att))
-
-    lines = []
-    if act.truncated:   # the adapter's hard stop — never silent (ADR-0014)
-        lines += ["⚠ FEED TRUNCATED — the feed exceeded the full-history "
-                  "hard stop; the OLDEST entries are missing from this "
-                  "mirror.", ""]
-    lines += [
-        f"# {m.key}: {m.title}",
-        "> Brief: MISSION.md (same folder) — description, labels, mission attachments.", "",
-        "## Activity (chronological mirror of the PMO feed)",
-        "Entries marked 🧑 HUMAN are instructions/steering from a person — they",
-        "are authoritative. Entries marked 🤖 DevCake are DevCake's own records.",
-    ]
-    by_id = {e.entry_id: e for e in act.entries if e.entry_id}
-    for e in act.entries:
-        body = e.body or ""
-        # provenance is sentinel-based, never author-based (docs/03 §8a):
-        # DevCake may post with the operator's own PMO credentials
-        provenance = "🤖 DevCake" if _is_devcake_comment(body) else "🧑 HUMAN"
-        lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} — {provenance} ({e.kind})")
-        parent = by_id.get(e.parent_id) if e.parent_id else None
-        if parent is not None:
-            lines.append(f"↳ reply to {parent.author} @ {parent.ts:%Y-%m-%d %H:%M}")
-        elif e.parent_id:
-            lines.append("↳ reply to (deleted comment)")
-        lines.append(body)                # full body — the mirror never trims
-        for att in e.attachments:
-            lines.append(await _materialize(att))
-        lines.append("")
-    return {"mission_md": _mission_md(m, mission_lines),
-            "activity_md": "\n".join(lines), "attachments": attachments}
-
 
 async def resolve_repo_live(mgr, mission, all_runs=None):
     """(repo_name | None, gate_reason | None), UN-GATING zero-repo missions
@@ -1078,9 +984,6 @@ async def resolve_repo_live(mgr, mission, all_runs=None):
     mission change) is a real gate — never silently redirected internal."""
     from ..repo_routing import REASON_ZERO_REPO
     from ...ports.internal_forge import internal_repo_name
-    from ...adapters.registry import make_gitea_adapter
-
-    from ...config import RepoInstance
 
     if all_runs is None:
         all_runs = mgr.runs.store.all()
@@ -1088,24 +991,14 @@ async def resolve_repo_live(mgr, mission, all_runs=None):
     async def _provision() -> str:
         # ensure service accounts first (lazy retry — boot provisioning may
         # have failed against a not-yet-ready Gitea; review finding #7)
-        svc = mgr.internal_forge.service_tokens()
-        if not svc:
+        if not mgr.internal_forge.service_tokens():
             await mgr.internal_forge.ensure_service_accounts()
-            svc = mgr.internal_forge.service_tokens() or {}
         creds = await mgr.internal_forge.ensure_mission_repo(
             mgr.instance_name, mission.key)
-        # the APP-SIDE adapter uses the devcake-app SERVICE token (org owner:
-        # write:issue for PR comments + write:repository for merge), NOT the
-        # mission's Dev write token (write:repository only → issue-scope 403s;
-        # review finding #1). The mission's write/read pair is the Dev's,
-        # delivered via runspec.
-        adapter = make_gitea_adapter(creds.clone_url, svc.get("app_token"),
-                                     svc.get("reviewer_token"))
-        # model_construct: internal repo names carry hyphens / exceed the
-        # operator-name pattern by design — they are synthesized, not input
-        inst = RepoInstance.model_construct(
-            name=creds.repo_name, forge="gitea", url=creds.clone_url,
-            default_branch="main", api_base=None)
+        # the row + app-side adapter come from the PORT (2026-08 F9): only
+        # the internal forge knows its own vendor — token choice, auto-merge
+        # doctrine and the synthesized-name RepoInstance live in the adapter
+        inst, adapter = mgr.internal_forge.mission_repo_binding(creds)
         mgr.forges.register_internal(creds.repo_name, inst, adapter)
         return creds.repo_name
 

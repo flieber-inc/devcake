@@ -3,7 +3,7 @@
 
 Claude cases run against REAL captured streams in fixtures/harness_streams/.
 The codex and grok cases here stay synthetic on purpose — they vary one field at
-a time to pin an arm's boundary; the real codex-cli 0.144.4 and grok 0.2.112
+a time to pin an arm's boundary; the real codex-cli 0.146.0 and grok 0.2.112
 captures are asserted end-to-end in test_harness_captures.py.
 """
 
@@ -323,6 +323,54 @@ def test_forensics_payload_stays_small_under_pathological_input(tmp_path):
     info = ep.workspace_forensics(out_dir, 0, 0, 0, "e" * 5000)
     assert len(json.dumps(info)) < 2048
     assert any("more" in e for e in info["out_listing"])
+
+
+# ── terminal evidence (ADR-0022 PR-1) ────────────────────────────────────────
+# What the exit-11 artifact names about HOW the stream ended: "ended cleanly
+# but early" (EndTurn) vs "just stopped" (null). Driven by the committed
+# captures wherever one carries the shape.
+
+def test_grok_terminal_evidence_names_the_narrate_and_stop_shape():
+    """grok_loop_nocap is the measured exit-11 shape: exit 0, clean end event,
+    stopReason EndTurn — the evidence must surface exactly that."""
+    for name in ("grok_loop_nocap.jsonl", "grok_loop_cap30.jsonl"):
+        ev = ep.terminal_evidence("grok-build", fx(name))
+        assert ev["event"] == "end" and ev["stop_reason"] == "EndTurn"
+        assert ev["num_turns"] == 16
+    healthy = ep.terminal_evidence("grok-build", fx("grok_healthy.jsonl"))
+    assert healthy["event"] == "end" and healthy["session_id"]
+
+
+def test_grok_terminal_evidence_error_and_truncated_streams():
+    err = ep.terminal_evidence("grok-build", fx("grok_empty.jsonl"))
+    assert err["event"] == "error" and "empty response" in err["message"]
+    # a stream that just stopped (text deltas, no terminal event) → None,
+    # which serializes as `"terminal": null` — that absence IS the evidence
+    assert ep.terminal_evidence(
+        "grok-build", J({"type": "text", "data": "working…"})) is None
+    assert ep.terminal_evidence("grok-build", "") is None
+
+
+def test_claude_terminal_evidence_reads_the_result_event():
+    ev = ep.terminal_evidence("claude-code", fx("claude_empty_completion.jsonl"))
+    assert ev["event"] == "result" and ev["subtype"] == "success"
+    assert ep.terminal_evidence("claude-code", J({"type": "assistant"})) is None
+
+
+def test_codex_terminal_evidence_reads_turn_completed():
+    ev = ep.terminal_evidence("codex", fx("codex_healthy.jsonl"))
+    assert ev["event"] == "turn.completed"
+    assert ep.terminal_evidence("codex", J({"type": "turn.started"})) is None
+
+
+def test_terminal_evidence_never_raises_on_hostile_shapes():
+    hostile = "\n".join([
+        J({"type": "end", "stopReason": ["not", "a", "string"], "num_turns": {}}),
+        J({"type": "turn.completed", "usage": "none"}),
+        J({"type": "result", "subtype": 7, "usage": []}),
+        "not json at all", J([1, 2, 3])])
+    for harness in ("grok-build", "codex", "claude-code", "unknown"):
+        ep.terminal_evidence(harness, hostile)  # must not raise
 
 
 # ── misplaced result.json ────────────────────────────────────────────────────

@@ -27,6 +27,10 @@ from ..ports.pmo import PMOTransient
 log = logging.getLogger("devcake")
 tracer = trace.get_tracer("devcake")
 
+# Budget for a forge-health sweep, shared by the boot sweep and the in-cycle
+# re-probe (AUD-007) so neither can hold the poll lock unbounded.
+FORGE_SWEEP_BUDGET_S = 60
+
 
 def _claim_missions(mgr: MissionManager, fetched: list,
                     owner: dict[str, str]) -> list:
@@ -76,8 +80,11 @@ class PollRuntime:
     def __init__(self, *, config, managers: dict[str, MissionManager],
                  mappers: dict, store, forge_runtime, refresh_forge_health,
                  managers_in_config_order, owner_store: OwnerStore | None = None,
-                 backend_degraded: dict[str, str] | None = None):
+                 backend_degraded: dict[str, str] | None = None,
+                 repo_cache=None):
         self.config = config
+        # ADR-0024: warm-up owner. None only in tests (loop() guards).
+        self.repo_cache = repo_cache
         self.managers = managers                    # live reference
         self.mappers = mappers                      # live reference
         self.store = store
@@ -209,9 +216,29 @@ class PollRuntime:
             span.set_attribute("devcake.poll.cycle", cycle)
             try:
                 # a latched repo re-probes every cycle so a transient failure
-                # (or a rotated-back token) self-heals without an operator
-                if self.forge_runtime.breakers:
-                    await self.refresh_forge_health()
+                # (or a rotated-back token) self-heals without an operator.
+                # An unset last_full_probe_at means no full sweep has ever
+                # completed (loop()'s initial sweep still pending, or its
+                # budget expired mid-catalog) — retry until one lands, or
+                # /health `forge_probe` would report "pending" forever.
+                if (self.forge_runtime.breakers
+                        or self.forge_runtime.last_full_probe_at is None):
+                    # AUD-007: the same 60 s budget as the boot sweep. Without
+                    # it, a large or sick catalog re-probes the WHOLE set every
+                    # cycle under the poll lock — and a partial first sweep
+                    # leaves last_full_probe_at unset, so this fires unbounded
+                    # forever, serializing force-poll / clear-runs behind a
+                    # multi-minute sweep. A timeout leaves it "pending" and the
+                    # next cycle retries — never a stuck lock.
+                    try:
+                        async with asyncio.timeout(FORGE_SWEEP_BUDGET_S):
+                            await self.refresh_forge_health()
+                    except TimeoutError:
+                        log.warning("in-cycle forge sweep exceeded its %ds "
+                                    "budget — %d/%d probed; retrying next cycle",
+                                    FORGE_SWEEP_BUDGET_S,
+                                    len(self.forge_runtime.health),
+                                    len(self.forge_runtime.forges))
                 # ADR-0018 — recompute the backend-degraded map. Placement is
                 # load-bearing in two ways, and BOTH fail silently if broken:
                 #   * UNCONDITIONAL, at this indent. One level deeper it would
@@ -231,7 +258,9 @@ class PollRuntime:
                 known = {name for mgr in self.managers.values()
                          for name in mgr.dev_types}
                 for dev_type in backend_health.refresh_degraded(
-                        self.store.all(), self.backend_degraded, known):
+                        self.store.all(), self.backend_degraded, known,
+                        classes=backend_health.fault_classes(
+                            self.config.brake_on_bad_output)):
                     with tracer.start_as_current_span("dev.backend_degraded") as bspan:
                         bspan.set_attribute("devcake.dev_type", dev_type)
                         bspan.set_attribute("devcake.reason",
@@ -304,7 +333,37 @@ class PollRuntime:
 
     async def loop(self) -> None:
         """Periodic poll driver. Shares `lock` and the cycle counter with
-        `POST /api/v1/poll/run` — at most one cycle in flight."""
+        `POST /api/v1/poll/run` — at most one cycle in flight.
+
+        The initial full forge sweep runs here, NOT in lifespan (incident
+        2026-08-01: 319 sequential probes held the listen socket ~95s+ and
+        failed the compose healthcheck), but still before the first cycle:
+        schedule() gates on latched breakers, so a definitively bad
+        credential must latch before cycle 1 can burn an attempt on it.
+        Budget is 60s because a manual poll queued on this lock must resolve
+        inside the admin proxy's 60s window; on expiry the probes that did
+        land already updated health incrementally, last_full_probe_at stays
+        unset, and run_cycle retries the sweep next tick."""
+        async with self.lock:
+            try:
+                async with asyncio.timeout(FORGE_SWEEP_BUDGET_S):
+                    await self.refresh_forge_health()
+            except TimeoutError:
+                log.warning(
+                    "initial forge sweep exceeded its 60s budget — "
+                    "%d/%d repos probed; retrying on the next poll cycle",
+                    len(self.forge_runtime.health),
+                    len(self.forge_runtime.forges))
+        # ADR-0024: mirror warm-up — background, UNBOUNDED, never under the
+        # poll lock and never awaited (a cold 27-repo deployment clones for
+        # minutes); a dispatch needing repo X coalesces onto the in-flight
+        # sync via RepoCache's per-name lock.
+        if self.repo_cache is not None:
+            warm = asyncio.create_task(self.repo_cache.warm_all(),
+                                       name="mirror_warmup")
+            warm.add_done_callback(
+                lambda t: t.cancelled() or t.exception() is None or log.error(
+                    "mirror warm-up died: %r", t.exception()))
         while True:
             async with self.lock:
                 await self.run_cycle(self.next_cycle_id())

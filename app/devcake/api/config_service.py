@@ -8,11 +8,13 @@ would orphan every holder of the old object).
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import HTTPException
 
 from .. import secrets as secrets_store
-from ..config import AppConfig, deep_merge, reject_stale_patch, save_config
+from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
+                      reconcile_managed_pmos, reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
 from ..settings_bundle import (BundleError, dry_run_adapters,
                                validate_config_semantics)
@@ -51,7 +53,7 @@ def inherit_pmo_intake(body: dict, current: dict) -> dict:
 
 
 async def apply_config_patch(body: dict, *, config, dev_types, managers,
-                             reload) -> dict:
+                             reload, repo_cache=None) -> dict:
     """Validate + apply a config PUT in place; hot-reload adapters; restore
     the previous config if the reload fails. `reload` is the composition
     root's reload_connections."""
@@ -61,6 +63,14 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
         # defaults would land if we waited until after model_validate
         current = config.model_dump()
         body = inherit_pmo_intake(body, current)
+        # ADR-0030: managed rows survive the wholesale list replace — and
+        # this MUST precede the removed-instance computation below, or a PUT
+        # omitting the board row would delete pmo-board.json with it
+        if isinstance(body.get("pmos"), list):
+            body = {**body, "pmos": reconcile_managed_pmos(
+                current.get("pmos") or [], body["pmos"],
+                internal_forge_present=bool(
+                    os.environ.get("GITEA_ADMIN_PASSWORD")))}
         merged = AppConfig.model_validate(deep_merge(current, body))
     except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
         raise HTTPException(422, str(e))
@@ -104,14 +114,18 @@ async def apply_config_patch(body: dict, *, config, dev_types, managers,
         except Exception:  # noqa: BLE001 — cleanup is best-effort: the config change is APPLIED; a failure must not 500 it (audit A21); orphan named in the log
             log.exception("could not delete stored secrets of removed "
                           "%s instance %r", scope, name)
-    if not previous["auto_merge"] and config.auto_merge:
-        # auto_merge flipped OFF→ON (founder request 2026-07-15): re-arm the
-        # deferred-merge window for missions already parked at DEVCAKE-MERGE —
-        # the next sweep posts a fresh window entry and drives their merges
-        for mgr in managers.values():
-            mgr.rearm_merge_windows = True
-        log.info("auto_merge flipped ON — parked DEVCAKE-MERGE missions "
-                 "re-armed for the deferred-merge sweep")
+        if scope == "repo" and repo_cache is not None:
+            # ADR-0024: the removed card's mirror goes with it (same
+            # best-effort contract as the secret deletion above)
+            try:
+                repo_cache.delete_mirror(name)
+            except Exception:  # noqa: BLE001 — cleanup only; the config change is APPLIED
+                log.exception("could not delete mirror of removed repo %r",
+                              name)
+    # Per-repo auto_merge OFF→ON (founder request 2026-07-15, ADR-0020):
+    # re-arm the deferred-merge window only for missions whose work repo
+    # flipped — the next sweep posts a fresh window entry for those.
+    apply_auto_merge_rearm(previous.get("repos") or [], config.repos, managers)
     return config.model_dump()
 
 

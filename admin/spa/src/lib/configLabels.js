@@ -2,11 +2,12 @@
 // drives the Save review dialog. Labels mirror the Field labels on the page.
 
 export const AUTO_MERGE_COPY =
-  "DevCake's app will merge its own pull requests to the default branch " +
-  "without a human PR click (after its REVIEW step approves). Without a " +
-  "reviewer token, merges proceed without a formal approval on the forge. " +
-  "Missions already parked at DEVCAKE-MERGE are picked back up: DevCake " +
-  "reopens their merge window and merges them as they become ready. " +
+  "DevCake's app will merge this repository's pull requests to the default " +
+  "branch without a human PR click (after its REVIEW step approves). Without " +
+  "a reviewer token, merges proceed without a formal approval on the forge. " +
+  "Missions on THIS repo already parked at DEVCAKE-MERGE are picked back up: " +
+  "DevCake reopens their merge window and merges them as they become ready " +
+  "(other repos are unaffected). " +
   "This toggle gates the app only — Devs still hold write forge tokens; " +
   "branch protection is what stops an agent from merging.";
 
@@ -19,6 +20,15 @@ export const ADOPTION_COPY =
 const onOff = (v) => (v ? "on" : "off");
 const orEmpty = (v) => (v === null || v === undefined || v === "" ? "(empty)" : String(v));
 const lines = (v) => ((v || []).length ? (v || []).join("\n") : "(none)");
+// rate-card rows diff atomically (the Cost Inputs modal PUTs the whole
+// list) — render them as readable per-1M lines, never [object Object]
+const rateRows = (v) =>
+  ((v || []).length
+    ? (v || []).map((r) =>
+        `${r.model_prefix}: $${r.input_per_mtok} in / ` +
+        `$${r.cache_read_per_mtok} cr / $${r.cache_write_per_mtok} cw / ` +
+        `$${r.output_per_mtok} out per 1M`).join("\n")
+    : "(none)");
 
 const EXACT = {
   "cfg.adoption_mode": {
@@ -27,25 +37,50 @@ const EXACT = {
     warning: (o, n) => (n === "opt_out" ? ADOPTION_COPY : null),
   },
   "cfg.poll_interval_seconds": { group: "PMO", label: "Poll interval (s)" },
-  "cfg.auto_merge": {
-    group: "Repository", label: "Auto-merge", format: onOff,
-    warning: (o, n) => (n === true ? AUTO_MERGE_COPY : null),
-  },
-  "cfg.auto_resolve_merge_conflicts": {
-    group: "Repository", label: "Auto-resolve merge conflicts", format: onOff,
-  },
-  "cfg.merge_retry_window_minutes": { group: "Repository", label: "Merge retry window (min)" },
   "cfg.attach_merged_changeset_to_pmo": {
     group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
   },
-  "cfg.relations_mapper.dev_type": { group: "Traffic control", label: "Mapper Dev Type", format: orEmpty },
-  "cfg.relations_mapper.interval_minutes": { group: "Traffic control", label: "Mapper interval (minutes)" },
-  "cfg.relations_mapper.enabled": { group: "Traffic control", label: "Mapper periodic service", format: onOff },
-  "cfg.concurrency.global_max": { group: "Limits", label: "Global max Devs" },
-  "cfg.dev_timeout_minutes": { group: "Limits", label: "Dev run timeout (min)" },
-  "cfg.review_loop_warning_every": { group: "Limits", label: "Loop warning every N rejections" },
+  "cfg.relations_mapper.dev_type": { group: "Limits & Traffic", label: "Mapper Dev Type", format: orEmpty },
+  "cfg.relations_mapper.interval_minutes": { group: "Limits & Traffic", label: "Mapper interval (minutes)" },
+  "cfg.relations_mapper.enabled": { group: "Limits & Traffic", label: "Mapper periodic service", format: onOff },
+  "cfg.max_decomposition_depth": {
+    group: "Limits & Traffic", label: "Decomposition depth",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.concurrency.global_max": { group: "Limits & Traffic", label: "Global max Devs" },
+  "cfg.dev_timeout_minutes": { group: "Limits & Traffic", label: "Dev run timeout (min)" },
+  "cfg.review_loop_warning_every": { group: "Limits & Traffic", label: "Loop warning every N rejections" },
   "cfg.recover_misplaced_result": {
-    group: "Limits", label: "Accept misplaced result files", format: onOff,
+    group: "Limits & Traffic", label: "Accept misplaced result files", format: onOff,
+  },
+  "cfg.continuation_policy": { group: "Limits & Traffic", label: "Continuation policy" },
+  "cfg.attempt_reset": {
+    group: "Limits & Traffic", label: "Attempt reset policy",
+    format: (v) => ({ "label-ops": "strict (DEVCAKE-RETRY / labels)",
+                      "any-comment": "any comment",
+                      unlimited: "unlimited (never give up)" }[v] || String(v)),
+  },
+  "cfg.brake_on_bad_output": {
+    group: "Limits & Traffic", label: "Brake on missing results (exit 11)",
+    format: onOff,
+  },
+  "cfg.repo_mirror.sync_max_age_seconds": {
+    group: "Limits & Traffic", label: "Mirror sync max age (s)",
+    format: (v) => (v === 0 ? "every dispatch" : String(v)),
+  },
+  "cfg.repo_mirror.lfs": {
+    group: "Limits & Traffic", label: "Mirror LFS content", format: onOff,
+  },
+  "cfg.max_continuations": {
+    group: "Limits & Traffic", label: "Max continuations per run",
+    format: (v) => (v === 0 ? "off" : String(v)),
+  },
+  "cfg.cost_inputs.override_native": {
+    group: "Cost", label: "Operator rates override displayed cost", format: onOff,
+  },
+  "cfg.cost_inputs.rates": {
+    group: "Cost", label: "Cost rate card ($/1M tokens)",
+    format: rateRows, multiline: true,
   },
 };
 
@@ -67,8 +102,8 @@ const ASSIGNMENT_FIELDS = {
 
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
-  "Traffic control", "PMO", "Repository", "Dev Types", "Assignments",
-  "Prompts", "Limits", "Other",
+  "PMO", "Repository", "Dev Types", "Mission Types",
+  "Prompts", "Limits & Traffic", "Cost", "Other",
 ];
 
 // the instance LISTS diff atomically when a card is added/removed — show the
@@ -86,10 +121,28 @@ export function metaFor(path) {
              multiline: false, format: instanceNames };
   let m = path.match(/^cfg\.repos\.(\d+)\.([^.]+)$/);
   if (m) {
-    const FIELDS = { name: "Repo name", forge: "Forge", url: "Repository URL",
-                     default_branch: "Default branch", api_base: "API base" };
-    return { group: "Repository", multiline: false, format: orEmpty,
-             label: `Repo #${+m[1] + 1} · ${FIELDS[m[2]] || m[2]}` };
+    // meta objects so per-repo merge doctrine can carry format/warning
+    // (ADR-0020); plain string values remain label-only identity fields
+    const FIELDS = {
+      name: { label: "Repo name" },
+      forge: { label: "Forge" },
+      url: { label: "Repository URL" },
+      default_branch: { label: "Default branch" },
+      api_base: { label: "API base" },
+      auto_merge: {
+        label: "Auto-merge", format: onOff,
+        warning: (o, n) => (n === true ? AUTO_MERGE_COPY : null),
+      },
+      auto_resolve_merge_conflicts: {
+        label: "Auto-resolve merge conflicts", format: onOff,
+      },
+      merge_retry_window_minutes: { label: "Merge retry window (min)" },
+    };
+    const f = FIELDS[m[2]] || { label: m[2] };
+    return {
+      group: "Repository", multiline: false, format: orEmpty, ...f,
+      label: `Repo #${+m[1] + 1} · ${f.label}`,
+    };
   }
   m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base)$/);
   if (m) {
@@ -120,12 +173,12 @@ export function metaFor(path) {
   m = path.match(/^cfg\.pmos\.(\d+)\.assignments\.([^.]+)\.(.+)$/);
   if (m && ASSIGNMENT_FIELDS[m[3]]) {
     const f = ASSIGNMENT_FIELDS[m[3]];
-    return { group: "Assignments", multiline: false, format: orEmpty, ...f,
+    return { group: "Mission Types", multiline: false, format: orEmpty, ...f,
              label: `${m[2]} override (PMO #${+m[1] + 1}) · ${f.label}` };
   }
   m = path.match(/^cfg\.pmos\.(\d+)\.assignments\.([^.]+)$/);
   if (m) {
-    return { group: "Assignments", multiline: false,
+    return { group: "Mission Types", multiline: false,
              label: `${m[2]} override (PMO #${+m[1] + 1})`,
              format: (v) => (v == null ? "(inherit global)"
                              : `${v.dev_type || "(unassigned)"}` +
@@ -143,7 +196,7 @@ export function metaFor(path) {
   if (m && ASSIGNMENT_FIELDS[m[2]]) {
     const f = ASSIGNMENT_FIELDS[m[2]];
     return {
-      group: "Assignments", multiline: false, format: orEmpty, ...f,
+      group: "Mission Types", multiline: false, format: orEmpty, ...f,
       label: `${m[1]} · ${f.label}`,
     };
   }

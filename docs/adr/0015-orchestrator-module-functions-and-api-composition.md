@@ -35,7 +35,7 @@ re-inlining bodies into one class.
 
 Reaffirms ADR-0009. No `AdvisoryState` wrapper object: `breakers` is an
 injected dict aliased by `main.shared_breakers` and `OAuthManager`;
-`anomalies`/`rearm_merge_windows`/`_grace` are mutated from the composition
+`anomalies`/`rearm_merge_repos`/`_grace` are mutated from the composition
 root; and `build_managers()` reconciles managers **in place** on config reload
 precisely so advisory state survives — the manager's identity IS the state
 container. A wrapper is isomorphic to the manager and only endangers the
@@ -52,13 +52,13 @@ as forwards with **unchanged coroutine names and signatures** — tests call
 them directly (`app_main.save_profile(...)`), so the forward layer is the
 API's stable test seam. No `APIRouter`: it would be a second routing idiom for
 zero behavior. Every `@app.<verb>` body is ≤ 4 statements, AST-guarded with an
-allowlist that may only shrink, never grow. At C6 close-out it holds nine
-read-side residuals — `dispatch_hello` (CI fixture), the `run_mapper`/`oauth`
-trio, and the small `runs`/`log`/`clear-runs` endpoints whose bodies are
-inherently a few statements (`list_runs`, `get_run`, `get_run_log`,
-`stream_run_log`, `clear_runs`) — not the single-entry end state an earlier
-draft imagined; the guard test (`test_structure_guards.py`) is the source of
-truth. Poll machinery lives in `api/poll.py` as `PollRuntime`; health probes
+allowlist that may only shrink, never grow. It holds **seven** read-side
+residuals — `dispatch_hello` (CI fixture), the `run_mapper`/`oauth` trio,
+and `get_run_log`/`stream_run_log`/`clear_runs` — not the single-entry end
+state an earlier draft imagined. (The C6 close-out counted nine; `list_runs`
+and `get_run` were since forwarded — the ratchet shrank and this prose
+lagged until the 2026-08 truth sweep.) The guard test
+(`test_structure_guards.py`) is the source of truth. Poll machinery lives in `api/poll.py` as `PollRuntime`; health probes
 in `api/health.py`.
 
 ## Decision 4 — module-public functions are the sanctioned test seam

@@ -41,6 +41,61 @@ def test_trips_on_two_faults_across_two_missions():
     assert backend_correlated_reason(runs) is not None
 
 
+# ── ADR-0026: opt-in widening to DEV_BAD_OUTPUT ──────────────────────────────
+
+def test_bad_output_is_invisible_to_the_brake_by_default():
+    """ADR-0018's design stands unless the operator opts in: exit-11 evidence
+    never correlates, never throttles (the 2026-07-24 cascade behavior)."""
+    runs = [run(1, mission="p1", error_class="DEV_BAD_OUTPUT"),
+            run(2, mission="p2", error_class="DEV_BAD_OUTPUT")]
+    assert backend_health.backend_correlated(runs, "judgment") is None
+    assert backend_health.backend_degraded(runs, "judgment") is None
+    assert backend_health.fault_classes(False) == frozenset(
+        {backend_health.FAULT_CLASS})
+
+
+def test_bad_output_correlates_when_opted_in():
+    """`brake_on_bad_output: true` makes a fleet-wide bad-output cascade read
+    as ONE backend event — including MIXED evidence (some containers exit 15,
+    others 11), which is exactly the shared-backend failure shape."""
+    classes = backend_health.fault_classes(True)
+    pure = [run(1, mission="p1", error_class="DEV_BAD_OUTPUT"),
+            run(2, mission="p2", error_class="DEV_BAD_OUTPUT")]
+    assert backend_health.backend_correlated(pure, "judgment",
+                                             classes=classes) is not None
+    mixed = [run(1, mission="p1", error_class="DEV_BAD_OUTPUT"),
+             run(2, mission="p2", error_class=FAULT)]
+    assert backend_health.backend_correlated(mixed, "judgment",
+                                             classes=classes) is not None
+    assert backend_health.backend_degraded(mixed, "judgment",
+                                           classes=classes) is not None
+
+
+def test_bad_output_solo_streak_throttles_when_opted_in():
+    classes = backend_health.fault_classes(True)
+    runs = [run(1, error_class="DEV_BAD_OUTPUT"),
+            run(2, error_class="DEV_BAD_OUTPUT"),
+            run(3, error_class="DEV_BAD_OUTPUT")]
+    assert backend_health.backend_correlated(runs, "judgment",
+                                             classes=classes) is None
+    assert backend_health.backend_degraded(runs, "judgment",
+                                           classes=classes) is not None
+
+
+def test_bad_output_excusals_are_class_scoped():
+    """The DEV_BAD_OUTPUT excusal budget is its own ledger: harness-fault
+    excusals must not consume it and vice versa (same per-step bound)."""
+    probe = run(9, error_class="DEV_BAD_OUTPUT")
+    spent_harness = [run(n, error_class=FAULT, counted=False)
+                     for n in (1, 2, 3)]
+    assert backend_health.excusals_left(
+        spent_harness + [probe], probe, error_class="DEV_BAD_OUTPUT")
+    spent_bad = [run(n, error_class="DEV_BAD_OUTPUT", counted=False)
+                 for n in (1, 2, 3)]
+    assert not backend_health.excusals_left(
+        spent_bad + [probe], probe, error_class="DEV_BAD_OUTPUT")
+
+
 def backend_correlated_reason(runs, dev_type="judgment"):
     return backend_health.backend_correlated(runs, dev_type)
 

@@ -27,6 +27,7 @@ observability gap.
 | Span | Parent | Emitted by | Content |
 |---|---|---|---|
 | `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `PMO_TRANSIENT`/`cycle_error` outcomes |
+| `poll.instance` | `poll.cycle` | app | one child per configured PMO instance (`devcake.instance`); a per-instance failure marks THIS span, not the cycle |
 | `mission.dispatch` | `poll.cycle` (mapper runs: `mapper.periodic`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
 | `mission.give_up` | `poll.cycle` | app | ERROR status; covers the `DEVCAKE-FAILED` label write + feed post |
 | `sweep.merge` | `poll.cycle` | app | emitted only when the sweep acts (`merged`/`closed`); covers the PMO writes |
@@ -52,7 +53,7 @@ observability gap.
 Deliberately span-free besides heartbeats: the watchdog's quiet 10 s scan (its
 *actions* — kills and Dagu status probes — are all spanned or auto-instrumented).
 
-**Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3), and every app-side consumer of a run message re-extracts it; one trace therefore spans dispatch → container execution → ingress handling → finalization (or kill). This is the primary debugging view: "show me everything about run X" is one trace ID.
+**Trace continuity:** the app injects W3C `TRACEPARENT` into the Dev container env (`07-dev-runtime.md` §3), and every app-side consumer of a run message re-extracts it; `TRACEPARENT` rides params into BOTH of a run's containers (provision and harness, ADR-0025), so one trace spans dispatch → provision → harness execution → ingress handling → finalization (or kill). This is the primary debugging view: "show me everything about run X" is one trace ID.
 
 ## 3. Attribute registry (normative — spelled exactly)
 
@@ -61,8 +62,9 @@ devcake.mission.id          devcake.mission.key        devcake.mission.type
 devcake.dev_type            devcake.harness
 devcake.run.id              devcake.run.seq            devcake.run.attempt
 devcake.tokens.input        devcake.tokens.output      devcake.tokens.total
-devcake.tokens.cache_read   devcake.tokens.cache_write
-devcake.cost.usd            devcake.outcome            (result.json outcome | error class)
+devcake.tokens.cache_read   devcake.tokens.cache_write devcake.tokens.reasoning
+devcake.cost.usd            devcake.cost.usd_estimated devcake.cost.rate_card
+devcake.outcome             (result.json outcome | error class)
 ```
 
 Every log line from app and Dev entrypoint carries `devcake.run.id` and `devcake.mission.key` for correlation.
@@ -89,13 +91,21 @@ Token/cost numbers are reported **twice by design**: human-facing in the
 activity-feed report (INV-5) and machine-facing as `run.finalize` span
 attributes — OpenObserve is the cost dashboard.
 
-**`devcake.cost.usd` is a claude-code-only attribute.** It is set solely from a
-natively reported figure, and neither `codex` 0.144.4 nor `grok` 0.2.112 emits a
+**`devcake.cost.usd` is a claude-code-only attribute.** It keeps its name over
+the stored v1 key (`cost_usd_native`, `adr/0029`) and is set solely from a
+natively reported figure; neither `codex` 0.146.0 nor `grok` 0.2.112 emits a
 cost field of any kind (`08-harness-templates.md` §5) — no price table invents
 one, and a missing cost is written as **null, never 0**, so a cost query returns
-claude runs only rather than silently averaging in free-looking runs. The
-cross-harness quantity is `devcake.tokens.*`: grok fills the full split plus
-`total` from its `end` event, codex the split with no total.
+claude runs only rather than silently averaging in free-looking runs.
+
+**`devcake.cost.usd_estimated` is the cross-harness spend proxy** (`adr/0021`):
+the app-side rate-card estimate, emitted only when the full token split exists
+and `config.cost_inputs.rates` maps the model, always accompanied by
+`devcake.cost.rate_card` (the card vintage that priced it). It never coalesces
+into `devcake.cost.usd` — dashboards that want "reported or estimated" must
+say so in their own labels (the provisioned dashboard keeps two panels). The
+cross-harness token quantity remains `devcake.tokens.*`: grok fills the full
+split plus `total` from its `end` event, codex the split with no total.
 
 ## 5. Pre-provisioned dashboard + alerts (`scripts/provision_oo.py`, idempotent)
 
@@ -105,7 +115,7 @@ dashboard and optional alerts: all panels SQL over the traces stream —
 **Cost per hour (USD, by dev type)** · **Dev runs by outcome (daily)** ·
 **Failure signals (kills, give-ups)**. With `OO_ALERT_WEBHOOK` set in `.env`,
 the script also provisions the alert set of `15-errors-and-retries.md` §6
-against the same stream. The admin panel's Logs page deep-links here
+against the same stream. The admin panel's Consoles page deep-links here
 (`11-admin-panel.md` §5). Safe to re-run; still ensures the ingest user if
 you want a host-side check without restarting the app.
 

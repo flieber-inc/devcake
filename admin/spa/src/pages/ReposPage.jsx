@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { get, send } from "../api.js";
 import PageHeader from "../components/PageHeader.jsx";
+import AdapterTabs from "../components/AdapterTabs.jsx";
 import { Section } from "../components/Card.jsx";
 import { Field, SecretField, Input, Select } from "../components/Field.jsx";
 import SettingRow from "../components/SettingRow.jsx";
@@ -57,7 +58,7 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
               <tr key={r.name} className="border-t border-neutral-200 dark:border-neutral-800">
                 <td className="py-1.5 pr-3 font-mono">{r.mission_key}</td>
                 <td className="pr-3">
-                  <a className="text-blue-600 hover:underline" href={r.html_url}
+                  <a className="text-accent-600 hover:underline" href={r.html_url}
                     target="_blank" rel="noreferrer">{r.name}</a>
                 </td>
                 <td className="pr-3">{Math.round(r.size_kb)} KB</td>
@@ -73,7 +74,7 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
       </div>
       )}
       {data.ui_url && (
-        <a className="mt-2 inline-block text-sm text-blue-600 hover:underline"
+        <a className="mt-2 inline-block text-sm text-accent-600 hover:underline"
           href={data.ui_url} target="_blank" rel="noreferrer">Open the Gitea UI →</a>
       )}
     </Section>
@@ -137,16 +138,13 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
 
 // neutral state note when a saved repo stores ONLY a read-only token: a
 // first-class reference-only repo (founder decisions 2026-07-15) — health
-// treats it as OK, so the note informs rather than warns
-function RoOnlyNote({ name }) {
-  const [state, setState] = useState(null);
-  useEffect(() => {
-    get(`/secrets-check?conn=repo:${name}:token,repo:${name}:token_ro`)
-      .then((r) => setState({
-        w: r.conn[`repo:${name}:token`]?.present,
-        ro: r.conn[`repo:${name}:token_ro`]?.present,
-      })).catch(() => setState(null));
-  }, [name]);
+// treats it as OK, so the note informs rather than warns. Reads the page's
+// batched presence map (bulk-scale 2026-08-02) instead of its own fetch.
+function RoOnlyNote({ name, presence }) {
+  const state = presence && {
+    w: presence[`repo:${name}:token`]?.present,
+    ro: presence[`repo:${name}:token_ro`]?.present,
+  };
   if (!state || state.w || !state.ro) return null;
   return (
     <p className="text-xs text-neutral-500 dark:text-neutral-400">
@@ -159,7 +157,7 @@ function RoOnlyNote({ name }) {
 }
 
 export default function ReposPage({ onHealthChange }) {
-  const { dr, loadErr, reload } = useSharedDraft();
+  const { dr, loadErr, reload, repoNewNamesState } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
@@ -172,7 +170,68 @@ export default function ReposPage({ onHealthChange }) {
   const [secretsEpoch, setSecretsEpoch] = useState(0);
   // cards added/renamed this session stay name-editable even when their name
   // collides with a still-saved one (the delete-then-re-add / mid-typing trap)
-  const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos);
+  // the Set lives in the provider (2026-08-02): an internal Set was lost on
+  // nav-away, so a session-added card whose name collided with a still-saved
+  // one came back born name-locked
+  const newNames = useNewNames(dr.server?.cfg.repos, dr.draft?.cfg.repos,
+                               repoNewNamesState);
+  // bulk-scale (2026-08-02): 350 cards × (3 SecretField self-fetches + a
+  // RoOnlyNote fetch) was ~1,400 requests per page load. The page renders at
+  // most CARD_CAP filtered cards, and ONE chunked batch covers their three
+  // token fields; SecretFields receive it via the `presence` prop and skip
+  // their self-fetch. The filter is debounced so typing doesn't refetch per
+  // keystroke.
+  const CARD_CAP = 30;
+  const [filter, setFilter] = useState("");
+  const [query, setQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(filter), 300);
+    return () => clearTimeout(t);
+  }, [filter]);
+  const [presence, setPresence] = useState({});   // "repo:name:field" → {present}
+  const draftRepoNames = (dr.draft?.cfg.repos || []).map((r) => r.name);
+  // filter + cap engage only past CARD_CAP — small fleets keep every card,
+  // and a leftover filter can never hide cards while its input is hidden.
+  // 2026-08 reviewer round: the input now appears past 5 repos (it used to
+  // wait for the 30-card cap); the hard render cap stays at CARD_CAP.
+  const filterActive = draftRepoNames.length > 5;
+  const fq = filterActive ? query.trim().toLowerCase() : "";
+  const matchedNames = filterActive
+    ? draftRepoNames.filter((n) => !fq || n.toLowerCase().includes(fq))
+    : draftRepoNames;
+  const visibleNames = draftRepoNames.length > CARD_CAP
+    ? matchedNames.slice(0, CARD_CAP)
+    : matchedNames;
+  const visibleKey = visibleNames.join(",");
+
+  // 2026-08 reviewer round: collapsed summary rows — one ~350px card per
+  // repo meant 2-3 fit a screen. Each card collapses to a one-line summary
+  // (name · forge · URL host · merge posture); expansion is per-operator
+  // ephemeral view state. ≤3 repos start expanded; a newly added repo opens
+  // expanded (its form needs filling).
+  // (keyed by INDEX, not name — a rename mid-edit must not collapse the
+  // card being typed in; indexes only shift on the rare remove)
+  const [expandedRepos, setExpandedRepos] = useState(() => new Set(
+    draftRepoNames.length <= 3 ? draftRepoNames.map((_, i) => i) : []));
+  const toggleRepoCard = (i) => setExpandedRepos((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
+  useEffect(() => {
+    const refs = visibleNames.filter(Boolean).flatMap((n) =>
+      [`repo:${n}:token`, `repo:${n}:token_ro`, `repo:${n}:reviewer_token`]);
+    if (!refs.length) return;
+    let live = true;
+    const chunks = [];
+    for (let i = 0; i < refs.length; i += 40) chunks.push(refs.slice(i, i + 40));
+    Promise.all(chunks.map((chunk) =>
+      get(`/secrets-check?conn=${encodeURIComponent(chunk.join(","))}`)
+        .then((r) => Object.fromEntries(chunk.map((ref) => [ref, r.conn[ref] || { present: false }])))
+        .catch(() => ({}))))
+      .then((parts) => { if (live) setPresence((p) => Object.assign({}, p, ...parts)); });
+    return () => { live = false; };
+  }, [visibleKey, secretsEpoch]);
 
   if (!dr.loaded) {
     return <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading…{loadErr}</p>;
@@ -180,6 +239,9 @@ export default function ReposPage({ onHealthChange }) {
 
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
+  const visibleSet = new Set(visibleNames);
+  const shownRepos = cfg.repos.filter((r) => visibleSet.has(r.name));
+  const hiddenCount = cfg.repos.length - shownRepos.length;
   // stored tokens key on the repo name — locked once saved. A card counts as
   // saved only when the server holds its name AND it isn't the card that was
   // (re)added this session, so a new card can never be born frozen. When a
@@ -196,6 +258,42 @@ export default function ReposPage({ onHealthChange }) {
       action: () => { setField(path, value); setConfirm(null); },
     });
 
+  // computed from the DRAFT, so unsaved PMO (de)selections count. Unused ⇔
+  // selected by no PMO, so no per-PMO deselection cascade is ever needed.
+  const removeUnusedRepos = () => {
+    const selected = new Set();
+    (cfg.pmos || []).forEach((p) => {
+      (p.repos || []).forEach((n) => selected.add(n));
+      (p.reference_repos || []).forEach((n) => selected.add(n));
+    });
+    const names = cfg.repos.map((r) => r.name).filter((n) => !selected.has(n));
+    if (names.length === 0) {
+      setConfirm({
+        title: "No unused repositories",
+        body: "Every configured repository is selected as a work or reference repo on at least one PMO.",
+        confirmLabel: "OK",
+        action: () => setConfirm(null),
+      });
+      return;
+    }
+    const shown = names.slice(0, 8).join(", ");
+    const more = names.length > 8 ? ` and ${names.length - 8} more` : "";
+    setConfirm({
+      title: `Remove ${names.length} unused repositor${names.length > 1 ? "ies" : "y"}?`,
+      body: `${shown}${more} — selected as work or reference on no PMO. `
+        + "Removing them and saving permanently deletes their stored tokens "
+        + "(write / read-only / reviewer); a run still in flight on one fails "
+        + "cleanly. Nothing changes until you Save.",
+      confirmLabel: "Remove from draft",
+      danger: true,
+      action: () => {
+        names.forEach((n) => newNames.untrack(n));
+        setField("cfg.repos", cfg.repos.filter((r) => !names.includes(r.name)));
+        setConfirm(null);
+      },
+    });
+  };
+
   const testForge = async (name) =>
     setTestResult({ ...testResult,
                     [`forge:${name}`]: await send("POST", `/connections/forge/${name}/test`) });
@@ -204,22 +302,84 @@ export default function ReposPage({ onHealthChange }) {
     <div className="space-y-5">
       <PageHeader title="Repositories"
         subtitle="Forge connections, tokens, merge policy, and the internal forge — edits apply on Save" />
+      <AdapterTabs page="repos" />
 
       <Section id="repository" title="Repositories"
         description="Forge connections, access tokens and merge policy. Missions route to a repo via a `devcake-repo:<name>` line in their description, else the PMO instance's default repo; unrouted missions wait."
         actions={
           <MoreMenu label="More repository actions" items={[
+            { label: "Remove unused repositories…", danger: true,
+              desc: "Drop every repo no PMO selects as work or reference — their stored tokens are deleted on Save.",
+              onClick: removeUnusedRepos },
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
               desc: CLEAR_SECRETS_ENTRY.desc,
               onClick: () => setClearSecrets(true) },
           ]} />
         }>
+        {filterActive && (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="relative w-64 shrink-0">
+              <Input className="pr-7" value={filter}
+                placeholder={`Filter ${cfg.repos.length} repositories…`}
+                aria-label="Filter repositories by name"
+                onChange={(e) => setFilter(e.target.value)} />
+              {filter && (
+                <button type="button" aria-label="Clear repository filter"
+                  onClick={() => setFilter("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                  ✕
+                </button>
+              )}
+            </span>
+            {hiddenCount > 0 && (
+              <span className="text-xs text-neutral-500 dark:text-neutral-400">
+                Showing {shownRepos.length} of {cfg.repos.length} — refine the filter
+              </span>
+            )}
+          </div>
+        )}
         {cfg.repos.map((repo, idx) => {
+          if (!visibleSet.has(repo.name)) return null;
           const tr = testResult[`forge:${repo.name}`];
+          if (!expandedRepos.has(idx)) {
+            let host = "";
+            try { host = repo.url ? new URL(repo.url).host : ""; } catch { host = ""; }
+            return (
+              <button key={`${idx}-${secretsEpoch}`} type="button"
+                data-testid="repo-summary-row"
+                aria-label={`Expand repository ${repo.name}`}
+                onClick={() => toggleRepoCard(idx)}
+                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
+                <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{repo.forge}</span>
+                {host && <span className="min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-400">{host}</span>}
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                    {repo.auto_merge ? "auto-merge" : "merge hand-off"}
+                  </span>
+                  {tr && (
+                    <span className={`text-xs ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
+                      {tr.ok ? "✓" : "✗"}
+                    </span>
+                  )}
+                  <span aria-hidden className="text-xs text-neutral-400">▸</span>
+                </span>
+              </button>
+            );
+          }
           return (
             <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                <span className="flex items-center gap-2">
+                  <button type="button"
+                    aria-label={`Collapse repository ${repo.name}`}
+                    title="Collapse to a summary row"
+                    onClick={() => toggleRepoCard(idx)}
+                    className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
+                    ▾
+                  </button>
+                  <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                </span>
                 {cfg.repos.length > 0 && (
                   <Button kind="danger-ghost" onClick={() => {
                     const doRemove = () => {
@@ -310,17 +470,20 @@ export default function ReposPage({ onHealthChange }) {
                   help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored securely — never echoed, never in .env."
                   refKey={`repo:${repo.name}:token`} paste
                   absentNote="not set — repo is reference-only until an Access token is stored"
+                  presence={presence[`repo:${repo.name}:token`] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
                   help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
                   refKey={`repo:${repo.name}:token_ro`} paste optional
+                  presence={presence[`repo:${repo.name}:token_ro`] || null}
                   locked={!nameLocked(repo.name, idx)} />
-                <SecretField label="Reviewer token" hint="Optional 2nd account → formal PR approvals"
-                  help="Optional second account's token. When set, REVIEW posts a formal approval from that account before merging."
+                <SecretField label="Reviewer token" hint="Recommended 2nd account → formal PR approvals"
+                  help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not the same as staffing a different Dev Type for REVIEW."
                   refKey={`repo:${repo.name}:reviewer_token`} paste optional
+                  presence={presence[`repo:${repo.name}:reviewer_token`] || null}
                   locked={!nameLocked(repo.name, idx)} />
               </div>
-              {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} />}
+              {savedRepoNames.has(repo.name) && <RoOnlyNote name={repo.name} presence={presence} />}
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testForge(repo.name)}>Test connection</Button>
                 <ImmediateBadge text="tests saved values" />
@@ -334,54 +497,64 @@ export default function ReposPage({ onHealthChange }) {
                   </span>
                 )}
               </div>
+              {/* per-repo merge doctrine (ADR-0020) — not a deployment master switch */}
+              <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
+                <SettingRow label="Auto-merge"
+                  desc={!!repo.auto_merge
+                    ? "ON — the app merges approved PRs (squash)."
+                    : "OFF — app will not merge (DEVCAKE-MERGE handoff)."}
+                  help="ON: after REVIEW approves, the app squash-merges this repo. OFF: the app stops at DEVCAKE-MERGE and does not call merge — protect the default branch so Devs (who still hold write tokens) cannot merge either.">
+                  <Toggle on={!!repo.auto_merge} label="Auto-merge"
+                    onClick={() =>
+                      repo.auto_merge
+                        ? setField(`cfg.repos.${idx}.auto_merge`, false)
+                        : guardedFlip(`cfg.repos.${idx}.auto_merge`, true,
+                            `Merge "${repo.name || "this repo"}" without human review?`,
+                            AUTO_MERGE_COPY + "\n\n(Drafted now; applies when you Save.)")} />
+                </SettingRow>
+                <div className={repo.auto_merge ? "" : "opacity-50"}
+                  aria-disabled={!repo.auto_merge}>
+                  <SettingRow label="Auto-resolve merge conflicts"
+                    desc={(repo.auto_resolve_merge_conflicts ?? true)
+                      ? "ON — conflicts go back to EXECUTE (max 2 tries)."
+                      : "OFF — conflicts wait for you at DEVCAKE-MERGE."}
+                    help="Only applies when auto-merge is ON for this repo. When a merge fails on conflicts, DevCake sends the mission back to EXECUTE to sync the branch and resolve them (max 2 attempts) instead of waiting for you at DEVCAKE-MERGE.">
+                    <Toggle on={repo.auto_resolve_merge_conflicts ?? true}
+                      label="Auto-resolve merge conflicts"
+                      disabled={!repo.auto_merge}
+                      onClick={() => repo.auto_merge &&
+                        setField(`cfg.repos.${idx}.auto_resolve_merge_conflicts`,
+                          !(repo.auto_resolve_merge_conflicts ?? true))} />
+                  </SettingRow>
+                  <SettingRow label="Merge retry window"
+                    desc="Minutes to keep retrying a not-yet-mergeable PR before handing off."
+                    help="When a merge isn't possible yet (CI running, mergeability computing), DevCake keeps retrying via the merge sweep for this long before handing off with DEVCAKE-MERGE. Lower it on CI-light repos; raise it on CI-heavy repos. 0 = hand off immediately.">
+                    <Input type="number" className="w-24" min="0"
+                      disabled={!repo.auto_merge}
+                      aria-label="Merge retry window (minutes)"
+                      value={repo.merge_retry_window_minutes ?? 30}
+                      onChange={(e) => setField(
+                        `cfg.repos.${idx}.merge_retry_window_minutes`,
+                        Math.max(0, Number(e.target.value)))} />
+                  </SettingRow>
+                </div>
+              </div>
             </div>
           );
         })}
         <Button kind="ghost" onClick={() => {
           const name = nextFreeName("repo", cfg.repos, dr.server.cfg.repos);
           newNames.track(name);
+          setExpandedRepos((prev) => new Set(prev).add(cfg.repos.length));
           setField("cfg.repos", [...cfg.repos,
             { name, forge: "github", url: "",
-              api_base: null, default_branch: "main" }]);
+              api_base: null, default_branch: "main",
+              auto_merge: false, auto_resolve_merge_conflicts: true,
+              merge_retry_window_minutes: 30 }]);
         }}>
           + Add repository
         </Button>
         <div className="divide-y divide-neutral-100 border-t border-neutral-100 dark:divide-neutral-800 dark:border-neutral-800">
-          <SettingRow label="Auto-merge"
-            desc={cfg.auto_merge
-              ? "ON — the app merges approved PRs (squash)."
-              : "OFF — app will not merge (DEVCAKE-MERGE handoff)."}
-            help="ON: after REVIEW approves, the app squash-merges. OFF: the app stops at DEVCAKE-MERGE and does not call merge — protect the default branch so Devs (who still hold write tokens) cannot merge either.">
-            <Toggle on={cfg.auto_merge} label="Auto-merge"
-              onClick={() =>
-                cfg.auto_merge
-                  ? setField("cfg.auto_merge", false)
-                  : guardedFlip("cfg.auto_merge", true, "Merge without human review?",
-                      AUTO_MERGE_COPY + "\n\n(Drafted now; applies when you Save.)")} />
-          </SettingRow>
-          {/* dependent rows: only meaningful while auto-merge is ON (drafted value) */}
-          <div className={cfg.auto_merge ? "" : "opacity-50"} aria-disabled={!cfg.auto_merge}>
-            <SettingRow label="Auto-resolve merge conflicts"
-              desc={cfg.auto_resolve_merge_conflicts
-                ? "ON — conflicts go back to EXECUTE (max 2 tries)."
-                : "OFF — conflicts wait for you at DEVCAKE-MERGE."}
-              help="Only applies when auto-merge is ON. When a merge fails on conflicts, DevCake sends the mission back to EXECUTE to sync the branch and resolve them (max 2 attempts) instead of waiting for you at DEVCAKE-MERGE.">
-              <Toggle on={cfg.auto_resolve_merge_conflicts} label="Auto-resolve merge conflicts"
-                disabled={!cfg.auto_merge}
-                onClick={() => cfg.auto_merge &&
-                  setField("cfg.auto_resolve_merge_conflicts", !cfg.auto_resolve_merge_conflicts)} />
-            </SettingRow>
-            <SettingRow label="Merge retry window"
-              desc="Minutes to keep retrying a not-yet-mergeable PR before handing off."
-              help="When a merge isn't possible yet (CI running, mergeability computing), DevCake keeps retrying via the merge sweep for this long before handing off with DEVCAKE-MERGE. Lower it on CI-light repos; raise it on CI-heavy repos. 0 = hand off immediately.">
-              <Input type="number" className="w-24" min="0"
-                disabled={!cfg.auto_merge}
-                aria-label="Merge retry window (minutes)"
-                value={cfg.merge_retry_window_minutes}
-                onChange={(e) => setField("cfg.merge_retry_window_minutes",
-                  Math.max(0, Number(e.target.value)))} />
-            </SettingRow>
-          </div>
           <SettingRow label="Also attach merged change set to PMO"
             desc={cfg.attach_merged_changeset_to_pmo
               ? "ON — after merge, zip PR files onto the PMO feed (configured repos too)."

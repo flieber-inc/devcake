@@ -1,10 +1,67 @@
-"""Stream dumps and token-report extraction (docs/08 §5)."""
+"""Stream dumps and token-report extraction (docs/08 §5).
+
+ADR-0029: every extractor emits **TokenReport v1** — one CLOSED shape,
+every key always present (None = unknown, never absent), provenance as the
+`source` field instead of key-presence folklore, and the vendor usage
+payload preserved untouched under `raw`. Normalization happens HERE, at the
+token-extraction seam (the seam a future HarnessDialect.parse_run
+formalizes), so app consumers read fixed keys and never branch per harness.
+"""
 from __future__ import annotations
 
 import json
 import pathlib
 
 from devcake_dev.domain.fault import _dict
+
+TOKEN_REPORT_SCHEMA = 1
+
+# The closed key set — test_token_report_shape pins every extractor to it.
+TOKEN_REPORT_KEYS = (
+    "schema", "model", "input_tokens", "output_tokens", "cache_read_tokens",
+    "cache_write_tokens", "total_tokens", "reasoning_tokens", "num_turns",
+    "duration_ms", "cost_usd_native", "cost_usd_estimated", "source", "raw")
+
+# `source` provenance values: the three extraction paths, "cumulative" (a
+# resume chain whose harness reports cumulative counters — codex; the last
+# report IS the chain total), "mixed" (a multi-chain merge whose inputs
+# disagree), "unavailable" (INV-5: reported explicitly, never silence).
+TOKEN_REPORT_SOURCES = ("session_json", "end_event", "signals", "cumulative",
+                        "mixed", "unavailable")
+
+
+def token_report_v1(*, model=None, source="unavailable", raw=None,
+                    input_tokens=None, output_tokens=None,
+                    cache_read_tokens=None, cache_write_tokens=None,
+                    total_tokens=None, reasoning_tokens=None, num_turns=None,
+                    duration_ms=None, cost_usd_native=None) -> dict:
+    """The one constructor for TokenReport v1. `cost_usd_estimated` is
+    ALWAYS None here — it is the app-side rate-card stamp (ADR-0021), and
+    the harness layer never estimates. `total_tokens` is reported-only:
+    deriving it from splits is a display concern the app labels honestly
+    ("effective"), not a measurement this layer may invent."""
+    return {
+        "schema": TOKEN_REPORT_SCHEMA,
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "total_tokens": total_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "num_turns": num_turns,
+        "duration_ms": duration_ms,
+        "cost_usd_native": cost_usd_native,
+        "cost_usd_estimated": None,
+        "source": source,
+        "raw": raw if isinstance(raw, dict) else {},
+    }
+
+
+def unavailable_report(model=None) -> dict:
+    """INV-5: "no report" is itself reported, in the full closed shape."""
+    return token_report_v1(model=model, source="unavailable")
+
 
 def grok_stream_parse(out: str):
     """(result_text, session_id) from streaming-json deltas; None if the
@@ -73,17 +130,20 @@ def grok_end_report(ev):
     # camelCase (`outputTokens`) and carry no per-model cost to rank by first
     models = sorted(mu, key=lambda k: _dict(mu[k]).get("outputTokens") or 0,
                     reverse=True)
-    return {
-        "input_tokens": usage.get("input_tokens"),
-        "output_tokens": usage.get("output_tokens"),
-        "cache_read_tokens": usage.get("cache_read_input_tokens"),
-        "total_tokens": usage.get("total_tokens"),
-        "cost_usd": None,               # never 0 — see above
-        "model": models[0] if models else "grok",
-        "extraction_method": "end_event",
-        "num_turns": ev.get("num_turns"),
-        "notes": f"reasoning_tokens={usage.get('reasoning_tokens')}",
-    }
+    return token_report_v1(
+        model=models[0] if models else "grok",
+        source="end_event",
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        cache_read_tokens=usage.get("cache_read_input_tokens"),
+        total_tokens=usage.get("total_tokens"),
+        # a SUBSET of output_tokens (never priced on top) — first-class in
+        # v1; pre-v1 it hid in a regex-parsed `notes` string
+        reasoning_tokens=usage.get("reasoning_tokens"),
+        num_turns=ev.get("num_turns"),
+        cost_usd_native=None,           # never 0 — see above
+        raw={"usage": usage, "modelUsage": mu,
+             "num_turns": ev.get("num_turns")})
 
 
 def grok_signals_report(session_id: str, home=None):
@@ -104,12 +164,71 @@ def grok_signals_report(session_id: str, home=None):
     if not sig:
         return None
     models = sig.get("modelsUsed")
-    return {
-        "total_tokens": sig.get("contextTokensUsed") or sig.get("totalTokens"),
-        "model": models[0] if isinstance(models, list) and models else "grok",
-        "extraction_method": "session_json",
-        "num_turns": sig.get("turnCount"),
-    }
+    return token_report_v1(
+        model=models[0] if isinstance(models, list) and models else "grok",
+        # names its path truthfully — pre-v1 this masqueraded as
+        # "session_json", indistinguishable from the claude/codex path
+        source="signals",
+        total_tokens=sig.get("contextTokensUsed") or sig.get("totalTokens"),
+        num_turns=sig.get("turnCount"),
+        raw=sig)
+
+
+def codex_token_report(out: str):
+    """TokenReport from codex's JSONL `turn.completed` events (verified
+    0.144.1), or None when the stream carries none. Last event wins — on a
+    multi-turn run each carries the running usage. Moved here from the
+    entrypoint's inline arm (ADR-0029): extraction lives at this seam."""
+    report = None
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one unparseable line must never cost the whole report
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "turn.completed":
+            u = _dict(ev.get("usage"))
+            report = token_report_v1(
+                model="codex",
+                source="session_json",
+                input_tokens=u.get("input_tokens"),
+                output_tokens=u.get("output_tokens"),
+                cache_read_tokens=u.get("cached_input_tokens"),
+                # NEW at codex 0.146.0 (capture-verified): 0.144.4 had no
+                # write counter at all — absent key reads None, so pre-bump
+                # streams keep rendering "—", never a fabricated 0
+                cache_write_tokens=u.get("cache_write_input_tokens"),
+                reasoning_tokens=u.get("reasoning_output_tokens"),
+                raw=u)
+    return report
+
+
+def claude_token_report(j) -> dict:
+    """TokenReport from claude-code's final result event (stream-json) or
+    the `--output-format json` blob — same fields either way (verified
+    live). Moved here from the entrypoint's inline arm (ADR-0029)."""
+    j = _dict(j)
+    usage = _dict(j.get("usage"))
+    mu = _dict(j.get("modelUsage"))
+
+    def _weight(v):  # dominant model = the one that cost/produced the most
+        return ((v.get("costUSD") or 0, v.get("outputTokens") or 0)
+                if isinstance(v, dict) else (0, 0))
+
+    models = sorted(mu, key=lambda k: _weight(mu[k]), reverse=True)
+    return token_report_v1(
+        model=models[0] if models else "claude-code",
+        source="session_json",
+        input_tokens=usage.get("input_tokens"),
+        output_tokens=usage.get("output_tokens"),
+        cache_read_tokens=usage.get("cache_read_input_tokens"),
+        cache_write_tokens=usage.get("cache_creation_input_tokens"),
+        cost_usd_native=j.get("total_cost_usd"),
+        num_turns=j.get("num_turns"),
+        duration_ms=j.get("duration_ms"),
+        raw={"usage": usage, "modelUsage": mu,
+             "total_cost_usd": j.get("total_cost_usd"),
+             "num_turns": j.get("num_turns"),
+             "duration_ms": j.get("duration_ms")})
 
 
 def claude_text_dump(out: str) -> str:

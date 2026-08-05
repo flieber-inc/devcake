@@ -182,3 +182,61 @@ def make_mission_manager(
     if noop_audit:
         mgr._audit = lambda *a, **k: None  # type: ignore[method-assign]
     return mgr
+
+
+def fake_pmo_capabilities(*, global_ids=True):
+    """Shared capability row for the test fakes. Default is Linear-shaped
+    (global ids ON, so peer-resolution tests exercise the allowed path);
+    colliding-id scenarios pass global_ids=False — the capability replaced
+    GLOBAL_ID_SYSTEMS in the 2026-08 cleanups."""
+    from devcake.ports.pmo import PMOCapabilities
+    return PMOCapabilities(
+        projects_supported=True, project_labels_supported=True,
+        attachment_max_bytes=50 * 1024 * 1024,
+        native_label_swap_atomic=True, relations_supported=True,
+        global_ids=global_ids)
+
+
+# ── ADR-0028: the test-side service graph ────────────────────────────────────
+
+class _Unwired:
+    """Explode-on-touch sentinel for Services slots a test did not wire.
+    Reading an attribute or calling it names the missing slot instead of
+    failing three frames later on a None."""
+
+    def __init__(self, slot: str):
+        object.__setattr__(self, "_slot", slot)
+
+    def __getattr__(self, attr):
+        raise AssertionError(
+            f"test touched services.{self._slot}.{attr} — wire it via "
+            f"make_services({self._slot}=...)")
+
+    def __call__(self, *a, **k):
+        raise AssertionError(
+            f"test called services.{self._slot} — wire it via "
+            f"make_services({self._slot}=...)")
+
+
+def make_services(**overrides):
+    """A Services instance for tests: named slots wired, everything else an
+    explode-on-touch sentinel. NEVER calls the real build_services() — that
+    reads /data, writes config.yaml, and constructs live adapters."""
+    import dataclasses
+
+    from devcake.api.services import Services
+
+    # methods stubbable as instance attributes (the sanctioned seam — the
+    # dataclass is deliberately unslotted)
+    method_overrides = {
+        name: overrides.pop(name)
+        for name in ("reload_connections", "refresh_forge_health",
+                     "build_managers", "managers_in_config_order")
+        if name in overrides}
+    names = [f.name for f in dataclasses.fields(Services)]
+    unknown = set(overrides) - set(names)
+    assert not unknown, f"make_services: unknown Services fields {sorted(unknown)}"
+    s = Services(**{n: overrides.get(n, _Unwired(n)) for n in names})
+    for name, stub in method_overrides.items():
+        setattr(s, name, stub)
+    return s

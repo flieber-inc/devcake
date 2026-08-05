@@ -22,10 +22,13 @@ def _ext(name="main"):
 
 
 def _internal_inst(name):
-    # internal repo names carry hyphens by design — synthesized, not operator input
+    # internal repo names carry hyphens by design — synthesized, not operator input.
+    # Always auto-merge (ADR-0020) — match dispatch.resolve_repo_live provision.
     return RepoInstance.model_construct(
         name=name, forge="gitea", url=f"http://gitea:3300/devcake-internal/{name}.git",
-        default_branch="main", api_base=None)
+        default_branch="main", api_base=None,
+        auto_merge=True, auto_resolve_merge_conflicts=True,
+        merge_retry_window_minutes=30)
 
 
 def test_rebuild_preserves_internal_registrations():
@@ -133,6 +136,82 @@ def test_delete_internal_repo_service_clears_health_and_breakers():
     assert name not in rt.forges
     assert name not in rt.health
     assert name not in rt.breakers
+
+
+# ── bounded-parallel refresh_all (incident 2026-08-01) ───────────────────────
+# 319 configured repos probed sequentially held FastAPI lifespan (and the
+# poll cycle's breaker re-probe) for ~95s+. refresh_all must run probes
+# concurrently under a semaphore, and stamp last_full_probe_at so /health
+# can distinguish "probe pending" from "probe done".
+
+OK_HEALTH = dict(ok=True, repository="o/x", can_push=True, can_read=True,
+                 transient=False, detail="")
+
+
+def test_refresh_all_runs_probes_concurrently():
+    rt = ForgeRuntime()
+    started = {"n": 0}
+    all_started = asyncio.Event()
+
+    class _Rendezvous:
+        async def health_probe(self):
+            started["n"] += 1
+            if started["n"] == 3:
+                all_started.set()
+            # deadlocks unless all three probes are in flight at once
+            await asyncio.wait_for(all_started.wait(), timeout=2)
+            return ForgeHealth(**OK_HEALTH)
+
+    rt.rebuild([_ext(f"r{i}") for i in range(3)], lambda i: _Rendezvous())
+    health = run_coro(asyncio.wait_for(rt.refresh_all(), timeout=5))
+    assert len(health) == 3
+    assert all(h["ok"] for h in health.values())
+
+
+def test_refresh_all_respects_concurrency_limit():
+    rt = ForgeRuntime()
+    gauge = {"current": 0, "peak": 0}
+
+    class _Slow:
+        async def health_probe(self):
+            gauge["current"] += 1
+            gauge["peak"] = max(gauge["peak"], gauge["current"])
+            for _ in range(3):
+                await asyncio.sleep(0)
+            gauge["current"] -= 1
+            return ForgeHealth(**OK_HEALTH)
+
+    rt.rebuild([_ext(f"r{i}") for i in range(6)], lambda i: _Slow())
+    run_coro(rt.refresh_all(limit=2))
+    assert gauge["peak"] == 2          # bounded AND actually parallel
+    assert len(rt.health) == 6
+
+
+def test_refresh_all_probe_failure_yields_transient_entry_and_completes_map():
+    rt = ForgeRuntime()
+
+    class _Boom:
+        async def health_probe(self):
+            raise RuntimeError("connection reset")
+
+    def make(inst):
+        return _Boom() if inst.name == "bad" else _ProbeForge(**OK_HEALTH)
+
+    rt.rebuild([_ext("good1"), _ext("bad"), _ext("good2")], make)
+    health = run_coro(rt.refresh_all())
+    assert set(health) == {"good1", "bad", "good2"}
+    assert health["good1"]["ok"] and health["good2"]["ok"]
+    assert health["bad"]["ok"] is False
+    assert health["bad"]["transient"] is True   # never raises, never latches
+    assert "bad" not in rt.breakers
+
+
+def test_refresh_all_stamps_last_full_probe_at():
+    rt = ForgeRuntime()
+    assert rt.last_full_probe_at is None
+    rt.rebuild([_ext("solo")], lambda i: _ProbeForge(**OK_HEALTH))
+    run_coro(rt.refresh_all())
+    assert rt.last_full_probe_at is not None
 
 
 # ── reference-only repos (founder decision 2026-07-15, round 2) ──────────────

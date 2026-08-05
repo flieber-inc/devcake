@@ -8,23 +8,39 @@ import RunsPage from "./pages/RunsPage.jsx";
 import MissionsPage from "./pages/MissionsPage.jsx";
 import DraftChrome from "./components/DraftChrome.jsx";
 import { ConfigDraftProvider } from "./lib/ConfigDraftContext.jsx";
-import LogsPage from "./pages/LogsPage.jsx";
+import PmoPage from "./pages/PmoPage.jsx";
+import ConsolesPage from "./pages/ConsolesPage.jsx";
 import deriveAlerts, { alertKey } from "./lib/alerts.js";
 import { CONFIG_SECTIONS } from "./lib/nav.js";
 import usePoll from "./lib/usePoll.js";
 import { get, send } from "./api.js";
 
-const PAGES = ["overview", "missions", "runs", "config", "repos", "logs"];
+const PAGES = ["overview", "missions", "runs", "config", "repos", "pmo", "consoles"];
 const SECTION_IDS = CONFIG_SECTIONS.map((s) => s.id);
 
+// Renamed/moved routes (2026-08-02 nav reorg + the v0.1.1 B4 repos move):
+// old bookmarks land on their new homes, never silently on the first config
+// section via the unknown-section fallback below.
+const REDIRECTS = [
+  [/^#\/config\/repository$/, "#/repos", { page: "repos", section: null }],
+  [/^#\/config\/pmo$/, "#/pmo", { page: "pmo", section: null }],
+  [/^#\/config\/traffic$/, "#/config/limits", { page: "config", section: "limits" }],
+  [/^#\/config\/assignments$/, "#/config/mission-types",
+    { page: "config", section: "mission-types" }],
+  [/^#\/logs$/, "#/consoles", { page: "consoles", section: null }],
+];
+
 // tiny hash router: #/overview · #/runs · #/config/<section> · #/repos ·
-// #/logs. Configuration is settings-style — one section per view — so bare
-// #/config (or an unknown section) lands on the first section. The old
-// #/config/repository deep link redirects to #/repos (v0.1.1 B4).
+// #/pmo · #/consoles. Configuration is settings-style — one section per
+// view — so bare #/config (or an unknown section) lands on the first
+// section. Redirects replace the hash (no history entry) and return a
+// synthetic route so the render doesn't wait for the hashchange round-trip.
 function parseHash() {
-  if (/^#\/config\/repository$/.test(window.location.hash)) {
-    window.location.replace("#/repos");
-    return { page: "repos", section: null };
+  for (const [re, target, route] of REDIRECTS) {
+    if (re.test(window.location.hash)) {
+      window.location.replace(target);
+      return route;
+    }
   }
   const m = window.location.hash.match(/^#\/([^/]+)(?:\/(.+))?/);
   const page = m && PAGES.includes(m[1]) ? m[1] : "overview";
@@ -85,8 +101,8 @@ export default function App() {
         return;
       }
       const next = parseHash();
-      const leavingDraft = /^#\/(config|repos)/.test(lastHash.current)
-        && !["config", "repos"].includes(next.page);
+      const leavingDraft = /^#\/(config|repos|pmo)/.test(lastHash.current)
+        && !["config", "repos", "pmo"].includes(next.page);
       if (navGuard.current && leavingDraft) {
         suppress.current = true;
         window.location.hash = lastHash.current; // revert before asking
@@ -186,8 +202,7 @@ export default function App() {
           </a>
         )}
         <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-8">
-          {/* Missions needs full main-pane width for the 7-col kanban; other pages keep the 6xl reading cap. */}
-          <div className={`mx-auto w-full ${page === "missions" ? "max-w-none" : "max-w-6xl"}`}>
+          <div className="mx-auto w-full max-w-6xl">
             {page === "overview" && (
               <OverviewPage
                 health={health}
@@ -203,14 +218,17 @@ export default function App() {
               />
             )}
             {page === "config" && (
-              <ConfigPage section={section} health={health} healthError={healthError}
-                onHealthChange={setHealth} />
+              <ConfigPage section={section} onHealthChange={setHealth} />
             )}
             {page === "repos" && <ReposPage onHealthChange={setHealth} />}
+            {page === "pmo" && (
+              <PmoPage health={health} healthError={healthError}
+                onHealthChange={setHealth} />
+            )}
             {page === "runs" && <RunsPage />}
             {page === "missions" && <MissionsPage />}
-            {page === "logs" && <LogsPage />}
-            {["config", "repos"].includes(page) && (
+            {page === "consoles" && <ConsolesPage health={health} />}
+            {["config", "repos", "pmo"].includes(page) && (
               <DraftChrome registerNavGuard={registerNavGuard} health={health} />
             )}
           </div>

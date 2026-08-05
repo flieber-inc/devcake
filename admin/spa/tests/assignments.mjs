@@ -3,26 +3,26 @@
 // assignment wholesale, an inherit row follows the global table. Never
 // confirms a Save — the flow restores the original selection so the dirty
 // bar clears and live config is untouched.
-import { check, gotoFresh, skip, summary, withPage } from "./harness.mjs";
+import { check, checked, gotoFresh, skip, summary, withPage } from "./harness.mjs";
 
 const MTS = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 
 await withPage(async (page) => {
-  await gotoFresh(page, "#/config/assignments");
-  await page.waitForSelector("#assignments");
+  await gotoFresh(page, "#/config/mission-types");
+  await page.waitForSelector("#mission-types");
 
   for (const mt of MTS) {
     check(`global table shows a ${mt} row`,
-      (await page.locator(`#assignments td:text-is("${mt}")`).count()) >= 1);
+      (await page.locator(`#mission-types td:text-is("${mt}")`).count()) >= 1);
   }
 
-  const blocks = page.locator('#assignments h4:has-text("Overrides —")');
+  const blocks = page.locator('#mission-types h4:has-text("Overrides —")');
   const nBlocks = await blocks.count();
   if (nBlocks === 0) {
     skip("override blocks", "no PMO instance configured (empty first boot)");
   } else {
     // every configured instance gets a block; every row offers inherit
-    const rowSelects = page.locator("#assignments table").nth(1).locator("select");
+    const rowSelects = page.locator("#mission-types table").nth(1).locator("select");
     check("first override block renders one select per mission type",
       (await rowSelects.count()) === MTS.length);
     const inheritOpt = rowSelects.first().locator('option[value=""]');
@@ -41,10 +41,14 @@ await withPage(async (page) => {
       skip("override flip", "only one dev type configured — nothing to flip to");
     } else {
       await sel.selectOption(target);
-      await page.waitForSelector('span:has-text("Unsaved changes")');
-      check("setting an override dirties the draft", true);
+      await checked("setting an override dirties the draft", async () => {
+        await page.waitForSelector('span:has-text("Unsaved changes")',
+          { timeout: 8000 });
+        return (await page.locator(
+          'span:has-text("Unsaved changes")').count()) >= 1;
+      });
       check("an overridden row exposes its own CLI-args input",
-        (await page.locator("#assignments table").nth(1)
+        (await page.locator("#mission-types table").nth(1)
           .locator('input[placeholder="e.g. --max-turns 15"]').count()) >= 1);
 
       // the save review names the override row — then Cancel, never Save
@@ -56,9 +60,13 @@ await withPage(async (page) => {
       await dlg.locator('button:has-text("Cancel")').click();
 
       await sel.selectOption(original);
-      await page.waitForSelector('span:has-text("Unsaved changes")',
-        { state: "detached", timeout: 5000 });
-      check("restoring the selection clears the dirty bar (symmetric diff)", true);
+      await checked("restoring the selection clears the dirty bar (symmetric diff)",
+        async () => {
+          await page.waitForSelector('span:has-text("Unsaved changes")',
+            { state: "detached", timeout: 5000 });
+          return (await page.locator(
+            'span:has-text("Unsaved changes")').count()) === 0;
+        });
     }
   }
 });

@@ -33,6 +33,14 @@ services:
     restart: unless-stopped
     volumes:
       - devcake_data:/data              # note: NO docker.sock — kill/reconcile go via the Dagu API
+      # ADR-0024: bare source mirrors, app-writable; the dev-run PROVISION
+      # step mounts the SAME volume read-only (real name devcake_mirrors) —
+      # agent containers never see it (ADR-0025)
+      - mirrors:/mirrors
+      # ADR-0025: per-run workspace tree. Host bind (NOT a named volume —
+      # the DAG needs per-run subpaths); up.sh upserts the HOST-ABSOLUTE
+      # path into .env, `:?` fails loud if it is missing
+      - ${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}:/workspaces
       # test fixture only: tests/test_entrypoint_render.py exercises the Dev
       # entrypoint's renderers by path; the app never imports this at runtime
       - ./images/common:/srv/images/common:ro
@@ -49,7 +57,7 @@ services:
       start_period: 15s
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5@sha256:469840b0e3b8e82096eadc93f2bf27b7e7150b0eee8f14343fd545830c2bfa59  # docs/13 §4
+    image: ghcr.io/dagucloud/dagu:2.11.3@sha256:e5f06be4aed0b445028ec133f9c7d5b0c4275025d4b6db2bde41e918345d3901  # docs/13 §4 (ADR-0024 §7 rider)
     restart: unless-stopped
     ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open
@@ -59,6 +67,11 @@ services:
       # entrypoint runs dagu as uid 1000 with group $DOCKER_GID → docker.sock access
       # (least privilege; find yours with: stat -c %g /var/run/docker.sock)
       - DOCKER_GID=${DOCKER_GID:?set DOCKER_GID in .env}
+      # ADR-0025: dev-run.yaml expands $DEVCAKE_WS_HOST in its per-run
+      # workspace bind sources — resolved on the DAEMON host, so the value
+      # must be host-absolute (up.sh derives it; `:?` fails loud, because an
+      # EMPTY expansion would silently bind-mount junk at the host root)
+      - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}
     # Stock /entrypoint.sh only runs /etc/custom-init.d/* when the file is +x.
     # The bind is :ro, so a non-executable host file is a silent skip → alpine
     # `addgroup` fails on this ubuntu image → `sudo: unknown group #$DOCKER_GID`
@@ -106,8 +119,30 @@ services:
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec",
-              "--requirepass", "${REDIS_PASSWORD}"]  # default user = app-only; per-run ACLs for Devs (docs/09 §1a)
+    # 2026-08 evaluation hardening:
+    # - maxmemory 1gb + noeviction: the flood backstop. The app XACK+XDELs
+    #   ingress entries after every handled batch, so legit load stays far
+    #   below the cap; a Dev flooding XADD faster than the app drains gets
+    #   write ERRORS instead of OOMing the whole control plane. noeviction
+    #   on purpose — evicting stream entries would silently lose run
+    #   artifacts; erroring the writer is the honest failure.
+    # - aclfile + ACL SAVE (from the app on every SETUSER/DELUSER): per-run
+    #   Dev users survive a redis-only restart, so in-flight runs reconnect
+    #   and finish instead of stranding until the heartbeat grace kills
+    #   them. MEASURED 2026-08-04: with --aclfile configured redis IGNORES
+    #   --requirepass entirely — an empty aclfile left the default user
+    #   password-LESS (the CI smoke caught it: the app's authed connection
+    #   failed with "AUTH called without any password configured"). The
+    #   default user therefore lives IN the aclfile, regenerated from .env
+    #   on every boot (grep drops the old default line, dev-* lines are
+    #   preserved) — which also makes REDIS_PASSWORD rotation just work.
+    #   The file must exist at boot (redis refuses a missing aclfile).
+    #   Plaintext password rides /data/users.acl inside the volume — same
+    #   exposure class as the AOF, docs/14 volume-theft row.
+    entrypoint: ["sh", "-c",
+                 "touch /data/users.acl && grep -v \"^user default \" /data/users.acl > /tmp/acl.new; cat /tmp/acl.new > /data/users.acl; echo \"user default on >$${REDIS_PASSWORD} ~* &* +@all\" >> /data/users.acl && exec docker-entrypoint.sh redis-server --appendonly yes --appendfsync everysec --maxmemory 1gb --maxmemory-policy noeviction --aclfile /data/users.acl"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}   # runtime shell expansion — the exec-array quoting safety the old command form had
     volumes: [ redis_data:/data ]
     depends_on:
       fluentbit: { condition: service_started }
@@ -120,7 +155,7 @@ services:
       retries: 5
 
   openobserve:
-    image: public.ecr.aws/zinclabs/openobserve:v0.91.1@sha256:e1ff0445fab3e748ac4cf630308cc8493579e50d19ad255bb3a3b8c1b710aaf7
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.5@sha256:012c9701b4b7a2f7070f9264a85eb7ed6d4998e4763628341924f06cdc810e6f
     restart: unless-stopped
     environment:
       - ZO_ROOT_USER_EMAIL=${OO_ROOT_EMAIL}
@@ -193,7 +228,7 @@ services:
   # idempotent admin create BEFORE the stock entrypoint (live-verified:
   # gitea CLI fatals without the generated app.ini).
   gitea:
-    image: gitea/gitea:1.24.7-rootless@sha256:a664a64d7740ef0db74f090f567040d0e5b34592473aad08ed5e296ccbe00eab
+    image: gitea/gitea:1.27.1-rootless@sha256:36cce26be71609091e1236d5b5de2c66a81fb8a7d45756a5fd3b7a28c11733b7
     restart: unless-stopped
     entrypoint: ["/bin/bash", "/etc/devcake-init/entrypoint-wrapper.sh"]
     environment:
@@ -240,3 +275,7 @@ volumes:
   dagu_data: {}
   redis_data: {}
   oo_data: {}
+  # ADR-0024: disposable source-mirror cache (safe to `docker volume rm` —
+  # the app re-warms). Real name devcake_mirrors (project prefix); the
+  # dev-run DAG mounts it by that literal name, network-precedent style.
+  mirrors: {}

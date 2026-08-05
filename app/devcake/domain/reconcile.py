@@ -4,7 +4,16 @@ lifespan so the ordering contract is unit-testable (ISSUES #26)."""
 import logging
 import re
 
+from . import failure_taxonomy
+
 log = logging.getLogger("devcake.reconcile")
+
+# ADR-0027: the recoverable-code list is a table derivation, not a hand-list.
+# Exit 12's absence is a table FIELD (orphan_recoverable=False on DEV_AUTH) —
+# see the enrichment comment below for why — and test_crash_recovery pins the
+# membership (10/11/20 recovered, 12 refused) independently of this regex.
+_EXIT_RE = re.compile(r"exit status (%s)" % "|".join(
+    str(c) for c in failure_taxonomy.ORPHAN_RECOVERABLE_EXIT_CODES))
 
 
 def _restamp_store_gen(store, run) -> None:
@@ -68,7 +77,13 @@ async def reconcile_runs(manager) -> None:
                 # never the structured `error_class` — dev_failure_error's 15
                 # arm therefore labels the orphan and lets it contribute
                 # evidence, but never excuses its attempt (ADR-0018).
-                exit_m = re.search(r"exit status (13|14|15|16)", detail.lower())
+                # AUD-015: enrich the informational exit classes too (10/11/20
+                # → DEV_CRASH / DEV_BAD_OUTPUT, incl. the ADR-0025 exit-20
+                # sentinel/marker family), not just 13-16. Exit 12 is
+                # DELIBERATELY excluded — dev_failure_error latches the dev-type
+                # auth breaker for it, and a stale orphan post-mortem must never
+                # trip a breaker from reconcile.
+                exit_m = _EXIT_RE.search(detail.lower())
                 if finalizer and exit_m:
                     r.error = finalizer.dev_failure_error(
                         r, {"exit_code": int(exit_m.group(1)),
@@ -84,3 +99,11 @@ async def reconcile_runs(manager) -> None:
         await messaging.reclaim_pending(manager.handle, manager.verify_auth)  # step 4
     except Exception:
         log.exception("pending-entry reclaim failed")
+    # ADR-0025 Hook G (boot half): reclaim leaked workspace dirs from runs
+    # that terminalled while the app was down. Safe by construction — the
+    # lifespan runs reconcile before the poll/ingress/watchdog tasks start
+    # and before uvicorn serves, so no dispatch can race it.
+    try:
+        manager.workspaces.sweep(manager.store)
+    except Exception:
+        log.exception("boot workspace sweep failed")

@@ -87,11 +87,14 @@ def capture_prompt(meta: dict) -> str:
 
     It is argv[2] for all three harnesses (`claude -p P`, `grok -p P`,
     `codex exec P`) because the rig builds argv through the entrypoint's own
-    `harness_argv`. grok's `empty_completion` arm needs it: the `grok export`
-    transcript opens by echoing the prompt, and the prompt is what separates
-    that echo from anything the run itself produced.
+    `harness_argv` — except codex's resume leg (`codex exec resume SID P`,
+    ADR-0022), where the prompt is argv[4]. grok's `empty_completion` arm
+    needs it: the `grok export` transcript opens by echoing the prompt, and
+    the prompt is what separates that echo from anything the run itself
+    produced.
     """
-    return meta["argv"][2]
+    argv = meta["argv"]
+    return argv[4] if argv[1:3] == ["exec", "resume"] else argv[2]
 
 
 def verdict(name: str) -> tuple:
@@ -140,7 +143,7 @@ CAPTURES = [
     ("claude_healthy", NO_FAULT),
     ("claude_refusal", NO_FAULT),
 
-    # ── codex-cli 0.144.4 ────────────────────────────────────────────────────
+    # ── codex-cli 0.146.0 ────────────────────────────────────────────────────
     # Reaches empty_completion only because error items are bucketed apart from
     # tool activity: with `-m` naming a model the backend does not advertise,
     # codex emits an `item.completed` whose item type is "error" (`Model
@@ -212,6 +215,35 @@ CAPTURES = [
     ("grok_loop_varying_cap20", BUDGET),
     # Operator misconfig (duplicate --output-format) → exit 10, not correlation.
     ("grok_json_blob", CRASH),
+
+    # ── headless resume (ADR-0022 Phase 0) ───────────────────────────────────
+    # Each pair is one rig run: a first leg through harness_argv, then a second
+    # leg in the SAME workspace through harness_resume_argv, resuming the first
+    # leg's session. Every leg exits 0 with no fault (the stub writes no
+    # result.json, so all six still land exit 11 — the row-9 shape ADR-0022's
+    # loop takes over). What each pair PROVES, and what RESUME_SPECS encodes:
+    #   grok 0.2.117:  `-p P -r SID` composes headless; the resumed `end` event
+    #     carries the SAME sessionId (no fork), no history replay in stdout,
+    #     usage/num_turns are PER-INVOCATION (leg 2 reports 1 turn, one call's
+    #     tokens) → usage_cumulative=False. Version drift note: 0.2.117 says
+    #     stopReason "end_turn" where the 0.2.112 captures say "EndTurn", and
+    #     adds available_commands/usage event types — nothing branches on
+    #     either (GROK_FAULT_STOP_REASONS is empty by design; unknown event
+    #     types are skipped), the docs/08 unpinned-CLI caveat in action.
+    ("grok_resume_nudge", NO_FAULT),
+    ("grok_resume_nudge_resume", NO_FAULT),
+    #   claude 2.1.210: `-p P --resume SID` composes headless; same session_id
+    #     on the resumed result event, no replay, per-invocation usage
+    #     → usage_cumulative=False.
+    ("claude_resume_nudge", NO_FAULT),
+    ("claude_resume_nudge_resume", NO_FAULT),
+    #   codex 0.146.0: `exec resume THREAD P` composes headless; same
+    #     thread_id, no replay, and usage is CUMULATIVE over the session —
+    #     leg 2's turn.completed reports input 240/output 48, both calls'
+    #     worth (docs/08 §5's `codex exec resume` caveat, now measured)
+    #     → usage_cumulative=True. Summing a resume chain would double-count.
+    ("codex_resume_nudge", NO_FAULT),
+    ("codex_resume_nudge_resume", NO_FAULT),
 ]
 
 

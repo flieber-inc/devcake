@@ -11,7 +11,9 @@ from opentelemetry.trace import SpanKind
 from ...harness import HARNESSES
 from ...security import redact_value
 from ...config import DevType
+from .. import costing
 from ..model import LABEL_OPTIN, Mission
+from ..workspaces import WorkspaceUnavailable
 from . import dispatch
 from ..run import Run, utcnow
 
@@ -57,6 +59,11 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
         spec_env = dispatch._protocol_spec_env(
             mgr,
             recover_misplaced_result=mgr.config.recover_misplaced_result,
+            continuation_policy=mgr.config.continuation_policy,
+            max_continuations=mgr.config.max_continuations,
+            mirror_path=(str(mgr.repo_cache.mirror_path(repo_name))
+                         if mgr.repo_cache.eligible(repo_name) else ""),
+            lfs=mgr.config.repo_mirror.lfs,
             mission_id="", mission_key="TEAM", mission_type="MAPPER",
             dev_type=dev_type, seq=seq, extra_args="",
             repo=repo, forge=forge)
@@ -73,8 +80,16 @@ async def dispatch_mapper(mgr, dev_type: DevType, missions: list[Mission]) -> Ru
         run.spec_prompt = dispatch.append_required_skills(
             mapper_prompt(dispatch._identifying_prompt(mgr, dev_type), eligible),
             dev_type.skills_required, run.spec_skills)
-        await mgr.runs.bootstrap.launch(
-            run, image=HARNESSES[dev_type.harness_template].image)
+        try:
+            await mgr.runs.bootstrap.launch(
+                run, image=HARNESSES[dev_type.harness_template].image)
+        except WorkspaceUnavailable as e:
+            # AUD-001: MAPPER is periodic and shares the poll segment — a bad
+            # workspace base must skip this run cleanly, never raise into the
+            # poll loop and mark the whole instance poll_degraded.
+            log.warning("mapper dispatch for %s skipped — workspace base "
+                        "unusable: %s", mgr.instance_name, e)
+            return None
         log.info("dispatched mapper %s (dev=%s, %d missions in prompt)",
                  run_id, dev_type.name, len(eligible))
         return run
@@ -86,7 +101,13 @@ async def finalize_mapper(mgr, run: Run, payload: dict) -> None:
     mission. Failures are logged only; the next interval simply retries."""
     result = payload.get("result") or {}
     outcome = result.get("outcome", "")
-    run.token_report = redact_value(payload.get("token_report") or {})
+    # same ADR-0021 stamp as mission finalize — mapper spend is fleet spend
+    run.token_report = redact_value(costing.stamp_estimate(
+        payload.get("token_report") or {}, mgr.config.cost_inputs))
+    try:                                               # ADR-0022, as finalize()
+        run.continuations_used = int(payload.get("continuations_used") or 0)
+    except (TypeError, ValueError):
+        run.continuations_used = 0
 
     ctx = None
     if run.traceparent:

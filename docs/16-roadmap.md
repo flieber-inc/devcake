@@ -20,14 +20,17 @@
 > **⏳ live-pending** = built, live end-to-end still owed ·
 > milestone `[x]` checkboxes mark exit criteria verified at that milestone's close.
 >
-> **Where we are (2026-07-26):** layers 1–2 closed through tag **v0.2** (and
-> patch tags through `v0.2.4` on `main`). The product loop (poll → dispatch →
-> harness → finalize → forge/PMO) is operational with three harness templates
-> (`claude-code`, `grok-build`, `codex`), multi-PMO / multi-repo / internal
-> Gitea, skills (ADR-0016), settings profiles/export (ADR-0013), fault
-> classification + backend brake (ADR-0018), and a package-split Dev entrypoint
-> (`images/common/devcake_dev/`). Unit suite is on the order of **~800+** tests
-> (815 counted 2026-07-26; do not treat any single count as a permanent claim).
+> **Where we are (2026-08-04):** layers 1–2 closed through tag **v0.2**;
+> release tags through **v0.2.5 "Hummingbird"** on `main`. The product loop
+> (poll → dispatch → harness → finalize → forge/PMO) is operational with three
+> harness templates (`claude-code`, `grok-build`, `codex`), multi-PMO /
+> multi-repo / internal Gitea, skills (ADR-0016), settings profiles/export
+> (ADR-0013), fault classification + backend brake (ADR-0018/0026), mandatory
+> source mirrors + provisioned workspaces (ADR-0024/0025), in-container
+> continuation (ADR-0022), and the 2026-08 evaluation fix campaign (spend
+> discipline, TOCTOU guards, composition-root tests, ops hardening — entries
+> below). Unit suite is on the order of **~1400+** tests (1421 counted
+> 2026-08-04; do not treat any single count as a permanent claim).
 > Ongoing append-only tracking: [Living log (after v0.2)](#living-log-after-v02).
 
 ## History — Layer 1: Milestone era (M0–M12)
@@ -40,7 +43,7 @@
 Exit criteria — **all verified 2026-07-11 (M0 complete)**:
 - [x] `docker compose up -d` from a fresh clone + `.env` → all services healthy.
 - [x] `app` emits a stub `poll.cycle` trace visible in OpenObserve (verified via `_search?type=traces`).
-- [x] Admin panel serves the three tabs *(M0-era layout; current SPA is six pages — Overview, Missions, Runs, Repos, Config, Logs — `11-admin-panel.md`)*; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
+- [x] Admin panel serves the three tabs *(M0-era layout; current SPA is seven pages — Overview, Missions, Runs, Repositories + PMO (under Adapters), Config, Consoles — `11-admin-panel.md`)*; the Executor and Logs tabs' buttons open the Dagu and OpenObserve UIs in new browser tabs (confirmed decision: buttons, no iframes). Basic auth verified: 401 without credentials on both the SPA and `/api`.
 - [x] Container stdout of `dagu`/`redis` searchable in OpenObserve (`container_logs` stream, via fluent-bit + fluentd logging driver).
 
 **Demo:** open the admin panel, click through the three tabs, show the trace.
@@ -141,7 +144,7 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 
 - **Docs — product security contract alignment:** `docs/14-security.md` rewritten as the normative contract (dedicated host, adult-operator prompt trust, supply-chain primary mitigation, warnings vs gates); cascaded into `00`, `17`, `README`, `13`, `01`, tutorials, and satellite docs. Claims must not exceed `14`.
 
-- **2026-07-12 — Traffic control (`adr/0007`):** Mission ordering via native `blocked by` relations (ONBOARD decomposition declares `blocked_by`; scheduler gate honors any relation, human-added included) · `DEVCAKE-NEEDS-HUMAN` hand-off label + `human_needed` outcome (tenth label) · intake pause toggle (`intake_paused` + admin Traffic control section) · comment-provenance sentinel `` `devcake:v1` `` with 🧑/🤖 markers in `ACTIVITY.md` · Relations Mapper service (`MAPPER` run kind: interval + manual trigger + Dev Type combobox + on/off in the admin panel). Requires a dev-image rebuild (new legal outcomes in the entrypoint).
+- **2026-07-12 — Traffic control (`adr/0007`):** Mission ordering via native `blocked by` relations (ONBOARD decomposition declares `blocked_by`; scheduler gate honors any relation, human-added included) · `DEVCAKE-NEEDS-HUMAN` hand-off label + `human_needed` outcome (tenth label) · intake pause toggle (`intake_paused` + admin Limits & traffic section) · comment-provenance sentinel `` `devcake:v1` `` with 🧑/🤖 markers in `ACTIVITY.md` · Relations Mapper service (`MAPPER` run kind: interval + manual trigger + Dev Type combobox + on/off in the admin panel). Requires a dev-image rebuild (new legal outcomes in the entrypoint).
 - **2026-07-12 — Traffic-control hardening (`adr/0007` addendum), same day, post-adversarial-review:** app-side `LEGAL_OUTCOMES` trust boundary · branch-protection verification + out-of-pipeline-merge tripwire (docs/13 §8a, docs/14 §2) · paginated Linear reads + relations-page warnings · `gate_map` as an always-fresh poll artifact + dependency-cycle detection with header banner · hand-off evidence requirement + escalating warnings (never auto-park) · seeded `junior-dev` + `MapperService` (lock, post-success watermark, store-derived degradation) · quote-aware sentinel classification · project-update baton passes (verified live) · stateful pause banner with in-flight count · config deep-merge + mapper Dev Type delete guard.
 
 - **2026-07-12 — Harness registry (admin authoritative):** found live — changing a Dev Type's harness in the admin panel didn't change what ran (dispatch used the stored `docker_image`; harness selection was image-baked). Reworked: `app/devcake/harness.py` registry is the single source of truth (image + credential requirements + OAuth flow per `harness_template`); `DevType` slimmed (no stored image/credential config; legacy YAML keys dropped on next save); dispatch sends `DEVCAKE_HARNESS` in the run spec (overrides the baked ENV); OAuth became per-Dev-Type (`POST /oauth/dev-types/{name}/start` — fixes credentials landing in the first same-harness Dev Type's dir); Dev Type card shows the derived image + live credential checklist (`GET /harnesses`, enriched `GET /dev-types`).
@@ -166,7 +169,7 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 
 **F3 — Any number of repos, including zero.** An instance configures 0..N repos (schema v3); per-mission resolution assigns **0 or 1** configured repo per mission (the mechanism — assignment config vs. mission metadata — is a **founder decision**), with the resolved forge adapter + credentials wired per-run into the runspec. A mission resolving to zero repos routes to F4's internal fallback forge — downstream (EXECUTE/REVIEW/PR mechanics) never sees a repo-less mission. N-repos-*per-mission* is explicitly out of scope (deferred — cross-repo atomicity is its own project). Ships paired with F4: the zero-repo dispatch path stays gated until the fallback exists. Absorbs the old "multi-instance runtime wiring" item.
 
-**F4 — Internal fallback forge: bundled Gitea.** Gitea joins `docker compose` as a long-lived service. Any mission that resolves to no configured repo gets a repository auto-created on the internal Gitea at intake (per-Mission, reused across attempts and rework — the PR-reuse mechanics from M4 carry over), plus a per-Mission machine user with user-scoped tokens and a collaborator grant on that repo (Gitea does not mint repo-scoped tokens; `14` §2). Devs receive it as a *perfectly ordinary forge repo*: EXECUTE & REVIEW run their standard PR mechanics on non-code artifacts with zero special-casing — simultaneously the strongest live test of F1's forge-agnosticism and the substrate for the **non-developer workload testing planned for v0.2**. **Because the fallback forge may not be observed by the end-user at all, deliverables must flow back to the PMO:** when a mission on the internal forge reaches its REVIEW-approved merge, the changed files are packaged (zip of the merged change set) and attached to the PMO activity feed (attachment-first policy) — the PMO stays the one place the user looks. Requires the Gitea `ForgePort` adapter (registry entry + `ForgeDescriptor` dialect); support for external/user-supplied Gitea instances comes free. `ForgeCapabilities` is extracted here, from observed three-forge divergence. Gitea admin credentials are a stack bootstrap secret (`.env`, F5 exception). Open **founder decisions**: internal-repo retention/GC after mission completion; whether internal repos surface in the admin panel. Bonus: the zero-repo golden path needs no external forge credential, though it still uses Linear and real model credentials. *(Replaces the earlier "internal Mission worktree / activity mirror" design — see Discarded.)*
+**F4 — Internal fallback forge: bundled Gitea.** Gitea joins `docker compose` as a long-lived service. Any mission that resolves to no configured repo gets a repository auto-created on the internal Gitea at intake (per-Mission, reused across attempts and rework — the PR-reuse mechanics from M4 carry over), plus a per-Mission machine user with user-scoped tokens and a collaborator grant on that repo (Gitea does not mint repo-scoped tokens; `14` §2). Devs receive it as a *perfectly ordinary forge repo*: EXECUTE & REVIEW run their standard PR mechanics on non-code artifacts with zero special-casing — simultaneously the strongest live test of F1's forge-agnosticism and the substrate for the **non-developer workload testing planned for v0.2**. **Because the fallback forge may not be observed by the end-user at all, deliverables must flow back to the PMO:** when a mission on the internal forge reaches its REVIEW-approved merge, the changed files are packaged (zip of the merged change set) and attached to the PMO activity feed (attachment-first policy) — the PMO stays the one place the user looks. Requires the Gitea `ForgePort` adapter (registry entry + `ForgeDescriptor` dialect); support for external/user-supplied Gitea instances comes free. `ForgeCapabilities` is extracted here, from observed three-forge divergence. Gitea admin credentials are a stack bootstrap secret (`.env`, F5 exception). Open **founder decisions**: internal-repo retention/GC after mission completion; whether internal repos surface in the admin panel. Bonus: the zero-repo golden path needs no external forge credential, though it still uses Linear and real model credentials. *(Superseded 2026-08-04: ADR-0030's auto-provisioned default board removes the Linear dependency too — the standalone path needs only model credentials.)* *(Replaces the earlier "internal Mission worktree / activity mirror" design — see Discarded.)*
 
 **F5 — All operator config via the admin GUI, single-mode.** Everything the operator supplies — PMO instances, repos, credentials, API keys — passes through the admin UI (Configuration for PMO/model settings; Repositories for forge settings), secret *values* included. Env-var indirection is **deleted, not kept as a fallback** (founder decision: one mode, no dual sources of truth — the original PAT-paste incident was indirection confusion). Secrets are stored 0600 under `/data/secrets/`, registered with the redaction layer, never echoed back; the ✓/✗ `env-check` pattern extends to stored-secret status. **Exceptions stay in `.env`:** stack bootstrap secrets only (Dagu, OpenObserve, nginx admin auth, Gitea admin) — what's needed before the GUI itself is up. A standing `security_warnings` breadcrumb marks the posture ("GUI-stored secrets behind basic auth — revisit before exposing beyond localhost") so the decision cannot silently ride into a first real deployment.
 
@@ -187,7 +190,7 @@ Exit criteria — **all verified 2026-07-14 (M8 complete)**:
 ## M9 — Multi-PMO port (schema v3)
 
 **Goal:** DevCake is PMO-independent; one instance oversees N≥1 PMO instances. **Implements:** F2.
-**Out of scope:** new PMO adapters (post-v0.1); cross-PMO *auto-federation* (DevCake never creates cross-instance edges or missions — *honoring* native peer edges shipped 2026-07-28, ADR-0009 amendment); webhooks.
+**Out of scope:** new PMO adapters (post-v0.1); cross-PMO *auto-federation* (DevCake never creates cross-instance edges or missions **of its own volition** — *honoring* native peer edges shipped 2026-07-28, ADR-0009 amendment; operator-transcribed missions via the composer are ADR-0030's carve-out, not federation); webhooks.
 
 Exit criteria:
 - [x] Schema v3 (instances-with-identities) boots — live stack hand-migrated per docs/10 §3 and running on it (2026-07-14); one GENERIC stale-schema refusal covers v1/v2/old-version files and PUT bodies; the singular shims are gone and the suite is migrated (258 tests).
@@ -216,7 +219,7 @@ Exit criteria:
 **Out of scope:** the non-developer workload testing itself (v0.2).
 
 Exit criteria:
-- [x] Gitea is a bundled compose service (`gitea/gitea:1.24.7-rootless`, digest-pinned): live-verified healthy from the stack, admin bootstrapped via the `docker-setup.sh → migrate → admin-create` wrapper (GITEA_ADMIN_* stack secret), container logs in OO. The wrapper ordering + idempotency were live-probed first (M11.0).
+- [x] Gitea is a bundled compose service (`gitea/gitea:1.27.1-rootless` since the 2026-08 bump, digest-pinned): live-verified healthy from the stack, admin bootstrapped via the `docker-setup.sh → migrate → admin-create` wrapper (GITEA_ADMIN_* stack secret), container logs in OO. The wrapper ordering + idempotency were live-probed first (M11.0).
 - [x] The Gitea `ForgePort` adapter passes the forge contract battery — **13/13 live** (`scripts/contract_tests_forge.py --forge gitea`, wired into `ci_suite.sh`); an external/user-supplied Gitea is just a `RepoInstance(forge="gitea", …)`. All divergences (client-side head filter, APPROVED event, overloaded 405, boolean mergeable, whitelist-officialness) were live-verified and encoded.
 - [x] Zero-repo dispatch un-gated (`resolve_repo_live`): a repo-less mission gets an auto-created internal repo at intake (per-Mission idempotent, reused across attempts/rework; the resolver re-registers it after an app restart), routed downstream exactly like an external repo — the F1 payoff. *(Full ONBOARD→…→Done runs on live model tokens; the machinery is hermetically tested + the API path live-verified end-to-end.)*
 - [x] **PMO delivery** (`domain/orchestrator/deliver.py`): on the approved merge (all three Done sites — review auto-merge + both sweep paths), the changed files are zipped (binary-safe, removed-files excluded, size-capped with a MANIFEST) and attached to the PMO feed; failure never un-Dones the mission. Hermetically tested; `pr_files`/`file_content` live-verified 13/13.
@@ -401,6 +404,110 @@ vocabulary at the top of this file).
 - **Security-contract reading aid** (PR #53) + roadmap/observability alignment
   (PRs #51–#52): docs/14 §0a buckets, deferred iron-proxy radar. **built**
   (docs).
+- **Dev toolchain floor** (ADR-0023, 2026-08-02): capability floors baked
+  into the shared Dev base — playwright's pinned headless Chromium + system
+  libs (class A: user-space can download a browser but never apt its shared
+  libraries), build-essential, Node in EVERY harness image (grok Devs could
+  not `npm run dev` before), uv + PATH/`.npmrc` guarantees for root-free
+  self-provisioning (class B), and the turn-saving conveniences + pandoc/
+  poppler/pandas/openpyxl document-and-spreadsheet floor (class C, founder
+  decision). Build-time smoke proves the floor AS uid 1000 (headless shell
+  must launch). Out by doctrine: sudo, docker, DBs, vendor CLIs,
+  LibreOffice. Base ~1.4 GB, shared layers. **built**. Skeptical-review fix
+  round same day: `/opt/pw-browsers` dev-owned (as shipped, the env var +
+  read-only dir bricked every non-baked browser — measured EACCES after
+  the download; disposable container ⇒ writable is safe) + `tini` as PID 1
+  (browser process trees vs a non-reaping entrypoint) + docs/ADR truth
+  sweep incl. `14` §11 browser-injection radar + memory-budget notes.
+  **built**.
+- **Mandatory repo source mirror** (ADR-0024, 2026-08-03): a 27-repo prod
+  stress instance re-cloned ~300 MB per run; now the app maintains bare
+  mirrors on `devcake_mirrors` (heads+tags, gc.auto=0, per-sync HEAD; git +
+  git-lfs = the app's first subprocess seam), sync is a FAIL-CLOSED dispatch
+  precondition (no toggle — founder decision; reason on missions row via the
+  shared gate dict; auth failures latch the repo breaker), Devs clone
+  `file://` from the RO mount and get origin rewritten to the real forge
+  (Dev-invisible; extras drop read tokens from the runspec). LFS = capability
+  toggle (standalone file:// transfer probe-verified, 2 MB bit-exact at
+  depth 1). Dagu bumped 2.10.5 → 2.11.3 as a severable rider (probes green;
+  CORS/token-TTL breaking changes verified non-applicable; controller/LLM
+  DAG features explicitly NOT adopted). **built**.
+- **Provisioned workspaces** (ADR-0025, 2026-08-03): ADR-0024 mounted the
+  whole mirror volume RO into every Dev, reopening the context-control problem
+  (agent saw `/mirrors` bare-pack duplicates of its own repo + every other
+  repo). Now one run is TWO dependent Dagu container steps sharing a per-run
+  host-bind workspace: `provision` (trusted code, `/mirrors` RO, clones, exits)
+  then `run_dev` (the agent, workspace ONLY — no `/mirrors`). The runspec is
+  phase-scoped (provision gets no harness/model secrets); an app-written
+  sentinel + a provision marker fence the daemon-root-autocreate and
+  WS_HOST-drift edges; cleanup is best-effort with a sweep as the guarantee;
+  `run.started` is hardened dispatched-only (also fixing a latent
+  finalizing-revert); mirror clones are credential-stripped with `-c lfs.url`
+  pinned; LFS posture runs in both phases. SUPERSEDES ADR-0024 §5's ambient
+  mirror-read risk (agent ambient read surface now zero). No single-container
+  fallback — the phase is mandatory and a missing/unknown one exits 20 loudly
+  (the initial ship carried a monolithic branch for one commit, deleted the
+  same day: pre-v1 does not carry rollback compat). **built**.
+- **In-container run continuation** (ADR-0022, 2026-08-02): the
+  narrate-and-stop landing (exit 0, `stopReason EndTurn`, no `result.json` —
+  ~50% of long weak-model runs, hours lost late) is nudged instead of failed:
+  session resume (capture-verified for all three CLIs, `RESUME_SPECS` with
+  per-harness cumulative-usage facts) → fresh-session escalation on stall,
+  budget-only termination (`continuation_policy` / `max_continuations`,
+  Limits & traffic). Plus `TURN_DISCIPLINE` prompt epilogue, exit-11
+  `evidence.terminal` instrumentation, `continuations_used` on
+  Run/API/feed/OTel, rig `--resume-prompt-file` mode + six
+  `*_resume_nudge*` capture fixtures. **built**.
+
+- **External audit + evaluation fix campaign** (2026-08-03…04): Grok's
+  tag-range audit (AUD-001…AUD-034; its report file was deleted from the
+  root 2026-08-03 — **this entry is the AUD-ID ledger** code comments
+  resolve against) landed as PR #81; the four-review critical evaluation
+  (architecture / tests / docs drift / ops) then drove PRs #82–#87:
+  - **ADR-0026 spend discipline** (#82): `attempt_reset` (strict
+    `label-ops` default + `DEVCAKE-RETRY` gesture / `any-comment` /
+    `unlimited` with cumulative-cost warnings) closing the
+    chatty-integration attempt-reset hole; opt-in `brake_on_bad_output`;
+    first-class Limits & Traffic UX. **Deliberate behavior change**
+    (strict default) — release-noted. **built**.
+  - **TOCTOU + parity** (#83): watchdog timeout/liveness kill branches
+    re-read before killing; `_kill_inner` aborts save + restore when the
+    state moved (the mover wins); the mirror gate's `needed_for` set is
+    snapshotted on `run.mirror_repos` and the runspec serves mirrors from
+    the snapshot only. **built**.
+  - **Enforcement** (#84): `test_api_surface.py` (TestClient over the real
+    app — 401/403 on every route; the auth middleware is finally
+    load-bearing), `test_repo_structural.py` (+RO mounts in both pytest
+    runners: /mirrors isolation, workspace binds, RUN_ID fence, no Dagu
+    auto-retry, single-uvicorn-worker premise), CI contract lane (compose
+    smoke stack + bundled Gitea runs BOTH batteries per PR), UI-suite
+    honesty (15 tautologies → `checked()` predicates, helpers suites wired
+    into check:ui). **built**.
+  - **Ops hardening** (#86 + hotfix #87): redis aclfile + per-op `ACL SAVE`
+    (dev users survive a redis-only restart — drill-verified; with an
+    aclfile redis IGNORES --requirepass, measured, so the default user
+    lives in the file, boot-regenerated from .env), `maxmemory 1gb +
+    noeviction` flood backstop, `chmod 600 .env` enforced, bake-failure
+    dagu-restart trap, `backup_data.sh`/`restore_data.sh`, vendored grok
+    installer, ADMIN_PASSWORD ≥12 (**deliberate breaking change**,
+    release-noted). #87 also REVERTED the attempted WS_HOST DAG
+    precondition: Dagu 2.11.3 loads but never expands service env in
+    `condition:` — every dev-run sat `dispatched` to the startup-grace
+    kill (measured live); an inverse structural test bars unverified
+    reintroduction. **built**.
+  - **AUD disposition:** fixed in #81 (`df08c9a`): AUD-001/002 (workspace
+    fail-closed real), 003 (stop-dagu-before-bake half; the DAG-precondition
+    half was attempted in #86 and reverted in #87 — the daemon-autocreate
+    residue is tracked debt again), 004 (tag lockstep), 005/006 (merge
+    wedges), 007 (sweep budget), 008 (doc overclaim deleted), 010
+    (tristate trust in sweep), 011 (fence `{6,64}`), 017 (costing bool
+    guard), 018 (parse-cache clear). Fixed in this campaign: 015-adjacent
+    kill/finalize races (#83), backup-pair gap (§ above), 029 (vendored
+    installer). Still open, honestly: **AUD-009** (provision phase is
+    honor-system — accepted, documented), **AUD-012** (relative WS_HOST via
+    plain `docker compose up` — up.sh asserts, compose alone does not),
+    **AUD-020** (hard-coded `devcake_mirrors` volume name — doc warning
+    only), **AUD-022** (no Dev cgroup HostConfig — docs/14 §11 debt).
 
 ### Still open (residuals)
 
@@ -587,6 +694,20 @@ long-lived incomplete dialect API.
 
 ### Deferred (later / conditional)
 
+- **2026-08 evaluation candidates** (recorded with the campaign entry above;
+  file:line evidence in the evaluation ledger): **per-run Dev networks**
+  (closes cross-Dev reachability incl. the post-ADR-0023 DevTools scenario —
+  ICC-off measured broken: it severs Dev→Redis) · **per-run ingress
+  streams** (closes the malicious-`MAXLEN` trim vector for good) · **brake
+  cycle-skip backoff** so the ADR-0018 throttle arm acts at
+  `max_concurrency: 1` (founder kept current design) · **composition-root
+  decomposition** (`api/main.py` builds 15+ import-time singletons) ·
+  **unifying the three failure-taxonomy encodings** (numeric exit /
+  `error_class` string / reconcile's stderr regex) · **config-PUT lock**
+  (a poll cycle can read mixed old/new config across awaits) ·
+  **conftest.py / event-loop test hygiene** (module-import loop ownership) ·
+  **`${VAR:-default}`-guarded volume name in dev-run.yaml** (AUD-020 —
+  verify Dagu expansion support first; see the #87 lesson).
 - **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
   polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
   among deferred items, independent of any harness-platform work.
@@ -619,10 +740,11 @@ long-lived incomplete dialect API.
 - **Priority-conditional Dev Type assignment** (e.g. Urgent EXECUTE → stronger
   Dev Type — relaxes 1 Mission Type → 1 Dev Type). The **instance** dimension
   shipped as ADR-0019 (per-PMO override rows); a condition language did not.
-- **Per-instance doctrine knobs beyond assignments** — adoption mode,
-  auto_merge, concurrency are still deployment-global; ADR-0019 lists them as
-  open candidates if two boards ever need different merge doctrine (until
-  then: second deployment).
+- **Per-instance doctrine knobs beyond assignments** — adoption mode and
+  concurrency are still deployment-global; ADR-0019 lists them as open
+  candidates if two boards ever need different intake/concurrency doctrine
+  (until then: second deployment). **`auto_merge` is per-repo** (ADR-0020),
+  not a per-PMO candidate.
 - Admin panel **OIDC/SSO** (basic auth remains the dedicated-host story —
   `14`).
 - **First-class OTel metrics layer** — when dashboards need pre-aggregation

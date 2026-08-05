@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ...security import redact
+from .. import costing
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import mission_branch, run_branch
@@ -66,13 +67,14 @@ async def _conflict_attempts(mgr, pmo_id: str) -> int:
 
 async def _maybe_route_conflict_to_execute(mgr, pmo_id: str, key: str,
                                            pr_url: str,
-                                           from_label: str) -> bool:
+                                           from_label: str, inst) -> bool:
     """docs/03 §4.1 — on an auto-resolvable merge failure (conflict or
     stale branch), route the mission back to EXECUTE with a resolve
     directive, max MAX_CONFLICT_RESOLVES attempts per mission. Returns
     True when routed; any failure or decline returns False so the caller's
-    human fallback (DEVCAKE-MERGE) is never blocked."""
-    if not mgr.config.auto_resolve_merge_conflicts:
+    human fallback (DEVCAKE-MERGE) is never blocked. ``inst`` is the
+    mission's RepoInstance (per-repo doctrine, ADR-0020)."""
+    if not inst.auto_resolve_merge_conflicts:
         return False
     try:
         n = await _conflict_attempts(mgr, pmo_id)
@@ -106,10 +108,11 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
     verdict = result.get("verdict")
     report = result.get("report_md") or result.get("summary") or ""
     forge = mgr.forges.get(run.repo_ref)
-    if forge is None:
-        # the run's repo vanished from config mid-flight: fail CLEANLY —
-        # transcripts/report are already posted; no transition is applied
-        # (the resolution-failure contract, domain/forge_runtime.py)
+    # forges + instances are co-populated (rebuild / register_internal); still
+    # treat a missing instance as vanished so a desync never AttributeErrors
+    # mid-finalize (resolution-failure contract, domain/forge_runtime.py)
+    inst = mgr.forges.instance(run.repo_ref) if forge is not None else None
+    if forge is None or inst is None:
         run.verdict = redact(
             f"failed: repo '{run.repo_ref}' is no longer configured — "
             f"REVIEW outcome not applied")
@@ -146,7 +149,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 # redelivery: only claim formal approval if it succeeded
                 formal = "review:formal_approve_ok" in run.finalized_steps
 
-        if mgr.config.auto_merge and pr:
+        if inst.auto_merge and pr:
             if "review:done" not in run.finalized_steps \
                     and "review:merge_failed" not in run.finalized_steps \
                     and "review:merge_deferred" not in run.finalized_steps \
@@ -213,8 +216,9 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                         if "review:conflict_routed" in run.finalized_steps:
                             return
                         try:
-                            routed = await _maybe_route_conflict_to_execute(mgr, 
-                                pmo_id, run.mission_key, pr_url, LABEL_REVIEW)
+                            routed = await _maybe_route_conflict_to_execute(
+                                mgr, pmo_id, run.mission_key, pr_url,
+                                LABEL_REVIEW, inst)
                         except Exception:
                             log.exception("conflict route failed for %s",
                                           run.mission_key)
@@ -230,13 +234,13 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                 MissionRef(pmo_id, "issue"),
                                 remove={LABEL_REVIEW}, add={LABEL_MERGE})
                             if mstate is not False and \
-                                    mgr.config.merge_retry_window_minutes > 0:
+                                    inst.merge_retry_window_minutes > 0:
                                 await mgr._feed(
                                     pmo_id, "issue",
                                     f"⏳ REVIEW approved but the merge is not "
                                     f"possible yet ({merge_err}) — DevCake keeps "
                                     f"retrying for up to "
-                                    f"{mgr.config.merge_retry_window_minutes} "
+                                    f"{inst.merge_retry_window_minutes} "
                                     f"minutes (mergeability computing / CI "
                                     f"pipeline running). You can merge {pr_url} "
                                     f"manually at any time. {MERGE_RETRY_MARKER}")
@@ -259,6 +263,31 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                     "review:merge_failed")
                             mgr.runs.store.save(run)
                         await _fail_path()
+        elif inst.auto_merge and inst.merge_retry_window_minutes > 0 \
+                and "review:merge_deferred" not in run.finalized_steps \
+                and "review:awaiting_merge" not in run.finalized_steps:
+            # AUD-006: auto_merge is ON but the PR wasn't visible at finalize
+            # (forge list lag / branch-naming miss). Pure human-await copy
+            # would strand app-driven merge FOREVER — the sweep silent-returns
+            # on a missing PR and opens no window without a marker. Open a
+            # deferred window instead: the sweep drives the merge the moment
+            # the PR surfaces, and the window bounds the wait before handing
+            # back. Never pure human-await when auto_merge is ON.
+            async def _defer_missing_pr():
+                await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
+                                          remove={LABEL_REVIEW}, add={LABEL_MERGE})
+                await mgr._feed(
+                    pmo_id, "issue",
+                    f"⏳ REVIEW approved but the PR isn't visible yet — DevCake "
+                    f"will auto-merge it once it appears, retrying for up to "
+                    f"{inst.merge_retry_window_minutes} minutes before handing "
+                    f"back to you. You can merge {pr_url} manually at any time. "
+                    f"{MERGE_RETRY_MARKER}")
+                mgr._audit(pmo_id, "review_approve_defer_missing_pr", pr_url)
+                mgr._merge_window_closed.discard(pmo_id)
+                run.finalized_steps.append("review:merge_deferred")
+                mgr.runs.store.save(run)
+            await _defer_missing_pr()
         elif "review:awaiting_merge" not in run.finalized_steps:
             async def _await_merge():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
@@ -311,14 +340,30 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
             every = mgr.config.review_loop_warning_every
             if every < 1 or rejections % every != 0:
                 return
-            cost = sum((r.token_report or {}).get("cost_usd") or 0
-                       for r in mgr.runs.store.all()
-                       if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r))
+            # effective per run (ADR-0021): native harness cost when reported,
+            # else the finalize-stamped estimate — grok spend no longer reads
+            # as $0.00 here. The estimated share is named, not blended away.
+            ci = mgr.config.cost_inputs
+            cost = est = 0.0
+            for r in mgr.runs.store.all():
+                if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
+                    continue
+                tr = r.token_report or {}
+                native = tr.get("cost_usd_native")
+                estimated = tr.get("cost_usd_estimated")
+                eff = costing.effective_cost(native, estimated, ci)
+                if eff is None:
+                    continue
+                cost += eff
+                if estimated is not None and (ci.override_native
+                                              or native is None):
+                    est += eff
+            share = f" (of which ${est:.2f} estimated)" if est else ""
             warn = (f"⚠️ **Loop warning:** this mission has been through "
                     f"{rejections} REVIEW rejections. Cumulative recorded "
-                    f"cost so far: ${cost:.2f} (runs without cost data not "
-                    f"included). Add `DEVCAKE-SKIP` to stop DevCake, or "
-                    f"intervene on the PR directly.")
+                    f"cost so far: ${cost:.2f}{share} (runs with no cost "
+                    f"data not included). Add `DEVCAKE-SKIP` to stop "
+                    f"DevCake, or intervene on the PR directly.")
             await mgr._feed(pmo_id, "issue", warn)
             if pr:
                 await forge.post_pr_comment(pr.number, warn)

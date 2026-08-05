@@ -36,11 +36,16 @@ def _wire_app(monkeypatch, tmp_path: Path):
     secrets.write_connection_secret("repo", "main", "token",
                                     "ghp_transfer_secret_value_01")
     secrets.write_harness_secret("ANTHROPIC_API_KEY", "sk-ant-transfer-02")
-    monkeypatch.setattr(app_main, "config", cfg)
-    monkeypatch.setattr(app_main, "dev_types", dts)
-    monkeypatch.setattr(app_main, "reload_connections", lambda: None)
-    monkeypatch.setattr(app_main, "store", SimpleNamespace(active=lambda: []))
-    monkeypatch.setattr(app_main, "shared_breakers", {})
+    from devcake.domain.skills import SkillService
+    from fakes import make_services
+    # ADR-0028: one test graph instead of five module-global patches.
+    # SkillService(None) serves the bundled skills forge-less, exactly as
+    # the old module global did in a GITEA-less test env.
+    monkeypatch.setattr(app_main, "services", make_services(
+        config=cfg, dev_types=dts, reload_connections=lambda: None,
+        store=SimpleNamespace(active=lambda: []), shared_breakers={},
+        managers={}, forge_runtime=SimpleNamespace(breakers={}),
+        skill_service=SkillService(None)))
     return app_main, config_mod, secrets
 
 
@@ -160,7 +165,7 @@ def test_import_lands_as_profile_then_apply_restores(monkeypatch, tmp_path):
     text = run_coro(app_main.export_settings(
         {"sections": ALL, "encryption": ENC})).body.decode()
     # drift the live world, then import + apply the bundle
-    app_main.config.poll_interval_seconds = 99
+    app_main.services.config.poll_interval_seconds = 99
     secrets.write_harness_secret("ANTHROPIC_API_KEY", "sk-rotated-03")
     out = run_coro(app_main.import_settings(
         {"content_b64": _b64(text), "passphrase": "correct horse",
@@ -169,9 +174,9 @@ def test_import_lands_as_profile_then_apply_restores(monkeypatch, tmp_path):
     assert out["sections"] == ["config", "secrets"]
     assert out["has_setup_env"] is False
     # nothing applied yet
-    assert app_main.config.poll_interval_seconds == 99
+    assert app_main.services.config.poll_interval_seconds == 99
     run_coro(app_main.apply_profile("imported"))
-    assert app_main.config.poll_interval_seconds == 30
+    assert app_main.services.config.poll_interval_seconds == 30
     assert secrets.read_harness_secret("ANTHROPIC_API_KEY") == "sk-ant-transfer-02"
 
 

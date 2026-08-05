@@ -15,7 +15,7 @@ from typing import Any, MutableMapping, Optional
 
 from ..harness import HARNESSES
 from .ids import make_run_id
-from .run import Run
+from .run import Run, utcnow
 
 log = logging.getLogger("devcake.oauth")
 
@@ -51,7 +51,10 @@ class OAuthManager:
                              dev_type.harness_template.split("-")[0].upper())
         run = Run(run_id=run_id, mission_key="OAUTH", mission_type="OAUTH",
                   pmo_ref="sys",   # not the legacy-marker default "main" (A29)
-                  dev_type=dev_type.name, seq=1, timeout_seconds=600,
+                  # 660 not 600 (ADR-0025 R6): the two-step DAG spends one
+                  # extra container cycle (provision exits 0 early for OAuth)
+                  # before the device-code window opens for the human
+                  dev_type=dev_type.name, seq=1, timeout_seconds=660,
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
                             "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
@@ -93,10 +96,29 @@ class OAuthManager:
         secrets_store.write_credential_file(
             s["dev_type"], s["secret_file"], payload["content"])
         s["state"] = "completed"
-        run.state = "finished"
-        self.runs.store.save(run)
+        # Terminal-ize ONLY a still-active run. A credential can land after
+        # the watchdog's 660 s kill (a slow human on the device-code page) or
+        # an operator stop — the credential is still stored above (the login
+        # DID succeed), but the run record's history is not rewritten: before
+        # this guard, a late oauth.result flipped a timed_out run back to
+        # "finished" while racing the kill's own save. And stamp ended_at:
+        # this was the ONE terminal transition in the codebase that omitted
+        # it, so every successful OAuth login's runtime grew forever in the
+        # Runs tab ((ended_at or now) - started_at, repriced every poll) and
+        # ranked as the longest run in history under the duration sort.
+        if run.state in ("dispatched", "running"):
+            run.state = "finished"
+            run.ended_at = utcnow()
+            self.runs.store.save(run)
+        else:
+            log.info("oauth: credential for %s landed after run %s already "
+                     "terminalled (%s) — record left as-is",
+                     s["dev_type"], run_id, run.state)
         await self.messaging.delete_run_user(run_id)
         await self.messaging.delete_reply_stream(run_id)
+        # ADR-0025 Hook D: OAuth completion bypasses finalize AND kill, so
+        # its (empty) workspace dir is reclaimed right here
+        self.runs.workspaces.cleanup(run_id)
         # a fresh credential clears any auth breaker for this dev type (docs/15 §4)
         if self.breakers is not None:
             self.breakers.pop(s["dev_type"], None)

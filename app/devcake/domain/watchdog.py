@@ -27,7 +27,18 @@ STALL_CHECK_INTERVAL = 60
 
 async def watchdog_loop(mgr: RunManager) -> None:
     last_stall_check = -float("inf")
+    last_ws_sweep = -float("inf")
     while True:
+        # ADR-0025 Hook G (periodic half): the sweep is the reclamation
+        # guarantee behind every best-effort cleanup hook — kill races,
+        # partial rmtrees, daemon-created husks. Cheap (one scandir + store
+        # lookups), so the stall-check cadence is plenty.
+        if time.monotonic() - last_ws_sweep >= STALL_CHECK_INTERVAL:
+            last_ws_sweep = time.monotonic()
+            try:
+                mgr.workspaces.sweep(mgr.store)
+            except Exception:
+                log.exception("workspace sweep failed")
         try:
             stalled_finalizing = []
             for run in mgr.store.active():
@@ -47,7 +58,19 @@ async def watchdog_loop(mgr: RunManager) -> None:
                     continue
                 age = (utcnow() - run.created_at).total_seconds()
                 if age > run.timeout_seconds:
-                    await mgr.kill(run, "timed_out", f"exceeded {run.timeout_seconds}s")
+                    # TOCTOU guard (2026-08 evaluation): the loop awaits on
+                    # earlier kills/status probes after materializing
+                    # active(), so this snapshot can be stale — re-read and
+                    # kill only a run the store still shows live. A run that
+                    # finalized (or entered finalize) in that window must not
+                    # be overwritten to timed_out after its PMO transition
+                    # landed. Same guard the stalled-finalize branch below
+                    # has always had.
+                    fresh = mgr.store.get(run.run_id)
+                    if fresh is None or fresh.state not in ("dispatched", "running"):
+                        continue
+                    await mgr.kill(fresh, "timed_out",
+                                   f"exceeded {run.timeout_seconds}s")
                     continue
                 # reference = last heartbeat, else run start: a Dev killed before its
                 # first heartbeat must not be invisible until the wall-clock timeout
@@ -62,9 +85,26 @@ async def watchdog_loop(mgr: RunManager) -> None:
                     label = str(detail.get("statusLabel", detail.get("status", ""))).lower()
                     if status is None or any(t in label for t in
                                              ("failed", "aborted", "error", "cancel")):
-                        await mgr.kill(run, "failed",
+                        # TOCTOU guard: the status() await above is a yield
+                        # point — finalize may have claimed the run, and a
+                        # first heartbeat/artifacts entry may have landed.
+                        # Re-read and re-derive the liveness verdict on the
+                        # FRESH record; kill only if it still holds.
+                        fresh = mgr.store.get(run.run_id)
+                        if fresh is None or fresh.state not in ("dispatched",
+                                                                "running"):
+                            continue
+                        beat = fresh.last_heartbeat or fresh.started_at
+                        still_stale = (fresh.state == "running" and beat
+                                       and utcnow() - beat > HEARTBEAT_GRACE)
+                        still_dead = (fresh.state == "dispatched"
+                                      and utcnow() - fresh.created_at
+                                      > STARTUP_GRACE)
+                        if not (still_stale or still_dead):
+                            continue
+                        await mgr.kill(fresh, "failed",
                                        "dagu run dead (%s)" %
-                                       ("no heartbeat" if stale_running else "never started"))
+                                       ("no heartbeat" if still_stale else "never started"))
             if stalled_finalizing and \
                     time.monotonic() - last_stall_check >= STALL_CHECK_INTERVAL:
                 last_stall_check = time.monotonic()

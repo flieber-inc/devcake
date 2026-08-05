@@ -11,7 +11,7 @@ from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.orchestrator import decomposition, review, transitions
-from devcake.domain.model import Activity, ActivityEntry, Mission
+from devcake.domain.model import Activity, ActivityEntry, Mission, MissionType
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
 from devcake.domain import backend_health
@@ -30,6 +30,10 @@ class FakePMO:
     def _check_ref(ref):
         from devcake.domain.model import MissionRef
         assert isinstance(ref, MissionRef), f"port called with {ref!r}, not a MissionRef"
+
+    def capabilities(self):
+        from fakes import fake_pmo_capabilities
+        return fake_pmo_capabilities()   # global_ids=True — peer path enabled
 
     def __init__(self, mission):
         self.mission = mission
@@ -252,7 +256,7 @@ def test_awaiting_merge_redelivery_not_misread_as_external(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})   # our own swap
     forge = FakeForge()
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
-    mgr.config.auto_merge = False
+    mgr.forges.instance("main").auto_merge = False
     run = _run("REVIEW", "DEVCAKE-REVIEW")
     run.finalized_steps = ["review:awaiting_merge"]            # checkpointed
     run_coro(transitions.transition(mgr, run, {"outcome": "reviewed", "verdict": "approve",
@@ -393,9 +397,23 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
     assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 1
 
 
-def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
-    """A human comment on the mission is an intervention: the step gets fresh
-    attempts. DevCake's own sentinel-signed comments never reset."""
+def _failed_execute_runs(store, t0, n=2):
+    from datetime import timedelta
+    for i in range(1, n + 1):
+        r = _run("EXECUTE", None)
+        r.run_id = f"T-1-{i}-EXECUTE-FAIL"
+        r.state = "failed"
+        r.error = "DEV_BAD_OUTPUT"
+        r.created_at = t0 + timedelta(seconds=i)
+        store.save(r)
+
+
+def test_attempts_ignore_plain_comments_under_default_policy(tmp_path, monkeypatch):
+    """ADR-0026 regression (critical evaluation 2026-08-04): under the strict
+    default (`label-ops`) an ordinary comment — human or integration bot —
+    does NOT reset the attempt count. The pre-0026 rule let any chatty
+    integration (Linear↔GitHub sync, CI notifier) keep the counter at 1
+    forever, defeating max_attempts and unbounding token spend."""
     from datetime import timedelta
     import devcake.domain.orchestrator as orchestrator_mod
 
@@ -403,14 +421,45 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
     mgr, _fake, store = make_mgr(tmp_path, m)
     monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
                         tmp_path / "no-audit.jsonl")
+    assert mgr.config.attempt_reset == "label-ops"   # the shipped default
     t0 = datetime.now(timezone.utc)
-    for i in (1, 2):
-        r = _run("EXECUTE", None)
-        r.run_id = f"T-1-{i}-EXECUTE-FAIL"
-        r.state = "failed"
-        r.error = "DEV_BAD_OUTPUT"
-        r.created_at = t0 + timedelta(seconds=i)
-        store.save(r)
+    _failed_execute_runs(store, t0)
+
+    bot = ActivityEntry(ts=t0 + timedelta(seconds=20), author="sync-bot",
+                        kind="comment", body="Synced from GitHub · #4711")
+    human = ActivityEntry(ts=t0 + timedelta(seconds=30), author="felix",
+                          kind="comment", body="resolved this by hand, carry on")
+    activity = Activity(mission=m, entries=[bot, human])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 3
+
+    # the deliberate gesture DOES reset — and the sentinel guard still holds:
+    # a DevCake-authored post mentioning the token is not an intervention
+    devcake_echo = ActivityEntry(
+        ts=t0 + timedelta(seconds=40), author="devcake",
+        kind="comment", body="mention of DEVCAKE-RETRY\n\n`devcake:v1`")
+    activity = Activity(mission=m, entries=[bot, human, devcake_echo])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 3
+
+    retry = ActivityEntry(ts=t0 + timedelta(seconds=50), author="felix",
+                          kind="comment", body="fixed the fixture — DEVCAKE-RETRY")
+    activity = Activity(mission=m, entries=[bot, human, devcake_echo, retry])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
+
+
+def test_attempts_reset_on_any_comment_when_opted_in(tmp_path, monkeypatch):
+    """`attempt_reset: any-comment` restores the pre-0026 rule: a human
+    comment is an intervention and grants fresh attempts. DevCake's own
+    sentinel-signed comments never reset."""
+    from datetime import timedelta
+    import devcake.domain.orchestrator as orchestrator_mod
+
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    mgr.config.attempt_reset = "any-comment"
+    monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
+                        tmp_path / "no-audit.jsonl")
+    t0 = datetime.now(timezone.utc)
+    _failed_execute_runs(store, t0)
 
     devcake_note = ActivityEntry(ts=t0 + timedelta(seconds=10), author="devcake",
                                  kind="comment", body="posted\n\n`devcake:v1`")
@@ -423,6 +472,43 @@ def test_attempts_reset_on_human_activity(tmp_path, monkeypatch):
                           kind="comment", body="resolved this by hand, carry on")
     activity = Activity(mission=m, entries=[devcake_note, old_human, human])
     assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
+
+
+def test_unlimited_never_gives_up_and_warns_at_cadence(tmp_path, monkeypatch):
+    """`attempt_reset: unlimited` (ADR-0026): the app never applies
+    DEVCAKE-FAILED — the gate proceeds past max_attempts, posting a loud
+    cumulative-cost warning every review_loop_warning_every failures, deduped
+    across poll cycles."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    mgr.config.attempt_reset = "unlimited"
+    mgr.config.max_attempts = 1
+    mgr.config.review_loop_warning_every = 3
+    dispatch._UNLIMITED_WARNED.clear()
+
+    # attempt 4 = 3 failures → warning cadence hit; gate still proceeds
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 4)) is True
+    assert fake.swaps == []                       # DEVCAKE-FAILED never applied
+    assert any("Unlimited-attempts mode" in c and "$" in c
+               for c in fake.comments)
+    warned = len(fake.comments)
+
+    # same attempt recurring (a later gate deferred the dispatch) → no spam
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 4)) is True
+    assert len(fake.comments) == warned
+
+    # off-cadence failure count → silent, still proceeds
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 5)) is True
+    assert len(fake.comments) == warned
+
+    # the default policy still gives up: gate refuses and applies the label
+    mgr.config.attempt_reset = "label-ops"
+    assert run_coro(dispatch._attempt_gate(
+        mgr, m, MissionType.EXECUTE, 4)) is False
+    assert any("DEVCAKE-FAILED" in str(add) for _rm, add in fake.swaps)
 
 
 def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
@@ -950,6 +1036,99 @@ def test_finalize_always_posts_report_inv5(tmp_path):
     assert ({"DEVCAKE-PLAN"} in [add for _, add in fake.swaps]) # transition applied
 
 
+def test_finalize_stamps_rate_card_estimate(tmp_path):
+    """ADR-0021: a grok-shaped report (full split, mapped model, no native
+    cost) persists cost_usd_estimated + rate_card_id; an unmapped model
+    persists neither; native cost_usd is never invented or touched."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    grok_report = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+                   "cache_write_tokens": None, "output_tokens": 500_000,
+                   "total_tokens": 3_500_000, "cost_usd_native": None,
+                   "model": "grok-4.5-build", "source": "end_event"}
+    run_coro(mgr.finalize(run, _finalize_payload(token_report=grok_report)))
+    saved = store.get(run.run_id).token_report
+    assert saved["cost_usd_estimated"] == 5.60      # $2/$0.30/$6 per 1M
+    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["cost_usd_native"] is None
+
+
+def test_finalize_leaves_unmapped_model_unstamped(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    claude_report = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
+                     "cache_write_tokens": 2_000, "output_tokens": 1_000,
+                     "total_tokens": 18_000, "cost_usd_native": 0.1234,
+                     "model": "claude-opus-5",
+                     "source": "session_json"}
+    run_coro(mgr.finalize(run, _finalize_payload(token_report=claude_report)))
+    saved = store.get(run.run_id).token_report
+    assert "cost_usd_estimated" not in saved
+    assert "rate_card_id" not in saved
+    assert saved["cost_usd_native"] == 0.1234       # native untouched
+
+
+def _grok_shaped_report(**over):
+    base = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+            "cache_write_tokens": None, "output_tokens": 500_000,
+            "total_tokens": 3_500_000, "cost_usd_native": None,
+            "model": "grok-4.5-build", "source": "end_event",
+            "reasoning_tokens": 20616}
+    base.update(over)
+    return base
+
+
+def test_feed_shows_estimated_cost_and_reasoning(tmp_path):
+    """docs/03 §8 + ADR-0021: native cost absent + estimate stamped → the
+    labeled estimated line appears (never the bare native line), and the
+    reasoning counter surfaces (a v1 scalar, ADR-0029) without being
+    priced."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        token_report=_grok_shaped_report())))
+    report = next(c for c in fake.comments if "token report" in c)
+    assert "cost (estimated, builtin-v1): $5.6000" in report
+    assert "\ncost: $" not in report
+    assert "reasoning: 20616" in report
+
+
+def test_feed_native_only_report_renders_without_estimate_or_reasoning(tmp_path):
+    """Native cost + unmapped model + no reasoning counter → the plain
+    historical layout: no estimated line, no reasoning segment. (Pre-v1
+    on-disk records render their unknown keys as "—" — accepted, docs/10
+    advisory-state doctrine; this pin covers the v1 shape.)"""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(token_report={
+        "input_tokens": 10_000, "cache_read_tokens": 5_000,
+        "cache_write_tokens": 2_000, "output_tokens": 1_000,
+        "total_tokens": 18_000, "cost_usd_native": 0.1234,
+        "model": "claude-opus-5", "source": "session_json"})))
+    report = next(c for c in fake.comments if "token report" in c)
+    assert "\ncost: $0.1234" in report
+    assert "estimated" not in report
+    assert "reasoning" not in report
+
+
+def test_feed_override_native_shows_both_cost_lines(tmp_path):
+    """override_native on + a mapped model WITH native cost → both lines
+    appear (the honest form of 'operator rates override the display')."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    mgr.config.cost_inputs.override_native = True
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        token_report=_grok_shaped_report(cost_usd_native=4.4321))))
+    report = next(c for c in fake.comments if "token report" in c)
+    assert "\ncost: $4.4321" in report
+    assert "cost (estimated, builtin-v1): $5.6000" in report
+
+
 def _finalize_payload(**over):
     base = {"result": {"outcome": "plan_needed", "summary": "s"},
             "transcript_md": "FULL DUMP",
@@ -1149,7 +1328,7 @@ def merge_fail_mgr(tmp_path, mergeable_result):
                                            status=405),
                       mergeable_result=mergeable_result)
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
-    mgr.config.auto_merge = True
+    mgr.forges.instance("main").auto_merge = True
     return m, mgr, fake, forge
 
 
@@ -1185,7 +1364,7 @@ def test_quoted_conflict_marker_does_not_count(tmp_path):
 
 def test_merge_conflict_toggle_off_keeps_current_behavior(tmp_path):
     m, mgr, fake, forge = merge_fail_mgr(tmp_path, mergeable_result=False)
-    mgr.config.auto_resolve_merge_conflicts = False
+    mgr.forges.instance("main").auto_resolve_merge_conflicts = False
     run_coro(_approve_review(mgr))
     assert "DEVCAKE-MERGE" in m.labels and "DEVCAKE-EXECUTE" not in m.labels
     assert not any("devcake:conflict-resolve" in c for c in fake.comments)
@@ -1204,7 +1383,7 @@ def test_non_conflict_merge_failure_defers(tmp_path):
 
 def test_zero_window_skips_deferred_retry(tmp_path):
     m, mgr, fake, forge = merge_fail_mgr(tmp_path, mergeable_result=None)
-    mgr.config.merge_retry_window_minutes = 0
+    mgr.forges.instance("main").merge_retry_window_minutes = 0
     run_coro(_approve_review(mgr))
     assert any("`devcake:merge-handoff`" in c for c in fake.comments)
     assert not any("`devcake:merge-retry`" in c for c in fake.comments)
@@ -1216,7 +1395,7 @@ def sweep_mgr(tmp_path, mergeable_result, merge_exc=None):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
     forge = FakeForge(merge_exc=merge_exc, mergeable_result=mergeable_result)
     mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
-    mgr.config.auto_merge = True
+    mgr.forges.instance("main").auto_merge = True
     fake.activity_entries = [ActivityEntry(
         ts=datetime.now(timezone.utc), author="devcake", kind="comment",
         body="⏳ deferred `devcake:merge-retry`\n\n`devcake:v1`")]
@@ -1260,7 +1439,7 @@ def test_sweep_merges_behind_branch_without_rework(tmp_path):
 
 def test_sweep_window_expiry_hands_off_once(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
-    mgr.config.merge_retry_window_minutes = 0          # expires immediately
+    mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
     run_coro(sweeps.merge_sweep(mgr, m))
     assert forge.merges == []                          # no merge attempt past expiry
     handoffs = [c for c in fake.comments if "`devcake:merge-handoff`" in c]
@@ -1272,6 +1451,86 @@ def test_sweep_window_expiry_hands_off_once(tmp_path):
     run_coro(sweeps.merge_sweep(mgr, m))
     assert len([c for c in fake.comments
                 if "`devcake:merge-handoff`" in c]) == 1
+
+
+def test_sweep_boolean_forge_conflict_hands_off_not_execute(tmp_path):
+    """AUD-010: on a boolean-only forge (Gitea, `mergeable_tristate=False`) a
+    failed merge with verdict False must NOT route to EXECUTE — a False can be
+    'not computed yet' there, so it hands off, IDENTICAL to finalize. Without
+    the capability check the sweep routed Gitea conflicts to rework while
+    finalize handed them off — the doctrine split the audit found."""
+    from types import SimpleNamespace
+    m, mgr, fake, forge = sweep_mgr(
+        tmp_path, mergeable_result=False,
+        merge_exc=ForgeError("409: conflict", status=409))
+    forge.capabilities = SimpleNamespace(mergeable_tristate=False)  # Gitea-like
+    run_coro(sweeps.merge_sweep(mgr, m))
+    assert forge.merges == [8]                          # merge WAS tried first
+    assert "DEVCAKE-EXECUTE" not in m.labels            # never routed to rework
+    assert not any("conflict-resolve" in c for c in fake.comments)
+    assert "DEVCAKE-MERGE" in m.labels                  # stays parked; retries
+
+
+def test_rearm_retained_when_parked_missions_pr_is_missing(tmp_path):
+    """AUD-005: a repo's OFF→ON re-arm must survive a cycle where the parked
+    mission's PR can't be found (forge lag) — otherwise the flag is cleared
+    unconditionally and the window is lost until another toggle."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+
+    async def _no_pr(_branch):
+        return None
+    forge.get_pr_by_branch = _no_pr          # PR not visible this cycle
+    mgr.rearm_merge_repos = {"main"}
+    run_coro(mgr.sweeps([m]))
+    assert mgr.rearm_merge_repos == {"main"}  # retained — not lost
+    assert m.pmo_id in mgr.blocked_reasons    # AUD-006: missing PR is VISIBLE
+    # once the PR appears, the rearm fires and the flag clears (one-shot)
+    async def _pr(_branch):
+        return PullRequest(number=8, url="https://forge/pr/8", state="open")
+    forge.get_pr_by_branch = _pr
+    fake.activity_entries = []
+    run_coro(mgr.sweeps([m]))
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert mgr.rearm_merge_repos == set()
+
+
+def _no_pr_forge(tmp_path, auto_merge, window=30):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    forge = FakeForge()
+
+    async def _none(_branch):
+        return None
+    forge.get_pr_by_branch = _none           # forge list lag at finalize
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    mgr.forges.instance("main").auto_merge = auto_merge
+    mgr.forges.instance("main").merge_retry_window_minutes = window
+    return m, mgr, fake
+
+
+def test_finalize_missing_pr_auto_merge_opens_deferred_window(tmp_path):
+    """AUD-006: auto_merge ON but no PR at REVIEW finalize (forge lag) must
+    open a deferred window (retry marker) — NOT pure human-await, which would
+    strand app-driven merge forever (the sweep silent-returns on a missing
+    PR and opens no window without a marker)."""
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=True)
+    run_coro(review.finalize_review(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"verdict": "approve", "report_md": "ok", "pr_url": "https://forge/pr/8"}))
+    assert "DEVCAKE-MERGE" in m.labels
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert not any("Awaiting human merge" in c for c in fake.comments)
+
+
+def test_finalize_missing_pr_manual_repo_keeps_human_await(tmp_path):
+    """Contrast: auto_merge OFF + no PR → the honest human-await copy, no
+    retry marker (the app was never going to merge it)."""
+    m, mgr, fake = _no_pr_forge(tmp_path, auto_merge=False)
+    run_coro(review.finalize_review(
+        mgr, _run("REVIEW", "DEVCAKE-REVIEW"),
+        {"verdict": "approve", "report_md": "ok", "pr_url": "https://forge/pr/8"}))
+    assert "DEVCAKE-MERGE" in m.labels
+    assert any("Awaiting human merge" in c for c in fake.comments)
+    assert not any("`devcake:merge-retry`" in c for c in fake.comments)
 
 
 def test_sweep_ignores_missions_without_retry_marker(tmp_path):
@@ -1289,7 +1548,7 @@ def test_manual_park_banners_without_feed_read(tmp_path):
     # auto_merge OFF: the banner entry derives from labels alone — zero
     # get_activity calls for the operator's normal merge queue
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
-    mgr.config.auto_merge = False
+    mgr.forges.instance("main").auto_merge = False
     run_coro(sweeps.merge_sweep(mgr, m))
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert getattr(fake, "get_activity_calls", 0) == 0
@@ -1304,7 +1563,7 @@ def test_active_retry_window_suppresses_banner(tmp_path):
 
 def test_expired_window_banners_and_skips_future_feed_reads(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
-    mgr.config.merge_retry_window_minutes = 0        # expires immediately
+    mgr.forges.instance("main").merge_retry_window_minutes = 0  # expires immediately
     run_coro(sweeps.merge_sweep(mgr, m))
     assert "awaiting human merge" in mgr.merge_handoffs[m.pmo_id]
     assert m.pmo_id in mgr._merge_window_closed
@@ -1375,24 +1634,24 @@ def test_human_needed_sets_verdict_and_advisory(tmp_path):
     assert mgr.needs_human["p1"].startswith("T-1: needs human")
 
 
-# ── auto-merge OFF→ON re-arm (founder request 2026-07-15) ────────────────────
+# ── auto-merge OFF→ON re-arm (founder request 2026-07-15, per-repo ADR-0020) ─
 # A mission parked at DEVCAKE-MERGE while auto_merge was OFF carries no retry
 # marker, so flipping auto_merge ON used to leave it awaiting a human forever
 # (the sweep closed the window on first read and the skip-set cached it).
-# The config PUT sets a one-shot re-arm flag on an OFF→ON flip: the next
+# The config PUT adds the flipped repo name to a one-shot re-arm set: the next
 # sweep posts a fresh retry-window entry (visible, marker-timestamped) for
-# every parked mission; the cycle after that reads the marker and drives the
-# merge inside the normal merge_retry_window_minutes bound.
+# parked missions on that repo; the cycle after that reads the marker and
+# drives the merge inside the normal merge_retry_window_minutes bound.
 
 def test_rearm_reopens_parked_mission_when_auto_merge_flips_on(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []            # the auto_merge-OFF park: no marker
-    mgr.rearm_merge_windows = True        # what put_config sets on OFF→ON
+    mgr.rearm_merge_repos = {"main"}     # what put_config sets on OFF→ON
     run_coro(mgr.sweeps([m]))             # cycle 1: posts the window entry
     rearm_comments = [c for c in fake.comments if "`devcake:merge-retry`" in c]
     assert len(rearm_comments) == 1
     assert m.pmo_id not in mgr._merge_window_closed
-    assert mgr.rearm_merge_windows is False           # one-shot
+    assert mgr.rearm_merge_repos == set()             # one-shot
     assert forge.merges == []                         # merge happens NEXT cycle
     fake.activity_entries = [ActivityEntry(
         ts=datetime.now(timezone.utc), author="devcake", kind="comment",
@@ -1402,11 +1661,26 @@ def test_rearm_reopens_parked_mission_when_auto_merge_flips_on(tmp_path):
     assert m.status == "done"
 
 
+def test_apply_auto_merge_rearm_populates_set_off_to_on(tmp_path):
+    """AUD-024: the shared re-arm (config PUT AND bundle/profile apply both
+    call apply_auto_merge_rearm — settings_bundle.py, config_service.py)
+    unions OFF→ON repos into every manager's rearm set."""
+    from devcake.config import RepoInstance, apply_auto_merge_rearm
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    prev = [RepoInstance(name="main", url="https://github.com/o/r",
+                         auto_merge=False)]
+    new = [RepoInstance(name="main", url="https://github.com/o/r",
+                        auto_merge=True)]
+    flipped = apply_auto_merge_rearm(prev, new, {"linear": mgr})
+    assert flipped == {"main"}
+    assert "main" in mgr.rearm_merge_repos
+
+
 def test_rearm_reaches_missions_already_in_skip_set(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []
     mgr._merge_window_closed = {"p1"}     # cached closed from prior cycles
-    mgr.rearm_merge_windows = True
+    mgr.rearm_merge_repos = {"main"}
     run_coro(mgr.sweeps([m]))
     assert any("`devcake:merge-retry`" in c for c in fake.comments)
     assert "p1" not in mgr._merge_window_closed
@@ -1417,11 +1691,188 @@ def test_rearm_noop_when_window_zero(tmp_path):
     # open a window the operator has configured away
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
     fake.activity_entries = []
-    mgr.config.merge_retry_window_minutes = 0
-    mgr.rearm_merge_windows = True
+    mgr.forges.instance("main").merge_retry_window_minutes = 0
+    mgr.rearm_merge_repos = {"main"}
     run_coro(mgr.sweeps([m]))
     assert not any("`devcake:merge-retry`" in c for c in fake.comments)
     assert forge.merges == []
+
+
+# ── ADR-0020: per-repo merge doctrine ────────────────────────────────────────
+
+def test_per_repo_auto_merge_only_merges_that_repos_missions(tmp_path):
+    """Two repos: A auto_merge ON merges on REVIEW approve; B OFF parks."""
+    from devcake.config import RepoInstance
+    from fakes import make_mission_manager
+
+    forge_a, forge_b = FakeForge(), FakeForge()
+    inst_a = RepoInstance(name="alpha", url="https://github.com/o/a",
+                          auto_merge=True)
+    inst_b = RepoInstance(name="beta", url="https://github.com/o/b",
+                          auto_merge=False)
+
+    class MultiRuntime:
+        def __init__(self):
+            self._map = {"alpha": (forge_a, inst_a), "beta": (forge_b, inst_b)}
+            self.health, self.breakers, self.internal = {}, {}, set()
+
+        def get(self, name):
+            return self._map[name][0] if name in self._map else None
+
+        def instance(self, name):
+            return self._map[name][1] if name in self._map else None
+
+        @property
+        def forges(self):
+            return {k: v[0] for k, v in self._map.items()}
+
+        @property
+        def instances(self):
+            return {k: v[1] for k, v in self._map.items()}
+
+    rt = MultiRuntime()
+    ma = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    ma.repo = "alpha"
+    mb = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    mb.pmo_id, mb.key, mb.repo = "p2", "T-2", "beta"
+    cfg = AppConfig()
+    mgr_a = make_mission_manager(
+        tmp_path, pmo=FakePMO(ma), forge_runtime=rt, config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    mgr_b = make_mission_manager(
+        tmp_path, pmo=FakePMO(mb), forge_runtime=rt, config=cfg,
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    run_a = _run("REVIEW", "DEVCAKE-REVIEW")
+    run_a.repo_ref = "alpha"
+    run_b = Run(run_id="T-2-1-REVIEW-BBBBBB", mission_key="T-2",
+                mission_pmo_id="p2", mission_type="REVIEW",
+                dev_type="senior-dev", seq=1,
+                stage_label_at_dispatch="DEVCAKE-REVIEW", repo_ref="beta")
+    run_coro(review.finalize_review(mgr_a, run_a,
+                                    {"verdict": "approve", "report_md": "ok"}))
+    run_coro(review.finalize_review(mgr_b, run_b,
+                                    {"verdict": "approve", "report_md": "ok"}))
+    assert forge_a.merges == [8]
+    assert ma.status == "done" and "DEVCAKE-MERGE" not in ma.labels
+    assert forge_b.merges == []
+    assert "DEVCAKE-MERGE" in mb.labels and mb.status == "in_progress"
+
+
+def test_conflict_auto_resolve_honors_mission_repo_flag(tmp_path):
+    """Mission on alpha (resolve OFF) parks even when beta would resolve ON."""
+    from devcake.config import RepoInstance
+    from fakes import make_mission_manager
+
+    forge_a = FakeForge(
+        merge_exc=ForgeError("405: conflicts", status=405),
+        mergeable_result=False)
+    inst_a = RepoInstance(name="alpha", url="https://github.com/o/a",
+                          auto_merge=True,
+                          auto_resolve_merge_conflicts=False)
+    inst_b = RepoInstance(name="beta", url="https://github.com/o/b",
+                          auto_merge=True,
+                          auto_resolve_merge_conflicts=True)
+
+    class MultiRuntime:
+        def __init__(self):
+            self._map = {"alpha": (forge_a, inst_a), "beta": (None, inst_b)}
+            self.health, self.breakers, self.internal = {}, {}, set()
+
+        def get(self, name):
+            pair = self._map.get(name)
+            return pair[0] if pair else None
+
+        def instance(self, name):
+            pair = self._map.get(name)
+            return pair[1] if pair else None
+
+        @property
+        def forges(self):
+            return {k: v[0] for k, v in self._map.items() if v[0] is not None}
+
+        @property
+        def instances(self):
+            return {k: v[1] for k, v in self._map.items()}
+
+    ma = mission("in_progress", {"DEVCAKE", "DEVCAKE-REVIEW"})
+    ma.repo = "alpha"
+    mgr = make_mission_manager(
+        tmp_path, pmo=FakePMO(ma), forge_runtime=MultiRuntime(),
+        config=AppConfig(),
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    run = _run("REVIEW", "DEVCAKE-REVIEW")
+    run.repo_ref = "alpha"
+    run_coro(review.finalize_review(mgr, run,
+                                    {"verdict": "approve", "report_md": "ok"}))
+    assert "DEVCAKE-MERGE" in ma.labels and "DEVCAKE-EXECUTE" not in ma.labels
+    assert not any("devcake:conflict-resolve" in c for c in mgr.pmo.comments)
+    # beta's ON flag must not have been consulted — alpha parked
+
+
+def test_rearm_only_targets_flipped_repo(tmp_path):
+    """rearm_merge_repos={alpha} must not reopen a mission parked on beta."""
+    m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=True)
+    fake.activity_entries = []
+    m.repo = "main"
+    mgr.rearm_merge_repos = {"other"}   # flipped a different repo
+    run_coro(mgr.sweeps([m]))
+    assert not any("`devcake:merge-retry`" in c for c in fake.comments)
+    assert forge.merges == []
+    # now re-arm the mission's own repo
+    mgr.rearm_merge_repos = {"main"}
+    run_coro(mgr.sweeps([m]))
+    assert any("`devcake:merge-retry`" in c for c in fake.comments)
+
+
+def test_config_put_rearm_is_per_repo(tmp_path, monkeypatch):
+    """apply_config_patch only re-arms repos that flipped OFF→ON."""
+    from devcake.api import config_service
+    from devcake.config import RepoInstance
+
+    cfg = AppConfig(repos=[
+        RepoInstance(name="alpha", url="https://github.com/o/a",
+                     auto_merge=False),
+        RepoInstance(name="beta", url="https://github.com/o/b",
+                     auto_merge=False),
+    ])
+    mgr = make_mgr(tmp_path, mission())[0]
+    managers = {"linear": mgr}
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(
+        "devcake.api.config_service.secrets_store.delete_connection_instance",
+        lambda *a, **k: None)
+    monkeypatch.setattr(
+        "devcake.api.config_service.validate_config_semantics",
+        lambda *a, **k: None)
+    monkeypatch.setattr(
+        "devcake.api.config_service.dry_run_adapters", lambda *a, **k: None)
+
+    def _reload():
+        pass
+
+    body = {
+        "repos": [
+            {"name": "alpha", "forge": "github",
+             "url": "https://github.com/o/a", "auto_merge": True,
+             "auto_resolve_merge_conflicts": True,
+             "merge_retry_window_minutes": 30, "default_branch": "main",
+             "api_base": None},
+            {"name": "beta", "forge": "github",
+             "url": "https://github.com/o/b", "auto_merge": False,
+             "auto_resolve_merge_conflicts": True,
+             "merge_retry_window_minutes": 30, "default_branch": "main",
+             "api_base": None},
+        ],
+    }
+    run_coro(config_service.apply_config_patch(
+        body, config=cfg, dev_types={}, managers=managers, reload=_reload))
+    assert mgr.rearm_merge_repos == {"alpha"}
 
 
 def test_executed_feed_uses_descriptor_pr_noun(tmp_path):
@@ -1455,8 +1906,10 @@ def _save_failed(store, run_id, *, error_class, mission="p1", mtype="EXECUTE",
     ({"exit_code": 10}, "DEV_CRASH"),
     ({"exit_code": 20}, "DEV_CRASH"),
     ({"exit_code": 11}, "DEV_BAD_OUTPUT"),
+    ({"exit_code": 12}, "DEV_AUTH"),
     ({"exit_code": 13}, "DEV_FORGE"),
     ({"exit_code": 14}, "DEV_MCP_SETUP"),
+    ({"exit_code": 15}, "DEV_HARNESS_FAULT"),
     ({"exit_code": 16}, "DEV_TURN_BUDGET"),
 ])
 def test_every_exit_code_stamps_a_structured_class(tmp_path, payload, expected_class):
@@ -1566,6 +2019,63 @@ def test_orphan_payload_without_a_structured_class_is_never_excused(tmp_path):
     mgr.dev_failure_error(run, {"exit_code": 15})       # numeric only
     assert run.error_class == "DEV_HARNESS_FAULT"
     assert run.attempt_counted is True
+
+
+def test_bad_output_counts_even_when_correlated_by_default(tmp_path):
+    """ADR-0026 default: brake_on_bad_output off keeps the ADR-0018 design —
+    a fleet-wide exit-11 cascade still burns attempts (2026-07-24 behavior)."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    assert mgr.config.brake_on_bad_output is False    # the shipped default
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_BAD_OUTPUT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_BAD_OUTPUT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {"exit_code": 11})
+    assert error.startswith("DEV_BAD_OUTPUT")
+    assert run.error_class == "DEV_BAD_OUTPUT"
+    assert run.attempt_counted is True
+
+
+def test_bad_output_correlated_is_excused_when_opted_in(tmp_path):
+    """brake_on_bad_output on: exit-11 evidence across ≥2 missions excuses the
+    attempt exactly like exit 15 — no container-class precondition, because
+    exit 11 has no in-band structured class (the code IS the classification)."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    mgr.config.brake_on_bad_output = True
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_BAD_OUTPUT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_BAD_OUTPUT",
+                 mission="p3")
+    run = _run("EXECUTE", None)
+    error = mgr.dev_failure_error(run, {"exit_code": 11})
+    assert run.attempt_counted is False
+    assert "does not count toward attempts" in error
+
+
+def test_bad_output_solitary_counts_when_opted_in(tmp_path):
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    mgr.config.brake_on_bad_output = True
+    _save_failed(store, "T-1-1-EXECUTE-OLD", error_class="DEV_BAD_OUTPUT")
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 11})
+    assert run.attempt_counted is True
+
+
+def test_bad_output_excusals_run_out_when_opted_in(tmp_path):
+    """The same escape hatch as exit 15, on the DEV_BAD_OUTPUT ledger."""
+    mgr, _fake, store = make_mgr(tmp_path, mission("in_progress", {"DEVCAKE"}))
+    mgr.config.brake_on_bad_output = True
+    _save_failed(store, "T-2-1-EXECUTE-A", error_class="DEV_BAD_OUTPUT",
+                 mission="p2")
+    _save_failed(store, "T-3-1-EXECUTE-B", error_class="DEV_BAD_OUTPUT",
+                 mission="p3")
+    for i in range(backend_health.MAX_EXCUSALS_PER_STEP):
+        _save_failed(store, f"T-1-1-EXECUTE-EX{i}",
+                     error_class="DEV_BAD_OUTPUT", counted=False)
+    run = _run("EXECUTE", None)
+    mgr.dev_failure_error(run, {"exit_code": 11})
+    assert run.attempt_counted is True, "exhausted excusals must start counting"
 
 
 def test_dev_forge_no_longer_counts_toward_attempts(tmp_path):

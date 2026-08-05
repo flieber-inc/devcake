@@ -7,8 +7,10 @@ These rules are **mandatory** unless the user explicitly overrides them for a ta
 
 The **product security contract** is [`docs/14-security.md`](docs/14-security.md).
 Do not write docs, README, or PR copy that claims a stronger posture (multi-tenant
-sandbox, guaranteed independent review, secrets never leave the host under
-injection, hard-gated branch protection) than that file. Design choices
+sandbox, secrets never leave the host under injection, hard-gated branch
+protection) than that file. Do not treat staffing a different Dev Type for
+REVIEW as a security control — the security-relevant second identity is the
+**reviewer token** (app-only); REVIEW is always a pipeline stage. Design choices
 (dedicated host, adult-operator prompt trust, warnings vs gates) are intentional.
 
 ## Admin SPA design system (mandatory)
@@ -21,7 +23,10 @@ copy voice, evidence loop). Read it before touching the SPA. Iron rules:
 - Colors come from the `@theme` tokens in `admin/spa/src/index.css` — never raw
   hex or new color families in components. `accent-*` is the only brand accent.
 - Scalar settings are `SettingRow`s; record lists are real tables styled like
-  the Runs table; config renders one section per `#/config/<section>` view.
+  the Runs table; config renders one section per `#/config/<section>` view
+  (the `limits` view carries the merged Limits + Traffic cards); Repositories
+  and PMO are draft-editing pages under the sidebar's Adapters item, not
+  Config sections.
 - One primary action per header/card; secondary/rare/destructive actions go in
   a `MoreMenu` (⋯) with honest one-line consequence descriptions — but never a
   one-item menu when it's the element's only action.
@@ -170,6 +175,10 @@ docker buildx bake images
 
 # Full lockstep (app + admin + all Dev images) — required when protocol/entrypoint changes
 docker buildx bake all && docker compose up -d
+
+# ADR-0025: dev-run.yaml + compose + .env (DEVCAKE_WS_HOST) also deploy in
+# lockstep. dagu/dags is a LIVE :ro bind, so a new DAG goes live at `git pull`
+# before ./up.sh — stop dagu first: docker compose stop dagu && ./up.sh --bake
 ```
 
 Optional tag pin (bake and compose must match):

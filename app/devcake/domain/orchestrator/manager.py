@@ -11,7 +11,7 @@ manager's identity is the state container — ``breakers`` is an injected dict
 shared across managers, and ``build_managers()`` reconciles managers in place
 on config reload precisely so this state survives. The advisory set:
 ``_grace``/``_grace_next``, ``breakers``, ``blocked_reasons``, ``cycles``,
-``anomalies``, ``merge_handoffs``, ``rearm_merge_windows``, ``needs_human``,
+``anomalies``, ``merge_handoffs``, ``rearm_merge_repos``, ``needs_human``,
 ``_merge_window_closed``.
 
 Tests construct via the real ``__init__`` (``tests/fakes.make_mission_manager``
@@ -30,8 +30,8 @@ from ..blocker_locator import LEGACY_PMO_REFS
 from ..runs import RunManager
 from typing import TYPE_CHECKING as _TC
 
-from . import (deliver, dispatch, feed, finalize, mapper, review, schedule,
-               sweeps)
+from . import (activity_payload as activity_payload_mod, deliver, dispatch,
+               feed, finalize, mapper, review, schedule, sweeps)
 
 if _TC:
     from ..forge_runtime import ForgeRuntime
@@ -52,7 +52,7 @@ class MissionManager:
                  instance=None, breakers: dict[str, str] | None = None,
                  internal_forge=None, skills=None,
                  backend_degraded: dict[str, str] | None = None,
-                 blocker_locator=None):
+                 blocker_locator=None, repo_cache=None):
         self.config = config
         self.dev_types = dev_types
         self.pmo = pmo
@@ -79,6 +79,13 @@ class MissionManager:
         # window only; an unset locator fails loud at the first gate, never
         # silently degrades to single-instance resolution.
         self.blocker_locator = blocker_locator
+        # ADR-0024: the ONE deployment-wide repo mirror (like `forges`).
+        # None only in tests — make_mission_manager injects a NullRepoCache;
+        # main injects the real one on every manager.
+        if repo_cache is None:
+            from ..repo_mirror import NullRepoCache
+            repo_cache = NullRepoCache()
+        self.repo_cache = repo_cache
         # ── advisory state (flat by design — see the module docstring) ──
         self._grace: set[str] = set()       # pmo_ids we transitioned last cycle
         self._grace_next: set[str] = set()
@@ -98,12 +105,13 @@ class MissionManager:
         # by the merge sweep for every open-PR DEVCAKE-MERGE mission whose
         # deferred-retry window is not actively running; pruned in sweeps()
         self.merge_handoffs: dict[str, str] = {}
-        # one-shot: set by the config PUT when auto_merge flips OFF→ON
-        # (founder request 2026-07-15) — the next sweep opens a fresh
-        # deferred-merge window for every parked DEVCAKE-MERGE mission, so
-        # the flip retroactively covers the operator's existing merge queue.
-        # In-memory: a restart between flip and sweep loses it (re-toggle).
-        self.rearm_merge_windows: bool = False
+        # one-shot: set by the config PUT when a repo's auto_merge flips
+        # OFF→ON (founder request 2026-07-15, per-repo ADR-0020) — the next
+        # sweep opens a fresh deferred-merge window for parked DEVCAKE-MERGE
+        # missions whose m.repo is in this set, so the flip retroactively
+        # covers that repo's merge queue. In-memory: a restart between flip
+        # and sweep loses it (re-toggle).
+        self.rearm_merge_repos: set[str] = set()
         # pmo_id → "needs human" note (advisory; admin Needs-Human panel).
         # Rebuilt every sweep from the DEVCAKE-NEEDS-HUMAN label — declarative,
         # restart-safe, self-pruning. Same "text — url" convention as
@@ -118,6 +126,11 @@ class MissionManager:
         # marker opens a new episode. A human DELETING the hand-off comment
         # instead of swapping labels isn't noticed until restart.
         self._merge_window_closed: set[str] = set()
+        # AUD-005: per-cycle scratch — pmo_ids whose parked-merge window was
+        # actually driven this sweep, so a repo's OFF→ON re-arm is cleared only
+        # once every parked mission on it was reached (not on a PR-lookup miss).
+        # Reset at the top of each `sweeps()`.
+        self._rearm_satisfied: set[str] = set()
 
     def rotate_grace(self) -> None:
         self._grace, self._grace_next = self._grace_next, set()
@@ -174,7 +187,7 @@ class MissionManager:
         return dispatch.runspec_secret_payload(self, run)
 
     async def activity_payload(self, pmo_id: str, kind: str = 'issue'):
-        return await dispatch.activity_payload(self, pmo_id, kind)
+        return await activity_payload_mod.activity_payload(self, pmo_id, kind)
 
     async def resolve_repo_live(self, mission, all_runs=None):
         return await dispatch.resolve_repo_live(self, mission, all_runs)

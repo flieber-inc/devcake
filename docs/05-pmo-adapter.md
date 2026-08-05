@@ -31,8 +31,13 @@ class PMOPort(Protocol):
     async def get(self, ref: MissionRef) -> Mission: ...
     async def get_activity(self, ref: MissionRef, full: bool = False) -> Activity: ...
         # ordered feed; full=True walks entire history + reply structure +
-        # mission attachments (ADR-0014). A ref without a comment feed
-        # (Linear projects) returns the mission with entries=[] — never raises
+        # mission attachments (ADR-0014). A ref without an issue-style comment
+        # feed (Linear projects) returns entries=[] in SHALLOW mode — never
+        # raises. FULL mode on a projects_supported vendor mirrors the
+        # project-NATIVE feed: updates + their comments as entries, long-form
+        # documents (Activity.documents), external links + native attachments
+        # (project-fidelity fix; enrichment is fail-open — the brief alone
+        # still dispatches)
     async def children_of(self, ref: MissionRef) -> list[Mission]: ...
 
     # ── writes ──
@@ -148,7 +153,7 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 **Read robustness (normative):** every list read (`list_all` issues and projects, `children_of`) is **cursor-paginated** — the scheduling gate and the mapper's validator must see the whole team; a first-page-only read turns silent truncation into wrong scheduling (and, for the mapper, wrong *writes*). `inverseRelations` uses `first: 50` — Linear returns ALL relation types and the `blocks` filter is client-side, so an undersized page can evict a blocker; a full relations page is logged as a WARNING (never silent).
 
-**`get_activity` pagination:** on issue refs, `get_activity` cursor-walks the full comment thread (`comments(first: 100, orderBy: createdAt, after: $cursor)`), per the read-robustness rule above — a single-page read was **verified lossy live on 2026-07-12** (DEV-50: 108 comments, 8 silently dropped). The ordering is pinned explicitly (verified: newest-first), so pages arrive newest-to-oldest and the safety ceiling of **10 pages / 1,000 comments** — a fail-loud valve at ~50× DevCake's post-hygiene comment rate, not a design limit — always keeps the newest comments, where the merge-state and conflict-resolve markers live (`03-mission-lifecycle.md` §4.1). Hitting the ceiling logs a truncation WARNING, never silent. Below it, `ACTIVITY.md` (`07-dev-runtime.md` §2), `_derive_seq`, and all marker counting see the complete thread. On project refs, `get_activity` returns the mission with `entries=[]` — Linear projects have no issue-style comments API (verified M2/M5).
+**`get_activity` pagination:** on issue refs, `get_activity` cursor-walks the full comment thread (`comments(first: 100, orderBy: createdAt, after: $cursor)`), per the read-robustness rule above — a single-page read was **verified lossy live on 2026-07-12** (DEV-50: 108 comments, 8 silently dropped). The ordering is pinned explicitly (verified: newest-first), so pages arrive newest-to-oldest and the safety ceiling of **10 pages / 1,000 comments** — a fail-loud valve at ~50× DevCake's post-hygiene comment rate, not a design limit — always keeps the newest comments, where the merge-state and conflict-resolve markers live (`03-mission-lifecycle.md` §4.1). Hitting the ceiling logs a truncation WARNING, never silent. Below it, `ACTIVITY.md` (`07-dev-runtime.md` §2), `_derive_seq`, and all marker counting see the complete thread. On project refs, SHALLOW `get_activity` returns the mission with `entries=[]` — Linear projects have no issue-style comments API (verified M2/M5), and no production caller rides the shallow project path (marker scans are issue-only). FULL mode on a project ref mirrors the project-native feed instead — see §5.
 
 ## 4. Feed posts, transcripts, and attachments
 
@@ -172,7 +177,9 @@ At startup (`04-orchestrator.md` §6) — and again after every config `PUT`, vi
 
 **Full-history mode (ADR-0014):** `get_activity(ref, full=True)` — used ONLY by the activity-folder builder — walks the entire comment history (hard stop `MAX_COMMENT_PAGES_FULL` = 100 pages / 10,000 comments; tripping it sets `Activity.truncated` and logs ERROR instead of raising, because a raise would starve the Dev's `activity.get` reply), fetches reply structure (`id parent { id }` → `entry_id`/`parent_id`), and surfaces mission-level attachments (`Activity.mission_attachments`): description-embedded `uploads.linear.app` assets (named via markdown links) plus the issue's native `attachments` connection (`pageInfo { hasNextPage } nodes { url title }` — a >50 overflow warns, never silent), url-deduped and classified `file` (asset host) vs `link` (external reference). The DEFAULT (shallow) query is field-identical to the pre-ADR one (whitespace aside) — the four marker-scan call paths never pay full-history cost.
 
-**Verified at M5:** Linear caps project `description` at **255 chars** — the long-form body lives in `content` (the adapter reads `content or description`); projects have **no issue-style comments API**, so project-run transcripts/token reports are recorded in the audit log + OpenObserve only (the substance lands on the child issues anyway, per ADR-0006).
+**Project full-history mode (project-fidelity fix, 2026-08-04):** `get_activity(project ref, full=True)` — the activity-folder builder's only project read — mirrors the project-NATIVE feed. One combined first-page enrichment query (verified live: x-complexity **1,349**, ~7× under the budget that blew the team query — the concern at these page sizes is response SIZE, not complexity) reads four connections, each with its own overflow walk and fail-loud ceiling: `documents` (25/page, 4-page ceiling → WARNING), `projectUpdates(orderBy: createdAt)` with nested first-page `comments` (25/page, 20-page ceiling → sets `Activity.truncated` + ERROR, feed semantics), per-update comment overflow via top-level `projectUpdate(id:)` (50/page, 10 pages/update → WARNING), `externalLinks` + native project `attachments` (single 50-pages, overflow WARNING). Updates land as entries authored `"Name (project update)"` with `entry_id` = update id; update comments thread under their update (or their own comment parent). Documents surface inline as `Activity.documents` (`MissionDocument{title, content, url}`); content- and document-embedded `uploads.linear.app` assets + external links + native attachments land in `mission_attachments` via the same extraction the issue path uses. **The base project read stays fail-closed; the enrichment is fail-open** — any enrichment failure logs a WARNING and dispatches the brief alone (a raise would starve the Dev's `activity.get` reply; precedent: the gitea_issues best-effort asset read).
+
+**Verified at M5:** Linear caps project `description` at **255 chars** — the long-form body lives in `content` (the adapter reads `content or description`); projects have **no issue-style comments API** — the project-native feed is `projectUpdates`, which full mode mirrors (above); project-run transcripts/token reports are still recorded in the audit log + OpenObserve only (the substance lands on the child issues anyway, per ADR-0006).
 
 **Verified at M2:** (a) Linear **project labels are a separate, workspace-level entity** (`projectLabels` / `projectLabelCreate`) — `ensure_labels` creates the ten managed labels in *both* namespaces, and `ProjectUpdateInput.labelIds` takes project-label ids, not issue-label ids; (b) Linear enforces a **per-query complexity budget** (~10k) — queries stay small and split rather than nesting team+issues+projects in one request.
 
@@ -193,7 +200,7 @@ Two batteries. Every future `PMOPort` implementation reuses both shapes: the off
 - **Port-surface pinning** — the exact method list of `PMOPort` is asserted, so a port edit must be deliberate.
 - **Adapter conformance** — `LinearAdapter` implements every port method with matching parameter names.
 - **Fake drift tripwire** — every port method a test fake (`FakePMO`/`MapPMO`/`DepPMO`) implements must match the port signature, keeping fakes honest as the contract evolves.
-- **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`; `get_activity` on a project returns `entries=[]` without ever querying comments; attachment `name` resolution (named markdown link vs bare URL).
+- **Unified dispatch on canned GraphQL** — via an injected `httpx.MockTransport`: `get(ref)` routes issue vs project queries by `ref.kind`; `post_feed` routes `commentCreate` vs `projectUpdateCreate`; `get_activity` on a project returns `entries=[]` **in shallow mode** without ever querying comments, while full mode routes to the documents/updates enrichment (project-fidelity fix); attachment `name` resolution (named markdown link vs bare URL).
 - **`health_probe` counting** — managed labels counted by `ALL_LABELS` intersection: a `DEVCAKE-CUSTOM-EXTRA` label must NOT count; `managed_labels_expected == len(ALL_LABELS)`.
 - **Transient typing** — a 429 surfaces as `PMOTransient` from the port.
 
@@ -221,6 +228,7 @@ docker compose exec -T app python - < scripts/contract_tests_pmo.py
 | 12 | `post_feed` marker/markdown fidelity (`` `devcake:v1` ``) |
 | 13 | Attachment upload/download round-trip |
 | 14 | `create_relation` + `blocked_by` (duplicate-tolerant) when `relations_supported` |
+| 15 | Project full-mode mirrors the native feed (posted update round-trips; shallow stays `entries=[]`) when `projects_supported` — skips cleanly without a discoverable project |
 
 The numbering is historical and stable (test files reference rows by number). The gaps are covered elsewhere: row 6 (attachment-first feed policy, > 2048-char externalization, inline fallback) is orchestrator policy, tested in `app/tests/test_transitions.py`; row 7 (`create_mission` labeling/priority/team scoping) is exercised through the decomposition tests; Linear-specific relation GraphQL parsing also has hermetic coverage in `app/tests/test_linear_relations.py`.
 
@@ -266,11 +274,15 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 - **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified).
 - **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
-### 9.4 Operator setup (bundled Gitea)
+### 9.4 The default board (ADR-0030) — and manual setup for external Gitea
 
-1. UI `http://localhost:3300` → create org/repo e.g. `devcake-pmo/missions` (empty git repo is fine).
+**Bundled stacks get a board for free.** Whenever `GITEA_ADMIN_PASSWORD` is set, boot (and every config reload, opportunistically) runs `GiteaProvisioner.ensure_pmo_board()`: org **`devcake-pmo`** (a third org — unreachable by the `devcake-internal` lifecycle sweeps and the `devcake-repos` activity sweep), repo **`missions`** (adopt-don't-refuse), issue dependencies enabled **under admin** (the board PAT cannot PATCH the repo), service user **`devcake-board`** with a repo-scoped PAT (`write:issue` + `write:repository`, liveness-checked by `token_last_eight`, re-minted only on definitive death) stored as the ordinary connection secret `pmo-board.json` — then registers the persisted **managed `board` instance** (`reconcile_managed_pmos` keeps it alive across config PUTs and bundle applies; the SPA shows it as a normal-but-marked card, pausable, not removable while the provisioner exists). Credential separation (§9.1) holds: board PAT ≠ forge tokens ≠ `GITEA_ADMIN_*`. An operator instance already targeting `devcake-pmo/missions` is **adopted** — no managed row is injected. The provisioner never constructs or wraps a PMO adapter — the board is an ordinary `gitea_issues` instance through `make_pmo`.
+
+**Manual setup remains the path for an EXTERNAL Gitea** (or a second board):
+
+1. Gitea UI → create org/repo e.g. `myteam/missions` (empty git repo is fine).
 2. Mint a PAT with issue write on that repo.
-3. Admin → Configuration → PMO → system **Gitea Issues**, api base `http://gitea:3000`, issues repo `devcake-pmo/missions`, paste PAT → Save → Test connection (expect 10/10 managed labels).
+3. Admin → PMO page (`#/pmo`, under Adapters) → system **Gitea Issues**, api base of that Gitea, issues repo `myteam/missions`, paste PAT → Save → Test connection (expect 10/10 managed labels).
 4. Label an issue `DEVCAKE` (opt-in) and poll.
 
 Work forge remains independent (GitHub/GitLab/Gitea repo cards, or empty → per-mission internal forge).

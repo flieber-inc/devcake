@@ -26,6 +26,13 @@ class RunStore:
         # after operator "start fresh". Restarts reset to 0 with an empty or
         # reloaded store — that is fine (no cross-process phantom writers).
         self.wipe_generation: int = 0
+        # all() parse cache, name → (mtime_ns, size, Run). Sound because the
+        # app is ONE process (the writer IS the reader) and save() lands via
+        # os.replace — new inode, fresh mtime — so an unchanged (mtime_ns,
+        # size) pair means an unchanged file. Cached Run objects are SHARED
+        # across calls: mutate-then-save() promptly (the existing contract);
+        # get() stays a fresh parse for the correctness-critical readers.
+        self._parse_cache: dict[str, tuple[int, int, Run]] = {}
 
     def _write_text(self, path: Path, text: str) -> None:
         fd, tmp = tempfile.mkstemp(dir=self.root, suffix=".tmp")
@@ -98,11 +105,27 @@ class RunStore:
 
     def all(self) -> list[Run]:
         runs = []
+        seen: set[str] = set()
         for p in sorted(self.root.glob("*.json")):
             try:
-                runs.append(Run.model_validate_json(p.read_text()))
+                st = p.stat()
+            except OSError:
+                continue  # unlinked mid-scan (clear-runs) — skip
+            seen.add(p.name)
+            cached = self._parse_cache.get(p.name)
+            if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+                runs.append(cached[2])
+                continue
+            try:
+                run = Run.model_validate_json(p.read_text())
             except Exception:  # noqa: BLE001 — corrupt run JSON is skipped, never crashes the listing; the boot sweep quarantines it
+                self._parse_cache.pop(p.name, None)
                 continue  # unreadable file: skip, never crash the loop
+            self._parse_cache[p.name] = (st.st_mtime_ns, st.st_size, run)
+            runs.append(run)
+        # deleted/quarantined files must never resurrect from the cache
+        for name in [n for n in self._parse_cache if n not in seen]:
+            del self._parse_cache[name]
         return runs
 
     def active(self) -> list[Run]:
@@ -129,6 +152,18 @@ class RunStore:
                 moved.append(path.stem)
         return moved
 
+    def delete(self, run_id: str) -> None:
+        """Remove a single run record (AUD-001 unwind): a dispatch that
+        aborts after the durable save — a workspace create failure — must
+        leave no phantom `dispatched` record behind to burn an attempt.
+        Best-effort; also drops the parse-cache entry."""
+        path = self.root / f"{run_id}.json"
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        self._parse_cache.pop(f"{run_id}.json", None)
+
     def clear(self) -> int:
         """Delete every run record. Returns how many files were removed.
 
@@ -143,4 +178,8 @@ class RunStore:
                 n += 1
             except OSError:
                 continue
+        # AUD-018: drop cached parses immediately rather than waiting for the
+        # next all() to prune by absent-file — a read between clear() and the
+        # next all() would otherwise still see wiped runs from the cache.
+        self._parse_cache.clear()
         return n

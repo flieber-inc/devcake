@@ -44,10 +44,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     DEVCAKE_DATA_DIR=/data
 
+# git + git-lfs: the repo source mirror (ADR-0024) — the app's ONLY
+# subprocess consumer (adapters/git.py). /mirrors pre-created app-owned so
+# docker's named-volume copy-up initializes `devcake_mirrors` with the right
+# ownership at first start (uid 1000 writes syncs; Devs mount it RO).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        git-lfs \
+    && rm -rf /var/lib/apt/lists/* \
+    && git lfs install --system
+
 RUN groupadd --gid 1000 app \
     && useradd --uid 1000 --gid app --shell /usr/sbin/nologin --create-home app \
-    && mkdir -p /data \
-    && chown app:app /data
+    && mkdir -p /data /mirrors \
+    && chown app:app /data /mirrors
 
 WORKDIR /srv
 

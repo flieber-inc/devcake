@@ -125,7 +125,7 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 
 GitHub and Gitea forbid approving a PR with the account that opened it (`self_approval_blocked=True`). GitLab allows self-approval by default (`self_approval_blocked=False`). Resolution (confirmed with the founder):
 
-1. **Optional reviewer token** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`.
+1. **Reviewer token (recommended for formal forge approval under branch protection)** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`. App-only — never injected into a Dev. Not the same as staffing a different Dev Type for the REVIEW stage.
 2. **Without it** — `approve()` returns `False` (no error): the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
 3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
 
@@ -135,7 +135,7 @@ GitHub and Gitea forbid approving a PR with the account that opened it (`self_ap
 |---|---|---|
 | **Write / access** (`token`) | EXECUTE Dev (always); non-EXECUTE only if `token_ro` is unset; **app** always has it for forge side effects | Push feature branch, open/update PR; app **squash-merge** when `auto_merge` is on |
 | **Read-only** (`token_ro`) | Non-EXECUTE stages when set (recommended) | Clone/read only — health warns `forge-write-token:{repo}` if missing (`14` §8) |
-| **Reviewer** (`reviewer_token`) | **App only** — never injected into a Dev container | Formal PR/MR approval after REVIEW Dev returns approve; enables protected-branch auto-merge without self-approval |
+| **Reviewer** (`reviewer_token`, recommended for formal approval) | **App only** — never injected into a Dev container | Formal PR/MR approval after REVIEW Dev returns approve; enables protected-branch auto-merge without self-approval |
 
 Do not conflate REVIEW Dev judgment with forge approval: the Dev returns
 `result.json`; the app calls `approve()` with the reviewer token (or skips
@@ -143,17 +143,17 @@ formal approval and posts `APPROVED-BY-DEVCAKE` when no reviewer token is set).
 Merge — when enabled — always uses the **write** token, never the reviewer token
 (`14` §2 zone C).
 
-## 5. `auto_merge` and the merge-before-Done rule
+## 5. Per-repo `auto_merge` and the merge-before-Done rule
 
-**Merge always precedes Done, in every path** (confirmed decision — `03-mission-lifecycle.md` §4.1). All DevCake-written code reaches Done only through REVIEW approval followed by a real merge:
+**Merge always precedes Done, in every path** (confirmed decision — `03-mission-lifecycle.md` §4.1). All DevCake-written code reaches Done only through REVIEW approval followed by a real merge. Merge doctrine is **per repository** (ADR-0020): each `RepoInstance` carries `auto_merge` / `auto_resolve_merge_conflicts` / `merge_retry_window_minutes`. Internal (zero-repo) synthesized instances always auto-merge.
 
-- `auto_merge` **ON**: after approval, the **app** merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §3).
-- `auto_merge` **OFF**: after approval the Mission carries `DEVCAKE-MERGE` and stays In Progress; the poll-cycle merge sweep (`04-orchestrator.md` §1) marks it Done when the PR is **observed merged** (normally a human), or Canceled if the PR is closed unmerged. **Off gates the app only** — it does not strip merge rights from the Dev's write token. Devs still receive forge credentials and CLI (`gh`/`glab`/API) for push + open PR; preventing a Dev from merging is **forge branch protection** (`14-security.md` §2 zone C, `13-deployment.md` §8a). A mid-pipeline merge is an out-of-pipeline **detection** tripwire, not a block.
+- Mission's repo `auto_merge` **ON**: after approval, the **app** merges (squash); only a successful merge triggers the Done transition. On GitHub without a reviewer token the merge proceeds without formal approval — merge permission is a repo setting the operator accepts by enabling the toggle; the admin panel warns about exactly this (`11-admin-panel.md` §2b).
+- Mission's repo `auto_merge` **OFF**: after approval the Mission carries `DEVCAKE-MERGE` and stays In Progress; the poll-cycle merge sweep (`04-orchestrator.md` §1) marks it Done when the PR is **observed merged** (normally a human), or Canceled if the PR is closed unmerged. **Off gates the app only** — it does not strip merge rights from the Dev's write token. Devs still receive forge credentials and CLI (`gh`/`glab`/API) for push + open PR; preventing a Dev from merging is **forge branch protection** (`14-security.md` §2 zone C, `13-deployment.md` §8a). A mid-pipeline merge is an out-of-pipeline **detection** tripwire, not a block.
 
 **Merge-failure classes.** Neither forge's merge status code alone identifies the cause (GitHub 405 covers conflicts, branch protection, AND pending required checks; GitLab 405 covers conflicts, drafts, running/failed pipelines; Gitea 405 is similarly overloaded — see §7a) — so after a failed merge the app reads the port's `mergeable()` and classifies:
 
-- **Auto-resolvable** (`False` — conflict or stale branch behind an up-to-date rule): with `auto_resolve_merge_conflicts` ON, the Mission goes back to EXECUTE for a sync-and-resolve rework, max 2 attempts (`03-mission-lifecycle.md` §4.1).
-- **Deferred** (`True`/`None` — ready-but-raced, mergeability computing, CI pending): the Mission lands on `DEVCAKE-MERGE` and the merge sweep retries for `merge_retry_window_minutes` before handing off. On large repos mergeability computation takes a while and CI-gated repos legitimately block merges for many minutes — `None` means "keep watching," never "give up."
+- **Auto-resolvable** (`False` — conflict or stale branch behind an up-to-date rule): with that repo's `auto_resolve_merge_conflicts` ON, the Mission goes back to EXECUTE for a sync-and-resolve rework, max 2 attempts (`03-mission-lifecycle.md` §4.1). A `False` is trusted as a real conflict **only on a tri-state forge** (`mergeable_tristate=True` — GitHub/GitLab). On a boolean-only forge (Gitea) a `False` can be "not computed yet", so a failed merge **hands off to a human, never routes to EXECUTE** — the same capability check in BOTH the REVIEW-finalize path and the merge sweep (AUD-010 aligned the two; the sweep still tries the merge first and only reaches this after it fails, retrying until the window expires then handing off).
+- **Deferred** (`True`/`None` — ready-but-raced, mergeability computing, CI pending): the Mission lands on `DEVCAKE-MERGE` and the merge sweep retries for that repo's `merge_retry_window_minutes` before handing off. On large repos mergeability computation takes a while and CI-gated repos legitimately block merges for many minutes — `None` means "keep watching," never "give up."
 - **Transient** (GitHub 409 head-modified/SHA race; Gitea 405 with *"Please try again later"* during async mergeability): short in-adapter retries, invisible to the orchestrator. Other 405s are **not** retried as transient — classify via `mergeable()` / already-merged probes.
 - **Everything else** is `FORGE_PERMANENT`: the Mission lands on `DEVCAKE-MERGE` (never a hollow Done), the PR stays open, a comment explains, and an admin-panel health warning is raised — never silent (`15-errors-and-retries.md`).
 

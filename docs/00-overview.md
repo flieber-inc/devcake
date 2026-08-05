@@ -41,8 +41,11 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 
 - Multi-operator RBAC or OIDC-as-default (HTTP basic auth is the control-plane
   auth story for dedicated host / loopback — `11-admin-panel.md`, `14` §4).
-- Hard enforcement of branch protection, RO forge PATs, or independent REVIEW
-  Dev Types — **recommended + warned**, operator-enforced (`14` §8).
+- Hard enforcement of branch protection, RO forge PATs, or the reviewer token
+  (`14` §8): RO missing → dismissable `forge-write-token` warning; unprotected
+  default branch → advisory; reviewer token is **recommended** for formal forge
+  approval but not a health warning today. (Staffing different Dev Types for
+  EXECUTE vs REVIEW is a performance choice, not a security gate.)
 - Treating prompt injection as a product defect — ticket + repo content are the
   interface; agents are powerful by design (`14` §3).
 - Sandboxed multi-tenant Dev isolation or least-privilege multi-customer
@@ -69,8 +72,11 @@ The complete set of ten managed labels is defined in `02-domain-model.md` §5 an
 ## 4. Core invariants
 
 These are **behavioral** contracts (not the full security model — that is
-`14-security.md`). They are referenced by ID (`INV-n`) throughout the docs and
-covered by automated tests (`16-roadmap.md`, M7).
+`14-security.md`). They are referenced by ID (`INV-n`) throughout the docs;
+the *behaviors* they name are pinned by the unit suite (`16-roadmap.md`, M7),
+though there is no invariant-indexed test map — coverage is by behavior, not
+by `INV-n` key (2026-08 truth sweep: the earlier wording implied an index
+that does not exist).
 
 - **INV-1 — The PMO System is the single source of truth.** All Mission status, labels, and priority are read live from the PMO System. No local data is ever deemed current; local state (`/data/state`) is advisory telemetry that can be wiped without corrupting the system (consequences of a wipe are documented in `10-persistence.md`).
 - **INV-2 — At most one stage label per Mission.** A Mission carrying two or more stage labels is in conflict: DevCake refuses to schedule it (`LABEL_CONFLICT` — unschedulable gate reason only; no auto-comment; `15-errors-and-retries.md`).
@@ -85,8 +91,8 @@ covered by automated tests (`16-roadmap.md`, M7).
                      ┌──────────────────── docker-compose (dedicated host) ────────────────────┐
                      │  devcake_control                              devcake_runtime            │
   ┌────────┐ GraphQL │  ┌──────────┐ REST  ┌──────┐ docker.sock  ┌ ─ ─ ─ ─ ─ ─ ─ ┐           │
-  │ Linear │◄────────┤  │ app      │──────►│ dagu │─────────────►│ dev-<run_id>  │           │
-  │ (PMO)  │  poll   │  │ FastAPI  │       └──────┘  siblings    │ harness       │           │
+  │ Linear │◄────────┤  │ app      │──────►│ dagu │─────────────►│ prov-/dev-    │           │
+  │ (PMO)  │  poll   │  │ FastAPI  │       └──────┘  siblings    │ <run_id>      │           │
   └────────┘         │  │          │◄── Redis Streams ───────────┤               │           │
   ┌────────┐ HTTPS   │  └────┬─────┘   (per-run ACL)             └───────┬───────┘           │
   │ Forge  │◄────────┤       │ /api/v1 (via admin)                       │ clone/push        │
@@ -112,12 +118,12 @@ A concrete end-to-end pass, naming the governing document at each hop:
 1. **A human creates an Issue** in the configured Linear team and labels it `DEVCAKE` (adoption is opt-in by default; an `opt_out` mode adopts everything in the team — `02-domain-model.md` §2). It sits in `Backlog`. Anyone who can write that ticket is inside the agent trust boundary (`14` §0).
 2. **The PMO Handler polls Linear** (default every 30 s) and normalizes the Issue into a Mission (`05-pmo-adapter.md`). Status `backlog` + no stage label ⇒ derived Mission Type = **ONBOARD** (`02-domain-model.md`).
 3. **The scheduler picks it** by priority (Urgent > High > Medium > Low; unset = Medium), checks the concurrency caps for the mapped Dev Type (`judgment`), and dispatches: writes a Run record, triggers Dagu's `dev-run` DAG, and marks the Mission `In Progress` in Linear (`04-orchestrator.md`).
-4. **Dagu spawns a Dev container.** The entrypoint prepares `/workspace/repo` (fresh clone), `/workspace/activity/ACTIVITY.md` (+ attachments), registers MCP servers, and launches Claude Code with the judgment identifying prompt + the ONBOARD playbook prompt (`07-dev-runtime.md`, `08-harness-templates.md`, `03-mission-lifecycle.md`).
+4. **Dagu spawns the run's two containers.** The **provision** container (`prov-<run_id>`) mounts the source mirrors read-only + this run's workspace, prepares `/workspace/repo` (fresh clone), `/workspace/activity/ACTIVITY.md` (+ attachments), and exits; then the **harness** container (`dev-<run_id>`) mounts ONLY the workspace — never the mirrors — registers MCP servers, and launches Claude Code with the judgment identifying prompt + the ONBOARD playbook prompt (ADR-0025; `07-dev-runtime.md`, `08-harness-templates.md`, `03-mission-lifecycle.md`).
 5. **The Dev assesses complexity** and, say, deems it *normal*. It writes `/workspace/out/result.json` with `outcome: "plan_needed"` and exits 0. The entrypoint publishes the transcript, token report, and result over Redis (`09-messaging.md`).
 6. **The app finalizes**: posts `1_ONBOARD.md` and the token report to the Linear activity feed, then — after re-reading the Mission live (compare-and-transition, `04-orchestrator.md` §4) — adds the `DEVCAKE-PLAN` label.
 7. **Next poll cycle**: status `started` + `DEVCAKE-PLAN` ⇒ Mission Type **PLAN** ⇒ judgment produces `PLAN.md`; the app uploads it, swaps the label to `DEVCAKE-EXECUTE`.
 8. **EXECUTE**: implementer (Grok Build) implements the plan on branch `devcake/LINEAR-ENG-142` (instance-prefixed — `mission_branch(instance, key)`), opens a PR (`06-forge-adapter.md`), and the app swaps the label to `DEVCAKE-REVIEW`.
-9. **REVIEW:** by **recommended** config, a *different* Dev Type than EXECUTE reviews the PR (warned if shared — not a hard gate; `14` §8). The REVIEW **Dev** only returns judgment in `result.json`. On approval, the **app** posts the PR comment and, if a **reviewer token** is configured (app-only, never injected into a Dev), files a formal forge approval; then **merge precedes Done**: with `auto_merge` **off** (default) the Mission carries `DEVCAKE-MERGE` until a merge is observed (normally a human — the app does not merge; Dev write tokens are stopped by **forge branch protection**, not by this toggle — `14` §2 zone C); with it on the app squash-merges using the **write** token (not the reviewer token) and only then marks **Done**. On rejection, the report is posted and the label swaps back to `DEVCAKE-EXECUTE`.
+9. **REVIEW** (always a pipeline stage — not optional): the Dev assigned to REVIEW judges the PR and returns only judgment in `result.json` (seeded default: `judgment`; staffing a different Dev Type than EXECUTE is for role-focused skills/prompts, not a security control). On approval, the **app** posts the PR comment and, if a **reviewer token** is configured (app-only, never injected into a Dev — the security-relevant second identity), files a formal forge approval; then **merge precedes Done**: with the mission's repo `auto_merge` **off** (default on config cards) the Mission carries `DEVCAKE-MERGE` until a merge is observed (normally a human — the app does not merge; Dev write tokens are stopped by **forge branch protection**, not by this toggle — `14` §2 zone C); with it on the app squash-merges using the **write** token (not the reviewer token) and only then marks **Done**. On rejection, the report is posted and the label swaps back to `DEVCAKE-EXECUTE`.
 10. **Throughout**, every hop is one connected OpenTelemetry trace (dispatch → container → finalization), visible in OpenObserve (`12-observability.md`).
 
 ## 6a. Onboarding path (30 minutes for a new engineer)
@@ -164,5 +170,5 @@ Operating duties — once at setup and recurring — live in
 | `17-positioning.md` | Outward voice — must not outclaim `14` |
 | `18-operator-contract.md` | What the operator owns — setup pointer + recurring duties + rotation |
 | `19-thesis.md` | Why DevCake — the thesis: four claims with evidence status, scope doctrine (ordering vs originating), falsifiers |
-| `adr/` | Records of significant architectural decisions |
+| `adr/` | Records of significant architectural decisions — index with per-ADR status: [`adr/README.md`](adr/README.md) |
 | `tutorials/` | Operator path (includes supply-chain checklist) |

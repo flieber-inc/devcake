@@ -3,7 +3,7 @@
 > **Audience:** implementers and operators.
 > **Decision record:** `adr/0002-file-based-persistence.md` (files over a database), `adr/0003-pmo-as-single-source-of-truth.md`.
 
-All local app data lives as plain files on one named volume (`devcake_data`, mounted at `/data`) so it is trivially inspectable, diffable, and recoverable. **Backup story: back up `/data`; everything else is reconstructible.**
+All local app **state** lives as plain files on the `devcake_data` volume (mounted at `/data`) so it is trivially inspectable, diffable, and recoverable. Since ADR-0024/0025 the app also holds two **non-state** stores this document is not the authority on: the `/mirrors` volume (bare source mirrors — a DISPOSABLE cache that re-warms) and the `$DEVCAKE_WS_HOST` host bind (`/workspaces` in-container — per-run scratch, reclaimed at run end). **Backup story: back up `/data` (via `scripts/backup_data.sh`) AND `gitea_data`; mirrors and workspaces are reconstructible and deliberately excluded** — the full story, including why the excluded trees still deserve host-snapshot care (they hold repo source), is `13-deployment.md` §8.
 
 Run records are accessed through **`StatePort`** (`ports/state.py`); the production adapter is `adapters/files/run_store.py`. A future SQLite (or other) store is an adapter swap behind that port (`adr/0002`, `16-roadmap.md`) — not a domain change.
 
@@ -19,6 +19,9 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
     profiles/{name}.yaml        # config profiles: section A of a settings bundle + metadata (ADR-0013)
   secrets/
     connections/{scope}-{instance}.json  # GUI-stored PMO/repo secret VALUES (ADR-0011); 0600
+                                         #   pmo-board.json is APP-MINTED (ADR-0030: the default
+                                         #   board's PAT) and self-healing — re-minted at boot/reload
+                                         #   when revoked or lost; never operator-entered
     harness/{VAR}.json          # GUI-stored harness/model keys; 0600
     internal_forge/*.json       # bundled-Gitea service/mission tokens (ADR-0010); 0600
     profiles/{name}.json        # a profile's secret snapshot (section B); 0600, covered by the redaction glob
@@ -44,7 +47,7 @@ every cycle, nothing on disk.)
 - **Atomic writes, always (config / run JSON / secrets):** write to `{path}.tmp` in the same directory → `fsync` → `rename`. **`events.jsonl` is append-only best-effort** — each audit line is written with a plain append; there is no per-line `fsync`.
 - **Schema evolution:** purely **additive** fields with defaults need no version bump — the Run record gained `pmo_ref`/`repo_ref` (both default `"main"`) that way. There is no auto-migration machinery: the v1→v2 migrators were removed at v0 crystallization (founder decision); pre-v2 data is refused (config) or quarantined (run records) with instructions, never silently upgraded.
 
-Run records are schema **v2**. They contain non-secret execution context and a one-way Redis envelope verifier, never raw Redis passwords, forge/model credentials, or credential-file content. Secret run-spec material is not persisted anywhere: the app builds it from current config when the Dev sends `runspec.get` (`09-messaging.md` §§3, 5). At every boot, an integrity sweep (`RunStore.quarantine_unreadable`) moves unparseable, model-invalid, or **pre-v2** records to `runs/quarantine/` (0600, named in the log) — so one corrupt record can never block boot, and a restored v1 backup (which persisted credentials) can never sit silently in the store. A record that still parses as JSON is **scrubbed of known credential-bearing fields before the move** (quarantine must not become secret-at-rest); only unparseable bytes are preserved verbatim, for inspection, under the restrictive modes. Because a quarantined record is forgotten, boot also best-effort tears down anything it may have left live — the Dagu run, the per-run Redis ACL user, the reply stream — keyed on the file's run id. Quarantined files are removed by clear-runs.
+Run records are schema **v2**. They contain non-secret execution context and a one-way Redis envelope verifier, never raw Redis passwords, forge/model credentials, or credential-file content. `RunStore.all()` serves a **per-process mtime-keyed parse cache** (2026-08-02, chosen over SQLite/Redis): the app is one process, `save()` lands via `os.replace` (new inode, fresh mtime), so an unchanged `(mtime_ns, size)` pair proves an unchanged file — files stay the only truth, and the runs API's filter/sort/group work never re-parses an unchanged record. Secret run-spec material is not persisted anywhere: the app builds it from current config when the Dev sends `runspec.get` (`09-messaging.md` §§3, 5). At every boot, an integrity sweep (`RunStore.quarantine_unreadable`) moves unparseable, model-invalid, or **pre-v2** records to `runs/quarantine/` (0600, named in the log) — so one corrupt record can never block boot, and a restored v1 backup (which persisted credentials) can never sit silently in the store. A record that still parses as JSON is **scrubbed of known credential-bearing fields before the move** (quarantine must not become secret-at-rest); only unparseable bytes are preserved verbatim, for inspection, under the restrictive modes. Because a quarantined record is forgotten, boot also best-effort tears down anything it may have left live — the Dagu run, the per-run Redis ACL user, the reply stream — keyed on the file's run id. Quarantined files are removed by clear-runs.
 
 ### Wipe generation (`store_gen`)
 
@@ -92,14 +95,18 @@ repos:                               # 0..N (empty = every mission routes to the
   url: https://github.com/acme/product
   api_base: null                     # null = the adapter's default API host / the repo's origin
   default_branch: main
+  auto_merge: false                  # per-repo (ADR-0020): true = app merges after REVIEW; false = park
+  auto_resolve_merge_conflicts: true # inert while auto_merge off: conflicts → EXECUTE rework (max 2)
+  merge_retry_window_minutes: 30     # inert while auto_merge off: deferred-merge sweep window
                                      # token VALUES (token/token_ro/reviewer_token) are GUI-stored:
                                      # /data/secrets/connections/repo-main.json
+                                     # internal (zero-repo) synthesized instances always auto_merge=true
 
 assignments:                         # every Mission Type must be assigned to exactly one Dev Type.
   ONBOARD:                           #   extra_cli_args are appended verbatim to the harness invocation —
     dev_type: judgment               #   admin-set data, harness-specific, NEVER hardcoded (02 §9).
     extra_cli_args: "--max-turns 15" # seeded default: bounded-effort triage for claude-code; edit/clear freely
-                                     #   --max-turns is claude-code + grok-build only; codex 0.144.4 has NO
+                                     #   --max-turns is claude-code + grok-build only; codex 0.146.0 has NO
                                      #   turn cap, so no args value bounds a codex Dev (08 §1, 15 §2a).
   PLAN:
     dev_type: judgment
@@ -119,10 +126,13 @@ adoption_mode: opt_in                # opt_in (default): only missions labeled D
 poll_interval_seconds: 30
 dev_timeout_minutes: 120             # enforced by the app watchdog (04 §5)
 max_attempts: 3
+recover_misplaced_result: true       # ADR-0018: accept a stray result file written during the run
+continuation_policy: auto            # ADR-0022: auto | resume-only | fresh-only | off (07 §5a)
+max_continuations: 2                 # ADR-0022: nudge relaunches per run; 0 = off; no upper bound
+repo_mirror:                         # ADR-0024: source-mirror knobs (the mirror itself has no off switch)
+  sync_max_age_seconds: 0            #   0 = sync before every dispatch (fail-closed gate, 07 §7b)
+  lfs: false                         #   true = mirrors also carry LFS content
 review_loop_warning_every: 3
-auto_merge: false                    # true = app merges after REVIEW; false = app parks (not a Dev merge fence)
-auto_resolve_merge_conflicts: true   # inert while auto_merge is off: conflicts → EXECUTE rework (max 2)
-merge_retry_window_minutes: 30       # inert while auto_merge is off: sweep retries not-yet-mergeable PRs this long
 attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for configured repos (internal always zips)
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
 # each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
@@ -137,6 +147,8 @@ dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts
 ```
 
 **Stale configs are refused, not auto-migrated:** any `schema_version` other than **4**, or a body still carrying singular `pmo:`/`repo:` / `id:`-keyed / `*_env` shapes, fails startup with a clear error. Hand-migrate all the way to **schema v4 name-keyed** lists (`pmos: [{name: …}]`, `repos: [{name: …}]`, secret VALUES under `/data/secrets/connections/`, no `*_env` fields) **or** delete the file and reconfigure via the admin panel. There is no stepwise auto-upgrade through v2/v3.
+
+**Pre-v1 field moves (ADR-0020):** merge doctrine used to be top-level (`auto_merge`, `auto_resolve_merge_conflicts`, `merge_retry_window_minutes`). Those keys now live under each `repos[]` entry. Pre-v1 policy: no migration — pydantic drops unknown top-level keys and per-repo defaults apply (`auto_merge: false`, …). **Operational footgun:** a file that still has top-level `auto_merge: true` will **stop** auto-merging after upgrade until each repo card is re-enabled. `load_config` logs a WARNING listing dropped keys and a second WARNING naming the legacy doctrine keys so this is not a quiet no-op.
 
 `dev_types/{name}.yaml` mirrors the DevType fields of `02-domain-model.md` §6 exactly.
 
@@ -158,3 +170,5 @@ Direct file edits are tolerated but take effect on the next app start, when `loa
 | `/data/secrets` | Dev Types whose harness credential files / harness secret VALUES lived here fail auth (exit 12 → circuit breaker) until re-uploaded or re-entered. GUI-stored connection secrets and profile secret snapshots are gone — re-enter via the Configuration page or re-import a bundle. |
 | `/data/config` | The app blocks startup pending reconfiguration (admin panel first-run flow). |
 | `/data/config/profiles` + `/data/secrets/profiles` | Saved profile snapshots are gone; **live settings are untouched** (profiles are fire-and-forget snapshots, ADR-0013). |
+| the `/mirrors` volume (`docker volume rm devcake_mirrors`, stack stopped) | Nothing durable lost — the mirror is a mandatory but DISPOSABLE cache (ADR-0024): the next dispatch's fail-closed freshness gate re-clones every needed repo (one full re-fetch per repo of cost). Deleting it while the stack runs instead trips the volume error → dispatch refuses with a visible reason until `verify_writable` clears. |
+| the `$DEVCAKE_WS_HOST` tree | Per-run scratch only (ADR-0025). In-flight runs' containers lose their bind and fail (counted per docs/15); terminal residue is exactly what the periodic sweep reclaims anyway. Never part of the backup set. |

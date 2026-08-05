@@ -49,7 +49,7 @@ await withPage(async (page) => {
     }
   });
 
-  await gotoFresh(page, "#/config/pmo");
+  await gotoFresh(page, "#/pmo");
   await page.waitForSelector("#pmo");
 
   const switches = page.locator(
@@ -131,6 +131,70 @@ await withPage(async (page) => {
     (await sw.getAttribute("aria-checked")) === before);
   check("restore path used the narrow endpoint at least twice overall",
     narrowPuts.length >= 2);
+});
+
+// Repo picker (2026-08-02 bulk-scale): selected chips render first in
+// SELECTION order with the default badge on chip 1; non-first selected
+// chips carry a pin "make default" affordance that reorders the draft.
+// Everything here ends in Discard — live config untouched.
+await withPage(async (page) => {
+  await gotoFresh(page, "#/pmo");
+  await page.waitForSelector("#pmo");
+  const defaultChip = page.locator('#pmo button:has-text("· default")');
+  if ((await defaultChip.count()) === 0) {
+    skip("repo picker order affordances", "no PMO with ≥1 work repo on this stack");
+  } else {
+    check("the first selected work repo wears the default badge",
+      (await defaultChip.count()) >= 1);
+    const pin = page.locator('#pmo button[aria-label^="Make "]').first();
+    if ((await pin.count()) === 0) {
+      skip("make-default reorders the draft", "PMO has a single work repo");
+    } else {
+      const newDefault = (await pin.getAttribute("aria-label"))
+        .replace(/^Make | the default$/g, "");
+      await pin.click();
+      await page.waitForSelector('span:has-text("Unsaved changes")');
+      check("make-default reorders the draft (DirtyBar appears)",
+        (await page.locator(`#pmo button:has-text("${newDefault} · default")`).count()) === 1);
+      await page.click('button:has-text("Discard changes")');
+      await page.waitForTimeout(200);
+      check("discard restores the original default",
+        (await page.locator("text=Unsaved changes").count()) === 0);
+    }
+    // small catalogs keep the zero-friction chip cloud — no search box
+    check("catalog search stays hidden under the threshold",
+      (await page.locator('#pmo input[aria-label^="Search "]').count()) === 0 ||
+      (await page.locator('#pmo button').count()) > 12);
+  }
+});
+
+// ── managed board card (ADR-0030) — soft-skips until the live stack has
+// provisioned one (the markdown.mjs catalog precedent) ─────────────────────
+await withPage(async (page) => {
+  await gotoFresh(page, "#/pmo");
+  await page.waitForSelector("#pmo");
+  await page.waitForTimeout(400);
+  const badge = page.locator('#pmo :text("Bundled board")');
+  if ((await badge.count()) === 0) {
+    skip("managed board card", "no managed board instance on this stack");
+  } else {
+    // expand the board card if it rendered as a summary row
+    const row = page.locator('button[aria-label="Expand PMO instance board"]');
+    if (await row.count()) await row.click();
+    await page.waitForTimeout(200);
+    check("managed card carries the Bundled board badge",
+      (await page.locator('#pmo :text("Bundled board")').count()) >= 1);
+    check("managed card hides its own Remove while the provisioner exists",
+      await page.evaluate(() => {
+        // Remove may exist for OTHER cards — none inside the board card
+        const cards = [...document.querySelectorAll("#pmo .space-y-3")];
+        const board = cards.find((c) => c.textContent.includes("Bundled board"));
+        return board ? ![...board.querySelectorAll("button")]
+          .some((b) => b.textContent.trim() === "Remove") : false;
+      }));
+    check("managed card explains the app-minted key (no paste field)",
+      (await page.locator('#pmo :text("App-minted and self-healing")').count()) >= 1);
+  }
 });
 
 summary("pmo_intake");

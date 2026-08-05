@@ -104,7 +104,7 @@ def save_profile_body(body: dict, config, dev_types) -> dict:
 
 
 def apply_profile_body(name: str, *, config, dev_types, store, reload,
-                       shared_breakers, forge_breakers) -> dict:
+                       shared_breakers, forge_breakers, managers=None) -> dict:
     """THE world-swap: replaces the sections the profile contains (a profile
     without secrets keeps the live ones). Blocked while runs are active;
     rollback-by-reapply on reload failure (settings_bundle)."""
@@ -112,7 +112,7 @@ def apply_profile_body(name: str, *, config, dev_types, store, reload,
     try:
         bundle = profiles_store.read_profile(name)
         result = apply_bundle(bundle, config=config, dev_types=dev_types,
-                              reload=reload)
+                              reload=reload, managers=managers)
     except BundleError as e:
         raise HTTPException(e.status, str(e))
     if "secrets" in result["applied"]:

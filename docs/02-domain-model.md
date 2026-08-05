@@ -29,7 +29,7 @@ A **Mission** is a normalized DTO produced by the PMO adapter from a live Linear
 
 **`MissionRef`** is a `NamedTuple(pmo_id: str, kind: "issue" | "project")` — the adapter-facing mission handle. The port's unified read/write methods (`get`, `get_activity`, `post_feed`, `set_status`, `swap_labels`, `children_of` — `05-pmo-adapter.md` §1) take a ref; how each kind is stored (Linear's issue/project duality, or nothing of the sort) is the adapter's business, never the domain's. `Mission.ref` is a property returning `MissionRef(pmo_id, pmo_kind)`.
 
-**`Activity`** is `{mission: Mission, entries: list[ActivityEntry], mission_attachments: list[AttachmentRef], truncated: bool}` — the normalized feed returned by `get_activity`. `mission_attachments` (full mode only, ADR-0014): assets the mission itself references — description-embedded uploads + the vendor's native attachment list. `truncated`: the full-history hard stop tripped; the activity-folder builder renders a loud banner.
+**`Activity`** is `{mission: Mission, entries: list[ActivityEntry], mission_attachments: list[AttachmentRef], documents: list[MissionDocument], truncated: bool}` — the normalized feed returned by `get_activity`. `mission_attachments` (full mode only, ADR-0014): assets the mission itself references — description-embedded uploads + the vendor's native attachment list. `documents` (full mode + project refs only, project-fidelity fix): long-form documents attached to the mission — `MissionDocument{title: str, content: str, url: str}`; content arrives inline from the vendor read (unlike `AttachmentRef` there is no URL to download), and the activity-folder builder materializes each as `docs/<title>.md`; `[]` everywhere else. `truncated`: the full-history hard stop tripped; the activity-folder builder renders a loud banner.
 
 **`ActivityEntry`:**
 
@@ -101,13 +101,13 @@ Rows 7, 8, 10, and 11 take precedence over rows 1–4; row 6 over everything exc
                                         │ approve
                                         ▼
                         remove DEVCAKE-REVIEW, approve PR, then:
-                        · auto_merge ON:  merge PR → on success mark Done
-                            (conflict + auto-resolve ON, < 2 tries →
+                        · mission's repo auto_merge ON: merge PR → Done
+                            (conflict + that repo's auto-resolve ON, < 2 tries →
                              swap → EXECUTE with a resolve directive;
                              not-mergeable-yet → + DEVCAKE-MERGE, sweep
-                             retries for merge_retry_window_minutes;
+                             retries for that repo's merge_retry_window;
                              else → + DEVCAKE-MERGE + warning)
-                        · auto_merge OFF: + DEVCAKE-MERGE (await human merge)
+                        · mission's repo auto_merge OFF: + DEVCAKE-MERGE
                                         │
                                         ▼
                         ┌───────────────────────────────┐
@@ -185,7 +185,7 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | Field | Type | Notes |
 |---|---|---|
 | `schema_version` | `int` (= 2) | Bumped by the credential-state hardening (secrets left the record). Records `< 2` are quarantined at boot, never migrated (`10-persistence.md` §5). The `pmo_ref`/`repo_ref` additions were additive with defaults — no bump of their own. |
-| `run_id` | `str` | Human-readable and unique: `{INSTANCE}-{key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). The uppercased PMO-instance prefix (schema v3) keeps run ids — and therefore ACL users, container names, and reply streams — collision-free across instances. Also the Dagu run ID and the Dev container name suffix, so Linear, the Dagu UI, `docker ps`, traces, and Redis streams all speak the same name (confirmed decision). HELLO/OAUTH runs use the fixed pseudo-instance `sys`. |
+| `run_id` | `str` | Human-readable and unique: `{INSTANCE}-{key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). The uppercased PMO-instance prefix (schema v3) keeps run ids — and therefore ACL users, container names, and reply streams — collision-free across instances. Also the Dagu run ID and the Dev container **name suffix** — one run is now **two** containers, `prov-<run_id>` then `dev-<run_id>` (ADR-0025), so a `docker ps` shows both — while Linear, the Dagu UI, traces, and Redis streams speak the bare run id. The charset is fenced twice more under ADR-0025: the DAG's `preconditions` guard and `WorkspaceStore`'s per-run dir validation both require `re:^[A-Za-z0-9_-]{6,64}$` before a container or a workspace dir is ever created. HELLO/OAUTH runs use the fixed pseudo-instance `sys`. |
 | `mission_key` | `str` | Denormalized for log/trace readability. |
 | `mission_pmo_id` | `str` | |
 | `pmo_kind` | `str` (default `"issue"`) | The mission's kind at dispatch. |
@@ -229,22 +229,25 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 |---|---|---|
 | `schema_version` | `int` (= 4) | Stale shapes refused at boot with hand-migration instructions (`10-persistence.md` §3). |
 | `pmos` | `list[PMOInstance]` — `{name, system, team_key, api_base, repos, reference_repos, assignments, …}` | Instance `name` is the identity. `system` validated against `PMO_SYSTEMS`. **`api_key` is a read-through** over the GUI secret store (`/data/secrets/connections/pmo-{name}.json`) — not an env-var name. `repos` is the ordered work-repo set for that instance (first = default for unmarked missions); `reference_repos` are read-only consultation clones, disjoint from the work set. `assignments` is the instance's Mission-Type override map (ADR-0019): present key = wholesale override of the global row below, absent = inherit live; empty `dev_type` and unknown mission-type keys refused. |
-| `repos` | `list[RepoInstance]` — `{name, forge, url, api_base, default_branch, …}` | `forge` validated against `forges()`. **`token` / `token_ro` / `reviewer_token` are read-throughs** over `/data/secrets/connections/repo-{name}.json` — not `*_env` fields. |
+| `repos` | `list[RepoInstance]` — `{name, forge, url, api_base, default_branch, auto_merge, auto_resolve_merge_conflicts, merge_retry_window_minutes, …}` | `forge` validated against `forges()`. **`token` / `token_ro` / `reviewer_token` are read-throughs** over `/data/secrets/connections/repo-{name}.json` — not `*_env` fields. **Merge doctrine is per repo** (ADR-0020): `auto_merge` (default `false`) — when true, the **app** merges this repo's PRs after REVIEW approval; when false, parks at `DEVCAKE-MERGE` (does **not** strip Dev forge-token merge capability — that is branch protection, `14-security.md` §2 zone C). `auto_resolve_merge_conflicts` (default `true`, inert while `auto_merge` off) — on conflict/stale branch, route back to EXECUTE (max 2 attempts). `merge_retry_window_minutes` (default 30, `≥ 0`, inert while `auto_merge` off) — deferred-merge sweep window. **Internal (zero-repo) synthesized instances always set `auto_merge=True`** at provision time — the zip deliverable depends on merge; operators who want doctrine control create the repo as a config card instead. |
 | `adoption_mode` | `"opt_in" \| "opt_out"` (default `opt_in`) | `opt_in`: only Missions labeled `DEVCAKE` are adopted. `opt_out`: every non-terminal item in the team is adopted (the original mission-doc behavior — enable deliberately; the admin panel warns about the backlog-wide consequence, `11-admin-panel.md` §3). |
 | `assignments` | `dict[MissionType, {dev_type: str, extra_cli_args: str}]` | The **global** Mission Type → Dev Type map: Dev Type name plus optional **extra CLI args** appended verbatim to the harness invocation for that Mission Type (`08-harness-templates.md` §1). Args are admin-set data, never hardcoded — they are harness-specific, so the admin UI warns and offers to clear them when the Mission Type is reassigned to a Dev Type with a different harness (`11-admin-panel.md` §3). Validation: all four types assigned. Per-instance override rows on `pmos[*].assignments` take precedence wholesale (ADR-0019); resolution is `assignment_for(config, instance, mission_type)` — the only read path schedule and dispatch use. |
 | `concurrency` | `{global_max: int}` | Per-type caps live on each DevType. Effective ceiling = min(global_max, Σ per-type) — this is a property of the dispatch check, not a separate rule. |
 | `dev_timeout_minutes` | `int` (default 120) | Enforced by the app watchdog (`04-orchestrator.md` §5), not by Dagu. |
 | `poll_interval_seconds` | `int` (default 30) | |
-| `auto_merge` | `bool` (default `false`) | When true, the **app** merges its own PRs after REVIEW approval (no human PR click). When false, the app parks at `DEVCAKE-MERGE` and does not call merge — it does **not** strip merge capability from Dev forge tokens; that is branch protection (`14-security.md` §2 zone C). See `03-mission-lifecycle.md`, `06-forge-adapter.md`. |
-| `auto_resolve_merge_conflicts` | `bool` (default `true`) | Inert while `auto_merge` is off. On a merge conflict (or stale branch), route the Mission back to EXECUTE with a sync-and-resolve directive instead of parking on `DEVCAKE-MERGE`; max 2 attempts per Mission, counted from feed markers (`03-mission-lifecycle.md` §4.1). |
-| `merge_retry_window_minutes` | `int ≥ 0` (default 30) | Inert while `auto_merge` is off. When a merge is not possible *yet* (CI running, mergeability computing), the merge sweep keeps retrying for this long before the human hand-off; 0 = hand off immediately. Lower on CI-light repos, raise on CI-heavy ones. |
 | `attach_merged_changeset_to_pmo` | `bool` (default `false`) | When true, after a REVIEW-approved **merge** the app also zips the PR change set onto the PMO feed for **configured** work repos. Internal/zero-repo missions always attach a zip (ADR-0010) regardless. Leave off for eng repos — the forge PR is canonical; the zip is a merge-time snapshot (size-capped, may omit files). Best-effort: packaging failure never un-Dones the mission. |
 | `review_loop_warning_every` | `int` (default 3) | Post a cost warning every Nth REVIEW→EXECUTE rejection. |
 | `max_attempts` | `int` (default 3) | Failed attempts of the same step before `DEVCAKE-FAILED`. |
+| `recover_misplaced_result` | `bool` (default `true`) | ADR-0018: accept a result file the Dev wrote elsewhere in its workspace — only when created during that run and passing the same validation; the misplacement is always recorded. |
+| `continuation_policy` | `"auto" \| "resume-only" \| "fresh-only" \| "off"` (default `auto`) | ADR-0022: in-container continuation of clean-but-incomplete runs (`07-dev-runtime.md` §5a). `auto` resumes the session where capture-verified, escalating permanently to a fresh session after a zero-progress continuation; `resume-only` stops (fails as before) when resume is unavailable. Plan mode never continues. |
+| `repo_mirror` | `{sync_max_age_seconds: int ≥ 0 (default 0), lfs: bool (default false)}` | ADR-0024: the source mirror is MANDATORY (no enable field); 0 = sync before every dispatch (fail-closed precondition, `07-dev-runtime.md` §7b); `lfs` upgrades pointer files to real content. |
+| `max_continuations` | `int` ≥ 0 (default 2) | ADR-0022: the continuation budget — the ONLY terminator (stalls escalate, never stop). Deliberately unbounded above (large experiments are legitimate; the watchdog bounds the run). `0` = off. Effective turn budget becomes (budget + 1) × `--max-turns`. |
 | `intake_paused` | `bool` (default `false`) | Operator master switch (`11-admin-panel.md` §0): while true, no NEW runs dispatch on **any** PMO (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
 | `pmos[].intake_paused` | `bool` (default `false`) | Per-PMO intake under the master switch: while true, that instance dispatches no NEW runs (others unaffected, unless the master is also paused). Same in-flight/sweeps semantics. |
+| `pmos[].managed` | `bool` (default `false`) | ADR-0030: app-managed instance (the auto-provisioned default board, reserved name `board`). Identity fields are canonicalized and the row survives wholesale `pmos` replaces via `reconcile_managed_pmos` while the bundled provisioner exists; `repos`/`reference_repos`/`assignments`/`intake_paused` stay operator-owned. Operators cannot claim the reserved name or mark rows managed (stray flags are stripped). |
 | `max_decomposition_depth` | `int` ≥ 0 (default 2) | How many generations of ONBOARD decomposition are allowed below a root (`adr/0012`). `0` = unlimited — the ONBOARD Dev decides (`03-mission-lifecycle.md` §1.3). |
 | `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`mapper`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
+| `cost_inputs` | `{rates: [{model_prefix, input_per_mtok, cache_read_per_mtok, cache_write_per_mtok, output_per_mtok}], override_native: bool}` (default: grok-4.5 list rates / `false`) | Operator rate card behind app-side cost **estimates** (`adr/0021`). Rates are USD per 1M tokens, matched by longest `model_prefix`; unknown models are never priced. `override_native` flips DISPLAY surfaces to prefer the rate-card computation over harness-reported cost. The derived `rate_card_id` (`builtin-v1` or `operator:<hash8>`) labels every stamped estimate. |
 | `active_prompt_templates` | `dict[str, str]` (default `{}`) | Per-Mission-Type active prompt template name; missing key ⇒ built-in `"default"`. |
 | `active_devtype_prompts` | `dict[str, str]` (default `{}`) | Per-Dev-Type active identifying-prompt template name; missing key ⇒ `"Development"` (the seeded original). Keys for deleted Dev Types are dropped on DELETE, stripped from export/profile snapshots, and pruned (with a warning) on PUT `/config` and bundle apply — never a hard 422, because `deep_merge` cannot remove dict keys from a partial SPA patch. |
 | `dismissed_alerts` | `list[str]` (default `[]`) | Admin-UI state: dismissed advisory alerts as `"id:signature"` strings. A list (not a dict) on purpose — `deep_merge` can't delete dict keys, so the UI un-dismisses by PUTting the whole replacement list. |
@@ -253,17 +256,27 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 
 Produced once per Dev run by the harness template's extraction strategy (`08-harness-templates.md` §5) and (a) posted to the activity feed as a message (INV-5), (b) attached to the `dev.run` span and metrics (`12-observability.md`).
 
+Since `adr/0029` this is **TokenReport v1**: one CLOSED shape from every
+extractor — every key always present (`None` = unknown, never an absent key),
+provenance as the `source` field instead of key-presence folklore.
+
 | Field | Type | Notes |
 |---|---|---|
+| `schema` | `1` | The shape version. |
+| `model` | `str \| None` | Dominant model per `modelUsage` where reported, else the harness name. |
 | `input_tokens` | `int \| None` | |
 | `output_tokens` | `int \| None` | |
 | `cache_read_tokens` | `int \| None` | |
-| `cache_write_tokens` | `int \| None` | |
-| `total_tokens` | `int \| None` | For harnesses that expose a total; filled alongside or instead of the split. Grok fills **both**: at **0.2.112** its `end` event carries `usage {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `num_turns` and `modelUsage` inline (captured 2026-07-25), and that is what the entrypoint reads (`08-harness-templates.md` §1/§5). Total-only is therefore version-scoped, not a property of the harness: it is what the retained `signals.json` fallback yields (`contextTokensUsed`, verified **v0.2.93**) when a stream carries no usable `end` event. Field names and their presence are CLI evidence; the captured numbers came from a stub backend and are not. Tokens are the primary cost signal; billed cost is best-effort on top. |
-| `cost_usd` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed — and neither `codex` 0.144.4 nor `grok` 0.2.112 emits any cost field, so it stays null for both. |
-| `model` | `str` | |
-| `extraction_method` | `"session_json" \| "end_event" \| "unavailable"` | The entrypoint records which path actually filled the report — `end_event` is grok's terminal stdout event, `session_json` the harness's own JSON (claude/codex streams, grok's `signals.json` fallback); silence is never acceptable (INV-5). |
-| `notes` | `str \| None` | e.g. which fallback triggered, or a counter with no field of its own: `reasoning_output_tokens` for codex, `reasoning_tokens` for grok. |
+| `cache_write_tokens` | `int \| None` | claude `cache_creation_input_tokens`; codex `cache_write_input_tokens` (**new at 0.146.0** — earlier codex streams read None, never a fabricated 0); grok has no write counter. |
+| `total_tokens` | `int \| None` | REPORTED-only (never derived by the harness layer). Grok fills **both** total and split: at **0.2.112** its `end` event carries `usage {input_tokens, cache_read_input_tokens, output_tokens, reasoning_tokens, total_tokens}` plus `num_turns` and `modelUsage` inline, and that is what the entrypoint reads (`08-harness-templates.md` §1/§5). Total-only is what the retained `signals.json` fallback yields (`contextTokensUsed`, verified **v0.2.93**). Field names and their presence are CLI evidence; captured numbers came from a stub backend and are not. |
+| `reasoning_tokens` | `int \| None` | A SUBSET of `output_tokens`, informational, never priced (pre-v1 it hid in a regex-parsed `notes` string). |
+| `num_turns` | `int \| None` | Harness-reported turn count (claude/grok terminal events; codex none). |
+| `duration_ms` | `int \| None` | Harness-reported wall time (claude result event; others none). |
+| `cost_usd_native` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed **by the harness layer** — neither `codex` 0.146.0 nor `grok` 0.2.112 emits any cost field, so it stays null for both, forever untouched by estimation (`adr/0021`). |
+| `cost_usd_estimated` | `float \| None` | Ships `None` from the image; the **app-side** rate-card estimate (`domain/costing.py`, `adr/0021`) fills it at finalize when the full input/cache-read/output split exists AND `config.cost_inputs.rates` maps the model. Kept strictly separate from `cost_usd_native`. |
+| `rate_card_id` | `str \| None` | App-stamped alongside the estimate: `builtin-v1` (shipped defaults) or `operator:<hash8>` (edited card). Present iff the estimate is. |
+| `source` | `"session_json" \| "end_event" \| "signals" \| "cumulative" \| "mixed" \| "unavailable"` | Which path actually filled the report — `end_event` grok's terminal stdout event, `session_json` the harness's own JSON (claude/codex), `signals` grok's session-file fallback, `cumulative` a codex resume chain (the harness's counters are cumulative; last-wins), `mixed` a multi-chain merge with disagreeing inputs; silence is never acceptable (INV-5 — `unavailable` is explicit). |
+| `raw` | `dict` | The vendor usage payload, untouched (fidelity); merges carry `{"invocations": [...]}`. The only nested field. |
 
 ## 11. Decomposition drafts
 

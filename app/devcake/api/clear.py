@@ -18,6 +18,7 @@ import httpx
 from ..adapters.dagu import DaguExecutor
 from ..adapters.files import RunLogStore, RunStore
 from ..adapters.redis import INGRESS, Messaging
+from ..domain import failure_taxonomy
 from ..telemetry import OO_ORG, OO_URL
 
 log = logging.getLogger("devcake.clear")
@@ -62,8 +63,9 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
         if run is None or run.state not in ("dispatched", "running"):
             continue                                    # gone / finalizing / terminal
         try:
-            await run_manager.kill(run, "failed", "operator clear-runs",
-                                   error_class="DEV_OPERATOR_STOP")
+            await run_manager.kill(
+                run, "failed", "operator clear-runs",
+                error_class=failure_taxonomy.DEV_OPERATOR_STOP)
             stopped.append(run.run_id)
         except Exception:  # noqa: BLE001 — best-effort teardown: a kill failure is logged; the drain below still waits on Dagu's view
             log.exception("clear: kill failed for %s — continuing", run.run_id)
@@ -304,6 +306,17 @@ async def clear_all(
             log.exception("stop_and_drain failed")
             drain = {"error": str(e)[:300], "stopped": 0, "undrained": []}
     local = clear_local_state(store, runlog)
+    # ADR-0025 Hook E: the run records are gone, so every run-id-shaped
+    # child of the workspace base goes too — unconditionally (undrained
+    # containers keep writing into a lazily-detached mount that dies with
+    # them). Runs inside the caller's dispatch_lock wrap, so no pre-create
+    # can race the wipe.
+    workspaces_removed = 0
+    if run_manager is not None:
+        try:
+            workspaces_removed = run_manager.workspaces.wipe_all()
+        except Exception:  # noqa: BLE001 — best-effort like every subsystem here; the sweep reclaims stragglers
+            log.exception("workspace wipe failed")
     dagu: dict[str, Any]
     oo: dict[str, Any]
     redis_info: dict[str, Any]
@@ -336,10 +349,12 @@ async def clear_all(
               and not drain.get("undrained"),
         "stopped": drain,
         "local": local,
+        "workspaces_removed": workspaces_removed,
         "dagu": dagu,
         "openobserve": oo,
         "redis": redis_info,
         "activity_repos": activity,
         "preserved": ["config", "secrets", "pmo", "operator repos",
-                      "skill-store", "work repos (devcake-internal)"],
+                      "skill-store", "work repos (devcake-internal)",
+                      "repo mirrors"],
     }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  LayoutDashboard, SquareTerminal, Settings2, FolderGit2, ScrollText,
+  LayoutDashboard, SquareTerminal, Settings2, Plug, ScrollText,
   TriangleAlert, Sun, Moon, Monitor, Play, Pause, PanelLeftClose, PanelLeftOpen,
   Columns3,
 } from "lucide-react";
@@ -10,13 +10,22 @@ import Toggle from "./Toggle.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 import { getTheme, setTheme, onThemeChange } from "../theme.js";
 
+// Entries are pages, or a multi-page parent (Adapters) that behaves exactly
+// like Configuration: one nav item (its href lands on the first child) with
+// indented sub-entries rendered only while one of its pages is active. The
+// child pages stay reachable from a collapsed/mobile rail via each page's
+// own chip row (AdapterTabs), mirroring ConfigPage's section chips.
 const NAV = [
   { page: "overview", href: "#/overview", label: "Overview", icon: LayoutDashboard },
   { page: "missions", href: "#/missions", label: "Missions", icon: Columns3 },
   { page: "runs", href: "#/runs", label: "Runs", icon: SquareTerminal },
-  { page: "repos", href: "#/repos", label: "Repositories", icon: FolderGit2 },
+  { pages: ["repos", "pmo"], href: "#/repos", label: "Adapters", icon: Plug,
+    children: [
+      { page: "repos", href: "#/repos", label: "Repositories" },
+      { page: "pmo", href: "#/pmo", label: "PMO" },
+    ] },
   { page: "config", href: "#/config", label: "Configuration", icon: Settings2 },
-  { page: "logs", href: "#/logs", label: "Logs", icon: ScrollText },
+  { page: "consoles", href: "#/consoles", label: "Consoles", icon: ScrollText },
 ];
 
 function NavItem({ href, icon: Icon, label, active, collapsed, onClick }) {
@@ -35,6 +44,31 @@ function NavItem({ href, icon: Icon, label, active, collapsed, onClick }) {
     >
       <Icon size={17} strokeWidth={2} className="shrink-0" aria-hidden />
       {!collapsed && <span>{label}</span>}
+    </a>
+  );
+}
+
+// Indented sub-entry list under an active parent item — one idiom for both
+// Configuration's sections and Adapters' pages.
+function SubNav({ children }) {
+  return (
+    <div className="ml-[1.35rem] flex flex-col gap-0.5 border-l border-neutral-200 py-1 pl-3 dark:border-neutral-800">
+      {children}
+    </div>
+  );
+}
+
+function SubLink({ href, active, children }) {
+  return (
+    <a
+      href={href}
+      className={`rounded-md px-2 py-1 text-xs transition ${
+        active
+          ? "font-semibold text-accent-700 dark:text-accent-300"
+          : "text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+      }`}
+    >
+      {children}
     </a>
   );
 }
@@ -166,18 +200,9 @@ export default function Sidebar({
       return !c;
     });
   };
-  // Missions kanban needs ≥1440 to fit 7 cols; force-collapse below that on
-  // this page only, without touching the persisted preference.
-  const [narrowForMissions, setNarrowForMissions] = useState(false);
-  useEffect(() => {
-    if (page !== "missions") { setNarrowForMissions(false); return; }
-    const mq = window.matchMedia("(max-width: 1439.98px)");
-    const update = () => setNarrowForMissions(mq.matches);
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, [page]);
-  const collapsed = collapsedPref || narrowForMissions;
+  // The Missions-page force-collapse (kanban fit math) died with the board
+  // (2026-08-02 re-decision) — the mission list works at any width.
+  const collapsed = collapsedPref;
 
   const dotOk = (key) =>
     (healthError && key === "app" ? false : serviceValue(health, key));
@@ -220,26 +245,35 @@ export default function Sidebar({
         />
       </div>
 
-      <nav className={`flex flex-col gap-0.5 pt-1 ${collapsed ? "px-2" : "px-3"}`}>
-        {NAV.map((item) => (
+      {/* min-h-0 + overflow-y-auto: the active item's sub-entries cost
+          vertical space — the mt-auto footer (theme, service grid, collapse)
+          must never clip at short viewport heights */}
+      <nav className={`flex min-h-0 flex-col gap-0.5 overflow-y-auto pt-1 ${collapsed ? "px-2" : "px-3"}`}>
+        {NAV.map((item) => item.children ? (
+          <React.Fragment key={item.label}>
+            <NavItem href={item.href} icon={item.icon} label={item.label}
+              active={item.pages.includes(page)} collapsed={collapsed} />
+            {item.pages.includes(page) && !collapsed && (
+              <SubNav>
+                {item.children.map((c) => (
+                  <SubLink key={c.page} href={c.href} active={page === c.page}>
+                    {c.label}
+                  </SubLink>
+                ))}
+              </SubNav>
+            )}
+          </React.Fragment>
+        ) : (
           <React.Fragment key={item.page}>
             <NavItem {...item} active={page === item.page} collapsed={collapsed} />
             {item.page === "config" && page === "config" && !collapsed && (
-              <div className="ml-[1.35rem] flex flex-col gap-0.5 border-l border-neutral-200 py-1 pl-3 dark:border-neutral-800">
+              <SubNav>
                 {CONFIG_SECTIONS.map((s) => (
-                  <a
-                    key={s.id}
-                    href={`#/config/${s.id}`}
-                    className={`rounded-md px-2 py-1 text-xs transition ${
-                      configSection === s.id
-                        ? "font-semibold text-accent-700 dark:text-accent-300"
-                        : "text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
-                    }`}
-                  >
+                  <SubLink key={s.id} href={`#/config/${s.id}`} active={configSection === s.id}>
                     {s.label}
-                  </a>
+                  </SubLink>
                 ))}
-              </div>
+              </SubNav>
             )}
           </React.Fragment>
         ))}
@@ -293,20 +327,11 @@ export default function Sidebar({
             </a>
           </p>
         )}
-        {/* When Missions force-collapses under 1440, toggling would just flip
-           the persisted preference without any visible change (effective
-           stays collapsed) — a control that lies about being functional.
-           Disable it with an honest title instead. */}
         <button
           onClick={toggleCollapsed}
-          disabled={narrowForMissions}
-          title={narrowForMissions
-            ? "Sidebar auto-collapsed on Missions below 1440 px so the board fits"
-            : collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-label={narrowForMissions
-            ? "Sidebar auto-collapsed on Missions below 1440 px"
-            : collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-500 dark:disabled:hover:bg-transparent dark:disabled:hover:text-neutral-400 ${
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className={`flex items-center gap-2 rounded-lg py-1.5 text-xs text-neutral-500 dark:text-neutral-400 hover:bg-stone-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
             collapsed ? "mx-auto h-8 w-8 justify-center" : "w-full px-2.5"
           }`}
         >

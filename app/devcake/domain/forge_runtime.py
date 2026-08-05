@@ -16,7 +16,9 @@ failure on repo A never stops repo B's missions (docs/15 §4).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from opentelemetry import trace
@@ -29,6 +31,12 @@ if TYPE_CHECKING:
 log = logging.getLogger("devcake.forge_runtime")
 tracer = trace.get_tracer("devcake")
 
+# Cap on in-flight health probes. Single GETs against (usually) one forge
+# host sharing a token: high enough that a large catalog sweeps in seconds
+# (incident 2026-08-01: 319 repos × ~300ms sequential ≈ 95s+), low enough
+# to stay clear of secondary rate limits.
+PROBE_CONCURRENCY = 8
+
 
 class ForgeRuntime:
     def __init__(self):
@@ -40,6 +48,10 @@ class ForgeRuntime:
         # NOT config repos — registered dynamically per mission, and flagged
         # so the merge → zip-to-PMO delivery hook knows to fire
         self.internal: set[str] = set()
+        # when the last FULL refresh_all completed; None = no full sweep yet
+        # (boot probe pending, or its 60s budget expired mid-sweep) — /health
+        # surfaces this and the poll loop retries the sweep while unset
+        self.last_full_probe_at: datetime | None = None
 
     def rebuild(self, repos: list["RepoInstance"], make_forge) -> None:
         """Reconcile with config (boot + hot reload). Unconfigured entries
@@ -62,6 +74,15 @@ class ForgeRuntime:
             if name in self.forges and name not in live:
                 live[name] = self.forges[name]
                 insts[name] = self.instances[name]
+        # F16: the outgoing adapters hold pooled keep-alive clients — close
+        # them (fire-and-forget) instead of leaking sockets on every config
+        # PUT / secret write. Carried-over internal entries are the SAME
+        # objects in `live`, so only truly replaced adapters close.
+        outgoing = [f for n, f in self.forges.items()
+                    if live.get(n) is not f]
+        if outgoing:
+            from ..adapters.http import aclose_adapters
+            aclose_adapters(outgoing)
         self.forges, self.instances = live, insts
         for name in list(self.health):
             if name not in live:
@@ -176,7 +197,20 @@ class ForgeRuntime:
         self.apply_health(name, data)
         return data
 
-    async def refresh_all(self) -> dict[str, dict]:
-        for name in list(self.forges):
-            await self.refresh_health(name)
+    async def refresh_all(self, *, limit: int = PROBE_CONCURRENCY) -> dict[str, dict]:
+        """Probe every registered repo, at most `limit` in flight. The bound
+        lives here so every caller gets it: the poll task's initial sweep,
+        the per-cycle breaker re-probe, and the config-reload probe all walk
+        the full catalog. Names are snapshotted at entry; refresh_health
+        never raises (probe contract) and apply_health drops names that a
+        concurrent rebuild unregistered, so overlapping sweeps are benign
+        last-writer-wins per repo."""
+        sem = asyncio.Semaphore(limit)
+
+        async def _one(name: str) -> None:
+            async with sem:
+                await self.refresh_health(name)
+
+        await asyncio.gather(*(_one(n) for n in list(self.forges)))
+        self.last_full_probe_at = datetime.now(timezone.utc)
         return dict(self.health)

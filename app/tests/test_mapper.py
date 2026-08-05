@@ -61,6 +61,27 @@ def run_coro(c):
     return asyncio.get_event_loop().run_until_complete(c)
 
 
+def test_finalize_mapper_stamps_rate_card_estimate(tmp_path):
+    """ADR-0021 parity: mapper spend is fleet spend — finalize_mapper stamps
+    the same cost_usd_estimated + rate_card_id as mission finalize (failed
+    outcome path: the stamp must land regardless of run success)."""
+    mgr = make_mgr(tmp_path, MapPMO([]))
+    run = Run(run_id="SYS-MAPPER-1-ZZZZZZ", mission_key="MAPPER",
+              mission_type="MAPPER", dev_type="mapper", seq=1,
+              state="finalizing")
+    mgr.runs.store.save(run)
+    grok = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+            "cache_write_tokens": None, "output_tokens": 500_000,
+            "total_tokens": 3_500_000, "cost_usd": None,
+            "model": "grok-4.5-build", "extraction_method": "end_event"}
+    run_coro(mapper.finalize_mapper(
+        mgr, run, {"result": {"outcome": "nope"}, "token_report": grok}))
+    saved = mgr.runs.store.get(run.run_id).token_report
+    assert saved["cost_usd_estimated"] == 5.60
+    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["cost_usd"] is None
+
+
 def test_apply_mapper_edges_validates_everything(tmp_path):
     # B already blocked by A; C is terminal; D is free
     pmo = MapPMO([m("ia", "T-A"), m("ib", "T-B", blocked_by=["ia"]),
@@ -88,17 +109,23 @@ def test_creates_cycle_transitive():
 
 
 def test_config_defaults():
+    from devcake.config import RepoInstance
     cfg = AppConfig()
     assert cfg.intake_paused is False
     assert cfg.relations_mapper.enabled is False           # manual-only by default
     assert cfg.relations_mapper.interval_minutes == 60
     assert cfg.relations_mapper.dev_type == "mapper"   # seeded cheap vehicle
-    assert cfg.auto_resolve_merge_conflicts is True        # docs/03 §4.1
-    assert cfg.merge_retry_window_minutes == 30
+    # merge doctrine lives on RepoInstance (ADR-0020 / docs/03 §4.1)
+    repo = RepoInstance(name="main", url="https://github.com/o/r")
+    assert repo.auto_merge is False
+    assert repo.auto_resolve_merge_conflicts is True
+    assert repo.merge_retry_window_minutes == 30
     # roundtrips through dump/validate (the /api/v1/config PUT path)
     assert AppConfig.model_validate(cfg.model_dump()) == cfg
     with pytest.raises(Exception):                         # ge=0 enforced
-        AppConfig.model_validate({"merge_retry_window_minutes": -5})
+        RepoInstance.model_validate(
+            {"name": "main", "url": "https://github.com/o/r",
+             "merge_retry_window_minutes": -5})
 
 
 def test_deep_merge_preserves_nested_siblings():
@@ -337,18 +364,19 @@ def test_activity_payload_materializes_mission_attachments(tmp_path):
 
 
 def test_activity_payload_project_brief_is_mission_md(tmp_path):
+    # project-fidelity fix: the project branch rides get_activity(full=True)
+    # (updates/documents mirror); the brief still lands in MISSION.md and an
+    # empty feed renders the honest placeholder, not the pre-fix stub
     proj = Mission(pmo_id="p9", pmo_kind="project", key="P-1", title="proj",
                    status="backlog", description="the project brief",
                    updated_at=NOW)
-    pmo = MapPMO([], activity=None)
-
-    async def _get(ref):
-        return proj
-    pmo.get = _get
+    pmo = MapPMO([], activity=Activity(mission=proj, entries=[]))
     mgr = make_mgr(tmp_path, pmo)
     payload = run_coro(mgr.activity_payload("p9", "project"))
+    assert pmo.activity_calls == [True]
     assert "the project brief" in payload["mission_md"]
-    assert "no comment feed" in payload["activity_md"]
+    assert "(no project updates yet" in payload["activity_md"]
+    assert "no comment feed" not in payload["activity_md"]
 
 
 def test_activity_payload_renders_truncation_banner(tmp_path):

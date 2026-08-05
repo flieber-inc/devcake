@@ -456,6 +456,34 @@ async def _run_battery(pmo, system: str, team: str) -> int:
         check("14", "create_relation + blocked_by (duplicate-tolerant)",
               ok14, note14)
 
+    # ── 15 project full-mode activity mirror (project-fidelity fix) ──────
+    # Gated on projects_supported AND a discoverable project (the port
+    # cannot create projects — the seed fixture provides one on the Linear
+    # sandbox lane; skip cleanly otherwise). Posts a sentinel-free update
+    # via post_feed and asserts full mode mirrors it byte-for-byte.
+    if caps.projects_supported:
+        proj15 = next((m for m in await pmo.list_all(team)
+                       if m.pmo_kind == "project"), None)
+        if proj15 is None:
+            print("  test 15  (skipped — no project in the team snapshot)")
+        else:
+            ok15, note15 = True, ""
+            try:
+                ref15 = MissionRef(proj15.pmo_id, "project")
+                marker = "contract battery update `devcake-contract:15`"
+                await pmo.post_feed(ref15, marker)
+                shallow = await pmo.get_activity(ref15)
+                full15 = await pmo.get_activity(ref15, full=True)
+                ok15 = (shallow.entries == []            # shallow stays cheap
+                        and any(marker in e.body for e in full15.entries))
+                note15 = (f"entries={len(full15.entries)} "
+                          f"docs={len(full15.documents)}") if ok15 else \
+                    "posted update did not round-trip into full entries"
+            except Exception as e:
+                ok15, note15 = False, str(e)[:160]
+            check("15", "project full-mode mirrors the native feed",
+                  ok15, note15)
+
     width = max(len(n) for _, n, _ in results)
     failures = 0
     for num, name, res in results:

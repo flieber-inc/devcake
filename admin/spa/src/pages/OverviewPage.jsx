@@ -211,7 +211,7 @@ function SetupChecklist({ health, dismissedKeys = [], onDismissInternalForge }) 
         ? "(using internal forge)"
         : null;
   const steps = [
-    { ok: checks.pmoOk, text: "Connect a PMO and store its API key", href: "#/config/pmo", go: "Configuration" },
+    { ok: checks.pmoOk, text: "Connect a PMO and store its API key", href: "#/pmo", go: "PMO" },
     {
       ok: repoStepOk,
       text: "Add a repository and store its Access token — or use the internal forge",

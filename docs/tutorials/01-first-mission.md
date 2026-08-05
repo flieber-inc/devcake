@@ -53,23 +53,25 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 
 ### Step 1b — Secrets and connections
 
-1. **Configuration → PMO** — Add PMO instance → team key → **Set** Linear API key → Test.
-2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token (and optional RO / reviewer) → Test. Repos are **not** under Configuration.
+1. **PMO** (`#/pmo`, under Adapters) — Add PMO instance → team key → **Set** Linear API key → Test.
+2. **Repositories** (`#/repos`) — Add repository → URL → **Set** write token;
+   prefer **RO** for non-EXECUTE and a **reviewer** token (app-only, different
+   account) for formal forge approval → Test. Repositories and PMO both live
+   under the sidebar's **Adapters** group.
 3. **Configuration → Dev Types** — Assign harness secrets / OAuth.
-4. On **Repositories**, leave **`auto_merge` OFF** for this tutorial.
-5. Prefer different Dev Types for EXECUTE vs REVIEW (warned if shared).
+4. On **Repositories**, leave each card's **`auto_merge` OFF** for this tutorial.
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
-## Step 2 — Meet the six pages
+## Step 2 — Meet the seven pages
 
 - **Overview** — masthead answer sentence, Let's get baking checklist, alerts, Needs Human Action, stats, In the oven, recent runs, quick links. Service health = **sidebar** dots.
-- **Missions** — kanban board of the poll snapshot; **Poll now**; card MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
+- **Missions** — pipeline strip (stage counts) + grouped mission list of the poll snapshot; **Poll now**; row MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.
 - **Runs** — live table; click a row for the terminal; open Dagu for the executor; rare actions (stop/clear) live in the ⋯ MoreMenu.
-- **Repositories** — external forge repos + bundled internal Gitea operator repos + merge posture toggles (not under Configuration).
-- **Configuration** — sections: PMO, Dev Types, Skills, Assignments, Prompts, Profiles & Export, Limits, Traffic.
-  Secrets are VALUES here (never echoed back). Connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
-- **Logs** — **Open OpenObserve ↗**. One Dev run = one trace.
+- **Adapters** — sidebar group with two pages: **Repositories** (external forge repos + bundled internal Gitea operator repos + merge posture toggles) and **PMO** (instances + adoption mode). Both edit the same shared config draft; connection tests hit `/connections/pmo/{name}/test` and `/connections/forge/{name}/test`.
+- **Configuration** — sections: Dev Types, Mission Types, Skills, Prompts, Limits & Traffic, Profiles & Export.
+  Secrets are VALUES here (never echoed back).
+- **Consoles** — the external UIs: OpenObserve (traces/costs), Dagu (execution history), Gitea (internal forge, when enabled). One Dev run = one trace.
 
 ## Step 3 — Log Grok in (one time)
 
@@ -84,8 +86,7 @@ On Configuration → Dev Types, **implementer** → **Connect via OAuth…** —
 | **Branch protection** on default branch (forge UI: require PR + ≥1 approval; Dev account cannot bypass) | Primary containment — forge enforces merges, not `auto_merge` (`14` zone C, `13` §8a) |
 | `auto_merge` still **off** | App will not merge; you merge; Done only after a real merge |
 | Write token set; **RO** forge token set (recommended) | EXECUTE pushes/opens PR; non-EXECUTE should not hold write |
-| **Reviewer** token from a different account (optional) | App-only formal forge approval — never given to a Dev; useful if you later enable auto-merge under protection |
-| EXECUTE ≠ REVIEW Dev Type (recommended) | Independent second look (judgment only — not forge approval) |
+| **Reviewer** token from a different account (recommended for formal forge approval) | App-only — never given to a Dev; second identity under branch protection / later auto-merge |
 | Health `security_warnings` read, not dismissed unread | Advisory posture (`14` §8) |
 
 Mental model: EXECUTE opens the PR → REVIEW Dev judges → app may formally

@@ -65,10 +65,14 @@ Configuration renders **one section per view**, routed as `#/config/<section>`
 dispatcher: it owns the page header, the page-level error line (`pageErr`,
 passed as `setPageErr` to sections that report async failures), the mobile
 section chip row, and the scroll-to-top on section change — then switches on
-the route to exactly ONE section component. Every section is a component in
-`src/components/`: `PmoSection`, `DevTypesSection`, `SkillsSection`,
-`AssignmentsSection`, `PromptsSection`, `ProfilesSection`, `LimitsSection`,
-`TrafficSection`. Most sections pull the shared draft themselves via
+the route to exactly ONE section view (sections, in order: `dev-types`,
+`mission-types`, `skills`, `prompts`, `limits`, `profiles`; the `limits` view
+renders `LimitsSection` + `TrafficSection` — the merged Limits & Traffic
+view). Every section is a component in `src/components/`: `DevTypesSection`,
+`SkillsSection`, `AssignmentsSection`, `PromptsSection`, `ProfilesSection`,
+`LimitsSection`, `TrafficSection`. `PmoSection` renders on its own page
+(`#/pmo`, Adapters item) — same shared draft, not a Config section. Most
+sections pull the shared draft themselves via
 `useSharedDraft()` (ConfigDraftContext); `PromptsSection` is the exception —
 it takes `cfg`/`setField`/`devTypeNames` as props from the dispatcher. Either
 wiring is acceptable, but new sections use `useSharedDraft()`. A section
@@ -98,24 +102,60 @@ Do not build a new one-off field layout when SettingRow fits. Complex entities
 (PMO instances, repos) stay as cards; grids of per-type values (Assignments)
 stay as tables.
 
-### Roster grid (Dev Types)
+### Roster table (Dev Types)
 
-Dev Types render as a **roster grid** (decided 2026-07-27, Buzz-style): compact
-tiles — monogram avatar in the accent tint (no emoji/illustrations), a
-credential-readiness dot (green = ready, amber = none), name in mono,
-`harness · model` line — plus a dashed "New Dev Type" tile closing the grid.
-The dashed tile is the ONLY create affordance — no twin button in the section
-header (the header keeps the immediacy badge and the ⋯; Clear secrets stays in
-the ⋯ even as its lone item, because §3.4 bars destructive header buttons).
-The whole tile opens the **editor modal**; Rename/Delete stay behind the
-tile's ⋯. The modal edits the shared draft (footer states "applied by the
-page-level Save" — no per-modal save button, ever); OAuth / uploads / secret
-values stay in their `InstantZone`s inside it. The editor's first view is
-harness, model and skills only (Buzz-style); credentials, concurrency and
-per-type plumbing (MCP setup, secret env) live behind a single `Advanced…`
-disclosure (labeled just "Advanced"). Credential readiness is never hidden
-by the fold — the header subtitle carries it (green ready / amber missing).
-Use this idiom only for identity-like rosters; settings stay SettingRows.
+Dev Types render as a **roster table** (re-decided 2026-08-02, founder-directed
+— the 2026-07-27 tile grid didn't survive bulk scale: a 12-Dev-Type stress
+test made oversized cards the problem; a table is as elegant at 3 rows as at
+20). The tile grid's invariants carry over unchanged: each row leads with the
+small monogram avatar (no emoji/illustrations) wearing the
+credential-readiness dot (green = ready, amber = none — readiness is NEVER
+hidden), name in mono, then harness / model / max-concurrency
+(`tabular-nums`) / skills-count columns and a **status** cell that is always
+informative: credential readiness in words (green "ready" / amber
+"no credentials" — the avatar dot's meaning, spelled out) plus an amber
+"· unsaved changes" badge appended while the row has draft edits (founder
+follow-up 2026-08-02: the earlier reserved-but-invisible badge slot looked
+like an empty, broken column).
+A dashed full-width "New Dev Type" row closes the table and is the ONLY
+create affordance — no twin button in the section header (the header keeps
+the immediacy badge and the ⋯; Clear secrets stays in the ⋯ even as its lone
+item, because §3.4 bars destructive header buttons). The whole row opens the
+**editor modal**; Rename/Delete stay behind the row's ⋯. The modal edits the
+shared draft (footer states "applied by the page-level Save" — no per-modal
+save button, ever); OAuth / uploads / secret values stay in their
+`InstantZone`s inside it. The editor's first view is harness, model and
+skills only (Buzz-style); credentials, concurrency and per-type plumbing
+(MCP setup, secret env) live behind a single `Advanced…` disclosure (labeled
+just "Advanced"). Credential readiness is never hidden by the fold — the
+header subtitle carries it (green ready / amber missing). Roster rows batch
+their readiness probes by harness template (one fetch per template, not per
+row). Use this idiom only for identity-like rosters; settings stay
+SettingRows.
+
+### Mission list (Missions page)
+
+Missions render as a **pipeline strip + grouped list** (re-decided 2026-08-02,
+founder-directed — the kanban board didn't survive contact with the product's
+own success: working stages drain in minutes-to-hours *by design* while Done
+accumulates, so the steady state was six columns rendering "empty" (~86% of
+the board's width) around one overflowing Done whose ~160px-tall cards showed
+4 of 30 missions with titles clipped to ~4 words). The strip — a sticky row
+of seven stage chips with live counts, populated ones jump buttons, Needs
+human amber when non-zero — is the ONLY place empty stages appear; it carries
+the whole "shape of the pipeline" signal the columns used to spend the full
+viewport on. Sections exist per non-empty stage (Needs human pinned first —
+it answers "what needs me" — Done last) and each mission is ONE dense row:
+glyph slot (reserved even when empty so keys align), mono key, full-width
+truncating title, needs-human badge, deviating reason, repo, priority DOT
+(tooltip — labelled chips repeat "medium" fleet-wide and carry no scan
+value), age, ↗, ⋯. A reason all rows of a section share is hoisted into its
+header. Done previews its 10 newest behind "Show all N". Invariants carried
+over from the board: row click opens the drawer, context actions stay behind
+the ⋯, the PMO is the source of truth. The list owes rendering at ANY
+viewport width with no horizontal scroll — retiring the board also deleted
+the sidebar's Missions force-collapse exception, and nothing may reintroduce
+per-page sidebar behavior.
 
 ### Tables
 
@@ -242,10 +282,15 @@ A UI change is done when you have personally seen:
 3. `npm --prefix admin/spa run check:ui` green — the committed behavioral
    suite (`admin/spa/tests/`: settings model, action hierarchy, redesign
    invariants; it boots vite itself and needs the live backend on :8080).
-   It never confirms a Save and cancels every destructive dialog, so it is
-   safe against live config. New interactions get assertions added here
-   (menu opens, dialog reached, draft counts edits), not just screenshots.
-   Local-only for now — CI has no live stack to run it against.
+   It cancels every destructive dialog, and every suite except one never
+   confirms a Save — the honest exception is `pmo_intake.mjs`, which
+   REALLY saves (a poll-interval tweak plus intake flips, restoring both
+   to as-found) to prove the save-revert regression; run it against
+   stacks whose config you own. New interactions get
+   real predicates added here (`checked(name, fn)` — never `check(name,
+   true)` after a bare wait), not just screenshots. Local-only for now —
+   CI has no live stack to run it against; the pure-node helper suites
+   (markdown/format) ride every run and need nothing live.
 4. For prod: `docker buildx bake admin && docker compose up -d admin` + load.
 
 Name anything left unproven (OAuth wizard, real save-PUT, etc.) instead of

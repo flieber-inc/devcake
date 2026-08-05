@@ -5,6 +5,7 @@ import MoreMenu from "./MoreMenu.jsx";
 import StageGlyph from "./StageGlyph.jsx";
 import StatusPill from "./StatusPill.jsx";
 import RunTerminal from "./RunTerminal.jsx";
+import DependencyPanel from "./DependencyPanel.jsx";
 import { Overlay, ConfirmDialog } from "./Modal.jsx";
 import { Textarea } from "./Field.jsx";
 import { get, send } from "../api.js";
@@ -25,7 +26,8 @@ const STOP_COPY = {
 // a Devin-style session: label chips, action row, live run history, per-run
 // terminal (opens on top of the drawer — its overlay stacks OK; focus
 // restores on close via the Overlay component's restore logic).
-export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
+export default function MissionDrawer({ mission, multiPmo, syncing, rows, adoptionMode,
+                                        cycles, onOpenMission, onClose, onAction }) {
   const [runs, setRuns] = useState({ runs: [] });
   const [openRun, setOpenRun] = useState(null);
   const [comment, setComment] = useState("");
@@ -67,7 +69,7 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
       });
       setComment("");
       setFlash(
-        "Guidance sent — it appears in Linear as a human comment, and the next poll will pick it up as steering."
+        "Guidance sent — it appears on your PMO as a human comment, and the next poll will pick it up as steering."
       );
       setTimeout(() => setFlash(""), 5000);
     } catch (e) {
@@ -111,7 +113,17 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
           <div className="min-w-0 grow">
             <div className="mb-1 flex items-center gap-2">
               {mission.mission_type && <StageGlyph stage={mission.mission_type} />}
-              <span className="font-mono text-xs text-neutral-500 dark:text-neutral-400">
+              <span
+                className="font-mono text-xs text-neutral-500 dark:text-neutral-400"
+                title={multiPmo
+                  ? `PMO instance ${mission.instance} · team ${mission.team}`
+                  : undefined}
+              >
+                {multiPmo && (
+                  <span className="text-neutral-400 dark:text-neutral-500">
+                    {mission.instance}·
+                  </span>
+                )}
                 {mission.key}
               </span>
               {syncing && (
@@ -133,7 +145,7 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
                   rel="noopener"
                   className="inline-flex items-center gap-1 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
                 >
-                  Open in Linear <ExternalLink size={11} aria-hidden />
+                  Open in PMO <ExternalLink size={11} aria-hidden />
                 </a>
               )}
               <button
@@ -173,8 +185,20 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
 
         {/* Scrollable body */}
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          {/* Dependency chain first: it renders only when edges exist, so
+              the common mission keeps Send guidance on top — and when it
+              does render, it is the context the header's "blocked by …"
+              reason line points at (context before action). */}
+          <DependencyPanel
+            mission={mission}
+            rows={rows}
+            adoptionMode={adoptionMode}
+            cycles={cycles}
+            multiPmo={multiPmo}
+            onOpenMission={onOpenMission}
+          />
           {flash && (
-            <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/60 dark:text-blue-200">
+            <p className="rounded-md border border-accent-200 bg-accent-50 px-3 py-2 text-xs text-accent-800 dark:border-accent-900 dark:bg-accent-950/60 dark:text-accent-200">
               {flash}
             </p>
           )}
@@ -188,13 +212,13 @@ export default function MissionDrawer({ mission, syncing, onClose, onAction }) {
           <section>
             <h3 className="mb-1.5 text-sm font-semibold">Send guidance</h3>
             <p className="mb-2 text-xs text-neutral-500 dark:text-neutral-400">
-              This posts a human comment on the Linear issue. The next poll picks it up as
+              This posts a human comment on the PMO issue. The next poll picks it up as
               🧑 HUMAN context, and the attempt counter resets.
             </p>
             <Textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              placeholder="Type direction for the Dev — visible in Linear."
+              placeholder="Type direction for the Dev — visible on your PMO."
               rows={3}
               aria-label="Steering comment"
             />

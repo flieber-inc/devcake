@@ -203,6 +203,7 @@ def test_clear_all_threads_internal_forge(tmp_path: Path, monkeypatch):
     assert forge.deleted == ["activity-a-b"]
     assert out["ok"] is True
     assert "work repos (devcake-internal)" in out["preserved"]
+    assert "repo mirrors" in out["preserved"]      # ADR-0024: cache is config-keyed, not run state
 
     out2 = run_coro(clear_mod.clear_all(store, None, None,
                                         internal_forge=None))
@@ -385,10 +386,22 @@ def test_clear_all_drains_before_every_wipe(monkeypatch):
     monkeypatch.setattr(clear_mod, "clear_redis", fake_redis)
     monkeypatch.setattr(clear_mod, "clear_activity_repos", fake_activity)
 
+    class WS:
+        def wipe_all(self):
+            calls.append("workspaces")
+            return 2
+
+    class RM:
+        workspaces = WS()
+
     out = run_coro(clear_mod.clear_all(None, None, None,
-                                       run_manager=object()))
+                                       run_manager=RM()))
     assert calls[0] == "drain"
     assert calls.index("drain") < calls.index("redis")
+    # ADR-0025 Hook E: the workspace wipe happens after the drain and is
+    # reported in the response
+    assert calls.index("drain") < calls.index("workspaces")
+    assert out["workspaces_removed"] == 2
     assert out["ok"] is True and out["stopped"]["stopped"] == 1
 
 

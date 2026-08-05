@@ -14,9 +14,26 @@ Bake builds images; Compose runs the stack only (never builds `devcake/*`).
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,
-  `fluentbit`, `gitea` (internal fallback forge).
+  `fluentbit`, `gitea` (internal fallback forge). Long-lived services carry
+  `restart: unless-stopped` in compose — a compose fact, not an app knob
+  (there is deliberately no UI control for it).
 - Volumes: `devcake_data` (→ `app:/data` — **secrets + config + state**),
-  `dagu_data`, `redis_data`, `oo_data`, `gitea_data`.
+  `devcake_mirrors` (→ `app:/mirrors` rw + the Dev **provision** container
+  `:ro` — ADR-0024 source mirrors; DISPOSABLE cache, excluded from backups,
+  §8), `dagu_data`, `redis_data`, `oo_data`, `gitea_data`.
+- Host bind (NOT a named volume): `$DEVCAKE_WS_HOST` (→ `app:/workspaces` rw;
+  each run's `<run_id>` subdir binds into its two Dev containers, ADR-0025).
+  Host-absolute, derived + `mkdir`'d `0700` by `./up.sh` (default
+  `./workspaces`). Holds repo source + activity transcripts + agent output —
+  treat like `gitea_data` (`14` §1); DevCake-exclusive (the sweep/wipe touch
+  every run-id-shaped child) and excluded from backups (§8).
+- **Do NOT override `COMPOSE_PROJECT_NAME`** (AUD-020): the compose project is
+  fixed to `devcake` (`name: devcake`), which makes the mirror volume's real
+  name `devcake_mirrors` — the literal string `dev-run.yaml` mounts. A custom
+  project name would rename the volume (`<proj>_mirrors`) while the DAG still
+  mounts `devcake_mirrors`, so every provision step would fail to find the
+  mirrors. If a rename is ever required, `dev-run.yaml`'s volume name must
+  change in lockstep.
 - Networks:
   - **`devcake_control`:** `app`, `admin`, `dagu`, Redis, OpenObserve,
     fluent-bit, otel-collector, gitea.
@@ -42,11 +59,16 @@ services:
     env_file: .env                       # bootstrap secrets ONLY (schema v4)
     volumes:
       - devcake_data:/data               # NO docker.sock — kill/reconcile via Dagu API
+      - mirrors:/mirrors                 # ADR-0024 source mirrors (app = only writer)
+      - ${DEVCAKE_WS_HOST}:/workspaces   # ADR-0025 per-run workspace base (host bind)
+      - ./images/common:/srv/images/common:ro   # TEST FIXTURE ONLY — entrypoint-render
+                                         #   tests read the real Dev entrypoint tree;
+                                         #   the running app never imports from it
     networks: [control]
     # no host ports — reach API only via admin proxy
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.10.5   # PIN — see §4
+    image: ghcr.io/dagucloud/dagu:2.11.3   # PIN — see §4
     ports: [ "127.0.0.1:8525:8080" ]      # loopback only — docs/14
     environment:
       - DAGU_AUTH_MODE=basic
@@ -72,7 +94,7 @@ services:
     networks: [control, runtime]
 
   openobserve:
-    image: public.ecr.aws/zinclabs/openobserve:v0.91.1
+    image: public.ecr.aws/zinclabs/openobserve:v0.91.5
     ports: [ "127.0.0.1:5080:5080" ]
     networks: [control]                  # NOT on runtime
 
@@ -88,6 +110,9 @@ services:
       - ADMIN_USER=${ADMIN_USER}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
     networks: [control]
+    # nginx /api/ proxies with client_max_body_size 96m (ADR-0030: base64
+    # composer attachments + >1MB settings-bundle imports; nginx's 1MB
+    # default silently 413'd both — server-side caps stay authoritative)
 
   gitea:
     ports: [ "127.0.0.1:3300:3000" ]
@@ -127,6 +152,9 @@ ADMIN_PASSWORD=
 # Host docker group (auto by ./up.sh; or: stat -c %g /var/run/docker.sock)
 DOCKER_GID=
 
+# Per-run workspace base — HOST-ABSOLUTE (ADR-0025; auto by ./up.sh)
+DEVCAKE_WS_HOST=
+
 # Optional local sandbox only — never in production
 # DEVCAKE_ALLOW_INSECURE=1
 
@@ -139,10 +167,11 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 
 ## 4. Dagu configuration
 
-- **Version pinned** (`2.10.5` at spec time — everything in this section was **verified live against v2.10.5**, source + running server, and exercised end-to-end at M1). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
+- **Version pinned** (`2.11.3` since ADR-0024 — originally verified live against v2.10.5 end-to-end at M1; the 2.11.3 bump re-measured the volume probes and audited the release notes: the v2.11.0 CORS hardening does not apply — DevCake calls the API server-side and the SPA only LINKS to Dagu's own same-origin UI — and the v2.10.6 token-TTL cap is moot under basic auth. Container cpu/memory/pids limits still do not exist at 2.11.3, so the `14` §11 debt stands. 2.11's controller/LLM/human-task DAG features are deliberately NOT adopted: all business logic stays in the app, the DAG remains a dumb launcher). The project rebranded to `dagucloud/dagu` and releases fast; on upgrade, re-check this section against the new version.
 - **Auth (verified at M1):** v2.10.5 locks the API by default (401). We run `DAGU_AUTH_MODE=basic` with `DAGU_AUTH_BASIC_USERNAME/PASSWORD` (env names confirmed from the source's config loader); the app sends HTTP Basic on every call; `/api/v1/health` stays open for the compose healthcheck.
 - **docker.sock access (verified at M1):** the image's entrypoint always drops to uid 1000 via sudo, and its `DOCKER_GID` group setup is broken on the ubuntu base (alpine-only `addgroup`). Our `dagu/init/10-docker-group.sh` (mounted at `/etc/custom-init.d/`) creates the docker group with `groupadd`, so the daemon runs as `dagu:docker` — least privilege, no root daemon. Stock `/entrypoint.sh` only runs custom-init scripts that are `+x`, and the bind is `:ro`, so a non-executable host file is a silent skip → `sudo: unknown group #$DOCKER_GID` crash-loop. Compose therefore wraps the entrypoint and always invokes hooks via `sh` before handing off (does not depend on the host execute bit; git still tracks the script as `100755`).
-- **Step ids are `^[a-zA-Z][a-zA-Z0-9_]*$`** (verified) — underscores, not dashes: the DAG's step is `run_dev`.
+- **Step ids are `^[a-zA-Z][a-zA-Z0-9_]*$`** (verified) — underscores, not dashes: the DAG's steps are `provision` and `run_dev` (ADR-0025).
+- **Two dependent steps per run (ADR-0025):** `provision` mounts the mirrors RO + this run's workspace, clones, exits; `run_dev` `depends: [provision]` and mounts ONLY the workspace. `$DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace` binds each run's host dir — `$DEVCAKE_WS_HOST` comes from the **dagu service env** (compose) and resolves on the daemon host, so it must be host-absolute; `${params.RUN_ID}` interpolates in the source (probe-verified 2.11.3). A DAG-level `preconditions` guard pins `${params.RUN_ID}` to `re:^[A-Za-z0-9_-]{6,64}$` so a manual Dagu-UI run with default params cannot bind the whole base into a container (dry-run-verified).
 - **Auto-retry disabled (verified):** the DAG sets `retry_policy: {limit: 0}` — Dagu would otherwise auto-retry failed runs 3×, fighting DevCake's own attempt counting (`15-errors-and-retries.md` §2).
 - **UI:** served at root on host port 8525; the admin panel links to it with a button (no iframe, no base-path/proxy configuration — confirmed decision).
 - **v2 YAML is snake_case only** (`timeout_sec`, not `timeoutSec` — camelCase keys are rejected with a hint). The step-level `container:` field is the current preferred syntax; `action: docker.run` and the legacy `type: docker` shapes also parse but are not used here.
@@ -155,43 +184,51 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 - **The single `dev-run` DAG** (`dagu/dags/dev-run.yaml`) — all business logic stays in the app; the DAG is a dumb container launcher. This exact shape (container field, param interpolation into `name`/`env`, network attach, auto-removal, blocking on the entrypoint) was validated and executed on v2.10.5:
 
 ```yaml
-# dev-run: launch one Dev container. Only non-secret params; everything else via runspec.get.
+# dev-run: one run = two dependent Dev containers (ADR-0025). Only non-secret
+# params; everything else via runspec.get. $DEVCAKE_WS_HOST is dagu-service env.
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
 retry_policy:
   limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting
+preconditions:                  # fence manual runs: default/empty RUN_ID must not bind the base
+  - condition: "${params.RUN_ID}"
+    expected: "re:^[A-Za-z0-9_-]{6,64}$"
 
-params:
-  - name: RUN_ID
-    default: ""
-  - name: IMAGE
-    default: ""
-  - name: TRACEPARENT
-    default: ""
-  - name: REDIS_USER          # per-run ACL user dev-{run_id} (09 §1a); scoped + revoked at
-    default: ""
-  - name: REDIS_PASSWORD      #   finalization — visible only to Dagu-authenticated operators
-    default: ""
+params:                         # RUN_ID, IMAGE, TRACEPARENT, REDIS_USER, REDIS_PASSWORD
+  - {name: RUN_ID, default: ""}     #   (per-run ACL user dev-{run_id}, 09 §1a — the one
+  # …                               #    param-borne secret; revoked at finalization)
 
 steps:
-  - id: run_dev
+  - id: provision                    # ADR-0025 step 1: trusted code, no agent
+    container:
+      image: ${params.IMAGE}
+      name: prov-${params.RUN_ID}
+      network: devcake_runtime
+      startup: entrypoint            # entrypoint sees DEVCAKE_PHASE=provision
+      volumes:
+        - devcake_mirrors:/mirrors:ro                    # RO source mirrors (ADR-0024)
+        - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace   # this run's host-bind workspace
+      env:
+        DEVCAKE_PHASE: provision
+        DEVCAKE_RUN_ID: ${params.RUN_ID}
+        # … TRACEPARENT, REDIS_URL, REDIS_USER, REDIS_PASSWORD as before
+  - id: run_dev                      # ADR-0025 step 2: the agent
+    depends: [provision]
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}
-      network: devcake_runtime       # Redis + otel-collector + Gitea + outbound; NOT OO
-      pull_policy: missing
-      keep_container: false          # verified: force-removed on every exit path (incl. stop);
-                                     #   post-mortem lives in Dagu step logs + OpenObserve
-      startup: entrypoint            # run the image ENTRYPOINT; step blocks until exit (verified)
+      network: devcake_runtime
+      keep_container: false          # force-removed on every exit path; post-mortem in step logs + OO
+      startup: entrypoint            # entrypoint sees DEVCAKE_PHASE=harness
+      volumes:
+        - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace   # ONLY the workspace — no /mirrors
       env:
+        DEVCAKE_PHASE: harness
         DEVCAKE_RUN_ID: ${params.RUN_ID}
-        TRACEPARENT: ${params.TRACEPARENT}
-        REDIS_URL: redis://redis:6379/0
-        REDIS_USER: ${params.REDIS_USER}
-        REDIS_PASSWORD: ${params.REDIS_PASSWORD}
+        # … TRACEPARENT, REDIS_URL, REDIS_USER, REDIS_PASSWORD as before
 ```
 
-> Notes from the live verification: no `volumes:` are needed (credentials arrive via `runspec.get`, not bind mounts — and bind-mount sources would resolve on the *daemon host*, not inside the Dagu container). The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the 2.10.5 ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix (always invoked via `sh` by the compose entrypoint wrapper, so host `+x` is not required) creates the docker group so the daemon runs as `dagu:docker` (not root / not `user: "0:0"`). In the `container:` env map, host-process env does **not** resolve implicitly; anything beyond params would need DAG-level `secrets:`/`env:` — we deliberately need neither.
+> Notes from the live verification: no SECRET `volumes:` are needed (credentials arrive via `runspec.get`, never mounts). The two workspace-carrying mounts are ADR-0025: `devcake_mirrors:/mirrors:ro` (a NAMED volume by real docker name, because bind sources resolve on the *daemon host*) on the provision step ONLY, and `$DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace` (a host-bind, `$DEVCAKE_WS_HOST` from the dagu service env → host-absolute) on both steps; `volumes:` support, `:ro` enforcement, `${params.X}`+`$ENV` interpolation in a volume source, and two dependent container steps sharing a per-run bind while the second lacks the first's mounts were all measured on 2.11.3. The stock `ghcr.io/dagucloud/dagu` image ships **no docker CLI**, so a shell `docker run` fallback is not viable — irrelevant, since the native executor (Moby SDK over the mounted socket) is fully verified. The image's stock `DOCKER_GID` entrypoint is broken on the ubuntu image — our `dagu/init/10-docker-group.sh` custom-init fix (always invoked via `sh` by the compose entrypoint wrapper, so host `+x` is not required) creates the docker group so the daemon runs as `dagu:docker` (not root). In the `container:` env map, host-process env does **not** resolve implicitly in the ENV values, but it DOES expand in a `volumes:` SOURCE (that is how `$DEVCAKE_WS_HOST` reaches the bind); per-step literal `DEVCAKE_PHASE` needs no expansion.
 
 ## 5. Two-level containers and networking
 
@@ -209,9 +246,10 @@ The DAG's `network: devcake_runtime` key attaches Devs at spawn (verified via
 - **no** Docker-network route or DNS entry for `app`, `admin`, Dagu, or
   **OpenObserve**.
 
-Names: `dev-{run_id}` via the DAG's `name:` key, with the human-readable run id
-format of `02-domain-model.md` §7 — container names, traces, and Redis streams
-match.
+Names: each run is two containers — `prov-{run_id}` then `dev-{run_id}` via the
+DAG's `name:` keys (ADR-0025), with the human-readable run id format of
+`02-domain-model.md` §7 — the run id, traces, and Redis streams match (a
+`docker ps` shows both container names).
 
 ### 5a. Operator deploy rules (security)
 
@@ -219,7 +257,7 @@ match.
 2. Do not run on a shared multi-tenant Docker host.
 3. Treat `/data` volume backups as **secret dumps** — likewise `gitea_data` backups (repo content + Gitea's credential DB) and any settings-export bundle containing secrets or setup values (ADR-0013).
 4. Before first real EXECUTE: branch protection + team membership + checklist in `14` §9.
-5. Mount `./dagu/dags` **read-only** into Dagu (compose does: `:ro`).
+5. Mount `./dagu/dags` **read-only** into Dagu (compose does: `:ro`). The dev-run DAG's own `devcake_mirrors:/mirrors:ro` mount is likewise non-negotiable — the `:ro` is the mirror-poisoning defense (ADR-0024).
 
 ## 6. Image build matrix (Bake only — `docker-bake.hcl`)
 
@@ -279,29 +317,33 @@ branch looks unprotected and does not hard-block dispatch (`14` §8).
 
 Why it is mandatory for production-ish use: Dev containers hold a write-capable
 forge token, and token scoping cannot separate “push a feature branch” from
-“merge to the default branch” (both are often `contents: write`). **`auto_merge`
-off only stops the app from merging** — it does not change what the Dev token
-can do (`14` §2 zone C). Full actor/token walkthrough: `14` §2 and the README
-“How forge merges are controlled.”
+“merge to the default branch” (both are often `contents: write`). **Per-repo
+`auto_merge` off only stops the app from merging that repo** — it does not
+change what the Dev token can do (`14` §2 zone C). Full actor/token
+walkthrough: `14` §2 and the README “How forge merges are controlled.”
 
 Recommended operator setup:
 
 1. **Protect `default_branch`** on every work repo.
 2. **Write token** for EXECUTE (push + open PR); app reuses it for merge if
-   `auto_merge` is later enabled.
+   that repo's `auto_merge` is later enabled (Repos page, per card — ADR-0020).
 3. **RO token** for non-EXECUTE (recommended).
-4. **Reviewer token** from a **different** account (app-only): formal approval
-   so “require ≥1 approval” can pass without self-approval.
-5. Leave **`auto_merge` off** until you want the app to squash-merge after REVIEW.
+4. **Reviewer token** from a **different** account (**recommended**, app-only):
+   formal approval so “require ≥1 approval” can pass without self-approval.
+   Not the same as which Dev Type runs the REVIEW stage.
+5. Leave each repo's **`auto_merge` off** until you want the app to
+   squash-merge that repo after REVIEW.
 
-- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so `auto_merge` can still work if you enable it.
+- **GitHub:** ruleset or classic protection — *require a pull request before merging* + *require ≥1 approval*; do not grant the Dev write account a bypass. With a reviewer token configured, the **app** (not the REVIEW Dev) files a formal approval so per-repo `auto_merge` can still work if you enable it.
 - **GitLab:** protect that branch (no direct pushes) and require ≥1 MR approval.
 
 Forge connection test and `/health` surface protection state; amber warning when unprotected.
 - **Upgrade:** `docker compose pull` (third-party images only) → `docker buildx bake all` → `docker compose up -d`. State survives (volumes). There is **no auto-migration**: pre-v2 state (a v1 `config.yaml`, v1 run records) is refused or quarantined with instructions (`10-persistence.md` §§2, 3, 5) — the v1→v2 migrators were removed at v0 crystallization.
 - **Upgrade — app and Dev images deploy in LOCKSTEP ("just rebuild it all"):** every deploy that touches `images/*` (and, to be safe, every upgrade) must run `docker buildx bake all`. There are **no cross-version compat shims** (founder decision): a new app with old images — or the reverse — fails loudly (missing descriptor vars crash the clone bootstrap; protocol shape changes reject old senders' output). The dev-run DAG uses `pull_policy: missing`, so stale locally-tagged `devcake/dev-*:latest` images keep running silently unless rebaked.
+- **Deploy ordering under ADR-0025 — the DAG, compose, and env deploy lockstep.** `./dagu/dags` is a LIVE `:ro` bind-mount and Dagu re-reads the YAML per dispatch, so a new `dev-run.yaml` goes live at `git pull`, before `./up.sh`. In that window the old dagu container has no `DEVCAKE_WS_HOST` (the new bind source would expand empty → a root-owned junk dir at the host root), and images that predate the deploy mishandle `DEVCAKE_PHASE` (a post-ADR-0025 image without a phase exits 20 loudly — there is no single-container fallback). The deploy ritual closes the window: **`docker compose stop dagu` → `git pull` → `./up.sh --bake`**. `./up.sh --bake` now enforces the sharp edges itself (AUD-003/004): it stops dagu before the multi-minute bake (so a running dagu can't see the new DAG without the new env), resolves `DEVCAKE_TAG` once (shell env > `.env` > `latest`) and exports it for BOTH the bake and `compose up` so images and the running stack never desync, and upserts + `mkdir 0700`s `DEVCAKE_WS_HOST`. `up -d` force-recreates dagu with the new env. The explicit `stop dagu` before `git pull` is still recommended to close the brief pull→up window. In-flight DAG-runs are orphaned by the dagu recreate and reconcile-adopted at the next app boot.
 - **Kill a stuck Dev:** admin → Runs page → open Dagu and stop the run (or `POST /api/v1/dag-runs/dev-run/<run_id>/stop`). The watchdog would do it at timeout regardless; the Mission reschedules per INV-3.
-- **Logs:** admin → Logs page (OpenObserve). One run = one trace ID (`12-observability.md` §2).
+- **Logs:** admin → Consoles page (OpenObserve). One run = one trace ID (`12-observability.md` §2).
 - **Data reset:** `docker compose down && docker volume rm devcake_devcake_data` — consequences per `10-persistence.md` §5 (Mission state is safe in the PMO).
-- **Backups (the full story):** back up the **`/data` volume** (settings + secrets + run state) AND the **`gitea_data` volume** (internal repos with history/PRs + skill store) — `scripts/backup_gitea.sh` / `scripts/restore_gitea.sh` handle the latter (restore refuses while gitea runs). Both backups are secret dumps. **Settings bundles** (Config → Profiles & Export) are the portable, selective layer on top: configs diffable-plaintext, secrets/setup values encrypted by default; import lands as a profile on the target. They do not replace volume backups (no run state, no repo content).
-- **Moving `.env` (setup values) between hosts:** export with "Setup values" checked → on the target, Import → "Download generated .env" → review the HOST-SPECIFIC lines (`DOCKER_GID`, `DEVCAKE_TAG`) → place at the repo root as `.env` → `docker compose up -d`. The app never writes the host's `.env` — exported values reflect the source stack at container start.
+- **Backups (the full story):** back up the **`/data` volume** (settings + secrets + run state) AND the **`gitea_data` volume** (internal repos with history/PRs + skill store) — `scripts/backup_data.sh` / `scripts/restore_data.sh` handle the former (2026-08: the primary target finally has its own pair; restore refuses while the app runs) and `scripts/backup_gitea.sh` / `scripts/restore_gitea.sh` the latter (restore refuses while gitea runs). Both backups are secret dumps. The `devcake_mirrors` volume (ADR-0024) and the `$DEVCAKE_WS_HOST` workspace tree (ADR-0025) are DISPOSABLE and **excluded** — the mirror re-warms, and workspaces are per-run scratch reclaimed at run end; both may hold repo source, so if you do snapshot the host treat it like a repo backup, but neither belongs in the settings/secrets backup set. **Settings bundles** (Config → Profiles & Export) are the portable, selective layer on top: configs diffable-plaintext, secrets/setup values encrypted by default; import lands as a profile on the target. They do not replace volume backups (no run state, no repo content).
+- **Redis posture (2026-08):** the service runs `--maxmemory 1gb --maxmemory-policy noeviction` (a flooding Dev gets write errors instead of OOMing the control plane; the app XDELs ingress entries after every handled batch, so legit load never nears the cap) and `--aclfile /data/users.acl` (per-run Dev users survive a redis-only restart; the app `ACL SAVE`s on every user create/delete). With an aclfile configured redis ignores `--requirepass` (measured — an empty aclfile left the instance password-less), so the compose entrypoint writes the `default` user INTO the aclfile from `.env` on every boot, preserving `dev-*` lines. **Rotating `REDIS_PASSWORD`** is therefore just: change `.env`, `docker compose up -d redis` (the app needs a restart too, to reconnect with the new value).
+- **Moving `.env` (setup values) between hosts:** export with "Setup values" checked → on the target, Import → "Download generated .env" → review the HOST-SPECIFIC lines (`DOCKER_GID`, `DEVCAKE_TAG`, `DEVCAKE_WS_HOST` — the last an absolute host path re-derived by `./up.sh`, so leave it for the script or set it to the target's checkout) → place at the repo root as `.env` → `./up.sh` (mkdirs the workspace base `0700`). If the invoking user is not uid 1000, `chown -R 1000:1000 $DEVCAKE_WS_HOST` so the app (uid 1000) can create run dirs — same precedent as the pre-Bake `/data` chown above. The app never writes the host's `.env` — exported values reflect the source stack at container start.

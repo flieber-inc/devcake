@@ -1,4 +1,4 @@
-"""Dispatch chokepoint tripwire (independent review residual G).
+"""Dispatch chokepoint tripwire.
 
 Every Dev ACL user create + executor.start MUST go through
 ``RunBootstrap.launch`` so clear-runs can serialize on ``dispatch_lock``.
@@ -97,3 +97,16 @@ def test_create_run_user_only_from_bootstrap_or_adapter():
         "create_run_user for Devs must go through RunBootstrap.launch "
         f"(or the redis adapter implementation): {offenders}"
     )
+
+
+def test_prod_wires_a_real_workspace_store():
+    """AUD-016: RunManager/RunBootstrap default to NullWorkspaceStore (a silent
+    no-op) so the existing suite stays untouched — therefore prod composition
+    MUST inject the real WorkspaceStore, or every dispatch would run onto an
+    unmanaged workspace with no pre-create, cleanup, or fail-closed gate.
+    Guard the wiring so dropping it fails CI rather than silently degrading.
+    ADR-0028: the composition root lives in api/services.py now."""
+    src = (ROOT / "api" / "services.py").read_text()
+    assert "WorkspaceStore(" in src, "prod must construct a real WorkspaceStore"
+    assert "workspaces=workspaces" in src, \
+        "RunManager must be wired with the real workspace store"

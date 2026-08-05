@@ -129,21 +129,36 @@ function secretShapeRe() {
 // three repo token fields look all-mandatory). `absentNote` overrides the
 // amber copy for required-ish fields with a more precise consequence.
 export function SecretField({ label, help, hint, refKey, checkKind = "conn",
-                              paste, locked, optional, absentNote }) {
+                              paste, locked, optional, absentNote, presence }) {
   // refKey: "scope:instance:field" for connections, or a var name for harness
   const [status, setStatus] = useState(null);      // {present, updated_at}
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
+  // `presence` (bulk-scale 2026-08-02): a page rendering MANY SecretFields
+  // (350 repo cards × 3 tokens) supplies one batched /secrets-check result
+  // instead of a per-field fetch storm. Optional — every other call site
+  // keeps the self-fetch. After a local PUT/DELETE the field re-fetches
+  // itself regardless (the batch is stale by then).
+  const [selfStatus, setSelfStatus] = useState(null);
   const refresh = () => {
     const q = checkKind === "harness"
       ? `harness=${encodeURIComponent(refKey)}`
       : `conn=${encodeURIComponent(refKey)}`;
     get(`/secrets-check?${q}`)
-      .then((r) => setStatus((r[checkKind] || {})[refKey] || { present: false }))
+      .then((r) => {
+        const s = (r[checkKind] || {})[refKey] || { present: false };
+        setStatus(s); setSelfStatus(s);
+      })
       .catch(() => setStatus(null));
   };
-  useEffect(refresh, [refKey]);
+  useEffect(() => {
+    if (presence !== undefined && selfStatus === null) {
+      setStatus(presence == null ? null : presence);
+      return;
+    }
+    if (presence === undefined) refresh();
+  }, [refKey, presence]);
   const submit = async () => {
     if (!draft) return;
     setBusy(true);

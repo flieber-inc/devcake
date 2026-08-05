@@ -11,6 +11,16 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+# Pre-schema-v3 run records carry no real instance ref: `pmo_ref` is "" or
+# the old "main" default, and such records always count as LOCAL (hiding
+# them would orphan pre-v3 blocker work). THE one definition (2026-08
+# cleanup — copies had drifted into router/ports and could diverge);
+# consumers: MissionManager._run_is_ours, the blocker locator's locality
+# set, FinalizerRouter's single-manager fallback, ports.forge.run_branch's
+# legacy branch naming. (dispatch's blocker-mount guard deliberately checks
+# only "main" — there it is a synthetic REPO name, not a pmo_ref.)
+LEGACY_PMO_REFS = frozenset({"", "main"})
+
 RunState = Literal[
     "dispatched", "running", "finalizing", "finished", "failed", "timed_out", "orphaned"
 ]
@@ -41,6 +51,12 @@ class Run(BaseModel):
     # [{repo_ref, mission_key}] — tokens are attached at runspec time.
     # Empty on legacy / MAPPER / no-blocker runs.
     blocker_work: list[dict[str, str]] = Field(default_factory=list)
+    # The mirror gate's needed_for set, snapshotted at dispatch (2026-08
+    # evaluation F12): which repos this run's extras serve via mirror_path is
+    # decided ONCE, when the gate proved them fresh — exactly like the
+    # primary's DEVCAKE_MIRROR_PATH in spec_env. Empty on legacy records
+    # (pre-field) → runspec falls back to the live derivation.
+    mirror_repos: list[str] = Field(default_factory=list)
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on
@@ -89,6 +105,10 @@ class Run(BaseModel):
     # verdict like "rejected: …" because _transition refused to act on the
     # outcome. None means an ordinary success.
     verdict: Optional[str] = None
+    # ADR-0022 — how many in-container continuations (nudge relaunches) the
+    # entrypoint used before this run ended, success or failure. 0 = the loop
+    # never fired, and every pre-ADR-0022 record reads as 0.
+    continuations_used: int = 0
     # Process-local wipe generation stamped at launch (docs/10): RunStore.clear
     # bumps wipe_generation then unlinks files; save() drops any run whose
     # store_gen is older so in-flight finalize/heartbeat cannot resurrect a

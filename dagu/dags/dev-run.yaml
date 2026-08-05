@@ -1,19 +1,44 @@
-# dev-run: launch one Dev container. Only non-secret params (+ the per-run scoped
-# Redis ACL credential, docs/09 §1a); everything else reaches the Dev via runspec.get.
-# Shape verified live on Dagu v2.10.5 — docs/13-deployment.md §4.
+# dev-run: one Dev run = two dependent containers (ADR-0025). Only non-secret
+# params (+ the per-run scoped Redis ACL credential, docs/09 §1a); everything
+# else reaches the Dev via runspec.get — the provision step gets a REDUCED
+# spec, the harness step the full one.
 #
-# Resource limits (ISSUES #20): Dagu 2.10.5 step `container:` schema does NOT
-# accept cpus/memory/pids_limit (additionalProperties: false — unknown keys fail
-# validation). DAG-level `resources.limits` is best-effort process cgroup for
-# the DAG run, not Docker HostConfig for the sibling Dev container. True
-# container cgroup limits need Dagu host-config support (v0.1). Primary throttle
-# remains app concurrency caps.
+#   provision  (prov-<run_id>): trusted entrypoint code, no agent — mounts the
+#              source mirrors RO + this run's workspace, clones everything,
+#              writes the marker, exits.
+#   run_dev    (dev-<run_id>):  the agent — mounts ONLY the per-run workspace.
+#              /mirrors does not exist in this container (probe-verified).
+#
+# $DEVCAKE_WS_HOST expands from the dagu SERVICE env (compose) and MUST be a
+# host-absolute path: bind sources resolve on the daemon host (docs/13 §4).
+# ${params.RUN_ID} interpolates inside volume sources (probe-verified 2.11.3).
+#
+# Resource limits (ISSUES #20): Dagu's step `container:` schema does NOT
+# accept cpus/memory/pids_limit (additionalProperties: false — unknown keys
+# fail validation). DAG-level `resources.limits` is best-effort process cgroup
+# for the DAG run, not Docker HostConfig for the sibling Dev containers. True
+# container cgroup limits need Dagu host-config support (v0.1). Primary
+# throttle remains app concurrency caps.
 
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
 retry_policy:
   limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting
                                 # (docs/15 §2; the default would retry failed runs 3x)
+
+# Fence manual Dagu-UI runs (ADR-0025 R11): a bare "Run" click with default
+# params would otherwise bind the WHOLE workspace base rw into a container.
+preconditions:
+  - condition: "${params.RUN_ID}"
+    expected: "re:^[A-Za-z0-9_-]{6,64}$"
+  # NO ${DEVCAKE_WS_HOST} precondition — attempted 2026-08-04 (AUD-003's
+  # missing half) and REVERTED the same hour: Dagu 2.11.3 expands service
+  # env in bind strings but NOT in precondition `condition:` fields, so the
+  # literal never matched and every dev-run sat `dispatched` until the
+  # startup grace killed it (measured live, SYS-HELLO-5). The empty/relative
+  # WS_HOST edge stays guarded by up.sh's absolute-path assert + the
+  # in-container sentinel (exit 20); the daemon-autocreate residue remains
+  # tracked debt (docs/14 §11).
 
 # Best-effort DAG-run resource budget (process cgroup where supported).
 resources:
@@ -34,7 +59,31 @@ params:
     default: ""
 
 steps:
+  - id: provision
+    container:
+      image: ${params.IMAGE}
+      name: prov-${params.RUN_ID}
+      network: devcake_runtime
+      pull_policy: missing
+      keep_container: false
+      startup: entrypoint
+      # ADR-0024: the app-maintained source mirrors, READ-ONLY (kernel-
+      # enforced). Real docker volume name on purpose: Dagu speaks the raw
+      # daemon API (network: precedent). ADR-0025: mounted in THIS step only
+      # — the agent never sees it.
+      volumes:
+        - devcake_mirrors:/mirrors:ro
+        - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace
+      env:
+        DEVCAKE_PHASE: provision
+        DEVCAKE_RUN_ID: ${params.RUN_ID}
+        TRACEPARENT: ${params.TRACEPARENT}
+        REDIS_URL: redis://redis:6379/0
+        REDIS_USER: ${params.REDIS_USER}
+        REDIS_PASSWORD: ${params.REDIS_PASSWORD}
+
   - id: run_dev
+    depends: [provision]
     container:
       image: ${params.IMAGE}
       name: dev-${params.RUN_ID}
@@ -42,7 +91,11 @@ steps:
       pull_policy: missing
       keep_container: false
       startup: entrypoint
+      # ONLY the per-run workspace — no mirrors line; that is the point.
+      volumes:
+        - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace
       env:
+        DEVCAKE_PHASE: harness
         DEVCAKE_RUN_ID: ${params.RUN_ID}
         TRACEPARENT: ${params.TRACEPARENT}
         REDIS_URL: redis://redis:6379/0

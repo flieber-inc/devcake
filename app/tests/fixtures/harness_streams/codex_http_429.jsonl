@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019f99fd-059a-7601-8b38-609826eb3e59"}
+{"type":"thread.started","thread_id":"019fcdc6-ac8a-7d32-b3e7-b9576eda5566"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"error","message":"exceeded retry limit, last status: 429 Too Many Requests"}

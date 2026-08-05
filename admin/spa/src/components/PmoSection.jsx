@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { get, send } from "../api.js";
 import { Section } from "./Card.jsx";
-import { Field, SecretField, Input } from "./Field.jsx";
+import { Field, Help, SecretField, Input } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Button from "./Button.jsx";
 import Toggle from "./Toggle.jsx";
@@ -30,6 +30,18 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   const [intakeOverride, setIntakeOverride] = useState({}); // name → bool optimistic
   const [intakeBusy, setIntakeBusy] = useState({});
   const [intakeErr, setIntakeErr] = useState({});
+  // 2026-08 reviewer round: collapsed summary rows + a name filter past 5
+  // instances — the ReposPage pattern (index-keyed expansion so a rename
+  // mid-edit never collapses the card being typed in; ≤3 start expanded)
+  const [pmoFilter, setPmoFilter] = useState("");
+  const [expandedPmos, setExpandedPmos] = useState(() => new Set(
+    (dr.draft?.cfg.pmos || []).length <= 3
+      ? (dr.draft?.cfg.pmos || []).map((_, i) => i) : []));
+  const togglePmoCard = (i) => setExpandedPmos((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
   // repos WITHOUT a stored Access (write) token cannot join a PMO's WORK
   // set (founder request 2026-07-15) — EXECUTE would fail at push; they
   // remain selectable as reference repos
@@ -38,11 +50,23 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
   useEffect(() => {
     const names = repoNamesKey ? repoNamesKey.split(",").filter(Boolean) : [];
     if (!names.length) { setRepoHasToken({}); return; }
-    const q = names.map((n) => `repo:${n}:token`).join(",");
-    get(`/secrets-check?conn=${encodeURIComponent(q)}`)
-      .then((r) => setRepoHasToken(Object.fromEntries(
-        names.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present]))))
-      .catch(() => setRepoHasToken({}));
+    // CHUNKED (bulk-scale 2026-08-02): one GET for 350 repos built a ~10KB
+    // request line, past nginx's 8KB limit. ≤40 names per request keeps
+    // URLs short, and a failed chunk marks only ITS repos unknown-truthy
+    // (previously any failure disabled EVERY work chip).
+    let live = true;
+    const chunks = [];
+    for (let i = 0; i < names.length; i += 40) chunks.push(names.slice(i, i + 40));
+    Promise.all(chunks.map((chunk) => {
+      const q = chunk.map((n) => `repo:${n}:token`).join(",");
+      return get(`/secrets-check?conn=${encodeURIComponent(q)}`)
+        .then((r) => Object.fromEntries(
+          chunk.map((n) => [n, !!r.conn[`repo:${n}:token`]?.present])))
+        .catch(() => Object.fromEntries(chunk.map((n) => [n, true])));
+    })).then((parts) => {
+      if (live) setRepoHasToken(Object.assign({}, ...parts));
+    });
+    return () => { live = false; };
   }, [repoNamesKey, secretsEpoch]);
   const [testResult, setTestResult] = useState({});
   // PMO cards added/renamed this session stay name-editable even when their
@@ -123,7 +147,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
     <>
       <Section id="pmo" title="PMO connections"
         description="The PMO teams DevCake watches, and how missions are adopted."
-        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (LINEAR-DEV-17).`}
+        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (MYTEAM-DEV-17).`}
         actions={
           <MoreMenu label="More PMO actions" items={[
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
@@ -134,8 +158,54 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
         {clearReloadErr && (
           <p className="text-sm text-red-600 dark:text-red-400">✗ {clearReloadErr}</p>
         )}
+        {cfg.pmos.length > 5 && (
+          <span className="relative block w-64">
+            <Input className="pr-7" value={pmoFilter}
+              placeholder={`Filter ${cfg.pmos.length} PMO instances…`}
+              aria-label="Filter PMO instances by name"
+              onChange={(e) => setPmoFilter(e.target.value)} />
+            {pmoFilter && (
+              <button type="button" aria-label="Clear PMO filter"
+                onClick={() => setPmoFilter("")}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-100">
+                ✕
+              </button>
+            )}
+          </span>
+        )}
         {cfg.pmos.map((inst, idx) => {
+          const fq = cfg.pmos.length > 5 ? pmoFilter.trim().toLowerCase() : "";
+          if (fq && !(inst.name || "").toLowerCase().includes(fq)) return null;
           const tr = testResult[`pmo:${inst.name}`];
+          if (!expandedPmos.has(idx)) {
+            return (
+              <button key={`${idx}-${secretsEpoch}`} type="button"
+                data-testid="pmo-summary-row"
+                aria-label={`Expand PMO instance ${inst.name}`}
+                onClick={() => togglePmoCard(idx)}
+                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-card border border-neutral-200 px-4 py-2.5 text-left transition hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-800 dark:hover:bg-neutral-900">
+                <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">{inst.system}</span>
+                {inst.managed && (
+                  <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                    Bundled board
+                  </span>
+                )}
+                {inst.team_key && (
+                  <span className="text-xs text-neutral-500 dark:text-neutral-400">{inst.team_key}</span>
+                )}
+                <span className="ml-auto flex shrink-0 items-center gap-3">
+                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">
+                    {(inst.repos || []).length} repo{(inst.repos || []).length === 1 ? "" : "s"}
+                  </span>
+                  {(health.pmo_instances || {})[inst.name]?.intake_paused && (
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400">intake paused</span>
+                  )}
+                  <span aria-hidden className="text-xs text-neutral-400">▸</span>
+                </span>
+              </button>
+            );
+          }
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
             || { needs_api_base: false, team_key_label: "Team key",
                  team_key_help: "", api_base_help: "" };
@@ -152,8 +222,26 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           return (
             <div key={`${idx}-${secretsEpoch}`} className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
-                {cfg.pmos.length > 1 && (
+                <span className="flex items-center gap-2">
+                  <button type="button"
+                    aria-label={`Collapse PMO instance ${inst.name}`}
+                    title="Collapse to a summary row"
+                    onClick={() => togglePmoCard(idx)}
+                    className="rounded text-xs text-neutral-400 hover:text-neutral-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-500 dark:hover:text-neutral-300">
+                    ▾
+                  </button>
+                  <span className="font-mono text-sm font-semibold">{inst.name || "(unnamed)"}</span>
+                  {inst.managed && (
+                    <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                      Bundled board
+                      <Help text="The auto-provisioned issues board on the bundled Gitea (ADR-0030). Its identity and API key are app-managed and self-healing — a config save that omits it puts it back. Intake, repositories, and staffing stay yours." />
+                    </span>
+                  )}
+                </span>
+                {/* the managed board is not removable while the bundled
+                    provisioner exists — the next boot would resurrect it and
+                    deleting would orphan its app-minted PAT (ADR-0030) */}
+                {cfg.pmos.length > 1 && !(inst.managed && health.internal_forge) && (
                   <Button kind="danger-ghost" onClick={() => {
                     const doRemove = () => {
                       newPmoNames.untrack(inst.name);
@@ -217,8 +305,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 <Field label="System"
                   help="PMO product this instance talks to. Driven by the adapter registry — adding an adapter does not require SPA edits.">
                   <select
-                    className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+                    className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-950"
                     value={inst.system || "linear"}
+                    disabled={!!inst.managed}
                     onChange={(e) => setField(`cfg.pmos.${idx}.system`, e.target.value)}
                     aria-label="PMO system"
                   >
@@ -229,21 +318,31 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 </Field>
                 <Field label={sysMeta.team_key_label || "Team key"}
                   help={sysMeta.team_key_help || ""}>
-                  <Input value={inst.team_key}
+                  <Input value={inst.team_key} disabled={!!inst.managed}
                   onChange={(e) => setField(`cfg.pmos.${idx}.team_key`, e.target.value)} /></Field>
                 {sysMeta.needs_api_base && (
                   <Field label="API base"
                     help={sysMeta.api_base_help || "Origin of the PMO API reachable from the app container."}>
-                    <Input value={inst.api_base || ""}
+                    <Input value={inst.api_base || ""} disabled={!!inst.managed}
                       placeholder="http://gitea:3000"
                       onChange={(e) => setField(`cfg.pmos.${idx}.api_base`,
                         e.target.value.trim() || null)} />
                   </Field>
                 )}
-                <SecretField label="API key"
-                  help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
-                  refKey={`pmo:${inst.name}:api_key`} paste
-                  locked={!pmoNameLocked(inst.name, idx)} />
+                {inst.managed ? (
+                  <Field label="API key">
+                    <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                      App-minted and self-healing — a revoked or lost key is
+                      re-minted at the next boot or config save. Nothing to
+                      paste here.
+                    </p>
+                  </Field>
+                ) : (
+                  <SecretField label="API key"
+                    help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
+                    refKey={`pmo:${inst.name}:api_key`} paste
+                    locked={!pmoNameLocked(inst.name, idx)} />
+                )}
                 <RepoChips label="Repositories"
                   help="The ORDERED set of repos this instance's missions may target — only repos with a stored Access token qualify (work needs push). Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
                   all={cfg.repos} selected={inst.repos || []}
@@ -253,12 +352,22 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                   unavailableNote="no Access token stored — usable only as a reference repo"
                   firstBadge=" · default"
                   onChange={(next) => setField(`cfg.pmos.${idx}.repos`, next)} />
+                {dr.errors[`cfg.pmos.${idx}.repos`] && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    ✗ {dr.errors[`cfg.pmos.${idx}.repos`]}
+                  </p>
+                )}
                 <RepoChips label="Reference repos"
                   help="Read-only consultation material (docs sources, style guides) cloned into EVERY stage's workspace alongside the mission's repository. Never a work target — markers naming one gate. Multiple supported."
                   all={cfg.repos} selected={inst.reference_repos || []}
                   excluded={inst.repos || []}
                   excludedNote="work repo"
                   onChange={(next) => setField(`cfg.pmos.${idx}.reference_repos`, next)} />
+                {dr.errors[`cfg.pmos.${idx}.reference_repos`] && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    ✗ {dr.errors[`cfg.pmos.${idx}.reference_repos`]}
+                  </p>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>
@@ -277,6 +386,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
         <Button kind="ghost" onClick={() => {
           const name = nextFreeName("linear", cfg.pmos, dr.server.cfg.pmos);
           newPmoNames.track(name);
+          setExpandedPmos((prev) => new Set(prev).add(cfg.pmos.length));
           const defaultSystem = (registry.pmo_systems || [])[0]?.id || "linear";
           setField("cfg.pmos", [...cfg.pmos,
             { name, system: defaultSystem,

@@ -1,6 +1,6 @@
-{"type":"thread.started","thread_id":"019f99fc-21c2-7621-8c9d-03fbe9f798d5"}
+{"type":"thread.started","thread_id":"019fcdc6-c0dc-70b2-af35-40c48a024258"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc stub","aggregated_output":"","exit_code":null,"status":"in_progress"}}
 {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc stub","aggregated_output":"/bin/bash: line 1: stub: command not found\n","exit_code":127,"status":"failed"}}
-{"type":"turn.completed","usage":{"input_tokens":240,"cached_input_tokens":0,"output_tokens":48,"reasoning_output_tokens":0}}
+{"type":"turn.completed","usage":{"input_tokens":240,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":48,"reasoning_output_tokens":0}}

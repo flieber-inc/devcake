@@ -20,6 +20,11 @@ cd "$(dirname "$0")/.."
 
 TAG="${DEVCAKE_TAG:-latest}"
 DOCKER_GID="${DOCKER_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)}"
+# ADR-0025: per-run workspace base — host-absolute (DAG bind sources resolve
+# on the daemon host). 0777 on purpose: the GHA runner user is uid 1001 but
+# the app container (which mkdirs run subdirs here) is uid 1000; CI runners
+# are ephemeral, so the prod 0700 posture does not apply.
+DEVCAKE_WS_HOST="${DEVCAKE_WS_HOST:-$(pwd)/workspaces}"
 
 # On GHA always write synthetic .env. Locally: only if CI_COMPOSE_WRITE_ENV=1
 # (never clobber a developer's real .env by default).
@@ -54,6 +59,7 @@ REDIS_PASSWORD=${REDIS_PASSWORD}
 ADMIN_USER=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 DOCKER_GID=${DOCKER_GID}
+DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST}
 DAGU_UI_URL=http://localhost:8525
 OO_UI_URL=http://localhost:5080
 EOF
@@ -67,10 +73,10 @@ else
   # load only what readiness curls need
   while IFS= read -r line; do
     case "$line" in
-      ADMIN_USER=*|ADMIN_PASSWORD=*|REDIS_PASSWORD=*|DAGU_USER=*|DAGU_PASSWORD=*|DEVCAKE_TAG=*)
+      ADMIN_USER=*|ADMIN_PASSWORD=*|REDIS_PASSWORD=*|DAGU_USER=*|DAGU_PASSWORD=*|DEVCAKE_TAG=*|DEVCAKE_WS_HOST=*)
         export "${line?}" ;;
     esac
-  done < <(grep -E '^(ADMIN_USER|ADMIN_PASSWORD|REDIS_PASSWORD|DAGU_USER|DAGU_PASSWORD|DEVCAKE_TAG)=' .env || true)
+  done < <(grep -E '^(ADMIN_USER|ADMIN_PASSWORD|REDIS_PASSWORD|DAGU_USER|DAGU_PASSWORD|DEVCAKE_TAG|DEVCAKE_WS_HOST)=' .env || true)
   set +a
   ADMIN_USER="${ADMIN_USER:-admin}"
   ADMIN_PASSWORD="${ADMIN_PASSWORD:?ADMIN_PASSWORD missing in .env}"
@@ -78,9 +84,28 @@ fi
 
 export DEVCAKE_TAG="$TAG"
 export ADMIN_USER ADMIN_PASSWORD REDIS_PASSWORD DAGU_USER DAGU_PASSWORD
+export DEVCAKE_WS_HOST
+
+# The dir must exist app-writable BEFORE compose up: dockerd auto-creates an
+# absent bind source ROOT-owned, and the app's boot writability probe would
+# then fail health forever (ADR-0025 R8). chmod only on the synthetic-env
+# (CI) path — a developer's real base keeps up.sh's 0700 posture.
+mkdir -p "$DEVCAKE_WS_HOST"
+if [[ "$WRITE_ENV" == "1" ]]; then
+  chmod 0777 "$DEVCAKE_WS_HOST"
+fi
 
 SERVICES=(fluentbit openobserve redis dagu otel-collector app admin)
 THIRD_PARTY=(fluentbit openobserve redis dagu otel-collector)
+
+# Opt-in Gitea (CI contract-battery lane, 2026-08 evaluation): the forge +
+# PMO batteries run inside the app container against the bundled instance —
+# zero external tokens — but need gitea up. Off by default to keep the
+# dispatch smoke minimal.
+if [[ "${CI_COMPOSE_WITH_GITEA:-0}" == "1" ]]; then
+  SERVICES+=(gitea)
+  THIRD_PARTY+=(gitea)
+fi
 
 # Resolve compose image refs once (digest-pinned in docker-compose.yml).
 # Prints "service<TAB>image" lines for the given service names.
@@ -172,6 +197,9 @@ wait_service redis healthy 40
 wait_service dagu healthy 40
 wait_service app healthy 60
 wait_service admin healthy 40
+if [[ "${CI_COMPOSE_WITH_GITEA:-0}" == "1" ]]; then
+  wait_service gitea healthy 60
+fi
 
 echo "── wait for authenticated control plane via admin :8080"
 BASE_URL="${DEVCAKE_BASE_URL:-http://127.0.0.1:8080}"

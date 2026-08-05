@@ -45,7 +45,7 @@ proving a fresh machine works is the
 Rotation is four different motions depending on the secret:
 
 1. **PMO tokens** — mint the new token at the provider, paste it into the
-   **Configuration → PMO** secret field, **Save**, then run the named
+   **PMO** page's secret field (`#/pmo`), **Save**, then run the named
    connection test. **Forge tokens** — same motion on **Repositories**
    (`#/repos`). The write path hot-reloads adapters ([`11`](11-admin-panel.md)).
 2. **Model / harness credentials** — upload via the Dev Type card under
@@ -75,8 +75,10 @@ The app warns; **you** gate (`14` §8):
   **Dev** from merging; `auto_merge` does not. Token scopes usually cannot
   separate push-branch from merge — see [`14`](14-security.md) §2.
 - **Forge token split** — write for EXECUTE (and app merge when enabled); RO
-  for non-EXECUTE (recommended); reviewer token **app-only** for formal PR
-  approval. The REVIEW Dev judges; it never receives the reviewer token
+  for non-EXECUTE (recommended); **reviewer token** (recommended for formal
+  PR approval under branch protection) **app-only** — never given to a Dev.
+  The REVIEW stage always runs; the Dev that staffs it only judges
+  (`result.json`) and never receives the reviewer token
   ([`06`](06-forge-adapter.md) §4).
 - **Team membership** — every ticket writer steers agents that hold your
   credentials (`14` §0).
@@ -84,8 +86,9 @@ The app warns; **you** gate (`14` §8):
   turning it on is a judgment call the app will never make for you. Off is
   **not** a guarantee that no agent can merge — Devs still hold write tokens
   and forge CLIs (`14` §2 zone C).
-- **REVIEW separation** — a different Dev Type for REVIEW than EXECUTE is
-  recommended configuration; the app warns when shared, nothing more.
+- **Dev Type staffing for REVIEW** — optional performance choice (different
+  skills / identifying prompt than EXECUTE). Not a security control; the
+  security-relevant second identity is the **reviewer token**.
 
 ## 6. Ownership map
 

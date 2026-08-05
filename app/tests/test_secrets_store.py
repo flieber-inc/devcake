@@ -71,7 +71,19 @@ def test_harness_delete_unlinks(monkeypatch, tmp_path):
 
 def _main(monkeypatch, tmp_path):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from types import SimpleNamespace
+
     from devcake.api import main as app_main
+    from devcake.config import AppConfig
+    from fakes import make_services
+
+    # ADR-0028: install a test graph — routes resolve svc() at call time.
+    # Unwired slots explode with their name; these are the ones the
+    # secrets/connections routes actually reach.
+    monkeypatch.setattr(app_main, "services", make_services(
+        config=AppConfig(), dev_types={}, shared_breakers={},
+        forge_runtime=SimpleNamespace(breakers={}),
+        reload_connections=lambda: None))
     return app_main
 
 
@@ -95,12 +107,9 @@ def test_public_config_response_never_echoes_stored_secrets(monkeypatch,
     s.write_harness_secret("ANTHROPIC_API_KEY", harness_secret)
     planted = {pmo_secret, *repo_secrets.values(), harness_secret}
 
-    monkeypatch.setattr(
-        app_main, "config",
-        AppConfig(
-            pmos=[PMOInstance(name="linear", team_key="DEV")],
-            repos=[RepoInstance(name="main", url="https://example.test/o/r")],
-        ),
+    app_main.services.config = AppConfig(
+        pmos=[PMOInstance(name="linear", team_key="DEV")],
+        repos=[RepoInstance(name="main", url="https://example.test/o/r")],
     )
     probe = FastAPI()
     probe.add_api_route("/api/v1/config", app_main.get_config, methods=["GET"])
@@ -288,7 +297,7 @@ def test_secrets_clear_deletes_selected_only(monkeypatch, tmp_path):
     assert (d / "other.json").exists()
     # omit pause_intake → API default false; intake unchanged
     assert out["intake_paused"] is False
-    assert app_main.config.intake_paused is False
+    assert app_main.services.config.intake_paused is False
 
 
 def test_secrets_clear_rejects_traversal_and_empty(monkeypatch, tmp_path):
@@ -320,14 +329,14 @@ def test_secrets_clear_pause_intake_default_and_explicit(monkeypatch, tmp_path):
     app_main = _main(monkeypatch, tmp_path)
     s = _store(monkeypatch, tmp_path)
     s.write_harness_secret("XAI_API_KEY", "v-pause-test")
-    app_main.config.intake_paused = False
+    app_main.services.config.intake_paused = False
 
     out = run_coro(app_main.clear_secrets({
         "harness": ["XAI_API_KEY"],
         "pause_intake": False,
     }))
     assert out["intake_paused"] is False
-    assert app_main.config.intake_paused is False
+    assert app_main.services.config.intake_paused is False
 
     s.write_harness_secret("XAI_API_KEY", "v-pause-test-2")
     out = run_coro(app_main.clear_secrets({
@@ -335,7 +344,7 @@ def test_secrets_clear_pause_intake_default_and_explicit(monkeypatch, tmp_path):
         "pause_intake": True,
     }))
     assert out["intake_paused"] is True
-    assert app_main.config.intake_paused is True
+    assert app_main.services.config.intake_paused is True
 
 
 def test_secrets_clear_pause_first_aborts_deletes_on_save_failure(
@@ -344,7 +353,7 @@ def test_secrets_clear_pause_first_aborts_deletes_on_save_failure(
     app_main = _main(monkeypatch, tmp_path)
     s = _store(monkeypatch, tmp_path)
     s.write_harness_secret("XAI_API_KEY", "must-survive")
-    app_main.config.intake_paused = False
+    app_main.services.config.intake_paused = False
 
     def boom(_cfg):
         raise OSError("disk full")
@@ -356,7 +365,7 @@ def test_secrets_clear_pause_first_aborts_deletes_on_save_failure(
             "pause_intake": True,
         }))
     assert s.harness_status("XAI_API_KEY")["present"] is True
-    assert app_main.config.intake_paused is True  # in-memory set before save
+    assert app_main.services.config.intake_paused is True  # in-memory set before save
 
 
 def test_secrets_clear_clears_breakers_and_audits(monkeypatch, tmp_path):
@@ -373,17 +382,17 @@ def test_secrets_clear_clears_breakers_and_audits(monkeypatch, tmp_path):
     d.mkdir(parents=True)
     (d / "auth.json").write_text("file-sentinel")
 
-    app_main.dev_types = {
+    app_main.services.dev_types = {
         "coder": DevType(name="coder", harness_template=ht),
     }
-    app_main.shared_breakers["coder"] = "DEV_AUTH"
+    app_main.services.shared_breakers["coder"] = "DEV_AUTH"
 
     out = run_coro(app_main.clear_secrets({
         "harness": [var],
         "credential_files": [{"dev_type": "coder", "filename": "auth.json"}],
     }))
     assert out["ok"] is True
-    assert "coder" not in app_main.shared_breakers
+    assert "coder" not in app_main.services.shared_breakers
 
     audit = (tmp_path / "state" / "events.jsonl")
     # audit may live under DATA_DIR/state — ensure it was written somewhere
@@ -414,7 +423,7 @@ def test_secrets_clear_repo_pops_forge_breaker_and_reloads(monkeypatch, tmp_path
     reloads = []
     resets = []
     fr = _FR()
-    monkeypatch.setattr(app_main, "forge_runtime", fr)
+    app_main.services.forge_runtime = fr
     # clear_secrets binds reload/forge_runtime at the route — call the service
     # with fakes so we can assert the side effects without full composition.
     from devcake.api import connections_service as cs
@@ -426,9 +435,9 @@ def test_secrets_clear_repo_pops_forge_breaker_and_reloads(monkeypatch, tmp_path
             {"scope": "repo", "instance": "main", "field": "token"}]},
         forge_runtime=fr,
         reload=lambda: reloads.append(True),
-        config=app_main.config,
-        shared_breakers=app_main.shared_breakers,
-        dev_types=app_main.dev_types,
+        config=app_main.services.config,
+        shared_breakers=app_main.services.shared_breakers,
+        dev_types=app_main.services.dev_types,
     ))
     assert out["ok"] is True
     assert "main" not in fr.breakers

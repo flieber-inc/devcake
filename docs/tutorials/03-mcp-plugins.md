@@ -80,5 +80,5 @@ Mechanics worth knowing (`../07-dev-runtime.md` §5, `../08-harness-templates.md
 
 Registration syntax for the grok/codex harnesses: `../08-harness-templates.md`
 §7. Its verification labels are version-specific: Grok 0.2.93 and the pinned
-Codex CLI 0.144.4 were live-probed; Grok's unpinned installer means the syntax
+Codex CLI 0.144.4 were live-probed (codex mcp syntax re-probed at 0.146.0); Grok's unpinned installer means the syntax
 must be rechecked after an image rebuild.

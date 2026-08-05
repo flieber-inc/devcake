@@ -294,6 +294,108 @@ def test_watchdog_timeout_kills(tmp_path, monkeypatch):
     assert store.get(run.run_id).state == "timed_out"
 
 
+def test_kill_aborts_when_finalize_claims_the_run_mid_kill(tmp_path):
+    """2026-08 evaluation TOCTOU: _kill_inner's teardown awaits are yield
+    points where finalize can claim or finish the run. The save must abort
+    (the mover's terminal truth wins over a stale kill verdict), the passed
+    record object must stay unmutated (it may be the store's shared parse
+    cache), and restore_after_failure must NOT fire — the mover owns the
+    mission transition."""
+    store = RunStore(tmp_path / "runs")
+    mgr = RunManager(store, FakeMessaging(), FakeExecutor())
+    run = _make_run(store, state="running")
+
+    async def flip_mid_kill(run_, new_state, reason):
+        fresh = store.get(run.run_id)
+        fresh.state = "finished"          # finalize completed during teardown
+        store.save(fresh)
+
+    mgr._ship_failure = flip_mid_kill  # type: ignore[method-assign]
+    restored = []
+
+    class SpyFinalizer:
+        async def restore_after_failure(self, r):
+            restored.append(r.run_id)
+
+    mgr.finalizer = SpyFinalizer()
+    run_coro(mgr.kill(run, "timed_out", "watchdog: timeout"))
+    assert store.get(run.run_id).state == "finished"   # never overwritten
+    assert run.state == "running"                      # snapshot unmutated
+    assert restored == []                              # mover owns the mission
+
+
+def test_watchdog_liveness_kill_disarmed_by_midprobe_finalize(tmp_path,
+                                                              monkeypatch):
+    """The heartbeat/startup branch awaits executor.status() before killing —
+    a run that finalize claimed during that probe must be left alone (the
+    same guard the stalled-finalize branch has always had)."""
+    from devcake.domain import watchdog as wd
+
+    store = RunStore(tmp_path / "runs")
+    executor = FakeExecutor()               # status() → None ⇒ "dagu run dead"
+    mgr = RunManager(store, FakeMessaging(), executor)
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run = _make_run(
+        store, state="running",
+        created_at=utcnow() - timedelta(minutes=20),
+        started_at=utcnow() - timedelta(minutes=20),
+        last_heartbeat=utcnow() - timedelta(minutes=10),   # stale
+        timeout_seconds=3600,                              # wall-clock not hit
+    )
+
+    async def status_flips_to_finalizing(rid):
+        fresh = store.get(run.run_id)
+        fresh.state = "finalizing"        # artifacts landed during the probe
+        store.save(fresh)
+        return None
+
+    executor.status = status_flips_to_finalizing  # type: ignore[method-assign]
+
+    async def one_cycle(_):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(wd.asyncio, "sleep", one_cycle)
+    with pytest.raises(asyncio.CancelledError):
+        run_coro(wd.watchdog_loop(mgr))
+    assert store.get(run.run_id).state == "finalizing"     # not killed
+
+
+def test_watchdog_liveness_kill_disarmed_by_fresh_heartbeat(tmp_path,
+                                                            monkeypatch):
+    """A first heartbeat that lands during the status() probe re-arms
+    liveness: the fresh re-read must re-derive the verdict, not kill on the
+    stale snapshot."""
+    from devcake.domain import watchdog as wd
+
+    store = RunStore(tmp_path / "runs")
+    executor = FakeExecutor()
+    mgr = RunManager(store, FakeMessaging(), executor)
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run = _make_run(
+        store, state="running",
+        created_at=utcnow() - timedelta(minutes=20),
+        started_at=utcnow() - timedelta(minutes=20),
+        last_heartbeat=utcnow() - timedelta(minutes=10),   # stale in snapshot
+        timeout_seconds=3600,
+    )
+
+    async def status_and_heartbeat(rid):
+        fresh = store.get(run.run_id)
+        fresh.last_heartbeat = utcnow()   # Dev was alive all along
+        store.save(fresh)
+        return None
+
+    executor.status = status_and_heartbeat  # type: ignore[method-assign]
+
+    async def one_cycle(_):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(wd.asyncio, "sleep", one_cycle)
+    with pytest.raises(asyncio.CancelledError):
+        run_coro(wd.watchdog_loop(mgr))
+    assert store.get(run.run_id).state == "running"        # not killed
+
+
 def test_github_merge_already_merged_is_success(monkeypatch):
     """ISSUES #6: merge() treats already-merged as success."""
     forge = GitHubForge("https://github.com/o/r", "tok")
@@ -499,6 +601,52 @@ def test_recon_enriches_exit14_mcp_setup(tmp_path):
     saved = store.get(dead.run_id)
     assert saved.state == "orphaned"
     assert saved.error == "DEV_MCP_SETUP: claude mcp add …: exit 1"
+
+
+@pytest.mark.parametrize("code,recovered", [
+    (10, True), (11, True), (20, True), (12, False)])
+def test_recon_enrichment_regex_membership(tmp_path, code, recovered):
+    """ADR-0027 gap-closure pin, taken BEFORE the regex became a table
+    derivation: the informational exits 10/11/20 ARE recovered from Dagu's
+    post-mortem string (AUD-015), and exit 12 is REFUSED — dev_failure_error
+    latches the dev-type auth breaker for 12, and a stale orphan post-mortem
+    must never trip a breaker from reconcile. The 13/14 arms are pinned by
+    the two tests above; membership itself was previously untested."""
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {"status": "failed",
+                                      "statusLabel": "failed"}}
+
+        async def node_errors(self, rid):
+            return [{"step": "run_dev", "status": "failed",
+                     "error": f"exit status {code}: boom"}]
+
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    seen = []
+
+    class MM:
+        def dev_failure_error(self, run, payload):
+            seen.append(payload["exit_code"])
+            return f"enriched exit {payload['exit_code']}"
+
+    dead = _make_run(store, state="running", run_id=f"DEAD-{code}")
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr.set_finalizer(MM())
+    run_coro(reconcile_runs(mgr))
+    saved = store.get(dead.run_id)
+    assert saved.state == "orphaned"
+    assert (seen == [code]) is recovered, (
+        f"exit {code}: enrichment {'expected' if recovered else 'FORBIDDEN'}")
 
 
 def test_recon_reclaims_even_when_a_kill_blows_up(tmp_path):

@@ -135,7 +135,8 @@ def test_max_decomposition_depth_defaults_and_bounds():
     # a patch touching an unrelated field must not reset the setting
     from devcake.config import deep_merge
     tuned = {**base, "max_decomposition_depth": 1}
-    merged = deep_merge(tuned, {"auto_merge": True})
+    merged = deep_merge(tuned, {"repos": [
+        {**base["repos"][0], "auto_merge": True}]})
     assert AppConfig.model_validate(merged).max_decomposition_depth == 1
 
 
@@ -158,8 +159,167 @@ def test_recover_misplaced_result_defaults_on_and_round_trips():
     assert round_tripped.schema_version == 4
     # a patch touching an unrelated field must not reset the setting
     from devcake.config import deep_merge
-    merged = deep_merge(off.model_dump(), {"auto_merge": True})
+    dumped = off.model_dump()
+    merged = deep_merge(dumped, {"repos": [
+        {**(dumped["repos"][0] if dumped["repos"] else
+            {"name": "main", "url": "https://github.com/o/r"}),
+         "auto_merge": True}]})
     assert AppConfig.model_validate(merged).recover_misplaced_result is False
+
+
+def test_continuation_fields_default_and_round_trip():
+    """ADR-0022: in-container continuation is operator policy (Limits) —
+    policy `auto`, budget 2, both additive: a pre-ADR-0022 config file still
+    validates at schema v4 with no migration."""
+    base = _base()
+    assert "continuation_policy" in base               # dumped for the SPA draft
+    assert "max_continuations" in base
+    assert AppConfig().continuation_policy == "auto"
+    assert AppConfig().max_continuations == 2
+    del base["continuation_policy"]                    # pre-ADR-0022 config JSON
+    del base["max_continuations"]
+    loaded = AppConfig.model_validate(base)
+    assert loaded.continuation_policy == "auto"
+    assert loaded.max_continuations == 2
+    assert loaded.schema_version == 4                  # additive, not a migration
+    tuned = AppConfig.model_validate(
+        {**base, "continuation_policy": "fresh-only", "max_continuations": 50})
+    round_tripped = AppConfig.model_validate(tuned.model_dump())
+    assert round_tripped.continuation_policy == "fresh-only"
+    assert round_tripped.max_continuations == 50
+    # a patch touching an unrelated field must not reset the settings
+    from devcake.config import deep_merge
+    dumped = tuned.model_dump()
+    merged = deep_merge(dumped, {"repos": [
+        {**dumped["repos"][0], "auto_merge": True}]})
+    assert AppConfig.model_validate(merged).max_continuations == 50
+
+
+def test_attempt_reset_and_brake_fields_default_and_round_trip():
+    """ADR-0026: spend discipline is operator policy (Limits & Traffic) —
+    strict `label-ops` default, brake widening OFF, both additive: a
+    pre-ADR-0026 config file still validates at schema v4 with no migration."""
+    base = _base()
+    assert "attempt_reset" in base                     # dumped for the SPA draft
+    assert "brake_on_bad_output" in base
+    assert AppConfig().attempt_reset == "label-ops"
+    assert AppConfig().brake_on_bad_output is False
+    del base["attempt_reset"]                          # pre-ADR-0026 config JSON
+    del base["brake_on_bad_output"]
+    loaded = AppConfig.model_validate(base)
+    assert loaded.attempt_reset == "label-ops"
+    assert loaded.brake_on_bad_output is False
+    assert loaded.schema_version == 4                  # additive, not a migration
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "attempt_reset": "sometimes"})
+    tuned = AppConfig.model_validate(
+        {**base, "attempt_reset": "unlimited", "brake_on_bad_output": True})
+    round_tripped = AppConfig.model_validate(tuned.model_dump())
+    assert round_tripped.attempt_reset == "unlimited"
+    assert round_tripped.brake_on_bad_output is True
+    # a patch touching an unrelated field must not reset the settings
+    from devcake.config import deep_merge
+    dumped = tuned.model_dump()
+    merged = deep_merge(dumped, {"repos": [
+        {**(dumped["repos"][0] if dumped["repos"] else
+            {"name": "main", "url": "https://github.com/o/r"}),
+         "auto_merge": True}]})
+    assert AppConfig.model_validate(merged).attempt_reset == "unlimited"
+
+
+def test_repo_mirror_defaults_and_round_trip():
+    """ADR-0024: the mirror is MANDATORY (no enable field exists — its
+    absence IS the contract); the two knobs default to sync-every-dispatch
+    and LFS off, additive at schema v4 with no migration."""
+    base = _base()
+    assert "repo_mirror" in base                       # dumped for the SPA draft
+    assert "enabled" not in base["repo_mirror"]        # no off switch, by design
+    assert AppConfig().repo_mirror.sync_max_age_seconds == 0
+    assert AppConfig().repo_mirror.lfs is False
+    del base["repo_mirror"]                            # pre-ADR-0024 config JSON
+    loaded = AppConfig.model_validate(base)
+    assert loaded.repo_mirror.sync_max_age_seconds == 0
+    assert loaded.schema_version == 4                  # additive, not a migration
+    tuned = AppConfig.model_validate(
+        {**base, "repo_mirror": {"sync_max_age_seconds": 300, "lfs": True}})
+    round_tripped = AppConfig.model_validate(tuned.model_dump())
+    assert round_tripped.repo_mirror.sync_max_age_seconds == 300
+    assert round_tripped.repo_mirror.lfs is True
+    with pytest.raises(Exception):
+        AppConfig.model_validate(
+            {**base, "repo_mirror": {"sync_max_age_seconds": -1}})
+    # a nested partial patch must not reset the sibling knob
+    from devcake.config import deep_merge
+    merged = deep_merge(tuned.model_dump(), {"repo_mirror": {"lfs": False}})
+    got = AppConfig.model_validate(merged)
+    assert got.repo_mirror.lfs is False
+    assert got.repo_mirror.sync_max_age_seconds == 300
+
+
+def test_continuation_fields_bounds():
+    """Budget: 0 (off) and LARGE values are both legal — founder decision
+    2026-08-02: 10/50-continuation experiments must validate; deliberately no
+    upper bound, unlike max_attempts. Negatives and unknown policies refused."""
+    base = _base()
+    for ok in (0, 1, 2, 10, 50, 500):
+        assert AppConfig.model_validate(
+            {**base, "max_continuations": ok}).max_continuations == ok
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "max_continuations": -1})
+    for ok in ("auto", "resume-only", "fresh-only", "off"):
+        assert AppConfig.model_validate(
+            {**base, "continuation_policy": ok}).continuation_policy == ok
+    with pytest.raises(Exception):
+        AppConfig.model_validate({**base, "continuation_policy": "always"})
+
+
+def test_cost_inputs_defaults_validation_and_round_trip():
+    """ADR-0021: the operator rate card is additive config (no migration),
+    validated (no negative rates, no duplicate prefixes), and deep_merge-
+    patchable: a narrow PUT body {cost_inputs: {...}} replaces the rates
+    list wholesale while preserving the untouched sibling key."""
+    from devcake.config import CostInputs, ModelRate, deep_merge
+
+    fresh = AppConfig()
+    assert [r.model_prefix for r in fresh.cost_inputs.rates] == ["grok-4.5"]
+    assert fresh.cost_inputs.override_native is False
+    assert fresh.cost_inputs.rate_card_id == "builtin-v1"
+
+    # pre-feature config file (no cost_inputs key) still validates at v4
+    base = _base()
+    base.pop("cost_inputs", None)
+    assert AppConfig.model_validate(base).cost_inputs.rate_card_id == "builtin-v1"
+
+    # a default-card edit must not write through to DEFAULT_MODEL_RATES
+    fresh.cost_inputs.rates[0].input_per_mtok = 99.0
+    assert AppConfig().cost_inputs.rates[0].input_per_mtok == 2.00
+
+    with pytest.raises(ValueError):
+        ModelRate(model_prefix="x", input_per_mtok=-1.0,
+                  cache_read_per_mtok=0.1, output_per_mtok=1.0)
+    with pytest.raises(ValueError):
+        CostInputs(rates=[
+            ModelRate(model_prefix="grok-4.5", input_per_mtok=1.0,
+                      cache_read_per_mtok=0.1, output_per_mtok=1.0),
+            ModelRate(model_prefix="grok-4.5", input_per_mtok=2.0,
+                      cache_read_per_mtok=0.2, output_per_mtok=2.0)])
+
+    # narrow PUT patch: rates replaced wholesale, sibling flag preserved
+    on = AppConfig.model_validate(
+        {**_base(), "cost_inputs": {"override_native": True}})
+    assert on.cost_inputs.override_native is True
+    assert [r.model_prefix for r in on.cost_inputs.rates] == ["grok-4.5"]
+    merged = deep_merge(on.model_dump(), {"cost_inputs": {"rates": [
+        {"model_prefix": "claude-opus", "input_per_mtok": 5.0,
+         "cache_read_per_mtok": 0.5, "output_per_mtok": 25.0}]}})
+    patched = AppConfig.model_validate(merged)
+    assert [r.model_prefix for r in patched.cost_inputs.rates] == ["claude-opus"]
+    assert patched.cost_inputs.override_native is True    # sibling survived
+    assert patched.cost_inputs.rate_card_id.startswith("operator:")
+
+    # round-trip through model_dump keeps the operator card
+    again = AppConfig.model_validate(patched.model_dump())
+    assert again.cost_inputs.rate_card_id == patched.cost_inputs.rate_card_id
 
 
 def test_repo_url_shape_validated():
@@ -218,8 +378,8 @@ def test_stale_put_bodies_rejected_not_dropped():
         reject_stale_patch({"repos": [{"name": "main", "token_env": "GITHUB_TOKEN"}]})
     with pytest.raises(ValueError, match=r"v3 \*_env"):
         reject_stale_patch({"repos": [{"name": "main", "reviewer_token_env": None}]})
-    # current bodies pass through untouched
-    reject_stale_patch({"auto_merge": False})
+    # current bodies pass through untouched (auto_merge is per-repo, ADR-0020)
+    reject_stale_patch({"repos": [{"name": "main", "auto_merge": False}]})
     reject_stale_patch({"pmos": [{"team_key": "OPS"}]})
     reject_stale_patch({"pmos": [{"name": "linear", "team_key": "OPS"}]})
 
@@ -233,6 +393,43 @@ def test_load_config_refuses_v1_file(tmp_path, monkeypatch):
         config_mod.load_config()
     # the refusal must not touch the file — the operator migrates it by hand
     assert yaml.safe_load(path.read_text())["schema_version"] == 1
+
+
+def test_load_config_warns_on_legacy_top_level_merge_doctrine(tmp_path, monkeypatch,
+                                                             caplog):
+    """ADR-0020: pre-v1 top-level auto_merge is dropped (defaults per-repo);
+    operators must see a loud warning, not a quiet no-op."""
+    import logging
+    path = tmp_path / "config" / "config.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "schema_version: 4\n"
+        "pmos:\n- name: linear\n  team_key: DEV\n"
+        "repos:\n- name: main\n  url: https://github.com/o/r\n"
+        "auto_merge: true\n"
+        "auto_resolve_merge_conflicts: false\n"
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", path)
+    with caplog.at_level(logging.WARNING, logger="devcake.config"):
+        # logger name may be the package logger — also catch root "devcake"
+        with caplog.at_level(logging.WARNING):
+            cfg = config_mod.load_config()
+    assert cfg.repos[0].auto_merge is False          # default, not migrated
+    assert cfg.repos[0].auto_resolve_merge_conflicts is True
+    text = "\n".join(r.message for r in caplog.records)
+    assert "auto_merge" in text
+    assert "DROPPED" in text or "dropped" in text.lower()
+    assert "per-repo" in text.lower() or "ADR-0020" in text
+
+
+def test_auto_merge_flipped_on_helper():
+    from devcake.config import auto_merge_flipped_on
+    prev = [{"name": "a", "auto_merge": False},
+            {"name": "b", "auto_merge": True}]
+    new = [RepoInstance(name="a", url="https://github.com/o/a", auto_merge=True),
+           RepoInstance(name="b", url="https://github.com/o/b", auto_merge=True),
+           RepoInstance(name="c", url="https://github.com/o/c", auto_merge=True)]
+    assert auto_merge_flipped_on(prev, new) == {"a", "c"}
 
 
 def test_load_config_stale_shapes_and_current(tmp_path, monkeypatch):

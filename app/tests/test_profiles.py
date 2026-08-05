@@ -176,15 +176,14 @@ def test_divergence_flips_on_config_edit_and_secret_rewrite(monkeypatch, tmp_pat
 def _wire_app(monkeypatch, tmp_path):
     sb, profiles, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
     from devcake.api import main as app_main
+    from fakes import make_services
     cfg, dts = _small_world(config_mod, secrets)
     tpl.seed_devtype_prompts(dts)
-    monkeypatch.setattr(app_main, "config", cfg)
-    monkeypatch.setattr(app_main, "dev_types", dts)
-    monkeypatch.setattr(app_main, "reload_connections", lambda: None)
-    monkeypatch.setattr(app_main, "store",
-                        SimpleNamespace(active=lambda: []))
-    monkeypatch.setattr(app_main, "shared_breakers", {})
-    monkeypatch.setattr(app_main.forge_runtime, "breakers", {})
+    # ADR-0028: one test graph instead of six module-global patches
+    monkeypatch.setattr(app_main, "services", make_services(
+        config=cfg, dev_types=dts, reload_connections=lambda: None,
+        store=SimpleNamespace(active=lambda: []), shared_breakers={},
+        forge_runtime=SimpleNamespace(breakers={}), managers={}))
     return sb, profiles, secrets, config_mod, app_main
 
 
@@ -209,10 +208,10 @@ def test_endpoint_flow_save_list_get_apply_rename_delete(monkeypatch, tmp_path):
     assert detail["secrets_present"]["connections"] == {"repo-main": ["token"]}
     assert "diff" in detail
 
-    app_main.config.poll_interval_seconds = 77   # drift before the apply
+    app_main.services.config.poll_interval_seconds = 77   # drift before the apply
     out = run_coro(app_main.apply_profile("base"))
     assert sorted(out["applied"]) == ["config", "secrets"]
-    assert app_main.config.poll_interval_seconds == 30
+    assert app_main.services.config.poll_interval_seconds == 30
     rows = run_coro(app_main.list_profiles())["profiles"]
     assert rows[0]["last_applied_at"] and rows[0]["diverged"] is False
 
@@ -234,9 +233,8 @@ def test_apply_blocked_while_runs_active(monkeypatch, tmp_path):
     from fastapi import HTTPException
     sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
     run_coro(app_main.save_profile({"name": "base"}))
-    monkeypatch.setattr(
-        app_main, "store",
-        SimpleNamespace(active=lambda: [SimpleNamespace(state="running")]))
+    app_main.services.store = SimpleNamespace(
+        active=lambda: [SimpleNamespace(state="running")])
     with pytest.raises(HTTPException) as e:
         run_coro(app_main.apply_profile("base"))
     assert e.value.status_code == 409
@@ -248,7 +246,7 @@ def test_apply_blocked_while_runs_active(monkeypatch, tmp_path):
 
 def test_save_warns_on_configured_instance_without_secret(monkeypatch, tmp_path):
     sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
-    app_main.config.pmos = [config_mod.PMOInstance(
+    app_main.services.config.pmos = [config_mod.PMOInstance(
         name="linear", team_key="ENG", repos=["main"])]
     out = run_coro(app_main.save_profile({"name": "gappy"}))
     assert any("no stored API key" in w for w in out["warnings"])

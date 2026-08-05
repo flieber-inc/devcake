@@ -18,7 +18,7 @@ Every `poll_interval_seconds` (default 30). **Multi-PMO:** the poll runtime walk
 1. Fetch all non-terminal Projects and Issues in the instance's team via `PMOPort.list_all(team_ref)` and normalize to `Mission` DTOs.
 2. Derive each Mission's type per the table in `02-domain-model.md` §2.
 3. **Project auto-completion sweep:** for each Project carrying `DEVCAKE-TRACKING`, check its child Issues; if all are `done`/`canceled` (and it has ≥1 child), set the Project's status to `done` and remove `DEVCAKE-TRACKING`. **No completion comment** is posted — the status + label change is the signal. (State is derived entirely from the PMO — no local tracking.) The child read is a flat in-project filter, so second-level decomposition composes correctly: a child canceled in favor of its own sub-missions counts terminal, while the sub-missions — created inside the same Project (`adr/0012`) — hold it open until they finish.
-4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter (`get_pr_by_branch`/`pr_state`, which return normalized `PullRequest` DTOs — attribute access, never raw forge JSON) — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). While the PR is still open and a deferred-merge retry window is active (`auto_merge` ON, latest merge-state feed marker is `` `devcake:merge-retry` ``), the sweep also drives the retry: `mergeable()` each cycle — ready → merge and complete; conflict → conflict-rework routing; computing/CI → wait; window elapsed → terminal hand-off, once. Done is only ever declared after the merge is real.
+4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter (`get_pr_by_branch`/`pr_state`, which return normalized `PullRequest` DTOs — attribute access, never raw forge JSON) — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). While the PR is still open and a deferred-merge retry window is active (that mission's repo has `auto_merge` ON, latest merge-state feed marker is `` `devcake:merge-retry` ``), the sweep also drives the retry: `mergeable()` each cycle — ready → merge and complete; conflict → conflict-rework routing; computing/CI → wait; window elapsed → terminal hand-off, once. Done is only ever declared after the merge is real.
 5. Run the scheduling algorithm (§3) over the derived candidates — **unless intake is paused** (`02-domain-model.md` §9): the global `intake_paused` master freezes every instance; each `pmos[].intake_paused` freezes only that instance. While blocked, steps 1–4 and 6 still run (sweeps, health, snapshot), the ingress consumer still finalizes in-flight runs, and the watchdog still enforces timeouts; only NEW dispatches (missions and MAPPER runs) are withheld for the blocked instance(s).
 6. **Relations Mapper cadence (`MapperService`):** when `relations_mapper.enabled` with a valid `dev_type`, no MAPPER run active, `interval_minutes` elapsed, and the service not **degraded** (3 most recent MAPPER runs all dead — store-derived, restart-safe) → dispatch a MAPPER run (`03-mission-lifecycle.md` §4b). One lock serializes this with the manual "Run now" endpoint; the watermark advances only after a successful dispatch. MAPPER runs count toward `global_max`.
 7. Refresh the in-memory missions snapshot served by `GET /api/v1/missions` (advisory only, rebuilt every cycle) and emit the `poll.cycle` span with counts (`12-observability.md`).
@@ -71,10 +71,20 @@ Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by t
 ```
 def launch(run, *, image):                         # RunBootstrap — all four flavors
   async with dispatch_lock:                        # clear-runs holds this for the full wipe
-    password = messaging.create_run_user(run.run_id)  # MessagingPort
+    if workspaces.volume_error:                       # (0) ADR-0025 fail-closed gate:
+        raise WorkspaceUnavailable(...)               #     an unusable workspace base
+        # refuses BEFORE any side effect — callers (dispatch, mapper) catch
+        # this and surface a blocked_reason; NO attempt burns, NO
+        # poll_degraded (the AUD-001/002 fix — fail-closed for real)
+    password = messaging.create_run_user(run.run_id)  # MessagingPort (+ ACL SAVE, 09 §1a)
     run.auth_digest = sha256(password)                # never persist the raw ACL secret
     run.store_gen = store.wipe_generation             # clear-runs generation guard
     state.save(run)                                   # (1) durable intent BEFORE side effects
+    try:
+        workspaces.create(run.run_id)                 # (1b) per-run host-bind dir, 0700
+    except OSError:                                   #      record-BEFORE-dir makes the
+        state.delete(run); messaging.delete_run_user  #      sweep predicate sound; a create
+        raise WorkspaceUnavailable(...)               #      failure UNWINDS record + ACL
     executor.start(params={                           # (2) ExecutorPort (Dagu in prod)
         "RUN_ID": run.run_id, "IMAGE": image,         #     non-secret params only (13 §4)
         "TRACEPARENT": run.traceparent or "",
@@ -93,10 +103,16 @@ def dispatch(mission, dev_type):                   # MissionManager — mission 
               spec_env=protocol_spec_env(...), ...)
     run.spec_prompt = resolve_prompt(mission, dev_type)  # includes {blocker_repos}
     run.blocker_work = resolve_blocker_work(...)         # ADR-0017: done blockers' repo_refs
+    run.mirror_repos = needed                            # the mirror gate's proven set,
+    #                                                      snapshotted (2026-08: the runspec
+    #                                                      serves mirrors from THIS, never
+    #                                                      from live config — 09 §3)
     bootstrap.launch(run, image=harness_image(dev_type))
-    # launch = ACL user → durable Run file BEFORE the Dagu trigger; the image
-    # param is a plain tag (e.g. devcake/dev-claude-code:latest — no digest
-    # pinning; 13-deployment.md §6), and Dagu receives only non-secret params
+    # launch = workspace gate → ACL user → durable Run file → workspace dir
+    # BEFORE the Dagu trigger (WorkspaceUnavailable at any of those steps is
+    # an unschedulable reason, not a failed attempt); the image param is a
+    # plain tag (e.g. devcake/dev-claude-code:latest — no digest pinning;
+    # 13-deployment.md §6), and Dagu receives only non-secret params
     # runspec later attaches RO tokens for blocker_work as extra_repos
     if live.status == "backlog":
         pmo.set_status(mission.ref, "in_progress")      # (3) reflect pull in PMO
@@ -150,7 +166,7 @@ def compare_and_transition(run, intended: Transition):
     audit_log.append(...)
 ```
 
-4. **Forge side effects** (EXECUTE/REVIEW only): PR comments/approval per `03-mission-lifecycle.md` and `06-forge-adapter.md`. **Exception to the ordering:** on REVIEW-approve, the merge (when `auto_merge` is on) runs *before* the status transition — Done is only declared after a real merge; a failed merge lands on `DEVCAKE-MERGE` instead (`03-mission-lifecycle.md` §4.1).
+4. **Forge side effects** (EXECUTE/REVIEW only): PR comments/approval per `03-mission-lifecycle.md` and `06-forge-adapter.md`. **Exception to the ordering:** on REVIEW-approve, the merge (when the mission's repo has `auto_merge` on) runs *before* the status transition — Done is only declared after a real merge; a failed merge lands on `DEVCAKE-MERGE` instead (`03-mission-lifecycle.md` §4.1).
 
 Each completed side effect is appended to `run.finalized_steps` and the Run file rewritten (atomic tmp+rename), so a crash mid-finalization resumes exactly where it stopped — already-done steps are skipped by their step keys.
 
@@ -162,6 +178,7 @@ Runs every 10 s over all Runs in `dispatched | running`:
 
 - **Timeout:** if `now - created_at > timeout_seconds` (default from `dev_timeout_minutes` at dispatch, 120 min), kill the run via Dagu's stop endpoint — `POST /api/v1/dag-runs/dev-run/{run_id}/stop` (verified: SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed, run `aborted`) — and mark the Run `timed_out`. Counts as a failed attempt (`15-errors-and-retries.md`, `DEV_TIMEOUT`). Ages are measured from **`created_at`**, not `started_at`. Dagu-side timeouts are intentionally not relied on — the app owns the kill (single owner; `13-deployment.md` §4 sets a belt-and-suspenders `timeout_sec` well above the app's). The app needs no `docker.sock` for this.
 - **Liveness:** a Run in `running` whose last `run.heartbeat` (`09-messaging.md`) is older than 5 minutes triggers a Dagu run-status query; a non-running Dagu status ⇒ Run `failed` (`DEV_CRASH`). A `dispatched` run that never starts within the startup grace (90 s) is treated the same way.
+- **Every kill branch re-reads before it kills (2026-08 evaluation).** The loop's snapshot of `store.active()` goes stale at every `await` (earlier kills, the Dagu status probe), so the timeout and liveness branches re-read the record and re-derive their verdict on the FRESH state immediately before killing — a run that finalized, entered finalize, or heartbeat mid-window is left alone. The same guard has always protected the stalled-finalize branch; `_kill_inner` additionally aborts its save (and the mission-status restore) if the state moved during its own teardown awaits — the mover wins.
 - **No mid-run kill on mission terminal:** the watchdog does **not** poll the PMO for `done`/`canceled` mid-run. `EXTERNAL_TRANSITION` is decided only at **finalize**, when compare-and-transition re-reads the live stage label and finds it differs from `stage_label_at_dispatch` (artifacts still post; no further stage mutation).
 - **Finalize-stall backstop:** Runs in `finalizing` are never wall-clock-killed while their `run.artifacts` entry can still be redelivered (crash+reclaim resumes them). But if a run is past `timeout_seconds + DEVCAKE_FINALIZE_STALL_SECONDS` (default 3600, age from `created_at`) **and** its entry is no longer on the ingress stream (poison dead-lettered per `15-errors-and-retries.md` §5, or lost), nothing can ever finish it — the watchdog fails it without re-entering finalize, so it stops blocking its mission and holding a concurrency slot.
 
@@ -177,7 +194,7 @@ On every app boot, before the first poll cycle:
    - Dagu says failed/aborted, or has no such run → mark `orphaned`; counts as a failed attempt; the Mission (whose label never advanced — INV-3) reschedules naturally.
    - A `dispatched` Run with no Dagu run → the §3.1 crash window; mark `orphaned` (never re-trigger blindly — a duplicate `dagRunId` trigger returns 409 `already_exists`, verified).
 4. Reclaim pending Redis messages older than the consumer's dead-time (XAUTOCLAIM) and process them.
-5. Start the poll, ingress, and watchdog loops.
+5. Start the poll, ingress, and watchdog loops. The poll task runs the **initial full forge sweep** (bounded-parallel, `ForgeRuntime.refresh_all`) before its first cycle — off the boot critical path (a large catalog probed inside lifespan held the listen socket and failed the compose healthcheck, incident 2026-08-01) but still ahead of any dispatch, so a definitively bad repo credential latches its breaker before cycle 1 can burn an attempt. `/health.forge_probe` reports the sweep's progress; a sweep that misses its 60 s budget is retried each cycle until one completes.
 
 ## 7. Crash matrix (summary)
 

@@ -40,8 +40,13 @@ def _run(mid, key, repo_ref, *, created=None):
 
 
 class BlockerPMO:
-    def __init__(self, missions: dict[str, Mission]):
+    def __init__(self, missions: dict[str, Mission], *, global_ids=True):
         self.missions = missions
+        self.global_ids = global_ids
+
+    def capabilities(self):
+        from fakes import fake_pmo_capabilities
+        return fake_pmo_capabilities(global_ids=self.global_ids)
 
     async def get(self, ref):
         m = self.missions.get(ref.pmo_id)
@@ -142,7 +147,7 @@ def test_resolve_blocker_work_colliding_gitea_id_never_mounts_peer(tmp_path):
     evil = _run("3", "#3", "evil-repo")
     evil.pmo_ref = "g2"                       # the OTHER gitea instance's #3
     mgr = make_mission_manager(
-        tmp_path, pmo=BlockerPMO({"3": a, "9": b}),
+        tmp_path, pmo=BlockerPMO({"3": a, "9": b}, global_ids=False),
         instance=PMOInstance(name="g1", system="gitea_issues",
                              team_key="o/r"),
         internal_forge=_ROInternal())
@@ -366,3 +371,4 @@ def test_prompt_includes_blocker_section():
                          blocker_repos=note)
     assert "Completed blocker work" in out
     assert "linear-t-a" in out
+

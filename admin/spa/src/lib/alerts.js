@@ -78,6 +78,26 @@ export default function deriveAlerts(health) {
     }
   }
 
+  // adapters no PMO selects (2026-08-01 incident): each one is rebuilt on
+  // every config/secret reload and probed on every full forge sweep — pure
+  // latency cost. Count in the title so a changed count resurfaces the alert.
+  const unused = health.unused_repos;
+  if (unused && unused.count > 0) {
+    const shown = unused.names.slice(0, 8).join(", ");
+    const more = unused.count > 8 ? ` and ${unused.count - 8} more` : "";
+    alerts.push({
+      id: "unused-repos",
+      severity: "warning",
+      dismissable: true,
+      title: `${unused.count} of ${unused.configured} configured repositories are unused`,
+      body:
+        `${shown}${more} — selected as work or reference repos on no PMO, ` +
+        "but still probed on every forge sweep. Remove them on Repositories " +
+        "→ ⋯ → Remove unused repositories (their stored tokens are deleted " +
+        "with them on Save).",
+    });
+  }
+
   // server-computed credential-posture warnings (ISSUES #13/#15): loud but
   // dismissable — the operator may accept the risk; a changed body (e.g. a
   // different missing credential) changes the key and resurfaces the alert
@@ -160,6 +180,65 @@ export default function deriveAlerts(health) {
         " — DevCake has throttled these Dev Types to one probe run at a time " +
         "and resumes full concurrency automatically once runs succeed. " +
         "No credential change is needed; check your model provider's status.",
+    });
+  }
+
+  // ADR-0024: repo source mirrors. Fail-closed dispatch precondition, so a
+  // failing mirror silently FREEZES every mission touching that repo — same
+  // honesty argument as poll-degraded: not dismissable.
+  const mirror = health.repo_mirror || {};
+  if (mirror.volume_error) {
+    alerts.push({
+      id: "mirror-volume",
+      severity: "critical",
+      title: "Repo mirror volume is unusable — dispatch is frozen",
+      body: mirror.volume_error,
+    });
+  }
+  const badMirrors = Object.entries(mirror.mirrors || {}).filter(
+    ([, st]) => st && st.ok === false,
+  );
+  if (badMirrors.length > 0) {
+    alerts.push({
+      id: "mirror-sync",
+      severity: "warning",
+      title:
+        badMirrors.length === 1
+          ? `Repo mirror '${badMirrors[0][0]}' is not syncing`
+          : `${badMirrors.length} repo mirrors are not syncing`,
+      body:
+        badMirrors.map(([name, st]) => `${name}: ${st.detail || "sync failed"}`).join(" · ") +
+        " — missions needing these repositories will not dispatch until the " +
+        "sync succeeds (retried every poll cycle). Auth failures also latch " +
+        "the repository's circuit breaker below.",
+    });
+  }
+
+  // ADR-0025: per-run workspace base (host bind). An unusable base freezes
+  // dispatch exactly like the mirror volume; leaked dirs mean the cleanup
+  // hooks AND the sweep are losing to something (disk fills → DEV_FORGE
+  // retry churn), so both surface loudly.
+  const ws = health.workspaces || {};
+  if (ws.volume_error) {
+    alerts.push({
+      id: "workspaces-volume",
+      severity: "critical",
+      title: "Workspace base is unusable — dispatch is frozen",
+      body: ws.volume_error,
+    });
+  }
+  if ((ws.leaked || 0) > 0) {
+    alerts.push({
+      id: "workspaces-leaked",
+      severity: "warning",
+      title:
+        ws.leaked === 1
+          ? "1 leaked run workspace on disk"
+          : `${ws.leaked} leaked run workspaces on disk`,
+      body:
+        "Terminal runs left workspace directories behind that the periodic " +
+        "sweep could not remove — check $DEVCAKE_WS_HOST permissions and " +
+        "free disk (docs/13 §8).",
     });
   }
 

@@ -5,7 +5,7 @@
 
 Each Mission Type has a **playbook**: what the Dev receives, what it must do inside the workspace, the structured output it must produce, and the app-side finalization that follows. Common to all four:
 
-- **Inputs:** `/workspace/repo` (fresh clone), `/workspace/activity/` (MISSION.md brief + ACTIVITY.md feed mirror + attachments, ADR-0014), the Dev Type's identifying prompt, and the playbook prompt (§7).
+- **Inputs:** `/workspace/repo` (fresh clone — served from the read-only source mirror for configured repos, origin rewritten to the real forge; ADR-0024, `07-dev-runtime.md` §7b), `/workspace/activity/` (MISSION.md brief + ACTIVITY.md feed mirror + attachments, ADR-0014), the Dev Type's identifying prompt, and the playbook prompt (§7).
 - **Output:** `/workspace/out/result.json` (§6) — the app finalizes **from this file plus the exit code, never by parsing prose**.
 - **Finalization (app-side, always):** post the step comment (the Dev's last message, `>`-blockquoted) with the `{seq}_{TYPE}.md` full-session transcript attached (ADR-0014) → post token report (§8) → compare-and-transition (`04-orchestrator.md` §4) → forge side effects if any. **Exception:** on REVIEW-approve, the merge precedes the Done transition (§4.1) — Done must never overstate the repository.
 - **Failure:** nonzero exit or invalid `result.json` ⇒ no PMO transition; the Mission's label is untouched and it reschedules (attempt counting per `15-errors-and-retries.md`).
@@ -83,14 +83,14 @@ The Dev must: check out the PR branch in its clone; diff against the plan; hunt 
 
 1. Post the review report as a PR comment, **always ending with the copy-pasteable approval command** (§5).
 2. If a **reviewer token** is configured (GUI secret `reviewer_token` for the repo), formally approve the PR with it; otherwise the comment carries the marker `APPROVED-BY-DEVCAKE`.
-3. Then, by `auto_merge`:
+3. Then, by the **mission's repo** `auto_merge` (per-repo doctrine, ADR-0020; internal/zero-repo instances always ON):
    - **ON:** merge the PR (`06-forge-adapter.md` §5). Success → remove `DEVCAKE-REVIEW`, mission status `done`. Failure branches three ways on the port's `mergeable()` read:
-     - **Auto-resolvable** (merge conflict or stale branch) with `auto_resolve_merge_conflicts` ON and fewer than 2 prior attempts → swap `DEVCAKE-REVIEW` → `DEVCAKE-EXECUTE` with a 🧩 resolve directive (🧩 is reserved for this directive; 🔀 already means "PR opened"): the next EXECUTE Dev only syncs the branch with the default branch, resolves the conflicts, and pushes; the PR then returns to REVIEW. Attempts are counted from `` `devcake:conflict-resolve:N` `` markers in the feed (PMO-derivable, quoted lines ignored); the directive posts **before** the label swap so the count never undercounts.
-     - **Not possible yet** (mergeability still computing, CI pipeline running) and `merge_retry_window_minutes` > 0 → remove `DEVCAKE-REVIEW`, add `DEVCAKE-MERGE`, post a deferred-retry comment carrying `` `devcake:merge-retry` `` — the merge sweep keeps retrying (below).
+     - **Auto-resolvable** (merge conflict or stale branch) with that repo's `auto_resolve_merge_conflicts` ON and fewer than 2 prior attempts → swap `DEVCAKE-REVIEW` → `DEVCAKE-EXECUTE` with a 🧩 resolve directive (🧩 is reserved for this directive; 🔀 already means "PR opened"): the next EXECUTE Dev only syncs the branch with the default branch, resolves the conflicts, and pushes; the PR then returns to REVIEW. Attempts are counted from `` `devcake:conflict-resolve:N` `` markers in the feed (PMO-derivable, quoted lines ignored); the directive posts **before** the label swap so the count never undercounts.
+     - **Not possible yet** (mergeability still computing, CI pipeline running) and that repo's `merge_retry_window_minutes` > 0 → remove `DEVCAKE-REVIEW`, add `DEVCAKE-MERGE`, post a deferred-retry comment carrying `` `devcake:merge-retry` `` — the merge sweep keeps retrying (below).
      - **Otherwise** (toggle off, attempts exhausted, window 0, unknown cause) → remove `DEVCAKE-REVIEW`, add `DEVCAKE-MERGE`, post an explanatory comment carrying `` `devcake:merge-handoff` `` — the Mission stays In Progress until a human resolves the merge, and it appears in the admin panel's **awaiting-human-merge banner** (`11-admin-panel.md` §2) within one poll cycle.
    - **OFF:** remove `DEVCAKE-REVIEW`, add `DEVCAKE-MERGE`. The Mission stays In Progress; the **app** does not call merge. The intended waiter is a human (awaiting-human-merge banner). This toggle does **not** prevent a Dev with a write token from merging on the forge if branch protection allows — that residual is `14-security.md` §2 zone C.
 
-**Merge sweep** (every poll cycle, alongside the `DEVCAKE-TRACKING` sweep — `04-orchestrator.md` §1): for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter — merged → remove the label, mission status `done`; closed without merging → remove the label, mission status `canceled`, with a comment either way. Additionally, while the feed's latest merge-state marker is `` `devcake:merge-retry` `` (auto_merge ON, PR open), the sweep drives the **deferred-merge window**: `mergeable()` each cycle — ready → merge and complete; auto-resolvable → the conflict-rework path above; still computing → wait. Once `merge_retry_window_minutes` elapse (measured from the marker comment's PMO timestamp — live-tunable, restart-safe), post the terminal hand-off with `` `devcake:merge-handoff` `` exactly once. A human can merge manually at any point mid-window. State remains fully derivable from PMO + forge; nothing local.
+**Merge sweep** (every poll cycle, alongside the `DEVCAKE-TRACKING` sweep — `04-orchestrator.md` §1): for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter — merged → remove the label, mission status `done`; closed without merging → remove the label, mission status `canceled`, with a comment either way. Additionally, while the feed's latest merge-state marker is `` `devcake:merge-retry` `` (that mission's repo has `auto_merge` ON, PR open), the sweep drives the **deferred-merge window**: `mergeable()` each cycle — ready → merge and complete; auto-resolvable → the conflict-rework path above; still computing → wait. Once that repo's `merge_retry_window_minutes` elapse (measured from the marker comment's PMO timestamp — live-tunable, restart-safe), post the terminal hand-off with `` `devcake:merge-handoff` `` exactly once. A human can merge manually at any point mid-window. State remains fully derivable from PMO + forge; nothing local.
 
 ### 4.2 Reject
 **Finalization:** transcript + token report → upload `report_md` as a `{seq}_REVIEW_REPORT.md` attachment referenced by a short feed comment (docs/05 §4), AND post it in full as a PR comment → swap `DEVCAKE-REVIEW` → `DEVCAKE-EXECUTE`. The next EXECUTE Dev finds the report in its `activity/` folder and reworks the same branch/PR.
@@ -190,11 +190,17 @@ Posted to the activity feed immediately after each transcript (INV-5):
 ```
 🧮 DevCake token report — step {seq} ({TYPE}, {dev_type})
 model: {model} · input: {input_tokens} · output: {output_tokens}
-cache read/write: {cache_read_tokens}/{cache_write_tokens}
-cost: ${cost_usd}                 (omitted when unknown — never estimated)
-extraction: {extraction_method}
+cache read/write: {cache_read_tokens}/{cache_write_tokens}[ · total: {total_tokens}][ · reasoning: {N}]
+cost: ${cost_usd_native}          (native harness cost — omitted when unknown, NEVER guessed)
+cost (estimated, {rate_card_id}): ${cost_usd_estimated}
+extraction: {source}
 run: {run_id}
 ```
+
+Line rules (each optional line appears only when its datum exists):
+
+- `total:` when the harness reported one; `reasoning:` from the report's `reasoning_tokens` scalar (adr/0029; informational — a subset of output, never priced).
+- `cost:` is the harness's own number, still never estimated. The **estimated** line (`adr/0021`) is the app-side rate-card computation, stamped at finalize and always labeled with its rate-card vintage; it appears when native cost is absent, or *alongside* the native line when the operator's `cost_inputs.override_native` is on. A report with neither shows no cost line at all.
 
 The `run: {run_id}` footer doubles as the idempotency key for finalization (`04-orchestrator.md` §4).
 

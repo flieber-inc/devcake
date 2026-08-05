@@ -493,6 +493,62 @@ def test_recover_misplaced_result_env_is_flag_not_str_bool():
     assert bool(on) is True and bool(off) is False
 
 
+def test_continuation_env_wire_format():
+    """ADR-0022: DEVCAKE_CONTINUATION_POLICY is the policy string verbatim and
+    DEVCAKE_MAX_CONTINUATIONS is str(int) — spec env is str→str on every path;
+    the entrypoint's continuation_config parses defensively (garbage → off),
+    so the app side's only job is to not mangle the values. Both call sites
+    (dispatch + mapper) thread them from mgr.config in lockstep."""
+    from fakes import make_mission_manager
+    from devcake.adapters.registry import make_forge
+    from devcake.config import RepoInstance
+    mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
+    repo = RepoInstance(url="https://github.com/o/r")
+    dt = DevType(name="main-dev", harness_template="grok-build")
+
+    def env(**over):
+        return dispatch._protocol_spec_env(
+            mgr, mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
+            dev_type=dt, seq=1, extra_args="", repo=repo,
+            forge=make_forge(repo), **over)
+
+    defaults = env()
+    assert defaults["DEVCAKE_CONTINUATION_POLICY"] == "auto"
+    assert defaults["DEVCAKE_MAX_CONTINUATIONS"] == "2"
+    tuned = env(continuation_policy="resume-only", max_continuations=50)
+    assert tuned["DEVCAKE_CONTINUATION_POLICY"] == "resume-only"
+    assert tuned["DEVCAKE_MAX_CONTINUATIONS"] == "50"
+    assert isinstance(tuned["DEVCAKE_MAX_CONTINUATIONS"], str)
+
+
+def test_mirror_env_wire_format():
+    """ADR-0024: DEVCAKE_MIRROR_PATH is a path string ("" = direct clone,
+    internal repos) and DEVCAKE_LFS rides the "1"/"" flag convention — the
+    entrypoint reads it with bare truthiness, so str(bool) would be
+    unswitchable (the ADR-0018 lesson)."""
+    from fakes import make_mission_manager
+    from devcake.adapters.registry import make_forge
+    from devcake.config import RepoInstance
+    mgr = make_mission_manager(config=AppConfig(), noop_audit=False)
+    repo = RepoInstance(url="https://github.com/o/r")
+    dt = DevType(name="main-dev", harness_template="grok-build")
+
+    def env(**over):
+        return dispatch._protocol_spec_env(
+            mgr, mission_id="p1", mission_key="T-1", mission_type="EXECUTE",
+            dev_type=dt, seq=1, extra_args="", repo=repo,
+            forge=make_forge(repo), **over)
+
+    defaults = env()
+    assert defaults["DEVCAKE_MIRROR_PATH"] == ""       # kwarg default = direct
+    assert defaults["DEVCAKE_LFS"] == ""
+    on = env(mirror_path="/mirrors/r.git", lfs=True)
+    assert on["DEVCAKE_MIRROR_PATH"] == "/mirrors/r.git"
+    assert on["DEVCAKE_LFS"] == "1"
+    for v in (on["DEVCAKE_LFS"], defaults["DEVCAKE_LFS"]):
+        assert v not in ("True", "False", "true", "false", "0")
+
+
 def test_harness_default_model_flows_into_spec_env(tmp_path):
     """UX item 2 (2026-07-15): grok-build runs grok-4.5 unless the Dev Type
     pins its own model; an explicit Dev Type model still wins."""

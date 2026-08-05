@@ -53,17 +53,19 @@ export default function AssignmentsSection() {
     }
   };
 
+  // Performance tip only — not a security control (reviewer token is).
   const sharedReviewBanner = (label, ex, rev) =>
     ex && rev && ex === rev && (
-      <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
-        {label}EXECUTE and REVIEW share the same Dev Type. Independent AI review is the
-        default configuration, not a hard invariant — consider assigning different
-        types (and models) for review independence.
+      <div className="mb-3 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900/40 dark:text-neutral-300">
+        {label}EXECUTE and REVIEW share the same Dev Type. Assigning a different type
+        for REVIEW is optional — useful so REVIEW can carry review-focused skills and
+        its own identifying prompt. Not a security control; formal forge approval uses
+        the app-only reviewer token.
       </div>
     );
 
   return (
-      <Section id="assignments" title="Assignments"
+      <Section id="mission-types" title="Mission Types"
         description={pmos.length
           ? "Which Dev Type handles each mission type. Per-PMO overrides below replace a row for that instance only."
           : "Which Dev Type handles each mission type."}>

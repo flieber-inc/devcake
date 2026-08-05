@@ -4,7 +4,7 @@
 // profile (`zz-uitest-profile`) and deletes it again, so the operator's real
 // profiles and live settings are untouched. The apply flow is opened for its
 // preview diff and then CANCELLED — this suite never clicks "Apply profile".
-import { BASE, check, gotoFresh, summary, withPage } from "./harness.mjs";
+import { BASE, check, checked, gotoFresh, summary, withPage } from "./harness.mjs";
 
 const NAME = "zz-uitest-profile";
 const NAME2 = "zz-uitest-renamed";
@@ -29,7 +29,7 @@ await withPage(async (page) => {
   await page.waitForSelector("#profiles");
   check("Profiles view renders the #profiles section",
     (await page.locator("#profiles").count()) === 1
-    && (await page.locator("#pmo").count()) === 0);
+    && (await page.locator("#dev-types").count()) === 0);
 
   // pre-clean any leftover throwaway rows from a prior aborted run
   await deleteIfPresent(page, NAME);
@@ -41,8 +41,11 @@ await withPage(async (page) => {
   await saveDlg.waitFor();
   await saveDlg.locator("input").fill(NAME);
   await saveDlg.locator('button:has-text("Save")').click();
-  await rowFor(page, NAME).waitFor({ timeout: 8000 });
-  check("Save current as profile creates the snapshot row", true);
+  await checked("Save current as profile creates the snapshot row",
+    async () => {
+      await rowFor(page, NAME).waitFor({ timeout: 8000 });
+      return (await rowFor(page, NAME).count()) === 1;
+    });
 
   // 3 — it appears in the Apply select
   const applyOpt = page.locator('select[aria-label="Profile to apply"] option',
@@ -61,8 +64,10 @@ await withPage(async (page) => {
   check("Apply shows the change-preview before anything applies",
     (await preview.count()) >= 1);
   await applyDlg.locator('button:has-text("Cancel")').click();
-  await applyDlg.waitFor({ state: "detached", timeout: 8000 });
-  check("Apply preview cancels cleanly — no world-swap", true);
+  await checked("Apply preview cancels cleanly — no world-swap", async () => {
+    await applyDlg.waitFor({ state: "detached", timeout: 8000 });
+    return (await applyDlg.count()) === 0;
+  });
 
   // 5 — Rename via the row action
   const row = rowFor(page, NAME);

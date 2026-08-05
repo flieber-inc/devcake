@@ -26,6 +26,11 @@ CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "co
 # compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
 _INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
 
+# ADR-0030: the app-managed default-board PMO instance (auto-provisioned
+# gitea_issues board on the bundled Gitea). Reserved in _pmos_valid; the name
+# prefixes branches and run ids like any instance name (ADR-0009).
+MANAGED_BOARD_NAME = "board"
+
 # Shared shape for GUI-stored harness/secret-env var names —
 # api.connections_service compiles _HARNESS_VAR_RE from this (one
 # definition; docs/02 §6).
@@ -93,6 +98,12 @@ class PMOInstance(BaseModel):
     # override's. An absent key inherits the global row. Empty dict (the
     # default) = this instance staffs exactly like the deployment default.
     assignments: dict[str, Assignment] = Field(default_factory=dict)
+    # ADR-0030: app-managed instance (the auto-provisioned default board).
+    # Identity fields are canonicalized and the row is re-injected across
+    # config PUTs / bundle applies by reconcile_managed_pmos while the
+    # bundled provisioner is present; operator-tunable fields (repos,
+    # reference_repos, assignments, intake_paused) stay operator-owned.
+    managed: bool = False
 
     @field_validator("assignments")
     @classmethod
@@ -147,6 +158,16 @@ class RepoInstance(BaseModel):
     url: str = ""
     api_base: str | None = None     # None = the adapter's default API host / the repo's origin
     default_branch: str = "main"
+    # Per-repo merge doctrine (docs/03 §4.1, ADR-0020). The last two are inert
+    # while auto_merge is OFF: on a merge conflict, route back to EXECUTE to
+    # sync + resolve (max 2 attempts) instead of parking on DEVCAKE-MERGE;
+    # while a merge is merely not-possible-yet (CI running, mergeability
+    # computing) the merge sweep keeps retrying for merge_retry_window_minutes
+    # before the human hand-off (0 = immediately). Internal (zero-repo)
+    # synthesized instances always set auto_merge=True at provision time.
+    auto_merge: bool = False
+    auto_resolve_merge_conflicts: bool = True
+    merge_retry_window_minutes: int = Field(30, ge=0)
     # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
     # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);
@@ -210,9 +231,10 @@ class RepoInstance(BaseModel):
 
 
 class Concurrency(BaseModel):
-    # concurrency caps are the real host-protection throttle: Dagu 2.10.5
-    # cannot apply Docker HostConfig limits to Dev containers (docs/07 §7);
-    # per-container hard limits return with Dagu host-config support (v0.1)
+    # concurrency caps are the real host-protection throttle: Dagu (measured
+    # at 2.10.5, re-verified at the pinned 2.11.3) cannot apply Docker
+    # HostConfig limits to Dev containers (docs/07 §7); per-container hard
+    # limits return with Dagu host-config support
     global_max: int = Field(3, ge=1)
 
 
@@ -224,6 +246,79 @@ class RelationsMapper(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(60, ge=1)
     dev_type: str | None = "mapper"
+
+
+class RepoMirror(BaseModel):
+    """Mandatory repo source mirror (ADR-0024). NO on/off switch by design
+    (founder decision 2026-08-03): configured repos always clone from the
+    app-maintained mirror volume; a fresh sync is a fail-closed dispatch
+    precondition. These are the only knobs:
+    - sync_max_age_seconds: 0 (default) = sync before EVERY dispatch; N > 0
+      accepts a mirror synced within the last N seconds (fewer forge
+      requests between rapid-fire mission steps, bounded staleness).
+    - lfs: also fetch Git LFS content (default-branch scope) into the
+      mirror so Devs get real files instead of pointer files. Default off:
+      LFS content can be large, and pointers-without-content is exactly
+      today's behavior (dev images gained git-lfs with ADR-0024)."""
+    sync_max_age_seconds: int = Field(0, ge=0)
+    lfs: bool = False
+
+
+class ModelRate(BaseModel):
+    """One operator rate-card row: USD per 1M tokens, keyed by model prefix
+    (longest prefix wins at estimation time — domain/costing.rate_for).
+    cache_write defaults to 0: grok reports no cache-write counter, and a
+    missing rate must price as free rather than block the whole estimate."""
+    model_prefix: str = Field(min_length=1, max_length=64)
+    input_per_mtok: float = Field(ge=0)
+    cache_read_per_mtok: float = Field(ge=0)
+    cache_write_per_mtok: float = Field(0.0, ge=0)
+    output_per_mtok: float = Field(ge=0)
+
+
+# xAI public list prices for grok-4.5 (standard, <200k prompt tokens) —
+# the one harness with token splits but no native cost_usd. Estimation is
+# app-side only; the harness layer stays estimate-free (docs/08 §5).
+DEFAULT_MODEL_RATES: list[ModelRate] = [
+    ModelRate(model_prefix="grok-4.5", input_per_mtok=2.00,
+              cache_read_per_mtok=0.30, output_per_mtok=6.00),
+]
+
+# Bump the -vN suffix whenever DEFAULT_MODEL_RATES change, so a stamped
+# feed line ("cost (estimated, builtin-v1)") names an unambiguous vintage.
+BUILTIN_RATE_CARD_ID = "builtin-v1"
+
+
+class CostInputs(BaseModel):
+    """Operator cost inputs (ADR-0021): the per-model rate card behind every
+    app-side cost estimate, plus the display-override switch. Native
+    harness-reported cost_usd stays authoritative and untouched; when
+    override_native is on, DISPLAY surfaces (Runs tab, feed) prefer the
+    rate-card computation where one is possible."""
+    rates: list[ModelRate] = Field(
+        default_factory=lambda: [r.model_copy() for r in DEFAULT_MODEL_RATES])
+    override_native: bool = False
+
+    @field_validator("rates")
+    @classmethod
+    def _unique_prefixes(cls, v: list[ModelRate]) -> list[ModelRate]:
+        seen: set[str] = set()
+        for r in v:
+            if r.model_prefix in seen:
+                raise ValueError(
+                    f"duplicate rate-card model prefix: {r.model_prefix!r}")
+            seen.add(r.model_prefix)
+        return v
+
+    @property
+    def rate_card_id(self) -> str:
+        rows = [r.model_dump() for r in self.rates]
+        if rows == [r.model_dump() for r in DEFAULT_MODEL_RATES]:
+            return BUILTIN_RATE_CARD_ID
+        import hashlib
+        import json
+        canon = json.dumps(rows, sort_keys=True)
+        return "operator:" + hashlib.sha256(canon.encode()).hexdigest()[:8]
 
 
 class DevType(BaseModel):
@@ -383,27 +478,61 @@ class AppConfig(BaseModel):
     poll_interval_seconds: int = Field(30, ge=1, le=3600)
     dev_timeout_minutes: int = Field(120, ge=1, le=24 * 60)
     max_attempts: int = Field(3, ge=1, le=50)
+    # ADR-0026 — what grants a step FRESH attempts (and whether give-up exists
+    # at all). The pre-0026 rule — ANY non-DevCake comment resets the count —
+    # let any chatty integration (a sync bot, a CI notifier) keep the counter
+    # at 1 forever, defeating max_attempts and unbounding token spend.
+    #   label-ops (default): only removing DEVCAKE-FAILED or a later step
+    #     finishing resets the count — plus a comment containing the literal
+    #     DEVCAKE-RETRY, the deliberate human gesture integrations never emit
+    #     (pre-give-up there is no label to remove, so strict mode needs one).
+    #   any-comment: the pre-0026 behavior, for boards with no bot traffic.
+    #   unlimited: the app NEVER applies DEVCAKE-FAILED (breakers still act;
+    #     DEVCAKE-SKIP still stops everything). A loop-style warning with
+    #     cumulative cost posts every review_loop_warning_every failures so
+    #     the mode is loud. For operators whose token cost is measured in
+    #     watts, by explicit choice.
+    attempt_reset: Literal["label-ops", "any-comment",
+                           "unlimited"] = "label-ops"
+    # ADR-0026 — widen the backend brake (ADR-0018) to exit-11 DEV_BAD_OUTPUT
+    # evidence. Default OFF (founder decision 2026-08-04: current design
+    # stands unless the operator opts in). ON makes a shared-backend garbage
+    # cascade (the 2026-07-24 shape: every container talks but none writes
+    # result.json) correlate across missions — excusing attempts and
+    # throttling to one probe — instead of burning the board to
+    # DEVCAKE-FAILED. The continuation loop (ADR-0022) already absorbs most
+    # solitary narrate-and-stop exit-11s; this covers what survives it.
+    brake_on_bad_output: bool = False
     # ADR-0018 — Devs are told to write /workspace/out/result.json. With this on,
     # a result file the Dev wrote elsewhere in its workspace is still accepted,
     # but only when it was created during that run and passes the same
     # validation. The misplacement is recorded either way, so turning this off
     # costs diagnosis nothing — it only stops DevCake acting on the stray.
     recover_misplaced_result: bool = True
+    # ADR-0022 — when a harness exits 0 with no fault but never wrote
+    # result.json (the narrate-and-stop shape), the Dev entrypoint relaunches
+    # the harness in the same container with a contract-reminder nudge instead
+    # of failing the attempt. `auto` resumes the session when the harness has
+    # a capture-verified resume (RESUME_SPECS) and escalates permanently to a
+    # fresh session after a zero-progress continuation; the integer budget is
+    # the ONLY terminator (founder decision 2026-08-02 — stalls escalate,
+    # never stop, so large experimental budgets run to completion). Plan mode
+    # never continues. NOTE: each relaunch resets the CLI's own --max-turns,
+    # so the effective turn budget is (max_continuations + 1) × max-turns.
+    continuation_policy: Literal["auto", "resume-only", "fresh-only",
+                                 "off"] = "auto"
+    # deliberately no upper bound (unlike max_attempts): large budgets (10,
+    # 50) are a legitimate experiment, bounded by dev_timeout_minutes
+    max_continuations: int = Field(2, ge=0)
     # ge=1: used as a modulo cadence; 0 would ZeroDivisionError (ISSUES #8/#9)
     review_loop_warning_every: int = Field(3, ge=1)
-    auto_merge: bool = False
-    # both inert while auto_merge is OFF (docs/03 §4.1): on a merge conflict,
-    # route back to EXECUTE to sync + resolve (max 2 attempts) instead of
-    # parking on DEVCAKE-MERGE; while a merge is merely not-possible-yet
-    # (CI running, mergeability computing) the merge sweep keeps retrying for
-    # merge_retry_window_minutes before the human hand-off (0 = immediately)
-    auto_resolve_merge_conflicts: bool = True
-    merge_retry_window_minutes: int = Field(30, ge=0)
     # After a REVIEW-approved merge, also zip the PR change set onto the PMO
     # feed for CONFIGURED (external) work repos. Internal/zero-repo missions
     # always zip (ADR-0010) regardless of this flag. Default OFF: the forge
     # PR is the canonical artifact for eng repos; zips are merge-time
     # snapshots (can omit large files, dual-truth vs main, secrets risk).
+    # (Merge doctrine — auto_merge / auto-resolve / retry window — lives on
+    # each RepoInstance; see ADR-0020.)
     attach_merged_changeset_to_pmo: bool = False
     # operator switch: no NEW runs dispatch while paused; in-flight runs finish
     # and sweeps keep running (docs/11)
@@ -413,6 +542,11 @@ class AppConfig(BaseModel):
     # the fission backstop by explicit operator choice (docs/03 §1.3)
     max_decomposition_depth: int = Field(2, ge=0)
     relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    # ADR-0024 — mandatory source mirror; see the RepoMirror docstring
+    repo_mirror: RepoMirror = Field(default_factory=RepoMirror)
+    # operator rate card + display-override switch for app-side cost
+    # estimates (ADR-0021); edited via the Runs page "Cost inputs" modal
+    cost_inputs: CostInputs = Field(default_factory=CostInputs)
     # per-Mission-Type ACTIVE prompt template (v0.1.1): missing key ⇒ the
     # built-in "default". A dict map (deep_merge-safe: a patch touching one
     # type preserves siblings; reset = PUT the value "default"). Name
@@ -458,6 +592,16 @@ class AppConfig(BaseModel):
                 f"pmos: reserved instance name(s) {sorted(reserved)} — "
                 f"'main' marks legacy run records, 'sys' the HELLO/OAUTH "
                 f"pseudo-instance; pick another name")
+        # ADR-0030: 'board' is the app-managed default-board instance —
+        # operators cannot claim the name with an ordinary row (the managed
+        # row itself, stamped by the app or carried by a bundle, validates)
+        for e in v:
+            if e.name == MANAGED_BOARD_NAME and not (
+                    e.managed and e.system == "gitea_issues"):
+                raise ValueError(
+                    f"pmos: {MANAGED_BOARD_NAME!r} is reserved for the "
+                    f"auto-provisioned default board (ADR-0030) — pick "
+                    f"another name")
         # two instances polling the same underlying team would double-
         # dispatch every mission under two identity prefixes — refuse
         targets = [(e.system, e.api_base, e.team_key) for e in v if e.configured]
@@ -563,6 +707,54 @@ def deep_merge(base: dict, patch: dict) -> dict:
     return merged
 
 
+def reconcile_managed_pmos(current: list[dict], incoming: list[dict], *,
+                           internal_forge_present: bool) -> list[dict]:
+    """ADR-0030: keep app-managed PMO rows coherent across the two world-swap
+    write paths (config PUT, bundle/profile apply — `pmos` is replaced
+    WHOLESALE by both, and profiles saved before the feature simply don't
+    contain the row; without this, applying one silently deletes the board
+    instance AND its stored PAT via the removed-instance cleanup).
+
+    Pure list[dict] → list[dict]:
+    - a live managed row OMITTED by the incoming list is re-injected — while
+      the bundled provisioner is present; with it absent, deletion is allowed
+      (an undeletable red card on a torn-out Gitea would be worse doctrine);
+    - a live managed row PRESENT in the incoming list keeps its identity
+      fields canonical (name/system/team_key/api_base/managed come from the
+      live row) while operator-tunable fields (repos, reference_repos,
+      assignments, intake_paused) stay the incoming row's;
+    - a stray `managed: true` on any OTHER incoming row is stripped (logged)
+      — fake managed rows would otherwise gain delete-protection; stripping
+      instead of refusing keeps cross-stack bundle imports applyable.
+    """
+    managed_live = {p["name"]: p for p in (current or [])
+                    if isinstance(p, dict) and p.get("managed")}
+    out: list[dict] = []
+    seen: set[str] = set()
+    for p in (incoming or []):
+        if not isinstance(p, dict):
+            out.append(p)
+            continue
+        row = dict(p)
+        name = row.get("name")
+        live = managed_live.get(name)
+        if live is not None:
+            for field in ("name", "system", "team_key", "api_base", "managed"):
+                row[field] = live.get(field)
+            seen.add(name)
+        elif row.get("managed") and name != MANAGED_BOARD_NAME:
+            log.warning("pmos[%r]: stripping stray managed flag — managed "
+                        "rows are stamped by the app (ADR-0030)", name)
+            row["managed"] = False
+        out.append(row)
+    for name, live in managed_live.items():
+        if name not in seen and internal_forge_present:
+            log.info("re-injecting managed PMO instance %r omitted by the "
+                     "incoming list (ADR-0030)", name)
+            out.append(dict(live))
+    return out
+
+
 def _atomic_yaml(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -586,11 +778,88 @@ def _refuse_stale_file(data: dict) -> None:
             "delete the file and reconfigure via the admin panel")
 
 
+# Former top-level merge doctrine keys (pre-ADR-0020). Dropped silently by
+# pydantic unless we shout — operators with auto_merge:true lose auto-merge
+# until they re-enable per repo card.
+_LEGACY_MERGE_DOCTRINE_KEYS = frozenset({
+    "auto_merge", "auto_resolve_merge_conflicts", "merge_retry_window_minutes",
+})
+
+
+def auto_merge_flipped_on(
+    previous_repos: list, new_repos: list,
+) -> set[str]:
+    """Repo names whose auto_merge went OFF→ON (ADR-0020 re-arm set).
+
+    Accepts model_dump dicts or RepoInstance rows for either side so PUT and
+    bundle apply can share one comparison.
+    """
+    def _name_on(r) -> tuple[str | None, bool]:
+        if isinstance(r, dict):
+            return r.get("name"), bool(r.get("auto_merge"))
+        return getattr(r, "name", None), bool(getattr(r, "auto_merge", False))
+
+    prev_on: set[str] = set()
+    for r in previous_repos:
+        name, on = _name_on(r)
+        if name and on:
+            prev_on.add(name)
+    flipped: set[str] = set()
+    for r in new_repos:
+        name, on = _name_on(r)
+        if name and on and name not in prev_on:
+            flipped.add(name)
+    return flipped
+
+
+def apply_auto_merge_rearm(previous_repos: list, new_repos: list,
+                           managers) -> set[str]:
+    """Union OFF→ON repo names into every manager's rearm set (ADR-0020).
+
+    THE re-arm implementation for both world-swap paths — config PUT and
+    profile/bundle apply. Touches only plain manager attributes, so it can
+    live here without pulling orchestrator imports into config.
+    """
+    if not managers:
+        return set()
+    flipped = auto_merge_flipped_on(previous_repos, new_repos)
+    if not flipped:
+        return set()
+    for mgr in managers.values():
+        mgr.rearm_merge_repos |= flipped
+    log.info("auto_merge flipped ON for repo(s) %s — parked "
+             "DEVCAKE-MERGE missions on those repos re-armed for the "
+             "deferred-merge sweep", sorted(flipped))
+    return flipped
+
+
+def warn_unknown_top_level_keys(data: dict) -> None:
+    """Pre-v1: no migration — pydantic drops unknown fields. Surface them so
+    a silent default is not a quiet no-op (docs/10 §3, ADR-0020)."""
+    known = set(AppConfig.model_fields)
+    dropped = sorted(k for k in data if k not in known)
+    if not dropped:
+        return
+    log.warning(
+        "config: ignoring unknown top-level key(s) %s "
+        "(pre-v1 policy — no migration; check docs/10 §3)",
+        dropped)
+    doctrine = [k for k in dropped if k in _LEGACY_MERGE_DOCTRINE_KEYS]
+    if doctrine:
+        log.warning(
+            "config: former top-level merge doctrine key(s) %s were DROPPED — "
+            "merge policy is per-repo (ADR-0020). Each repos[] entry defaults "
+            "to auto_merge=false; re-enable on the Repos page cards if this "
+            "deployment previously auto-merged (docs/10 §3, docs/11 §2b)",
+            doctrine)
+
+
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
         data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
         if isinstance(data, dict):
             _refuse_stale_file(data)
+            warn_unknown_top_level_keys(data)
         cfg = AppConfig.model_validate(data)
     else:
         # first boot is EMPTY (schema v4, F5): everything — PMO instances,

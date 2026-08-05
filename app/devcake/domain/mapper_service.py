@@ -84,7 +84,16 @@ class MapperService:
         # otherwise emit an identical (ERROR) span every poll tick
         outcome, error = None, None
         degraded = self.degraded()
-        if degraded:
+        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh([repo])
+        if not mirror_ok:
+            # ADR-0024 fail-closed precondition — same semantics as mission
+            # dispatch: skip this cycle, retry next; NEVER raises into the
+            # poll segment (an exception here would mark the instance
+            # poll_degraded)
+            outcome = "mirror_stale"
+            error = f"repository mirror not fresh: {mirror_why.get(repo, '')}"
+            log.warning("mapper periodic run skipped — %s", error)
+        elif degraded:
             outcome, error = "degraded_skip", degraded
             log.warning("mapper degraded — periodic run skipped (%s)", degraded)
         elif (missing := missing_referenced_secret_env(dt)):
@@ -132,6 +141,11 @@ class MapperService:
         if repo in self.mgr.forges.breakers:
             raise MapperUnconfigured(
                 f"repo '{repo}' is not writable; fix its token first")
+        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh([repo])
+        if not mirror_ok:
+            raise MapperUnconfigured(
+                f"repository mirror for '{repo}' is not fresh: "
+                f"{mirror_why.get(repo, 'sync failed')}")
         async with self._lock:
             if self.active():
                 raise MapperBusy("a relations-mapper run is already active")

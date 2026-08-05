@@ -23,7 +23,9 @@ Precondition discipline:
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import re
 import time
 
 log = logging.getLogger("devcake.missions")
@@ -33,6 +35,7 @@ from typing import Any, Awaitable, Callable, Protocol
 
 from fastapi import HTTPException
 
+from ..domain import failure_taxonomy
 from ..domain.model import MissionRef
 from ..ports.pmo import PMOTransient
 from ..security import redact
@@ -202,6 +205,147 @@ async def post_steering(
     return {"ok": True}
 
 
+# ── 2b) operator mission creation (ADR-0030 Decision 3) ─────────────────────
+
+PRIORITIES: frozenset[str] = frozenset({"urgent", "high", "medium", "low"})
+MAX_CREATE_ATTACHMENTS = 10
+_SAFE_ATTACHMENT_NAME = re.compile(r"^[\w][\w .()\[\]-]{0,119}$")
+
+
+async def create_mission(
+    *,
+    instance: str,
+    title: str,
+    description: str = "",
+    priority: str = "medium",
+    adopt: bool = True,
+    attachments: list[dict] | None = None,
+    managers: dict[str, Any],
+    adoption_mode: str,
+) -> dict:
+    """Transcribe an operator-originated mission onto the PMO board
+    (ADR-0030: DevCake holds the pen; the operator originates the intent).
+
+    Write-through only — no local record; the PMO stays the source of truth
+    (INV-1). Resurrects the PR-#14-deleted seam with three deliberate
+    changes: `instance` is REQUIRED (multi-PMO implicit routing is a
+    footgun), title/description are REDACTED before the port call (the old
+    dialog's paste-safety copy claimed this and the old backend never did
+    it), and v1 carries attachments (uploaded after create, never aborting
+    the loop — partial failure is disclosed, not rolled back: the mission
+    EXISTS, a retried POST would duplicate it, and the port deliberately
+    has no delete)."""
+    if not (title and title.strip()):
+        raise HTTPException(status_code=422, detail="title must not be blank")
+    if priority not in PRIORITIES:
+        # the Linear adapter maps priority via dict lookup — an unknown value
+        # would KeyError into a 500 there; refuse it at the boundary instead
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown priority {priority!r}; "
+                   f"expected one of {sorted(PRIORITIES)}")
+    if instance not in managers:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no configured PMO instance named {instance!r}")
+    mgr = managers[instance]
+    team_key = getattr(mgr.instance, "team_key", "")
+    if not team_key:
+        raise HTTPException(
+            status_code=409,
+            detail=f"instance {instance!r} has no team_key configured")
+
+    files: list[tuple[str, bytes]] = []
+    raw_atts = attachments or []
+    if len(raw_atts) > MAX_CREATE_ATTACHMENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"at most {MAX_CREATE_ATTACHMENTS} attachments per mission")
+    cap = mgr.pmo.capabilities().attachment_max_bytes
+    for att in raw_atts:
+        name = (att.get("name") or "").strip()
+        if not _SAFE_ATTACHMENT_NAME.match(name) or name in (".", ".."):
+            raise HTTPException(
+                status_code=422,
+                detail=f"attachment name {name!r} must be a plain filename")
+        try:
+            data = base64.b64decode(att.get("content_b64") or "",
+                                    validate=True)
+        except Exception:  # noqa: BLE001 — boundary validation: any decode failure is the client's 422, never a 500
+            raise HTTPException(
+                status_code=422,
+                detail=f"attachment {name!r}: content_b64 is not valid base64")
+        if len(data) > cap:
+            raise HTTPException(
+                status_code=422,
+                detail=f"attachment {name!r} exceeds this PMO's "
+                       f"{cap // (1024 * 1024)}MB attachment limit")
+        files.append((name, data))
+
+    # redaction BEFORE the port call — a pasted secret must never land on
+    # the external board (the same guarantee post_steering gives)
+    clean_title = redact(title.strip())
+    clean_description = redact(description or "")
+    # adopt rides the create as the DEVCAKE label — only meaningful under
+    # opt_in (opt_out adopts everything; sending the label would be noise).
+    # NEVER the DEVCAKE-CREATED family-gate label: that marks decomposition
+    # children and would withhold the mission behind a marker-parent scan.
+    label_names = ({"DEVCAKE"} if adoption_mode == "opt_in" and adopt
+                   else set())
+    try:
+        key, pmo_id = await mgr.pmo.create_mission(
+            team_key, clean_title, clean_description, priority, label_names)
+    except PMOTransient as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo transient error while creating mission: {e}") from e
+    except RuntimeError as e:
+        # Non-transient adapter errors (revoked token, unknown team) surface
+        # as 502 — never let a bare RuntimeError leak as 500 to the SPA.
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo rejected mission creation: {e}") from e
+
+    url = ""
+    try:
+        url = (await mgr.pmo.get(MissionRef(pmo_id, "issue"))).url
+    except Exception:  # noqa: BLE001 — the deep link is a courtesy; its failure must not fail a mission that EXISTS
+        log.warning("created mission %s: url lookup failed", key)
+
+    uploaded: list[tuple[str, str]] = []
+    attachment_failures: list[dict] = []
+    for name, data in files:
+        try:
+            asset_url = await mgr.pmo.upload_attachment(pmo_id, name, data)
+            uploaded.append((name, asset_url))
+        except Exception as e:  # noqa: BLE001 — partial-failure honesty: one bad upload must not abort the rest; each failure is disclosed by name
+            attachment_failures.append(
+                {"name": name, "error": redact(str(e))[:160]})
+
+    feed_posted = False
+    if uploaded:
+        # Linear attachments are INVISIBLE unless referenced from a feed
+        # post (docs/05 §1); harmless and consistent on Gitea. Sentinel-free
+        # on purpose: operator-authored = HUMAN classification is honest,
+        # and a fresh mission has no attempt counter to protect.
+        lines = ["Attached at creation:"] + [
+            f"- [{name}]({asset_url})" for name, asset_url in uploaded]
+        try:
+            await mgr.pmo.post_feed(MissionRef(pmo_id, "issue"),
+                                    "\n".join(lines))
+            feed_posted = True
+        except Exception as e:  # noqa: BLE001 — disclosure over failure: the files ARE uploaded; a failed index post is a warning, not an error
+            log.warning("created mission %s: attachment index post failed: %s",
+                        key, e)
+
+    _try_audit(mgr, pmo_id, "ui_create",
+               f"{clean_title[:100]} atts={len(uploaded)}/{len(files)}")
+    return {"key": key, "pmo_id": pmo_id, "instance": instance, "url": url,
+            "adopted": bool(label_names) or adoption_mode != "opt_in",
+            "attachment_failures": attachment_failures,
+            "feed_posted": feed_posted}
+
+
 # ── 3) stop-run endpoint ────────────────────────────────────────────────────
 
 async def stop_run(
@@ -231,8 +375,9 @@ async def stop_run(
                    "DevCake is finishing bookkeeping; it completes or fails "
                    "on its own")
 
-    await run_manager.kill(run, "failed", "stopped by operator from the admin UI",
-                           error_class="DEV_OPERATOR_STOP")
+    await run_manager.kill(
+        run, "failed", "stopped by operator from the admin UI",
+        error_class=failure_taxonomy.DEV_OPERATOR_STOP)
     return {"ok": True, "run_id": run_id, "state": "failed"}
 
 
@@ -268,8 +413,9 @@ async def stop_all_runs(
             skipped.append(run.run_id)                  # finalizing/terminal
             continue
         try:
-            await run_manager.kill(run, "failed", "stopped by operator (stop all)",
-                                   error_class="DEV_OPERATOR_STOP")
+            await run_manager.kill(
+                run, "failed", "stopped by operator (stop all)",
+                error_class=failure_taxonomy.DEV_OPERATOR_STOP)
             stopped.append(run.run_id)
         except Exception as e:  # noqa: BLE001 — one kill failure must not abort the batch or lose accounting; recorded per-run
             log.exception("stop_all_runs: kill failed for %s", run.run_id)

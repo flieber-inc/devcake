@@ -57,11 +57,14 @@ instance-name-keyed sibling structure can drift against the instance list.
 
 ### 4 — Admin UI
 
-The Assignments section keeps the global table ("global defaults") and adds
+The Assignments section (labeled **Mission Types** in the UI since the
+2026-08-02 nav reorg; the config field stays `assignments`) keeps the global
+table ("global defaults") and adds
 one override block per configured PMO card: a tri-state select per mission
 type whose inherit option names the effective global Dev Type, an args input
-only when overridden, and the review-independence (EXECUTE ≠ REVIEW) and
-harness-mismatch advisories evaluated per instance on **effective** rows.
+only when overridden, and the role-focus (EXECUTE vs REVIEW share a Dev Type —
+performance tip: skills/prompt focus) and harness-mismatch advisories
+evaluated per instance on **effective** rows.
 The draft seeds `assignments: {}` on every PMO card at load so diffs stay
 per-row and removing the last override round-trips to a clean draft.
 
@@ -77,5 +80,6 @@ per-row and removing the last override round-trips to a clean draft.
   adds an instance dimension, not a condition language.
 - Two instances sharing one board domain but needing different staffing no
   longer motivates a second deployment — the remaining single-global knobs
-  (adoption mode, auto_merge, concurrency) are listed in docs/16 as open
-  per-instance candidates, deliberately unbundled from this change.
+  (adoption mode, concurrency) are listed in docs/16 as open per-instance
+  candidates, deliberately unbundled from this change. **`auto_merge` moved
+  to per-repo doctrine** (ADR-0020), not per-PMO.

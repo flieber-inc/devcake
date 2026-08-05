@@ -17,6 +17,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from .. import failure_taxonomy
 from ..run import Run, utcnow
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("devcake.router")
 
-_LEGACY_REFS = ("", "main")
+from ..run import LEGACY_PMO_REFS
 
 
 class FinalizerRouter:
@@ -38,7 +39,7 @@ class FinalizerRouter:
 
     def _mgr(self, run: Run) -> "MissionManager | None":
         mgr = self._managers.get(run.pmo_ref)
-        if mgr is None and run.pmo_ref in _LEGACY_REFS and len(self._managers) == 1:
+        if mgr is None and run.pmo_ref in LEGACY_PMO_REFS and len(self._managers) == 1:
             mgr = next(iter(self._managers.values()))
         return mgr
 
@@ -61,7 +62,7 @@ class FinalizerRouter:
         # it stamps its own class. The state is "failed" but the condition is a
         # genuine orphan (the run's PMO instance is gone from config) — the
         # state/class mismatch is pre-existing and deliberate.
-        run.error_class = "DEV_ORPHANED"
+        run.error_class = failure_taxonomy.DEV_ORPHANED
         run.ended_at = utcnow()
         self._store.save(run)
 

@@ -179,16 +179,33 @@ def partial_text(buf) -> str:
     return buf.decode("utf-8", "replace") if isinstance(buf, bytes) else str(buf)
 
 
-def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
-    """One harness invocation. Returns the measured record."""
-    prompt = pathlib.Path(args.prompt_file).read_text()
-    slot = root if root.name == "workspace" and args.concurrency == 1 \
+def capture_slot(root: pathlib.Path, index: int, concurrency: int) -> pathlib.Path:
+    """The per-invocation workspace root — ONE definition, because the resume
+    leg must resolve the exact directory the first leg ran in (grok keys its
+    session store on the urlencoded cwd)."""
+    return root if root.name == "workspace" and concurrency == 1 \
         else root / f"slot{index}"
+
+
+def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
+    """One harness invocation in a FRESH workspace. Returns the measured record."""
+    prompt = pathlib.Path(args.prompt_file).read_text()
+    slot = capture_slot(root, index, args.concurrency)
     workdir = make_workspace(slot, prompt)
     out_dir = slot / "out"
     argv = ep.harness_argv(args.harness, prompt, plan_mode=args.plan_mode,
                            model=args.model, extra=shlex.split(args.extra or ""),
                            out_dir=out_dir)
+    rec = execute_argv(ep, args, argv, workdir, out_dir, prompt)
+    rec["slot"] = index
+    return rec
+
+
+def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
+                 out_dir: pathlib.Path, prompt: str) -> dict:
+    """Execute one argv in an EXISTING workspace and measure it — the shared
+    core of run_once and the resume second leg (ADR-0022 Phase 0), so both
+    legs are recorded by identical machinery."""
     started = time.monotonic()
     proc = subprocess.Popen(argv, cwd=workdir, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True,
@@ -222,7 +239,13 @@ def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
     lm = out_dir / "last_message.txt"
     if args.harness == "codex" and lm.exists():
         last_message = lm.read_text()
-    session_id = grok_session_id(stdout) if args.harness == "grok-build" else ""
+    # session_identity is the production reader (ADR-0022; all three
+    # harnesses); the grok-only scan stays as the fallback for a baked
+    # entrypoint that predates it (/dev_entrypoint.py without /srv mounted)
+    sid_fn = getattr(ep, "session_identity", None)
+    session_id = (sid_fn(args.harness, stdout) if sid_fn
+                  else grok_session_id(stdout)
+                  if args.harness == "grok-build" else "")
     if args.harness == "codex":
         dump = ep.codex_text_dump(stdout)
     elif args.harness == "grok-build":
@@ -241,7 +264,7 @@ def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
          else 16 if fault else 11, ""))
 
     return {
-        "slot": index, "argv": argv, "exit_code": exit_code,
+        "argv": argv, "exit_code": exit_code,
         "timed_out": timed_out, "duration_ms": duration_ms,
         "stdout": stdout, "stderr": stderr,
         "stdout_bytes": len(stdout), "stdout_lines": len(stdout.splitlines()),
@@ -271,6 +294,12 @@ def main() -> None:
     ap.add_argument("--preflight", default="", help="URL that must answer first")
     ap.add_argument("--model", default="")
     ap.add_argument("--extra", default="", help="shell-quoted extra argv")
+    ap.add_argument("--resume-prompt-file", default="",
+                    help="ADR-0022 Phase 0: after the first invocation, run a "
+                         "SECOND one in the SAME workspace via the production "
+                         "harness_resume_argv, resuming the first's session — "
+                         "recorded as <name>_resume.*. Requires --concurrency 1 "
+                         "(session stores are keyed on the cwd).")
     ap.add_argument("--plan-mode", action="store_true")
     ap.add_argument("--intended", default="",
                     help="the reason we EXPECT; recorded for comparison only")
@@ -304,10 +333,38 @@ def main() -> None:
     else:
         records = [run_once(ep, args, 0, work)]
 
+    # ADR-0022 Phase 0: the resume second leg — same workspace, same session,
+    # argv through the PRODUCTION harness_resume_argv (the rig's whole reason
+    # to exist: a fixture must not drift from what production would run).
+    if args.resume_prompt_file:
+        if args.concurrency != 1:
+            sys.exit("--resume-prompt-file requires --concurrency 1")
+        first = records[0]
+        sid = first["session_id"]
+        if not sid:
+            sys.exit("first invocation exposed no session identity — nothing "
+                     "to resume (that itself is a finding: record the first "
+                     "capture and stop)")
+        resume_prompt = pathlib.Path(args.resume_prompt_file).read_text()
+        slot = capture_slot(work, 0, args.concurrency)
+        argv = ep.harness_resume_argv(args.harness, sid, resume_prompt,
+                                      model=args.model,
+                                      extra=shlex.split(args.extra or ""),
+                                      out_dir=slot / "out")
+        if argv is None:
+            sys.exit(f"harness_resume_argv has no candidate for {args.harness}")
+        rec = execute_argv(ep, args, argv, slot / "repo", slot / "out",
+                           resume_prompt)
+        rec["slot"] = 0
+        rec["name_override"] = f"{args.name}_resume"
+        rec["resume_of"] = args.name
+        rec["first_session_id"] = sid
+        records.append(rec)
+
     summary = []
     for rec in records:
         suffix = "" if args.concurrency == 1 else f".{rec['slot']}"
-        base = f"{args.name}{suffix}"
+        base = rec.get("name_override") or f"{args.name}{suffix}"
         (out_root / f"{base}.jsonl").write_text(rec["stdout"])
         if rec["stderr"]:
             (out_root / f"{base}.stderr.txt").write_text(rec["stderr"])
@@ -333,6 +390,11 @@ def main() -> None:
             "dump_bytes": len(rec["dump"]),
             "last_message_bytes": len(rec["last_message"]),
             "session_id": rec["session_id"] or None,
+            # resume leg only (ADR-0022 Phase 0): which capture it resumed and
+            # the FIRST leg's session id — equality with session_id above is
+            # the fork-semantics answer (same id = resumed in place)
+            "resume_of": rec.get("resume_of"),
+            "first_session_id": rec.get("first_session_id"),
             # measured verdicts. The EXPECTED reason deliberately lives in the
             # pytest parametrize table, never here — measured facts and
             # expectations must not share a file, or an expectation can be

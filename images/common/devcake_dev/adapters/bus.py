@@ -81,8 +81,11 @@ def send_artifacts(payload: dict) -> None:
                                "data": part})
 
 
-def request_reply(kind: str, want: str, timeout: int = 90) -> dict:
-    send(kind, {})
+def request_reply(kind: str, want: str, timeout: int = 90,
+                  payload: dict | None = None) -> dict:
+    # ADR-0025: runspec.get carries {"phase": ...} so the app can serve the
+    # provision step a reduced, secret-free spec; no payload = full spec.
+    send(kind, payload or {})
     last_id, deadline = "0", time.time() + timeout
     while time.time() < deadline:
         for _s, msgs in r.xread({REPLY: last_id}, block=5000, count=10) or []:

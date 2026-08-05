@@ -38,7 +38,8 @@ from pydantic import ValidationError
 
 from . import secrets as secrets_store
 from .config import (AppConfig, DevType, _INSTANCE_NAME_RE, delete_dev_type,
-                     reject_stale_patch, save_config, save_dev_type)
+                     reconcile_managed_pmos, reject_stale_patch, save_config,
+                     save_dev_type)
 from .prompts import PLAYBOOK_VARS
 from .prompts import templates as prompt_templates
 from .security import redact
@@ -74,6 +75,9 @@ SETUP_ENV_VARS: list[tuple[str, bool]] = [
     ("OO_UI_URL", False),
     ("DOCKER_GID", True),
     ("DEVCAKE_TAG", True),
+    # ADR-0025: host-absolute workspace base — up.sh re-derives it on the
+    # target host, so an exported value is verification-only like DOCKER_GID
+    ("DEVCAKE_WS_HOST", True),
 ]
 _SETUP_ENV_NAMES = {name for name, _ in SETUP_ENV_VARS}
 
@@ -503,6 +507,7 @@ def generate_env_file(setup_env: dict) -> str:
     hints = {
         "DOCKER_GID": "# HOST-SPECIFIC — verify: stat -c %g /var/run/docker.sock",
         "DEVCAKE_TAG": "# HOST-SPECIFIC — must match your docker buildx bake tag",
+        "DEVCAKE_WS_HOST": "# HOST-SPECIFIC — absolute path; ./up.sh re-derives it",
     }
     for name, host in SETUP_ENV_VARS:
         if host:
@@ -703,6 +708,7 @@ def _newer_secret_warnings(bundle: dict, parsed: dict) -> list[str]:
 def apply_bundle(bundle: dict, *, config: AppConfig,
                  dev_types: dict[str, DevType],
                  reload: Callable[[], None],
+                 managers: dict | None = None,
                  _is_rollback: bool = False) -> dict:
     """REPLACE the live world with the bundle's sections. Synchronous end to
     end — no awaits between validation and the in-memory swap, so the asyncio
@@ -718,6 +724,20 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     warnings = list(parsed["warnings"])
     new_cfg: AppConfig | None = parsed["config"]
     if new_cfg is not None and not _is_rollback:
+        # ADR-0030: profiles saved BEFORE the managed-board feature carry no
+        # board row — applying one must not delete the instance (and, at the
+        # next boot's provisioning, resurrect it with a fresh identity while
+        # its PAT still exists). Rollback re-applies serialize_current output,
+        # which already carries the row — skip there.
+        incoming = [p.model_dump() for p in new_cfg.pmos]
+        reconciled = reconcile_managed_pmos(
+            [p.model_dump() for p in config.pmos], incoming,
+            internal_forge_present=bool(
+                os.environ.get("GITEA_ADMIN_PASSWORD")))
+        if reconciled != incoming:
+            new_cfg = AppConfig.model_validate(
+                {**new_cfg.model_dump(), "pmos": reconciled})
+            parsed["config"] = new_cfg
         dry_run_adapters(new_cfg)
 
     previous = serialize_current(
@@ -725,6 +745,9 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
         include_config=new_cfg is not None,
         include_secrets=parsed["secrets"] is not None,
         include_orphan_secrets=True)   # byte-exact rollback (re-audit #3)
+    # snapshot auto_merge before the in-memory swap so OFF→ON re-arm works
+    # for profile/import apply the same way as PUT /config (ADR-0020)
+    prev_repos = list(config.repos) if new_cfg is not None else []
 
     applied: list[str] = []
     try:
@@ -759,6 +782,11 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
                 log.exception("rollback reload failed — files restored")
         else:
             reload()
+            if new_cfg is not None and not _is_rollback:
+                # same OFF→ON re-arm as PUT /config — ONE implementation in
+                # config.py (ADR-0020); no api import (module stays import-light)
+                from .config import apply_auto_merge_rearm
+                apply_auto_merge_rearm(prev_repos, config.repos, managers)
     except BundleError:
         raise
     except Exception as e:
@@ -767,7 +795,7 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
         log.exception("bundle apply failed — restoring previous settings")
         try:
             apply_bundle(previous, config=config, dev_types=dev_types,
-                         reload=reload, _is_rollback=True)
+                         reload=reload, managers=None, _is_rollback=True)
         except Exception:
             log.exception("rollback also failed")
             raise BundleError(

@@ -22,9 +22,11 @@ from ..ports.finalizer import RunFinalizer
 from ..ports.messaging import MessagingPort
 from ..ports.state import StatePort
 from ..telemetry import OTEL_COLLECTOR_URL
+from . import failure_taxonomy
 from .ids import make_run_id
 from .run import Run, auth_digest, utcnow
 from .run_bootstrap import RunBootstrap
+from .workspaces import NullWorkspaceStore
 
 log = logging.getLogger("devcake.runs")
 tracer = trace.get_tracer("devcake")
@@ -42,8 +44,8 @@ RUN_FAILURES_STREAM = "run_failures"
 # for a future one nobody remembers to add), so no kill path can leave a run
 # unclassified and silently fall back to the legacy `error`-prefix matching in
 # `attempt_number`. Operator-initiated stops pass DEV_OPERATOR_STOP explicitly.
-KILL_CLASSES = {"timed_out": "DEV_TIMEOUT", "orphaned": "DEV_ORPHANED",
-                "failed": "DEV_KILLED"}
+# ADR-0027: the mapping is the taxonomy table's `kill_state` column.
+KILL_CLASSES = failure_taxonomy.KILL_CLASSES
 
 
 def failure_record(run: "Run", outcome: str, reason: str,
@@ -69,6 +71,30 @@ def failure_record(run: "Run", outcome: str, reason: str,
     }
 
 
+def provision_runspec_reply(run: "Run", secret: dict) -> dict:
+    """ADR-0025 R1 — the REDUCED spec served to a `runspec.get` that names
+    phase "provision". The provision container runs trusted code but sits
+    in the same image on the same network, so it gets only what cloning
+    needs: the run's non-secret spec_env, the extras entries (mirrored ones
+    are already tokenless), the activity-repo credential, and the forge
+    token ONLY when the work repo direct-clones (mirror_path empty —
+    internal repos). Harness/model keys, Dev-Type secret env and credential
+    FILE content never ride this reply."""
+    env = dict(run.spec_env)
+    if not env.get("DEVCAKE_MIRROR_PATH", ""):
+        tok = (secret.get("env") or {}).get("DEVCAKE_FORGE_TOKEN")
+        if tok:
+            env["DEVCAKE_FORGE_TOKEN"] = tok
+    return {"env": env,
+            "credential_files": [],
+            "extra_repos": secret.get("extra_repos") or [],
+            "skills": [],
+            "skills_dir": "",
+            "mcp_setup_commands": [],
+            "activity_repo": secret.get("activity_repo") or None,
+            "prompt": ""}
+
+
 class RunManager:
     def __init__(
         self,
@@ -76,11 +102,16 @@ class RunManager:
         messaging: MessagingPort,
         executor: ExecutorPort,
         finalizer: RunFinalizer | None = None,
+        workspaces=None,
     ):
         self.store = store
         self.messaging = messaging
         self.executor = executor
-        self.bootstrap = RunBootstrap(store, messaging, executor)
+        # ADR-0025: per-run workspace lifecycle (Null default keeps every
+        # existing construction — tests included — a no-op, like NullRepoCache)
+        self.workspaces = workspaces or NullWorkspaceStore()
+        self.bootstrap = RunBootstrap(store, messaging, executor,
+                                      workspaces=self.workspaces)
         self.finalizer = finalizer  # MissionManager (or fake); optional for hello-only
         self.oauth_mgr = None       # wired by main (OAuthManager)
         self.runlog = None          # wired by main (RunLogStore)
@@ -200,12 +231,15 @@ class RunManager:
             run.last_heartbeat = utcnow()
             self.store.save(run)
         elif kind == "run.started":
-            # terminal guard (mirrors run.artifacts below): a run killed while
-            # its container was still booting must NOT be resurrected to
-            # 'running' by an in-flight run.started — it would re-enter
-            # store.active(), hold the mission's in-flight slot, and only
-            # self-heal at the watchdog's heartbeat grace (audit D5 #10).
-            if run.state in ("finished", "failed", "timed_out", "orphaned"):
+            # ADR-0025: accept ONLY the dispatched→running transition. Any
+            # replay (ingress redelivery, the bus's XADD retry, a Dagu-UI
+            # re-run) previously overwrote started_at — corrupting the Runs
+            # page's runtime metric — and even reverted a `finalizing` run
+            # to `running`; and under the two-step DAG only the provision
+            # step sends run.started, so anything else is a replay by
+            # construction. (Supersedes the narrower terminal-only guard,
+            # audit D5 #10.)
+            if run.state != "dispatched":
                 return
             run.state, run.started_at = "running", utcnow()
             self.store.save(run)
@@ -217,6 +251,16 @@ class RunManager:
                     run_id, "runspec.error",
                     {"error": "run is not active, its dev type was deleted, or its repo was removed from config"},
                 )
+                return
+            # ADR-0025 R1: the provision step asks with {"phase":
+            # "provision"} and gets a reduced, secret-free spec; the harness
+            # step asks with "harness" and gets the full one. Anything else
+            # (defensively) gets the full spec. Stateless per request — both
+            # steps of one run ask independently.
+            if (payload or {}).get("phase") == "provision":
+                await self.messaging.reply(
+                    run_id, "runspec.result",
+                    provision_runspec_reply(run, secret))
                 return
             await self.messaging.reply(
                 run_id, "runspec.result",
@@ -300,6 +344,16 @@ class RunManager:
                 await self._finalize(run, payload)
             if self.runlog is not None:
                 self.runlog.close(run.run_id)  # end any live log followers
+            # ADR-0025 Hook A: one cleanup covers every finalize exit
+            # (mission success/failure, mapper, hello) — but ONLY once the
+            # run is actually terminal. A finalize crash leaves `finalizing`
+            # and the workspace intact for artifact redelivery / the
+            # stalled-finalize killer to reach later. The container already
+            # exited (artifacts are the dying words) — no mount race.
+            fresh = self.store.get(run_id)
+            if fresh is None or fresh.state in ("finished", "failed",
+                                                "timed_out", "orphaned"):
+                self.workspaces.cleanup(run_id)
         else:
             log.warning("unknown message kind %s for %s", kind, run_id)
 
@@ -366,6 +420,10 @@ class RunManager:
 
     async def _kill_inner(self, run: Run, new_state: str, reason: str, *,
                           error_class: str | None = None) -> None:
+        # The state the killer DECIDED on, captured before any await in this
+        # method: the teardown below yields repeatedly, and finalize can claim
+        # or finish the run in those windows (2026-08 evaluation TOCTOU).
+        prior_state = run.state
         # Fail-safe teardown (ISSUES #3): stop/_ship_failure may raise on
         # transport errors; ACL delete + terminal state MUST still run so the
         # run leaves store.active() and the watchdog does not re-kill forever.
@@ -389,27 +447,67 @@ class RunManager:
                 await self.messaging.delete_reply_stream(run.run_id)
             except Exception:
                 log.exception("delete_reply_stream failed for %s", run.run_id)
-            run.state = new_state  # type: ignore[assignment]
-            run.ended_at = utcnow()
-            from ..security import redact
-            run.error = redact(reason)
-            # ADR-0018: classify HERE, not at the call sites. Seven callers
-            # across watchdog / reconcile / clear / stop-run / stop-all funnel
-            # through this method, and two earlier attempts to enumerate them
-            # in a table both missed one. The state-keyed default plus the
-            # DEV_KILLED catch-all means a future kill site cannot silently
-            # produce an unclassified run.
-            run.error_class = error_class or KILL_CLASSES.get(new_state, "DEV_KILLED")
-            # Do not RESURRECT a record a concurrent clear-runs wipe just
-            # deleted (re-audit #31 #1/#2): get()+save() with no await between
-            # is atomic under asyncio's cooperative scheduling, so this fully
-            # closes the phantom-record race for EVERY killer — watchdog,
-            # stop-run, stop-all, and clear's own drain all funnel through
-            # here. A record clear already unlinked reads None → we skip; it is
-            # already out of store.active() so nothing re-kills it.
-            if self.store.get(run.run_id) is not None:
-                self.store.save(run)
-        if self.finalizer and run.mission_pmo_id:
+            # Two guards on one FRESH read, no await before save (atomic under
+            # asyncio's cooperative scheduling):
+            # 1. Do not RESURRECT a record a concurrent clear-runs wipe just
+            #    deleted (re-audit #31 #1/#2): a record clear already unlinked
+            #    reads None → skip; it is already out of store.active() so
+            #    nothing re-kills it.
+            # 2. Do not OVERWRITE a run whose state moved under the kill
+            #    (2026-08 evaluation): the teardown awaits above are yield
+            #    points where finalize can claim (running → finalizing) or
+            #    finish the run — stamping timed_out/failed then would revert
+            #    a landed PMO transition or race the in-flight finalize.
+            #    Comparing against `prior_state` (what the killer decided on)
+            #    keeps the stalled-finalize path legal: it re-reads and
+            #    passes a run still in `finalizing`, so the states match.
+            #    NOTE: the record object stays UNMUTATED on the skip path —
+            #    `run` may be the store's shared parse-cache instance
+            #    (store.all()), and a dead killer must not scribble on an
+            #    object other coroutines are reading.
+            current = self.store.get(run.run_id)
+            state_moved = current is not None and current.state != prior_state
+            if state_moved:
+                # The record object stays UNMUTATED on this path — `run` may
+                # be the store's shared parse-cache instance (store.all()),
+                # and a dead killer must not scribble on an object other
+                # coroutines are reading.
+                log.info("kill of %s aborted at save: state moved %s → %s "
+                         "under the kill — the mover wins", run.run_id,
+                         prior_state, current.state)
+            else:
+                run.state = new_state  # type: ignore[assignment]
+                run.ended_at = utcnow()
+                from ..security import redact
+                run.error = redact(reason)
+                # ADR-0018: classify HERE, not at the call sites. Seven callers
+                # across watchdog / reconcile / clear / stop-run / stop-all
+                # funnel through this method, and two earlier attempts to
+                # enumerate them in a table both missed one. The state-keyed
+                # default plus the DEV_KILLED catch-all means a future kill
+                # site cannot silently produce an unclassified run.
+                run.error_class = (error_class
+                                   or KILL_CLASSES.get(
+                                       new_state, failure_taxonomy.DEV_KILLED))
+                if current is not None:
+                    self.store.save(run)
+            # ADR-0025 Hook B: every kill path (watchdog ×3, reconcile
+            # orphan, operator stop, clear drain) funnels through this
+            # teardown. Best-effort by doctrine — the dying container can
+            # hold the bind through Dagu's stop grace and keep writing; the
+            # sweep guarantees reclamation. cleanup() never raises, but this
+            # block is the fail-safe teardown, so belt-and-suspenders.
+            try:
+                self.workspaces.cleanup(run.run_id)
+            except Exception:
+                log.exception("workspace cleanup failed for %s", run.run_id)
+        # state_moved: the kill lost the race — the run's mover (finalize, or
+        # another killer) now owns the mission transition, and restoring the
+        # dispatch-time status here would revert it underneath the live
+        # finalize (the exact hazard clear.py's drain guards against). The
+        # record-deleted (clear-wipe) path keeps restoring as before: "start
+        # fresh" legitimately hands missions back.
+        if self.finalizer and run.mission_pmo_id and not state_moved:
             try:
                 await self.finalizer.restore_after_failure(run)
             except Exception:

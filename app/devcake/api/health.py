@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 
 from .. import security
 from ..adapters.dagu import DAGU_URL
+from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..prompts import templates as prompt_templates
 from ..telemetry import OO_URL
 
@@ -45,22 +46,31 @@ def reset_protection_cache() -> None:
 
 
 async def _branch_protection(forge_runtime) -> dict:
-    """{repo_name: BranchProtection|None} across every configured repo."""
+    """{repo_name: BranchProtection|None} across every configured repo.
+    Bounded-parallel like ForgeRuntime.refresh_all — sequential, this walk
+    stalled the first rich /health call for O(N repos) of probe I/O (same
+    defect class as the 2026-08-01 boot incident)."""
     if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
         _protection_cache["ts"] = time.monotonic()
+        sem = asyncio.Semaphore(PROBE_CONCURRENCY)
         out: dict = {}
-        for name, f in forge_runtime.forges.items():
+
+        async def _probe(name: str, f) -> None:
             inst = forge_runtime.instance(name)
             # reference-only repos: DevCake never pushes or merges there, so
             # the unprotected-default-branch advisory would be pure noise
             if inst is not None and inst.reference_only:
-                continue
-            try:
-                prot = await f.default_branch_protection(
-                    inst.default_branch if inst else "main")
-                out[name] = prot.model_dump() if prot else None
-            except Exception:  # noqa: BLE001 — probe contract: failure → None (advisory omitted); /health must never 500
-                out[name] = None
+                return
+            async with sem:
+                try:
+                    prot = await f.default_branch_protection(
+                        inst.default_branch if inst else "main")
+                    out[name] = prot.model_dump() if prot else None
+                except Exception:  # noqa: BLE001 — probe contract: failure → None (advisory omitted); /health must never 500
+                    out[name] = None
+
+        await asyncio.gather(*(_probe(n, f)
+                               for n, f in list(forge_runtime.forges.items())))
         _protection_cache["value"] = out
     return _protection_cache["value"]
 
@@ -101,10 +111,24 @@ async def _oo_ingest_check() -> dict:
     return result
 
 
+def unused_repo_names(config) -> list[str]:
+    """Configured repo adapters selected by NO PMO instance (neither work nor
+    reference). Dead weight with a latency price: every entry is rebuilt on
+    each config/secret reload and probed on each full forge sweep — 292 of
+    them turned the 2026-08-01 boot into a ~95s outage. Unconfigured (empty
+    url) entries count too: clutter either way."""
+    selected: set[str] = set()
+    for pmo in config.pmos:
+        selected.update(pmo.repos)
+        selected.update(pmo.reference_repos)
+    return sorted(r.name for r in config.repos if r.name not in selected)
+
+
 async def build_health_payload(*, config, dev_types, managers, mappers,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
-                               backend_degraded: dict | None = None) -> dict:
+                               backend_degraded: dict | None = None,
+                               repo_cache=None, workspaces=None) -> dict:
     """The /api/v1/health body (docs/11 §0). All deps explicit — unit-testable
     with fakes; the route in main.py is a one-line forward."""
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -151,6 +175,15 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
         "pmo": bool(configured_ok) and all(configured_ok),
         "pmo_instances": pmo_instances,
         "forge": forge_runtime.health,
+        # the initial full sweep now rides the poll task (2026-08-01) — this
+        # tells an empty/partial `forge` map apart from a completed sweep
+        "forge_probe": {
+            "complete": forge_runtime.last_full_probe_at is not None,
+            "completed_at": (forge_runtime.last_full_probe_at.isoformat()
+                             if forge_runtime.last_full_probe_at else None),
+            "probed": len(forge_runtime.health),
+            "configured": len(forge_runtime.forges),
+        },
         # dev-type breakers + per-repo forge breakers, one map for the SPA
         "circuit_breakers": {**shared_breakers,
                              **{f"repo:{k}": v
@@ -192,4 +225,29 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
             prompt_templates.template_warnings(config)
             + prompt_templates.devtype_prompt_warnings(config, dev_types)),
         "security_warnings": security.security_warnings(config),
+        # adapters no PMO selects — SPA derives a dismissable hygiene alert
+        # and Repositories → ⋯ offers bulk removal (2026-08-01 incident)
+        "unused_repos": {
+            "count": len(names := unused_repo_names(config)),
+            "names": names,
+            "configured": len(config.repos),
+        },
+        # ADR-0024: per-mirror sync state + the volume probe. A failing
+        # mirror freezes dispatch for every mission touching it (fail-closed
+        # precondition), so the SPA derives a NON-dismissable alert.
+        "repo_mirror": {
+            "lfs": config.repo_mirror.lfs,
+            "sync_max_age_seconds": config.repo_mirror.sync_max_age_seconds,
+            "volume_error": getattr(repo_cache, "volume_error", None),
+            "mirrors": repo_cache.health_map() if repo_cache else {},
+            "disk": repo_cache.disk_stats() if repo_cache else None,
+        },
+        # ADR-0025: per-run workspace base (host bind). leaked > 0 means the
+        # cleanup hooks AND the sweep are losing to something; disk
+        # exhaustion here otherwise presents as DEV_FORGE retry churn.
+        "workspaces": {
+            "volume_error": getattr(workspaces, "volume_error", None),
+            "leaked": workspaces.leaked_count(store) if workspaces else 0,
+            "disk": workspaces.disk_stats() if workspaces else None,
+        },
     }

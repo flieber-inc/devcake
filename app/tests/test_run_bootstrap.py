@@ -40,6 +40,9 @@ class InMemoryStore:
         r = self._runs.get(run_id)
         return r.model_copy(deep=True) if r else None
 
+    def delete(self, run_id: str) -> None:
+        self._runs.pop(run_id, None)
+
     def all(self) -> list[Run]:
         return [r.model_copy(deep=True) for r in self._runs.values()]
 

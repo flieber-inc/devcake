@@ -33,13 +33,20 @@ abandoned (decomposed away, or PR closed unmerged).
 - **Force a rework:** swap `DEVCAKE-MERGE` (or `-REVIEW`) → `DEVCAKE-EXECUTE`,
   optionally with a comment saying what you want changed — the next run reads
   the feed, reuses the branch, and updates the same PR. This is also the answer
-  when a waiting PR grows **merge conflicts** — though with `auto_merge` +
-  `auto_resolve_merge_conflicts` ON, DevCake does this swap itself (up to 2
+  when a waiting PR grows **merge conflicts** — though with that repo's
+  `auto_merge` + `auto_resolve_merge_conflicts` ON, DevCake does this swap itself (up to 2
   attempts) before handing the conflict to you; the manual swap remains the
   recovery path after that, or with the toggle OFF.
 - **Edit mid-run without fear:** if you change a mission's stage label while a
   Dev is running, DevCake finishes, posts its output, and *applies nothing* —
   a comment tells you your edit won. Your labels always beat its labels.
+- **Grant fresh attempts before give-up:** under the default strict
+  attempt-reset policy (ADR-0026), an ordinary comment does NOT restart a
+  failing step's attempt count — comment with the literal `DEVCAKE-RETRY` in
+  the body (e.g. after fixing the cause) to grant a fresh budget. After
+  `DEVCAKE-FAILED` lands, removing the label does the same. With the policy
+  set to *Any comment* (Limits & Traffic), every non-DevCake comment resets —
+  fine on a board with no bot traffic, defeated by one chatty integration.
 - **Re-triage:** move an untouched-looking mission back to Backlog with no stage
   labels and it becomes ONBOARD material again.
 
@@ -47,24 +54,25 @@ abandoned (decomposed away, or PR closed unmerged).
 
 Every step posts a token report to the feed — model, token counts (full split
 for Claude and Codex; totals for Grok), and cost where the harness reports it.
-For aggregates, the Logs page (OpenObserve) carries every run as a trace with
+For aggregates, the Consoles page (OpenObserve) carries every run as a trace with
 `devcake.tokens.*` / `devcake.cost.usd` attributes. Watch for the **loop
 warning** comment: every third review rejection it posts the mission's
 cumulative recorded cost — that's your cue to intervene or SKIP.
 
 ## The two big switches
 
-- **`adoption_mode`** (Configuration → PMO) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
+- **`adoption_mode`** (the PMO page, under Adapters) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
   working it by priority, spending tokens — flip deliberately. Remember: the
   whole team is in the agent trust boundary).
-- **`auto_merge`** (Repositories page, not Configuration) — off (default): the
+- **`auto_merge`** (per repo card on the Repositories page, under Adapters) — off (default): the
   **app** will not merge; `DEVCAKE-MERGE` is the handoff (normally you merge).
   On: after REVIEW approves, the **app** merges and missions go straight to
   Done. Off does **not** strip merge rights from Dev tokens — **branch
-  protection** does that (`14` §2 zone C). Enable only with protection, a clear
-  review setup, and eyes open. Independent REVIEW Dev Type is **recommended**,
-  not enforced.
+  protection** does that (`14` §2 zone C). Enable only with protection, a
+  **reviewer token** (app-only formal approval), and eyes open. REVIEW always
+  runs as a pipeline stage; which Dev Type staffs it is a performance choice
+  (skills / identifying prompt), not a security control.
 
 ## Config profiles — save and switch whole setups
 

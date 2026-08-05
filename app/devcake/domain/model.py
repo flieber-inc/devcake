@@ -178,6 +178,16 @@ class ActivityEntry(BaseModel):
     parent_id: Optional[str] = None
 
 
+class MissionDocument(BaseModel):
+    """A long-form document attached to the mission (Linear project
+    Documents). Content arrives inline from the vendor read — unlike
+    AttachmentRef there is no URL to download; the builder materializes
+    it as a file directly. Full mode + project refs only; [] elsewhere."""
+    title: str
+    content: str = ""
+    url: str = ""
+
+
 class Activity(BaseModel):
     mission: Mission
     entries: list[ActivityEntry]
@@ -185,5 +195,8 @@ class Activity(BaseModel):
     # description-embedded uploads + the vendor's native attachment list —
     # resolved by the ADAPTER; the domain never parses vendor asset URLs
     mission_attachments: list[AttachmentRef] = Field(default_factory=list)
+    # full mode, project refs only (vendors with projects_supported):
+    # long-form documents attached to the project; [] elsewhere
+    documents: list[MissionDocument] = Field(default_factory=list)
     # full-mode hard stop tripped: the builder must render a loud banner
     truncated: bool = False

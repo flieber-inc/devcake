@@ -66,6 +66,12 @@ FEED_INLINE_MAX = 2048
 # back into the thread.
 REPLY_MARKER = "<!-- DEVCAKE-REPLY -->"
 
+# The deliverable-zip feed note, marked so the concierge can classify it as
+# bookkeeping instead of scraping it into Slack as the mission's "Findings" —
+# which is exactly how users ended up shown an auth-walled zip link as the
+# answer. Same startswith contract as REPLY_MARKER.
+DELIVERABLE_MARKER = "<!-- DEVCAKE-DELIVERABLE -->"
+
 # docs/03 §4.1 — merge-failure state markers, counted/located from the feed
 # so the state stays fully PMO-derivable (no local clocks or counters). The
 # comments carrying them are short by construction (< FEED_INLINE_MAX): the

@@ -19,6 +19,7 @@ import zipfile
 
 from ...ports.forge import PRFile, run_branch
 from . import feed
+from .markers import DELIVERABLE_MARKER
 
 log = logging.getLogger("devcake.deliver")
 
@@ -95,8 +96,11 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         name = f"{mission_key}-deliverable.zip"
         url = await mgr.pmo.upload_attachment(pmo_id, name, zip_bytes)
         is_internal = repo_ref in mgr.forges.internal
-        note = (f"📦 Deliverable attached: {len(files) - len(omitted)} file(s) "
-                f"from the approved merge — [{name}]({url}).")
+        note = (f"{DELIVERABLE_MARKER}\n"
+                f"📦 For the record: archived the merged change set — "
+                f"{len(files) - len(omitted)} file(s) in [{name}]({url}), "
+                f"attached to this issue. This zip is the audit copy, not "
+                f"the answer.")
         if not is_internal:
             note += (f" Snapshot of the merged change set; the forge PR is "
                      f"canonical: {state.url}.")
@@ -113,6 +117,7 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
         try:
             await mgr._feed(
                 pmo_id, pmo_kind,
+                f"{DELIVERABLE_MARKER}\n"
                 "⚠️ Deliverable packaging failed — the merged files remain "
                 f"available in the repository ({repo_ref}).")
         except Exception:

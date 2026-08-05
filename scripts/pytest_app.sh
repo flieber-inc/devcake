@@ -67,6 +67,7 @@ docker run --rm \
   -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \
   -v "$(pwd)/app/Dockerfile:/srv/app.Dockerfile:ro" \
   -v "$(pwd)/docs:/srv/docs:ro" \
+  -v "$(pwd)/scripts:/srv/repo-scripts:ro" \
   -w /srv \
   "devcake/app-test:${TAG}" \
-  python -m pytest tests/ -q "$@"
+  python -m pytest tests/ -q -o cache_dir=/tmp/pytest-cache "$@"

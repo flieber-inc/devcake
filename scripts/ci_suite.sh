@@ -32,15 +32,21 @@ docker run --rm -e RUFF_CACHE_DIR=/tmp/ruff-cache -w /srv \
 
 echo "── unit + live-redis tests (INV-1..6 coverage) via app-test image"
 # Same Docker network as compose so redis://redis resolves; prod app stays lean.
-# Mount images/common for test_entrypoint_render (same path as compose: /srv/images/common).
+# Mount images/common for test_entrypoint_render (same path as compose:
+# /srv/images/common) plus the structural-test binds — the suite hard-fails
+# with "mount missing" when any is absent (same set as pytest_app.sh / ci.yml).
 docker run --rm \
   --network devcake_control \
   -e "REDIS_URL=redis://redis:6379/0" \
   -e "REDIS_PASSWORD=${REDIS_PASSWORD}" \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
+  -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \
+  -v "$(pwd)/app/Dockerfile:/srv/app.Dockerfile:ro" \
+  -v "$(pwd)/docs:/srv/docs:ro" \
+  -v "$(pwd)/scripts:/srv/repo-scripts:ro" \
   -w /srv \
   "devcake/app-test:${DEVCAKE_TAG:-latest}" \
-  python -m pytest tests/ -q
+  python -m pytest tests/ -q -o cache_dir=/tmp/pytest-cache
 
 echo "── forge contract battery (gitea lane — bundled instance, no external tokens)"
 docker compose exec -T app python - < scripts/contract_tests_forge.py

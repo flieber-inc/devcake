@@ -57,6 +57,39 @@ def test_malformed_basic_auth_is_rejected(monkeypatch):
     ).status_code == 401
 
 
+def test_malformed_host_cannot_disguise_protected_path_as_liveness(monkeypatch):
+    """The Host header must not influence which route is exempt from auth.
+
+    This pins the composite invariant, not auth.py alone: starlette >= 1.0.1
+    itself refuses to let a malformed authority poison ``request.url.path``
+    (GHSA-86qp-5c8j-p5mr), so on the pinned starlette this test passes even
+    with the old ``request.url.path`` exemption (verified empirically). The
+    ``scope["path"]`` check in auth.py is defense-in-depth against a
+    starlette downgrade or upstream regression — a revert of auth.py by
+    itself will NOT turn this test red while starlette stays patched.
+    """
+    monkeypatch.setenv("ADMIN_USER", "operator")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret")
+    app = FastAPI()
+    app.middleware("http")(enforce_control_plane_auth)
+
+    @app.get("/api/v1/health/live")
+    async def live():
+        return {"app": True}
+
+    @app.get("/api/v1/config")
+    async def read_config():
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/config",
+        headers={"Host": "example.com/api/v1/health/live?ignored="},
+    )
+
+    assert response.status_code == 401
+
+
 def _auth_app(monkeypatch, user: str, password: str) -> TestClient:
     monkeypatch.setenv("ADMIN_USER", user)
     monkeypatch.setenv("ADMIN_PASSWORD", password)

@@ -52,7 +52,11 @@ def _valid_basic_auth(value: str) -> bool:
 
 async def enforce_control_plane_auth(request: Request, call_next):
     """Leave only liveness public; require auth and intent for everything else."""
-    if request.url.path == LIVE_PATH:
+    # Authentication exemptions must use the ASGI route path, not
+    # ``request.url.path``: Starlette builds the latter from the untrusted Host
+    # header, so a malformed authority can disguise a protected request as the
+    # public liveness path (GHSA-86qp-5c8j-p5mr).
+    if request.scope["path"] == LIVE_PATH:
         return await call_next(request)
     if not _valid_basic_auth(request.headers.get("authorization", "")):
         return JSONResponse(

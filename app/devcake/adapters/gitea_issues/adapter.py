@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlsplit, urlunsplit
 
@@ -212,7 +212,7 @@ class GiteaIssuesAdapter:
         try:
             updated_at = datetime.fromisoformat(updated.replace("Z", "+00:00"))
         except ValueError:
-            updated_at = datetime.utcnow()
+            updated_at = datetime.now(timezone.utc)
         return Mission(
             pmo_id=str(number),
             pmo_kind="issue",
@@ -317,7 +317,7 @@ class GiteaIssuesAdapter:
             m = Mission(
                 pmo_id=ref.pmo_id, pmo_kind="project", key=f"PRJ-{ref.pmo_id}",
                 title="", description="", status="backlog", priority="medium",
-                labels=set(), updated_at=datetime.utcnow(), url="",
+                labels=set(), updated_at=datetime.now(timezone.utc), url="",
                 instance=self._instance)
             return Activity(mission=m, entries=[], mission_attachments=[],
                             truncated=False)
@@ -366,7 +366,7 @@ class GiteaIssuesAdapter:
         try:
             ts = datetime.fromisoformat(created.replace("Z", "+00:00"))
         except ValueError:
-            ts = datetime.utcnow()
+            ts = datetime.now(timezone.utc)
         user = (c.get("user") or {}).get("login") or "unknown"
         atts = self._attachments_from_body(body)
         for a in c.get("assets") or []:

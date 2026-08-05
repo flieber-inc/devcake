@@ -122,6 +122,35 @@ def test_apply_config_patch_does_not_undo_pause_when_pmos_omit_intake(
     assert by["beta"].intake_paused is False
 
 
+def test_config_patch_waits_for_in_flight_poll_cycle(monkeypatch):
+    """A PUT cannot swap the shared config while a poll owns its cycle lock."""
+    cfg = AppConfig(intake_paused=False)
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+    reloads = []
+
+    async def scenario():
+        cycle_lock = asyncio.Lock()
+        await cycle_lock.acquire()
+        apply_task = asyncio.create_task(config_service.apply_config_patch(
+            {"intake_paused": True}, config=cfg, dev_types={}, managers={},
+            reload=lambda: reloads.append(1), cycle_lock=cycle_lock))
+        await asyncio.sleep(0)
+        assert not apply_task.done()
+        assert cfg.intake_paused is False
+
+        cycle_lock.release()
+        result = await apply_task
+        return result
+
+    result = run_coro(scenario())
+    assert result["intake_paused"] is True
+    assert cfg.intake_paused is True
+    assert reloads == [1]
+
+
 def test_set_pmo_intake_mutates_in_place_without_list_replace(tmp_path, monkeypatch):
     """Narrow path: flip one bool on the live object; never rewrite pmos."""
     cfg = AppConfig(pmos=[

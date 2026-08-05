@@ -6,10 +6,11 @@
 
 DevCake staffs the task board you already use with AI developers. You write a
 ticket in plain language; disposable containers triage, plan, implement, and
-(optionally) review; work comes back as a pull request with a **transcript and a
-token bill** on the ticket. Labels are the control plane. A human edit always
-beats an in-flight agent. **Done means merged** — never before — unless you turn
-auto-merge on.
+pass every mission through REVIEW; work comes back as a pull request with a
+**transcript and a token bill** on the ticket. Labels are the control plane. A
+human edit always beats an in-flight agent. **Done means merged** — with
+auto-merge off, DevCake waits for you; with it on, the app merges an approved
+pull request before marking the mission Done.
 
 It runs on **your** machine, with **your** model subscriptions or API
 credentials and **your** forge. There is no hosted SaaS and no second

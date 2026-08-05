@@ -68,10 +68,20 @@ def _svc_user(repo_name: str) -> str:
     but repo names run to 60, so a naive `svc-{repo}[:40]` truncation could
     collide two missions to one user (revoking each other's tokens; review
     finding #3). Suffix a deterministic hash of the FULL repo name so the
-    name is collision-free while staying readable + ≤40 chars."""
+    name is collision-free while staying readable + ≤40 chars.
+
+    The truncated stem is rstripped of hyphens: Gitea rejects usernames with
+    CONSECUTIVE hyphens ("[Username]: invalid username", measured on 1.27.1),
+    and cutting at 27 chars lands on a hyphen for any repo whose 28th char
+    starts a new segment — `board-devcake-pmo-missions-<n>` (the ADR-0030
+    default board) hit this on EVERY mission, so the machine user was never
+    created and every zero-repo board mission gated on the follow-up
+    collaborator PUT. The hash still rides the FULL name, so stems that
+    differ only in stripped hyphens stay distinct users.
+    """
     import hashlib
     digest = hashlib.sha1(repo_name.encode()).hexdigest()[:8]
-    return f"svc-{repo_name[:27]}-{digest}"
+    return f"svc-{repo_name[:27].rstrip('-')}-{digest}"
 
 
 class GiteaProvisioner:
@@ -91,13 +101,20 @@ class GiteaProvisioner:
         self._transport = transport      # test injection (LinearAdapter pattern)
 
     async def _req(self, method: str, path: str, ok=(200, 201, 204),
-                   tolerate=(), **kw):
+                   tolerate=(), tolerate_only_if: str | None = None, **kw):
+        """`tolerate` swallows expected conflicts. `tolerate_only_if` narrows
+        that to responses whose body contains the given marker — Gitea reuses
+        422 for BOTH "already exists" (idempotent, tolerable) and "invalid
+        username" (a bug, must fail loud), so a bare status check silently
+        accepted a user that was never created and left the confusing 422 to
+        the next call (audit A11/A19/A20 fail-loud provisioning)."""
         async with httpx.AsyncClient(timeout=20, auth=self._auth,
                                      transport=self._transport) as client:
             resp = await client.request(method, f"{self.url}/api/v1{path}", **kw)
         if resp.status_code in ok:
             return resp.json() if resp.text else None
-        if resp.status_code in tolerate:
+        if resp.status_code in tolerate and (
+                tolerate_only_if is None or tolerate_only_if in resp.text):
             return None
         raise RuntimeError(f"internal forge: {method} {path} → "
                            f"{resp.status_code}: {resp.text[:200]}")
@@ -110,6 +127,7 @@ class GiteaProvisioner:
                         tolerate=(409, 422))
         for user in (APP_USER, REVIEWER_USER, ACTIVITY_RO_USER):
             await self._req("POST", "/admin/users", tolerate=(409, 422),
+                            tolerate_only_if="already exists",
                             json={"username": user,
                                   "email": f"{user}@devcake.example",
                                   "password": f"Xx1!{pysecrets.token_urlsafe(24)}",
@@ -227,6 +245,7 @@ class GiteaProvisioner:
                         json={"name": repo, "private": True, "auto_init": True,
                               "default_branch": "main"})
         await self._req("POST", "/admin/users", tolerate=(409, 422),
+                        tolerate_only_if="already exists",
                         json={"username": svc_user,
                               "email": f"{svc_user}@devcake.example",
                               "password": f"Xx1!{pysecrets.token_urlsafe(24)}",
@@ -282,6 +301,7 @@ class GiteaProvisioner:
                             "enable_issue_dependencies": True,
                         }})
         await self._req("POST", "/admin/users", tolerate=(409, 422),
+                        tolerate_only_if="already exists",
                         json={"username": BOARD_USER,
                               "email": f"{BOARD_USER}@devcake.example",
                               "password": f"Xx1!{pysecrets.token_urlsafe(24)}",
@@ -333,6 +353,7 @@ class GiteaProvisioner:
                                   "auto_init": True, "default_branch": "main"})
         svc_user = _svc_user(f"op-{name}")
         await self._req("POST", "/admin/users", tolerate=(409, 422),
+                        tolerate_only_if="already exists",
                         json={"username": svc_user,
                               "email": f"{svc_user}@devcake.example",
                               "password": f"Xx1!{pysecrets.token_urlsafe(24)}",

@@ -18,6 +18,7 @@ const SUITES = [
   "markdown_helpers.mjs",
   "format_helpers.mjs",
   "deps_helpers.mjs",
+  "board_helpers.mjs",
   "settings.mjs",
   "hierarchy.mjs",
   "devtypes.mjs",

@@ -23,7 +23,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install --upgrade pip==26.2.1 \
+    && pip install -r requirements.txt
 
 # ── prod + test deps ─────────────────────────────────────────────────────────
 FROM deps AS deps-dev

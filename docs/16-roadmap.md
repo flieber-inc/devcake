@@ -706,6 +706,10 @@ long-lived incomplete dialect API.
   construction) ·
   **unifying the three failure-taxonomy encodings** (numeric exit /
   `error_class` string / reconcile's stderr regex) ·
+  **cycle-lock the remaining reload paths** (secret PUT/DELETE and
+  `POST /secrets/clear` call `reload_connections` without `poll_rt.lock`, so
+  a suspended poll cycle can still resume against a swapped adapter graph;
+  config PUT and profile apply hold the lock since PR #104) ·
   **conftest.py / event-loop test hygiene** (module-import loop ownership) ·
   **`${VAR:-default}`-guarded volume name in dev-run.yaml** (AUD-020 —
   verify Dagu expansion support first; see the #87 lesson).

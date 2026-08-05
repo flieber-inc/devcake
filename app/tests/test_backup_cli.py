@@ -25,6 +25,7 @@ def test_data_backup_defaults_outside_the_checkout(tmp_path):
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
     }
     env.pop("XDG_DATA_HOME", None)
+    env.pop("DEVCAKE_BACKUP_DIR", None)
 
     result = subprocess.run(
         [str(BACKUP_SCRIPT)],

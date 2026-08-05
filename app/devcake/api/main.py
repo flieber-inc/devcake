@@ -506,10 +506,14 @@ async def save_profile(body: dict):
 @app.post("/api/v1/profiles/{name}/apply")
 async def apply_profile(name: str):
     s = svc()
-    return profiles_service.apply_profile_body(
-        name, config=s.config, dev_types=s.dev_types, store=s.store,
-        reload=s.reload_connections, shared_breakers=s.shared_breakers,
-        forge_breakers=s.forge_runtime.breakers, managers=s.managers)
+    # Same serialization as PUT /config: the world-swap must not replace the
+    # config object and adapter graph while a poll cycle sits suspended
+    # across an await (run_cycle holds this lock for the whole cycle).
+    async with s.poll_rt.lock:
+        return profiles_service.apply_profile_body(
+            name, config=s.config, dev_types=s.dev_types, store=s.store,
+            reload=s.reload_connections, shared_breakers=s.shared_breakers,
+            forge_breakers=s.forge_runtime.breakers, managers=s.managers)
 
 
 @app.post("/api/v1/profiles/{name}/rename")

@@ -45,7 +45,8 @@ def _wire_app(monkeypatch, tmp_path: Path):
         config=cfg, dev_types=dts, reload_connections=lambda: None,
         store=SimpleNamespace(active=lambda: []), shared_breakers={},
         managers={}, forge_runtime=SimpleNamespace(breakers={}),
-        skill_service=SkillService(None)))
+        skill_service=SkillService(None),
+        poll_rt=SimpleNamespace(lock=asyncio.Lock())))
     return app_main, config_mod, secrets
 
 

@@ -183,7 +183,8 @@ def _wire_app(monkeypatch, tmp_path):
     monkeypatch.setattr(app_main, "services", make_services(
         config=cfg, dev_types=dts, reload_connections=lambda: None,
         store=SimpleNamespace(active=lambda: []), shared_breakers={},
-        forge_runtime=SimpleNamespace(breakers={}), managers={}))
+        forge_runtime=SimpleNamespace(breakers={}), managers={},
+        poll_rt=SimpleNamespace(lock=asyncio.Lock())))
     return sb, profiles, secrets, config_mod, app_main
 
 
@@ -227,6 +228,29 @@ def test_endpoint_flow_save_list_get_apply_rename_delete(monkeypatch, tmp_path):
         and "profile_deleted" in actions
     log_text = (tmp_path / "state" / "events.jsonl").read_text()
     assert "ghp_profile_secret_value_01" not in log_text
+
+
+def test_profile_apply_waits_for_in_flight_poll_cycle(monkeypatch, tmp_path):
+    """The world-swap shares the poll-cycle lock — same contract as PUT
+    /config (a suspended cycle must never resume against swapped adapters)."""
+    sb, profiles, secrets, config_mod, app_main = _wire_app(monkeypatch, tmp_path)
+    run_coro(app_main.save_profile({"name": "base"}))
+    app_main.services.config.poll_interval_seconds = 77   # drift before apply
+
+    async def scenario():
+        lock = app_main.services.poll_rt.lock
+        await lock.acquire()
+        task = asyncio.create_task(app_main.apply_profile("base"))
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert app_main.services.config.poll_interval_seconds == 77
+
+        lock.release()
+        return await task
+
+    out = run_coro(scenario())
+    assert "config" in out["applied"]
+    assert app_main.services.config.poll_interval_seconds == 30
 
 
 def test_apply_blocked_while_runs_active(monkeypatch, tmp_path):

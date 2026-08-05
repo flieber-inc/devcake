@@ -3,4 +3,7 @@
 pytest==9.0.3
 ruff==0.12.2
 pip-audit==2.10.1
+# starlette 1.x's TestClient rides httpx2 (encode's next-gen httpx successor,
+# same author — NOT a typosquat); the app's own adapters keep classic httpx
+# pinned in requirements.txt.
 httpx2==2.7.0

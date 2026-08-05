@@ -16,6 +16,7 @@ from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
 from devcake.domain import backend_health
 from devcake.domain.orchestrator import dispatch, feed, sweeps
+from devcake.domain.orchestrator.markers import FEED_INLINE_MAX, REPLY_MARKER
 
 
 class FakePMO:
@@ -2244,3 +2245,113 @@ def test_explicit_error_class_wins_over_the_state_default(tmp_path):
                            error_class="DEV_OPERATOR_STOP"))
     assert store.get(run.run_id).error_class == "DEV_OPERATOR_STOP"
 
+
+def test_finalize_posts_a_marker_comment_carrying_the_slack_reply(tmp_path):
+    # The concierge cannot read our deliverable zips, so the Slack-bound answer
+    # has to arrive as its own comment it can recognise deterministically:
+    # one comment, marker FIRST, body quarantined.
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="Root cause: the skip gate.\n\nFix in !2163.")))
+    reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
+    assert "> Root cause: the skip gate." in reply
+    assert "> Fix in !2163." in reply
+    # quarantine holds: every line of model text is quoted. Only our own
+    # provenance sentinel stays unquoted (feed._is_devcake_comment reads it),
+    # which is why the concierge has to strip that line before posting.
+    body = [
+        l for l in reply.splitlines()
+        if l and not l.startswith(REPLY_MARKER) and "`devcake:v1`" not in l
+    ]
+    assert all(l.lstrip().startswith(">") or l == ">" for l in body), reply
+    assert feed._is_devcake_comment(reply)
+
+
+def test_the_reply_comment_redacts_before_it_truncates(tmp_path):
+    # A clipped half-token no longer matches its own pattern, so redaction has
+    # to run first — same rule as the transcript comment.
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        last_message_md="key ghp_" + "c" * 36 + "\n" + "x" * FEED_INLINE_MAX)))
+    reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
+    assert "ghp_" not in reply
+    assert "truncated" in reply
+    # Reply has no attachment of its own; point at the Linear step transcript
+    # (Slack never sees Linear assets either).
+    assert "attachment" not in reply.lower()
+    assert "step transcript" in reply
+
+
+def test_a_redelivered_finalize_does_not_post_the_reply_twice(tmp_path):
+    # Finalize is redelivered on retry; finalized_steps is what stops a second
+    # copy of the answer landing in the requester's Slack thread.
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _saved_run(store)
+    payload = _finalize_payload(last_message_md="Answered.")
+    run_coro(mgr.finalize(run, payload))
+    run_coro(mgr.finalize(run, payload))
+    assert sum(1 for c in fake.comments
+               if c.lstrip().startswith(REPLY_MARKER)) == 1
+
+
+def test_an_old_payload_without_last_message_posts_no_reply(tmp_path):
+    # Rolling-deploy pin: an old image sends no last_message_md, and an empty
+    # answer must not become an empty Slack post.
+    for payload in (_finalize_payload(), _finalize_payload(last_message_md="")):
+        m = mission("in_progress", {"DEVCAKE"})
+        mgr, fake, store = make_mgr(tmp_path, m)
+        run = _saved_run(store)
+        run_coro(mgr.finalize(run, payload))
+        assert not any(c.lstrip().startswith(REPLY_MARKER) for c in fake.comments)
+
+
+def test_review_reviewed_does_not_displace_the_execute_reply(tmp_path):
+    # Multi-step contract: EXECUTE posts the answer; REVIEW/`reviewed` must
+    # not mint a newer REPLY that the concierge would pick for the Done card.
+    # Exercise _post_reply directly so the pin does not depend on the full
+    # review merge path.
+    from devcake.domain.orchestrator.finalize import _post_reply
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    exec_run = Run(run_id="T-1-1-EXECUTE-AAAAAA", mission_key="T-1",
+                   mission_pmo_id="p1", mission_type="EXECUTE",
+                   dev_type="senior-dev", seq=1,
+                   stage_label_at_dispatch="DEVCAKE-EXECUTE",
+                   state="finalizing")
+    rev_run = Run(run_id="T-1-2-REVIEW-BBBBBB", mission_key="T-1",
+                  mission_pmo_id="p1", mission_type="REVIEW",
+                  dev_type="senior-dev", seq=2,
+                  stage_label_at_dispatch="DEVCAKE-REVIEW",
+                  state="finalizing")
+    run_coro(_post_reply(
+        mgr, exec_run,
+        "Root cause: the skip gate.\n\nFix in !2163.", "executed"))
+    run_coro(_post_reply(
+        mgr, rev_run, "LGTM — approved.", "reviewed"))
+    replies = [c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER)]
+    assert len(replies) == 1, replies
+    assert "Root cause: the skip gate." in replies[0]
+    assert "LGTM" not in replies[0]
+
+
+def test_review_human_needed_still_posts_a_reply(tmp_path):
+    # human_needed on REVIEW *is* the Slack-bound ask — suppress only
+    # reviewed (approve/reject process noise).
+    from devcake.domain.orchestrator.finalize import _post_reply
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run = Run(run_id="T-1-2-REVIEW-CCCCCC", mission_key="T-1",
+              mission_pmo_id="p1", mission_type="REVIEW",
+              dev_type="senior-dev", seq=2,
+              stage_label_at_dispatch="DEVCAKE-REVIEW",
+              state="finalizing")
+    run_coro(_post_reply(
+        mgr, run,
+        "Need merge permission on the protected branch.", "human_needed"))
+    reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
+    assert "Need merge permission" in reply

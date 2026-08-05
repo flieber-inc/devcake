@@ -9,7 +9,7 @@ import { ConfirmDialog } from "../components/Modal.jsx";
 import { Select } from "../components/Field.jsx";
 import { get, send } from "../api.js";
 import usePoll from "../lib/usePoll.js";
-import { bucketize, COLUMNS } from "../lib/board.js";
+import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 
 // Board refresh cadence — /missions reflects the last PMO poll (~30s at the
 // server); polling at 10s here keeps the UI fresh without leading the operator
@@ -154,7 +154,14 @@ export default function MissionsPage() {
     const failNote = fails.length
       ? ` ${fails.length} attachment${fails.length === 1 ? "" : "s"} failed (${fails.map((f) => f.name).join(", ")}) — attach ${fails.length === 1 ? "it" : "them"} in the PMO.`
       : "";
-    setFlash(`${result.key} created in ${result.instance} — appears on the board after the next poll.${failNote}`);
+    // an UNADOPTED mission is real on the PMO but invisible here (columnOf
+    // drops opt-in rows without DEVCAKE) — promising "appears on the board"
+    // would send the operator hunting for a card that never renders
+    const where = result.adopted
+      ? "appears on the board after the next poll."
+      : "created WITHOUT the DEVCAKE label — it stays in your PMO and will "
+        + "not appear on this board until you add the label there.";
+    setFlash(`${result.key} created in ${result.instance} — ${where}${failNote}`);
     setTimeout(() => setFlash(""), 8000);
     // silent poll (not doPoll — its own flash would clobber the creation
     // notice); 409 = a cycle is already running = picked up anyway
@@ -227,6 +234,15 @@ export default function MissionsPage() {
 
   const buckets = useMemo(
     () => bucketize(filteredRows, data.adoption_mode),
+    [filteredRows, data.adoption_mode]
+  );
+
+  // Under opt_in, bucketize DROPS every row without the DEVCAKE label — the
+  // mission exists on the PMO and in /missions, but no section renders it.
+  // Silent omission read as "my new mission vanished" (founder report
+  // 2026-08-05), so the count is surfaced instead of inferred.
+  const unadoptedCount = useMemo(
+    () => unadoptedHiddenCount(filteredRows, data.adoption_mode),
     [filteredRows, data.adoption_mode]
   );
 
@@ -448,6 +464,17 @@ export default function MissionsPage() {
             </span>
           )}
         </div>
+      )}
+      {unadoptedCount > 0 && (
+        // the sections below can only render adopted rows; say what they omit
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          <span className="tabular-nums">{unadoptedCount}</span>{" "}
+          {unadoptedCount === 1 ? "mission is" : "missions are"} not adopted
+          (no DEVCAKE label) and {unadoptedCount === 1 ? "is" : "are"} not
+          listed below — this deployment is opt-in, so DevCake ignores
+          {unadoptedCount === 1 ? " it" : " them"} until you add the label in
+          your PMO.
+        </p>
       )}
       {activeFilter && filteredRows.length === 0 && rows.length > 0 && (
         // dedicated filtered-empty copy — never the bootstrap empty state,

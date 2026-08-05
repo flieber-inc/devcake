@@ -59,6 +59,21 @@ export function columnOf(row, adoptionMode) {
   return null; // in_progress without a stage label — hidden
 }
 
+// How many rows the ADOPTION gate hides — opt-in missions with no DEVCAKE
+// label. Defined against columnOf so it can never drift from the real drop
+// rule, and narrowed by the label so it counts only the adoption omission
+// (an in_progress row WITH the label is hidden too, but for a different
+// reason and no label would fix it). The Missions page surfaces this:
+// bucketize silently drops these rows, so a freshly created unadopted
+// mission simply vanished from the board (founder report 2026-08-05).
+export function unadoptedHiddenCount(rows, adoptionMode) {
+  if (adoptionMode !== "opt_in") return 0;
+  return (rows || []).filter(
+    (r) => r && columnOf(r, adoptionMode) === null
+      && !(r.labels || []).includes("DEVCAKE")
+  ).length;
+}
+
 // Buckets an array of rows into COLUMNS. Done column caps to `doneCap`
 // newest by `updated_at` (default 30) to keep the board scannable.
 export function bucketize(rows, adoptionMode, { doneCap = 30 } = {}) {

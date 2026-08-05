@@ -601,3 +601,65 @@ def test_delete_activity_repo_guarded(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         run_coro(prov.delete_activity_repo("skill-store"))
     assert len(rec.calls) == before           # refused with ZERO HTTP
+
+
+# ── machine-user naming + fail-loud creation (founder report 2026-08-05) ─────
+
+
+def test_svc_user_never_emits_a_gitea_invalid_username():
+    """Gitea rejects CONSECUTIVE hyphens; the 27-char cut can land on one.
+
+    `board-devcake-pmo-missions-<n>` (the ADR-0030 default board) truncated
+    to exactly `board-devcake-pmo-missions-`, so every board mission derived
+    `svc-board-devcake-pmo-missions--<hash>` → 422 invalid username →
+    the machine user was never created and the mission gated."""
+    from devcake.adapters.gitea.provision import _svc_user
+    from devcake.ports.internal_forge import internal_repo_name
+
+    for n in range(1, 40):
+        repo = internal_repo_name("board", f"devcake-pmo/missions#{n}")
+        user = _svc_user(repo)
+        assert "--" not in user, f"{repo} → {user}"
+        assert not user.endswith("-") and len(user) <= 40
+    # a stem that only DIFFERS by the stripped hyphen stays a distinct user:
+    # the digest rides the full repo name, not the truncated stem
+    assert _svc_user("board-devcake-pmo-missions-1") != \
+        _svc_user("board-devcake-pmo-missions-10")
+
+
+def test_invalid_username_fails_loud_instead_of_being_tolerated():
+    """422 is BOTH "already exists" (tolerable) and "invalid username" (a
+    bug). Swallowing the latter left the confusing 422 to the collaborator
+    PUT two calls later ("user does not exist")."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(
+            422, json={"message": "[Username]: invalid username"})
+
+    prov = GiteaProvisioner(url="http://gitea:3000", admin_user="a",
+                            admin_password="p",
+                            transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError) as e:
+        run_coro(prov._req("POST", "/admin/users",
+                           tolerate=(409, 422),
+                           tolerate_only_if="already exists",
+                           json={"username": "svc-bad--name"}))
+    assert "invalid username" in str(e.value)
+    assert len(seen) == 1
+
+
+def test_existing_user_is_still_tolerated():
+    """The idempotent path must keep working — re-provisioning is normal."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422, json={"message": "user already exists [name: svc-x]"})
+
+    prov = GiteaProvisioner(url="http://gitea:3000", admin_user="a",
+                            admin_password="p",
+                            transport=httpx.MockTransport(handler))
+    assert run_coro(prov._req("POST", "/admin/users",
+                              tolerate=(409, 422),
+                              tolerate_only_if="already exists",
+                              json={"username": "svc-x"})) is None

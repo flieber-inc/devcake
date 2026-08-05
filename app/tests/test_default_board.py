@@ -235,3 +235,51 @@ def test_ensure_default_board_skips_without_forge(tmp_path, monkeypatch):
     s.internal_forge = None
     run_coro(ensure_default_board(s))
     assert s.config.pmos == [] and s._reloads == []
+
+
+def test_board_mission_repo_provisions_with_a_valid_machine_user(
+        tmp_path, monkeypatch):
+    """End-to-end shape of the founder-reported gate (2026-08-05).
+
+    A zero-repo mission on the DEFAULT board routes to the internal forge.
+    Gitea refuses a username with consecutive hyphens, so the derived name
+    had to be valid for `POST /admin/users` to create it — otherwise the
+    collaborator PUT that follows 422'd with "user does not exist" and the
+    mission surfaced as "internal forge unreachable — mission gated"."""
+    from devcake.adapters.gitea.provision import _svc_user
+    from devcake.ports.internal_forge import internal_repo_name
+
+    repo = internal_repo_name("board", "devcake-pmo/missions#21")
+    assert repo == "board-devcake-pmo-missions-21"
+    created_users, collaborators = [], []
+
+    def handler(request):
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/admin/users"):
+            name = json.loads(request.content)["username"]
+            # the real Gitea rule (measured on 1.27.1)
+            if "--" in name or name.endswith("-"):
+                return httpx.Response(
+                    422, json={"message": "[Username]: invalid username"})
+            created_users.append(name)
+            return httpx.Response(201, json={})
+        if request.method == "PUT" and "/collaborators/" in path:
+            user = path.rsplit("/", 1)[1]
+            if user not in created_users and user != "devcake-reviewer":
+                return httpx.Response(422, json={
+                    "message": f"user does not exist [uid: 0, name: {user}]"})
+            collaborators.append(user)
+            return httpx.Response(204)
+        if request.method == "POST" and "/tokens" in path:
+            return httpx.Response(201, json={"sha1": "tok-12345678"})
+        if request.method == "GET":
+            return httpx.Response(404)
+        return httpx.Response(201, json={})
+
+    prov = _prov(handler, tmp_path, monkeypatch)
+    creds = run_coro(prov.ensure_mission_repo("board",
+                                              "devcake-pmo/missions#21"))
+
+    assert creds.username == _svc_user(repo)
+    assert creds.username in created_users     # the user really got created
+    assert creds.username in collaborators     # and the PUT accepted it

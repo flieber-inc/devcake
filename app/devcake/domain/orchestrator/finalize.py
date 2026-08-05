@@ -111,8 +111,10 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         # 1b — the Slack-bound reply (ADR-0014 D2 quarantine still applies).
         # Its own comment, marker first, so devcake-concierge can find the
         # answer without parsing our transcript header or opening the zip.
+        # REVIEW/`reviewed` is suppressed (see _post_reply) so a trailing
+        # "LGTM" cannot displace the EXECUTE answer on the Done card.
         await _checkpoint(mgr, run, "reply", lambda: _post_reply(
-            mgr, run, payload.get("last_message_md"),
+            mgr, run, payload.get("last_message_md"), outcome,
         ))
 
         if _pre_wipe(mgr, run):
@@ -401,20 +403,34 @@ async def _post_transcript(mgr, run: Run, transcript: str,
     mgr._audit(run.mission_pmo_id, "transcript", name)
 
 
-async def _post_reply(mgr, run: Run, last_message: str | None) -> None:
+async def _post_reply(mgr, run: Run, last_message: str | None,
+                      outcome: str = "") -> None:
     """The answer, marked for devcake-concierge to carry into Slack.
 
     No last message (old-image payload) or an empty one ⇒ no comment: an empty
     reply must never become an empty Slack post. Issues only — a project feed
     has no Slack thread waiting on it.
+
+    REVIEW + ``reviewed`` is also a no-op: the concierge (and the default
+    outbox-off Done card) take the newest REPLY, and a short approve/reject
+    "LGTM" would displace the EXECUTE answer. ``human_needed`` on REVIEW
+    still posts — that text *is* the ask. Intermediate ONBOARD/PLAN/EXECUTE
+    replies are intentional progressive posts when the outbox is on.
     """
     if run.pmo_kind != "issue" or not (last_message or "").strip():
+        return
+    if run.mission_type == "REVIEW" and outcome == "reviewed":
         return
     # redact BEFORE truncate, same rule as the transcript comment: a clipped
     # half-secret no longer matches its own pattern.
     body = redact(last_message)
     if len(body) > FEED_INLINE_MAX:
-        body = body[:FEED_INLINE_MAX] + "\n\n… (truncated — full text in the attachment)"
+        # This comment has no attachment of its own; the full last message
+        # lives in the step transcript on the Linear issue. Do not claim an
+        # attachment exists — Slack never sees Linear assets either.
+        body = (body[:FEED_INLINE_MAX]
+                + "\n\n… (truncated — full text on the Linear issue, "
+                  "in the step transcript)")
     await mgr._feed(
         run.mission_pmo_id, "issue",
         f"{REPLY_MARKER}\n\n" + _blockquote(body),

@@ -701,10 +701,11 @@ long-lived incomplete dialect API.
   streams** (closes the malicious-`MAXLEN` trim vector for good) · **brake
   cycle-skip backoff** so the ADR-0018 throttle arm acts at
   `max_concurrency: 1` (founder kept current design) · **composition-root
-  decomposition** (`api/main.py` builds 15+ import-time singletons) ·
+  decomposition** (`api/services.py:build_services` still constructs 15+
+  graph objects in one function; ADR-0028 already removed the old import-time
+  construction) ·
   **unifying the three failure-taxonomy encodings** (numeric exit /
-  `error_class` string / reconcile's stderr regex) · **config-PUT lock**
-  (a poll cycle can read mixed old/new config across awaits) ·
+  `error_class` string / reconcile's stderr regex) ·
   **conftest.py / event-loop test hygiene** (module-import loop ownership) ·
   **`${VAR:-default}`-guarded volume name in dev-run.yaml** (AUD-020 —
   verify Dagu expansion support first; see the #87 lesson).

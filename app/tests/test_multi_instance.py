@@ -402,6 +402,7 @@ def test_config_put_survives_secret_cleanup_failure(tmp_path, monkeypatch):
     from devcake.api import config_service
     from devcake.config import AppConfig, RepoInstance
     from fakes import make_services
+    from types import SimpleNamespace
 
     def boom(scope, name):
         raise RuntimeError("disk error")
@@ -416,6 +417,7 @@ def test_config_put_survives_secret_cleanup_failure(tmp_path, monkeypatch):
         config=AppConfig(repos=[RepoInstance(name="gone",
                                              url="https://github.com/o/r")]),
         dev_types={}, managers={}, repo_cache=None,
+        poll_rt=SimpleNamespace(lock=asyncio.Lock()),
         reload_connections=lambda: None))
     out = run_coro(app_main.put_config({"repos": []}))   # must not raise
     assert out["repos"] == []

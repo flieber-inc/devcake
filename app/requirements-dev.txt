@@ -1,4 +1,6 @@
 # Test-only deps — installed only into the `test` image target (docker-bake app-test).
 # Runtime image uses requirements.txt alone.
-pytest==8.3.4
+pytest==9.0.3
 ruff==0.12.2
+pip-audit==2.10.1
+httpx2==2.7.0

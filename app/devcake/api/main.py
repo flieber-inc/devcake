@@ -472,7 +472,8 @@ async def put_config(body: dict):
     return await apply_config_patch(body, config=s.config, dev_types=s.dev_types,
                                     managers=s.managers,
                                     reload=s.reload_connections,
-                                    repo_cache=s.repo_cache)
+                                    repo_cache=s.repo_cache,
+                                    cycle_lock=s.poll_rt.lock)
 
 
 @app.put("/api/v1/config/pmos/{name}/intake")

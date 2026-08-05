@@ -40,7 +40,7 @@ docker run --rm \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
   -w /srv \
   "devcake/app-test:${DEVCAKE_TAG:-latest}" \
-  python -m pytest tests/ -q
+  python -m pytest tests/ -q -o cache_dir=/tmp/pytest-cache
 
 echo "── forge contract battery (gitea lane — bundled instance, no external tokens)"
 docker compose exec -T app python - < scripts/contract_tests_forge.py

@@ -13,11 +13,19 @@
 # docker compose up -d.
 #
 # Usage: scripts/backup_data.sh [output.tar.gz]
+# Default: ${XDG_DATA_HOME:-$HOME/.local/share}/devcake/backups/
+# Override the default directory with DEVCAKE_BACKUP_DIR.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VOLUME="${DEVCAKE_DATA_VOLUME:-devcake_devcake_data}"
-OUT="${1:-devcake-data-$(date -u +%Y%m%d-%H%M).tar.gz}"
+if [[ $# -gt 0 ]]; then
+  OUT="$1"
+else
+  BACKUP_DIR="${DEVCAKE_BACKUP_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/devcake/backups}"
+  install -d -m 700 "$BACKUP_DIR"
+  OUT="$BACKUP_DIR/devcake-data-$(date -u +%Y%m%d-%H%M).tar.gz"
+fi
 
 docker volume inspect "$VOLUME" >/dev/null
 

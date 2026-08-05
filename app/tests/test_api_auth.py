@@ -57,6 +57,30 @@ def test_malformed_basic_auth_is_rejected(monkeypatch):
     ).status_code == 401
 
 
+def test_malformed_host_cannot_disguise_protected_path_as_liveness(monkeypatch):
+    """The Host header must not influence which route is exempt from auth."""
+    monkeypatch.setenv("ADMIN_USER", "operator")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret")
+    app = FastAPI()
+    app.middleware("http")(enforce_control_plane_auth)
+
+    @app.get("/api/v1/health/live")
+    async def live():
+        return {"app": True}
+
+    @app.get("/api/v1/config")
+    async def read_config():
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/config",
+        headers={"Host": "example.com/api/v1/health/live?ignored="},
+    )
+
+    assert response.status_code == 401
+
+
 def _auth_app(monkeypatch, user: str, password: str) -> TestClient:
     monkeypatch.setenv("ADMIN_USER", user)
     monkeypatch.setenv("ADMIN_PASSWORD", password)

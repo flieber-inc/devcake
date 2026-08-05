@@ -34,6 +34,9 @@ dagu/dags/.dag.index
 # Gitea credential-bearing backup tarballs (scripts/backup_gitea.sh) — never commit
 devcake-gitea-*.tar.gz
 
+# App-data backups contain every operator secret in plaintext.
+devcake-data-*.tar.gz
+
 # never commit env backups (2026-08-04 incident)
 .env.*
 .env.bak*

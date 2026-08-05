@@ -7,6 +7,7 @@ would orphan every holder of the old object).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -53,7 +54,21 @@ def inherit_pmo_intake(body: dict, current: dict) -> dict:
 
 
 async def apply_config_patch(body: dict, *, config, dev_types, managers,
-                             reload, repo_cache=None) -> dict:
+                             reload, repo_cache=None,
+                             cycle_lock: asyncio.Lock | None = None) -> dict:
+    """Serialize the config transaction against an in-flight poll cycle."""
+    if cycle_lock is None:
+        return _apply_config_patch(
+            body, config=config, dev_types=dev_types, managers=managers,
+            reload=reload, repo_cache=repo_cache)
+    async with cycle_lock:
+        return _apply_config_patch(
+            body, config=config, dev_types=dev_types, managers=managers,
+            reload=reload, repo_cache=repo_cache)
+
+
+def _apply_config_patch(body: dict, *, config, dev_types, managers,
+                        reload, repo_cache=None) -> dict:
     """Validate + apply a config PUT in place; hot-reload adapters; restore
     the previous config if the reload fails. `reload` is the composition
     root's reload_connections."""

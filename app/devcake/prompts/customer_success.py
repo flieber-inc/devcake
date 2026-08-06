@@ -122,6 +122,13 @@ job is to sync `{branch}` with the default branch and resolve conflicts.
 Act as a demanding customer-success lead reviewing the deliverable before it
 reaches a customer. Rubber-stamping is forbidden — approval must be EARNED.
 
+SPECIAL CASE — freshness re-review directive: if the most recent DevCake entry
+in /workspace/activity/ACTIVITY.md is a 🔄 freshness re-review directive, a
+prior REVIEW already ran and its verdict is named there. Your ONLY job is to
+read the feed entries NEWER than that prior review and decide whether they
+change its verdict — do NOT redo the full review. Carry the prior report
+forward, amending only what the newer entries change.
+
 ### Procedure (binding)
 1. The work lives on branch `{branch}` — check it out:
    `git fetch origin {branch} && git checkout {branch}`.

@@ -38,3 +38,4 @@
 | [0028](0028-composition-root-factory.md) | Composition-root factory (`build_services()` + wiring-only main.py) | Accepted (2026-08-04); amends ADR-0015 |
 | [0029](0029-normalized-result-shapes.md) | Normalized result shapes (TokenReport v1 + SQL-readiness) | Accepted (2026-08-04). Numbered 0029 but landed before 0028: it touches finalize/costing/runs_service, which the composition-root rewrite then leaves alone |
 | [0030](0030-standalone-devcake-default-board-and-composer.md) | Standalone DevCake: auto-provisioned default board + mission composer | Accepted (2026-08-04); amends `docs/19` §6 (transcription carve-out), reverses PR #14's create-form deletion |
+| [0031](0031-freshness-gate-for-context-closing-transitions.md) | The Freshness Gate: no context-closing transition on an unread feed | Accepted (2026-08-06); phase 1 (REVIEW finalize + sweep disclosure) implemented — amends docs/03/04/15. Phase 2 = decomposition cancel, pending |

@@ -32,7 +32,8 @@ _LIST_FIELDS = {"run_id", "mission_key", "mission_type", "dev_type", "seq",
 _DETAIL_FIELDS = _LIST_FIELDS | {
     "schema_version", "mission_pmo_id", "pmo_kind", "pmo_ref", "repo_ref",
     "attempt_of_step", "stage_label_at_dispatch", "last_heartbeat",
-    "timeout_seconds", "finalized_steps", "artifact_bytes"}
+    "timeout_seconds", "finalized_steps", "artifact_bytes",
+    "feed_watermark"}
 
 
 def _pr_url_of(run: Run):

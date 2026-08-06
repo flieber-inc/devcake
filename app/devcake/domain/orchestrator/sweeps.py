@@ -11,7 +11,7 @@ from ...ports.forge import legacy_branch, mission_branch
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import utcnow
-from . import dispatch, feed, review
+from . import dispatch, feed, freshness, review
 from .markers import MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -250,6 +250,10 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                           exc_info=True)
             return
         span.set_attribute("devcake.outcome", "merged")
+        # ADR-0031 D1 (deferred-merge row): DISCLOSE-ONLY — the finalize-time
+        # gate passed minutes-to-hours ago; material landing since still
+        # closes (the merge was operator-sanctioned) but never silently
+        await freshness.disclose_unread_at_close(mgr, m)
         await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
         await mgr.pmo.set_status(m.ref, "done")
         await mgr._feed(

@@ -388,7 +388,8 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
 
     # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
     # repo records what this Dev actually receives. NEVER gates dispatch.
-    await push_activity_repo(mgr, live, mtype, seq)
+    # The returned watermark (ADR-0031) is the run's reading receipt.
+    feed_watermark = await push_activity_repo(mgr, live, mtype, seq)
 
     blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips)
 
@@ -463,6 +464,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             spec_env=spec_env,
             blocker_work=list(blocker_entries),
             mirror_repos=list(needed),
+            feed_watermark=dict(feed_watermark),
         )
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""

@@ -115,21 +115,29 @@ async def resolve_blocker_work(
         mgr, mission: Mission, primary_repo: str,
         all_runs: list | None = None, *,
         max_extras: int = MAX_BLOCKER_WORK_EXTRAS,
-) -> tuple[list[dict[str, str]], list[str]]:
-    """Direct done-blockers' work repos for RO mounts.
+) -> tuple[list[dict[str, str]], list[str], list[dict[str, str]]]:
+    """Direct done-blockers' work repos for RO mounts, plus their handoffs.
 
-    → (entries, skip_reasons). Entries are `[{repo_ref, mission_key}]`,
-    deduped by repo_ref, excluding the mission's own primary work repo.
-    Only `status == "done"` blockers mount; canceled/open/unreadable are
-    skipped with a reason. Repo_ref comes from the blocker's latest run
-    with a non-empty repo_ref (no re-provision of cleared internals), and
-    must be mountable NOW (`_blocker_mount_ok`) — extant pipelines can be
-    weeks old, so a cleared work repo is a skip, not a phantom mount.
+    → (entries, skip_reasons, notes). Entries are `[{repo_ref,
+    mission_key}]`, deduped by repo_ref, excluding the mission's own primary
+    work repo. Only `status == "done"` blockers mount; canceled/open/
+    unreadable are skipped with a reason. Repo_ref comes from the blocker's
+    latest run with a non-empty repo_ref (no re-provision of cleared
+    internals), and must be mountable NOW (`_blocker_mount_ok`) — extant
+    pipelines can be weeks old, so a cleared work repo is a skip, not a
+    phantom mount.
+
+    Notes (ADR-0032) are `[{mission_key, title, handoff}]` for every DONE
+    blocker, collected BEFORE the same-repo drop, the mountability drop, the
+    repo_ref dedup, and the cap — narrative must never vanish with its
+    mount. Zero extra PMO calls: the locator already fetched each blocker
+    Mission whole, description included.
     """
     entries: list[dict[str, str]] = []
     skip: list[str] = []
+    notes: list[dict[str, str]] = []
     if not getattr(mission, "blocked_by", None):
-        return entries, skip
+        return entries, skip, notes
     if all_runs is None:
         all_runs = mgr.runs.store.all()
     # Mission-only run index (mirror resolve_repo history): MAPPER/hello never
@@ -168,6 +176,9 @@ async def resolve_blocker_work(
             else:
                 skip.append(f"{b.key}: not done ({b.status})")
             continue
+        handoff = markers.handoff_of(b.description)
+        notes.append({"mission_key": b.key, "title": b.title,
+                      "handoff": handoff[:markers.HANDOFF_EXCERPT_MAX]})
         runs = [r for r in (by_mid.get(bid) or [])
                 if getattr(r, "pmo_ref", "") in res.accepted_pmo_refs]
         runs_sorted = sorted(
@@ -199,15 +210,24 @@ async def resolve_blocker_work(
         deduped = deduped[:max_extras]
         skip.append("cap %d: skipped %s" % (
             max_extras, ", ".join(e["mission_key"] for e in overflow)))
-    return deduped, skip
+    return deduped, skip, notes
 
 
 def _blocker_repos_note(mgr, entries: list[dict[str, str]],
-                        skip_reasons: list[str]) -> str:
-    """Prompt section naming RO blocker work clones (empty when none)."""
-    if not entries and not skip_reasons:
+                        skip_reasons: list[str],
+                        notes: list[dict[str, str]] | None = None) -> str:
+    """Prompt section naming RO blocker work clones plus each done blocker's
+    HANDOFF note (ADR-0032). Empty when there is nothing to say. Handoffs
+    render for mounted AND unmounted done blockers — the narrative is
+    decoupled from the mount list by design (dedup/cap/same-repo drops must
+    never eat it)."""
+    notes = notes or []
+    handoffs = {n["mission_key"]: n for n in notes}
+    if not entries and not skip_reasons \
+            and not any(n["handoff"] for n in notes):
         return ""
     lines = []
+    listed: set[str] = set()
     for e in entries:
         name = e["repo_ref"]
         url = None
@@ -220,13 +240,27 @@ def _blocker_repos_note(mgr, entries: list[dict[str, str]],
             if inst is not None:
                 url = inst.url
         slug = (url or name).rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        listed.add(e["mission_key"])
         lines.append(
             f"- `{e['mission_key']}` (`{name}`) → /workspace/repo/{slug}/")
+        n = handoffs.get(e["mission_key"])
+        if n and n["handoff"]:
+            lines.append(f"  Handoff: {n['handoff']}")
+    for n in notes:
+        if n["mission_key"] in listed or not n["handoff"]:
+            continue
+        lines.append(f"- `{n['mission_key']}` — {n['title']} (no work-repo "
+                     f"mount)")
+        lines.append(f"  Handoff: {n['handoff']}")
     body = (
         "\n### Completed blocker work (read-only)\n"
         "Shallow clones of work repositories from missions that block this "
         "one and are done. Read freely; NEVER modify, commit, or open PRs "
         "here. Your write target remains the primary work repository only.\n"
+        "Each blocker's Handoff line is its closing note — what changed, "
+        "what was discovered, what downstream should know. Your mission "
+        "description predates them: where they conflict, the handoff is "
+        "newer — reconcile, and flag the drift in your summary.\n"
     )
     if lines:
         body += "\n" + "\n".join(lines) + "\n"
@@ -368,7 +402,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # snapshot commit per gated poll cycle. resolve_blocker_work is
     # side-effect-free (store + locator reads only).
     all_runs = mgr.runs.store.all()
-    blocker_entries, blocker_skips = await resolve_blocker_work(
+    blocker_entries, blocker_skips, blocker_notes = await resolve_blocker_work(
         mgr, live, repo_name, all_runs)
 
     # ADR-0024: fail-closed mirror precondition (docs/07 §5a). NOT a run
@@ -389,9 +423,11 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
     # repo records what this Dev actually receives. NEVER gates dispatch.
     # The returned watermark (ADR-0031) is the run's reading receipt.
-    feed_watermark = await push_activity_repo(mgr, live, mtype, seq)
+    feed_watermark = await push_activity_repo(mgr, live, mtype, seq,
+                                              blocker_notes=blocker_notes)
 
-    blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips)
+    blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips,
+                                       blocker_notes)
 
     with tracer.start_as_current_span("mission.dispatch", kind=SpanKind.PRODUCER) as span:
         span.set_attribute("devcake.run.id", run_id)

@@ -108,11 +108,11 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
             run.finalized_steps.append("transcript")
             mgr.runs.store.save(run)
 
-        # 1b — the Slack-bound reply (ADR-0014 D2 quarantine still applies).
-        # Its own comment, marker first, so devcake-concierge can find the
-        # answer without parsing our transcript header or opening the zip.
+        # 1b — the answer as its own marked comment (ADR-0014 D2 quarantine
+        # still applies). Marker first, so downstream feed consumers can find
+        # the answer without parsing our transcript header or opening the zip.
         # REVIEW/`reviewed` is suppressed (see _post_reply) so a trailing
-        # "LGTM" cannot displace the EXECUTE answer on the Done card.
+        # "LGTM" cannot displace the EXECUTE answer as the newest REPLY.
         await _checkpoint(mgr, run, "reply", lambda: _post_reply(
             mgr, run, payload.get("last_message_md"), outcome,
         ))
@@ -405,17 +405,18 @@ async def _post_transcript(mgr, run: Run, transcript: str,
 
 async def _post_reply(mgr, run: Run, last_message: str | None,
                       outcome: str = "") -> None:
-    """The answer, marked for devcake-concierge to carry into Slack.
+    """The answer, marked so downstream feed consumers can find it.
 
-    No last message (old-image payload) or an empty one ⇒ no comment: an empty
-    reply must never become an empty Slack post. Issues only — a project feed
-    has no Slack thread waiting on it.
+    No last message (old-image payload) or an empty one ⇒ no comment: no
+    content, no post — an empty marked answer is worse than none. Issues only —
+    the contract is defined on the issue comment feed; project feeds are a
+    different surface.
 
-    REVIEW + ``reviewed`` is also a no-op: the concierge (and the default
-    outbox-off Done card) take the newest REPLY, and a short approve/reject
-    "LGTM" would displace the EXECUTE answer. ``human_needed`` on REVIEW
-    still posts — that text *is* the ask. Intermediate ONBOARD/PLAN/EXECUTE
-    replies are intentional progressive posts when the outbox is on.
+    REVIEW + ``reviewed`` is also a no-op: consumers take the newest REPLY as
+    the mission's answer, and a short approve/reject "LGTM" would displace the
+    EXECUTE answer. ``human_needed`` on REVIEW still posts — that text *is*
+    the ask. Intermediate ONBOARD/PLAN/EXECUTE replies are intentional
+    progressive posts consumers may use or ignore.
     """
     if run.pmo_kind != "issue" or not (last_message or "").strip():
         return
@@ -426,11 +427,11 @@ async def _post_reply(mgr, run: Run, last_message: str | None,
     body = redact(last_message)
     if len(body) > FEED_INLINE_MAX:
         # This comment has no attachment of its own; the full last message
-        # lives in the step transcript on the Linear issue. Do not claim an
-        # attachment exists — Slack never sees Linear assets either.
+        # lives in the step transcript on the issue. Never claim an
+        # attachment exists.
         body = (body[:FEED_INLINE_MAX]
-                + "\n\n… (truncated — full text on the Linear issue, "
-                  "in the step transcript)")
+                + "\n\n… (truncated — full text in the step transcript "
+                  "on this issue)")
     await mgr._feed(
         run.mission_pmo_id, "issue",
         f"{REPLY_MARKER}\n\n" + _blockquote(body),

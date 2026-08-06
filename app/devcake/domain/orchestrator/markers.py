@@ -58,24 +58,23 @@ _SWAP_MARKER_STAGE: dict[str, str | None] = {
 # inline-last-message truncation bound.
 FEED_INLINE_MAX = 2048
 
-# The Slack-bound answer, carried on its own issue comment for devcake-concierge
-# (docs/00 §2: the PMO is the only interface; the concierge imports nothing of
-# ours). Public cross-repo contract — keep in lockstep with concierge
-# `domain/reply.py` and docs/05 §4. The marker must be the FIRST thing in the
-# comment — the concierge matches on `startswith`, which is what keeps a
-# relayed Slack message that happens to quote this string from being mistaken
-# for our reply and echoed back into the thread. Producer rules (finalize
-# `_post_reply`): issues only; empty last message ⇒ no post; REVIEW/`reviewed`
-# suppressed so approval noise cannot displace the EXECUTE answer; body
-# blockquoted (ADR-0014); externalize=False; truncation points at the Linear
-# step transcript, not a non-existent attachment.
+# The mission's answer, carried on its own issue comment (docs/00 §1: the PMO
+# is the single source of truth, so the feed is where downstream consumers —
+# human, script, or bot, none named here — look for it). Public cross-repo
+# contract, docs/05 §4: consumers match on `startswith`; treat the string as
+# frozen. The marker must be the FIRST thing in the comment — startswith is
+# what keeps a quoted or relayed copy of this string from ever classifying as
+# the real answer (composes with the ADR-0014 D2 quarantine). Producer rules
+# (finalize `_post_reply`): issues only; empty last message ⇒ no post;
+# REVIEW/`reviewed` suppressed so approval noise cannot displace the EXECUTE
+# answer; body blockquoted (ADR-0014); externalize=False; truncation points
+# at the step transcript, not a non-existent attachment.
 REPLY_MARKER = "<!-- DEVCAKE-REPLY -->"
 
-# The deliverable-zip feed note, marked so the concierge can classify it as
-# bookkeeping instead of scraping it into Slack as the mission's "Findings" —
-# which is exactly how users ended up shown an auth-walled zip link as the
-# answer. Same startswith contract as REPLY_MARKER. Wording says the zip is
-# the audit copy, not the answer (docs/05 §4).
+# The deliverable-zip feed note, marked so any feed consumer can classify it
+# as packaging bookkeeping — an auth-walled zip link must never be mistaken
+# for the mission's answer. Same startswith contract as REPLY_MARKER. Wording
+# says the zip is the audit copy, not the answer (docs/05 §4).
 DELIVERABLE_MARKER = "<!-- DEVCAKE-DELIVERABLE -->"
 
 # docs/03 §4.1 — merge-failure state markers, counted/located from the feed

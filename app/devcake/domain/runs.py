@@ -286,9 +286,18 @@ class RunManager:
             await self.messaging.delete_runspec_result(run_id)
         elif kind == "activity.get":
             if self.finalizer and run.mission_pmo_id:
-                await self.messaging.reply(
-                    run_id, "activity.result",
-                    await self.finalizer.activity_payload(run))
+                reply = await self.finalizer.activity_payload(run)
+                # ADR-0031: this fallback rebuilds the payload at container
+                # start, LATER than the dispatch-time snapshot — the Dev is
+                # about to read a fresher mirror than the Run's receipt
+                # claims. Refresh the watermark so the Freshness Gate judges
+                # against what was actually served (stale receipt = spurious
+                # re-review, the wasteful direction).
+                wm = reply.get("feed_watermark")
+                if wm:
+                    run.feed_watermark = wm
+                    self.store.save(run)
+                await self.messaging.reply(run_id, "activity.result", reply)
             else:
                 await self.messaging.reply(
                     run_id, "activity.result",

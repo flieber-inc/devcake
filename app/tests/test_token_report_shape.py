@@ -151,6 +151,8 @@ RUN_SCALAR_COLUMNS = {
 RUN_BLOB_COLUMNS = {
     "blocker_work", "mirror_repos", "spec_skills", "spec_env",
     "finalized_steps", "result", "token_report",
+    # ADR-0031 — {entry_id, ts} reading receipt; a two-key JSON column
+    "feed_watermark",
 }
 
 _SCALAR_TYPES = (str, int, float, bool)

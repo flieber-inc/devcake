@@ -152,12 +152,17 @@ def _activity_snapshot_files(payload: dict) -> list[dict]:
     return files
 
 
-async def push_activity_repo(mgr, mission, mtype, seq: int) -> None:
+async def push_activity_repo(mgr, mission, mtype, seq: int) -> dict[str, str]:
     """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
     audited loudly and swallowed — the run proceeds on the Redis fallback;
-    Gitea down degrades to pre-ADR behavior, never to a halt."""
+    Gitea down degrades to pre-ADR behavior, never to a halt.
+
+    Returns the pushed snapshot's feed watermark (ADR-0031) — {} when the
+    push failed or never ran: a failed push means the Dev clones the
+    PREVIOUS snapshot, so a watermark from this fetch would overclaim what
+    the run actually read."""
     if mgr.internal_forge is None:
-        return
+        return {}
     try:
         payload = await activity_payload(mgr, mission.pmo_id, mission.pmo_kind)
         name = await mgr.internal_forge.ensure_activity_repo(
@@ -166,10 +171,12 @@ async def push_activity_repo(mgr, mission, mtype, seq: int) -> None:
             name, _activity_snapshot_files(payload),
             f"step {seq} {mtype.value} dispatch")
         log.info("activity repo %s: snapshot for step %d", name, seq)
+        return payload.get("feed_watermark") or {}
     except Exception as e:
         log.exception("activity repo push failed for %s", mission.key)
         mgr._audit(mission.pmo_id, "activity_repo_push_failed",
                     f"{mission.key}: {type(e).__name__}: {str(e)[:180]}")
+        return {}
 
 
 def _mission_md(m, attachment_lines=(), document_lines=()) -> str:
@@ -311,6 +318,16 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
         for att in e.attachments:
             lines.append(await _materialize(att))
         lines.append("")
+    # ADR-0031 — the newest entry this mirror includes, the consumer run's
+    # reading receipt. Entries arrive ascending from both adapters; a fresh
+    # mission's EMPTY feed yields no watermark (never an IndexError — this
+    # builder also serves the Redis activity.get fallback, where an escape
+    # would cost the Dev its activity.result). Wire-safe extra key: the
+    # entrypoint and the snapshot builder read known keys via .get.
+    last = act.entries[-1] if act.entries else None
+    watermark = ({"entry_id": last.entry_id or "", "ts": last.ts.isoformat()}
+                 if last is not None else {})
     return {"mission_md": _mission_md(m, mission_lines, document_lines),
-            "activity_md": "\n".join(lines), "attachments": attachments}
+            "activity_md": "\n".join(lines), "attachments": attachments,
+            "feed_watermark": watermark}
 

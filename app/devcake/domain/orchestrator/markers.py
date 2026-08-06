@@ -100,6 +100,24 @@ MERGE_RETRY_MARKER = "`devcake:merge-retry`"
 MERGE_HANDOFF_MARKER = "`devcake:merge-handoff`"
 MAX_CONFLICT_RESOLVES = 2
 
+# ADR-0031 — the Freshness Gate's re-review directive, counted exactly like
+# CONFLICT_MARKER (max over unquoted feed bodies; PMO-derivable, restart-
+# proof). Inherited marker doctrine, docs/03 §4.1: a human deleting the
+# directive comments deliberately resets the count, and a human PASTING one
+# unquoted inflates it toward exhaustion — humans own the feed. The directive
+# comment must stay under FEED_INLINE_MAX so the marker is never externalized
+# into an attachment.
+FRESHNESS_MARKER = re.compile(r"`devcake:freshness-rereview:(\d+)`")
+# The ONLY terminator of the re-review loop (per mission lifetime, like the
+# conflict budget). A constant, not operator config, until live data
+# demonstrates a need — knobs are debt too (docs/08 §1).
+MAX_FRESHNESS_REREVIEWS = 2
+# ADR-0031 Decision 3 — sentinel'd feed entries matching one of these regexes
+# are material to the Freshness Gate DESPITE being DevCake-posted. Shipped
+# EMPTY; the routed DISCOVERY-IN class joins when discovery routing ships.
+# Nothing is elevated implicitly.
+ELEVATED_MARKERS: list[re.Pattern[str]] = []
+
 # Comment-provenance sentinel (docs/03 §8a, ADR-0007): every comment DevCake
 # posts ends with this footer. Classification is content-based, NEVER
 # author/credential-based — DevCake may post with the operator's own PMO key.

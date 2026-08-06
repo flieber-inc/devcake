@@ -81,7 +81,24 @@ class FakePMO:
     async def get_activity(self, ref, full=False):
         self._check_ref(ref)
         self.get_activity_calls = getattr(self, "get_activity_calls", 0) + 1
-        return Activity(mission=self.mission, entries=list(self.activity_entries))
+        if full:
+            self.get_activity_full_calls = (
+                getattr(self, "get_activity_full_calls", 0) + 1)
+        if getattr(self, "activity_exc", None):
+            raise self.activity_exc
+        entries = []
+        for e in self.activity_entries:
+            e = e.model_copy()
+            if not full:
+                # adapter fidelity (ADR-0031): entry ids exist ONLY on the
+                # full path — Linear's shallow field set omits `id`, gitea
+                # sets it only `if full`. A consumer reading ids off a
+                # shallow fetch must fail here in tests, not in production.
+                e.entry_id = None
+                e.parent_id = None
+            entries.append(e)
+        return Activity(mission=self.mission, entries=entries,
+                        truncated=getattr(self, "activity_truncated", False))
 
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):

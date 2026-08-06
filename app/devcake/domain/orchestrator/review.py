@@ -10,6 +10,7 @@ from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import mission_branch, run_branch
 from .feed import _unquoted
+from .freshness import review_freshness_gate
 from .markers import (CONFLICT_MARKER, MAX_CONFLICT_RESOLVES, MERGE_HANDOFF_MARKER,
                       MERGE_RETRY_MARKER)
 
@@ -124,6 +125,12 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
     footer = forge.approval_footer(pr_url)
 
     if verdict == "approve":
+        # ADR-0031 — the Freshness Gate, BEFORE any approval artifact: a
+        # tripped run must post nothing a re-review would duplicate. Withheld
+        # transition ⇒ the mission keeps DEVCAKE-REVIEW and the next poll
+        # re-dispatches (attempt 1 — a finished run is a reset anchor).
+        if await review_freshness_gate(mgr, run) == "tripped":
+            return
         formal = False
         if pr:
             async def _pr_comment():

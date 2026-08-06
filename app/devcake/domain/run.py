@@ -57,6 +57,14 @@ class Run(BaseModel):
     # primary's DEVCAKE_MIRROR_PATH in spec_env. Empty on legacy records
     # (pre-field) → runspec falls back to the live derivation.
     mirror_repos: list[str] = Field(default_factory=list)
+    # ADR-0031 — the run's reading receipt: {entry_id, ts(iso)} of the newest
+    # feed entry in the ACTIVITY.md mirror this run received. Captured only
+    # from a SUCCESSFUL snapshot push (a failed push serves the previous,
+    # older snapshot); refreshed when the Redis activity fallback rebuilds
+    # the payload at container start. Empty on legacy records / internal
+    # forge absent / empty feed → the Freshness Gate falls back to
+    # entry-ts > created_at.
+    feed_watermark: dict[str, str] = Field(default_factory=dict)
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on

@@ -4,7 +4,7 @@ Split from the former god-module for maintainability (ISSUES #36). Public
 imports remain `from devcake.domain.orchestrator import MissionManager, ...`.
 """
 
-from ..mapper_service import MapperBusy, MapperService, MapperUnconfigured
+from ..steward_service import StewardBusy, StewardService, StewardUnconfigured
 from . import markers
 from .router import FinalizerRouter
 from .manager import MissionManager
@@ -14,9 +14,9 @@ __all__ = [
     "AUDIT_PATH",
     "FinalizerRouter",
     "LEGAL_OUTCOMES",
-    "MapperBusy",
-    "MapperService",
-    "MapperUnconfigured",
+    "StewardBusy",
+    "StewardService",
+    "StewardUnconfigured",
     "MissionManager",
     "markers",
 ]

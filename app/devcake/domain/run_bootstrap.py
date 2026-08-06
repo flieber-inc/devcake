@@ -1,7 +1,7 @@
 """RunBootstrap — deep module for the dispatch spine (docs/04 §3.1).
 
 Owns the invariant: create per-run ACL user → set auth_digest → durable
-store.save → executor.start. Every dispatch flavor (hello, mission, mapper,
+store.save → executor.start. Every dispatch flavor (hello, mission, steward,
 oauth) should call launch(); callers own mission-specific fields and spans.
 """
 
@@ -38,7 +38,7 @@ class RunBootstrap:
         # #0/#6): clear-runs holds this lock across its whole wipe, so no run
         # can create a `dev-<run_id>` ACL user or start a container while the
         # ACL sweep is deleting `dev-*` — the poll-loop lock alone missed the
-        # oauth / mapper-run-now / hello paths, which bypass it. A run
+        # oauth / steward-run-now / hello paths, which bypass it. A run
         # launched just BEFORE the wipe grabs the lock is already in
         # store.save (below) → the drain's active() snapshot catches it.
         self.dispatch_lock = asyncio.Lock()

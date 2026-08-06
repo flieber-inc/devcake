@@ -31,7 +31,7 @@ from ..adapters.dagu import DuplicateRun
 from .. import secrets as secrets_store
 from .. import security
 from ..domain.model import ALL_LABELS
-from ..domain.orchestrator import MapperBusy, MapperUnconfigured
+from ..domain.orchestrator import StewardBusy, StewardUnconfigured
 from ..domain.reconcile import reconcile_runs
 from ..domain.watchdog import watchdog_loop
 from ..prompts import templates as prompt_templates
@@ -145,6 +145,9 @@ async def lifespan(app: FastAPI):
     # never 401s after a fresh volume. Retries while OO is still starting.
     status = await ensure_oo_ingest_user_at_boot()
     log.info("openobserve: ingest user %s", status)
+    # MAPPER→STEWARD (2026-08-06): one-time rename of persisted run records,
+    # BEFORE the quarantine sweep re-validates them
+    s.store.migrate_steward_names()
     # corrupt run records must never wedge boot; a quarantined record is
     # FORGOTTEN, so best-effort teardown of anything it may have left live
     # (container, per-run ACL user, reply stream) — the run id is the handle
@@ -236,7 +239,7 @@ async def health():
     s = svc()
     return await build_health_payload(
         config=s.config, dev_types=s.dev_types, managers=s.managers,
-        mappers=s.mappers, forge_runtime=s.forge_runtime,
+        stewards=s.stewards, forge_runtime=s.forge_runtime,
         shared_breakers=s.shared_breakers, store=s.store,
         internal_forge=s.internal_forge, poll_rt=s.poll_rt,
         backend_degraded=s.shared_backend_degraded, repo_cache=s.repo_cache,
@@ -359,7 +362,7 @@ async def force_poll_route():
 
     409 when a poll cycle is already in flight (periodic OR another manual
     trigger) — the operator retries; the next automatic cycle is imminent
-    anyway. Mirrors `POST /api/v1/relations-mapper/run` (docs/11 §1).
+    anyway. Mirrors `POST /api/v1/steward/run` (docs/11 §1).
     """
     from .mission_actions import force_poll_now
     rt = svc().poll_rt
@@ -430,7 +433,7 @@ async def clear_runs():
         #   • poll_rt.lock stops the periodic poll cycle (and force-poll) —
         #     the poll loop takes it at cycle start, so no cycle runs.
         #   • bootstrap.dispatch_lock is the true chokepoint: EVERY dispatch
-        #     flavor (poll, oauth, mapper "run now", hello) creates its ACL
+        #     flavor (poll, oauth, steward "run now", hello) creates its ACL
         #     user + container inside RunBootstrap.launch under this lock.
         #     poll_rt.lock alone missed the three non-poll paths, so the
         #     ACL/SIGTERM race D3 targeted was still reachable — this closes it.
@@ -775,23 +778,23 @@ async def delete_internal_repo(name: str):
         forge_runtime=s.forge_runtime)
 
 
-@app.post("/api/v1/relations-mapper/run")
-async def run_mapper(instance: str | None = None):
+@app.post("/api/v1/steward/run")
+async def run_steward(instance: str | None = None):
     """Manual trigger (docs/11): works regardless of the enabled toggle — the
     toggle governs only the periodic service. Requires a valid dev_type.
     ?instance= selects the PMO instance; default = the first configured."""
     s = svc()
-    names = [i.name for i in s.config.pmos if i.name in s.mappers]
+    names = [i.name for i in s.config.pmos if i.name in s.stewards]
     if not names:
         raise HTTPException(422, "no configured PMO instance")
     target = instance or names[0]
-    if target not in s.mappers:
+    if target not in s.stewards:
         raise HTTPException(404, f"no PMO instance named {target!r}")
     try:
-        run = await s.mappers[target].run_now()
-    except MapperUnconfigured as e:
+        run = await s.stewards[target].run_now()
+    except StewardUnconfigured as e:
         raise HTTPException(422, str(e))
-    except MapperBusy as e:
+    except StewardBusy as e:
         raise HTTPException(409, str(e))
     return {"run_id": run.run_id, "state": run.state, "instance": target}
 

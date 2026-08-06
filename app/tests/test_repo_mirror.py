@@ -300,9 +300,9 @@ def test_needed_for_table(tmp_path):
     execute = cache.needed_for(work_repo="beta", mission_type="EXECUTE",
                                instance=inst, blocker_entries=[])
     assert execute == ["beta", "pub"]              # routing set is ONBOARD-only
-    mapper = cache.needed_for(work_repo="alpha", mission_type="MAPPER",
+    steward = cache.needed_for(work_repo="alpha", mission_type="STEWARD",
                               instance=inst, blocker_entries=[])
-    assert mapper == ["alpha"]
+    assert steward == ["alpha"]
     internal_work = cache.needed_for(work_repo="int-1", mission_type="EXECUTE",
                                      instance=inst, blocker_entries=[])
     assert internal_work == ["pub"]                # internal work repo → extras only

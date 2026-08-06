@@ -12,7 +12,7 @@ Two invariants carried over from ADR-0015 (identity is the contract):
 
 * Hot reload MUTATES in place, never rebinds — `apply_config_patch` setattrs
   fields on the stable `config` object, `build_managers` reconciles the
-  `managers`/`mappers` dicts in place, and the shared dicts
+  `managers`/`stewards` dicts in place, and the shared dicts
   (`shared_breakers`, `shared_backend_degraded`) keep one identity that
   every MissionManager holds. Nothing outside build_services() may replace
   these objects.
@@ -40,7 +40,7 @@ from ..config import AppConfig, DevType, load_config, load_dev_types
 from ..domain.blocker_locator import BlockerLocator
 from ..domain.model import ALL_LABELS
 from ..domain.oauth import OAuthManager
-from ..domain.orchestrator import FinalizerRouter, MapperService, MissionManager
+from ..domain.orchestrator import FinalizerRouter, StewardService, MissionManager
 from ..domain.forge_runtime import ForgeRuntime
 from ..domain.repo_mirror import RepoCache
 from ..domain.workspaces import WorkspaceStore
@@ -74,7 +74,7 @@ class Services:
     shared_breakers: dict[str, str]
     shared_backend_degraded: dict[str, str]
     managers: dict[str, MissionManager]
-    mappers: dict[str, MapperService]
+    stewards: dict[str, StewardService]
     forge_runtime: ForgeRuntime
     repo_cache: RepoCache
     internal_forge: Any
@@ -94,7 +94,7 @@ class Services:
         live = {i.name: i for i in self.config.pmos if i.configured}
         for name in [n for n in self.managers if n not in live]:
             self.managers.pop(name)
-            self.mappers.pop(name, None)
+            self.stewards.pop(name, None)
         for name, inst in live.items():
             p = make_pmo(inst)
             if name in self.managers:
@@ -115,7 +115,7 @@ class Services:
                     backend_degraded=self.shared_backend_degraded,
                     blocker_locator=self.blocker_locator,
                     repo_cache=self.repo_cache)
-                self.mappers[name] = MapperService(
+                self.stewards[name] = StewardService(
                     self.config, self.dev_types, self.managers[name])
 
     def managers_in_config_order(self) -> list[MissionManager]:
@@ -209,7 +209,7 @@ def build_services() -> Services:
         config=config, dev_types=dev_types, store=store, runlog=runlog,
         messaging=messaging, executor=executor, workspaces=workspaces,
         manager=manager, shared_breakers={}, shared_backend_degraded={},
-        managers={}, mappers={}, forge_runtime=forge_runtime,
+        managers={}, stewards={}, forge_runtime=forge_runtime,
         repo_cache=repo_cache, internal_forge=internal_forge,
         skill_service=SkillService(internal_forge))
 
@@ -219,7 +219,7 @@ def build_services() -> Services:
     # `poll_rt.missions_cache` keeps one stable list identity;
     # /api/v1/missions serves it by reference.
     s.poll_rt = PollRuntime(
-        config=config, managers=s.managers, mappers=s.mappers, store=store,
+        config=config, managers=s.managers, stewards=s.stewards, store=store,
         forge_runtime=s.forge_runtime,
         refresh_forge_health=s.refresh_forge_health,
         managers_in_config_order=s.managers_in_config_order,

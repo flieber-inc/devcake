@@ -121,7 +121,7 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
                           shared_breakers):
     """Rename a Dev Type in place (2026-07-15): moves its YAML, credential
     dir, and prompt-template dir, and remaps every reference (assignments,
-    mapper, active prompt selection, breaker)."""
+    steward, active prompt selection, breaker)."""
     import shutil
     from pathlib import Path as _P
     new = str(body.get("new_name") or "")
@@ -150,8 +150,8 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
             if a.dev_type == name:
                 a.dev_type = new
                 changed = True
-    if config.relations_mapper.dev_type == name:
-        config.relations_mapper.dev_type = new
+    if config.steward.dev_type == name:
+        config.steward.dev_type = new
         changed = True
     if name in config.active_devtype_prompts:
         config.active_devtype_prompts[new] = config.active_devtype_prompts.pop(name)
@@ -167,7 +167,7 @@ async def remove_dev_type(name: str, *, config, dev_types):
     """Delete a Dev Type and every config/file reference that would otherwise
     poison later saves (active_devtype_prompts deep_merge ghosts, leftover
     prompt-template and credential dirs). Mirrors rename_dev_type's
-    reference hygiene; DELETE still refuses while assigned / mapper-bound."""
+    reference hygiene; DELETE still refuses while assigned / steward-bound."""
     import shutil
     from pathlib import Path as _P
 
@@ -182,9 +182,9 @@ async def remove_dev_type(name: str, *, config, dev_types):
         raise HTTPException(
             409, f"{name} is assigned on PMO instance(s) "
                  f"{', '.join(holders)} — remove the override(s) first")
-    if config.relations_mapper.dev_type == name:
-        raise HTTPException(409, f"{name} is the Relations Mapper's Dev Type — "
-                                 "repoint or disable the mapper first")
+    if config.steward.dev_type == name:
+        raise HTTPException(409, f"{name} is the Relations Steward's Dev Type — "
+                                 "repoint or disable the steward first")
     dev_types.pop(name, None)
     delete_dev_type(name)
     data = _P(os.environ.get("DEVCAKE_DATA_DIR", "/data"))

@@ -199,7 +199,7 @@ The pockets of non-flow work DevCake contains are all ordering steps, inbound
 or outbound: mapping orders repo-space, decomposition orders task-space,
 blocker gating orders time, mounts order what enters a session, transcripts
 and summaries order what leaves one. And each observes a hard limit: the
-mapper never invents a Mission; decomposition never exceeds its parent's
+steward never invents a Mission; decomposition never exceeds its parent's
 scope; DevCake honors `blocked_by` edges but never draws one of its own
 volition (ADR-0007 — an external agent, human or otherwise, owns the edges);
 summaries never address an external audience.

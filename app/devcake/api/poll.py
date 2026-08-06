@@ -78,7 +78,7 @@ class PollRuntime:
     Durable across restarts via OwnerStore."""
 
     def __init__(self, *, config, managers: dict[str, MissionManager],
-                 mappers: dict, store, forge_runtime, refresh_forge_health,
+                 stewards: dict, store, forge_runtime, refresh_forge_health,
                  managers_in_config_order, owner_store: OwnerStore | None = None,
                  backend_degraded: dict[str, str] | None = None,
                  repo_cache=None):
@@ -86,7 +86,7 @@ class PollRuntime:
         # ADR-0024: warm-up owner. None only in tests (loop() guards).
         self.repo_cache = repo_cache
         self.managers = managers                    # live reference
-        self.mappers = mappers                      # live reference
+        self.stewards = stewards                      # live reference
         self.store = store
         self.forge_runtime = forge_runtime
         self.refresh_forge_health = refresh_forge_health
@@ -174,7 +174,7 @@ class PollRuntime:
             dispatched = await mgr.schedule(missions, gate)
             # .get: build_managers may drop the instance mid-cycle (hot reload) —
             # a KeyError here would abort the WHOLE poll cycle (review finding)
-            mp = self.mappers.get(mgr.instance_name)
+            mp = self.stewards.get(mgr.instance_name)
             if mp is not None:
                 await mp.maybe_dispatch(missions)
         mgr.rotate_grace()

@@ -96,14 +96,14 @@ def test_runspec_carries_activity_repo_ro(tmp_path):
     assert "activity_repo" not in mgr.runspec_secret_payload(run)
 
 
-def test_runspec_no_activity_repo_for_mapper(tmp_path):
+def test_runspec_no_activity_repo_for_steward(tmp_path):
     from devcake.domain.run import Run
     forge = FakeInternalForge()
     mgr, fake, m, launched = _dispatch_setup(tmp_path, forge)
-    mapper = Run(run_id="LINEAR-DEV-1-MAPPER-AAAAAA", mission_key="DEV",
-                 mission_type="MAPPER", dev_type="senior-dev", seq=1,
+    steward = Run(run_id="LINEAR-DEV-1-STEWARD-AAAAAA", mission_key="DEV",
+                 mission_type="STEWARD", dev_type="senior-dev", seq=1,
                  repo_ref="main", state="dispatched")
-    payload = mgr.runspec_secret_payload(mapper)
+    payload = mgr.runspec_secret_payload(steward)
     assert payload is not None
     assert "activity_repo" not in payload
 

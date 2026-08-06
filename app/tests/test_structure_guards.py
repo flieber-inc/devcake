@@ -19,10 +19,10 @@ MANAGER = (Path(__file__).parents[1] / "devcake" / "domain" / "orchestrator"
 MAIN = Path(__file__).parents[1] / "devcake" / "api" / "main.py"
 
 # Residual bodies allowed in main.py (C6 close-out; shrink opportunistically):
-# the CI fixture, the mapper/OAuth trio, and the small read-side runs/log/
+# the CI fixture, the steward/OAuth trio, and the small read-side runs/log/
 # clear endpoints. Everything else forwards to a service module.
 ROUTE_BODY_ALLOWLIST = {
-    "dispatch_hello", "run_mapper", "oauth_start", "oauth_status",
+    "dispatch_hello", "run_steward", "oauth_start", "oauth_status",
     "clear_runs", "get_run_log", "stream_run_log",
 }
 

@@ -1,7 +1,7 @@
 """MissionManager: DI container, advisory state, and the public verb surface.
 
 Implementation lives in the sibling modules (schedule, dispatch, finalize,
-transitions, review, decomposition, sweeps, feed, mapper, deliver); this class
+transitions, review, decomposition, sweeps, feed, steward, deliver); this class
 holds explicit delegating methods with the modules' exact signatures. Binding
 attributes onto the class after its definition is forbidden (ADR-0015) and
 guarded by ``tests/test_structure_guards.py``.
@@ -31,7 +31,7 @@ from ..runs import RunManager
 from typing import TYPE_CHECKING as _TC
 
 from . import (activity_payload as activity_payload_mod, deliver, dispatch,
-               feed, finalize, mapper, review, schedule, sweeps)
+               feed, finalize, steward, review, schedule, sweeps)
 
 if _TC:
     from ..forge_runtime import ForgeRuntime
@@ -192,8 +192,8 @@ class MissionManager:
     async def resolve_repo_live(self, mission, all_runs=None):
         return await dispatch.resolve_repo_live(self, mission, all_runs)
 
-    def mapper_repo(self):
-        return dispatch.mapper_repo(self)
+    def steward_repo(self):
+        return dispatch.steward_repo(self)
 
     async def finalize(self, run: Run, payload: dict):
         return await finalize.finalize(self, run, payload)
@@ -207,11 +207,11 @@ class MissionManager:
     async def sweeps(self, missions: list[Mission]):
         return await sweeps.sweeps(self, missions)
 
-    async def dispatch_mapper(self, dev_type: DevType, missions: list[Mission]):
-        return await mapper.dispatch_mapper(self, dev_type, missions)
+    async def dispatch_steward(self, dev_type: DevType, missions: list[Mission]):
+        return await steward.dispatch_steward(self, dev_type, missions)
 
-    async def finalize_mapper(self, run: Run, payload: dict):
-        return await mapper.finalize_mapper(self, run, payload)
+    async def finalize_steward(self, run: Run, payload: dict):
+        return await steward.finalize_steward(self, run, payload)
 
     async def deliver_internal_zip(self, run, pr):
         return await deliver.deliver_internal_zip(self, run, pr)

@@ -115,21 +115,21 @@ def test_a_single_mission_looping_still_throttles():
     assert backend_health.backend_degraded(runs, "judgment") is not None
 
 
-def test_solo_streak_survives_an_interleaved_mapper_run():
+def test_solo_streak_survives_an_interleaved_steward_run():
     """The solo arm selects its OWN evidence (the 3 most recent MISSION-BEARING
     terminal runs). Filtering mission-bearing runs out of the already-truncated
-    3-window instead let ONE PMO-less run — a Relations Mapper sharing the dev
+    3-window instead let ONE PMO-less run — a Relations Steward sharing the dev
     type — cap the list at 2 forever, making the arm dead in exactly the
     single-mission deployment it exists for."""
-    runs = [run(1), run(2), run(3, mission="", mtype="MAPPER"), run(4)]
+    runs = [run(1), run(2), run(3, mission="", mtype="STEWARD"), run(4)]
     assert backend_health.backend_degraded(runs, "judgment") is not None
     assert backend_health.backend_correlated(runs, "judgment") is None
 
 
-def test_mapper_only_faults_never_throttle_the_dev_type():
-    """The mission-bearing filter still holds: the mapper has its own
+def test_steward_only_faults_never_throttle_the_dev_type():
+    """The mission-bearing filter still holds: the steward has its own
     degraded() back-off and must not throttle a dev type's real missions."""
-    runs = [run(i, mission="", mtype="MAPPER") for i in (1, 2, 3)]
+    runs = [run(i, mission="", mtype="STEWARD") for i in (1, 2, 3)]
     assert backend_health.backend_degraded(runs, "judgment") is None
 
 
@@ -144,12 +144,12 @@ def test_other_dev_types_are_unaffected():
     assert backend_health.backend_degraded(runs, "implementer") is None
 
 
-def test_mapper_runs_never_satisfy_the_distinct_mission_rule():
-    """MAPPER runs carry mission_pmo_id == "" and the Relations Mapper's dev
+def test_steward_runs_never_satisfy_the_distinct_mission_rule():
+    """STEWARD runs carry mission_pmo_id == "" and the Relations Steward's dev
     type is operator-configurable — it may legitimately BE `judgment`. Without
-    the truthy filter, one MAPPER fault plus one mission fault would read as
+    the truthy filter, one STEWARD fault plus one mission fault would read as
     two distinct missions."""
-    runs = [run(1, mission="", mtype="MAPPER"), run(2, mission="p2")]
+    runs = [run(1, mission="", mtype="STEWARD"), run(2, mission="p2")]
     assert backend_health.backend_correlated(runs, "judgment") is None
 
 

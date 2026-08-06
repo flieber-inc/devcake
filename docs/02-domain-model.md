@@ -152,7 +152,7 @@ Persisted as one YAML file per Dev Type at `/data/config/dev_types/{name}.yaml` 
 
 | Field | Type | Notes |
 |---|---|---|
-| `name` | `str` | e.g. `judgment`, `implementer`, `mapper` (kebab-case slug; display name derived). |
+| `name` | `str` | e.g. `judgment`, `implementer`, `steward` (kebab-case slug; display name derived). |
 | `harness_template` | `"claude-code" \| "grok-build" \| "codex"` | **Authoritative** (2026-07-12 rework): the Docker image, credential requirements, and OAuth flow all derive from it via the harness registry (`app/devcake/harness.py`, `08-harness-templates.md` §2/§4). Changing it in the admin panel changes what actually runs. |
 | `identifying_prompt` | `str` | Always delivered to the harness at the start of every run, before the playbook prompt. Short persona/workflow framing only — not step machinery. |
 | `mcp_setup_commands` | `list[str]` | Shell commands run by the Dev entrypoint before harness launch — the MCP-plugin install/register lines (`08-harness-templates.md` §7). Delivered as a top-level runspec key, live-read at `runspec.get` (like the secret half — an edit applies to the next run without redispatch). Failure or 300 s per-command timeout ⇒ exit code 14, `DEV_MCP_SETUP` (`15-errors-and-retries.md` §1). |
@@ -170,7 +170,7 @@ There is deliberately **no stored `docker_image` or credential config**: require
 |---|---|---|
 | `judgment` | `claude-code` (Claude Fable) | ONBOARD, PLAN, REVIEW |
 | `implementer` | `grok-build` (Grok 4.5) | EXECUTE |
-| `mapper` | `claude-code` (`claude-haiku-4-5`) | Relations Mapper (default vehicle; assignable anywhere) |
+| `steward` | `claude-code` (`claude-haiku-4-5`) | Relations Steward (default vehicle; assignable anywhere) |
 
 Dev Types are **vehicles** (harness, model, concurrency, skill chips), not seniority ranks. Mission-step contracts live in playbooks; domain knowledge lives in skills (**ADR-0016**).
 
@@ -195,7 +195,7 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | `seq` | `int` | Step number for transcript naming (§8). |
 | `attempt_of_step` | `int` | 1-based attempt counter for this (mission, type) — seq-independent, since failed runs advance `seq` by posting transcripts. Resets at the newest of: last give-up watermark, any finished run for the mission, or the latest human feed comment (`15-errors-and-retries.md` §3). |
 | `stage_label_at_dispatch` | `str \| None` | Input to compare-and-transition (`04-orchestrator.md` §4). |
-| `branch` | `str` | The PR branch minted at dispatch (schema v3) — stored so review/merge lookups never drift from what the Dev pushed. Empty on legacy/mapper/hello records (`ports.forge.run_branch` derives those). |
+| `branch` | `str` | The PR branch minted at dispatch (schema v3) — stored so review/merge lookups never drift from what the Dev pushed. Empty on legacy/steward/hello records (`ports.forge.run_branch` derives those). |
 | `spec_prompt` | `str` | The composed prompt delivered in the run spec. |
 | `spec_skills` | `list[dict]` | Skill-store files for the Dev, snapshotted at dispatch: `[{name, files: [{path, content_b64}]}]` so a mid-run Gitea outage cannot change what a runspec re-request serves. |
 | `spec_skills_dir` | `str` | HOME-relative dir the entrypoint writes `spec_skills` under — snapshotted from the harness registry at dispatch; empty on legacy records → entrypoint default. |
@@ -242,11 +242,11 @@ Persisted at `/data/config/config.yaml` (full annotated example in `10-persisten
 | `continuation_policy` | `"auto" \| "resume-only" \| "fresh-only" \| "off"` (default `auto`) | ADR-0022: in-container continuation of clean-but-incomplete runs (`07-dev-runtime.md` §5a). `auto` resumes the session where capture-verified, escalating permanently to a fresh session after a zero-progress continuation; `resume-only` stops (fails as before) when resume is unavailable. Plan mode never continues. |
 | `repo_mirror` | `{sync_max_age_seconds: int ≥ 0 (default 0), lfs: bool (default false)}` | ADR-0024: the source mirror is MANDATORY (no enable field); 0 = sync before every dispatch (fail-closed precondition, `07-dev-runtime.md` §7b); `lfs` upgrades pointer files to real content. |
 | `max_continuations` | `int` ≥ 0 (default 2) | ADR-0022: the continuation budget — the ONLY terminator (stalls escalate, never stop). Deliberately unbounded above (large experiments are legitimate; the watchdog bounds the run). `0` = off. Effective turn budget becomes (budget + 1) × `--max-turns`. |
-| `intake_paused` | `bool` (default `false`) | Operator master switch (`11-admin-panel.md` §0): while true, no NEW runs dispatch on **any** PMO (missions or mapper). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
+| `intake_paused` | `bool` (default `false`) | Operator master switch (`11-admin-panel.md` §0): while true, no NEW runs dispatch on **any** PMO (missions or steward). In-flight runs finish, results finalize, and the merge/tracking sweeps keep running. Hot-applied next poll cycle. |
 | `pmos[].intake_paused` | `bool` (default `false`) | Per-PMO intake under the master switch: while true, that instance dispatches no NEW runs (others unaffected, unless the master is also paused). Same in-flight/sweeps semantics. |
 | `pmos[].managed` | `bool` (default `false`) | ADR-0030: app-managed instance (the auto-provisioned default board, reserved name `board`). Identity fields are canonicalized and the row survives wholesale `pmos` replaces via `reconcile_managed_pmos` while the bundled provisioner exists; `repos`/`reference_repos`/`assignments`/`intake_paused` stay operator-owned. Operators cannot claim the reserved name or mark rows managed (stray flags are stripped). |
 | `max_decomposition_depth` | `int` ≥ 0 (default 2) | How many generations of ONBOARD decomposition are allowed below a root (`adr/0012`). `0` = unlimited — the ONBOARD Dev decides (`03-mission-lifecycle.md` §1.3). |
-| `relations_mapper` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`mapper`) | The Relations Mapper (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
+| `steward` | `{enabled: bool, interval_minutes: int, dev_type: str \| None}` (default off/60/`steward`) | The Relations Steward (`03-mission-lifecycle.md` §4b): manual-only by default ("Run now"); the periodic service is opt-in. `dev_type` must name an existing Dev Type whenever `enabled`; deleting the referenced Dev Type is refused (409). |
 | `cost_inputs` | `{rates: [{model_prefix, input_per_mtok, cache_read_per_mtok, cache_write_per_mtok, output_per_mtok}], override_native: bool}` (default: grok-4.5 list rates / `false`) | Operator rate card behind app-side cost **estimates** (`adr/0021`). Rates are USD per 1M tokens, matched by longest `model_prefix`; unknown models are never priced. `override_native` flips DISPLAY surfaces to prefer the rate-card computation over harness-reported cost. The derived `rate_card_id` (`builtin-v1` or `operator:<hash8>`) labels every stamped estimate. |
 | `active_prompt_templates` | `dict[str, str]` (default `{}`) | Per-Mission-Type active prompt template name; missing key ⇒ built-in `"default"`. |
 | `active_devtype_prompts` | `dict[str, str]` (default `{}`) | Per-Dev-Type active identifying-prompt template name; missing key ⇒ `"Development"` (the seeded original). Keys for deleted Dev Types are dropped on DELETE, stripped from export/profile snapshots, and pruned (with a warning) on PUT `/config` and bundle apply — never a hard 422, because `deep_merge` cannot remove dict keys from a partial SPA patch. |

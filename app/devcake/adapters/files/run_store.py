@@ -152,6 +152,37 @@ class RunStore:
                 moved.append(path.stem)
         return moved
 
+    def migrate_steward_names(self) -> int:
+        """MAPPER→STEWARD (2026-08-06 rename, founder decision: records too,
+        no aliases): rewrite persisted run records carrying the old
+        mission_type/dev_type names. run_id strings stay HISTORICAL —
+        they are immutable identifiers referenced by Dagu DAG names, OTel
+        traces, and relay logs; rewriting them would orphan those
+        references. One-time boot sweep, idempotent; returns the count."""
+        migrated = 0
+        for path in sorted(self.root.glob("*.json")):
+            try:
+                raw = json.loads(path.read_text())
+            except Exception:  # noqa: BLE001 — unreadable records are the quarantine sweep's job, not this one's
+                continue
+            if not isinstance(raw, dict):
+                continue
+            changed = False
+            if raw.get("mission_type") == "MAPPER":
+                raw["mission_type"] = "STEWARD"
+                changed = True
+            if raw.get("dev_type") == "mapper":
+                raw["dev_type"] = "steward"
+                changed = True
+            if changed:
+                self._write_text(path, json.dumps(raw, indent=2, default=str))
+                self._parse_cache.pop(path.name, None)
+                migrated += 1
+        if migrated:
+            log.info("run store: migrated %d MAPPER record(s) to STEWARD",
+                     migrated)
+        return migrated
+
     def delete(self, run_id: str) -> None:
         """Remove a single run record (AUD-001 unwind): a dispatch that
         aborts after the durable save — a workspace create failure — must

@@ -124,7 +124,7 @@ def unused_repo_names(config) -> list[str]:
     return sorted(r.name for r in config.repos if r.name not in selected)
 
 
-async def build_health_payload(*, config, dev_types, managers, mappers,
+async def build_health_payload(*, config, dev_types, managers, stewards,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
                                backend_degraded: dict | None = None,
@@ -212,13 +212,13 @@ async def build_health_payload(*, config, dev_types, managers, mappers,
         # there would tell the operator to refresh a credential that is fine —
         # and services.js would paint the Dev card red for what is a
         # self-healing throttle. Shaped like poll_degraded, placed by
-        # mapper_degraded (which is a plain string, not a map).
+        # steward_degraded (which is a plain string, not a map).
         "dev_backend_degraded": dict(backend_degraded or {}),
         "internal_forge": (await internal_forge.health()
                            if internal_forge is not None else None),
-        "mapper_degraded": " · ".join(
+        "steward_degraded": " · ".join(
             f"[{name}] {msg}" if prefixed else str(msg)
-            for name, mp in mappers.items() if (msg := mp.degraded())) or None,
+            for name, mp in stewards.items() if (msg := mp.degraded())) or None,
         # active templates that no longer resolve (fallback-to-default in
         # effect) — the SPA derives a dismissable alert per entry (v0.1.1)
         "prompt_template_warnings": (

@@ -512,7 +512,7 @@ def harness_main() -> None:
         "PLAN": {"planned"},
         "EXECUTE": {"executed", "human_needed"},
         "REVIEW": {"reviewed", "human_needed"},
-        "MAPPER": {"relations_mapped"},
+        "STEWARD": {"relations_mapped"},
     }
     mission_type = env.get("DEVCAKE_MISSION_TYPE", "")
     legal = legal_outcomes.get(mission_type,

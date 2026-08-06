@@ -21,7 +21,7 @@ def run_coro(c):
 
 def _rt(tmp_path, *, forge_runtime, refresh):
     return PollRuntime(
-        config=AppConfig(), managers={}, mappers={},
+        config=AppConfig(), managers={}, stewards={},
         store=SimpleNamespace(active=lambda: [], all=lambda: []),
         forge_runtime=forge_runtime,
         refresh_forge_health=refresh,

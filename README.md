@@ -76,7 +76,7 @@ What you own as the operator — once at setup, and recurring — fits on one pa
 | One or more **PMO instances** (teams) | Polls, managed labels, feed posts, adoption modes |
 | Zero or more **external repos** | Clone, branch, PR; zero uses the bundled Gitea; **RO** + **reviewer** tokens recommended (write always for work repos) |
 | **Work** vs **reference** repos per PMO | Routing targets vs read-only consultation clones |
-| **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional mapper) |
+| **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional steward) |
 | **Skills** per Dev Type (skill store) | Curated Claude Code skills seeded into an editable Gitea repo, installed into agent sessions |
 | Auto-merge, intake pause, limits | Operator knobs — defaults favor a human merge |
 

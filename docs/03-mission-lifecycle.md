@@ -113,15 +113,17 @@ Any ONBOARD, EXECUTE, or REVIEW run may end with `outcome: "human_needed"` inste
 
 **Semantics vs neighbors:** `DEVCAKE-FAILED` = DevCake errored out after `max_attempts` (involuntary); `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = a clean, deliberate hand-off — the run `finished`, so it **never counts toward `max_attempts`**. Recovery: the human resolves the obstacle and removes the label; the Mission re-derives its stage on the next poll. See `15-errors-and-retries.md`.
 
-## 4b. Relations Mapper (`MAPPER` runs)
+## 4b. Relations Steward (`STEWARD` runs)
 
-A **team-scoped run kind** (not a Mission Type — it has no host Mission and no labels) whose only job is proposing missing blocked-by relations across the team's open Missions. Configured under `AppConfig.relations_mapper` (`02-domain-model.md` §9): **manual-only by default** (the admin "Run now" button) with an opt-in periodic service. Its default vehicle is the seeded **mapper** Dev Type (claude-code pinned to a cheap model) — ordering judgment from titles and description heads doesn't need a heavyweight; the repo clone is kept so a future prompt can let it inspect code for dependency evidence.
+> **Naming (2026-08-06):** STEWARD — formerly MAPPER — is the general class of out-of-the-loop, board-tending Dev runs; relations mapping is its first duty (discovery routing joins later, see ADR-0031's elevated-marker seam). Renamed everywhere live (code, config, records, docs) with one-time migrations for persisted config (`relations_mapper` → `steward`, dev type `mapper` → `steward`), settings bundles, and run records; pre-rename ADRs and historical feed comments/run ids keep the old name as the immutable record.
 
-**Cadence & degradation (`MapperService`):** one lock serializes the manual and periodic paths (no double dispatch); the interval watermark advances only after a successful dispatch (a transient executor error costs one poll cycle, not a full interval); and when the 3 most recent MAPPER runs all died, the periodic service **backs off** — surfaced as `mapper_degraded` in `/health` and on the admin card — while "Run now" stays available and a successful run clears the condition (store-derived, restart-safe).
+A **team-scoped run kind** (not a Mission Type — it has no host Mission and no labels) whose only job is proposing missing blocked-by relations across the team's open Missions. Configured under `AppConfig.steward` (`02-domain-model.md` §9): **manual-only by default** (the admin "Run now" button) with an opt-in periodic service. Its default vehicle is the seeded **steward** Dev Type (claude-code pinned to a cheap model) — ordering judgment from titles and description heads doesn't need a heavyweight; the repo clone is kept so a future prompt can let it inspect code for dependency evidence.
 
-- **Dispatch:** the app inlines every open, adopted, issue-kind Mission into the prompt — `key · status · existing blocker keys · title · first ~300 chars of description` (capped at 200 missions; truncation logged). No PMO writes at dispatch. Skipped while the global master `intake_paused` is on **or** that instance's `pmos[].intake_paused` is on; max one MAPPER run in flight; counts toward `global_max`.
+**Cadence & degradation (`StewardService`):** one lock serializes the manual and periodic paths (no double dispatch); the interval watermark advances only after a successful dispatch (a transient executor error costs one poll cycle, not a full interval); and when the 3 most recent STEWARD runs all died, the periodic service **backs off** — surfaced as `steward_degraded` in `/health` and on the admin card — while "Run now" stays available and a successful run clears the condition (store-derived, restart-safe).
+
+- **Dispatch:** the app inlines every open, adopted, issue-kind Mission into the prompt — `key · status · existing blocker keys · title · first ~300 chars of description` (capped at 200 missions; truncation logged). No PMO writes at dispatch. Skipped while the global master `intake_paused` is on **or** that instance's `pmos[].intake_paused` is on; max one STEWARD run in flight; counts toward `global_max`.
 - **Output:** `result.json` `{"outcome": "relations_mapped", "edges": [{"blocker": "<key>", "blocked": "<key>"}, …], "summary": "…"}` — an empty `edges` list is valid and common. The playbook demands conservatism: propose only edges where one Mission clearly consumes another's output; never invent keys.
-- **Finalization (the app is the gatekeeper):** each proposed edge is validated against a live snapshot and dropped (audited `mapper_edge_rejected`) if it references an unknown or terminal key, is a self-edge, duplicates an existing relation, or would create a cycle in the blocked-by graph. Surviving edges become native PMO relations, and the blocked Mission gets a sentinel-signed comment naming its blocker ("delete the relation in Linear if wrong"). No transcript/token-report comments — there is no host Mission; failures are logged only and the next interval retries.
+- **Finalization (the app is the gatekeeper):** each proposed edge is validated against a live snapshot and dropped (audited `steward_edge_rejected`) if it references an unknown or terminal key, is a self-edge, duplicates an existing relation, or would create a cycle in the blocked-by graph. Surviving edges become native PMO relations, and the blocked Mission gets a sentinel-signed comment naming its blocker ("delete the relation in Linear if wrong"). No transcript/token-report comments — there is no host Mission; failures are logged only and the next interval retries.
 
 ## 5. The approval-command footer (normative)
 
@@ -152,7 +154,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
                                            // supplies create_mission's parent_ref
                                            // (02-domain-model.md §11)
   ],
-  "edges": [                               // MAPPER 'relations_mapped' only (§4b)
+  "edges": [                               // STEWARD 'relations_mapped' only (§4b)
     {"blocker": "ENG-10", "blocked": "ENG-12"}
   ],
   "pr_url": "https://…"                    // executed / reviewed
@@ -161,7 +163,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
 
 A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.md` (the opportunistic plan, §1.2) — carried in the `run.artifacts` payload as `plan_md`, like a PLAN run's output (`09-messaging.md` §3).
 
-**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome on a mission step is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on. The Dev entrypoint applies a related first-line check (exit 11) that also knows MAPPER's `relations_mapped`; the app table below is the mission-step invariant (old images may run):
+**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome on a mission step is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on. The Dev entrypoint applies a related first-line check (exit 11) that also knows STEWARD's `relations_mapped`; the app table below is the mission-step invariant (old images may run):
 
 | Run type | Legal outcomes |
 |---|---|
@@ -170,7 +172,7 @@ A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.
 | EXECUTE | `executed` · `human_needed` |
 | REVIEW | `reviewed` · `human_needed` |
 
-**MAPPER is not in `LEGAL_OUTCOMES`.** Mapper runs finalize through a separate path (`finalize_mapper`): the only accepted outcome is `relations_mapped`; anything else marks the run **`failed`** (no `DEVCAKE-SKIP` parking — there is no host mission to park).
+**STEWARD is not in `LEGAL_OUTCOMES`.** Steward runs finalize through a separate path (`finalize_steward`): the only accepted outcome is `relations_mapped`; anything else marks the run **`failed`** (no `DEVCAKE-SKIP` parking — there is no host mission to park).
 
 A **structurally invalid payload** behind a legal outcome (empty decomposition, forward/self `blocked_by` index) is different: it fails the run as `DEV_BAD_OUTPUT` — a counted attempt that retries naturally (`15-errors-and-retries.md` §2) — because a formatting slip deserves a retry where a forged outcome does not.
 
@@ -184,8 +186,8 @@ The full prompt a Dev receives = **identifying prompt** (Dev Type, below) + **pl
 ### Implementer — identifying prompt
 > You are **Implementer**, DevCake's implementation engineer. You turn plans into working, tested code. You follow the plan you are given; where reality contradicts the plan, you implement the smallest sound deviation and document it prominently in your summary. You match the conventions of the codebase you are in, you run the tests, and you never commit until the work is complete. Do exactly what your current mission playbook asks.
 
-### Mapper — identifying prompt
-> You are **Mapper**, DevCake's fast, literal assistant for narrow structured tasks. You do exactly the task you are given — no more. You never improvise scope, you follow output formats to the letter, and when you are unsure you say so instead of guessing. Do exactly what your current mission playbook asks.
+### Steward — identifying prompt
+> You are **Steward**, DevCake's fast, literal assistant for narrow structured tasks. You do exactly the task you are given — no more. You never improvise scope, you follow output formats to the letter, and when you are unsure you say so instead of guessing. Do exactly what your current mission playbook asks.
 
 *(Playbook prompt texts are derived mechanically from §§1–4 of this document; they live as templates in `app/devcake/prompts/__init__.py` and are the single runtime source. When this doc and those templates disagree, this doc wins and the templates must be fixed.)*
 

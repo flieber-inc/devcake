@@ -93,8 +93,8 @@ def test_artifacts_redelivery_noop_on_all_terminal_states(tmp_path):
         async def finalize(self, run, payload):
             finalize_calls.append((run.run_id, run.state))
 
-        async def finalize_mapper(self, run, payload):
-            finalize_calls.append(("mapper", run.run_id))
+        async def finalize_steward(self, run, payload):
+            finalize_calls.append(("steward", run.run_id))
 
     mgr.set_finalizer(MM())
 
@@ -115,7 +115,7 @@ def test_artifacts_enters_finalize_from_running(tmp_path):
         async def finalize(self, run, payload):
             calls.append(run.state)
 
-        async def finalize_mapper(self, run, payload):
+        async def finalize_steward(self, run, payload):
             pass
 
     mgr.set_finalizer(MM())

@@ -398,8 +398,8 @@ def test_attempts_reset_when_other_step_finishes(tmp_path, monkeypatch):
     store.save(failed_review)
     assert dispatch.attempt_number(mgr, "p1", "EXECUTE") == 3   # failure ≠ resolution
 
-    stray = _run("MAPPER", None)
-    stray.run_id = "T-0-1-MAPPER-OK"
+    stray = _run("STEWARD", None)
+    stray.run_id = "T-0-1-STEWARD-OK"
     stray.mission_pmo_id = ""
     stray.state = "finished"
     stray.created_at = t0 + timedelta(seconds=4)

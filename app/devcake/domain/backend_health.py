@@ -74,9 +74,9 @@ def backend_correlated(runs, dev_type: str,
     any one mission, else None. Only this predicate may excuse an attempt.
 
     `mission_pmo_id` must be truthy to count toward the distinct-mission rule:
-    MAPPER runs carry `""` (mapper.py never sets it) and the Relations Mapper's
+    STEWARD runs carry `""` (steward.py never sets it) and the Relations Steward's
     dev type is operator-configurable, so it may legitimately be `judgment`.
-    Without the filter one MAPPER fault plus one mission fault would read as
+    Without the filter one STEWARD fault plus one mission fault would read as
     `{"", "X"}` — "two distinct missions" — and degrade a dev type on the
     strength of a run that belongs to no mission at all.
     """
@@ -106,15 +106,15 @@ def backend_degraded(runs, dev_type: str,
     MISSION-BEARING terminal runs of the dev type, independent of the shared
     window above. Filtering mission-bearing runs OUT OF that already-truncated
     3-window instead made the arm dead in exactly the deployment it exists for:
-    one PMO-less run (a Relations Mapper sharing the dev type) capped the list
+    one PMO-less run (a Relations Steward sharing the dev type) capped the list
     at 2 forever, so the streak could never be reached.
     """
     correlated = backend_correlated(runs, dev_type, classes)
     if correlated:
         return correlated
-    # mission-bearing only: three MAPPER faults (mission_pmo_id == "") must not
+    # mission-bearing only: three STEWARD faults (mission_pmo_id == "") must not
     # throttle the real missions of a dev type that is otherwise healthy — the
-    # mapper has its own degraded() back-off and is not gated by this map.
+    # steward has its own degraded() back-off and is not gated by this map.
     solo = _window(runs, dev_type, SOLO_THROTTLE_STREAK, mission_bearing=True)
     # ONE mission: multi-mission evidence belongs to `backend_correlated` above,
     # which also excuses — this arm stays strictly the solitary fallback.

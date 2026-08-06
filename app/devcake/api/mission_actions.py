@@ -427,7 +427,7 @@ async def stop_all_runs(
 # ── 5) force-poll endpoint ──────────────────────────────────────────────────
 # The most on-philosophy write we ship: forcing a poll cycle is asking the PMO
 # "what's true right now?" — INV-1 amplified, not sidestepped (docs/00 §4).
-# Precedent: `POST /api/v1/relations-mapper/run` (docs/11 §1, docs/04 §1.6),
+# Precedent: `POST /api/v1/steward/run` (docs/11 §1, docs/04 §1.6),
 # the same "manual-dispatch mirrors a periodic cadence" shape.
 
 async def force_poll_now(

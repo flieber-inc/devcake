@@ -39,7 +39,7 @@ def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
     health_mod.reset_protection_cache()
     return run_coro(health_mod.build_health_payload(
-        config=AppConfig(), dev_types={}, managers={}, mappers={},
+        config=AppConfig(), dev_types={}, managers={}, stewards={},
         forge_runtime=fr, shared_breakers={},
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,
@@ -92,7 +92,7 @@ def test_unused_repo_names_and_payload_block(monkeypatch):
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
     health_mod.reset_protection_cache()
     payload = run_coro(health_mod.build_health_payload(
-        config=cfg, dev_types={}, managers={}, mappers={},
+        config=cfg, dev_types={}, managers={}, stewards={},
         forge_runtime=_forge_runtime(), shared_breakers={},
         store=SimpleNamespace(active=lambda: []),
         internal_forge=None,

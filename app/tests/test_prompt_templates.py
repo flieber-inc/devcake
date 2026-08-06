@@ -118,7 +118,7 @@ def test_save_list_delete_roundtrip_and_validation(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="64"):
         t.save_template("PLAN", "big", "x" * (64 * 1024 + 1))
     with pytest.raises(ValueError, match="unknown mission type"):
-        t.save_template("MAPPER", "x", "y")
+        t.save_template("STEWARD", "x", "y")
     t.delete_template("EXECUTE", "terse")
     assert all(e["name"] != "terse" for e in t.list_templates()["EXECUTE"])
     with pytest.raises(FileNotFoundError):

@@ -163,7 +163,7 @@ def test_launch_makes_run_retrievable_and_active():
 
 def test_launch_serializes_on_dispatch_lock():
     """Re-audit #0/#6: clear-runs holds bootstrap.dispatch_lock across its wipe
-    so NO dispatch flavor (poll/oauth/mapper/hello) can create an ACL user or
+    so NO dispatch flavor (poll/oauth/steward/hello) can create an ACL user or
     start a container mid-wipe. Prove launch actually blocks on the lock."""
     async def scenario():
         store = InMemoryStore()
@@ -227,8 +227,8 @@ def test_dispatch_hello_uses_bootstrap_spine():
     assert params["REDIS_PASSWORD"] == FakeMessaging.PASSWORD
 
 
-def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
-    """Mapper path: MAPPER fields stay in MissionManager; spine is RunBootstrap."""
+def test_dispatch_steward_uses_bootstrap_spine(tmp_path, monkeypatch):
+    """Steward path: STEWARD fields stay in MissionManager; spine is RunBootstrap."""
     from datetime import datetime, timezone
 
     from devcake.adapters.github import GitHubForge
@@ -251,14 +251,14 @@ def test_dispatch_mapper_uses_bootstrap_spine(tmp_path, monkeypatch):
     m = Mission(pmo_id="p1", pmo_kind="issue", key="T-1", title="t",
                 status="backlog", labels={"DEVCAKE"},
                 updated_at=datetime.now(timezone.utc))
-    run = run_coro(mgr.dispatch_mapper(dt, [m]))
+    run = run_coro(mgr.dispatch_steward(dt, [m]))
 
     assert run.auth_digest == auth_digest(FakeMessaging.PASSWORD)
     assert store.get(run.run_id) is not None
     params, _ = executor.starts[0]
     assert params["IMAGE"] == HARNESSES["grok-build"].image
     assert params["REDIS_PASSWORD"] == FakeMessaging.PASSWORD
-    assert run.spec_env["DEVCAKE_MISSION_TYPE"] == "MAPPER"
+    assert run.spec_env["DEVCAKE_MISSION_TYPE"] == "STEWARD"
 
 
 def test_oauth_start_uses_bootstrap_spine(tmp_path, monkeypatch):
@@ -296,8 +296,8 @@ def test_artifacts_route_to_finalizer_for_mission_run():
         async def finalize(self, run, payload):
             self.finalized.append((run.run_id, payload.get("result")))
 
-        async def finalize_mapper(self, run, payload):
-            raise AssertionError("mapper path not expected")
+        async def finalize_steward(self, run, payload):
+            raise AssertionError("steward path not expected")
 
         async def restore_after_failure(self, run):
             raise AssertionError("restore not expected")
@@ -353,7 +353,7 @@ def test_kill_restores_via_finalizer():
             self.restored = []
 
         async def finalize(self, run, payload): pass
-        async def finalize_mapper(self, run, payload): pass
+        async def finalize_steward(self, run, payload): pass
         async def restore_after_failure(self, run):
             self.restored.append(run.run_id)
         def runspec_secret_payload(self, run): return None

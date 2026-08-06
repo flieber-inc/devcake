@@ -205,7 +205,7 @@ def test_two_repos_route_tokens_and_dialects_per_run(tmp_path, monkeypatch):
 
 
 def test_resolve_repo_history_assembly(tmp_path):
-    """_resolve_repo's history filter: this mission's runs only, MAPPER runs
+    """_resolve_repo's history filter: this mission's runs only, STEWARD runs
     excluded, foreign-instance records excluded, newest first."""
     from fakes import FakeForgeRuntime
     from devcake.adapters.files.run_store import RunStore
@@ -214,8 +214,8 @@ def test_resolve_repo_history_assembly(tmp_path):
     store = RunStore(tmp_path / "runs")
     mine_old = _run("alpha"); mine_old.mission_pmo_id = "p1"; mine_old.pmo_ref = "linear"
     mine_new = _run("beta", seq=2); mine_new.mission_pmo_id = "p1"; mine_new.pmo_ref = "linear"
-    mapper = _run("alpha", seq=3); mapper.mission_pmo_id = "p1"
-    mapper.pmo_ref, mapper.mission_type = "linear", "MAPPER"
+    steward = _run("alpha", seq=3); steward.mission_pmo_id = "p1"
+    steward.pmo_ref, steward.mission_type = "linear", "STEWARD"
     other_mission = _run("alpha", seq=4); other_mission.mission_pmo_id = "p9"
     other_instance = _run("alpha", seq=5); other_instance.mission_pmo_id = "p1"
     other_instance.pmo_ref = "linearb"
@@ -223,7 +223,7 @@ def test_resolve_repo_history_assembly(tmp_path):
     from devcake.domain.run import utcnow
     mine_old.created_at = utcnow() - timedelta(hours=2)
     mine_new.created_at = utcnow() - timedelta(hours=1)
-    for r in (mine_old, mine_new, mapper, other_mission, other_instance):
+    for r in (mine_old, mine_new, steward, other_mission, other_instance):
         store.save(r)
 
     from fakes import make_mission_manager
@@ -247,7 +247,7 @@ def test_resolve_repo_history_assembly(tmp_path):
         name, reason = dispatch.resolve_repo(mgr, _m())
     finally:
         rr.resolve_repo = orig
-    # newest-first, only THIS mission's non-mapper, same-instance records
+    # newest-first, only THIS mission's non-steward, same-instance records
     assert got[0] == [mine_new.run_id, mine_old.run_id]
     assert name == "beta" and reason is None      # sticky = newest repo_ref
 
@@ -744,11 +744,11 @@ def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch
         assert all(x["token"].endswith("-ro-token1")
                    for x in payload["extra_repos"])
 
-    # MAPPER never gets extras
-    mapper_run = Run(run_id="LINEAR-TEAM-1-MAPPER-AAAAAA", mission_key="TEAM",
-                     mission_type="MAPPER", dev_type="senior-dev", seq=1,
+    # STEWARD never gets extras
+    steward_run = Run(run_id="LINEAR-TEAM-1-STEWARD-AAAAAA", mission_key="TEAM",
+                     mission_type="STEWARD", dev_type="senior-dev", seq=1,
                      repo_ref="alpha", pmo_ref="linear", state="dispatched")
-    assert "extra_repos" not in mgr.runspec_secret_payload(mapper_run)
+    assert "extra_repos" not in mgr.runspec_secret_payload(steward_run)
 
     # a marker naming a reference repo GATES — never a work target
     name, reason = resolve_repo(_m("`devcake-repo:docs`"), inst,

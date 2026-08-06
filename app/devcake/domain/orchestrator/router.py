@@ -73,12 +73,12 @@ class FinalizerRouter:
             return
         await mgr.finalize(run, payload)
 
-    async def finalize_mapper(self, run: Run, payload: dict) -> None:
+    async def finalize_steward(self, run: Run, payload: dict) -> None:
         mgr = self._mgr(run)
         if mgr is None:
-            await self._fail(run, "finalize_mapper")
+            await self._fail(run, "finalize_steward")
             return
-        await mgr.finalize_mapper(run, payload)
+        await mgr.finalize_steward(run, payload)
 
     async def restore_after_failure(self, run: Run) -> None:
         mgr = self._mgr(run)

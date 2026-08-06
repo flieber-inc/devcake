@@ -19,7 +19,7 @@ from ..domain.model import Mission
 from ..ports.forge import mission_branch
 
 # variables each Mission Type's template may reference (the validation
-# allowlist AND exactly what dispatch provides). MAPPER is deliberately not
+# allowlist AND exactly what dispatch provides). STEWARD is deliberately not
 # templated (founder decision 2026-07-14); adding it later = one entry here
 # + one DEFAULT_PLAYBOOKS entry.
 PLAYBOOK_VARS: dict[str, tuple[str, ...]] = {
@@ -378,8 +378,8 @@ def review_prompt(identifying_prompt: str, mission: Mission,
             + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
-MAPPER_PLAYBOOK = """
-## Your current mission type: RELATIONS MAPPER
+STEWARD_PLAYBOOK = """
+## Your current mission type: RELATIONS STEWARD
 
 Below is every open mission DevCake manages in this team. Your ONLY job is to
 identify ordering dependencies that are not yet mapped: pairs where one mission
@@ -402,8 +402,8 @@ blockers — only propose edges that are missing. Never invent mission keys.
 An empty "edges" list is a valid and common result.
 """
 
-MAPPER_MISSION_CAP = 200          # prompt-size bound; truncation is logged
-MAPPER_DESC_HEAD_CHARS = 300
+STEWARD_MISSION_CAP = 200          # prompt-size bound; truncation is logged
+STEWARD_DESC_HEAD_CHARS = 300
 
 # the canonical (un-doubled) playbook texts — seed source for the stored
 # "default" templates and the fallback when a stored template is broken
@@ -415,16 +415,16 @@ DEFAULT_PLAYBOOKS: dict[str, str] = {
 }
 
 
-def mapper_prompt(identifying_prompt: str, missions: list[Mission]) -> str:
+def steward_prompt(identifying_prompt: str, missions: list[Mission]) -> str:
     id_to_key = {m.pmo_id: m.key for m in missions}
     rows = []
-    for m in missions[:MAPPER_MISSION_CAP]:
-        head = " ".join((m.description or "").split())[:MAPPER_DESC_HEAD_CHARS]
+    for m in missions[:STEWARD_MISSION_CAP]:
+        head = " ".join((m.description or "").split())[:STEWARD_DESC_HEAD_CHARS]
         blockers = ", ".join(id_to_key.get(b, "?") for b in m.blocked_by) or "(none)"
         rows.append(f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
                     f"  {m.title} — {head or '(no description)'}")
     table = "\n".join(rows) or "(no open missions)"
-    # MAPPER stays un-templated (founder decision 2026-07-14) — TURN_DISCIPLINE
+    # STEWARD stays un-templated (founder decision 2026-07-14) — TURN_DISCIPLINE
     # is a code-owned epilogue like the others, not a template
     return (identifying_prompt + "\n"
-            + MAPPER_PLAYBOOK.format(mission_table=table) + TURN_DISCIPLINE)
+            + STEWARD_PLAYBOOK.format(mission_table=table) + TURN_DISCIPLINE)

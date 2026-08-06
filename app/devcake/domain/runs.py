@@ -345,8 +345,8 @@ class RunManager:
                 # do not drive PMO transitions on a wiped run.
                 log.info("abort finalize after wipe race for %s", run_id)
                 return
-            if self.finalizer and run.mission_type == "MAPPER":
-                await self.finalizer.finalize_mapper(run, payload)
+            if self.finalizer and run.mission_type == "STEWARD":
+                await self.finalizer.finalize_steward(run, payload)
             elif self.finalizer and run.mission_pmo_id:
                 await self.finalizer.finalize(run, payload)
             else:
@@ -354,7 +354,7 @@ class RunManager:
             if self.runlog is not None:
                 self.runlog.close(run.run_id)  # end any live log followers
             # ADR-0025 Hook A: one cleanup covers every finalize exit
-            # (mission success/failure, mapper, hello) — but ONLY once the
+            # (mission success/failure, steward, hello) — but ONLY once the
             # run is actually terminal. A finalize crash leaves `finalizing`
             # and the workspace intact for artifact redelivery / the
             # stalled-finalize killer to reach later. The container already

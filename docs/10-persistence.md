@@ -137,10 +137,10 @@ attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for con
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
 # each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
 max_decomposition_depth: 2           # 0 = unlimited; ADR-0012 / 03 §1.3
-relations_mapper:                    # ADR-0007: manual-only by default; periodic service is opt-in
+steward:                    # ADR-0007: manual-only by default; periodic service is opt-in
   enabled: false
   interval_minutes: 60
-  dev_type: mapper
+  dev_type: steward
 active_prompt_templates: {}          # per-Mission-Type template name; missing ⇒ "default"
 active_devtype_prompts: {}           # per-Dev-Type identifying-prompt name; missing ⇒ "Development"
 dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts ("id:signature")

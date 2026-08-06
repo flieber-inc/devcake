@@ -140,7 +140,7 @@ What is **not** hard from the toggle alone:
 | Secret (Repositories GUI) | Injected into Devs? | Used by the app for |
 |---|---|---|
 | **Write / access** (`token`) | **EXECUTE** always; other stages only if no RO PAT is set | PR comments, state, and **squash-merge** when `auto_merge` is on |
-| **Read-only** (`token_ro`, recommended) | Non-EXECUTE stages (ONBOARD / PLAN / REVIEW / MAPPER) | — (clone/read only in-container) |
+| **Read-only** (`token_ro`, recommended) | Non-EXECUTE stages (ONBOARD / PLAN / REVIEW / STEWARD) | — (clone/read only in-container) |
 | **Reviewer** (`reviewer_token`, recommended for formal forge approval) | **Never** — app-side only | **Formal** PR/MR approval (`ForgePort.approve`) after REVIEW Dev returns approve |
 
 REVIEW’s job is judgment (`result.json`). Formal forge approval and merge are **app** side effects, never something the REVIEW container is handed credentials to do with the reviewer token.
@@ -195,7 +195,7 @@ agent work out.” Users are adults; the job of the docs and product is to
 - **Even with `auto_merge` off:** the same write token + forge CLI (`gh` /
   `glab` / API) can **merge** a PR if forge branch protection does not forbid
   it (§2 zone C). Off only stops the **app** from merging.
-- If **no RO PAT** is configured: **every** stage (ONBOARD/PLAN/REVIEW/MAPPER)
+- If **no RO PAT** is configured: **every** stage (ONBOARD/PLAN/REVIEW/STEWARD)
   gets the same write-capable token as EXECUTE — a non-EXECUTE Dev can push
   (and, without protection, may merge).
 - Exfiltrate env secrets over **open egress** (redaction does not cover Dev

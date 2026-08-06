@@ -2,7 +2,7 @@
 everything is configured through the admin GUI (schema v4, no env seeding).
 The full operator surface: PMO/repo connections (0..N instances, secrets
 GUI-stored under /data/secrets/ — ADR-0011), adoption, polling, assignments,
-concurrency, merge policy, relations mapper.
+concurrency, merge policy, relations steward.
 """
 
 import logging
@@ -238,14 +238,46 @@ class Concurrency(BaseModel):
     global_max: int = Field(3, ge=1)
 
 
-class RelationsMapper(BaseModel):
-    """Dev run that maps missing blocked-by relations (ADR-0007). Manual-only
-    by default (enabled=False → the admin "Run now" button); the periodic
-    service is opt-in. dev_type must name an existing Dev Type whenever
-    enabled — the seeded mapper (cheap model) is the default vehicle."""
+class Steward(BaseModel):
+    """The out-of-the-loop Dev class (STEWARD — renamed from MAPPER,
+    founder decision 2026-08-06): board-tending runs outside any mission's
+    pipeline. Today's sole duty is mapping missing blocked-by relations
+    (ADR-0007); discovery routing joins later. Manual-only by default
+    (enabled=False → the admin "Run now" button); the periodic service is
+    opt-in. dev_type must name an existing Dev Type whenever enabled — the
+    seeded steward (cheap model) is the default vehicle."""
     enabled: bool = False
     interval_minutes: int = Field(60, ge=1)
-    dev_type: str | None = "mapper"
+    dev_type: str | None = "steward"
+
+
+def migrate_steward_names(data: dict) -> dict:
+    """MAPPER→STEWARD one-time raw-config migration (2026-08-06 rename, no
+    aliases in code): `relations_mapper` → `steward` top-level key, and the
+    "mapper" Dev-Type NAME wherever config references one. Idempotent;
+    load_config's normalized write-back persists the result, so the old
+    shape disappears from disk on first boot. Runs on EVERY AppConfig
+    validation (before-validator), which also covers settings-bundle
+    imports and API config patches carrying the old shape."""
+    if not isinstance(data, dict):
+        return data
+    if "relations_mapper" in data and "steward" not in data:
+        data["steward"] = data.pop("relations_mapper")
+    st = data.get("steward")
+    if isinstance(st, dict) and st.get("dev_type") == "mapper":
+        st["dev_type"] = "steward"
+
+    def _fix_assignments(assignments) -> None:
+        if not isinstance(assignments, dict):
+            return
+        for row in assignments.values():
+            if isinstance(row, dict) and row.get("dev_type") == "mapper":
+                row["dev_type"] = "steward"
+    _fix_assignments(data.get("assignments"))
+    for inst in data.get("pmos") or []:
+        if isinstance(inst, dict):
+            _fix_assignments(inst.get("assignments"))
+    return data
 
 
 class RepoMirror(BaseModel):
@@ -440,8 +472,8 @@ IMPLEMENTER_PROMPT = (
     "the tests, and you never commit until the work is complete. Do exactly what your "
     "current mission playbook asks."
 )
-MAPPER_PROMPT = (
-    "You are **Mapper**, DevCake's fast, literal assistant for narrow structured "
+STEWARD_PROMPT = (
+    "You are **Steward**, DevCake's fast, literal assistant for narrow structured "
     "tasks. You do exactly the task you are given — no more. You never improvise "
     "scope, you follow output formats to the letter, and when you are unsure you say "
     "so instead of guessing. Do exactly what your current mission playbook asks."
@@ -453,15 +485,20 @@ DEFAULT_DEV_TYPES = [
             model="claude-fable-5"),  # founder decision 2026-07-12: judgment runs on Fable
     DevType(name="implementer", harness_template="grok-build",
             identifying_prompt=IMPLEMENTER_PROMPT, max_concurrency=2),
-    # cheap, literal worker for narrow structured tasks — the Relations Mapper's
+    # cheap, literal worker for narrow structured tasks — the Relations Steward's
     # default vehicle (ADR-0007 addendum); same harness/credentials as judgment
-    DevType(name="mapper", harness_template="claude-code",
-            identifying_prompt=MAPPER_PROMPT, max_concurrency=1,
+    DevType(name="steward", harness_template="claude-code",
+            identifying_prompt=STEWARD_PROMPT, max_concurrency=1,
             model="claude-haiku-4-5"),
 ]
 
 
 class AppConfig(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_steward_names(cls, data):
+        return migrate_steward_names(data)
+
     # v4 (M12): secret VALUES are GUI-stored, not env-referenced; a truly
     # empty first boot (pmos/repos both empty) is a defined idle state
     schema_version: int = 4
@@ -541,7 +578,7 @@ class AppConfig(BaseModel):
     # mission (ADR-0012). 0 = unlimited — the ONBOARD Dev decides; removes
     # the fission backstop by explicit operator choice (docs/03 §1.3)
     max_decomposition_depth: int = Field(2, ge=0)
-    relations_mapper: RelationsMapper = Field(default_factory=RelationsMapper)
+    steward: Steward = Field(default_factory=Steward)
     # ADR-0024 — mandatory source mirror; see the RepoMirror docstring
     repo_mirror: RepoMirror = Field(default_factory=RepoMirror)
     # operator rate card + display-override switch for app-side cost
@@ -888,6 +925,21 @@ def delete_dev_type(name: str) -> None:
 def load_dev_types() -> dict[str, DevType]:
     dt_dir = CONFIG_PATH.parent / "dev_types"
     dt_dir.mkdir(parents=True, exist_ok=True)
+    # MAPPER→STEWARD (2026-08-06): migrate a persisted mapper.yaml — rename
+    # the file AND its name field, preserving operator customizations
+    # (harness, model, secret refs) — unless a steward.yaml already exists
+    # (then the old file is retired untouched-in-content but removed, so the
+    # seeder below cannot resurrect a parallel "mapper" type). One-time,
+    # idempotent, ahead of the seeding pass.
+    legacy = dt_dir / "mapper.yaml"
+    if legacy.exists():
+        target = dt_dir / "steward.yaml"
+        if not target.exists():
+            data = yaml.safe_load(legacy.read_text()) or {}
+            data["name"] = "steward"
+            _atomic_yaml(target, DevType.model_validate(data).model_dump())
+            log.info("config: migrated dev type mapper → steward")
+        legacy.unlink()
     # name-based top-up: a default Dev Type is (re-)seeded whenever its file is
     # missing, so existing deployments gain new defaults on boot. Customize
     # defaults by EDITING them — a deleted default returns next boot (docs/02 §6).

@@ -44,17 +44,17 @@ def resolve_repo(mgr, mission: Mission, all_runs: list | None = None):
     history = sorted(
         (r for r in all_runs
          if r.mission_pmo_id == mission.pmo_id and mgr._run_is_ours(r)
-         and r.mission_type != "MAPPER"),
+         and r.mission_type != "STEWARD"),
         key=lambda r: r.created_at, reverse=True)
     return resolve_repo(mission, mgr.instance,
                         set(mgr.forges.instances), history)
 
 
-def mapper_repo(mgr) -> str | None:
-    """The repo a MAPPER run clones (the entrypoint always clones): the
+def steward_repo(mgr) -> str | None:
+    """The repo a STEWARD run clones (the entrypoint always clones): the
     instance's default repo when configured, else any configured repo. A
-    MAPPER run reads the whole team's relations, not a mission — it never
-    routes to a per-mission internal repo (returns None → mapper stays idle
+    STEWARD run reads the whole team's relations, not a mission — it never
+    routes to a per-mission internal repo (returns None → steward stays idle
     when only the internal forge exists)."""
     for name in (mgr.instance.repos or []):      # set order = preference
         if name in mgr.forges.instances:
@@ -140,7 +140,7 @@ async def resolve_blocker_work(
         return entries, skip, notes
     if all_runs is None:
         all_runs = mgr.runs.store.all()
-    # Mission-only run index (mirror resolve_repo history): MAPPER/hello never
+    # Mission-only run index (mirror resolve_repo history): STEWARD/hello never
     # carry a mission work repo. Instance scope is PER BLOCKER now: the
     # locator's attribution (accepted_pmo_refs) decides whose run history may
     # serve each id — gitea_issues pmo_ids are per-repo issue NUMBERS, so a
@@ -150,7 +150,7 @@ async def resolve_blocker_work(
     for r in all_runs:
         if not getattr(r, "mission_pmo_id", None) or not getattr(r, "repo_ref", None):
             continue
-        if r.mission_type in ("MAPPER", "HELLO", "OAUTH"):
+        if r.mission_type in ("STEWARD", "HELLO", "OAUTH"):
             continue
         # legacy default "main" (see run.LEGACY_PMO_REFS — here it is a
         # synthetic REPO name, deliberately narrower: "" is never a repo
@@ -587,7 +587,7 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
                        mirror_path: str = "",
                        lfs: bool = False) -> dict[str, str]:
     """The Dev-protocol env contract (docs/07 §3), built in exactly one
-    place so mission and mapper dispatches can never drift apart — a var
+    place so mission and steward dispatches can never drift apart — a var
     missing on one path would crash the entrypoint's strict readers."""
     return {
         "DEVCAKE_MISSION_ID": mission_id,
@@ -671,10 +671,10 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
         payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
     # ADR-0014 D4: the activity-repo RO clone spec (secret half — the token
-    # never rests on the Run). Absent for MAPPER (no mission, no repo), when
+    # never rests on the Run). Absent for STEWARD (no mission, no repo), when
     # the forge is off, or before the boot mint — the entrypoint then falls
     # back to the Redis materialization.
-    if mgr.internal_forge is not None and run.mission_type != "MAPPER":
+    if mgr.internal_forge is not None and run.mission_type != "STEWARD":
         from ...ports.internal_forge import activity_repo_name
         creds = mgr.internal_forge.activity_credentials(
             activity_repo_name(mgr.instance_name, run.mission_key))

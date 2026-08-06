@@ -49,7 +49,7 @@ class Run(BaseModel):
     attempt_of_step: int = 1
     # Done direct blockers' work repos (non-secret snapshot at dispatch):
     # [{repo_ref, mission_key}] — tokens are attached at runspec time.
-    # Empty on legacy / MAPPER / no-blocker runs.
+    # Empty on legacy / STEWARD / no-blocker runs.
     blocker_work: list[dict[str, str]] = Field(default_factory=list)
     # The mirror gate's needed_for set, snapshotted at dispatch (2026-08
     # evaluation F12): which repos this run's extras serve via mirror_path is
@@ -68,7 +68,7 @@ class Run(BaseModel):
     stage_label_at_dispatch: Optional[str] = None
     # the PR branch minted at dispatch (schema v3): stored so review/merge
     # lookups can never drift from what the Dev actually pushed; "" on
-    # legacy/mapper/hello records (ports.forge.run_branch derives those)
+    # legacy/steward/hello records (ports.forge.run_branch derives those)
     branch: str = ""
     spec_prompt: str = ""
     # skill-store files for the Dev (non-secret, fetched at dispatch so a

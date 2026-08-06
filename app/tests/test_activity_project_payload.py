@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from devcake.domain.model import Activity, ActivityEntry, AttachmentRef, Mission, MissionDocument
 from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
-from test_mapper import MapPMO, make_mgr, run_coro
+from test_steward import MapPMO, make_mgr, run_coro
 
 NOW = datetime.now(timezone.utc)
 
@@ -112,7 +112,7 @@ def test_project_payload_empty_feed_is_self_explanatory(tmp_path):
 def test_issue_payload_keeps_its_shape(tmp_path):
     """Issue-path parity: default kind stays `issue`, and the project-only
     empty-feed line never leaks into an issue mirror."""
-    from test_mapper import m as mission_m
+    from test_steward import m as mission_m
     pmo = KindPMO([], activity=Activity(mission=mission_m("i1", "T-1"),
                                         entries=[]))
     mgr = make_mgr(tmp_path, pmo)

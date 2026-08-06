@@ -168,7 +168,7 @@ class LinearAdapter:
 
     async def _paginate(self, query: str, root: str, variables: dict) -> list[dict]:
         """Cursor-paginate a top-level connection. The scheduling gate and the
-        mapper's validator must see the WHOLE team — a first-page-only read
+        steward's validator must see the WHOLE team — a first-page-only read
         turns silent truncation into wrong scheduling decisions (docs/05 §6)."""
         nodes: list[dict] = []
         after: str | None = None

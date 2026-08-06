@@ -277,7 +277,7 @@ def security_warnings(config) -> list[dict]:
                 "title": f"All mission stages hold repo '{repo.name}'s "
                          "WRITE token",
                 "body": f"No read-only PAT is set for repo '{repo.name}', so "
-                        "PLAN/REVIEW/MAPPER/ONBOARD Devs receive the same "
+                        "PLAN/REVIEW/STEWARD/ONBOARD Devs receive the same "
                         "write-capable forge token as EXECUTE. A prompt-injected "
                         "non-EXECUTE Dev could push to the repo. Add a read-only "
                         "token for this repo on the Config page (ISSUES #15).",

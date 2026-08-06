@@ -249,7 +249,7 @@ def test_runspec_secret_payload_built_on_request(tmp_path, monkeypatch):
                                             "content": '{"grok": true}',
                                             "mode": "600"}]
     # Non-EXECUTE stages: prefer RO token (clone-capable), never omit token
-    for mtype in ("PLAN", "REVIEW", "ONBOARD", "MAPPER"):
+    for mtype in ("PLAN", "REVIEW", "ONBOARD", "STEWARD"):
         r2 = Run(run_id=f"T-1-1-{mtype}-AAAAAA", mission_key="T-1",
                  mission_type=mtype, dev_type="senior-dev", seq=1)
         p2 = mgr.runspec_secret_payload(r2)
@@ -402,7 +402,7 @@ def test_runspec_result_delivers_mcp_setup_commands(tmp_path):
     assert payload["env"] == {"PUBLIC": "yes", "DD_API_KEY": "v"}
 
 
-def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeypatch):
+def test_dispatch_steward_uses_registry_image_and_sends_harness(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     captured = {}
 
@@ -432,7 +432,7 @@ def test_dispatch_mapper_uses_registry_image_and_sends_harness(tmp_path, monkeyp
     m = Mission(pmo_id="p1", pmo_kind="issue", key="T-1", title="t",
                 status="backlog", labels={"DEVCAKE"},
                 updated_at=datetime.now(timezone.utc))
-    run = run_coro(mgr.dispatch_mapper(dt, [m]))
+    run = run_coro(mgr.dispatch_steward(dt, [m]))
 
     assert captured["IMAGE"] == HARNESSES["grok-build"].image
     # skills dir snapshotted from the same registry read as the image
@@ -498,7 +498,7 @@ def test_continuation_env_wire_format():
     DEVCAKE_MAX_CONTINUATIONS is str(int) — spec env is str→str on every path;
     the entrypoint's continuation_config parses defensively (garbage → off),
     so the app side's only job is to not mangle the values. Both call sites
-    (dispatch + mapper) thread them from mgr.config in lockstep."""
+    (dispatch + steward) thread them from mgr.config in lockstep."""
     from fakes import make_mission_manager
     from devcake.adapters.registry import make_forge
     from devcake.config import RepoInstance

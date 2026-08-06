@@ -41,7 +41,7 @@ def make_mgr(tmp_path, pmo):
         dev_types={
             "judgment": DevType(name="judgment", harness_template="claude-code"),
             "implementer": DevType(name="implementer", harness_template="grok-build"),
-            "mapper": DevType(name="mapper", harness_template="claude-code"),
+            "steward": DevType(name="steward", harness_template="claude-code"),
         },
         noop_audit=True,
     )

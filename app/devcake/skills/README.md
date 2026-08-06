@@ -46,7 +46,7 @@ work from three layers — keep them separate:
    product.
 
 One skill may attach to **many** Mission Types and Dev Types (e.g. a company
-readme skill on every vehicle; dependency reasoning on judgment and mapper).
+readme skill on every vehicle; dependency reasoning on judgment and steward).
 
 ## Available vs Required
 

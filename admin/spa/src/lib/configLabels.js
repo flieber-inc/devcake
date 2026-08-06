@@ -40,9 +40,9 @@ const EXACT = {
   "cfg.attach_merged_changeset_to_pmo": {
     group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
   },
-  "cfg.relations_mapper.dev_type": { group: "Limits & Traffic", label: "Mapper Dev Type", format: orEmpty },
-  "cfg.relations_mapper.interval_minutes": { group: "Limits & Traffic", label: "Mapper interval (minutes)" },
-  "cfg.relations_mapper.enabled": { group: "Limits & Traffic", label: "Mapper periodic service", format: onOff },
+  "cfg.steward.dev_type": { group: "Limits & Traffic", label: "Steward Dev Type", format: orEmpty },
+  "cfg.steward.interval_minutes": { group: "Limits & Traffic", label: "Steward interval (minutes)" },
+  "cfg.steward.enabled": { group: "Limits & Traffic", label: "Steward periodic service", format: onOff },
   "cfg.max_decomposition_depth": {
     group: "Limits & Traffic", label: "Decomposition depth",
     format: (v) => (v === 0 ? "unlimited" : String(v)),

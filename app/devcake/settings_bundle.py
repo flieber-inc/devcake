@@ -288,7 +288,14 @@ def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
             raise BundleError(422, f"config.app invalid — "
                                    f"{_scrub_validation_error(e)}")
         dts: dict[str, DevType] = {}
-        for name, data in (cfg_section.get("dev_types") or {}).items():
+        incoming_dts = dict(cfg_section.get("dev_types") or {})
+        # MAPPER→STEWARD (2026-08-06): bundles exported before the rename
+        # carry a "mapper" dev type — import it under its new name (a bundle
+        # that somehow carries both keeps the explicit "steward")
+        if "mapper" in incoming_dts:
+            incoming_dts.setdefault("steward", incoming_dts["mapper"])
+            del incoming_dts["mapper"]
+        for name, data in incoming_dts.items():
             if not isinstance(data, dict):
                 raise BundleError(422, f"dev_types[{name!r}] must be a mapping")
             try:
@@ -554,10 +561,10 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
     never hard-422 — delete/rename/export paths must stay healable after an
     incomplete Dev Type removal.
     """
-    rm = cfg.relations_mapper
+    rm = cfg.steward
     if rm.enabled and (not rm.dev_type or rm.dev_type not in dev_type_names):
-        raise BundleError(422, "relations_mapper.dev_type must name an "
-                               "existing Dev Type when the mapper is enabled")
+        raise BundleError(422, "steward.dev_type must name an "
+                               "existing Dev Type when the steward is enabled")
     for mt, name in (cfg.active_prompt_templates or {}).items():
         if mt not in PLAYBOOK_VARS:
             raise BundleError(422, f"active_prompt_templates: unknown "

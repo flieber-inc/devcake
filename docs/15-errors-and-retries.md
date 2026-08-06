@@ -166,7 +166,7 @@ Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE
 
 **Loop guardrail (warnings only):** repeats on the same (mission, stage) escalate the baton-pass comment from the 2nd hand-off on ("Hand-off #N … add `DEVCAKE-SKIP` to stop DevCake"); DevCake never auto-parks — the human always decides (founder decision 2026-07-12). The prompts require evidence (quote the exact error) before any hand-off.
 
-**Mapper degradation:** 3 consecutive dead MAPPER runs ⇒ the periodic service backs off (`mapper_degraded` in `/health` + the admin card); "Run now" remains available and a successful run clears it. Store-derived — restart-safe, no counters to reset.
+**Steward degradation:** 3 consecutive dead STEWARD runs ⇒ the periodic service backs off (`steward_degraded` in `/health` + the admin card); "Run now" remains available and a successful run clears it. Store-derived — restart-safe, no counters to reset.
 
 **`out_of_pipeline_merge` (anomaly, not an error):** a mission's PR found merged while the mission is still mid-pipeline (EXECUTE/REVIEW). Detection tripwire only (docs/14 §2 zone C): comment + audit + health banner — **does not prevent or reverse the merge**. A human may have merged early, or a Dev with a write token may have merged if branch protection allowed it (`auto_merge` off only stops the **app**).
 
@@ -178,14 +178,14 @@ When many Devs share one model backend, harness-level faults (`DEV_HARNESS_FAULT
 often land together. That class therefore has a brake, of a **different kind**
 from §4's: store-derived, self-healing, and never latched.
 
-**Detection** is derived from the run store in the `mapper_service.degraded()`
+**Detection** is derived from the run store in the `steward_service.degraded()`
 idiom — no counters, restart-safe. Two predicates, because throttling and
 accounting are different questions:
 
 | predicate | condition (recent terminal runs of a dev type) | effect |
 |---|---|---|
 | `backend_correlated` | ≥2 `DEV_HARNESS_FAULT` spanning ≥2 distinct missions, in the last **3 terminal runs** | may EXCUSE the attempt |
-| `backend_degraded` | the above, **or** 3 consecutive faults on one mission among that type's last 3 **mission-bearing** runs (its own selection — a PMO-less Relations Mapper run interleaved in the window must not disarm the arm) | THROTTLES to one probe run |
+| `backend_degraded` | the above, **or** 3 consecutive faults on one mission among that type's last 3 **mission-bearing** runs (its own selection — a PMO-less Relations Steward run interleaved in the window must not disarm the arm) | THROTTLES to one probe run |
 
 **Throttled, not stopped.** A degraded Dev Type dispatches at most one run at a
 time. That probe *is* the half-open: it is what lets the condition clear itself,

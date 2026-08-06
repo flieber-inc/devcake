@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from devcake.domain.model import Mission
 from devcake.adapters.github import GitHubForge
 from devcake.adapters.gitlab import GitLabForge
-from devcake.prompts import (execute_prompt, mapper_prompt, onboard_prompt,
+from devcake.prompts import (execute_prompt, steward_prompt, onboard_prompt,
                              plan_prompt, review_prompt)
 
 GH_PR = GitHubForge.descriptor.pr_instructions
@@ -116,7 +116,7 @@ def test_turn_discipline_in_result_writing_playbooks():
     operator template overrides. PLAN is excluded: read-only, its final
     message IS the deliverable, ending the turn is correct there."""
     writing = (onboard_prompt("ID", M), execute_prompt("ID", M, "repo", GH_PR),
-               review_prompt("ID", M), mapper_prompt("ID", [M]))
+               review_prompt("ID", M), steward_prompt("ID", [M]))
     for p in writing:
         assert "Never end your turn" in p
         assert "call a tool" in p
@@ -124,14 +124,14 @@ def test_turn_discipline_in_result_writing_playbooks():
     assert "Never end your turn" not in plan_prompt("ID", M)
 
 
-def test_mapper_prompt_embeds_missions():
+def test_steward_prompt_embeds_missions():
     a = Mission(instance="linear", pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
                 description="x" * 500, status="backlog",
                 updated_at=datetime.now(timezone.utc))
     b = Mission(instance="linear", pmo_id="idb", pmo_kind="issue", key="T-2", title="implement",
                 status="backlog", blocked_by=["ida"],
                 updated_at=datetime.now(timezone.utc))
-    p = mapper_prompt("ID", [a, b])
+    p = steward_prompt("ID", [a, b])
     assert "T-1" in p and "T-2" in p
     assert "blocked by: T-1" in p                 # existing blockers shown as keys
     assert "x" * 300 in p and "x" * 301 not in p  # description head capped

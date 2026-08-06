@@ -158,8 +158,8 @@ def test_dispatch_stamps_the_dispatching_instances_pmo_ref():
     src = inspect.getsource(dispatch_mod.dispatch)
     assert "pmo_ref=mgr.instance_name" in src
     assert "pmo_ref=self.config.pmos[0]" not in src
-    from devcake.domain.orchestrator import mapper as mapper_mod
-    src = inspect.getsource(mapper_mod.dispatch_mapper)
+    from devcake.domain.orchestrator import steward as steward_mod
+    src = inspect.getsource(steward_mod.dispatch_steward)
     assert "pmo_ref=mgr.instance_name" in src
 
 
@@ -178,7 +178,7 @@ def _rt(tmp_path, managers=None, store=None, order=None):
         return {}
 
     return PollRuntime(
-        config=AppConfig(), managers=managers, mappers={},
+        config=AppConfig(), managers=managers, stewards={},
         store=store if store is not None else SimpleNamespace(active=lambda: [], all=lambda: []),
         forge_runtime=SimpleNamespace(breakers={},
                                       last_full_probe_at=datetime.now(timezone.utc)),

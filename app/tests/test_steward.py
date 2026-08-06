@@ -1,7 +1,7 @@
-"""ADR-0007: the Relations Mapper is advisory — the app validates every
+"""ADR-0007: the Relations Steward is advisory — the app validates every
 proposed edge (unknown/self/terminal/duplicate/cycle are dropped) — plus the
-MapperService cadence/degradation and the comment-provenance sentinel
-classification the mapper's output relies on."""
+StewardService cadence/degradation and the comment-provenance sentinel
+classification the steward's output relies on."""
 import asyncio
 import time
 from datetime import datetime, timezone
@@ -10,12 +10,12 @@ from types import SimpleNamespace
 import pytest
 
 from devcake.config import AppConfig, DevType
-from devcake.domain.orchestrator import (MapperBusy, MapperService, MapperUnconfigured,
+from devcake.domain.orchestrator import (StewardBusy, StewardService, StewardUnconfigured,
                               MissionManager)
 from devcake.domain.model import Activity, ActivityEntry, AttachmentRef, Mission
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
-from devcake.domain.orchestrator import dispatch, mapper
+from devcake.domain.orchestrator import dispatch, steward
 
 NOW = datetime.now(timezone.utc)
 
@@ -61,20 +61,20 @@ def run_coro(c):
     return asyncio.get_event_loop().run_until_complete(c)
 
 
-def test_finalize_mapper_stamps_rate_card_estimate(tmp_path):
-    """ADR-0021 parity: mapper spend is fleet spend — finalize_mapper stamps
+def test_finalize_steward_stamps_rate_card_estimate(tmp_path):
+    """ADR-0021 parity: steward spend is fleet spend — finalize_steward stamps
     the same cost_usd_estimated + rate_card_id as mission finalize (failed
     outcome path: the stamp must land regardless of run success)."""
     mgr = make_mgr(tmp_path, MapPMO([]))
-    run = Run(run_id="SYS-MAPPER-1-ZZZZZZ", mission_key="MAPPER",
-              mission_type="MAPPER", dev_type="mapper", seq=1,
+    run = Run(run_id="SYS-STEWARD-1-ZZZZZZ", mission_key="STEWARD",
+              mission_type="STEWARD", dev_type="steward", seq=1,
               state="finalizing")
     mgr.runs.store.save(run)
     grok = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
             "cache_write_tokens": None, "output_tokens": 500_000,
             "total_tokens": 3_500_000, "cost_usd": None,
             "model": "grok-4.5-build", "extraction_method": "end_event"}
-    run_coro(mapper.finalize_mapper(
+    run_coro(steward.finalize_steward(
         mgr, run, {"result": {"outcome": "nope"}, "token_report": grok}))
     saved = mgr.runs.store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60
@@ -82,12 +82,12 @@ def test_finalize_mapper_stamps_rate_card_estimate(tmp_path):
     assert saved["cost_usd"] is None
 
 
-def test_apply_mapper_edges_validates_everything(tmp_path):
+def test_apply_steward_edges_validates_everything(tmp_path):
     # B already blocked by A; C is terminal; D is free
     pmo = MapPMO([m("ia", "T-A"), m("ib", "T-B", blocked_by=["ia"]),
                   m("ic", "T-C", status="done"), m("id", "T-D")])
     mgr = make_mgr(tmp_path, pmo)
-    created, rejected = run_coro(mapper.apply_mapper_edges(mgr, [
+    created, rejected = run_coro(steward.apply_steward_edges(mgr, [
         {"blocker": "T-X", "blocked": "T-A"},      # unknown key
         {"blocker": "T-A", "blocked": "T-A"},      # self-edge
         {"blocker": "T-C", "blocked": "T-D"},      # terminal blocker
@@ -104,17 +104,17 @@ def test_apply_mapper_edges_validates_everything(tmp_path):
 
 def test_creates_cycle_transitive():
     graph = {"a": {"b"}, "b": {"c"}}               # a depends on b depends on c
-    assert mapper._creates_cycle(graph, "a", "c")       # c←a would loop
-    assert not mapper._creates_cycle(graph, "c", "d")   # fresh edge is fine
+    assert steward._creates_cycle(graph, "a", "c")       # c←a would loop
+    assert not steward._creates_cycle(graph, "c", "d")   # fresh edge is fine
 
 
 def test_config_defaults():
     from devcake.config import RepoInstance
     cfg = AppConfig()
     assert cfg.intake_paused is False
-    assert cfg.relations_mapper.enabled is False           # manual-only by default
-    assert cfg.relations_mapper.interval_minutes == 60
-    assert cfg.relations_mapper.dev_type == "mapper"   # seeded cheap vehicle
+    assert cfg.steward.enabled is False           # manual-only by default
+    assert cfg.steward.interval_minutes == 60
+    assert cfg.steward.dev_type == "steward"   # seeded cheap vehicle
     # merge doctrine lives on RepoInstance (ADR-0020 / docs/03 §4.1)
     repo = RepoInstance(name="main", url="https://github.com/o/r")
     assert repo.auto_merge is False
@@ -131,36 +131,36 @@ def test_config_defaults():
 def test_deep_merge_preserves_nested_siblings():
     from devcake.config import deep_merge
     base = AppConfig().model_dump()
-    merged = deep_merge(base, {"relations_mapper": {"enabled": True}})
-    assert merged["relations_mapper"]["enabled"] is True
-    assert merged["relations_mapper"]["dev_type"] == "mapper"  # sibling survived
+    merged = deep_merge(base, {"steward": {"enabled": True}})
+    assert merged["steward"]["enabled"] is True
+    assert merged["steward"]["dev_type"] == "steward"  # sibling survived
 
 
-# ── MapperService cadence + degradation ──────────────────────────────────────
+# ── StewardService cadence + degradation ──────────────────────────────────────
 
-def make_service(tmp_path, enabled=True, dev_type="mapper"):
+def make_service(tmp_path, enabled=True, dev_type="steward"):
     cfg = AppConfig()
-    cfg.relations_mapper.enabled = enabled
-    cfg.relations_mapper.dev_type = dev_type
+    cfg.steward.enabled = enabled
+    cfg.steward.dev_type = dev_type
     mgr = make_mgr(tmp_path, MapPMO([]))
     dispatched = []
 
     async def fake_dispatch(dt, missions):
         dispatched.append(dt.name)
-        return Run(run_id=f"TEAM-{len(dispatched)}-MAPPER-AAAAAA",
-                   mission_key="TEAM", mission_type="MAPPER",
+        return Run(run_id=f"TEAM-{len(dispatched)}-STEWARD-AAAAAA",
+                   mission_key="TEAM", mission_type="STEWARD",
                    dev_type=dt.name, seq=len(dispatched))
 
-    mgr.dispatch_mapper = fake_dispatch
-    svc = MapperService(cfg, {"mapper": DevType(name="mapper",
+    mgr.dispatch_steward = fake_dispatch
+    svc = StewardService(cfg, {"steward": DevType(name="steward",
                                                     harness_template="claude-code")},
                         mgr)
     return svc, mgr, dispatched
 
 
-def mapper_run(n, state):
-    return Run(run_id=f"TEAM-{n}-MAPPER-{'X' * 6}", mission_key="TEAM",
-               mission_type="MAPPER", dev_type="mapper", seq=n, state=state)
+def steward_run(n, state):
+    return Run(run_id=f"TEAM-{n}-STEWARD-{'X' * 6}", mission_key="TEAM",
+               mission_type="STEWARD", dev_type="steward", seq=n, state=state)
 
 
 def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
@@ -174,9 +174,9 @@ def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
     assert dispatched == []                        # interval not elapsed
     svc._last_at = time.monotonic() - 10**6
     run_coro(svc.maybe_dispatch([]))
-    assert dispatched == ["mapper"]            # elapsed → dispatched
+    assert dispatched == ["steward"]            # elapsed → dispatched
     run_coro(svc.maybe_dispatch([]))
-    assert dispatched == ["mapper"]            # watermark advanced
+    assert dispatched == ["steward"]            # watermark advanced
 
 
 def test_watermark_not_advanced_on_dispatch_failure(tmp_path):
@@ -185,7 +185,7 @@ def test_watermark_not_advanced_on_dispatch_failure(tmp_path):
     async def boom(dt, missions):
         raise RuntimeError("dagu down")
 
-    mgr.dispatch_mapper = boom
+    mgr.dispatch_steward = boom
     svc._last_at = time.monotonic() - 10**6
     before = svc._last_at
     with pytest.raises(RuntimeError):
@@ -196,46 +196,46 @@ def test_watermark_not_advanced_on_dispatch_failure(tmp_path):
 def test_degraded_after_three_dead_runs_skips_periodic_only(tmp_path):
     svc, mgr, dispatched = make_service(tmp_path)
     for i, st in enumerate(("failed", "timed_out", "failed"), start=1):
-        mgr.runs.store.save(mapper_run(i, st))
+        mgr.runs.store.save(steward_run(i, st))
     assert svc.degraded()
     svc._last_at = time.monotonic() - 10**6
     run_coro(svc.maybe_dispatch([]))
     assert dispatched == []                        # periodic backs off
     run = run_coro(svc.run_now())                  # manual is the reset signal
-    assert run.mission_type == "MAPPER"
+    assert run.mission_type == "STEWARD"
     # a finished run clears the condition (store-derived, restart-safe)
-    mgr.runs.store.save(mapper_run(9, "finished"))
+    mgr.runs.store.save(steward_run(9, "finished"))
     assert svc.degraded() is None
 
 
 def test_run_now_errors(tmp_path):
     svc, mgr, dispatched = make_service(tmp_path, dev_type=None)
-    with pytest.raises(MapperUnconfigured):
+    with pytest.raises(StewardUnconfigured):
         run_coro(svc.run_now())
     svc, mgr, dispatched = make_service(tmp_path)
-    active = mapper_run(1, "running")
+    active = steward_run(1, "running")
     mgr.runs.store.save(active)
-    with pytest.raises(MapperBusy):
+    with pytest.raises(StewardBusy):
         run_coro(svc.run_now())
 
 
 def test_run_now_gates_on_missing_referenced_secret_env(tmp_path, monkeypatch):
-    """Mapper runs use the same gate as mission dispatch: a referenced-but-
+    """Steward runs use the same gate as mission dispatch: a referenced-but-
     unstored secret env var refuses run_now with a 422-bound
-    MapperUnconfigured naming the var; storing the value lifts it."""
+    StewardUnconfigured naming the var; storing the value lifts it."""
     monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
     svc, mgr, dispatched = make_service(tmp_path)
-    svc.dev_types["mapper"] = DevType(
-        name="mapper", harness_template="claude-code",
+    svc.dev_types["steward"] = DevType(
+        name="steward", harness_template="claude-code",
         secret_env=["DD_API_KEY"],
         mcp_setup_commands=["claude mcp add logs -e K=$DD_API_KEY -- x"])
-    with pytest.raises(MapperUnconfigured, match="DD_API_KEY"):
+    with pytest.raises(StewardUnconfigured, match="DD_API_KEY"):
         run_coro(svc.run_now())
     assert dispatched == []
     from devcake import secrets as s
     s.write_harness_secret("DD_API_KEY", "k")
     run_coro(svc.run_now())
-    assert dispatched == ["mapper"]
+    assert dispatched == ["steward"]
 
 
 def test_activity_payload_marks_provenance(tmp_path):
@@ -393,12 +393,12 @@ def _returns(value):
     return _f
 
 
-def test_mapper_seq_scoped_to_own_instance():
+def test_steward_seq_scoped_to_own_instance():
     """Audit A29 (cosmetic): run ids are collision-free regardless, but the
-    human-visible seq counted OTHER instances' MAPPER runs too."""
+    human-visible seq counted OTHER instances' STEWARD runs too."""
     import inspect
-    from devcake.domain.orchestrator import mapper as mapper_mod
-    assert "_run_is_ours" in inspect.getsource(mapper_mod.dispatch_mapper)
+    from devcake.domain.orchestrator import steward as steward_mod
+    assert "_run_is_ours" in inspect.getsource(steward_mod.dispatch_steward)
 
 
 def test_activity_payload_marks_unavailable_attachment(tmp_path):

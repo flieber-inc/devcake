@@ -76,10 +76,10 @@ export default function useConfigDraft() {
   const errors = useMemo(() => {
     const errs = {};
     if (!draft) return errs;
-    const rm = draft.cfg.relations_mapper || {};
+    const rm = draft.cfg.steward || {};
     if (rm.enabled && !rm.dev_type)
-      errs["cfg.relations_mapper.enabled"] =
-        "Relations Mapper: periodic service is ON but no Dev Type is selected";
+      errs["cfg.steward.enabled"] =
+        "Relations Steward: periodic service is ON but no Dev Type is selected";
     for (const [mt, a] of Object.entries(draft.assignments || {})) {
       if (a?.dev_type && !draft.devTypes[a.dev_type])
         errs[`assignments.${mt}.dev_type`] =

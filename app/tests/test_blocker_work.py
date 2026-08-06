@@ -80,14 +80,14 @@ def test_resolve_blocker_work_done_different_repo(tmp_path):
     assert skips == []
 
 
-def test_resolve_blocker_work_ignores_mapper_and_unattributed_foreign(tmp_path):
-    """Descendant of the pre-cross-instance guard: MAPPER runs never mount,
+def test_resolve_blocker_work_ignores_steward_and_unattributed_foreign(tmp_path):
+    """Descendant of the pre-cross-instance guard: STEWARD runs never mount,
     and a run stamped by an instance the locator did NOT attribute the
     blocker to (here: unconfigured 'other-instance') stays invisible."""
     a = _mission("a", "T-A", status="done")
     b = _mission("b", "T-B", blocked_by=["a"])
-    mapper = _run("a", "T-A", "evil-repo")
-    mapper.mission_type = "MAPPER"
+    steward = _run("a", "T-A", "evil-repo")
+    steward.mission_type = "STEWARD"
     foreign = _run("a", "T-A", "foreign-repo")
     foreign.pmo_ref = "other-instance"
     good = _run("a", "T-A", "linear-t-a")
@@ -97,7 +97,7 @@ def test_resolve_blocker_work_ignores_mapper_and_unattributed_foreign(tmp_path):
     # manager instance name defaults to linear
     entries, _, _notes = run_coro(
         dispatch.resolve_blocker_work(
-            mgr, b, "primary", [mapper, foreign, good]))
+            mgr, b, "primary", [steward, foreign, good]))
     assert entries == [{"repo_ref": "linear-t-a", "mission_key": "T-A"}]
 
 
@@ -324,13 +324,13 @@ def test_extra_repos_includes_blocker_work_internal(tmp_path, monkeypatch):
     assert item["token"] == "read-secret"
     assert "linear-t-a" in item["url"]
 
-    # MAPPER never gets blocker extras
-    mapper = Run(run_id="LINEAR-TEAM-1-MAPPER-AAAAAA", mission_key="TEAM",
-                 mission_type="MAPPER", dev_type="judgment", seq=1,
+    # STEWARD never gets blocker extras
+    steward = Run(run_id="LINEAR-TEAM-1-STEWARD-AAAAAA", mission_key="TEAM",
+                 mission_type="STEWARD", dev_type="judgment", seq=1,
                  repo_ref="alpha",
                  blocker_work=[{"repo_ref": "linear-t-a", "mission_key": "T-A"}])
     assert "linear-t-a" not in [
-        x["name"] for x in dispatch._extra_repos_for(mgr, mapper)]
+        x["name"] for x in dispatch._extra_repos_for(mgr, steward)]
 
 
 def test_extra_repos_includes_blocker_work_configured(tmp_path, monkeypatch):

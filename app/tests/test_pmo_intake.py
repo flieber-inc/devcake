@@ -190,7 +190,7 @@ def test_set_pmo_intake_rejects_non_bool(monkeypatch):
 
 
 def test_poll_instance_skips_schedule_when_instance_paused(tmp_path):
-    """A paused instance must not schedule or mapper-dispatch; sweeps still run.
+    """A paused instance must not schedule or steward-dispatch; sweeps still run.
     A sibling open instance is unaffected (tested at the predicate layer above).
     """
     from fakes import make_mission_manager
@@ -211,7 +211,7 @@ def test_poll_instance_skips_schedule_when_instance_paused(tmp_path):
     mgr.instance_name = "alpha"
     mgr.anomalies = {}
 
-    mapper = SimpleNamespace(maybe_dispatch=AsyncMock())
+    steward = SimpleNamespace(maybe_dispatch=AsyncMock())
 
     async def _noop():
         return {}
@@ -219,7 +219,7 @@ def test_poll_instance_skips_schedule_when_instance_paused(tmp_path):
     rt = PollRuntime(
         config=AppConfig(intake_paused=False),
         managers={"alpha": mgr},
-        mappers={"alpha": mapper},
+        stewards={"alpha": steward},
         store=SimpleNamespace(active=lambda: [], all=lambda: []),
         forge_runtime=SimpleNamespace(breakers={}),
         refresh_forge_health=_noop,
@@ -230,7 +230,7 @@ def test_poll_instance_skips_schedule_when_instance_paused(tmp_path):
     assert disp == 0
     sweeps.assert_awaited_once()
     schedule.assert_not_awaited()
-    mapper.maybe_dispatch.assert_not_awaited()
+    steward.maybe_dispatch.assert_not_awaited()
     gate_map.assert_awaited_once()
 
 
@@ -256,7 +256,7 @@ def test_poll_instance_schedules_when_open(tmp_path):
     rt = PollRuntime(
         config=AppConfig(intake_paused=False),
         managers={"alpha": mgr},
-        mappers={},
+        stewards={},
         store=SimpleNamespace(active=lambda: [], all=lambda: []),
         forge_runtime=SimpleNamespace(breakers={}),
         refresh_forge_health=_noop,
@@ -290,7 +290,7 @@ def test_global_pause_skips_schedule_even_if_instance_open(tmp_path):
     rt = PollRuntime(
         config=AppConfig(intake_paused=True),
         managers={"alpha": mgr},
-        mappers={},
+        stewards={},
         store=SimpleNamespace(active=lambda: [], all=lambda: []),
         forge_runtime=SimpleNamespace(breakers={}),
         refresh_forge_health=_noop,

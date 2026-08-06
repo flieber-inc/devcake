@@ -35,7 +35,7 @@ def _world(config_mod, secrets, prompt_templates):
         # refuses while assigned)
         assignments={mt: config_mod.Assignment(dev_type="senior-dev")
                      for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")},
-        relations_mapper=config_mod.RelationsMapper(dev_type="senior-dev"),
+        steward=config_mod.Steward(dev_type="senior-dev"),
     )
     dts = {
         "senior-dev": config_mod.DevType(

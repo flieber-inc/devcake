@@ -3,7 +3,7 @@
 > **Audience:** implementers. This is the most correctness-sensitive document in the set.
 > **Depends on:** `00-overview.md` (INV-1…6), `02-domain-model.md` (derivation table, Run, AppConfig).
 
-The orchestrator is the always-on core of the main app. **Implementation** lives under `app/devcake/domain/orchestrator/` as a package (ISSUES #36, structure per ADR-0015): `MissionManager` is the DI container + advisory state + public verb surface, holding explicit delegating methods; schedule, dispatch, finalize, transitions, review, freshness (the ADR-0031 gate on REVIEW's context-closing finalize — `docs/03` §4.1), decomposition, sweeps, feed policy, and MAPPER mission ops are focused modules whose functions take the manager (`mgr`) as an explicit first parameter. Step-finalization and sweep seams are module-public (`transitions.transition`, `review.finalize_review`, `freshness.review_freshness_gate`/`disclose_unread_at_close`, `decomposition.finalize_decomposition`, `sweeps.merge_sweep`/`tracking_sweep`, `dispatch.attempt_number`/`resolve_repo`/`resolve_repo_live`/`decomposition_rule`/`mapper_repo`, `mapper.apply_mapper_edges`) — the sanctioned test seam. `MapperService` (cadence) stays in `domain/mapper_service.py`. Wiring and the three loops live in `api/main.py`.
+The orchestrator is the always-on core of the main app. **Implementation** lives under `app/devcake/domain/orchestrator/` as a package (ISSUES #36, structure per ADR-0015): `MissionManager` is the DI container + advisory state + public verb surface, holding explicit delegating methods; schedule, dispatch, finalize, transitions, review, freshness (the ADR-0031 gate on REVIEW's context-closing finalize — `docs/03` §4.1), decomposition, sweeps, feed policy, and STEWARD mission ops are focused modules whose functions take the manager (`mgr`) as an explicit first parameter. Step-finalization and sweep seams are module-public (`transitions.transition`, `review.finalize_review`, `freshness.review_freshness_gate`/`disclose_unread_at_close`, `decomposition.finalize_decomposition`, `sweeps.merge_sweep`/`tracking_sweep`, `dispatch.attempt_number`/`resolve_repo`/`resolve_repo_live`/`decomposition_rule`/`steward_repo`, `steward.apply_steward_edges`) — the sanctioned test seam. `StewardService` (cadence) stays in `domain/steward_service.py`. Wiring and the three loops live in `api/main.py`.
 
 It runs three cooperating loops on one asyncio event loop:
 
@@ -19,8 +19,8 @@ Every `poll_interval_seconds` (default 30). **Multi-PMO:** the poll runtime walk
 2. Derive each Mission's type per the table in `02-domain-model.md` §2.
 3. **Project auto-completion sweep:** for each Project carrying `DEVCAKE-TRACKING`, check its child Issues; if all are `done`/`canceled` (and it has ≥1 child), set the Project's status to `done` and remove `DEVCAKE-TRACKING`. **No completion comment** is posted — the status + label change is the signal. (State is derived entirely from the PMO — no local tracking.) The child read is a flat in-project filter, so second-level decomposition composes correctly: a child canceled in favor of its own sub-missions counts terminal, while the sub-missions — created inside the same Project (`adr/0012`) — hold it open until they finish.
 4. **Merge sweep:** for each Mission carrying `DEVCAKE-MERGE`, check its PR via the forge adapter (`get_pr_by_branch`/`pr_state`, which return normalized `PullRequest` DTOs — attribute access, never raw forge JSON) — merged → remove the label, status `done`; closed unmerged → remove the label, status `canceled`; either way with a comment (`03-mission-lifecycle.md` §4.1). While the PR is still open and a deferred-merge retry window is active (that mission's repo has `auto_merge` ON, latest merge-state feed marker is `` `devcake:merge-retry` ``), the sweep also drives the retry: `mergeable()` each cycle — ready → merge and complete; conflict → conflict-rework routing; computing/CI → wait; window elapsed → terminal hand-off, once. Done is only ever declared after the merge is real.
-5. Run the scheduling algorithm (§3) over the derived candidates — **unless intake is paused** (`02-domain-model.md` §9): the global `intake_paused` master freezes every instance; each `pmos[].intake_paused` freezes only that instance. While blocked, steps 1–4 and 6 still run (sweeps, health, snapshot), the ingress consumer still finalizes in-flight runs, and the watchdog still enforces timeouts; only NEW dispatches (missions and MAPPER runs) are withheld for the blocked instance(s).
-6. **Relations Mapper cadence (`MapperService`):** when `relations_mapper.enabled` with a valid `dev_type`, no MAPPER run active, `interval_minutes` elapsed, and the service not **degraded** (3 most recent MAPPER runs all dead — store-derived, restart-safe) → dispatch a MAPPER run (`03-mission-lifecycle.md` §4b). One lock serializes this with the manual "Run now" endpoint; the watermark advances only after a successful dispatch. MAPPER runs count toward `global_max`.
+5. Run the scheduling algorithm (§3) over the derived candidates — **unless intake is paused** (`02-domain-model.md` §9): the global `intake_paused` master freezes every instance; each `pmos[].intake_paused` freezes only that instance. While blocked, steps 1–4 and 6 still run (sweeps, health, snapshot), the ingress consumer still finalizes in-flight runs, and the watchdog still enforces timeouts; only NEW dispatches (missions and STEWARD runs) are withheld for the blocked instance(s).
+6. **Relations Steward cadence (`StewardService`):** when `steward.enabled` with a valid `dev_type`, no STEWARD run active, `interval_minutes` elapsed, and the service not **degraded** (3 most recent STEWARD runs all dead — store-derived, restart-safe) → dispatch a STEWARD run (`03-mission-lifecycle.md` §4b). One lock serializes this with the manual "Run now" endpoint; the watermark advances only after a successful dispatch. STEWARD runs count toward `global_max`.
 7. Refresh the in-memory missions snapshot served by `GET /api/v1/missions` (advisory only, rebuilt every cycle) and emit the `poll.cycle` span with counts (`12-observability.md`).
 
 A `PMOTransient` on one instance skips **only that instance's segment** for this cycle (`15-errors-and-retries.md`, `PMO_TRANSIENT`); other configured PMO instances still poll. The next tick re-attempts the sick instance — nothing is lost because nothing local is authoritative.
@@ -66,14 +66,14 @@ Properties:
 
 ### 3.1 Dispatch (ordered, crash-safe)
 
-Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_mapper`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart. **`dispatch_lock`** serializes every flavor with clear-runs (poll alone is not enough — oauth / mapper / hello bypass the poll lock). Clear-runs itself holds **`poll_rt.lock` and `bootstrap.dispatch_lock`** for the full wipe (order: poll then dispatch — matching the poll loop's own acquire order so it never deadlocks with an in-flight cycle). Launch also stamps `run.store_gen` from `RunStore.wipe_generation` so a later clear cannot be undone by in-flight saves (`10-persistence.md`).
+Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by the caller (`MissionManager.dispatch`, `dispatch_steward`, hello, OAuth). The **shared spine** is `RunBootstrap.launch` (`domain/run_bootstrap.py`) — one deep module every dispatch flavor must use so ACL lifecycle, auth digest, durable intent, and executor start cannot drift apart. **`dispatch_lock`** serializes every flavor with clear-runs (poll alone is not enough — oauth / steward / hello bypass the poll lock). Clear-runs itself holds **`poll_rt.lock` and `bootstrap.dispatch_lock`** for the full wipe (order: poll then dispatch — matching the poll loop's own acquire order so it never deadlocks with an in-flight cycle). Launch also stamps `run.store_gen` from `RunStore.wipe_generation` so a later clear cannot be undone by in-flight saves (`10-persistence.md`).
 
 ```
 def launch(run, *, image):                         # RunBootstrap — all four flavors
   async with dispatch_lock:                        # clear-runs holds this for the full wipe
     if workspaces.volume_error:                       # (0) ADR-0025 fail-closed gate:
         raise WorkspaceUnavailable(...)               #     an unusable workspace base
-        # refuses BEFORE any side effect — callers (dispatch, mapper) catch
+        # refuses BEFORE any side effect — callers (dispatch, steward) catch
         # this and surface a blocked_reason; NO attempt burns, NO
         # poll_degraded (the AUD-001/002 fix — fail-closed for real)
     password = messaging.create_run_user(run.run_id)  # MessagingPort (+ ACL SAVE, 09 §1a)
@@ -134,9 +134,9 @@ at **finalization** — after the ingress consumer receives the Dev's
 different purpose: `poll_rt.lock` serializes poll cycles and
 `RunBootstrap.dispatch_lock` serializes dispatch against Clear run history;
 neither survives a crash or owns a Mission (`18-operator-contract.md` §3).
-Ingress lives in `RunManager` (`domain/runs.py`); mission and MAPPER artifacts
+Ingress lives in `RunManager` (`domain/runs.py`); mission and STEWARD artifacts
 are routed through the injected **`RunFinalizer`** (`finalize` /
-`finalize_mapper`); hello and other PMO-less runs use the local finalize
+`finalize_steward`); hello and other PMO-less runs use the local finalize
 checklist. Composition binds `manager.set_finalizer(mission_mgr)` at boot
 (`01-architecture.md` §3).
 

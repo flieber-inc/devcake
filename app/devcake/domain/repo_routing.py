@@ -41,7 +41,7 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
     """→ (repo_name, None) when resolved; (None, reason) when gated.
 
     `run_history`: this mission's prior runs (any state), newest first —
-    only their repo_ref is read. Mapper/hello records never carry a
+    only their repo_ref is read. Steward/hello records never carry a
     mission's repo and must not be passed in.
     """
     marker = marker_repo(mission.description)

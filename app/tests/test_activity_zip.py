@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from devcake.domain.model import Activity, ActivityEntry, AttachmentRef
 from devcake.domain.orchestrator import activity_payload as activity
-from test_mapper import MapPMO, run_coro
+from test_steward import MapPMO, run_coro
 
 NOW = datetime.now(timezone.utc)
 
@@ -88,7 +88,7 @@ def test_unique_name_respects_extraction_dirs():
 
 
 def test_activity_payload_expands_zip(tmp_path):
-    from test_mapper import m as mission_m, make_mgr, _returns
+    from test_steward import m as mission_m, make_mgr, _returns
 
     mission = mission_m("i1", "T-1")
     url = "https://uploads.linear.app/deliverable.zip"
@@ -144,7 +144,7 @@ def test_zip_stem_never_collides_with_flat_attachment(tmp_path):
     """A feed attachment named exactly like a zip's stem (either order) must
     not produce a file-vs-dir pair in the payload — the extraction remaps
     to `{stem}-2/…` (zip first) or the flat name gets `-2` (zip second)."""
-    from test_mapper import m as mission_m, make_mgr
+    from test_steward import m as mission_m, make_mgr
 
     zdata = _zip_bytes({"a.md": b"z"})
     flat_url = "https://uploads.linear.app/flat"

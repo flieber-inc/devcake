@@ -43,7 +43,7 @@ def test_fakes_do_not_drift_from_port():
     """Every port method a test fake implements must match the port signature
     — keeps FakePMO/MapPMO/DepPMO honest as the contract evolves."""
     from test_transitions import FakePMO
-    from test_mapper import MapPMO
+    from test_steward import MapPMO
     from test_dependencies import DepPMO
     for fake in (FakePMO, MapPMO, DepPMO):
         for name in PORT_METHODS:

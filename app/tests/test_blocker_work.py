@@ -74,7 +74,7 @@ def test_resolve_blocker_work_done_different_repo(tmp_path):
     runs = [_run("a", "T-A", "linear-t-a")]
     mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}),
                                internal_forge=_ROInternal())
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "linear-t-b", runs))
     assert entries == [{"repo_ref": "linear-t-a", "mission_key": "T-A"}]
     assert skips == []
@@ -95,7 +95,7 @@ def test_resolve_blocker_work_ignores_mapper_and_unattributed_foreign(tmp_path):
     mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}),
                                internal_forge=_ROInternal())
     # manager instance name defaults to linear
-    entries, _ = run_coro(
+    entries, _, _notes = run_coro(
         dispatch.resolve_blocker_work(
             mgr, b, "primary", [mapper, foreign, good]))
     assert entries == [{"repo_ref": "linear-t-a", "mission_key": "T-A"}]
@@ -130,7 +130,7 @@ def test_resolve_blocker_work_accepts_attributed_peer_runs(tmp_path):
     cs = _peer("cs", "linear", {"a": a})
     locator = BlockerLocator({"linear": mgr, "cs": cs}, lambda bid: None)
     mgr.blocker_locator = locator
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", [cs_run]))
     assert entries == [{"repo_ref": "cs-cs-1", "mission_key": "CS-1"}]
     assert skips == []
@@ -154,7 +154,7 @@ def test_resolve_blocker_work_colliding_gitea_id_never_mounts_peer(tmp_path):
     g2 = _peer("g2", "gitea_issues", {"3": _mission("3", "#3", status="done")})
     mgr.blocker_locator = BlockerLocator(
         {"g1": mgr, "g2": g2}, lambda bid: None)
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", [evil]))
     assert entries == []
     assert any("no prior work repo" in s for s in skips)
@@ -217,7 +217,7 @@ def test_resolve_blocker_work_same_repo_skipped(tmp_path):
     b = _mission("b", "T-B", blocked_by=["a"])
     runs = [_run("a", "T-A", "shared")]
     mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "shared", runs))
     assert entries == []
     assert skips == []
@@ -228,7 +228,7 @@ def test_resolve_blocker_work_canceled_skipped(tmp_path):
     b = _mission("b", "T-B", blocked_by=["a"])
     runs = [_run("a", "T-A", "linear-t-a")]
     mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", runs))
     assert entries == []
     assert any("canceled" in s for s in skips)
@@ -238,7 +238,7 @@ def test_resolve_blocker_work_no_runs_skipped(tmp_path):
     a = _mission("a", "T-A", status="done")
     b = _mission("b", "T-B", blocked_by=["a"])
     mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", []))
     assert entries == []
     assert any("no prior work repo" in s for s in skips)
@@ -252,7 +252,7 @@ def test_resolve_blocker_work_cap(tmp_path):
     mgr = make_mission_manager(
         tmp_path, pmo=BlockerPMO({**blockers, "z": b}),
         internal_forge=_ROInternal())
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", runs, max_extras=8))
     assert len(entries) == 8
     assert any(s.startswith("cap 8:") for s in skips)
@@ -267,7 +267,7 @@ def test_resolve_blocker_work_unmountable_skipped(tmp_path):
     runs = [_run("a", "T-A", "linear-t-a")]
     # no internal forge, no configured instance → nothing to mount with
     mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"a": a, "b": b}))
-    entries, skips = run_coro(
+    entries, skips, _notes = run_coro(
         dispatch.resolve_blocker_work(mgr, b, "primary", runs))
     assert entries == []
     assert any("unavailable" in s for s in skips)

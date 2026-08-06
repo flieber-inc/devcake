@@ -2246,10 +2246,10 @@ def test_explicit_error_class_wins_over_the_state_default(tmp_path):
     assert store.get(run.run_id).error_class == "DEV_OPERATOR_STOP"
 
 
-def test_finalize_posts_a_marker_comment_carrying_the_slack_reply(tmp_path):
-    # The concierge cannot read our deliverable zips, so the Slack-bound answer
-    # has to arrive as its own comment it can recognise deterministically:
-    # one comment, marker FIRST, body quarantined.
+def test_finalize_posts_the_answer_as_its_own_marked_comment(tmp_path):
+    # Downstream feed consumers cannot read our deliverable zips, so the
+    # answer has to arrive as its own comment they can recognise
+    # deterministically: one comment, marker FIRST, body quarantined.
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
@@ -2260,7 +2260,7 @@ def test_finalize_posts_a_marker_comment_carrying_the_slack_reply(tmp_path):
     assert "> Fix in !2163." in reply
     # quarantine holds: every line of model text is quoted. Only our own
     # provenance sentinel stays unquoted (feed._is_devcake_comment reads it),
-    # which is why the concierge has to strip that line before posting.
+    # which is why a consumer relaying the answer must strip that line.
     body = [
         l for l in reply.splitlines()
         if l and not l.startswith(REPLY_MARKER) and "`devcake:v1`" not in l
@@ -2280,15 +2280,15 @@ def test_the_reply_comment_redacts_before_it_truncates(tmp_path):
     reply = next(c for c in fake.comments if c.lstrip().startswith(REPLY_MARKER))
     assert "ghp_" not in reply
     assert "truncated" in reply
-    # Reply has no attachment of its own; point at the Linear step transcript
-    # (Slack never sees Linear assets either).
+    # Reply has no attachment of its own; point at the step transcript and
+    # never claim an attachment exists.
     assert "attachment" not in reply.lower()
     assert "step transcript" in reply
 
 
 def test_a_redelivered_finalize_does_not_post_the_reply_twice(tmp_path):
     # Finalize is redelivered on retry; finalized_steps is what stops a second
-    # copy of the answer landing in the requester's Slack thread.
+    # copy of the answer reaching the requester.
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     run = _saved_run(store)
@@ -2301,7 +2301,7 @@ def test_a_redelivered_finalize_does_not_post_the_reply_twice(tmp_path):
 
 def test_an_old_payload_without_last_message_posts_no_reply(tmp_path):
     # Rolling-deploy pin: an old image sends no last_message_md, and an empty
-    # answer must not become an empty Slack post.
+    # answer must not become an empty marked comment.
     for payload in (_finalize_payload(), _finalize_payload(last_message_md="")):
         m = mission("in_progress", {"DEVCAKE"})
         mgr, fake, store = make_mgr(tmp_path, m)
@@ -2312,9 +2312,9 @@ def test_an_old_payload_without_last_message_posts_no_reply(tmp_path):
 
 def test_review_reviewed_does_not_displace_the_execute_reply(tmp_path):
     # Multi-step contract: EXECUTE posts the answer; REVIEW/`reviewed` must
-    # not mint a newer REPLY that the concierge would pick for the Done card.
-    # Exercise _post_reply directly so the pin does not depend on the full
-    # review merge path.
+    # not mint a newer REPLY that a newest-wins consumer would take as the
+    # answer. Exercise _post_reply directly so the pin does not depend on the
+    # full review merge path.
     from devcake.domain.orchestrator.finalize import _post_reply
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)
@@ -2340,7 +2340,7 @@ def test_review_reviewed_does_not_displace_the_execute_reply(tmp_path):
 
 
 def test_review_human_needed_still_posts_a_reply(tmp_path):
-    # human_needed on REVIEW *is* the Slack-bound ask — suppress only
+    # human_needed on REVIEW *is* the ask to the human — suppress only
     # reviewed (approve/reject process noise).
     from devcake.domain.orchestrator.finalize import _post_reply
     m = mission("in_progress", {"DEVCAKE"})

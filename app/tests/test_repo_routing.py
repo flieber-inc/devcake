@@ -765,9 +765,9 @@ def test_reference_repos_all_stages_and_never_work_targets(tmp_path, monkeypatch
 
 
 def test_deliverable_note_is_marked_and_honest(tmp_path):
-    """The feed note opens with DELIVERABLE_MARKER (concierge classifies on
-    startswith) and says what the zip IS — the audit copy — so no reader,
-    human or bot, mistakes it for the mission's answer."""
+    """The feed note opens with DELIVERABLE_MARKER (downstream consumers
+    classify on startswith) and says what the zip IS — the audit copy — so no
+    reader, human or bot, mistakes it for the mission's answer."""
     mgr, uploaded, feed, m, pr = _mission_delivery_setup(
         tmp_path, "unrelated earlier comment")
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))

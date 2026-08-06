@@ -152,7 +152,9 @@ def _activity_snapshot_files(payload: dict) -> list[dict]:
     return files
 
 
-async def push_activity_repo(mgr, mission, mtype, seq: int) -> dict[str, str]:
+async def push_activity_repo(mgr, mission, mtype, seq: int,
+                             blocker_notes: list[dict] | None = None
+                             ) -> dict[str, str]:
     """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
     audited loudly and swallowed — the run proceeds on the Redis fallback;
     Gitea down degrades to pre-ADR behavior, never to a halt.
@@ -164,7 +166,8 @@ async def push_activity_repo(mgr, mission, mtype, seq: int) -> dict[str, str]:
     if mgr.internal_forge is None:
         return {}
     try:
-        payload = await activity_payload(mgr, mission.pmo_id, mission.pmo_kind)
+        payload = await activity_payload(mgr, mission.pmo_id, mission.pmo_kind,
+                                         blocker_notes=blocker_notes)
         name = await mgr.internal_forge.ensure_activity_repo(
             mgr.instance_name, mission.key)
         await mgr.internal_forge.push_activity_snapshot(
@@ -179,7 +182,8 @@ async def push_activity_repo(mgr, mission, mtype, seq: int) -> dict[str, str]:
         return {}
 
 
-def _mission_md(m, attachment_lines=(), document_lines=()) -> str:
+def _mission_md(m, attachment_lines=(), document_lines=(),
+                blocker_lines=()) -> str:
     """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;
     every step playbook points here."""
     lines = [
@@ -187,6 +191,11 @@ def _mission_md(m, attachment_lines=(), document_lines=()) -> str:
         f"> Kind: {m.pmo_kind} · Status: {m.status} · Priority: {m.priority} · URL: {m.url}",
         f"> Labels: {', '.join(sorted(m.labels)) or '(none)'}", "",
         "## Description", m.description or "(none)"]
+    if blocker_lines:
+        # ADR-0032 — done blockers' closing notes; the description above
+        # predates them (frozen at decomposition time), so on conflict the
+        # handoff is newer
+        lines += ["", "## Blocked by (completed — handoffs)", *blocker_lines]
     if document_lines:
         lines += ["", "## Project documents", *document_lines]
     if attachment_lines:
@@ -203,12 +212,16 @@ def _doc_filename(title: str) -> str:
     return (seg or "untitled")[:80]
 
 
-async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
+async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
+                           blocker_notes: list[dict] | None = None) -> dict:
     """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
     of the feed — full bodies inline (never externalized), attachments by
     name in feed order, reply nesting; every attachment's bytes ride as
     sibling files. Project refs (project-fidelity fix): the feed is the
-    project-update mirror, and project Documents materialize under docs/."""
+    project-update mirror, and project Documents materialize under docs/.
+    blocker_notes (ADR-0032, dispatch-only — the Redis fallback rebuild has
+    no resolved blockers and omits the section) render as a MISSION.md
+    handoff block."""
     act = await mgr.pmo.get_activity(MissionRef(pmo_id, kind), full=True)
     m = act.mission
     attachments = []
@@ -327,7 +340,13 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue") -> dict:
     last = act.entries[-1] if act.entries else None
     watermark = ({"entry_id": last.entry_id or "", "ts": last.ts.isoformat()}
                  if last is not None else {})
-    return {"mission_md": _mission_md(m, mission_lines, document_lines),
+    blocker_lines = []
+    for n in blocker_notes or []:
+        blocker_lines.append(f"- `{n['mission_key']}` — {n['title']}")
+        if n.get("handoff"):
+            blocker_lines.append(f"  Handoff: {n['handoff']}")
+    return {"mission_md": _mission_md(m, mission_lines, document_lines,
+                                      blocker_lines),
             "activity_md": "\n".join(lines), "attachments": attachments,
             "feed_watermark": watermark}
 

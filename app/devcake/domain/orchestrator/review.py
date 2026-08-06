@@ -11,7 +11,8 @@ from ..run import Run
 from ...ports.forge import mission_branch, run_branch
 from .feed import _unquoted
 from .freshness import review_freshness_gate
-from .markers import (CONFLICT_MARKER, MAX_CONFLICT_RESOLVES, MERGE_HANDOFF_MARKER,
+from .markers import (CONFLICT_MARKER, HANDOFF_APPEND_MAX, HANDOFF_MARKER,
+                      MAX_CONFLICT_RESOLVES, MERGE_HANDOFF_MARKER,
                       MERGE_RETRY_MARKER)
 
 log = logging.getLogger("devcake.missions")
@@ -104,6 +105,34 @@ async def _maybe_route_conflict_to_execute(mgr, pmo_id: str, key: str,
         return False
 
 
+async def _append_handoff(mgr, run: Run, result: dict) -> None:
+    """ADR-0032 — the mission's closing note, appended to its DESCRIPTION as
+    a marked section on approve. Three hardenings, none optional: redact()
+    (append_description is a raw pass-through in both adapters — the only
+    model-output sink without its own choke point, and the text is
+    re-injected into every downstream prompt); backtick-defang (a handoff
+    quoting a decomposition / devcake-repo / handoff marker must never
+    shadow a real one — description markers anchor last-match); cap +
+    best-effort (lineage-note doctrine: a vendor description-cap failure
+    must never block the close or burn attempts). Re-approves append again;
+    consumers take the LAST marker (markers.handoff_of)."""
+    text = str(result.get("handoff_md") or "").strip()
+    if not text:
+        return
+    pmo_id = run.mission_pmo_id
+
+    async def _note():
+        body = redact(text).replace("`devcake:", "devcake:").replace(
+            "`devcake-repo:", "devcake-repo:")[:HANDOFF_APPEND_MAX]
+        note = f"\n\n---\n{HANDOFF_MARKER}\n{body}\n"
+        try:
+            await mgr.pmo.append_description(
+                MissionRef(pmo_id, "issue"), note)
+        except Exception as e:  # noqa: BLE001 — best-effort BY DESIGN (lineage-note precedent): the close proceeds, the failure is audited
+            mgr._audit(pmo_id, "handoff_append_failed", str(e)[:200])
+    await mgr._checkpoint(run, "review:handoff", _note)
+
+
 async def finalize_review(mgr, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
     verdict = result.get("verdict")
@@ -131,6 +160,10 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
         # re-dispatches (attempt 1 — a finished run is a reset anchor).
         if await review_freshness_gate(mgr, run) == "tripped":
             return
+        # ADR-0032 — one append site covers every eventual-done path (auto-
+        # merge now, sweep/human merge later): the handoff is a property of
+        # the APPROVE, not of the merge mechanics
+        await _append_handoff(mgr, run, result)
         formal = False
         if pr:
             async def _pr_comment():

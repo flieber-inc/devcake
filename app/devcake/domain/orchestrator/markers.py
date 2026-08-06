@@ -118,6 +118,37 @@ MAX_FRESHNESS_REREVIEWS = 2
 # Nothing is elevated implicitly.
 ELEVATED_MARKERS: list[re.Pattern[str]] = []
 
+# ADR-0032 — the HANDOFF note: a marked section APPENDED to a completed
+# mission's description at approve-finalize (description, not feed: zero
+# extra PMO calls at dispatch — blocker Missions are already fetched whole —
+# and immune to the feed-truncation direction problem). A DESCRIPTION marker
+# like `devcake-repo:` and the decomposition footer, by the same precedent.
+# Parse rule: the LAST marker line wins (appends accumulate across
+# re-approves; the founder amends by editing in place — human-authored
+# marker lines are a feature, not a forgery, because the description is
+# operator-owned). Model-authored text is redacted AND backtick-defanged
+# before the append, so a handoff can never smuggle a live marker.
+HANDOFF_MARKER = "`devcake:handoff:v1`"
+# App-side cap at append time — the entrypoint does not bound handoff_md,
+# and a vendor description-cap failure must stay in best-effort territory.
+HANDOFF_APPEND_MAX = 4000
+# Per-blocker excerpt bound in the prompt note and MISSION.md.
+HANDOFF_EXCERPT_MAX = 700
+
+
+def handoff_of(description: str | None) -> str:
+    """The mission's current handoff note: text after the LAST handoff
+    marker line, up to the next `---` rule or the end. "" when absent."""
+    text = description or ""
+    idx = text.rfind(HANDOFF_MARKER)
+    if idx < 0:
+        return ""
+    body = text[idx + len(HANDOFF_MARKER):]
+    cut = body.find("\n---")
+    if cut >= 0:
+        body = body[:cut]
+    return body.strip()
+
 # Comment-provenance sentinel (docs/03 §8a, ADR-0007): every comment DevCake
 # posts ends with this footer. Classification is content-based, NEVER
 # author/credential-based — DevCake may post with the operator's own PMO key.

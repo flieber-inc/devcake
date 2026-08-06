@@ -78,6 +78,12 @@ the EXECUTE step, from the plan you attach.
 
 {description}
 
+Staleness check: this description was written when the mission was planned and
+may predate its blockers' actual work. If a "Completed blocker work" section
+follows, read each blocker's Handoff line first and reconcile — where the
+description and a handoff conflict, the handoff is newer; adapt your
+assessment and name the drift in your summary.
+
 {project_note}{repo_options}{reference_repos}{blocker_repos}### Classify (docs rubric)
 - `trivial` — you are CERTAIN you can complete it now: localized (≤ ~2 files), zero
   design ambiguity, obvious verification. Rare.
@@ -321,8 +327,8 @@ SPECIAL CASE — freshness re-review directive: if the most recent DevCake entry
 in /workspace/activity/ACTIVITY.md is a 🔄 freshness re-review directive, a
 prior REVIEW already ran and its verdict is named there. Your ONLY job is to
 read the feed entries NEWER than that prior review and decide whether they
-change its verdict — do NOT redo the full review. Carry the prior report
-forward, amending only what the newer entries change.
+change its verdict — do NOT redo the full review. Carry the prior report AND
+its handoff_md forward, amending only what the newer entries change.
 
 ### Procedure (binding)
 1. The work lives on branch `{branch}` — check it out:
@@ -340,7 +346,13 @@ forward, amending only what the newer entries change.
   "report_md": "<your full review report in markdown: what you checked, what
   you found, and — if rejecting — an actionable list the next EXECUTE run must
   address>", "pr_url": "<the PR url from the activity feed>",
-  "summary": "<one-paragraph verdict rationale>"}}
+  "summary": "<one-paragraph verdict rationale>",
+  "handoff_md": "<REQUIRED on approve: the mission's closing note for
+  downstream missions — what changed, what was DISCOVERED along the way, and
+  what work that builds on this must know (deviations from the plan, renamed
+  or moved things, gotchas, deferred items). Compress anything inherited from
+  this mission's own blockers instead of repeating it. A few sentences to one
+  short paragraph; omit on reject.>"}}
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}

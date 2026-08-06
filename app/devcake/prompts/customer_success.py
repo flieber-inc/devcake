@@ -126,8 +126,8 @@ SPECIAL CASE — freshness re-review directive: if the most recent DevCake entry
 in /workspace/activity/ACTIVITY.md is a 🔄 freshness re-review directive, a
 prior REVIEW already ran and its verdict is named there. Your ONLY job is to
 read the feed entries NEWER than that prior review and decide whether they
-change its verdict — do NOT redo the full review. Carry the prior report
-forward, amending only what the newer entries change.
+change its verdict — do NOT redo the full review. Carry the prior report AND
+its handoff_md forward, amending only what the newer entries change.
 
 ### Procedure (binding)
 1. The work lives on branch `{branch}` — check it out:
@@ -148,7 +148,10 @@ forward, amending only what the newer entries change.
   "report_md": "<your full review: what you checked, what you found, and —
   if rejecting — an actionable list for the next EXECUTE run>",
   "pr_url": "<the PR url from the activity feed>",
-  "summary": "<one-paragraph verdict rationale>"}
+  "summary": "<one-paragraph verdict rationale>",
+  "handoff_md": "<REQUIRED on approve: the closing note for downstream
+  issues — what was produced, what was discovered, what follow-up work must
+  know. A few sentences; omit on reject.>"}
 
 ### The issue
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}

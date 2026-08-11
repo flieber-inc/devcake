@@ -346,12 +346,19 @@ continuation of “since v0.1” (that window is closed in Layer 2).
 | Subsection | What it is |
 |---|---|
 | **Shipped after v0.2** | Chronological log of merges on `main` after the closed cut |
+| **Field evidence (self-reported)** | Production use reported by the operator — evidence class stated, deploy pinned |
 | **Still open** | Residuals / demos still owed from Layers 1–2 — not new features |
 | **Candidates** | Design we may invest in; **not** an ordered sprint queue |
 | **Deferred / Discarded** | Longer-term or rejected ideas |
 
 Honesty rule: a feature is not *done* until the live box proves it (status
 vocabulary at the top of this file).
+
+Versioning doctrine: below v1 the project carries **no backwards/legacy-compat
+obligation** — an upgrade may require a wipe-and-re-onboard instead of a
+migration. v1 is gated on a **pre-registered, receipted evidence run on public
+material**, executed on the release candidate and reported in these docs;
+until that run exists, field evidence below stays operator-self-reported.
 
 ### Shipped after v0.2
 
@@ -509,19 +516,98 @@ vocabulary at the top of this file).
     **AUD-020** (hard-coded `devcake_mirrors` volume name — doc warning
     only), **AUD-022** (no Dev cgroup HostConfig — docs/14 §11 debt).
 
+- **Post-evaluation campaigns** (2026-08-04…06, PRs #88–#112): docs truth
+  sweep + the six architecture cleanups (#88–#89); ingress consumer survives
+  a Redis restart (#90); **ADR-0027 failure taxonomy as data** (#91);
+  **ADR-0029 TokenReport v1 + SQL-readiness** (#92); **ADR-0028
+  composition-root factory** (#93); OAuth success stamps `ended_at` and never
+  resurrects a terminal run (#94); harness-CLI + infra pin bumps (#95–#96);
+  the SPA overhaul and **ADR-0030 default board + New Mission composer**
+  (#97–#103); control-plane auth/backup/CI hardening (#104); the
+  REPLY/DELIVERABLE marker generalization — core names no downstream
+  environment (#105/#108); **ADR-0031 phase 1 — the Freshness Gate** on
+  REVIEW's context-closing finalize (#109); **ADR-0032 mission handoff
+  notes** — the closing narrative flows with the graph (#112); the
+  **MAPPER → STEWARD rename** with persisted-state migrations (#111).
+  **built** — hermetic suite green; these merges landed during the 2026-08
+  GHA cache-service outage, so CI re-verification came only with the
+  cache-export resilience fix (#113, `ignore-error=true` on `type=gha`
+  cache-to across all three lanes); the live stack has **not** yet been
+  redeployed onto them (R9 ritual + image rebake owed).
+- **Discovery routing: designed, not shipped.** ADR-0031's elevated-marker
+  seam ships deliberately empty (`ELEVATED_MARKERS = []` — nothing is
+  elevated implicitly), and STEWARD's only duty is proposing missing
+  `blocked_by` edges (ADR-0007). No code reads, collects, or routes a
+  `DISCOVERY.md` today. This is a **different lane** from HANDOFF notes
+  (ADR-0032, shipped): a handoff closes a *finished* mission's narrative for
+  graph-ordered readers; discovery routing would push *mid-work* findings to
+  downstream/sibling missions. STEWARD finalization + discovery routing is
+  the next planned code work — it graduates only with red→green tests at the
+  public seam plus a live multi-mission smoke.
+
+### Field evidence (operator-self-reported)
+
+Production use reported by the founder-operator, 2026-08. Evidence class:
+**self-reported** — the work substrates are proprietary, so no receipts are
+published; shapes only, no invented metrics. Each picture is pinned to the
+deploy that ran it, and none of it credits ADRs merged after that deploy.
+
+- **Multirepo legacy delivery** (deploy: **v0.3** `df08c9a`; Linear + GitLab;
+  ~20-hour composed run): a ~500k-line legacy multirepo product took a
+  brand-new customer-facing feature from scratch — one Linear project
+  decomposed into eight issues, each routed to its own work repo (the 0-or-1
+  rule, not N repos per mission), with merge requests opened on three GitLab
+  repositories. Staffing: Claude Code (Fable) on ONBOARD/PLAN/REVIEW, Grok
+  Build (Grok 4.5) on EXECUTE. Outcome: end-to-end delivery; not green on
+  first merge — the follow-up adaptations needed were genuinely small.
+- **Dual-board multi-PMO production** (same deploy and window): two Linear
+  teams as two PMO instances on one stack — Development carried the multirepo
+  delivery while Customer Success ran deep research on point customer tasks.
+  Operator judgment: stable under concurrent dual-team production use. This
+  is multi-instance on one dedicated host, not multi-tenant SaaS; the
+  colliding-identifier completion below stays open.
+- **Limited model + Gitea Issues corpus run** (deploy: **v0.2.5** `d3361f2`,
+  post-ADR-0018 fault-classification hardening — before ADR-0026/0027
+  existed): a local stack pointed the Grok Build harness at **Qwen3.6-27B**
+  on a local vLLM OpenAI-compatible endpoint (`08` §8) and worked a **Gitea
+  Issues** board over a large messy text corpus (~150 folders / ~3k files /
+  ~2M lines of *input* material), extracting dialogue snippets. Run errors
+  still occur and stay localized; fault classification and re-dispatch kept
+  the loop productive. Operator judgment: works uncannily well for similar
+  tasks on limited models and experimented harness pairings — field comfort
+  with the recovery envelope, not a claim of zero failures or universal
+  model support.
+
+What these do **not** claim: injection-proofness (`14` §3); multi-tenancy;
+zero harness failures; that every local model works; a controlled comparison
+against bare CLI sessions (`19` §7); or anything about features merged after
+the pinned deploys (ADR-0026/0027, the freshness gate, and handoff notes
+among them).
+
 ### Still open (residuals)
 
 Not new features — demos or proofs still owed from Layers 1–2 (milestones or
 the v0.2 trailer list).
 
-- **M9 additivity proof** (two Linear instances on one DevCake, full colliding-
-  id completion): architecture and hermetic tests done; live dual-team /
-  dual-key proof still **⏳** (sandbox plan limits / founder credentials).
+- **M9 additivity residuals**: dual-Linear production use is field-reported
+  (Field evidence above) — the operational proof is no longer owed. Still
+  open, specifically: a deliberate **colliding-identifier completion** across
+  two instances (instance-prefixed branches, end to end) and the
+  dual-workspace / dual-key sandbox ceremony. **⏳**
 - **M10 live two-forge merged-PR demo** and **M11/M12 full live model golden
   paths** on the operator's box: machinery proven hermetically + contract
-  batteries; full token-spending demos remain **⏳** when credentials allow.
+  batteries; live GitLab MRs are field-reported (Field evidence above),
+  but the two-forges-in-one-instance demo and the token-spending golden
+  paths remain **⏳**.
 - **Fresh-`/data` operator-drill re-run** after the post-v0.2 surface growth
-  (profiles, skills, Gitea Issues, per-PMO intake): **⏳** non-gating trailer.
+  (profiles, skills, Gitea Issues, per-PMO intake, default board, composer,
+  freshness, handoff): **⏳** non-gating trailer. Dual-team production and
+  the corpus run do **not** substitute for the wipe-and-reconfigure
+  stranger-operability ritual.
+- **Field-evidence detail pass**: the pictures above are shape-only pending
+  founder decisions on publishable detail (mission keys / MR numbers, exact
+  dual-Linear topology, quotable numbers) and the field-derived host-sizing
+  guidance for `13`/`18`. **⏳**
 
 ---
 
@@ -710,9 +796,16 @@ long-lived incomplete dialect API.
   `POST /secrets/clear` call `reload_connections` without `poll_rt.lock`, so
   a suspended poll cycle can still resume against a swapped adapter graph;
   config PUT and profile apply hold the lock since PR #104) ·
+  **`dispatch.py` vertical split** (`domain/orchestrator/dispatch.py` is the
+  ~1k-LOC gravity well left after the façade removal; split at public seams,
+  tests at the seams only) ·
   **conftest.py / event-loop test hygiene** (module-import loop ownership) ·
   **`${VAR:-default}`-guarded volume name in dev-run.yaml** (AUD-020 —
   verify Dagu expansion support first; see the #87 lesson).
+- **Local-backend operator recipe** — distill the field-exercised Qwen/vLLM +
+  Grok Build pairing (`08` §8, Field evidence above) into a reproducible
+  operator page: secret env, base URL, model string, known footguns. An
+  experimented pairing made repeatable — not a supported-matrix claim.
 - **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
   polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
   among deferred items, independent of any harness-platform work.

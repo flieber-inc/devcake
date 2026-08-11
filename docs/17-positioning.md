@@ -3,12 +3,18 @@
 > **Audience:** anyone writing outward-facing words about this project — README,
 > website, pitch, launch post. The README is the applied version of this doc;
 > the full argument it compresses is [`19-thesis.md`](19-thesis.md).
-> **Status:** adopted at v0 close; motto and fit criteria revised 2026-07-18
-> (pre-v0.2) — §1, §1b. **Aligned with the product security contract**
+> **Status:** adopted at v0 close; last revised 2026-08-11 — §1, §1c, §6.
+> **Aligned with the product security contract**
 > in [`14-security.md`](14-security.md). Outward copy must not claim a stronger
-> posture than `14`. The product name is **provisional** (§6).
+> posture than `14`.
 
 ## 1. The core insight
+
+DevCake is a **meta-harness** — a CLI agent orchestrator. It does not replace
+Claude Code, Grok Build, or Codex; it **staffs** them. Those tools are model
+harnesses: one session between a model and its tools. DevCake is the outer
+envelope that turns board work into sequenced, isolated, accountable harness
+runs — swap the workers without changing the control plane.
 
 Most AI-developer products ask you to manage each task in a chat window, a
 special IDE, or someone else's work queue. DevCake keeps the **day-to-day
@@ -81,6 +87,29 @@ both lists recognizable within the first minute.
   ticket writers — ticket writers are inside the trust boundary (`14` §3).
 - You want pair programming in an editor. This is delegation, not
   companionship.
+
+### 1c. The clean room (what the envelope means)
+
+As machine workers improve, the scarce thing stops being capability and
+becomes **accountability** — specifying, checking, and accounting for work —
+and that is what the envelope supplies, domain-free. The clean-room analogy is
+precise, not decorative: fabs do not hope dust stays out; they build rooms
+that do not care which process runs inside. Contamination control, one-way
+pressure, QA-before-release, and batch records map one-to-one onto context
+contaminants, read-only valves, REVIEW, and receipts. **DevCake is the clean
+room for delegated deep work** — the meta-harness *is* the clean room; the
+inner harness is the process that runs inside it.
+
+| Clean-room concept | DevCake mechanism |
+|---|---|
+| Contamination control | Context hygiene: fresh containers, curated mounts, quoting quarantine, activity-mirror discipline (ADR-0014/0025) |
+| One-way pressure / valves | Read-only upstream context — credential scope plus instruction; the only kernel-RO mount is the provision-phase source mirror (ADR-0025) |
+| QA before release | REVIEW as an always-on pipeline stage, plus the operator/forge merge doctrine |
+| Batch records / genealogy | Transcripts, token reports, run records, feed posts, activity repos — the accountability trail (INV-5) |
+
+The analogy stops where `14` stops: a clean room for *work quality* is not a
+multi-tenant sandbox, and receipts do not make agents injection-proof
+(`14` §3).
 
 ## 2. The pitches
 
@@ -174,20 +203,8 @@ it is a multi-tenant secure sandbox (it is a powerful agent on **your** host —
 The long-form version of this argument — evidence status stated per claim,
 falsifiers included — is [`19-thesis.md`](19-thesis.md).
 
-## 6. The name (open decision)
+## 6. The name
 
-"DevCake" is provisional. Criteria for the real name: says *delegated work*
-or *board* at first hearing; two syllables preferred; survives being said
-aloud in a serious meeting; no collisions with known dev-tools.
-
-| Candidate | Why | Risk |
-|---|---|---|
-| **DevCake** (keep) | Warm, memorable, "piece of cake" = the promise; layers = the pipeline; 🍰 already ours | Reads playful; "Dev-" prefix is crowded |
-| **Boardhand** | A hand for your board — ranch-hand/deckhand worker DNA; motto-compatible ("hands for the board you already run") | Invented word; needs a beat to land |
-| **Nightcrew** | The work happens while you sleep; honest and evocative | Implies only-async; slightly ops-flavored |
-| **Punchlist** | Construction term: the list a contractor finishes and the owner inspects — exactly our loop | Existing small products use it |
-| **Ticketsmith** | Forges finished work from tickets; craft connotation | Three syllables; smith-naming is common |
-
-Recommendation: decide before anything public. Renaming touches the label
-namespace (`DEVCAKE-*`), repo, and docs — a one-day, find-and-replace-plus-
-migration job (label rename procedure already exists in ADR-0004).
+The product name is **DevCake**. "Piece of cake" is the promise; the layers
+are the pipeline; the 🍰 is ours. The name can smile — the sentences stay in
+work clothes (§4).

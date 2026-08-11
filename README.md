@@ -23,8 +23,7 @@ handles configuration and operations.
 > and whether the **app** may auto-merge after REVIEW. Full contract:
 > [`docs/14-security.md`](docs/14-security.md).
 
-Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning.md)
-(*name is provisional* — §6).
+Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning.md).
 
 ---
 
@@ -33,19 +32,24 @@ Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning
 The deepest AI-assisted work today happens in CLI harnesses — Claude Code,
 Grok Build, Codex — with an expert invisibly orchestrating each session:
 curating context, sizing the task, sequencing the work, verifying the output.
-DevCake mechanizes that orchestration for board-shaped work. It is not a new
-coding agent; it is a session made repeatable, without the expert chained to
-the keyboard.
+DevCake mechanizes that orchestration for board-shaped work. It is a
+**meta-harness** — a CLI agent orchestrator that staffs those harnesses rather
+than competing with them: not a new coding agent, but a session made
+repeatable, without the expert chained to the keyboard.
 
 The method is context hygiene, engineered: one clear goal per session, tasks
 decomposed until they fit, fresh containers, curated read-only mounts of
 exactly the relevant prior work, feedback at step boundaries — never
 interruption inside one. We call it putting AI to work in a state of flow,
-and we treat the conditions for it as a design target, not a hope.
+and we treat the conditions for it as a design target, not a hope. In one
+phrase: **the clean room for delegated deep work** — as capability gets
+cheap, the scarce thing is accountability, and the envelope supplies it,
+domain-free ([`docs/17-positioning.md`](docs/17-positioning.md) §1c).
 
-We believe this works; we have not yet proven it. The mechanisms are built
-and tested; the results so far are our own use. The full argument — its
-evidence status stated claim by claim, and what would change our mind — is
+We believe this works; we have not yet proven it publicly. The mechanisms are
+built and tested; the evidence so far is our own production use, self-reported
+([`docs/16-roadmap.md`](docs/16-roadmap.md), living log). The full argument —
+its evidence status stated claim by claim, and what would change our mind — is
 [`docs/19-thesis.md`](docs/19-thesis.md).
 
 ---

@@ -53,7 +53,7 @@ jobs:
           sbom: false
           set: |
             *.cache-from=type=gha,scope=devcake-images
-            *.cache-to=type=gha,mode=max,scope=devcake-images
+            *.cache-to=type=gha,mode=max,scope=devcake-images,ignore-error=true
 
       - name: Smoke harness CLIs (pinned versions)
         # `sh -ec 'a && b'`: without -e (and with `;` separators) only the

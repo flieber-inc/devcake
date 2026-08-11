@@ -1,15 +1,22 @@
 # 00 — Overview: Vision, Glossary, and Core Invariants
 
 > **Audience:** everyone. Every other document in `docs/` assumes you have read this one.
-> **Status:** technical preview.
+> **Status:** early production (dedicated host). Field evidence to date is
+> operator-self-reported ([`16-roadmap.md`](16-roadmap.md), living log); a
+> receipted public evidence run gates v1. Packaging is single-operator
+> self-host — not multi-tenant GA.
 > **Security:** the product security contract lives in [`14-security.md`](14-security.md) — this file must not claim a stronger posture.
 
 ## 1. What DevCake is
 
-DevCake is a **CLI agent orchestrator** for automating ticket resolutions, designed for a
+DevCake is a **meta-harness** — a CLI agent orchestrator for automating
+ticket resolutions — designed for a
 **single operator on a dedicated host**. It runs automated coding agents
 ("**Devs**") inside Docker containers that systematically resolve work items
 ("**Missions**") pulled from a project-management system ("**PMO System**"). Devs are scheduled through [Dagu](https://docs.dagu.sh), talk back to the main app through Redis Streams and a Gitea internal server, and telemetry lands in OpenObserve.
+The CLI coding agents it runs (Claude Code, Grok Build, Codex) are the
+**harnesses**; DevCake is the envelope that staffs, sequences, isolates, and
+accounts for their sessions — it is not itself a CLI coding agent.
 
 **Deployment premise:** one machine you control; host `docker.sock` on Dagu;
 admin + secrets ≅ host trust. Not multi-tenant SaaS. Ticket writers and repo
@@ -61,6 +68,7 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 | **Dev** | An ephemeral Docker container running a Dev Type's selected model through its harness CLI to perform one Mission Step, then exit. |
 | **Dev Type** | A named configuration: harness template + model selection + identifying prompt + MCP servers + credentials + concurrency cap + optional domain skills. v0 seeds three role vehicles: **judgment** (Claude Fable / Claude Code — ONBOARD/PLAN/REVIEW), **implementer** (Grok 4.5 / Grok Build — EXECUTE), and **steward** (Claude Haiku / Claude Code — Relations Steward default). The model belongs to the Dev Type; multiple Dev Types may share one harness. |
 | **Harness Template** | One of three registry-backed runtime adapters: `claude-code`, `grok-build`, or `codex`. A template selects the CLI image, credential/OAuth contract, invocation and artifact parsing, and skills directory — not a fixed model. `DevType.model` selects the model; empty uses the registry or CLI default. Specified in `08-harness-templates.md`. |
+| **Meta-harness** | What DevCake is: the outer envelope that staffs, sequences, isolates, and accounts for harness sessions as board-shaped Missions. The harnesses (Claude Code, Grok Build, Codex) are the workers; DevCake is not itself a CLI coding agent. |
 | **PMO System** | The external project-management system holding the Missions. Adapters are pluggable (registered in `adapters/registry.py`); in-tree: **Linear** and **Gitea Issues**. A stack may configure **0..N** PMO instances; **each instance is scoped to exactly one team** (Linear team key, or Gitea `owner/repo` board). Accessed only through the `PMOPort` adapter (`05-pmo-adapter.md`). |
 | **Forge** | The code-hosting platform holding the configured repository: GitHub, GitLab, or Gitea (including the bundled internal Gitea for zero-repo missions). Accessed only through the `ForgePort` adapter (`06-forge-adapter.md`). |
 | **Run** | The locally persisted record of one Mission Step attempt: telemetry, timing, outcome, token report. Advisory data only — never authoritative (see INV-1). |

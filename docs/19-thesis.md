@@ -140,6 +140,16 @@ together, and we think the combination — not any component — is the identity
 of the project. This is an argument against the field as of July 2026; it is
 dated, and it decays.
 
+The identity has a name. As machine workers improve, the scarce thing stops
+being capability and becomes **accountability** — specifying, checking, and
+accounting for work — and that is what the envelope supplies, domain-free.
+The clean-room analogy is precise, not decorative: fabs do not hope dust
+stays out; they build rooms that do not care which process runs inside.
+Contamination control, one-way pressure, QA-before-release, and batch records
+map one-to-one onto context contaminants, read-only valves, REVIEW, and
+receipts (`17` §1c holds the mapping). DevCake is the clean room for
+delegated deep work.
+
 ## 4. As an instrument *(conjecture, stated testably)*
 
 DevCake might matter to people who study these systems, for one structural

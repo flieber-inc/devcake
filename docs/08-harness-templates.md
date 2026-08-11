@@ -6,7 +6,9 @@
 > locations named in §9.
 > **Depends on:** `07-dev-runtime.md` (container contract), `02-domain-model.md` (DevType, TokenReport).
 
-A **harness template** describes how one CLI runs inside a Dev container:
+A **harness template** describes how one CLI runs inside a Dev container —
+these are the *inner* model harnesses that the DevCake meta-harness staffs
+(`00-overview.md` §3):
 image, credentials, invocation, artifact parsing, OAuth, and skills delivery.
 It does **not** own a fixed model. Exactly three templates exist as entries in
 the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2). Adding a

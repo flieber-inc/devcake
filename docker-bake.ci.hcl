@@ -9,5 +9,7 @@
 
 target "_common" {
   cache-from = ["type=gha,scope=devcake"]
-  cache-to   = ["type=gha,mode=max,scope=devcake"]
+  # ignore-error: a GHA cache-service outage degrades to an uncached build
+  # instead of failing the bake (2026-08 outage kept main unverifiable).
+  cache-to   = ["type=gha,mode=max,scope=devcake,ignore-error=true"]
 }

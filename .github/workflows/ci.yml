@@ -50,7 +50,7 @@ jobs:
           sbom: false
           set: |
             *.cache-from=type=gha,scope=devcake-ci
-            *.cache-to=type=gha,mode=max,scope=devcake-ci
+            *.cache-to=type=gha,mode=max,scope=devcake-ci,ignore-error=true
 
       - name: Assert prod app has no pytest
         run: |

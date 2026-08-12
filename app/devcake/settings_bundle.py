@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -37,7 +38,8 @@ from opentelemetry import trace
 from pydantic import ValidationError
 
 from . import secrets as secrets_store
-from .config import (AppConfig, DevType, _INSTANCE_NAME_RE, delete_dev_type,
+from .config import (AppConfig, DevType, HARNESS_VAR_PATTERN,
+                     _INSTANCE_NAME_RE, delete_dev_type,
                      reconcile_managed_pmos, reject_stale_patch, save_config,
                      save_dev_type)
 from .prompts import PLAYBOOK_VARS
@@ -131,8 +133,11 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
                       skill_payloads: list[dict] | None = None) -> dict:
     """Snapshot the live world into a bundle dict. dismissed_alerts is
     STRIPPED (importing someone else's dismissals could hide active
-    advisories); credential files are export-only opt-in (host-migration
-    material, never profile material).
+    advisories); credential files are export-only opt-in — host-migration
+    material that "save current as profile" deliberately excludes (no
+    plaintext OAuth copy per casual snapshot) but apply now HONORS wherever
+    the section appears (SEC-2: the old one-way door validated them on
+    import and then silently never wrote them).
 
     ``include_orphan_secrets`` (default False): user-facing snapshots
     (profiles, export) drop connection secrets for instances not in the
@@ -194,7 +199,8 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
             "harness": secrets_store.list_harness_secrets(),
         }
         if include_credential_files:
-            sec["credential_files"] = _read_credential_files(dev_types)
+            sec["credential_files"] = _read_credential_files(
+                dev_types, include_orphans=include_orphan_secrets)
         bundle["secrets"] = sec
         bundle["sections"].append("secrets")
     if include_setup_env:
@@ -213,11 +219,20 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
     return bundle
 
 
-def _read_credential_files(dev_types: dict) -> dict[str, list[dict]]:
+def _read_credential_files(dev_types: dict, *,
+                           include_orphans: bool = False) -> dict[str, list[dict]]:
+    """include_orphans (the rollback snapshot, re-audit #3 precedent):
+    enumerate via inventory() rather than the dev_types dict, so a rollback
+    restores byte-exact including dirs whose dev type isn't in config."""
     import base64
     root = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "secrets"
+    if include_orphans:
+        names = sorted({cf["dev_type"] for cf in
+                        secrets_store.inventory()["credential_files"]})
+    else:
+        names = list(dev_types)
     out: dict[str, list[dict]] = {}
-    for name in dev_types:
+    for name in names:
         d = root / name
         if not d.is_dir():
             continue
@@ -243,7 +258,7 @@ def _scrub_validation_error(e: ValidationError) -> str:
 
 _CONN_FIELDS = secrets_store.CONNECTION_FIELDS
 _INSTANCE_RE = re.compile(_INSTANCE_NAME_RE)
-_HARNESS_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_HARNESS_RE = re.compile(f"^{HARNESS_VAR_PATTERN}$")   # one definition: config.py
 
 
 def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
@@ -314,7 +329,6 @@ def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
                 template_exists=lambda mt, name:
                     name in prompt_templates._builtins() or name == "default"
                     or name in templates.get(mt, {}),
-                check_assignments=True,
                 warnings=warnings)
         else:
             # rollback path: still drop impossible active_devtype_prompts
@@ -418,7 +432,7 @@ def _validate_secrets(sec, cfg: AppConfig | None, warnings: list[str]) -> dict:
     for var, value in (sec.get("harness") or {}).items():
         if not _HARNESS_RE.fullmatch(str(var)):
             raise BundleError(422, f"secrets.harness[{var!r}]: var must match "
-                                   "^[A-Z][A-Z0-9_]{0,63}$")
+                                   f"^{HARNESS_VAR_PATTERN}$")
         if not isinstance(value, str) or not value:
             raise BundleError(422, f"secrets.harness[{var}]: value must be a "
                                    "non-empty string")
@@ -428,14 +442,40 @@ def _validate_secrets(sec, cfg: AppConfig | None, warnings: list[str]) -> dict:
     if cred is not None:
         if not isinstance(cred, dict):
             raise BundleError(422, "secrets.credential_files must be a mapping")
+        import base64
+        out_cred: dict[str, list[dict]] = {}
         for dev, files in cred.items():
+            rows: list[dict] = []
             for f in files or []:
                 fname = str((f or {}).get("filename") or "")
-                if not fname or os.path.basename(fname) != fname:
+                try:
+                    # THE path-safety gate — same one the upload endpoint and
+                    # the OAuth writer use (reserved dirs, traversal, shape);
+                    # the old bespoke basename check is gone (SEC-2)
+                    secrets_store.require_credential_ref(str(dev), fname)
+                except ValueError as e:
                     raise BundleError(
-                        422, f"secrets.credential_files[{dev!r}]: filenames "
-                             "must be bare basenames")
-        out["credential_files"] = cred
+                        422, f"secrets.credential_files[{dev!r}]: {e}")
+                b64 = (f or {}).get("content_b64")
+                if not isinstance(b64, str):
+                    raise BundleError(
+                        422, f"secrets.credential_files[{dev}/{fname}]: "
+                             "content_b64 must be a string")
+                try:
+                    raw = base64.b64decode(b64, validate=True)
+                    content = raw.decode("utf-8")
+                except Exception:  # noqa: BLE001 — any decode failure maps to one typed 422; never echoes the payload
+                    raise BundleError(
+                        422, f"secrets.credential_files[{dev}/{fname}]: "
+                             "content_b64 must decode to UTF-8 text")
+                if len(raw) > secrets_store.MAX_CREDENTIAL_FILE_BYTES:
+                    raise BundleError(
+                        422, f"secrets.credential_files[{dev}/{fname}]: "
+                             f"exceeds {secrets_store.MAX_CREDENTIAL_FILE_BYTES}"
+                             f" bytes")
+                rows.append({"filename": fname, "content": content})
+            out_cred[str(dev)] = rows
+        out["credential_files"] = out_cred
     if cfg is not None:
         known = ({f"pmo-{p.name}" for p in cfg.pmos}
                  | {f"repo-{r.name}" for r in cfg.repos})
@@ -548,14 +588,15 @@ def prune_stale_active_devtype_prompts(cfg: AppConfig,
 
 def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
                               template_exists: Callable[[str, str], bool],
-                              *, check_assignments: bool = False,
-                              warnings: list[str] | None = None) -> None:
-    """Cross-store checks shared by PUT /config and bundle apply.
+                              *, warnings: list[str] | None = None) -> None:
+    """Cross-store checks shared by boot, PUT /config, and bundle apply —
+    ONE path, no caller-specific carve-outs (2026-08-12 audit SEC-3; the old
+    `check_assignments` flag made the bundle path strict and the PUT path
+    blind, and the two had already drifted on empty dev_type). The SPA saves
+    Dev Types before the config PUT so a draft that creates-and-references a
+    Dev Type in one Save still validates (DraftChrome ordering note).
     template_exists decides against the caller's template universe — disk
-    for the PUT, bundle ∪ builtins for an apply. check_assignments is
-    apply-only: the PUT keeps today's split where PUT /assignments owns that
-    validation (the SPA saves assignments separately, possibly before a new
-    Dev Type lands).
+    for the PUT/boot, bundle ∪ builtins for an apply.
 
     Stale active_devtype_prompts keys are pruned (with optional warnings),
     never hard-422 — delete/rename/export paths must stay healable after an
@@ -578,17 +619,19 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
     elif dropped:
         for msg in dropped:
             log.warning(msg)
-    if check_assignments:
-        for mt, a in (cfg.assignments or {}).items():
-            if a.dev_type and a.dev_type not in dev_type_names:
-                raise BundleError(422, f"assignments[{mt}]: unknown Dev Type "
-                                       f"{a.dev_type!r}")
-        for inst in cfg.pmos:                     # ADR-0019 override maps
-            for mt, a in inst.assignments.items():
-                if a.dev_type not in dev_type_names:
-                    raise BundleError(
-                        422, f"pmos[{inst.name}].assignments[{mt}]: unknown "
-                             f"Dev Type {a.dev_type!r}")
+    # emptiness is impossible post-model (config.validate_assignment_map runs
+    # as a field validator on every model_validate) — only the cross-store
+    # dev-type reference is checked here
+    for mt, a in (cfg.assignments or {}).items():
+        if a.dev_type not in dev_type_names:
+            raise BundleError(422, f"assignments[{mt}]: unknown Dev Type "
+                                   f"{a.dev_type!r}")
+    for inst in cfg.pmos:                     # ADR-0019 override maps
+        for mt, a in inst.assignments.items():
+            if a.dev_type not in dev_type_names:
+                raise BundleError(
+                    422, f"pmos[{inst.name}].assignments[{mt}]: unknown "
+                         f"Dev Type {a.dev_type!r}")
 
 
 def dry_run_adapters(cfg: AppConfig) -> None:
@@ -665,6 +708,18 @@ def diff_bundle(bundle: dict, config: AppConfig,
                         "replaced": sorted(new_h & cur_h),
                         "removed": sorted(cur_h - new_h)},
         }
+        cred = parsed["secrets"].get("credential_files")
+        if cred is not None:
+            # names only ("dev/file"), never content — same ADR-0011 rule
+            cur_cred = {f'{cf["dev_type"]}/{cf["filename"]}' for cf in
+                        secrets_store.inventory()["credential_files"]}
+            new_cred = {f"{dev}/{f['filename']}"
+                        for dev, files in cred.items() for f in files}
+            out["sections"]["secrets"]["credential_files"] = {
+                "added": sorted(new_cred - cur_cred),
+                "replaced": sorted(new_cred & cur_cred),
+                "removed": sorted(cur_cred - new_cred),
+            }
         warnings.extend(_newer_secret_warnings(bundle, parsed))
 
     if parsed["setup_env"] is not None:
@@ -707,6 +762,19 @@ def _newer_secret_warnings(bundle: dict, parsed: dict) -> list[str]:
             warns.append(f"secret harness/{var} was updated after this "
                          "snapshot was captured — applying restores the "
                          "older value")
+    cred = parsed["secrets"].get("credential_files")
+    if cred:
+        inv = {(cf["dev_type"], cf["filename"]): cf["updated_at"]
+               for cf in secrets_store.inventory()["credential_files"]}
+        for dev, files in cred.items():
+            for f in files:
+                ts = inv.get((dev, f["filename"]))
+                if ts and ts > created:
+                    warns.append(
+                        f"credential file {dev}/{f['filename']} was updated "
+                        "after this snapshot was captured — applying "
+                        "restores the older version (a re-OAuth since the "
+                        "export would be overwritten)")
     return warns
 
 
@@ -722,10 +790,27 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     poll loop can never observe a half-applied world. The caller holds the
     runs-active guard.
 
-    Ordering (crash honesty, ADR-0013): additive file writes first, then the
-    config.yaml commit point, then deletions. A crash before the commit
-    leaves the old world authoritative with inert extra files; after it, the
-    new world is authoritative and a re-apply prunes the stale extras.
+    Ordering (crash honesty, ADR-0013; made true by the 2026-08-12 audit
+    SEC-1 fix — deletions used to run before the commit): three phases —
+      1. ADDITIVE writes: config files, then secret keys the old world
+         never stored (_apply_secret_adds);
+      2. the config.yaml COMMIT POINT (in-memory swap + save_config +
+         config-file prunes);
+      3. DESTRUCTIVE secret ops (_apply_secret_destructive): overwrites,
+         then deletions.
+    Invariant: a crash BEFORE the commit never modifies or removes any value
+    the old world stored — the old config stays authoritative over a store
+    with, at worst, inert extra keys, pruned by a re-apply. After the commit
+    the new world is authoritative and a re-apply converges the stragglers.
+    A secrets-only apply has no config.yaml commit; its commit point is the
+    ADD→MUT boundary, with the correspondingly weaker (but honest)
+    guarantee: every file replacement is individually atomic, no stored
+    value is modified before all additions are durable, no deletion happens
+    before all writes, and a crash leaves a well-formed mixed key set that
+    re-applying either bundle converges. One residual, named honestly: an
+    ADD-phase secret for an instance the old config has but never stored a
+    value for becomes visible to the old world after a crash — additive,
+    never a modification.
     """
     parsed = validate_bundle(bundle, _strict=not _is_rollback)
     warnings = list(parsed["warnings"])
@@ -747,24 +832,37 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
             parsed["config"] = new_cfg
         dry_run_adapters(new_cfg)
 
+    cred_in_bundle = (parsed["secrets"] is not None
+                      and parsed["secrets"].get("credential_files") is not None)
     previous = serialize_current(
         config, dev_types,
         include_config=new_cfg is not None,
         include_secrets=parsed["secrets"] is not None,
+        # a failed apply that already overwrote grok-auth.json must be able
+        # to roll it back — snapshot the group iff the bundle touches it
+        include_credential_files=cred_in_bundle,
         include_orphan_secrets=True)   # byte-exact rollback (re-audit #3)
     # snapshot auto_merge before the in-memory swap so OFF→ON re-arm works
     # for profile/import apply the same way as PUT /config (ADR-0020)
     prev_repos = list(config.repos) if new_cfg is not None else []
 
     applied: list[str] = []
+    # the plan is computed inside the same synchronous, lock-held window as
+    # the phases that execute it — it cannot go stale
+    ops = (_plan_secret_ops(parsed["secrets"],
+                            new_cfg if new_cfg is not None else config,
+                            target_dev_types=set(
+                                parsed["dev_types"] if new_cfg is not None
+                                else dev_types),
+                            restore_exact=_is_rollback)
+           if parsed["secrets"] is not None else None)
+    if ops is not None:
+        warnings.extend(ops.warnings)
     try:
         if new_cfg is not None:
             _apply_config_files(parsed)
-        if parsed["secrets"] is not None:
-            warnings.extend(_apply_secrets(
-                parsed["secrets"],
-                new_cfg if new_cfg is not None else config,
-                restore_exact=_is_rollback))
+        if ops is not None:
+            _apply_secret_adds(ops)          # phase ADD — pre-commit safe
         if new_cfg is not None:
             # commit point: config.yaml swaps the authoritative world
             live_alerts = list(config.dismissed_alerts)
@@ -777,7 +875,8 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
             dev_types.update(parsed["dev_types"])
             prompt_templates.seed_devtype_prompts(dev_types)
             applied.append("config")
-        if parsed["secrets"] is not None:
+        if ops is not None:
+            _apply_secret_destructive(ops)   # phase MUT — post-commit only
             applied.append("secrets")
         if _is_rollback:
             # files restored is the load-bearing part — a rollback reload
@@ -811,9 +910,10 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
                      "either the profile or your last export to converge "
                      f"(apply error: {e})")
         raise BundleError(500, f"apply failed; previous settings restored: {e}")
-    return {"applied": applied, "warnings": warnings,
-            "untouched": ["runs", "dev-type credential files",
-                          "internal forge", "profiles"]}
+    untouched = ["runs", "internal forge", "profiles"]
+    if not (ops is not None and ops.cred_section_present):
+        untouched.insert(1, "dev-type credential files")
+    return {"applied": applied, "warnings": warnings, "untouched": untouched}
 
 
 def _apply_config_files(parsed: dict) -> None:
@@ -854,10 +954,36 @@ def _prune_config_files(parsed: dict, old_dev_types: dict) -> None:
                 p.unlink(missing_ok=True)
 
 
-def _apply_secrets(sec: dict, target_cfg: AppConfig, *,
-                   restore_exact: bool = False) -> list[str]:
-    """Replace the secret stores. Unknown-instance entries are SKIPPED with a
-    warning — never an orphan secret file on disk (ADR-0013 hardening).
+@dataclass(frozen=True)
+class _SecretOps:
+    """Pure plan of secret-store mutations, partitioned by crash class
+    (2026-08-12 audit SEC-1): ADDS create keys the old world never stored —
+    safe before the commit point; overwrites and deletions are DESTRUCTIVE
+    and run only after it."""
+    warnings: tuple[str, ...]
+    conn_adds: tuple[tuple[str, str, str, str], ...]       # scope, inst, field, value
+    conn_overwrites: tuple[tuple[str, str, str, str], ...]
+    conn_field_deletes: tuple[tuple[str, str, str], ...]
+    conn_instance_deletes: tuple[tuple[str, str], ...]
+    harness_adds: tuple[tuple[str, str], ...]
+    harness_overwrites: tuple[tuple[str, str], ...]
+    harness_deletes: tuple[str, ...]
+    # credential files (SEC-2): section-presence-keyed replace-the-world —
+    # absent key = untouched (every pre-existing profile keeps its meaning),
+    # present key = listed files written, unlisted host files deleted (the
+    # same replace-the-world rule as connections/harness; one rule, not three)
+    cred_section_present: bool
+    cred_adds: tuple[tuple[str, str, str], ...]            # dev, filename, content
+    cred_overwrites: tuple[tuple[str, str, str], ...]
+    cred_deletes: tuple[tuple[str, str], ...]
+
+
+def _plan_secret_ops(sec: dict, target_cfg: AppConfig, *,
+                     target_dev_types: set[str],
+                     restore_exact: bool = False) -> _SecretOps:
+    """Partition the bundle's secret section against the live store. Pure
+    read (store listings only). Unknown-instance entries are SKIPPED with a
+    warning — never an orphan secret file on disk (ADR-0013 hardening);
     restore_exact (rollback only) disables the skip: a live world may
     legitimately hold a secret whose instance card isn't saved yet, and a
     rollback must restore byte-exact, not editorialize."""
@@ -872,18 +998,90 @@ def _apply_secrets(sec: dict, target_cfg: AppConfig, *,
             continue
         wanted[key] = fields
     current = secrets_store.list_connection_secrets()
-    for key in set(current) - set(wanted):
-        scope, _, instance = key.partition("-")
-        secrets_store.delete_connection_instance(scope, instance)
+    conn_adds: list[tuple[str, str, str, str]] = []
+    conn_overwrites: list[tuple[str, str, str, str]] = []
+    conn_field_deletes: list[tuple[str, str, str]] = []
     for key, fields in wanted.items():
         scope, _, instance = key.partition("-")
-        for field in set(current.get(key, {})) - set(fields):
-            secrets_store.delete_connection_field(scope, instance, field)
+        have = current.get(key, {})
         for field, value in fields.items():
-            secrets_store.write_connection_secret(scope, instance, field, value)
+            row = (scope, instance, field, value)
+            (conn_overwrites if field in have else conn_adds).append(row)
+        for field in set(have) - set(fields):
+            conn_field_deletes.append((scope, instance, field))
+    conn_instance_deletes = []
+    for key in sorted(set(current) - set(wanted)):
+        scope, _, instance = key.partition("-")
+        conn_instance_deletes.append((scope, instance))
     cur_h = secrets_store.list_harness_secrets()
-    for var in set(cur_h) - set(sec["harness"]):
-        secrets_store.delete_harness_secret(var)
-    for var, value in sec["harness"].items():
+    cred = sec.get("credential_files")
+    cred_adds: list[tuple[str, str, str]] = []
+    cred_overwrites: list[tuple[str, str, str]] = []
+    cred_deletes: list[tuple[str, str]] = []
+    if cred is not None:
+        current_files = {(cf["dev_type"], cf["filename"])
+                         for cf in secrets_store.inventory()["credential_files"]}
+        wanted_files: dict[tuple[str, str], str] = {}
+        for dev, files in cred.items():
+            if dev not in target_dev_types and not restore_exact:
+                warnings.append(f"secrets.credential_files[{dev}]: no such "
+                                "Dev Type in the target world — skipped")
+                continue
+            for f in files:
+                wanted_files[(dev, f["filename"])] = f["content"]
+        for (dev, fname), content in sorted(wanted_files.items()):
+            row = (dev, fname, content)
+            (cred_overwrites if (dev, fname) in current_files
+             else cred_adds).append(row)
+        cred_deletes = sorted(current_files - set(wanted_files))
+    return _SecretOps(
+        warnings=tuple(warnings),
+        conn_adds=tuple(conn_adds),
+        conn_overwrites=tuple(conn_overwrites),
+        conn_field_deletes=tuple(conn_field_deletes),
+        conn_instance_deletes=tuple(conn_instance_deletes),
+        harness_adds=tuple((v, val) for v, val in sec["harness"].items()
+                           if v not in cur_h),
+        harness_overwrites=tuple((v, val) for v, val in sec["harness"].items()
+                                 if v in cur_h),
+        harness_deletes=tuple(sorted(set(cur_h) - set(sec["harness"]))),
+        cred_section_present=cred is not None,
+        cred_adds=tuple(cred_adds),
+        cred_overwrites=tuple(cred_overwrites),
+        cred_deletes=tuple(cred_deletes),
+    )
+
+
+def _apply_secret_adds(ops: _SecretOps) -> None:
+    """Phase ADD (pre-commit): only writes that create keys the old world
+    never stored — through the store choke points, so 0600/atomicity/
+    redaction registration come free. A crash after any prefix leaves the
+    old world authoritative; nothing it stored was modified or removed."""
+    for scope, instance, field, value in ops.conn_adds:
+        secrets_store.write_connection_secret(scope, instance, field, value)
+    for var, value in ops.harness_adds:
         secrets_store.write_harness_secret(var, value)
-    return warnings
+    for dev, fname, content in ops.cred_adds:
+        # the ONE writer seam (same call the OAuth flow and the upload
+        # endpoint use) — 0600, atomic write, size cap, redaction registration
+        secrets_store.write_credential_file(dev, fname, content)
+
+
+def _apply_secret_destructive(ops: _SecretOps) -> None:
+    """Phase MUT (post-commit): overwrites first, then deletions — once the
+    new world is authoritative, converging to it wins over preserving the
+    old one."""
+    for scope, instance, field, value in ops.conn_overwrites:
+        secrets_store.write_connection_secret(scope, instance, field, value)
+    for var, value in ops.harness_overwrites:
+        secrets_store.write_harness_secret(var, value)
+    for dev, fname, content in ops.cred_overwrites:
+        secrets_store.write_credential_file(dev, fname, content)
+    for scope, instance, field in ops.conn_field_deletes:
+        secrets_store.delete_connection_field(scope, instance, field)
+    for scope, instance in ops.conn_instance_deletes:
+        secrets_store.delete_connection_instance(scope, instance)
+    for var in ops.harness_deletes:
+        secrets_store.delete_harness_secret(var)
+    for dev, fname in ops.cred_deletes:
+        secrets_store.delete_credential_file(dev, fname)

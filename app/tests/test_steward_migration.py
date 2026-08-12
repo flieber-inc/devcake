@@ -13,7 +13,12 @@ def test_raw_config_migrates_relations_mapper_key_and_dev_type_names():
     cfg = AppConfig.model_validate({
         "relations_mapper": {"enabled": True, "interval_minutes": 15,
                              "dev_type": "mapper"},
-        "assignments": {"EXECUTE": {"dev_type": "mapper"}},
+        # complete map (SEC-3): real pre-rename configs always carried all
+        # four rows — save_config wrote the defaults in
+        "assignments": {"ONBOARD": {"dev_type": "judgment"},
+                        "PLAN": {"dev_type": "judgment"},
+                        "EXECUTE": {"dev_type": "mapper"},
+                        "REVIEW": {"dev_type": "judgment"}},
         "pmos": [{"name": "linear", "team_key": "DEV",
                   "assignments": {"REVIEW": {"dev_type": "mapper"}}}],
     })

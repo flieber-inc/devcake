@@ -43,11 +43,15 @@ def _valid_basic_auth(value: str) -> bool:
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return False
     expected_user, expected_password = admin_credentials()
-    return (
-        bool(expected_user and expected_password)
-        and _const_eq(supplied_user, expected_user)
-        and _const_eq(supplied_password, expected_password)
-    )
+    configured = bool(expected_user and expected_password)
+    # BOTH comparisons always run (bitwise &, no short-circuit): the old
+    # `and` chain skipped the password compare on a username miss — a
+    # measurable timing oracle for username validity (2026-08-12 audit
+    # SEC-9). The `configured` gate may short-circuit: configured-vs-not is
+    # deployment state, not a per-request secret.
+    user_ok = _const_eq(supplied_user, expected_user)
+    pass_ok = _const_eq(supplied_password, expected_password)
+    return configured and (user_ok & pass_ok)
 
 
 async def enforce_control_plane_auth(request: Request, call_next):

@@ -501,28 +501,329 @@ def test_audit_event_appends_scrubbed_line(monkeypatch, tmp_path):
 
 # ── cross-store semantics: assignment refs (global + ADR-0019 overrides) ─────
 
-def test_apply_semantics_refuse_unknown_devtype_in_any_assignment_map(
+def test_semantics_refuse_unknown_devtype_in_any_assignment_map(
         monkeypatch, tmp_path):
-    """check_assignments (apply-only) must scan the global map AND every
-    instance override map — a bundle whose override names a Dev Type the
-    bundle doesn't carry would otherwise apply cleanly and then silently
-    never staff that mission type on that instance."""
+    """The cross-store assignment check runs UNCONDITIONALLY — one path for
+    boot, PUT /config, and bundle apply (2026-08-12 audit SEC-3; the old
+    check_assignments flag left the PUT blind). A config whose global map or
+    instance override names a missing Dev Type must refuse, or the mission
+    type silently never staffs (override) / KeyErrors at dispatch (global)."""
     sb, _p, secrets, config_mod, prompt_templates = _env(monkeypatch, tmp_path)
     cfg, dts = _world(config_mod, secrets, prompt_templates)
     names = set(dts)
     exists = lambda mt, name: True
 
-    sb.validate_config_semantics(cfg, names, exists, check_assignments=True)
+    sb.validate_config_semantics(cfg, names, exists)
 
     bad_global = copy.deepcopy(cfg)
     bad_global.assignments["EXECUTE"].dev_type = "ghost"
     with pytest.raises(sb.BundleError, match="ghost"):
-        sb.validate_config_semantics(bad_global, names, exists,
-                                     check_assignments=True)
+        sb.validate_config_semantics(bad_global, names, exists)
 
     bad_override = copy.deepcopy(cfg)
     bad_override.pmos[0].assignments = {
         "EXECUTE": config_mod.Assignment(dev_type="ghost")}
     with pytest.raises(sb.BundleError, match="linear.*ghost|ghost.*linear"):
-        sb.validate_config_semantics(bad_override, names, exists,
-                                     check_assignments=True)
+        sb.validate_config_semantics(bad_override, names, exists)
+
+
+# ── apply ordering: crash honesty (2026-08-12 audit SEC-1) ───────────────────
+
+
+def _journaled(monkeypatch, sb, secrets):
+    """Wrap the commit point + every secret-store mutation to append to one
+    shared journal, preserving behavior."""
+    journal: list[str] = []
+
+    def wrap(mod, name, tag):
+        real = getattr(mod, name)
+
+        def logged(*a, **k):
+            journal.append(tag(*a, **k))
+            return real(*a, **k)
+        monkeypatch.setattr(mod, name, logged)
+
+    wrap(sb, "save_config", lambda c: "COMMIT")
+    wrap(secrets, "write_connection_secret",
+         lambda s, i, f, v: f"conn_write:{s}-{i}.{f}")
+    wrap(secrets, "delete_connection_field",
+         lambda s, i, f: f"conn_del_field:{s}-{i}.{f}")
+    wrap(secrets, "delete_connection_instance",
+         lambda s, i: f"conn_del_inst:{s}-{i}")
+    wrap(secrets, "write_harness_secret", lambda v, val: f"harness_write:{v}")
+    wrap(secrets, "delete_harness_secret", lambda v: f"harness_del:{v}")
+    return journal
+
+
+def test_apply_orders_adds_then_commit_then_destructive(monkeypatch, tmp_path):
+    """Phase order IS the crash-safety property: keys the old world never
+    stored land before the config.yaml commit; every overwrite and deletion
+    lands after it."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    # bundle world: replaces the pmo api_key (overwrite), drops repo main's
+    # token (instance delete via config w/o that repo? keep repo; field del),
+    # adds a NEW harness key, drops the old one
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-1"
+    del bundle["secrets"]["connections"]["repo-main"]
+    bundle["secrets"]["harness"] = {"NEW_KEY": "brand-new-value-42"}
+
+    journal = _journaled(monkeypatch, sb, secrets)
+    live_dts = dict(dts)
+    sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
+                    reload=lambda: None)
+
+    assert "COMMIT" in journal
+    commit_at = journal.index("COMMIT")
+    adds = [j for j in journal if j == "harness_write:NEW_KEY"]
+    assert adds and all(journal.index(a) < commit_at for a in adds), (
+        "new keys must land before the commit point")
+    destructive = [j for j in journal if j.startswith(
+        ("conn_del", "harness_del")) or j == "conn_write:pmo-linear.api_key"]
+    assert destructive, "expected overwrites + deletions in the plan"
+    assert all(journal.index(d, commit_at) > commit_at for d in destructive), (
+        "every overwrite/deletion must land after the commit point")
+    # end state converged
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") == "rotated-key-1"
+    assert secrets.read_connection_secret("repo", "main", "token") == ""
+    assert secrets.read_harness_secret("NEW_KEY") == "brand-new-value-42"
+    assert secrets.read_harness_secret("ANTHROPIC_API_KEY") == ""
+
+
+def test_commit_failure_leaves_secret_store_untouched(monkeypatch, tmp_path):
+    """New property of the reorder: if save_config raises, the store still
+    holds every OLD value — including the instance the bundle would have
+    deleted and the value it would have overwritten (rollback then prunes
+    the inert ADD-phase extras)."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-1"
+    del bundle["secrets"]["connections"]["repo-main"]
+    bundle["secrets"]["harness"]["NEW_KEY"] = "brand-new-value-42"
+
+    real_save = sb.save_config
+    calls = {"n": 0}
+
+    def boom_once(cfg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("disk full at the commit point")
+        return real_save(cfg)          # the rollback's own commit succeeds
+
+    monkeypatch.setattr(sb, "save_config", boom_once)
+    live_dts = dict(dts)
+    with pytest.raises(sb.BundleError, match="previous settings restored"):
+        sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
+                        reload=lambda: None)
+    # old values intact — never modified pre-commit
+    assert (secrets.read_connection_secret("pmo", "linear", "api_key")
+            == "lin_api_secret_value_0001")
+    assert (secrets.read_connection_secret("repo", "main", "token")
+            == "ghp_secret_value_0002")
+    assert secrets.read_harness_secret("ANTHROPIC_API_KEY") == "sk-ant-secret-0003"
+    # and the rollback pruned the inert ADD-phase extra
+    assert secrets.read_harness_secret("NEW_KEY") == ""
+
+
+def test_destructive_phase_failure_rolls_back_overwrites(monkeypatch, tmp_path):
+    """A failure INSIDE phase MUT (post-commit) restores both config and the
+    already-overwritten secret values via rollback-by-reapply."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-1"
+    del bundle["secrets"]["connections"]["repo-main"]   # → instance delete
+
+    def boom(scope, instance):
+        raise RuntimeError("store failure mid-deletes")
+
+    monkeypatch.setattr(secrets, "delete_connection_instance", boom)
+    monkeypatch.setattr(sb.secrets_store, "delete_connection_instance", boom)
+    live_dts = dict(dts)
+    with pytest.raises(sb.BundleError, match="previous settings restored"):
+        sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
+                        reload=lambda: None)
+    # the overwrite that already landed was rolled back to the old value
+    assert (secrets.read_connection_secret("pmo", "linear", "api_key")
+            == "lin_api_secret_value_0001")
+    assert (secrets.read_connection_secret("repo", "main", "token")
+            == "ghp_secret_value_0002")
+
+
+def test_secrets_only_apply_orders_adds_before_destructive(monkeypatch, tmp_path):
+    """No config section → no config.yaml commit; the declared commit point
+    is the ADD→MUT boundary and the order must still hold."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_config=False,
+                                  include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-2"
+    bundle["secrets"]["harness"] = {"NEW_ONLY": "value-brand-new"}
+
+    journal = _journaled(monkeypatch, sb, secrets)
+    result = sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                             reload=lambda: None)
+    assert result["applied"] == ["secrets"]
+    assert "COMMIT" not in journal
+    first_mut = min(i for i, j in enumerate(journal)
+                    if j.startswith(("conn_del", "harness_del"))
+                    or j == "conn_write:pmo-linear.api_key")
+    adds = [i for i, j in enumerate(journal) if j == "harness_write:NEW_ONLY"]
+    assert adds and max(adds) < first_mut
+
+
+# ── credential files: the one-way door closed (2026-08-12 audit SEC-2) ──────
+
+
+def test_credential_files_export_apply_round_trip(monkeypatch, tmp_path):
+    """Host migration as advertised: exported credential files ARRIVE on the
+    target — written 0600 through the one writer seam — and the group is
+    replace-the-world (an unlisted host file is deleted)."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path / "src")
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "grok-auth.json",
+                                  '{"tok": "oauth-secret-abc123"}')
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True,
+                                  include_credential_files=True)
+    assert "credential_files" in bundle["secrets"]
+
+    dst = tmp_path / "dst"
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(dst))
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        dst / "config" / "config.yaml")
+    # a stale credential on the target that the bundle does not list
+    secrets.write_credential_file("senior-dev", "stale-auth.json", "old")
+    result = sb.apply_bundle(bundle, config=config_mod.AppConfig(),
+                             dev_types={}, reload=lambda: None)
+    target = dst / "secrets" / "senior-dev" / "grok-auth.json"
+    assert target.read_text() == '{"tok": "oauth-secret-abc123"}'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert not (dst / "secrets" / "senior-dev" / "stale-auth.json").exists()
+    assert "dev-type credential files" not in result["untouched"]
+
+
+def test_credential_files_absent_key_leaves_files_untouched(monkeypatch, tmp_path):
+    """No `credential_files` key (every pre-SEC-2 profile/bundle) → the group
+    is untouched: an ordinary profile apply must never wipe OAuth creds."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "grok-auth.json", "keep-me")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)   # no creds
+    result = sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                             reload=lambda: None)
+    assert (tmp_path / "secrets" / "senior-dev" / "grok-auth.json"
+            ).read_text() == "keep-me"
+    assert "dev-type credential files" in result["untouched"]
+
+
+def test_credential_files_validation_refusals(monkeypatch, tmp_path):
+    import base64
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+
+    def bundle_with(dev, entry):
+        b = sb.serialize_current(cfg, dts, include_secrets=True)
+        b["secrets"]["credential_files"] = {dev: [entry]}
+        return b
+
+    ok = base64.b64encode(b"x").decode()
+    with pytest.raises(sb.BundleError, match="invalid credential filename"):
+        sb.validate_bundle(bundle_with(
+            "senior-dev", {"filename": "../../etc/passwd", "content_b64": ok}))
+    with pytest.raises(sb.BundleError, match="invalid credential dev_type"):
+        sb.validate_bundle(bundle_with(
+            "connections", {"filename": "a.json", "content_b64": ok}))
+    with pytest.raises(sb.BundleError, match="UTF-8"):
+        sb.validate_bundle(bundle_with(
+            "senior-dev", {"filename": "a.json",
+                           "content_b64": base64.b64encode(b"\xff\xfe").decode()}))
+    big = base64.b64encode(b"x" * (secrets.MAX_CREDENTIAL_FILE_BYTES + 1)).decode()
+    with pytest.raises(sb.BundleError, match="exceeds"):
+        sb.validate_bundle(bundle_with(
+            "senior-dev", {"filename": "a.json", "content_b64": big}))
+
+
+def test_credential_files_unknown_dev_type_skipped_with_warning(
+        monkeypatch, tmp_path):
+    import base64
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["credential_files"] = {
+        "ghost-dev": [{"filename": "a.json",
+                       "content_b64": base64.b64encode(b"v").decode()}]}
+    result = sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                             reload=lambda: None)
+    assert any("ghost-dev" in w and "skipped" in w for w in result["warnings"])
+    assert not (tmp_path / "secrets" / "ghost-dev").exists()
+
+
+def test_rollback_restores_overwritten_credential_file(monkeypatch, tmp_path):
+    """The rollback snapshot must carry the group when the bundle touches it
+    — without the include_credential_files flag on `previous`, a failed
+    apply that already overwrote grok-auth.json could not restore it."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "grok-auth.json", "NEWER-oauth")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True,
+                                  include_credential_files=True)
+    # bundle captured, then simulate the export being stale vs a re-OAuth
+    import base64 as b64mod
+    bundle["secrets"]["credential_files"]["senior-dev"] = [
+        {"filename": "grok-auth.json",
+         "content_b64": b64mod.b64encode(b"OLDER-oauth").decode()}]
+
+    calls = {"n": 0}
+
+    def failing_reload():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("adapter reload blew up")
+
+    with pytest.raises(sb.BundleError, match="previous settings restored"):
+        sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                        reload=failing_reload)
+    assert (tmp_path / "secrets" / "senior-dev" / "grok-auth.json"
+            ).read_text() == "NEWER-oauth"
+
+
+def test_diff_previews_credential_file_names_only(monkeypatch, tmp_path):
+    import base64
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "replaced.json", "current")
+    secrets.write_credential_file("senior-dev", "removed.json", "current")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["credential_files"] = {
+        "senior-dev": [
+            {"filename": "replaced.json",
+             "content_b64": base64.b64encode(b"incoming").decode()},
+            {"filename": "added.json",
+             "content_b64": base64.b64encode(b"incoming").decode()},
+        ]}
+    out = sb.diff_bundle(bundle, cfg, dts)
+    delta = out["sections"]["secrets"]["credential_files"]
+    assert delta == {"added": ["senior-dev/added.json"],
+                     "replaced": ["senior-dev/replaced.json"],
+                     "removed": ["senior-dev/removed.json"]}
+    blob = str(out)
+    assert "incoming" not in blob and "current" not in blob
+
+
+def test_wrong_type_json_secret_reads_as_absent_not_attribute_error(
+        monkeypatch, tmp_path):
+    """SEC-10 (2026-08-12 audit): a secret file whose JSON parses to a
+    list/string escaped the lenient-read except and AttributeError'd at the
+    caller (inside the poll cycle via PMOInstance.api_key). Lenient reads
+    treat it as absent; strict reads refuse read-modify-write."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    p = tmp_path / "secrets" / "connections" / "pmo-linear.json"
+    p.parent.mkdir(parents=True)
+    p.write_text('["not", "an", "object"]')
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") == ""
+    assert secrets.connection_status("pmo", "linear", "api_key") == {
+        "present": False, "updated_at": None}
+    with pytest.raises(ValueError, match="refusing read-modify-write"):
+        secrets.write_connection_secret("pmo", "linear", "api_key", "v")

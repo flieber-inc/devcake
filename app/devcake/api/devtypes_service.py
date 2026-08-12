@@ -13,7 +13,8 @@ import re
 from fastapi import HTTPException
 
 from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
-                      delete_dev_type, save_config, save_dev_type)
+                      delete_dev_type, save_config, save_dev_type,
+                      validate_assignment_map)
 from ..harness import HARNESSES, dev_type_status
 from ..prompts import templates as prompt_templates
 
@@ -227,9 +228,17 @@ async def put_assignments(body: dict, *, config, dev_types):
         new = {k: Assignment.model_validate(v) for k, v in body.items()}
     except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
         raise HTTPException(422, str(e))
-    missing = set(DEFAULT_ASSIGNMENTS) - set(new)
-    if missing:
-        raise HTTPException(422, f"unassigned mission types: {sorted(missing)}")
+    # ONE shared shape rule (config.validate_assignment_map) — explicit call
+    # because `config.assignments = new` below is a plain setattr that
+    # bypasses pydantic (do NOT enable validate_assignment model-wide: the
+    # apply/rollback paths assign already-validated values field-by-field).
+    # Incidentally closes the latent hole where this PUT accepted unknown
+    # mission-type keys (2026-08-12 audit SEC-3).
+    try:
+        validate_assignment_map(new, require_complete=True,
+                                context="assignments")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     unknown = {a.dev_type for a in new.values()} - set(dev_types)
     if unknown:
         raise HTTPException(422, f"unknown dev types: {sorted(unknown)}")

@@ -108,16 +108,10 @@ class PMOInstance(BaseModel):
     @field_validator("assignments")
     @classmethod
     def _assignment_overrides_valid(cls, v):
-        unknown = set(v) - set(DEFAULT_ASSIGNMENTS)
-        if unknown:
-            raise ValueError(
-                f"assignments: unknown mission type(s) {sorted(unknown)} — "
-                f"valid keys: {sorted(DEFAULT_ASSIGNMENTS)}")
-        empty = sorted(mt for mt, a in v.items() if not a.dev_type)
-        if empty:
-            raise ValueError(
-                f"assignments[{', '.join(empty)}]: an override must name a "
-                f"Dev Type — remove the key to inherit the global assignment")
+        # delegated to the ONE shared rule (defined after DEFAULT_ASSIGNMENTS,
+        # resolved at call time): overrides may be partial, never empty-typed
+        validate_assignment_map(v, require_complete=False,
+                                context="assignments")
         return v
 
     @field_validator("system")
@@ -446,6 +440,38 @@ DEFAULT_ASSIGNMENTS = {
 }
 
 
+def validate_assignment_map(rows: dict[str, Assignment], *,
+                            require_complete: bool, context: str) -> None:
+    """The ONE assignment-map shape rule for every entry point (2026-08-12
+    audit SEC-3): the AppConfig field validator (boot, PUT /config, bundle
+    validate, and reconcile all funnel through model_validate), the
+    per-instance override validator, and PUT /assignments. The old split —
+    endpoint-only completeness, no model rule — let a hand-edited
+    config.yaml boot green and KeyError inside the poll cycle at
+    assignment_for()."""
+    unknown = set(rows) - set(DEFAULT_ASSIGNMENTS)
+    if unknown:
+        raise ValueError(
+            f"{context}: unknown mission type(s) {sorted(unknown)} — "
+            f"valid keys: {sorted(DEFAULT_ASSIGNMENTS)}")
+    empty = sorted(mt for mt, a in rows.items() if not a.dev_type)
+    if empty:
+        if require_complete:
+            raise ValueError(
+                f"{context}[{', '.join(empty)}]: an assignment must name a "
+                f"Dev Type")
+        raise ValueError(
+            f"{context}[{', '.join(empty)}]: an override must name a "
+            f"Dev Type — remove the key to inherit the global assignment")
+    if require_complete:
+        missing = sorted(set(DEFAULT_ASSIGNMENTS) - set(rows))
+        if missing:
+            raise ValueError(
+                f"{context}: unassigned mission types {missing} — add rows "
+                f"for them, or delete the `assignments:` key entirely to "
+                f"restore the defaults")
+
+
 def assignment_for(config: "AppConfig", instance: PMOInstance,
                    mission_type: str) -> Assignment:
     """The Assignment staffing `mission_type` on `instance` (ADR-0019): the
@@ -510,6 +536,15 @@ class AppConfig(BaseModel):
     assignments: dict[str, Assignment] = Field(
         default_factory=lambda: {k: v.model_copy()
                                  for k, v in DEFAULT_ASSIGNMENTS.items()})
+
+    @field_validator("assignments")
+    @classmethod
+    def _assignments_valid(cls, v):
+        # the global map must staff EVERY mission type with a named Dev Type
+        # (SEC-3: assignment_for indexes it directly on the dispatch path)
+        validate_assignment_map(v, require_complete=True,
+                                context="assignments")
+        return v
     concurrency: Concurrency = Field(default_factory=Concurrency)
     adoption_mode: Literal["opt_in", "opt_out"] = "opt_in"
     poll_interval_seconds: int = Field(30, ge=1, le=3600)

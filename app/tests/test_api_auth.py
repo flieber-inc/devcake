@@ -148,3 +148,27 @@ def test_non_ascii_admin_username_accepts_and_rejects(monkeypatch):
     bad = {"Authorization": _basic("operator", "correct-horse")}
     assert client.get("/api/v1/config", headers=good).status_code == 200
     assert client.get("/api/v1/config", headers=bad).status_code == 401
+
+
+def test_both_credential_fields_compared_even_on_username_miss(monkeypatch):
+    """SEC-9 (2026-08-12 audit): the old short-circuit `and` skipped the
+    password compare when the username missed — a measurable timing oracle
+    for username validity. Call-count pins the property (timing asserts
+    flake); both comparisons must run on every well-formed attempt."""
+    from devcake.api import auth as auth_mod
+
+    monkeypatch.setenv("ADMIN_USER", "operator")
+    monkeypatch.setenv("ADMIN_PASSWORD", "correct-horse")
+    calls = []
+    real = auth_mod._const_eq
+
+    def counting(a, b):
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(auth_mod, "_const_eq", counting)
+    assert auth_mod._valid_basic_auth(_basic("wrong-user", "whatever")) is False
+    assert len(calls) == 2, "username miss must still compare the password"
+    calls.clear()
+    assert auth_mod._valid_basic_auth(_basic("operator", "correct-horse")) is True
+    assert len(calls) == 2

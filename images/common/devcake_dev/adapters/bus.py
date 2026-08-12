@@ -30,18 +30,27 @@ SHRINKABLE_FIELDS = ("transcript_md", "plan_md", "last_message_md")
 TRUNCATE_FLOOR = 10_000
 
 
-def send(kind: str, payload: dict) -> None:
+# attempts × backoff. The default (~1.75s) covers a momentary blip; the
+# BOOT and FINALIZE sends widen it (2026-08-12 audit OPS-M5): an operator
+# `compose restart redis` at container start used to kill the first
+# heartbeat, and a blip at run end turned a cleanly classified failure into
+# an unclassified crash-with-traceback. ~15s of retry rides both windows out.
+SEND_ATTEMPTS = 4
+SEND_ATTEMPTS_RESILIENT = 8
+
+
+def send(kind: str, payload: dict, *, attempts: int = SEND_ATTEMPTS) -> None:
     envelope = {"v": 1, "run_id": RUN_ID, "auth": os.environ["REDIS_PASSWORD"],
                 "kind": kind, "ts": datetime.now(timezone.utc).isoformat(),
                 "payload": payload}
-    for attempt in range(4):
+    for attempt in range(attempts):
         try:
             r.xadd(INGRESS, {"m": json.dumps(envelope)})
             return
         except redis.RedisError:
-            if attempt == 3:
+            if attempt == attempts - 1:
                 raise
-            time.sleep(0.25 * (2 ** attempt))
+            time.sleep(min(4.0, 0.25 * (2 ** attempt)))
 
 
 def _fit_payload(payload: dict) -> dict:
@@ -65,10 +74,13 @@ def _fit_payload(payload: dict) -> dict:
 
 
 def send_artifacts(payload: dict) -> None:
+    # FINALIZE send (OPS-M5): the artifacts are the run's whole verdict — a
+    # transient Redis blip here must not lose them to an unclassified crash,
+    # so ride the wider retry budget.
     payload = _fit_payload(payload)
     blob = json.dumps(payload)
     if len(blob) <= CHUNK_LIMIT:
-        send("run.artifacts", payload)
+        send("run.artifacts", payload, attempts=SEND_ATTEMPTS_RESILIENT)
         return
     parts = [blob[i:i + CHUNK_SIZE] for i in range(0, len(blob), CHUNK_SIZE)]
     if len(parts) > 128 or len(blob.encode("utf-8")) > 50 * 1024 * 1024:
@@ -78,7 +90,7 @@ def send_artifacts(payload: dict) -> None:
     for i, part in enumerate(parts, start=1):
         send("run.artifacts", {"chunk": i, "of": len(parts),
                                "chunk_id": chunk_id, "sha256": digest,
-                               "data": part})
+                               "data": part}, attempts=SEND_ATTEMPTS_RESILIENT)
 
 
 def request_reply(kind: str, want: str, timeout: int = 90,
@@ -103,7 +115,15 @@ def request_reply(kind: str, want: str, timeout: int = 90,
 
 
 def heartbeat_loop(stop: threading.Event) -> None:
-    send("run.heartbeat", {"phase": "starting"})
+    # The FIRST beat was outside the try (OPS-M5): a boot-window Redis blip
+    # raised out of it, the thread died PERMANENTLY, and a perfectly healthy
+    # multi-hour run was later killed by heartbeat grace. Guard it like the
+    # loop body, with the wider boot-window budget.
+    try:
+        send("run.heartbeat", {"phase": "starting"},
+             attempts=SEND_ATTEMPTS_RESILIENT)
+    except Exception:
+        pass
     while not stop.wait(30):
         try:
             send("run.heartbeat", {"phase": "working"})

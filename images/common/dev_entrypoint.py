@@ -561,6 +561,18 @@ def harness_main() -> None:
             for t in pumps:
                 t.join(timeout=10)
             progress.join(timeout=10)
+            # OPS-L2: a pump still draining after the 10s join means the
+            # joined output below is TRUNCATED — the very stdout the fault
+            # predicates classify on. Say so loudly instead of silently
+            # judging a partial capture.
+            if any(t.is_alive() for t in pumps):
+                relay.add("[devcake] WARNING: output capture truncated — a "
+                          "pump thread did not drain within 10s; the fault "
+                          "classification below reads a PARTIAL transcript",
+                          visible_output=False)
+                print(f"[devcake] output capture truncated for {RUN_ID} "
+                      f"attempt {attempt} — pump still draining after join",
+                      file=sys.stderr)
         joined_out = "".join(out_lines)
         joined_err = "".join(err_lines)
         n_bytes, n_lines = len(joined_out), len(out_lines)

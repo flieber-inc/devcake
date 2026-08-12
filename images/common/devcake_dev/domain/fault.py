@@ -51,6 +51,18 @@ HARNESS_AUTH_MARKERS = tuple(_re.compile(r"\b" + p + r"\b") for p in (
 # when the fault predicate has already explained a failure, only unambiguous
 # credential evidence may override it. Bare "authentication"/"unauthorized" are
 # excluded: OpenAI-compatible gateways emit them for ordinary rejections.
+#
+# CAPTURE RITUAL (2026-08-12 audit OPS-M4 — these markers are version-coupled
+# to CLI stderr wording; exit 12 vs the exit-10 burned-attempt cascade turns
+# on one phrase). Whenever a harness CLI pin is bumped (images/Dockerfile
+# CLAUDE_CODE_VERSION / CODEX_VERSION, or the unpinned grok floats), RE-RUN
+# the in-image capture so a wording change is caught as a fixture-verdict
+# mismatch, not discovered as a revoked-credential cascade in production:
+#   docker run --rm -v "$PWD:/srv" -w /srv devcake/dev-<harness>:<tag> \
+#       python scripts/harness_capture/in_container.py --auth-revoked
+# then commit the new capture under app/tests/fixtures/harness_streams/ — the
+# parity test (test_harness_captures) fails if the CURRENT predicate disagrees
+# with the recorded verdict. See scripts/harness_capture/in_container.py.
 DISTINCTIVE_AUTH_MARKERS = tuple(_re.compile(r"\b" + p + r"\b") for p in (
     "not signed in", r"grok login",
 ))

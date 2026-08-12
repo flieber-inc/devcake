@@ -33,6 +33,8 @@ MAX_COMMENT_PAGES_FULL = 100
 COMMENTS_PAGE = 50
 ISSUES_PAGE = 50
 MAX_ISSUE_PAGES = 40  # 2000 issues fail-loud
+LABELS_PAGE = 50
+MAX_LABEL_PAGES = 10  # 500 labels fail-loud — see _fetch_all_labels
 
 # Attachment host patterns for markdown link recovery
 _NAMED_ASSET_RE = re.compile(
@@ -199,6 +201,16 @@ class GiteaIssuesAdapter:
                 f"(need owner/repo)")
         return f"/repos/{self._owner}/{self._repo}{suffix}"
 
+    def _require_issue(self, ref: MissionRef) -> None:
+        """projects_supported=False: a project-kind ref reaching this adapter
+        is a caller bug. Raise (permanent family) — never fabricate a Mission
+        or silently no-op a write, which would report success while swapping
+        no labels and setting no status (2026-08-12 audit F1)."""
+        if ref.kind != "issue":
+            raise RuntimeError(
+                "gitea_issues: projects are not supported "
+                f"(got kind={ref.kind!r})")
+
     # ── normalization ───────────────────────────────────────────────────────
 
     def _mission(self, issue: dict) -> Mission:
@@ -292,7 +304,15 @@ class GiteaIssuesAdapter:
         out: list[Mission] = []
         for raw in await self._list_issues(state="all"):
             m = self._mission(raw)
-            out.append(await self._enrich_blocked_by(m))
+            # blocked_by enrichment costs one GET per issue per poll cycle —
+            # spend it on OPEN issues only: the scheduler's gate reads a
+            # BLOCKER's status off its own list row, never a closed issue's
+            # blocked_by, and set_status deletes dependencies on close. The
+            # old unconditional enrichment grew monotonically with history
+            # (2026-08-12 audit F9).
+            if m.status not in ("done", "canceled"):
+                m = await self._enrich_blocked_by(m)
+            out.append(m)
         return out
 
     def _apply_team(self, team_ref: str) -> None:
@@ -303,24 +323,17 @@ class GiteaIssuesAdapter:
             self._label_ids.clear()
 
     async def get(self, ref: MissionRef) -> Mission:
-        if ref.kind != "issue":
-            raise RuntimeError(
-                "gitea_issues: projects are not supported "
-                f"(got kind={ref.kind!r})")
+        self._require_issue(ref)
         raw = await self._req(
             "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
         return await self._enrich_blocked_by(self._mission(raw))
 
     async def get_activity(self, ref: MissionRef,
                            full: bool = False) -> Activity:
-        if ref.kind != "issue":
-            m = Mission(
-                pmo_id=ref.pmo_id, pmo_kind="project", key=f"PRJ-{ref.pmo_id}",
-                title="", description="", status="backlog", priority="medium",
-                labels=set(), updated_at=datetime.now(timezone.utc), url="",
-                instance=self._instance)
-            return Activity(mission=m, entries=[], mission_attachments=[],
-                            truncated=False)
+        # The port's "shallow project ref never raises" clause is scoped to
+        # projects_supported vendors — here a project ref is a caller bug,
+        # and the old fabricated Mission answer made misroutes invisible.
+        self._require_issue(ref)
         mission = await self.get(ref)
         max_pages = MAX_COMMENT_PAGES_FULL if full else MAX_COMMENT_PAGES
         entries: list[ActivityEntry] = []
@@ -403,15 +416,13 @@ class GiteaIssuesAdapter:
     # ── writes ──────────────────────────────────────────────────────────────
 
     async def post_feed(self, ref: MissionRef, markdown: str) -> None:
-        if ref.kind != "issue":
-            return
+        self._require_issue(ref)
         await self._req(
             "POST", self._repo_path(f"/issues/{ref.pmo_id}/comments"),
             json={"body": markdown})
 
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None:
-        if ref.kind != "issue":
-            return
+        self._require_issue(ref)
         if status in ("done", "canceled"):
             state = "closed"
             # Gitea 412s close when the issue still has open blockers
@@ -451,8 +462,7 @@ class GiteaIssuesAdapter:
             _ = result
 
     async def cancel_mission(self, ref: MissionRef) -> None:
-        if ref.kind != "issue":
-            return
+        self._require_issue(ref)
         cur = await self._req(
             "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
         if (cur.get("state") == "closed"
@@ -462,8 +472,7 @@ class GiteaIssuesAdapter:
 
     async def swap_labels(self, ref: MissionRef, remove: set[str],
                           add: set[str]) -> None:
-        if ref.kind != "issue":
-            return
+        self._require_issue(ref)
         await self._ensure_label_cache()
         cur = await self._req(
             "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
@@ -475,8 +484,13 @@ class GiteaIssuesAdapter:
             if lid is None:
                 await self.ensure_labels(self._team_ref, {name})
                 lid = self._label_ids.get(name.upper())
-            if lid is not None:
-                ids.append(lid)
+            if lid is None:
+                # NEVER PUT a set assembled from unresolved names: the PUT
+                # replaces the issue's FULL label set, so dropping the id
+                # here silently erases the label from the issue (2026-08-12
+                # audit F8 — Linear's write path refuses the same way).
+                raise RuntimeError(f"label {name} missing — ensure_labels not run?")
+            ids.append(lid)
         # PUT replaces the full set (live-verified 1.24.7)
         await self._req(
             "PUT", self._repo_path(f"/issues/{ref.pmo_id}/labels"),
@@ -519,13 +533,42 @@ class GiteaIssuesAdapter:
         if isinstance(result, dict) and result.get("_duplicate"):
             return  # idempotent
 
+    async def _fetch_all_labels(self) -> list[dict]:
+        """Every label on the repo, paginated with a fail-loud ceiling.
+
+        swap_labels PUT-replaces the issue's FULL label set, so any rewrite
+        computed from a truncated registry read silently erases labels past
+        the page boundary from the vendor system (2026-08-12 audit F8 — the
+        ISSUES #7 destruction class; this is the REST twin of Linear's
+        `_refuse_truncated_rewrite`). Raise at the ceiling, never truncate:
+        every consumer of this read feeds a full-set rewrite, a create
+        decision, or an ensure that would mint an uppercase duplicate."""
+        labels: list[dict] = []
+        page = 1
+        while page <= MAX_LABEL_PAGES:
+            batch = await self._req("GET", self._repo_path("/labels"),
+                                    params={"page": page,
+                                            "limit": LABELS_PAGE})
+            if not batch:
+                break
+            labels.extend(batch)
+            if len(batch) < LABELS_PAGE:
+                break
+            page += 1
+        else:
+            raise RuntimeError(
+                f"gitea_issues: more than {MAX_LABEL_PAGES * LABELS_PAGE} "
+                f"labels on {self._owner}/{self._repo} — refusing (a label "
+                f"past the ceiling would be silently erased by the next "
+                f"full-set label rewrite)")
+        return labels
+
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None:
         self._apply_team(team_ref)
         await self._enable_issue_dependencies()
-        existing = await self._req("GET", self._repo_path("/labels"),
-                                   params={"limit": 50})
+        existing = await self._fetch_all_labels()
         by_upper = {(lb.get("name") or "").upper(): lb
-                    for lb in (existing or [])}
+                    for lb in existing}
         for name in names:
             u = name.upper()
             if u in by_upper:
@@ -541,9 +584,7 @@ class GiteaIssuesAdapter:
     async def _ensure_label_cache(self) -> None:
         if self._label_ids:
             return
-        existing = await self._req("GET", self._repo_path("/labels"),
-                                   params={"limit": 50})
-        for lb in existing or []:
+        for lb in await self._fetch_all_labels():
             n = (lb.get("name") or "").upper()
             if n:
                 self._label_ids[n] = int(lb["id"])
@@ -562,8 +603,7 @@ class GiteaIssuesAdapter:
             log.warning("gitea_issues enable dependencies: %s", e)
 
     async def append_description(self, ref: MissionRef, text: str) -> None:
-        if ref.kind != "issue":
-            return
+        self._require_issue(ref)
         cur = await self._req(
             "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
         body = (cur.get("body") or "") + text
@@ -670,11 +710,9 @@ class GiteaIssuesAdapter:
                 return PMOHealth(ok=False, detail="api_base is empty")
             await self.ensure_labels(team_ref, ALL_LABELS)
             await self._ensure_label_cache()
-            present = sum(1 for n in ALL_LABELS if n.upper() in self._label_ids)
             # count only managed intersection on the repo
-            raw_labels = await self._req("GET", self._repo_path("/labels"),
-                                         params={"limit": 50})
-            remote = {(lb.get("name") or "").upper() for lb in (raw_labels or [])}
+            raw_labels = await self._fetch_all_labels()
+            remote = {(lb.get("name") or "").upper() for lb in raw_labels}
             present = len(remote & {n.upper() for n in ALL_LABELS})
             return PMOHealth(
                 ok=True,

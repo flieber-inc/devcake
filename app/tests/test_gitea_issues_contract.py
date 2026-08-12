@@ -80,10 +80,15 @@ class Router:
         if method == "PATCH" and path == "/api/v1/repos/o/r":
             return httpx.Response(200, json={"name": "r"})
 
-        # labels collection
+        # labels collection (pagination-aware: the adapter must walk pages —
+        # a one-page read feeding the full-set PUT is the audit-F8 bug)
         if path == "/api/v1/repos/o/r/labels":
             if method == "GET":
-                return httpx.Response(200, json=list(self.labels.values()))
+                page = int(req.url.params.get("page", 1))
+                limit = int(req.url.params.get("limit", 50))
+                items = list(self.labels.values())
+                return httpx.Response(
+                    200, json=items[(page - 1) * limit: page * limit])
             if method == "POST":
                 name = (body.get("name") or "").upper()
                 self.next_label += 1
@@ -463,10 +468,97 @@ def test_download_asset_allows_same_host_redirect():
     assert body == b"payload-bytes"
 
 
-def test_get_activity_full_project_ref_stays_empty():
-    # projects_supported=False: the non-issue branch answers without any
-    # HTTP and the project-fidelity fields stay defaulted
-    pmo = GiteaIssuesAdapter("http://gitea:3000", "tok", "o/r")
-    act = run(pmo.get_activity(MissionRef("9", "project"), full=True))
-    assert act.entries == [] and act.documents == []
-    assert act.mission_attachments == [] and act.truncated is False
+@pytest.mark.parametrize("op", [
+    lambda pmo: pmo.get_activity(MissionRef("9", "project"), full=True),
+    lambda pmo: pmo.get_activity(MissionRef("9", "project")),
+    lambda pmo: pmo.post_feed(MissionRef("9", "project"), "hi"),
+    lambda pmo: pmo.set_status(MissionRef("9", "project"), "done"),
+    lambda pmo: pmo.swap_labels(MissionRef("9", "project"), set(), {"X"}),
+    lambda pmo: pmo.cancel_mission(MissionRef("9", "project")),
+    lambda pmo: pmo.append_description(MissionRef("9", "project"), "x"),
+])
+def test_project_ref_operations_raise_never_fabricate_or_noop(op):
+    """projects_supported=False: a project ref is a caller bug (2026-08-12
+    audit F1). The old adapter fabricated a Mission for get_activity and
+    silently no-opped every write — success reported, no labels swapped, the
+    misroute invisible forever. All seven now raise the permanent family."""
+    router = Router()
+    pmo = make_pmo(router)
+    with pytest.raises(RuntimeError, match="projects are not supported"):
+        run(op(pmo))
+    assert not any(c.startswith(("POST", "PATCH", "PUT", "DELETE"))
+                   for c in router.calls), "no write may reach the vendor"
+
+
+# --- label-registry data safety (2026-08-12 audit F8) -----------------------
+
+
+def test_swap_labels_reads_all_label_pages_and_preserves_overflow():
+    """The destruction case: a human-applied label whose registry entry sits
+    past page 1. The full-set PUT rewrite must still carry it — the old
+    one-page read dropped its id and erased it from the issue."""
+    router = Router()
+    for i in range(118):                       # +DEVCAKE = 120 labels, 3 pages
+        router.labels[f"L{i:03d}"] = {"id": 2000 + i, "name": f"L{i:03d}",
+                                      "color": "ffffff"}
+    router.labels["HUMANPICK"] = {"id": 9999, "name": "HUMANPICK",
+                                  "color": "ffffff"}
+    router.issues[1]["labels"] = [{"id": 1, "name": "DEVCAKE"},
+                                  {"id": 9999, "name": "HUMANPICK"}]
+    pmo = make_pmo(router)
+    run(pmo.swap_labels(MissionRef("1", "issue"),
+                        remove=set(), add={"DEVCAKE-PLAN"}))
+    names = {lb["name"] for lb in router.issues[1]["labels"]}
+    assert "HUMANPICK" in names, "overflow label must survive the rewrite"
+    assert "DEVCAKE" in names and "DEVCAKE-PLAN" in names
+
+
+def test_label_ceiling_refuses_loudly_with_zero_writes():
+    router = Router()
+    for i in range(520):
+        router.labels[f"M{i:04d}"] = {"id": 3000 + i, "name": f"M{i:04d}",
+                                      "color": "ffffff"}
+    pmo = make_pmo(router)
+    with pytest.raises(RuntimeError, match="more than 500 labels"):
+        run(pmo.swap_labels(MissionRef("1", "issue"),
+                            remove=set(), add={"DEVCAKE-PLAN"}))
+    assert not any(c.startswith("PUT") for c in router.calls)
+
+
+def test_swap_labels_never_puts_a_set_with_unresolved_names(monkeypatch):
+    """An issue carrying a label absent from the registry (deleted from the
+    repo while still attached): if the ensure retry cannot resolve it, the
+    swap must raise — the old code PUT the partial set and erased it."""
+    router = Router()
+    router.issues[1]["labels"] = [{"id": 77, "name": "GHOST"}]
+    pmo = make_pmo(router)
+
+    async def ensure_noop(team_ref, names):
+        return None
+
+    monkeypatch.setattr(pmo, "ensure_labels", ensure_noop)
+    with pytest.raises(RuntimeError, match="label GHOST missing"):
+        run(pmo.swap_labels(MissionRef("1", "issue"),
+                            remove=set(), add=set()))
+    assert not any(c.startswith("PUT") for c in router.calls)
+
+
+# --- dependency-enrichment cost (2026-08-12 audit F9) ------------------------
+
+
+def test_list_all_skips_dependency_fetch_for_closed_issues():
+    """blocked_by enrichment is one GET per issue per poll cycle; closed
+    issues never need it (the gate reads a blocker's status off its own list
+    row, and set_status clears dependencies on close) — history must not
+    grow the poll's request count."""
+    router = Router()
+    router.issues[3] = _issue(3, state="closed")
+    router.comments[3] = []
+    router.deps[3] = []
+    pmo = make_pmo(router)
+    missions = run(pmo.list_all("o/r"))
+    assert {m.pmo_id for m in missions} == {"1", "2", "3"}
+    dep_gets = [c for c in router.calls
+                if c.startswith("GET") and "/dependencies" in c]
+    assert any("/issues/1/" in c for c in dep_gets)
+    assert not any("/issues/3/" in c for c in dep_gets)

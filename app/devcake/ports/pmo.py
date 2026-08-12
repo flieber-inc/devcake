@@ -49,7 +49,13 @@ class PMOPort(Protocol):
     - `get_activity` SHALLOW on a ref without an issue-style comment feed
       (Linear projects) returns the mission with `entries=[]` — never raises.
       The shallow project path has no production caller (marker scans are
-      issue-only) and must stay cheap.
+      issue-only) and must stay cheap. That never-raises clause is scoped to
+      `projects_supported` vendors: on a vendor WITHOUT project support, a
+      project-kind ref is a caller bug and every method — reads and writes —
+      MUST raise (permanent family), never fabricate a Mission or silently
+      no-op the write (2026-08-12 audit F1: a swallowed project write
+      reports success while swapping no labels, so the misroute re-derives
+      forever with zero signal).
     - `get_activity(full=True)` (ADR-0014 D3, the activity-folder builder's
       mode) walks the ENTIRE feed history, carries reply structure
       (`entry_id`/`parent_id`) and mission-level attachments (description

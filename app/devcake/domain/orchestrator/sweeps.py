@@ -10,7 +10,7 @@ from opentelemetry.trace import Status, StatusCode
 from ...ports.forge import legacy_branch, mission_branch
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
-from ..run import utcnow
+from ..run import aware, utcnow
 from . import completion, dispatch, feed
 from .markers import MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER
 
@@ -162,8 +162,8 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
     act = await mgr.pmo.get_activity(m.ref)
     retry_ts = handoff_ts = None
     for e in act.entries:
-        body = feed._unquoted(e.body)
-        ts = dispatch._aware(e.ts)  # a naive PMO timestamp must not TypeError
+        body = feed.unquoted(e.body)
+        ts = aware(e.ts)  # a naive PMO timestamp must not TypeError
         if MERGE_RETRY_MARKER in body:
             retry_ts = max(retry_ts, ts) if retry_ts else ts
         if MERGE_HANDOFF_MARKER in body:

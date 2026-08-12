@@ -29,6 +29,14 @@ RunState = Literal[
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+def aware(ts: datetime) -> datetime:
+    """Timestamps arrive from three sources (audit log, run records, PMO
+    comments); a stray naive one must not crash a scheduler comparison.
+    Moved from dispatch._aware (ADR-0034 PR-3): a time utility, not
+    dispatch logic — it lives beside utcnow now."""
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
 
 def auth_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()

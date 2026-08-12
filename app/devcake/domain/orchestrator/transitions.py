@@ -64,7 +64,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
     expected_stages.update(
         stage for marker, stage in _SWAP_MARKER_STAGE.items()
         if marker in run.finalized_steps)
-    if feed._stage_of(live) not in expected_stages:
+    if feed.stage_of(live) not in expected_stages:
         async def _external():
             await mgr._feed(
                 pmo_id, run.pmo_kind,

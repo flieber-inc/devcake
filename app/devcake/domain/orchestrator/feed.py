@@ -81,7 +81,7 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
             # preview from UNQUOTED lines only: flattening newlines would
             # otherwise land "> "-quarantined text mid-line, back in scan
             # scope (ADR-0014 D2)
-            preview = _unquoted(markdown) or markdown[:300]
+            preview = unquoted(markdown) or markdown[:300]
             markdown = (preview[:300].replace("\n", " ")
                         + f"… — full text attached: [{name}]({url})")
         except Exception:
@@ -91,8 +91,8 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
 
 
-def _blockquote(text: str) -> str:
-    """Inverse of _unquoted: prefix EVERY line with '> ' (bare '>' for blank
+def blockquote(text: str) -> str:
+    """Inverse of unquoted: prefix EVERY line with '> ' (bare '>' for blank
     lines, so lazy-continuation can't leak) — the ADR-0014 D2 quarantine for
     model-authored text posted inline. Applied app-side at the finalize
     choke-point, never in the entrypoint: old images stay quarantined too."""
@@ -100,23 +100,23 @@ def _blockquote(text: str) -> str:
                      for line in (text or "").splitlines())
 
 
-def _unquoted(body: str | None) -> str:
+def unquoted(body: str | None) -> str:
     """Strip `>`-quoted lines: markers/sentinels inside a human's quote of
     a DevCake comment must never count as DevCake's own."""
     return "\n".join(line for line in (body or "").splitlines()
                      if not line.lstrip().startswith(">"))
 
 
-def _is_devcake_comment(body: str | None) -> bool:
+def is_devcake_comment(body: str | None) -> bool:
     """Provenance classification (docs/03 §8a): sentinel-signed ⇒ DevCake.
     `>`-quoted lines are ignored, so a human reply that ENDS by quoting a
     DevCake comment still classifies as human — misreading a human's
     instruction as DevCake's own record is the unsafe direction."""
     return bool(SENTINEL_RE.search(
-        _unquoted(body).rstrip()))
+        unquoted(body).rstrip()))
 
 
-def _stage_of(mission: Mission) -> str | None:
+def stage_of(mission: Mission) -> str | None:
     stage = mission.labels & STAGE_LABELS
     return next(iter(stage)) if stage else None
 

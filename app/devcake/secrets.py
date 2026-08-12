@@ -90,11 +90,17 @@ def _fsync_dir(directory: Path) -> None:
 
 def _read(path: Path) -> dict:
     """Lenient read for status/read-through paths: a corrupt file reads as
-    absent (the redaction scanner alarms on it separately)."""
+    absent (the redaction scanner alarms on it separately). Wrong-TYPE JSON
+    (a list/string that parses) is corrupt too — without the isinstance
+    check it escaped the except and the caller's .get AttributeError'd
+    inside the poll cycle (2026-08-12 audit SEC-10)."""
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        return data
     except Exception:  # noqa: BLE001 — lenient-read contract: corrupt file reads as absent (logged); redaction scanner alarms separately
         log.error("unreadable secret file %s", path)
         return {}
@@ -106,7 +112,10 @@ def _read_strict(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        return data
     except Exception as e:
         raise ValueError(
             f"corrupt secret file {path.name!r} — refusing read-modify-write; "

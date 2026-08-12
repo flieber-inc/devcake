@@ -810,3 +810,20 @@ def test_diff_previews_credential_file_names_only(monkeypatch, tmp_path):
                      "removed": ["senior-dev/removed.json"]}
     blob = str(out)
     assert "incoming" not in blob and "current" not in blob
+
+
+def test_wrong_type_json_secret_reads_as_absent_not_attribute_error(
+        monkeypatch, tmp_path):
+    """SEC-10 (2026-08-12 audit): a secret file whose JSON parses to a
+    list/string escaped the lenient-read except and AttributeError'd at the
+    caller (inside the poll cycle via PMOInstance.api_key). Lenient reads
+    treat it as absent; strict reads refuse read-modify-write."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    p = tmp_path / "secrets" / "connections" / "pmo-linear.json"
+    p.parent.mkdir(parents=True)
+    p.write_text('["not", "an", "object"]')
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") == ""
+    assert secrets.connection_status("pmo", "linear", "api_key") == {
+        "present": False, "updated_at": None}
+    with pytest.raises(ValueError, match="refusing read-modify-write"):
+        secrets.write_connection_secret("pmo", "linear", "api_key", "v")

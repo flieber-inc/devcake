@@ -463,6 +463,36 @@ def test_attempts_ignore_plain_comments_under_default_policy(tmp_path, monkeypat
     assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
 
 
+def test_quoted_retry_token_does_not_reset_attempts(tmp_path, monkeypatch):
+    """IRON RULE (ADR-0014 D2, 2026-08-12 audit F14): a human QUOTING a post
+    that mentions DEVCAKE-RETRY — the reply-with-quote gesture every PMO UI
+    offers — is not the deliberate retry gesture. Only an unquoted token
+    resets the counter."""
+    from datetime import timedelta
+    import devcake.domain.orchestrator as orchestrator_mod
+
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, store = make_mgr(tmp_path, m)
+    monkeypatch.setattr(orchestrator_mod.markers, "AUDIT_PATH",
+                        tmp_path / "no-audit.jsonl")
+    assert mgr.config.attempt_reset == "label-ops"
+    t0 = datetime.now(timezone.utc)
+    _failed_execute_runs(store, t0)
+
+    quoting = ActivityEntry(
+        ts=t0 + timedelta(seconds=20), author="felix", kind="comment",
+        body="> when ready, comment DEVCAKE-RETRY to grant fresh attempts\n\n"
+             "not yet — still investigating")
+    activity = Activity(mission=m, entries=[quoting])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 3
+
+    unquoted = ActivityEntry(
+        ts=t0 + timedelta(seconds=30), author="felix", kind="comment",
+        body="fixture fixed. DEVCAKE-RETRY")
+    activity = Activity(mission=m, entries=[quoting, unquoted])
+    assert dispatch.attempt_number(mgr, "p1", "EXECUTE", activity) == 1
+
+
 def test_attempts_reset_on_any_comment_when_opted_in(tmp_path, monkeypatch):
     """`attempt_reset: any-comment` restores the pre-0026 rule: a human
     comment is an intervention and grants fresh attempts. DevCake's own

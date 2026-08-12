@@ -912,7 +912,11 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
                     if e.kind == "comment"
                     and not _is_devcake_comment(e.body)
                     and (policy == "any-comment"
-                         or RETRY_TOKEN in (e.body or ""))]
+                         # IRON RULE (markers.py, ADR-0014 D2): token scans
+                         # run on the unquoted body — a human QUOTING a
+                         # DevCake post that mentions the token is not the
+                         # deliberate retry gesture (2026-08-12 audit F14)
+                         or RETRY_TOKEN in _unquoted(e.body or ""))]
     since = max(anchors, default=None)
     return 1 + sum(
         1 for r in history

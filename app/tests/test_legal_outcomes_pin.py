@@ -42,3 +42,9 @@ def test_mission_rows_match_and_steward_is_entrypoint_only():
             f"entrypoint {mt} drifted from markers.LEGAL_OUTCOMES")
     assert entry["STEWARD"] == {"relations_mapped"}
     assert "STEWARD" not in LEGAL_OUTCOMES
+    # Reverse direction (2026-08-12 review): the forward loop only pins the
+    # rows the APP knows about — an entrypoint-only extra key would sail
+    # through it. STEWARD is the one sanctioned entrypoint-only row; anything
+    # else means the entrypoint grew a mission type the app never legalized.
+    assert set(entry) - {"STEWARD"} == set(LEGAL_OUTCOMES), (
+        "entrypoint legal_outcomes has rows the app's LEGAL_OUTCOMES lacks")

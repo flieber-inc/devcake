@@ -1,8 +1,12 @@
 // Instance-qualified mission identity (ADR-0009). gitea_issues pmo_ids
 // are per-repo issue numbers, so a bare id collides across boards.
 
+// THE optimistic-override key (2026-08-12 review): must match how `pending`
+// is minted in MissionsPage — double colon + empty-instance guard. A single
+// canonical definition here, imported everywhere; a divergent copy would
+// silently re-open the cross-board Park-bleed bug (#136).
 export function refKey(instance, pmoId) {
-  return `${instance}:${pmoId}`;
+  return `${instance || ""}::${pmoId}`;
 }
 
 export function runsListPath(mission) {

@@ -608,3 +608,44 @@ def test_health_probe_is_strictly_read_only():
     writes = [c for c in router.calls
               if c.startswith(("POST", "PATCH", "PUT", "DELETE"))]
     assert not writes, f"probe must not write: {writes}"
+
+
+# --- issue-label pagination (2026-08-12 review: _issue_label_names) ----------
+
+
+def test_swap_labels_walks_all_issue_label_PAGES_and_preserves_overflow():
+    """The F8 embed-read twin: the issue's OWN labels are read from the paged
+    /issues/{id}/labels endpoint, not the single-page GET embed. A label on
+    page 2 must survive the full-set PUT — the old embed read dropped it."""
+    router = Router()
+    # 60 labels ON issue #1 → 2 pages of 50; registry carries them all
+    issue_labels = []
+    for i in range(60):
+        name = f"L{i:03d}"
+        router.labels[name] = {"id": 4000 + i, "name": name, "color": "fff"}
+        issue_labels.append({"id": 4000 + i, "name": name})
+    router.issues[1]["labels"] = issue_labels
+    pmo = make_pmo(router)
+    run(pmo.swap_labels(MissionRef("1", "issue"),
+                        remove=set(), add={"DEVCAKE-PLAN"}))
+    # the PUT carried every one of the 60 overflow labels + the added one
+    put = [c for c in router.calls if c.startswith("PUT") and "/labels" in c]
+    assert put, "a PUT must have happened"
+    names = {lb["name"] for lb in router.issues[1]["labels"]}
+    assert "L058" in names and "L059" in names, "page-2 labels must survive"
+    assert "DEVCAKE-PLAN" in names
+    # and it genuinely paged the issue's labels (page>=2 requested)
+    assert any("/issues/1/labels" in c for c in router.calls)
+
+
+def test_swap_labels_refuses_when_issue_has_more_than_the_ceiling():
+    """>500 labels on the issue → refuse the full-set rewrite from a
+    truncated read, zero writes (the ceiling-raise path of _issue_label_names)."""
+    router = Router()
+    router.issues[1]["labels"] = [
+        {"id": 5000 + i, "name": f"M{i:04d}"} for i in range(520)]
+    pmo = make_pmo(router)
+    with pytest.raises(RuntimeError, match="more than 500 labels"):
+        run(pmo.swap_labels(MissionRef("1", "issue"),
+                            remove=set(), add={"DEVCAKE-PLAN"}))
+    assert not any(c.startswith("PUT") for c in router.calls)

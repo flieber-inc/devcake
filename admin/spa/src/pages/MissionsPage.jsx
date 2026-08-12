@@ -10,7 +10,7 @@ import { Select } from "../components/Field.jsx";
 import { get, send } from "../api.js";
 import usePoll from "../lib/usePoll.js";
 import { makeReqSeq } from "../lib/reqSeq.js";
-import { liveMission } from "../lib/missionIdentity.js";
+import { liveMission, refKey } from "../lib/missionIdentity.js";
 import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 
 // Board refresh cadence — /missions reflects the last PMO poll (~30s at the
@@ -18,12 +18,11 @@ import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 // to expect a faster PMO round-trip than exists.
 const POLL_MS = 10_000;
 
-// Optimistic-override identity: gitea_issues pmo_ids are per-repo issue
-// numbers, so an override must be keyed by (instance, pmo_id), never the bare
-// id (2026-08-12 audit — a Park on one board bled onto a colliding id on
-// another). `instance` may be "" on a single-PMO deployment; that is fine —
-// there is exactly one board to collide on.
-const refKey = (instance, pmo_id) => `${instance || ""}::${pmo_id}`;
+// Optimistic-override identity: `refKey` is the ONE definition, imported from
+// lib/missionIdentity.js (2026-08-12 review — a second divergent copy would
+// re-open the cross-board Park-bleed bug). gitea_issues pmo_ids are per-repo
+// issue numbers, so an override keys by (instance, pmo_id), never the bare id;
+// `instance` may be "" on a single-PMO deployment — one board to collide on.
 
 // Self-heal bound: the scheduler can advance a mission to a THIRD state the
 // optimistic projection never predicted, and an exact-label-match test would

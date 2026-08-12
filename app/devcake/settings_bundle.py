@@ -866,9 +866,15 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
            if parsed["secrets"] is not None else None)
     if ops is not None:
         warnings.extend(ops.warnings)
+    # snapshot which config files already exist BEFORE any write, so the
+    # ADD pass and the overwrite pass agree on what was pre-existing — else
+    # the ADD pass creates a file the overwrite pass then re-writes (a
+    # harmless but wasteful double write). One snapshot = each file written
+    # exactly once, in exactly its phase.
+    pre_existing = _config_files_on_disk(parsed) if new_cfg is not None else set()
     try:
         if new_cfg is not None:
-            _apply_config_files(parsed, existing_only=False)
+            _apply_config_files(parsed, pre_existing, existing_only=False)
         if ops is not None:
             _apply_secret_adds(ops)          # phase ADD — pre-commit safe
         if new_cfg is not None:
@@ -878,7 +884,7 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
                 setattr(config, field, getattr(new_cfg, field))
             config.dismissed_alerts = live_alerts
             save_config(config)
-            _apply_config_files(parsed, existing_only=True)
+            _apply_config_files(parsed, pre_existing, existing_only=True)
             _prune_config_files(parsed, dev_types)
             dev_types.clear()               # shared by reference with managers
             dev_types.update(parsed["dev_types"])
@@ -925,34 +931,52 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     return {"applied": applied, "warnings": warnings, "untouched": untouched}
 
 
-def _apply_config_files(parsed: dict, *, existing_only: bool) -> None:
-    """Write config files through the existing per-store choke points.
+def _config_files_on_disk(parsed: dict) -> set:
+    """The (kind, name) config-file keys that exist on disk RIGHT NOW — the
+    pre-apply snapshot both _apply_config_files passes key on (see there)."""
+    from .config import CONFIG_PATH
+    dt_dir = CONFIG_PATH.parent / "dev_types"
+    out: set = set()
+    for dt in parsed["dev_types"].values():
+        if (dt_dir / f"{dt.name}.yaml").exists():
+            out.add(("dt", dt.name))
+    for mt, entries in parsed["prompt_templates"].items():
+        tdir = prompt_templates._dir(mt)
+        for name in entries:
+            if (tdir / f"{name}.yaml").exists():
+                out.add(("tpl", mt, name))
+    for dev, entries in parsed["devtype_prompts"].items():
+        ddir = prompt_templates._dev_dir(dev)
+        for name in entries:
+            if (ddir / f"{name}.yaml").exists():
+                out.add(("dtp", dev, name))
+    return out
 
-    ``existing_only=False`` (ADD): names that are not on disk yet — safe
+
+def _apply_config_files(parsed: dict, pre_existing: set, *,
+                        existing_only: bool) -> None:
+    """Write config files through the existing per-store choke points, keyed
+    on the pre-apply on-disk snapshot ``pre_existing`` (never re-``exists()``,
+    so a file the ADD pass just created is not re-written by the MUT pass).
+
+    ``existing_only=False`` (ADD): names not on disk before the apply — safe
     before the config.yaml commit (inert extras if we crash).
     ``existing_only=True`` (MUT): overwrite files the old world already
     stored — only after the commit, so a SIGKILL cannot mix old
     config.yaml with new Dev Type / template bytes.
     """
-    from .config import CONFIG_PATH
-    dt_dir = CONFIG_PATH.parent / "dev_types"
     for dt in parsed["dev_types"].values():
-        exists = (dt_dir / f"{dt.name}.yaml").exists()
-        if exists != existing_only:
+        if (("dt", dt.name) in pre_existing) != existing_only:
             continue
         save_dev_type(dt)
     for mt, entries in parsed["prompt_templates"].items():
-        tdir = prompt_templates._dir(mt)
         for name, text in entries.items():
-            exists = (tdir / f"{name}.yaml").exists()
-            if exists != existing_only:
+            if (("tpl", mt, name) in pre_existing) != existing_only:
                 continue
             prompt_templates.save_template(mt, name, text)
     for dev, entries in parsed["devtype_prompts"].items():
-        ddir = prompt_templates._dev_dir(dev)
         for name, text in entries.items():
-            exists = (ddir / f"{name}.yaml").exists()
-            if exists != existing_only:
+            if (("dtp", dev, name) in pre_existing) != existing_only:
                 continue
             prompt_templates.save_devtype_prompt(dev, name, text)
 

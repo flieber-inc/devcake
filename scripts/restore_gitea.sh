@@ -18,7 +18,7 @@ VOLUME="${GITEA_VOLUME:-devcake_gitea_data}"
 TARBALL="${1:?usage: restore_gitea.sh <devcake-gitea-*.tar.gz>}"
 [[ -f "$TARBALL" ]] || { echo "no such file: $TARBALL" >&2; exit 1; }
 
-if docker ps --format '{{.Names}}' | grep -q gitea; then
+if [ -n "$(docker compose ps -q gitea 2>/dev/null)" ]; then
   echo "refusing: the gitea service is running — docker compose stop gitea first" >&2
   exit 1
 fi
@@ -33,4 +33,4 @@ docker run --rm -e TARFILE="$TARFILE" -e KIND=gitea \
   -v "$VOLUME":/dst -v "$TARDIR":/in:ro \
   -v "$(pwd)/scripts/lib":/lib:ro \
   "$ALPINE_IMAGE" sh /lib/restore_payload.sh
-echo "restored $VOLUME from $TARBALL (verified before extract) — docker compose up -d to restart the stack"
+echo "restored $VOLUME from $TARBALL — docker compose up -d to restart the stack"

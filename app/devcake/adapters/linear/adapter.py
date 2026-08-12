@@ -914,10 +914,14 @@ class LinearAdapter:
         uf = up["uploadFile"]
         headers = {h["key"]: h["value"] for h in uf["headers"]}
         headers["Content-Type"] = "text/markdown"
-        async with httpx.AsyncClient(timeout=60,
-                                     transport=self._transport) as client:
-            resp = await client.put(uf["uploadUrl"], content=data, headers=headers)
-            resp.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=60,
+                                         transport=self._transport) as client:
+                resp = await client.put(uf["uploadUrl"], content=data,
+                                        headers=headers)
+                resp.raise_for_status()
+        except httpx.HTTPError as e:
+            raise PMOTransient(f"linear upload network: {e}") from e
         return uf["assetUrl"]
 
     async def download_asset(self, url: str) -> bytes:

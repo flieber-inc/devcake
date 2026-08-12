@@ -73,14 +73,19 @@ def _fit_payload(payload: dict) -> dict:
     return payload
 
 
+ARTIFACTS_SENT = False
+
+
 def send_artifacts(payload: dict) -> None:
     # FINALIZE send (OPS-M5): the artifacts are the run's whole verdict — a
     # transient Redis blip here must not lose them to an unclassified crash,
     # so ride the wider retry budget.
+    global ARTIFACTS_SENT
     payload = _fit_payload(payload)
     blob = json.dumps(payload)
     if len(blob) <= CHUNK_LIMIT:
         send("run.artifacts", payload, attempts=SEND_ATTEMPTS_RESILIENT)
+        ARTIFACTS_SENT = True
         return
     parts = [blob[i:i + CHUNK_SIZE] for i in range(0, len(blob), CHUNK_SIZE)]
     if len(parts) > 128 or len(blob.encode("utf-8")) > 50 * 1024 * 1024:
@@ -91,6 +96,7 @@ def send_artifacts(payload: dict) -> None:
         send("run.artifacts", {"chunk": i, "of": len(parts),
                                "chunk_id": chunk_id, "sha256": digest,
                                "data": part}, attempts=SEND_ATTEMPTS_RESILIENT)
+    ARTIFACTS_SENT = True
 
 
 def request_reply(kind: str, want: str, timeout: int = 90,

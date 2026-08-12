@@ -62,7 +62,6 @@ async def _branch_protection(forge_runtime) -> dict:
     stalled the first rich /health call for O(N repos) of probe I/O (same
     defect class as the 2026-08-01 boot incident)."""
     if time.monotonic() - _protection_cache["ts"] > 300 or _protection_cache["ts"] == 0:
-        _protection_cache["ts"] = time.monotonic()
         sem = asyncio.Semaphore(PROBE_CONCURRENCY)
         out: dict = {}
 
@@ -83,6 +82,7 @@ async def _branch_protection(forge_runtime) -> dict:
         await asyncio.gather(*(_probe(n, f)
                                for n, f in list(forge_runtime.forges.items())))
         _protection_cache["value"] = out
+        _protection_cache["ts"] = time.monotonic()
     return _protection_cache["value"]
 
 
@@ -187,7 +187,9 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         out: dict = {}
         for name, mgr in managers.items():
             for k, v in getattr(mgr, attr).items():
-                out[k] = f"[{name}] {v}" if prefixed and isinstance(v, str) else v
+                key = f"{name}:{k}" if prefixed else k
+                out[key] = (f"[{name}] {v}" if prefixed and isinstance(v, str)
+                            else v)
         return out
 
     return {

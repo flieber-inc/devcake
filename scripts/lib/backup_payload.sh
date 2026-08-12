@@ -9,6 +9,9 @@
 # DEVCAKE_BACKUP_KIND marker (first archive member) records what volume kind
 # the tarball holds; restore_payload.sh refuses a mismatched kind.
 #
+# Write is tmp+rename (2026-08-12 leftover): in-place czf to $OUT_BASE
+# destroyed a previously verified same-name archive if tar died mid-write.
+#
 # Env: OUT_BASE  tarball basename (rides env, never shell-interpolated —
 #                re-audit #5)
 #      OWNER    uid:gid to hand the tarball to (audit D5 #19)
@@ -22,10 +25,13 @@ umask 077
 KIND_DIR="$(mktemp -d)"
 printf '%s\n' "$KIND" > "$KIND_DIR/DEVCAKE_BACKUP_KIND"
 
-tar czf "$OUT_DIR/$OUT_BASE" -C "$KIND_DIR" DEVCAKE_BACKUP_KIND -C "$SRC" .
+PARTIAL="$OUT_DIR/$OUT_BASE.partial"
+rm -f "$PARTIAL"
+tar czf "$PARTIAL" -C "$KIND_DIR" DEVCAKE_BACKUP_KIND -C "$SRC" .
 
 # verify: walk the ENTIRE archive — a backup that cannot be listed today
 # could not have been restored tomorrow (write-only-backup audit finding)
-tar tzf "$OUT_DIR/$OUT_BASE" > /dev/null
+tar tzf "$PARTIAL" > /dev/null
 
+mv "$PARTIAL" "$OUT_DIR/$OUT_BASE"
 chown "$OWNER" "$OUT_DIR/$OUT_BASE"

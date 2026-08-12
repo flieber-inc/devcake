@@ -113,13 +113,21 @@ def test_prod_wires_a_real_workspace_store():
     even if the object bound there is null. This checks a real call to the
     class whose name is EXACTLY WorkspaceStore, passed as workspaces=."""
     tree = ast.parse((ROOT / "api" / "services.py").read_text())
-    real_ctor = any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id == "WorkspaceStore"
-        for n in ast.walk(tree))
-    assert real_ctor, (
-        "prod must construct a REAL WorkspaceStore (exact name) — "
-        "NullWorkspaceStore does not satisfy the AUD-016 guard")
+    assigned_from_real = False
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "workspaces"
+                   for t in n.targets):
+            continue
+        if (isinstance(n.value, ast.Call)
+                and isinstance(n.value.func, ast.Name)
+                and n.value.func.id == "WorkspaceStore"):
+            assigned_from_real = True
+    assert assigned_from_real, (
+        "prod must bind workspaces = WorkspaceStore(...) — a decoy "
+        "WorkspaceStore = NullWorkspaceStore then WorkspaceStore(...) "
+        "does not count unless the name on the Assign is the real class")
     wired = any(
         isinstance(n, ast.Call)
         and any(kw.arg == "workspaces"

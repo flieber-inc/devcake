@@ -10,6 +10,7 @@ captures are asserted end-to-end in test_harness_captures.py.
 import importlib.util
 import json
 import os
+import signal
 import stat
 import time
 from pathlib import Path
@@ -590,6 +591,23 @@ def test_argv_codex_out_dir_is_redirectable():
         "codex", "P", out_dir="/tmp/cap")
 
 
-def test_argv_unknown_harness_falls_back_to_claude():
-    """Mirrors harness_fault and the renderer dispatch — one fallback, not three."""
-    assert ep.harness_argv("something-new", "P")[0] == "claude"
+def test_argv_unknown_harness_fails_closed():
+    """A typo must not silently run the Claude argv on a grok/codex image."""
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.harness_argv("something-new", "P")
+
+
+def test_sigterm_flushes_artifacts_once(monkeypatch):
+    sent = []
+
+    def fake_send(payload):
+        sent.append(payload)
+
+    monkeypatch.setattr(ep, "send_artifacts", fake_send)
+    import devcake_dev.adapters.bus as bus
+    monkeypatch.setattr(bus, "ARTIFACTS_SENT", False)
+    with pytest.raises(SystemExit) as ei:
+        ep._on_term(signal.SIGTERM, None)
+    assert ei.value.code == 20
+    assert sent and sent[0]["error_class"] == "DEV_CRASH"
+    assert sent[0]["exit_code"] == 20

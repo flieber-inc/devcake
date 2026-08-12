@@ -459,9 +459,7 @@ class GiteaIssuesAdapter:
                           add: set[str]) -> None:
         self._require_issue(ref)
         await self._ensure_label_cache()
-        cur = await self._req(
-            "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
-        current = { (lb.get("name") or "") for lb in (cur.get("labels") or []) }
+        current = await self._issue_label_names(ref.pmo_id)
         next_names = (current - remove) | add
         ids = []
         for name in next_names:
@@ -489,9 +487,11 @@ class GiteaIssuesAdapter:
         self._apply_team(team_ref)
         await self.ensure_labels(team_ref, label_names)
         await self._ensure_label_cache()
-        label_ids = [self._label_ids[n.upper()]
-                     for n in label_names
-                     if n.upper() in self._label_ids]
+        missing = [n for n in label_names if n.upper() not in self._label_ids]
+        if missing:
+            raise RuntimeError(
+                f"label {missing[0]} missing — ensure_labels not run?")
+        label_ids = [self._label_ids[n.upper()] for n in label_names]
         # parent_ref ignored (issue-only; decomposition uses markers/relations)
         _ = parent_ref
         _ = priority  # Gitea has no priority field
@@ -517,6 +517,23 @@ class GiteaIssuesAdapter:
             json=payload)
         if isinstance(result, dict) and result.get("_duplicate"):
             return  # idempotent
+
+    async def _issue_label_names(self, pmo_id: str) -> set[str]:
+        """The issue's current labels, paged. The issue GET embed is not
+        a pagination contract — a truncated embed feeding a full-set PUT
+        is the F8 twin of the registry one-page read."""
+        from .._toolkit import paginate_rest
+        labels, _ = await paginate_rest(
+            lambda page: self._req(
+                "GET", self._repo_path(f"/issues/{pmo_id}/labels"),
+                params={"page": page, "limit": LABELS_PAGE}),
+            page_size=LABELS_PAGE, max_pages=MAX_LABEL_PAGES,
+            what=f"gitea_issues issue {pmo_id} labels", on_ceiling="raise",
+            ceiling_error=(
+                f"gitea_issues: issue {pmo_id} has more than "
+                f"{MAX_LABEL_PAGES * LABELS_PAGE} labels — refusing a "
+                f"full-set rewrite from a truncated read"))
+        return {(lb.get("name") or "") for lb in labels}
 
     async def _fetch_all_labels(self) -> list[dict]:
         """Every label on the repo, paginated with a fail-loud ceiling.

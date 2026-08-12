@@ -145,6 +145,12 @@ class Router:
                 self.next_comment += 1
                 self.comments.setdefault(num, []).append(c)
                 return httpx.Response(201, json=c)
+            if rest == "/labels" and method == "GET":
+                page = int(req.url.params.get("page", 1))
+                limit = int(req.url.params.get("limit", 50))
+                items = list(self.issues[num].get("labels") or [])
+                return httpx.Response(
+                    200, json=items[(page - 1) * limit: page * limit])
             if rest == "/labels" and method == "PUT":
                 labs = []
                 for lid in body.get("labels") or []:
@@ -273,6 +279,24 @@ def test_create_mission_returns_key_and_id():
         "o/r", "child", "desc `devcake:v1`", "high", {"DEVCAKE"}))
     assert pid == "3"
     assert key == "o/r#3"
+
+
+def test_create_mission_refuses_unresolved_label():
+    """swap_labels fail-loud twin: dropping an unresolved id on create
+    would mint an issue without the managed label the caller required."""
+    r = Router()
+    pmo = make_pmo(r)
+
+    async def silent_ensure(team_ref, names):
+        return None
+
+    pmo.ensure_labels = silent_ensure
+    pmo._label_ids.clear()
+    with pytest.raises(RuntimeError, match="missing"):
+        run(pmo.create_mission(
+            "o/r", "child", "desc", "high", {"DEVCAKE", "NOPE"}))
+    assert not any(c.startswith("POST /api/v1/repos/o/r/issues")
+                   for c in r.calls)
 
 
 def test_health_probe_counts_managed_labels_only():

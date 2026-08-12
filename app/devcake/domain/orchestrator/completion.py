@@ -14,10 +14,13 @@ out of these threads, and operators grep them too).
 Checkpoint semantics are preserved, NOT unified: the REVIEW-finalize path
 checkpoints the core as the existing byte-stable key ``review:done`` so
 in-flight finalizing runs at upgrade time resume through it; the sweep
-paths execute directly — their idempotency is the label swap removing the
-mission from the sweep's selection predicate, plus the zip's own durable
-feed-probe guard. Unifying the two regimes would change PMO read costs and
-failure economics for no defect closed (ADR-0034 out-of-scope list).
+paths execute directly. Sweep idempotency is **status landed** (derive row
+5), not the label swap: ``set_status("done")`` first, then strip the park
+label, then feed/audit. A failed status leaves ``DEVCAKE-MERGE`` in place
+so the next cycle still selects; a failed swap after Done is leftover
+hygiene on a terminal mission, never row-9 stranding. The zip keeps its
+own durable feed-probe guard. Unifying checkpoint vs sweep regimes would
+change PMO read costs for no extra defect closed (ADR-0034 out-of-scope).
 
 Leaf module by design: imports only model/run/freshness/feed/markers/ports
 so both review and sweeps import downward (sweeps already imports review —
@@ -85,7 +88,7 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
                           run: Run | None = None,
                           mission: Mission | None = None) -> None:
     """Complete a mission whose PR is merged. Fixed order for every cause:
-    disclose pre-step (table-driven) → core (swap → status → feed → audit;
+    disclose pre-step (table-driven) → core (status → swap → feed → audit;
     checkpointed as ``review:done`` when a Run is in flight, direct on sweep
     paths) → deliverable zip (best-effort — packaging must NEVER un-Done the
     mission, deliver.py doctrine). ``pr`` is forwarded verbatim to the zip
@@ -100,9 +103,12 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
             await freshness.disclose_unread_at_close(mgr, mission)
 
         async def _core():
+            # status FIRST: derive keys on status, the sweep keys on the
+            # park label. Swap-then-status stranded a merged PR at row 9
+            # when set_status failed after the label was already gone.
+            await mgr.pmo.set_status(ref, "done")
             await mgr.pmo.swap_labels(ref, remove={spec.remove_label},
                                       add=set())
-            await mgr.pmo.set_status(ref, "done")
             await mgr._feed(ref.pmo_id, ref.kind,
                             spec.feed.format(pr_url=pr_url))
             mgr._audit(ref.pmo_id, spec.audit_action, pr_url)
@@ -129,7 +135,8 @@ def trusted_conflict(forge, verdict) -> bool:
     computed yet" (AUD-010 / M11), so a failed merge there hands off to a
     human rather than routing EXECUTE rework."""
     caps = getattr(forge, "capabilities", None)
-    return verdict is False and (caps is None or caps.mergeable_tristate)
+    return verdict is False and bool(
+        caps is not None and getattr(caps, "mergeable_tristate", False))
 
 
 async def conflict_attempts(mgr, pmo_id: str) -> int:

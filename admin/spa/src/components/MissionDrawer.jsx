@@ -10,6 +10,7 @@ import { Overlay, ConfirmDialog } from "./Modal.jsx";
 import { Textarea } from "./Field.jsx";
 import { get, send } from "../api.js";
 import usePoll from "../lib/usePoll.js";
+import { runsListPath } from "../lib/missionIdentity.js";
 import { relTime, fullTime, duration } from "../lib/format.js";
 import { contextActions, needsHumanReason } from "../lib/board.js";
 
@@ -39,16 +40,14 @@ export default function MissionDrawer({ mission, multiPmo, syncing, rows, adopti
 
   const loadRuns = useCallback(async () => {
     try {
-      const d = await get(
-        `/runs?limit=100&mission_key=${encodeURIComponent(mission.key)}`
-      );
+      const d = await get(runsListPath(mission));
       setRuns(d);
     } catch (e) {
       setError(String(e.message || e));
     }
-  }, [mission.key]);
+  }, [mission.key, mission.instance]);
 
-  usePoll(loadRuns, 10_000, [mission.key]);
+  usePoll(loadRuns, 10_000, [mission.key, mission.instance]);
 
   const badge = needsHumanReason(mission.labels);
   const actions = contextActions(mission);

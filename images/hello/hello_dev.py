@@ -36,17 +36,21 @@ r = redis.from_url(REDIS_URL, username=REDIS_USER, password=REDIS_PASSWORD,
                    decode_responses=True)
 
 
-def send(kind: str, payload: dict) -> None:
+SEND_ATTEMPTS = 4
+SEND_ATTEMPTS_RESILIENT = 8
+
+
+def send(kind: str, payload: dict, *, attempts: int = SEND_ATTEMPTS) -> None:
     envelope = {"v": 1, "run_id": RUN_ID, "auth": REDIS_PASSWORD, "kind": kind,
                 "ts": now(), "payload": payload}
-    for attempt in range(4):
+    for attempt in range(attempts):
         try:
             r.xadd(INGRESS, {"m": json.dumps(envelope)})
             return
         except redis.RedisError:
-            if attempt == 3:
+            if attempt == attempts - 1:
                 raise
-            time.sleep(0.25 * (2 ** attempt))
+            time.sleep(min(4.0, 0.25 * (2 ** attempt)))
 
 
 # PINNED MIRROR of devcake_dev/adapters/bus.py (ADR-0034): the hello image
@@ -85,7 +89,7 @@ def send_artifacts(payload: dict) -> None:
     payload = _fit_payload(payload)
     blob = json.dumps(payload)
     if len(blob) <= CHUNK_LIMIT:
-        send("run.artifacts", payload)
+        send("run.artifacts", payload, attempts=SEND_ATTEMPTS_RESILIENT)
         return
     parts = [blob[i:i + CHUNK_SIZE] for i in range(0, len(blob), CHUNK_SIZE)]
     if len(parts) > 128 or len(blob.encode("utf-8")) > 50 * 1024 * 1024:
@@ -95,7 +99,7 @@ def send_artifacts(payload: dict) -> None:
     for i, part in enumerate(parts, start=1):
         send("run.artifacts", {"chunk": i, "of": len(parts),
                                "chunk_id": chunk_id, "sha256": digest,
-                               "data": part})
+                               "data": part}, attempts=SEND_ATTEMPTS_RESILIENT)
 
 
 def fetch_runspec() -> dict:

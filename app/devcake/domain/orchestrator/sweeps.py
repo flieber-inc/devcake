@@ -115,10 +115,13 @@ async def merge_sweep(mgr, m: Mission) -> None:
                     pr=state, pr_url=state.url, mission=m)
             else:
                 # a CLOSED-unmerged PR is a cancellation, not a completion —
-                # deliberately outside the chokepoint (ADR-0034 scope note)
+                # deliberately outside the chokepoint (ADR-0034 scope note).
+                # cancel FIRST (same commit-point rule as complete_merged):
+                # stripping MERGE before cancel lands hides the mission from
+                # the next sweep if cancel raises.
+                await mgr.pmo.cancel_mission(m.ref)
                 await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE},
                                           add=set())
-                await mgr.pmo.cancel_mission(m.ref)
                 await mgr._feed(
                     m.pmo_id, "issue",
                     f"🚫 PR {state.url} was closed without merging — mission "

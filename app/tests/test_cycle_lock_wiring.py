@@ -21,6 +21,15 @@ LOCK_REQUIRED_CALLS = {
     "clear_secrets",
 }
 
+# apply_profile holds the lock via `async with s.poll_rt.lock` (different
+# shape — not a cycle_lock= kwarg). Harness PUT/DELETE and credential
+# upload are live-read at dispatch and are listed here so a reviewer
+# does not assume they were forgotten.
+LOCK_VIA_WITH = {"apply_profile"}
+LIVE_READ_UNLOCKED = {
+    "put_harness_secret", "delete_harness_secret", "upload_credentials",
+}
+
 
 def _service_calls(tree):
     """Every Call whose func is `<module>.<name>` or a bare `<name>`, yielded
@@ -47,9 +56,8 @@ def test_mutation_routes_thread_the_poll_cycle_lock():
         # the value must be the real poll lock, not None/a placeholder
         lock_kw = next((kw for kw in call.keywords if kw.arg == "cycle_lock"),
                        None)
-        good = has_lock and lock_kw is not None and (
-            isinstance(lock_kw.value, ast.Attribute)
-            and lock_kw.value.attr == "lock")
+        unparsed = ast.unparse(lock_kw.value) if lock_kw is not None else ""
+        good = has_lock and "poll_rt.lock" in unparsed
         if not good:
             offenders.append(name)
     missing = [n for n, hit in seen.items() if not hit]
@@ -61,3 +69,6 @@ def test_mutation_routes_thread_the_poll_cycle_lock():
         f"these mutation routes do not forward cycle_lock=<poll_rt.lock> — "
         f"a mid-cycle secret/config write would swap the adapter graph under "
         f"a suspended poll segment (L-1/L-2): {offenders}")
+    src = MAIN.read_text()
+    assert "poll_rt.lock" in src and "apply_profile" in src, (
+        "apply_profile must hold poll_rt.lock (async with, not cycle_lock=)")

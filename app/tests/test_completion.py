@@ -126,6 +126,130 @@ def test_requires_run_or_mission():
             pr=None, pr_url="u"))
 
 
+# ── Sweep restartability: status is the commit point, not the label swap ───
+
+
+class _BoomSwapPMO(FakePMO):
+    async def swap_labels(self, ref, remove, add):
+        raise RuntimeError("PMO 502 mid-swap")
+
+
+class _AlreadyMergedForge(FakeForge):
+    async def get_pr_by_branch(self, branch):
+        return PullRequest(number=8, url="https://forge/pr/8",
+                           state="closed", merged=True)
+
+    async def pr_state(self, pr_number):
+        return PullRequest(number=pr_number, url="https://forge/pr/8",
+                           state="closed", merged=True)
+
+
+class _ClosedUnmergedForge(FakeForge):
+    async def get_pr_by_branch(self, branch):
+        return PullRequest(number=8, url="https://forge/pr/8",
+                           state="closed", merged=False)
+
+    async def pr_state(self, pr_number):
+        return PullRequest(number=pr_number, url="https://forge/pr/8",
+                           state="closed", merged=False)
+
+
+class _BoomCancelPMO(FakePMO):
+    def __init__(self, mission, fail_times=1):
+        super().__init__(mission)
+        self._cancel_fails = fail_times
+
+    async def cancel_mission(self, ref):
+        if self._cancel_fails > 0:
+            self._cancel_fails -= 1
+            raise RuntimeError("PMO 502 mid-cancel")
+        await super().cancel_mission(ref)
+
+
+def _sweep_mgr(tmp_path, *, pmo, forge):
+    from fakes import make_mission_manager
+    from devcake.config import AppConfig, DevType
+    from test_transitions import NullMessaging
+    return make_mission_manager(
+        tmp_path, pmo=pmo, forge=forge, config=AppConfig(),
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+
+
+def test_sweep_status_failure_leaves_merge_label_so_retry_works(tmp_path):
+    """Status is the derive commit. A failed set_status must leave
+    DEVCAKE-MERGE in place so the next sweep still selects the mission.
+    Swap-first (the old order) stranded a merged PR at derivation row 9."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    fake = _FlakyStatusPMO(m, fail_times=1)
+    mgr = _sweep_mgr(tmp_path, pmo=fake, forge=FakeForge())
+    pr = PullRequest(number=8, url="https://forge/pr/8",
+                     state="closed", merged=True)
+    with pytest.raises(RuntimeError, match="PMO 502"):
+        run_coro(completion.complete_merged(
+            mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+            ref=MissionRef("p1", "issue"), mission_key="T-1",
+            pr=pr, pr_url="https://forge/pr/8", mission=m))
+    assert "DEVCAKE-MERGE" in m.labels
+    assert m.status != "done"
+    assert fake.comments == []
+
+    run_coro(completion.complete_merged(
+        mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+        ref=MissionRef("p1", "issue"), mission_key="T-1",
+        pr=pr, pr_url="https://forge/pr/8", mission=m))
+    assert m.status == "done"
+    assert "DEVCAKE-MERGE" not in m.labels
+    assert sum("mission done" in c for c in fake.comments) == 1
+
+
+def test_status_lands_even_if_label_swap_fails(tmp_path):
+    """A Done mission with a leftover MERGE label is row 5 (ignored).
+    A swapped-but-not-Done mission is row 9 (stranded). Status first."""
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    fake = _BoomSwapPMO(m)
+    mgr = _sweep_mgr(tmp_path, pmo=fake, forge=FakeForge())
+    with pytest.raises(RuntimeError, match="PMO 502 mid-swap"):
+        run_coro(completion.complete_merged(
+            mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+            ref=MissionRef("p1", "issue"), mission_key="T-1",
+            pr=SimpleNamespace(url="https://forge/pr/8"),
+            pr_url="https://forge/pr/8", mission=m))
+    assert m.status == "done"
+    assert "DEVCAKE-MERGE" in m.labels
+
+
+def test_sweeps_retries_after_swallowed_status_failure(tmp_path):
+    """sweeps() swallows per-mission errors. The next cycle must still
+    see an unfinished merged PR (MERGE still on, in_progress) and finish it."""
+    from devcake.domain.orchestrator import sweeps
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    fake = _FlakyStatusPMO(m, fail_times=1)
+    mgr = _sweep_mgr(tmp_path, pmo=fake, forge=_AlreadyMergedForge())
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert m.status != "done"
+    assert "DEVCAKE-MERGE" in m.labels
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert m.status == "done"
+    assert "DEVCAKE-MERGE" not in m.labels
+
+
+def test_closed_unmerged_keeps_merge_label_if_cancel_fails(tmp_path):
+    """Same commit-point rule on the cancel twin: strip MERGE only after
+    cancel_mission lands, or the next sweep cannot see the mission."""
+    from devcake.domain.orchestrator import sweeps
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-MERGE"})
+    fake = _BoomCancelPMO(m, fail_times=1)
+    mgr = _sweep_mgr(tmp_path, pmo=fake, forge=_ClosedUnmergedForge())
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert m.status != "canceled"
+    assert "DEVCAKE-MERGE" in m.labels
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert m.status == "canceled"
+    assert "DEVCAKE-MERGE" not in m.labels
+
+
 # ── F4: completion failures propagate, never masquerade as merge failures ───
 
 
@@ -194,7 +318,7 @@ def test_pmo_failure_inside_completion_propagates_not_merge_failed(tmp_path):
 @pytest.mark.parametrize("verdict,tristate,expected", [
     (False, True, True),     # GitHub/GitLab False = real conflict
     (False, False, False),   # Gitea boolean False = maybe not-computed-yet
-    (False, None, True),     # missing caps → legacy default: trust
+    (False, None, False),    # missing caps → fail-closed (do not trust)
     (True, True, False),
     (None, True, False),
     (None, False, False),

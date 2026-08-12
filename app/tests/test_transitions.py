@@ -4,6 +4,7 @@ Also the docs/03 §4.1 merge-failure branches (conflict rework, deferred retry)
 against a FakeForge, and the docs/05 §4 attachment policy."""
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -147,13 +148,17 @@ def mission(status="in_progress", labels=frozenset({"DEVCAKE"})):
 
 class FakeForge:
     """Port-shaped fake (docs/06). merge_exc raised on every merge() call;
-    mergeable_result is the tri-state mergeable() answer."""
+    mergeable_result is the tri-state mergeable() answer. Default caps are
+    GitHub-shaped (mergeable_tristate=True); Gitea tests overwrite."""
+
+    capabilities = SimpleNamespace(mergeable_tristate=True)
 
     def __init__(self, merge_exc=None, mergeable_result=None):
         self.merge_exc = merge_exc
         self.mergeable_result = mergeable_result
         self.merges = []
         self.pr_comments = []
+        self.capabilities = SimpleNamespace(mergeable_tristate=True)
 
     async def get_pr_by_branch(self, branch):
         return PullRequest(number=8, url="https://forge/pr/8", state="open")

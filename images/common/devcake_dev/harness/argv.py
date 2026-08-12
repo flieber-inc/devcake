@@ -31,6 +31,8 @@ RESUME_SPECS: dict[str, ResumeSpec] = {
     "codex": ResumeSpec(usage_cumulative=True),          # codex_resume_nudge_*
 }
 
+KNOWN_HARNESSES = frozenset(RESUME_SPECS)
+
 def forge_dialect(env: dict) -> tuple:
     """(clone_user, git_name, git_email, cli_token_envs) for the clone
     bootstrap. Values come from the app's ForgeDescriptor via spec_env
@@ -57,6 +59,8 @@ def harness_argv(harness: str, prompt: str, *, plan_mode: bool = False,
     """
     extra = list(extra)
     out = pathlib.Path(out_dir) if out_dir is not None else WORKSPACE / "out"
+    if harness not in KNOWN_HARNESSES:
+        raise ValueError(f"unknown harness {harness!r} — refusing Claude fall-through")
     if harness == "grok-build":
         mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
         pin = ["--model", model] if model else []

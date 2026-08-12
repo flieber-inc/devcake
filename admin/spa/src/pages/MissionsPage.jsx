@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import Button from "../components/Button.jsx";
@@ -9,6 +9,8 @@ import { ConfirmDialog } from "../components/Modal.jsx";
 import { Select } from "../components/Field.jsx";
 import { get, send } from "../api.js";
 import usePoll from "../lib/usePoll.js";
+import { makeReqSeq } from "../lib/reqSeq.js";
+import { liveMission } from "../lib/missionIdentity.js";
 import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 
 // Board refresh cadence — /missions reflects the last PMO poll (~30s at the
@@ -135,6 +137,7 @@ export default function MissionsPage() {
   // entry is { labels, syncing, polls } — `polls` bounds the self-heal so a
   // projection can never stick forever if the server advances PAST it.
   const [pending, setPending] = useState({});
+  const loadSeq = useRef(makeReqSeq());
   const [openMission, setOpenMission] = useState(null);
   const [showAllDone, setShowAllDone] = useState(false);
   const [hiddenStages, setHiddenStages] = useState(readHiddenStages);
@@ -191,11 +194,13 @@ export default function MissionsPage() {
   }, []);
 
   const load = useCallback(async () => {
+    const mine = loadSeq.current.next();
     try {
       const [missionsBody, healthBody] = await Promise.all([
         get("/missions"),
         get("/health").catch(() => null),
       ]);
+      if (!loadSeq.current.isLatest(mine)) return;
       setData(missionsBody);
       if (healthBody) {
         setPollState({
@@ -608,7 +613,7 @@ export default function MissionsPage() {
           // mission — a half-typed guidance draft must never post to the
           // newly opened mission
           key={`${openMission.instance}:${openMission.pmo_id}`}
-          mission={openMission}
+          mission={liveMission(rows, openMission)}
           multiPmo={multiPmo}
           syncing={!!pending[refKey(openMission.instance, openMission.pmo_id)]?.syncing}
           rows={rows}

@@ -1,9 +1,11 @@
-"""The clear_* subsystem bodies EXECUTED (2026-08-12 audit test-gap): the
-ordering tests in test_clear.py monkeypatch clear_redis/clear_dagu/
-clear_openobserve away, so the dangerous code — clear_redis's `ACL DELUSER
-dev-*` (the very logic behind the incident quoted in test_clear.py's header)
-— was never run by any test. Here each body runs for real: clear_redis on
-the live compose redis, clear_dagu/clear_openobserve via MockTransport."""
+"""clear_* subsystem bodies.
+
+`clear_redis` runs against live Redis (ACL SETUSER/DELUSER, XTRIM).
+`clear_dagu` and `clear_openobserve` run the function body against
+httpx.MockTransport — they pin call order (stop-all before DELETE; skip
+metadata streams), not Dagu settle / the SIGTERM-vs-ACL-DELUSER race.
+That composed hazard is still an order test in test_clear.py with fakes.
+"""
 
 import asyncio
 

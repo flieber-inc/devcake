@@ -200,6 +200,13 @@ DOMAIN_ADAPTER_IMPORT_ALLOWLIST = {
     ("forge_runtime.py", "adapters.http"),
 }
 
+# keyed by path relative to domain/ so a new nested file cannot inherit
+# a basename allowlist entry
+DOMAIN_ADAPTER_IMPORT_ALLOWLIST_REL = {
+    ("repo_mirror.py", "adapters.git"),
+    ("forge_runtime.py", "adapters.http"),
+}
+
 
 def _steps_module():
     from devcake.domain.orchestrator import steps
@@ -226,41 +233,82 @@ def _step_key_expr_ok(node, local_assigns, steps) -> bool:
     return False
 
 
+def _checkpoint_key_node(node) -> ast.AST | None:
+    """Key expression of a `_checkpoint(...)` call (Name or Attribute)."""
+    f = node.func
+    is_ckpt = ((isinstance(f, ast.Name) and f.id == "_checkpoint")
+               or (isinstance(f, ast.Attribute) and f.attr == "_checkpoint"))
+    if not is_ckpt:
+        return None
+    for kw in node.keywords:
+        if kw.arg == "key":
+            return kw.value
+    # Name: _checkpoint(mgr, run, key, fn) → args[2]
+    # Attribute 3-arg: mgr._checkpoint(run, key, fn) → args[1]
+    # Attribute 4-arg: finalize._checkpoint(mgr, run, key, fn) → args[2]
+    if isinstance(f, ast.Name):
+        return node.args[2] if len(node.args) >= 3 else None
+    if len(node.args) == 3:
+        return node.args[1]
+    if len(node.args) >= 4:
+        return node.args[2]
+    return None
+
+
 def scan_step_key_sites(source: str, steps) -> list[str]:
-    """Offending `_checkpoint(...)` / `finalized_steps.append(...)` key
-    expressions — anything that does not resolve to the registry. Anti-
-    accident, not anti-adversary: it resolves literals, `steps.*` constants,
-    family constructor calls, and simple local assignments of those; it does
-    not chase arbitrary dataflow. The checkpoint MECHANISM itself
-    (finalize._checkpoint's own `append(key)`) is exempt by name."""
+    """Offending `_checkpoint(...)` / `finalized_steps.append/extend` keys.
+
+    Anti-accident: literals, `steps.*`, family constructors, per-function
+    local assigns. The mechanism body of a function *named* `_checkpoint`
+    is exempt (finalize._checkpoint's own `append(key)`).
+    """
     tree = ast.parse(source)
-    local_assigns: dict[str, ast.AST] = {}
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)):
-            local_assigns[node.targets[0].id] = node.value
-    # drop the mechanism's own body from the scan
     mechanism = {id(n) for fn in ast.walk(tree)
                  if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
                  and fn.name == "_checkpoint"
                  for n in ast.walk(fn)}
     offenders = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or id(node) in mechanism:
-            continue
-        f = node.func
-        key = None
-        if isinstance(f, ast.Attribute) and f.attr == "_checkpoint":
-            # mgr._checkpoint(run, key, fn) → args[1];
-            # finalize._checkpoint(mgr, run, key, fn) → args[2]
-            if len(node.args) >= 3:
-                key = node.args[1] if len(node.args) == 3 else node.args[2]
-        elif (isinstance(f, ast.Attribute) and f.attr == "append"
-                and isinstance(f.value, ast.Attribute)
-                and f.value.attr == "finalized_steps"):
-            key = node.args[0] if node.args else None
-        if key is not None and not _step_key_expr_ok(key, local_assigns, steps):
-            offenders.append(f"line {node.lineno}: {ast.unparse(key)}")
+
+    def _locals(fn) -> dict[str, ast.AST]:
+        local_assigns: dict[str, ast.AST] = {}
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)):
+                local_assigns[node.targets[0].id] = node.value
+        return local_assigns
+
+    functions = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    if not functions:
+        functions = [tree]
+    module_assigns = _locals(tree)
+
+    for fn in functions:
+        local_assigns = {**module_assigns, **_locals(fn)}
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Call) or id(node) in mechanism:
+                continue
+            f = node.func
+            keys: list[ast.AST] = []
+            ck = _checkpoint_key_node(node)
+            if ck is not None:
+                keys.append(ck)
+            elif (isinstance(f, ast.Attribute) and f.attr == "append"
+                    and isinstance(f.value, ast.Attribute)
+                    and f.value.attr == "finalized_steps"):
+                if node.args:
+                    keys.append(node.args[0])
+            elif (isinstance(f, ast.Attribute) and f.attr == "extend"
+                    and isinstance(f.value, ast.Attribute)
+                    and f.value.attr == "finalized_steps"):
+                arg0 = node.args[0] if node.args else None
+                if isinstance(arg0, ast.List):
+                    keys.extend(arg0.elts)
+                elif arg0 is not None:
+                    keys.append(arg0)
+            for key in keys:
+                if not _step_key_expr_ok(key, local_assigns, steps):
+                    offenders.append(f"line {node.lineno}: {ast.unparse(key)}")
     return offenders
 
 
@@ -323,10 +371,15 @@ def test_domain_never_imports_adapters():
             elif isinstance(node, ast.Import):
                 mods += [a.name for a in node.names
                          if "adapters" in a.name.split(".")]
+            elif (isinstance(node, ast.ImportFrom) and not node.module
+                    and any(a.name == "adapters" or a.name.startswith("adapters.")
+                            for a in node.names)):
+                mods.append("adapters")
             for m in mods:
                 short = m[m.index("adapters"):]
-                if (p.name, short) not in DOMAIN_ADAPTER_IMPORT_ALLOWLIST:
-                    offenders.append(f"{p.relative_to(DOMAIN)}: imports {m}")
+                rel = str(p.relative_to(DOMAIN))
+                if (rel, short) not in DOMAIN_ADAPTER_IMPORT_ALLOWLIST_REL:
+                    offenders.append(f"{rel}: imports {m}")
     assert not offenders, (
         "domain must not import adapter packages (ADR-0034 layering ratchet; "
         "sanctioned seams live in the allowlist): " + "; ".join(offenders))

@@ -1,10 +1,10 @@
-"""The grace-cycle skip END-TO-END (2026-08-12 audit test-gap): after DevCake
-writes to a mission's PMO feed, the NEXT poll cycle must not re-dispatch that
-mission on the feedback loop it just created (docs/04 §2). The wiring is
-feed._audit → mgr._grace_next → poll.rotate_grace → schedule skips _grace.
-The only prior touch of _grace_next poked a SimpleNamespace attribute; here
-the real chain runs, so deleting the schedule skip (or the rotate) turns the
-suite red."""
+"""The grace-cycle skip at the schedule seam (docs/04 §2).
+
+This is a poll-wiring unit, not a PMO-staleness e2e: FakePMO, faked
+dispatch, and an explicit rotate. The load-bearing rotate *site* is
+`poll.py` (`mgr.rotate_grace()` after schedule); `test_poll_rotates_grace`
+pins that call so deleting it turns red. The skip predicate itself is
+`schedule.py`'s `_grace` check, pinned below."""
 
 import asyncio
 
@@ -66,6 +66,19 @@ def test_own_write_defers_dispatch_one_cycle(tmp_path, monkeypatch):
     mgr.rotate_grace()
     run_coro(schedule.schedule(mgr, [m], gate={}))
     assert dispatched == [m.pmo_id], "the skip is ONE cycle, not permanent"
+
+
+def test_poll_rotates_grace_after_schedule():
+    """The rotate must live in the poll segment, not only in this file."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "devcake" / "api"
+           / "poll.py").read_text()
+    assert "rotate_grace" in src
+    sched = src.find("schedule")
+    rot = src.find("rotate_grace")
+    assert sched != -1 and rot != -1 and rot > sched, (
+        "poll.py must rotate grace AFTER schedule so a write this cycle "
+        "is skipped next cycle")
 
 
 def test_grace_is_not_triggered_without_a_write(tmp_path, monkeypatch):

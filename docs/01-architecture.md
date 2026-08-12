@@ -133,7 +133,8 @@ Normative product contract: **`14-security.md` §0–2** (three trust zones). Su
 | **B** | Dev credentials + open egress | Required for work; redaction does not cover Dev sockets |
 | **B** | Dev → control plane | No Docker route to app/admin/Dagu; runtime isolation is intentional |
 | **C — Supply chain** | Default branch, team membership, auto_merge, RO PAT, reviewer token | **Primary mitigation; mostly operator-owned** (warnings, not hard gates) |
-| **Hard product gates** | `LEGAL_OUTCOMES`, INV-4, out-of-pipeline merge detection | Enforced regardless of “adult” ethos |
+| **Hard product gates** | `LEGAL_OUTCOMES`, INV-4 | Enforced regardless of “adult” ethos |
+| **Detection tripwire** | out-of-pipeline merge | Comment + audit + health banner — does **not** prevent or reverse the merge (`14` §2) |
 
 **Credentials delivery:** real secrets are **not** Dagu/`docker run` env (except the per-run Redis ACL). The app rebuilds secret material on authenticated `runspec.get` (`09-messaging.md`, `14` §4). Never in images, Run JSON, or DAG YAML.
 

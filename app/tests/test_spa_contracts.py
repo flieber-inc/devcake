@@ -10,6 +10,9 @@ from pathlib import Path
 from tests.gen_spa_contracts import build
 
 CONTRACTS = Path("/srv/docs/contracts/spa-contracts.json")
+if not CONTRACTS.exists():
+    CONTRACTS = (Path(__file__).resolve().parents[2]
+                 / "docs" / "contracts" / "spa-contracts.json")
 
 
 def test_contracts_file_matches_the_source_of_truth():

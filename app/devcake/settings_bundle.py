@@ -586,6 +586,16 @@ def prune_stale_active_devtype_prompts(cfg: AppConfig,
             for n in stale]
 
 
+def assert_assignment_dev_types(assignments, dev_type_names: set[str],
+                                *, prefix: str = "assignments") -> None:
+    """THE unknown-Dev-Type check (PUT /assignments + boot/bundle)."""
+    for mt, a in assignments.items():
+        name = a.dev_type if hasattr(a, "dev_type") else a.get("dev_type")
+        if name not in dev_type_names:
+            raise BundleError(422, f"{prefix}[{mt}]: unknown Dev Type "
+                                   f"{name!r}")
+
+
 def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
                               template_exists: Callable[[str, str], bool],
                               *, warnings: list[str] | None = None) -> None:
@@ -622,16 +632,11 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
     # emptiness is impossible post-model (config.validate_assignment_map runs
     # as a field validator on every model_validate) — only the cross-store
     # dev-type reference is checked here
-    for mt, a in (cfg.assignments or {}).items():
-        if a.dev_type not in dev_type_names:
-            raise BundleError(422, f"assignments[{mt}]: unknown Dev Type "
-                                   f"{a.dev_type!r}")
+    assert_assignment_dev_types(cfg.assignments or {}, dev_type_names)
     for inst in cfg.pmos:                     # ADR-0019 override maps
-        for mt, a in inst.assignments.items():
-            if a.dev_type not in dev_type_names:
-                raise BundleError(
-                    422, f"pmos[{inst.name}].assignments[{mt}]: unknown "
-                         f"Dev Type {a.dev_type!r}")
+        assert_assignment_dev_types(
+            inst.assignments, dev_type_names,
+            prefix=f"pmos[{inst.name}].assignments")
 
 
 def dry_run_adapters(cfg: AppConfig) -> None:
@@ -800,8 +805,11 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
          then deletions.
     Invariant: a crash BEFORE the commit never modifies or removes any value
     the old world stored — the old config stays authoritative over a store
-    with, at worst, inert extra keys, pruned by a re-apply. After the commit
-    the new world is authoritative and a re-apply converges the stragglers.
+    with, at worst, inert extra keys *and extra config files for names that
+    did not exist*, pruned by a re-apply. Existing ``dev_types/`` and
+    template files are overwritten only AFTER ``save_config``. After the
+    commit the new world is authoritative and a re-apply converges the
+    stragglers.
     A secrets-only apply has no config.yaml commit; its commit point is the
     ADD→MUT boundary, with the correspondingly weaker (but honest)
     guarantee: every file replacement is individually atomic, no stored
@@ -860,7 +868,7 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
         warnings.extend(ops.warnings)
     try:
         if new_cfg is not None:
-            _apply_config_files(parsed)
+            _apply_config_files(parsed, existing_only=False)
         if ops is not None:
             _apply_secret_adds(ops)          # phase ADD — pre-commit safe
         if new_cfg is not None:
@@ -870,6 +878,7 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
                 setattr(config, field, getattr(new_cfg, field))
             config.dismissed_alerts = live_alerts
             save_config(config)
+            _apply_config_files(parsed, existing_only=True)
             _prune_config_files(parsed, dev_types)
             dev_types.clear()               # shared by reference with managers
             dev_types.update(parsed["dev_types"])
@@ -916,16 +925,35 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     return {"applied": applied, "warnings": warnings, "untouched": untouched}
 
 
-def _apply_config_files(parsed: dict) -> None:
-    """Additive writes through the existing per-store choke points — each
-    file individually atomic, validation stays load-bearing."""
+def _apply_config_files(parsed: dict, *, existing_only: bool) -> None:
+    """Write config files through the existing per-store choke points.
+
+    ``existing_only=False`` (ADD): names that are not on disk yet — safe
+    before the config.yaml commit (inert extras if we crash).
+    ``existing_only=True`` (MUT): overwrite files the old world already
+    stored — only after the commit, so a SIGKILL cannot mix old
+    config.yaml with new Dev Type / template bytes.
+    """
+    from .config import CONFIG_PATH
+    dt_dir = CONFIG_PATH.parent / "dev_types"
     for dt in parsed["dev_types"].values():
+        exists = (dt_dir / f"{dt.name}.yaml").exists()
+        if exists != existing_only:
+            continue
         save_dev_type(dt)
     for mt, entries in parsed["prompt_templates"].items():
+        tdir = prompt_templates._dir(mt)
         for name, text in entries.items():
+            exists = (tdir / f"{name}.yaml").exists()
+            if exists != existing_only:
+                continue
             prompt_templates.save_template(mt, name, text)
     for dev, entries in parsed["devtype_prompts"].items():
+        ddir = prompt_templates._dev_dir(dev)
         for name, text in entries.items():
+            exists = (ddir / f"{name}.yaml").exists()
+            if exists != existing_only:
+                continue
             prompt_templates.save_devtype_prompt(dev, name, text)
 
 

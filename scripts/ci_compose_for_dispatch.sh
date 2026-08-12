@@ -18,13 +18,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# ONE derivation, shared with up.sh (ADR-0034: the two bring-up paths used
+# to derive independently — a standing drift surface). CI policy stays here:
+# permissive fallbacks (gid 0, cwd workspaces) instead of up.sh's hard fails.
+# shellcheck source=lib/stack_env.sh
+source "$(dirname "$0")/lib/stack_env.sh"
+
 TAG="${DEVCAKE_TAG:-latest}"
-DOCKER_GID="${DOCKER_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)}"
+DOCKER_GID="${DOCKER_GID:-$(devcake_docker_gid || echo 0)}"
 # ADR-0025: per-run workspace base — host-absolute (DAG bind sources resolve
 # on the daemon host). 0777 on purpose: the GHA runner user is uid 1001 but
 # the app container (which mkdirs run subdirs here) is uid 1000; CI runners
 # are ephemeral, so the prod 0700 posture does not apply.
-DEVCAKE_WS_HOST="${DEVCAKE_WS_HOST:-$(pwd)/workspaces}"
+DEVCAKE_WS_HOST="${DEVCAKE_WS_HOST:-$(devcake_ws_host .env "$(pwd)")}"
 
 # On GHA always write synthetic .env. Locally: only if CI_COMPOSE_WRITE_ENV=1
 # (never clobber a developer's real .env by default).

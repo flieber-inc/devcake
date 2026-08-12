@@ -64,6 +64,7 @@ docker run --rm \
   "${NET_ARGS[@]}" \
   "${ENV_ARGS[@]}" \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
+  -v "$(pwd)/images/hello:/srv/images/hello:ro" \
   -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \
   -v "$(pwd)/app/Dockerfile:/srv/app.Dockerfile:ro" \
   -v "$(pwd)/docs:/srv/docs:ro" \

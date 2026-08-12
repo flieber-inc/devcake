@@ -155,6 +155,33 @@ def test_quoted_freshness_marker_does_not_count(tmp_path):
     assert any("`devcake:freshness-rereview:1`" in c for c in fake.comments)
 
 
+def test_routed_discovery_trips_the_gate(tmp_path):
+    """ADR-0033: `devcake:discovery-in:v1` is ELEVATED_MARKERS' first member
+    — a routed discovery landing after the review's context was assembled
+    is material DESPITE being DevCake-posted (the ADR-0031 seam doing what
+    it was built for)."""
+    m, mgr, fake = _gate_mgr(tmp_path, [
+        _entry("e1", "brief" + SENTINEL, author="devcake"),
+        _entry("e2", "🔎 routed:\n`devcake:discovery-in:v1 src=T-7 step=2`"
+               "\n\n> finding text\n\n" + SENTINEL, author="devcake")])
+    run = _review_run(watermark_id="e1")
+    _approve(mgr, run)
+    assert fake.statuses == []                    # withheld
+    assert any("freshness-rereview:1" in c for c in fake.comments)
+    assert "review:freshness_tripped" in run.finalized_steps
+
+
+def test_quoted_discovery_in_marker_does_not_trip(tmp_path):
+    # IRON RULE sibling of the quoted-freshness test: the delivery marker
+    # quoted inside a sentinel'd comment is not elevated material
+    m, mgr, fake = _gate_mgr(tmp_path, [
+        _entry("e1", "brief" + SENTINEL, author="devcake"),
+        _entry("e2", "as noted:\n> `devcake:discovery-in:v1 src=T-7 step=2`"
+               "\n\n" + SENTINEL, author="devcake")])
+    _approve(mgr, _review_run(watermark_id="e1"))
+    assert "done" in fake.statuses                # passed clean
+
+
 def test_truncated_fetch_trips_never_passes(tmp_path):
     # gitea_issues pages ASCENDING — its hard stop drops the NEWEST entries,
     # exactly the ones the gate exists to catch: truncated ⇒ material-unknown

@@ -59,6 +59,26 @@ def test_marker_line_is_far_below_inline_max():
     assert len(discovery_marker(999, 99)) < 64 < FEED_INLINE_MAX
 
 
+def test_discovery_in_keys_are_a_distinct_pair_set():
+    from devcake.domain.orchestrator.markers import discovery_in_keys
+    text = ("`devcake:discovery-in:v1 src=T-7 step=2`\n"
+            "`devcake:discovery-in:v1 src=T-7 step=2`\n"   # idempotent re-run
+            "`devcake:discovery-in:v1 src=T-9 step=1`")
+    assert discovery_in_keys(text) == {("T-7", 2), ("T-9", 1)}
+    assert discovery_in_keys("no markers") == set()
+
+
+def test_elevated_markers_carry_exactly_the_delivery_class():
+    # ADR-0031's seam gains its first member (ADR-0033); the SOURCE-side
+    # marker must never join — a mission's own discovery post would trip
+    # its own freshness gate
+    from devcake.domain.orchestrator.markers import (DISCOVERY_IN_MARKER_RE,
+                                                     DISCOVERY_MARKER_RE,
+                                                     ELEVATED_MARKERS)
+    assert ELEVATED_MARKERS == [DISCOVERY_IN_MARKER_RE]
+    assert DISCOVERY_MARKER_RE not in ELEVATED_MARKERS
+
+
 # ── the harvest seam (finalize hook, full path) ──────────────────────────────
 
 from datetime import datetime, timezone  # noqa: E402

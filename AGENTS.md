@@ -76,7 +76,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 | **O** — Open/closed | Extend via new adapters / new callers of a deep module; do not fork copy-paste spines. |
 | **L** — Liskov | Port adapters are substitutable (prod + test fakes). Fakes must honor the Protocol contract. |
 | **I** — Interface segregation | Prefer focused Protocols (`ports/*`) over god objects callers only use 10% of. |
-| **D** — Dependency inversion | Domain depends on **ports**, not `adapters/*`. Composition root: `api/main.py`. Inject dependencies; do not construct infrastructure inside domain logic. |
+| **D** — Dependency inversion | Domain depends on **ports**, not `adapters/*`. Composition root: `api/services.build_services()` (ADR-0028; `api/main.py` is wiring + ≤4-statement route forwards). Inject dependencies; do not construct infrastructure inside domain logic. The domain→adapters ban is now test-enforced (`test_structure_guards.test_domain_never_imports_adapters`, ADR-0034), with two allowlisted seams. |
 
 **Deletion test:** if deleting a module only moves lines around (no complexity concentrates), it was shallow — do not add more of those.
 
@@ -102,7 +102,8 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 - Giant untested functions in `orchestrator.py` without a public-seam test
 - `except Exception: pass` that swallows real failures without logging — lint-enforced: ruff `BLE001`; every blanket catch is narrowed or carries `# noqa: BLE001 — <justification>` naming its contract (docs/15 §7)
 - Mutating production modules only “to make the test pass” by weakening invariants
-- New endpoint bodies in `api/main.py` or new attributes bound onto `MissionManager` after its class body — main.py is composition root + ≤4-statement route forwards, orchestrator behavior lives in module functions taking `mgr` (ADR-0015; enforced by `tests/test_structure_guards.py`)
+- New endpoint bodies in `api/main.py` or new attributes bound onto `MissionManager` after its class body — main.py is wiring + ≤4-statement route forwards (composition happens in `api/services.build_services()`, ADR-0028), orchestrator behavior lives in module functions taking `mgr` (ADR-0015; enforced by `tests/test_structure_guards.py`)
+- New checkpoint-step key literals — every `finalized_steps`/`_checkpoint` key registers in `domain/orchestrator/steps.py` (ADR-0034; the AST guard in `test_structure_guards` rejects bare literals). Same file forbids a domain module importing `adapters/*` outside the two allowlisted seams.
 
 ## Docker images: Bake only
 

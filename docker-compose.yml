@@ -16,6 +16,18 @@ name: devcake
 # root-equivalent if reachable. restart: unless-stopped on long-lived services
 # (ISSUES #21) so host reboots recover the stack automatically.
 
+# Bounded local logs for services NOT on the fluentd pipeline (2026-08-12
+# audit L1): the pipeline itself (fluentbit/otel-collector) cannot ship to
+# fluentd, and admin/openobserve carried the DEFAULT json-file driver with NO
+# max-size — unbounded disk growth until a host daemon.json cap, which most
+# hosts lack. 10 MB × 3 files is a generous local ring for a loopback service.
+x-local-logs: &local_logs
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   app:
     image: devcake/app:${DEVCAKE_TAG:-latest}
@@ -155,6 +167,7 @@ services:
       retries: 5
 
   openobserve:
+    <<: *local_logs
     image: public.ecr.aws/zinclabs/openobserve:v0.91.5@sha256:012c9701b4b7a2f7070f9264a85eb7ed6d4998e4763628341924f06cdc810e6f
     restart: unless-stopped
     environment:
@@ -168,6 +181,7 @@ services:
     networks: [control]
 
   admin:
+    <<: *local_logs
     image: devcake/admin:${DEVCAKE_TAG:-latest}
     pull_policy: never                  # local bake only
     restart: unless-stopped
@@ -189,6 +203,7 @@ services:
   # services — Dagu spawns them. See docker-bake.hcl group "images".
 
   fluentbit:
+    <<: *local_logs
     image: fluent/fluent-bit:3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562
     restart: unless-stopped
     command: ["-c", "/fluent-bit/etc/fluent-bit.conf"]
@@ -206,6 +221,7 @@ services:
   # holds the OO service account. Image is FROM scratch — no shell, so no
   # container healthcheck (the otlphttp exporter retries; ordering is soft).
   otel-collector:
+    <<: *local_logs
     image: otel/opentelemetry-collector-contrib:0.135.0@sha256:89107a3a8f4636a396927edf7025bb9614b8da2d92f4cc3f43109e8d115736e2
     restart: unless-stopped
     command: ["--config=/etc/otelcol/config.yaml"]

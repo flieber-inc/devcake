@@ -70,7 +70,11 @@ discover_docker_gid() {
 upsert_env_var() {
   local key="$1" val="$2" file="$3"
   local tmp
-  tmp=$(mktemp)
+  # SAME-FILESYSTEM temp (2026-08-12 audit OPS-L6): mktemp defaults to
+  # $TMPDIR (often a tmpfs), so `mv tmp .env` was a cross-device COPY —
+  # non-atomic, and a crash mid-copy could truncate the file holding every
+  # bootstrap password. A sibling temp makes the mv a pure rename.
+  tmp=$(mktemp "$(dirname "$file")/.env.tmp.XXXXXX")
   if [[ -f "$file" ]]; then
     awk -v k="$key" -v v="$val" '
       BEGIN { done = 0 }
@@ -183,7 +187,17 @@ if [[ "$DO_BAKE" -eq 1 ]]; then
     # failing until an operator noticed. Restart dagu on ANY error exit for
     # as long as the bake window is open; cleared right after the bake so it
     # can never fire spuriously later.
-    trap 'echo "── bake failed: restarting dagu (half-down stack guard)" >&2; docker compose start dagu || true' ERR
+    # SIGINT/SIGTERM do NOT fire an ERR trap (2026-08-12 audit OPS-M2): an
+    # operator who Ctrl-C's a slow bake got exactly the half-down failure the
+    # ERR guard was built for — app healthy, dagu silently stopped, every
+    # dispatch failing. Restore dagu on an interrupt too, then re-raise the
+    # default disposition so the interrupt still stops the script.
+    _restore_dagu() {
+      echo "── bake interrupted/failed: restarting dagu (half-down stack guard)" >&2
+      docker compose start dagu || true
+    }
+    trap '_restore_dagu' ERR
+    trap '_restore_dagu; trap - INT TERM; kill -INT $$' INT TERM
   fi
   if [[ ${#BAKE_TARGETS[@]} -eq 0 ]]; then
     echo "── docker buildx bake all"
@@ -192,7 +206,7 @@ if [[ "$DO_BAKE" -eq 1 ]]; then
     echo "── docker buildx bake ${BAKE_TARGETS[*]}"
     docker buildx bake "${BAKE_TARGETS[@]}"
   fi
-  trap - ERR
+  trap - ERR INT TERM
 fi
 
 if [[ ${#COMPOSE_ARGS[@]} -gt 0 ]]; then
@@ -201,6 +215,30 @@ if [[ ${#COMPOSE_ARGS[@]} -gt 0 ]]; then
 else
   echo "── docker compose up -d"
   docker compose up -d
+fi
+
+# Post-up health gate (2026-08-12 audit OPS-M2): the deploy used to return the
+# moment `up -d` dispatched the containers — a wedged app (bad config, failed
+# migration, unreachable dependency) was the operator's to discover later.
+# Wait for the app's own /health/live, non-fatally: a timeout WARNS with the
+# diagnostic command instead of failing the script (the containers are up;
+# the operator may want to inspect logs rather than have up.sh exit non-zero).
+echo "── waiting for the app to report healthy…"
+_app_healthy() {
+  docker compose exec -T app python -c \
+    "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)" \
+    >/dev/null 2>&1
+}
+_ok=0
+for _ in $(seq 1 30); do
+  if _app_healthy; then _ok=1; break; fi
+  sleep 2
+done
+if [[ "$_ok" -eq 1 ]]; then
+  echo "── app healthy ✓"
+else
+  echo "── WARNING: app did not report healthy within ~60s. The stack is up," >&2
+  echo "   but the app may be wedged — check: docker compose logs --tail=50 app" >&2
 fi
 
 echo "── stack starting (admin: http://localhost:8080)"

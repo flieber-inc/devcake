@@ -20,12 +20,12 @@ from ...config import DevType, assignment_for
 from .. import failure_taxonomy
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
-from ..run import Run, utcnow
 from ..workspaces import WorkspaceUnavailable
 from . import markers
 from . import schedule
 from .activity_payload import push_activity_repo
-from .feed import _is_devcake_comment, _stage_of, _unquoted
+from ..run import Run, aware, utcnow
+from .feed import is_devcake_comment, stage_of, unquoted
 from .markers import STEP_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -357,7 +357,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     repo = mgr.forges.instance(repo_name)
     forge = mgr.forges.get(repo_name)
     if live.blocked_by:
-        open_blockers = await schedule._open_blockers(mgr, live, {}, {})  # all live
+        open_blockers = await schedule.open_blockers_live(mgr, live)
         if open_blockers:
             log.info("dispatch of %s aborted — blocked by %s",
                      live.key, ", ".join(open_blockers))
@@ -502,7 +502,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         run.spec_prompt = append_required_skills(
             prompt, dev_type.skills_required, run.spec_skills)
         run.branch = mission_branch(mgr.instance_name, mission.key)
-        run.stage_label_at_dispatch = _stage_of(live)
+        run.stage_label_at_dispatch = stage_of(live)
         run.mission_pmo_id = mission.pmo_id
         try:
             await mgr.runs.bootstrap.launch(
@@ -796,16 +796,10 @@ def _credential_spec(mgr, dev_type: DevType) -> tuple[dict[str, str], list[dict]
 def _derive_seq(activity) -> int:
     """docs/02 §8 — max step number among prior feed artifacts + 1 (max, not
     count: collision-proof when a human deletes a transcript comment). Scans
-    _unquoted bodies only (ADR-0014 D2): quoted marker mentions never count."""
+    unquoted bodies only (ADR-0014 D2): quoted marker mentions never count."""
     steps = [int(m.group(1)) for e in activity.entries
-             for m in STEP_MARKER.finditer(_unquoted(e.body))]
+             for m in STEP_MARKER.finditer(unquoted(e.body))]
     return (max(steps) + 1) if steps else 1
-
-
-def _aware(ts: datetime) -> datetime:
-    """Anchor timestamps come from three sources (audit log, run records,
-    PMO comments); a stray naive one must not crash the scheduler."""
-    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
 def _last_giveup_at(pmo_id: str) -> datetime | None:
@@ -873,25 +867,25 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
                 if r.mission_pmo_id == pmo_id and mgr._run_is_ours(r)]
     history = [r for r in all_runs if r.mission_type == mission_type]
     anchors = [t for t in [_last_giveup_at(pmo_id),
-                           *(_aware(r.created_at) for r in all_runs
+                           *(aware(r.created_at) for r in all_runs
                              if r.state == "finished")] if t]
     if activity is not None:
         policy = mgr.config.attempt_reset
-        anchors += [_aware(e.ts) for e in activity.entries
+        anchors += [aware(e.ts) for e in activity.entries
                     if e.kind == "comment"
-                    and not _is_devcake_comment(e.body)
+                    and not is_devcake_comment(e.body)
                     and (policy == "any-comment"
                          # IRON RULE (markers.py, ADR-0014 D2): token scans
                          # run on the unquoted body — a human QUOTING a
                          # DevCake post that mentions the token is not the
                          # deliberate retry gesture (2026-08-12 audit F14)
-                         or RETRY_TOKEN in _unquoted(e.body or ""))]
+                         or RETRY_TOKEN in unquoted(e.body or ""))]
     since = max(anchors, default=None)
     return 1 + sum(
         1 for r in history
         if r.state in ("failed", "timed_out", "orphaned")
         and counts_toward_attempts(r)
-        and (since is None or _aware(r.created_at) > since)
+        and (since is None or aware(r.created_at) > since)
     )
 
 
@@ -902,22 +896,29 @@ def attempt_number(mgr, pmo_id: str, mission_type: str,
 _UNLIMITED_WARNED: set[tuple[str, str, int]] = set()
 
 
-def _mission_cost(mgr, pmo_id: str) -> float:
+def mission_cost(mgr, pmo_id: str, *,
+                 split_estimated: bool = False):
     """Cumulative effective cost of a mission's runs (ADR-0021 semantics —
     native harness cost when reported, else the finalize-stamped estimate).
-    Mirrors the REVIEW loop warning's arithmetic (review._reject_loop_warn)."""
+    THE one cost-rollup (ADR-0034 PR-3 — review's loop warning carried a
+    near-duplicate of this arithmetic): split_estimated=True additionally
+    returns the estimated share, named rather than blended away."""
     from .. import costing
     ci = mgr.config.cost_inputs
-    total = 0.0
+    total = est = 0.0
     for r in mgr.runs.store.all():
         if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
             continue
         tr = r.token_report or {}
-        eff = costing.effective_cost(
-            tr.get("cost_usd_native"), tr.get("cost_usd_estimated"), ci)
-        if eff is not None:
-            total += eff
-    return total
+        native = tr.get("cost_usd_native")
+        estimated = tr.get("cost_usd_estimated")
+        eff = costing.effective_cost(native, estimated, ci)
+        if eff is None:
+            continue
+        total += eff
+        if estimated is not None and (ci.override_native or native is None):
+            est += eff
+    return (total, est) if split_estimated else total
 
 
 async def _attempt_gate(mgr, mission: Mission, mtype: MissionType,
@@ -949,7 +950,7 @@ async def _unlimited_warn(mgr, mission: Mission, mtype: MissionType,
     if key in _UNLIMITED_WARNED:
         return
     _UNLIMITED_WARNED.add(key)
-    cost = _mission_cost(mgr, mission.pmo_id)
+    cost = mission_cost(mgr, mission.pmo_id)
     await mgr._feed(
         mission.pmo_id, mission.pmo_kind,
         f"⚠️ **Unlimited-attempts mode:** this mission's {mtype.value} step "

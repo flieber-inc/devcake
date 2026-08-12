@@ -676,8 +676,8 @@ def test_quoted_sentinel_still_classifies_human():
     quoted = ("please also add tests\n\n"
               "> ✋ **DevCake needs a human.** blah\n> `devcake:v1`")
     genuine = "> user asked:\n> do X\n\nDone.\n\n`devcake:v1`"
-    assert not feed._is_devcake_comment(quoted)
-    assert feed._is_devcake_comment(genuine)
+    assert not feed.is_devcake_comment(quoted)
+    assert feed.is_devcake_comment(genuine)
 
 
 def test_decomposition_wires_blocked_by_edges(tmp_path):
@@ -1211,7 +1211,7 @@ def test_finalize_posts_last_message_blockquoted(tmp_path):
     assert comment.count("`devcake:v1`") == 1
     assert "Details here." not in "\n".join(       # no unquoted model text
         l for l in lines if not l.lstrip().startswith(">"))
-    assert feed._is_devcake_comment(comment)   # provenance holds
+    assert feed.is_devcake_comment(comment)   # provenance holds
 
 
 def test_finalize_without_last_message_keeps_pointer_comment(tmp_path):
@@ -1258,8 +1258,8 @@ def test_finalize_last_message_markers_are_quarantined(tmp_path):
                           kind="comment", body=comment)
     assert dispatch._derive_seq(
         Activity(mission=m, entries=[entry])) == 2      # only the real step
-    from devcake.domain.orchestrator.feed import _unquoted
-    assert "T-1-deliverable.zip" not in _unquoted(comment)
+    from devcake.domain.orchestrator.feed import unquoted
+    assert "T-1-deliverable.zip" not in unquoted(comment)
 
 
 # ── docs/05 §4 attachment policy ─────────────────────────────────────────────
@@ -1304,10 +1304,10 @@ def test_feed_externalized_preview_strips_quoted_lines(tmp_path):
     # the 300-char preview of an externalized comment flattens newlines —
     # quoted content must be dropped from it, or "> " prefixes land mid-line
     # and markers leak back into scan scope
-    from devcake.domain.orchestrator.feed import _blockquote
+    from devcake.domain.orchestrator.feed import blockquote
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
-    body = "header line\n" + _blockquote("see `7_EXECUTE.md`\n" + "x" * 3000)
+    body = "header line\n" + blockquote("see `7_EXECUTE.md`\n" + "x" * 3000)
     run_coro(mgr._feed("p1", "issue", body))
     posted = fake.comments[-1]
     assert "full text attached:" in posted
@@ -2306,14 +2306,14 @@ def test_finalize_posts_the_answer_as_its_own_marked_comment(tmp_path):
     assert "> Root cause: the skip gate." in reply
     assert "> Fix in !2163." in reply
     # quarantine holds: every line of model text is quoted. Only our own
-    # provenance sentinel stays unquoted (feed._is_devcake_comment reads it),
+    # provenance sentinel stays unquoted (feed.is_devcake_comment reads it),
     # which is why a consumer relaying the answer must strip that line.
     body = [
         l for l in reply.splitlines()
         if l and not l.startswith(REPLY_MARKER) and "`devcake:v1`" not in l
     ]
     assert all(l.lstrip().startswith(">") or l == ">" for l in body), reply
-    assert feed._is_devcake_comment(reply)
+    assert feed.is_devcake_comment(reply)
 
 
 def test_the_reply_comment_redacts_before_it_truncates(tmp_path):

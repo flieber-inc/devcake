@@ -12,7 +12,7 @@ from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, utcnow
 from . import steps, transitions
-from .feed import _blockquote, _stage_of
+from .feed import blockquote, stage_of
 from .markers import FEED_INLINE_MAX, REPLY_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -348,7 +348,7 @@ async def restore_after_failure(mgr, run: Run) -> None:
         return  # only ONBOARD dispatches from backlog change the status
     try:
         live = await mgr.pmo.get(MissionRef(run.mission_pmo_id, run.pmo_kind))
-        if live.status == "in_progress" and _stage_of(live) is None:
+        if live.status == "in_progress" and stage_of(live) is None:
             await mgr.pmo.set_status(
                 MissionRef(run.mission_pmo_id, run.pmo_kind), "backlog")
             mgr._audit(run.mission_pmo_id, "set_status",
@@ -383,7 +383,7 @@ async def _post_transcript(mgr, run: Run, transcript: str,
         # step-marker header line stays unquoted for seq derivation
         log.exception("transcript upload failed — posting inline (quoted)")
         body = (f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n"
-                + _blockquote(f"---\n\n{transcript}"))
+                + blockquote(f"---\n\n{transcript}"))
     if last_message and attached:
         # redact BEFORE truncate+quote: truncation must never split a secret
         # across the boundary, and quoting must never break a multi-line
@@ -394,7 +394,7 @@ async def _post_transcript(mgr, run: Run, transcript: str,
                             + "\n\n… (truncated — full text in the attachment)")
         # quoting quarantines the model text from every feed scan; the
         # opt-out is safe because the full text already rides the attachment
-        body += "\n\n" + _blockquote(last_message)
+        body += "\n\n" + blockquote(last_message)
         await mgr._feed(run.mission_pmo_id, "issue", body, externalize=False)
     else:
         # no attachment ⇒ the last message already rides inside the (quoted)
@@ -434,7 +434,7 @@ async def _post_reply(mgr, run: Run, last_message: str | None,
                   "on this issue)")
     await mgr._feed(
         run.mission_pmo_id, "issue",
-        f"{REPLY_MARKER}\n\n" + _blockquote(body),
+        f"{REPLY_MARKER}\n\n" + blockquote(body),
         externalize=False,
     )
 

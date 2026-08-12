@@ -17,10 +17,10 @@ import logging
 from datetime import datetime
 
 from ..model import MissionRef
-from ..run import Run
 from . import steps
-from .dispatch import _aware, _mission_cost
-from .feed import _is_devcake_comment, _unquoted
+from ..run import Run, aware
+from .dispatch import mission_cost
+from .feed import is_devcake_comment, unquoted
 from .markers import (ELEVATED_MARKERS, FRESHNESS_MARKER,
                       MAX_FRESHNESS_REREVIEWS)
 
@@ -50,10 +50,10 @@ def _is_material(body: str | None) -> bool:
     CONSTRUCTION: that is the livelock guarantee. (Label/status events never
     arrive as entries at all — both adapters fetch comments only — so the
     non-empty-body test is defense-in-depth, not the operative exclusion.)"""
-    text = _unquoted(body).strip()
+    text = unquoted(body).strip()
     if not text:
         return False
-    if not _is_devcake_comment(body):
+    if not is_devcake_comment(body):
         return True
     return any(rx.search(text) for rx in ELEVATED_MARKERS)
 
@@ -80,12 +80,12 @@ def _entries_after_watermark(entries, run: Run) -> list:
     anchor = None
     if wm.get("ts"):
         try:
-            anchor = _aware(datetime.fromisoformat(wm["ts"]))
+            anchor = aware(datetime.fromisoformat(wm["ts"]))
         except ValueError:
             anchor = None
     if anchor is None:
-        anchor = _aware(run.created_at)
-    return [e for e in entries if _aware(e.ts) > anchor]
+        anchor = aware(run.created_at)
+    return [e for e in entries if aware(e.ts) > anchor]
 
 
 def _describe(entries: list) -> list[str]:
@@ -108,7 +108,7 @@ async def _unread_material(mgr, run: Run) -> tuple[list, int]:
     act = await mgr.pmo.get_activity(
         MissionRef(run.mission_pmo_id, "issue"), full=True)
     hits = [int(m.group(1)) for e in act.entries
-            for m in FRESHNESS_MARKER.finditer(_unquoted(e.body))]
+            for m in FRESHNESS_MARKER.finditer(unquoted(e.body))]
     count = max(hits) if hits else 0
     if act.truncated:
         return [_TRUNCATED], count
@@ -169,7 +169,7 @@ async def review_freshness_gate(mgr, run: Run) -> str:
                 f"re-review budget ({MAX_FRESHNESS_REREVIEWS}) is spent, so "
                 f"the standing approve verdict proceeds. Unevaluated: "
                 f"{names}{more}. Cumulative recorded mission cost: "
-                f"${_mission_cost(mgr, pmo_id):.2f}.")
+                f"${mission_cost(mgr, pmo_id):.2f}.")
             mgr._audit(pmo_id, "freshness_exhausted",
                        f"{len(found)} unread entries at close")
             mgr.anomalies[pmo_id] = (
@@ -211,7 +211,7 @@ async def disclose_unread_at_close(mgr, mission) -> None:
                    and r.state == "finished"]
         if not reviews:
             return
-        run = max(reviews, key=lambda r: _aware(r.created_at))
+        run = max(reviews, key=lambda r: aware(r.created_at))
         found, _ = await _unread_material(mgr, run)
         if not found:
             return

@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 
 from ...security import redact
-from .. import costing
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import run_branch
-from . import completion, steps
+from . import completion, dispatch, steps
 from .freshness import review_freshness_gate
 from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
                       MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER)
@@ -328,21 +327,10 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
             # effective per run (ADR-0021): native harness cost when reported,
             # else the finalize-stamped estimate — grok spend no longer reads
             # as $0.00 here. The estimated share is named, not blended away.
-            ci = mgr.config.cost_inputs
-            cost = est = 0.0
-            for r in mgr.runs.store.all():
-                if r.mission_pmo_id != pmo_id or not mgr._run_is_ours(r):
-                    continue
-                tr = r.token_report or {}
-                native = tr.get("cost_usd_native")
-                estimated = tr.get("cost_usd_estimated")
-                eff = costing.effective_cost(native, estimated, ci)
-                if eff is None:
-                    continue
-                cost += eff
-                if estimated is not None and (ci.override_native
-                                              or native is None):
-                    est += eff
+            # ONE rollup (ADR-0034 PR-3): this used to inline a near-copy of
+            # dispatch.mission_cost's arithmetic.
+            cost, est = dispatch.mission_cost(mgr, pmo_id,
+                                              split_estimated=True)
             share = f" (of which ${est:.2f} estimated)" if est else ""
             warn = (f"⚠️ **Loop warning:** this mission has been through "
                     f"{rejections} REVIEW rejections. Cumulative recorded "

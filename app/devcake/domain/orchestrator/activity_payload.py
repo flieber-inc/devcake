@@ -17,7 +17,7 @@ from datetime import datetime  # noqa: F401 — type context for Activity entrie
 from pathlib import Path
 
 from ..model import MissionRef
-from .feed import _is_devcake_comment
+from .feed import is_devcake_comment
 
 log = logging.getLogger("devcake.missions")
 
@@ -320,7 +320,7 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         body = e.body or ""
         # provenance is sentinel-based, never author-based (docs/03 §8a):
         # DevCake may post with the operator's own PMO credentials
-        provenance = "🤖 DevCake" if _is_devcake_comment(body) else "🧑 HUMAN"
+        provenance = "🤖 DevCake" if is_devcake_comment(body) else "🧑 HUMAN"
         lines.append(f"### {e.ts:%Y-%m-%d %H:%M} — {e.author} — {provenance} ({e.kind})")
         parent = by_id.get(e.parent_id) if e.parent_id else None
         if parent is not None:

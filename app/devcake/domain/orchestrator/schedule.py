@@ -133,6 +133,14 @@ async def schedule(mgr, missions: list[Mission],
     return dispatched
 
 
+async def open_blockers_live(mgr, m: Mission) -> list[str]:
+    """The all-live variant (ADR-0034 PR-3): dispatch's pre-launch re-read
+    resolves every blocker fresh — empty by_id (no snapshot index) and a
+    fresh memo (no cross-mission reuse). The two empty dicts USED to be
+    magic arguments hand-rolled at the call site."""
+    return await _open_blockers(mgr, m, {}, {})
+
+
 async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
                          memo: dict) -> list[str]:
     """Blockers of `m` that are still open (status not done/canceled), as

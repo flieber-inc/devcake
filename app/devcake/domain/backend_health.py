@@ -48,7 +48,7 @@ TERMINAL_STATES = ("finished", "failed", "timed_out", "orphaned")
 
 def _aware(ts):
     """Anchor timestamps come from several sources; a stray naive one must not
-    crash the detector (mirrors dispatch._aware)."""
+    crash the detector (mirrors run.aware)."""
     if ts is None:
         return datetime.min.replace(tzinfo=timezone.utc)
     return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)

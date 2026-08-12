@@ -51,3 +51,30 @@ export function containerExists(tree, path) {
   const parent = path.split(".").slice(0, -1).join(".");
   return parent === "" || getIn(tree, parent) != null;
 }
+
+// Same name sequence = an atomic instance-list edit (add/remove diffs as one
+// whole-list row) whose shape change has LANDED on the server: the fresh
+// list's enriched cards are canonical, and re-applying the draft's partial
+// scaffold wholesale would strip server-side fields — leaving a diff that
+// can never converge (permanent "Unsaved changes" + phantom value→(empty)
+// rows after every save of an added card).
+const sameNameShape = (a, b) =>
+  Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+  a.every(isPlainObject) && b.every(isPlainObject) &&
+  a.every((el, i) => el.name === b[i].name);
+
+// Re-apply user edits onto a fresh server snapshot — edits win, EXCEPT when
+// the fresh tree already subsumes the edit: the value landed verbatim, or
+// the instance-list shape matches by name (see above). Edits under a
+// deleted container are silently dropped, as before.
+export function applyEditsOnto(fresh, edits) {
+  let next = fresh;
+  for (const e of edits) {
+    if (!containerExists(fresh, e.path)) continue;
+    const cur = getIn(fresh, e.path);
+    if (JSON.stringify(cur) === JSON.stringify(e.new)) continue;
+    if (sameNameShape(cur, e.new)) continue;
+    next = setIn(next, e.path, e.new);
+  }
+  return next;
+}

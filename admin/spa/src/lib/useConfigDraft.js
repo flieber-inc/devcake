@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { diffLeaves, setIn, containerExists } from "./objectPath.js";
+import { diffLeaves, setIn, applyEditsOnto } from "./objectPath.js";
 import { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "./instanceNames.js";
 
 // Paths that never dirty the draft: server-owned state that immediate
@@ -57,9 +57,10 @@ export default function useConfigDraft() {
     let next = fresh;
     if (prevServer && prevDraft) {
       const edits = diffLeaves(prevServer, prevDraft).filter((e) => !ignored(e.path));
-      for (const e of edits) {
-        if (containerExists(fresh, e.path)) next = setIn(next, e.path, e.new);
-      }
+      // edits win — except where fresh already subsumes them (verbatim value,
+      // or a landed instance-list shape change: the server's enriched cards
+      // are canonical, never the draft's partial scaffold)
+      next = applyEditsOnto(fresh, edits);
     }
     setServer(fresh);
     setDraft(next);

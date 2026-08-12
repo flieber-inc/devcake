@@ -689,9 +689,11 @@ class GiteaIssuesAdapter:
                                      f"need owner/repo")
             if not self._api:
                 return PMOHealth(ok=False, detail="api_base is empty")
-            await self.ensure_labels(team_ref, ALL_LABELS)
-            await self._ensure_label_cache()
-            # count only managed intersection on the repo
+            # READ-ONLY (PMOHealth contract; 2026-08-12 audit F3): the
+            # old probe ran ensure_labels — a repo-settings PATCH + label
+            # POSTs fired at the SPA's 10 s /health cadence, forever. The
+            # healing now rides the poll cycle's per-config-generation
+            # once-latch (poll.poll_instance); the probe only reads.
             raw_labels = await self._fetch_all_labels()
             remote = {(lb.get("name") or "").upper() for lb in raw_labels}
             present = len(remote & {n.upper() for n in ALL_LABELS})

@@ -20,7 +20,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from ..adapters.files.owner_store import OwnerStore
 from ..domain import backend_health
-from ..domain.model import derive
+from ..domain.model import ALL_LABELS, derive
 from ..domain.orchestrator import MissionManager
 from ..ports.pmo import PMOTransient
 
@@ -141,6 +141,17 @@ class PollRuntime:
         gate + sweeps + schedule + cache rows. Returns (seen, candidates,
         dispatched, fetched_ids). Raises PMOTransient for the caller's
         per-instance skip."""
+        if not mgr.labels_ready:
+            # per-config-generation once-latch (audit F3): heal the managed
+            # labels here — not in the read-only /health probe. Failure is
+            # logged and retried next cycle; reads below tolerate missing
+            # labels (boot already ensures once, main.py lifespan).
+            try:
+                await mgr.pmo.ensure_labels(mgr.instance.team_key, ALL_LABELS)
+                mgr.labels_ready = True
+            except Exception:  # noqa: BLE001 — label healing must never take the segment down; the poll's reads work without it
+                log.exception("label ensure failed for %s — retrying next "
+                              "cycle", mgr.instance_name)
         fetched = await mgr.pmo.list_all(mgr.instance.team_key)
         fetched_ids = {m.pmo_id for m in fetched}
         missions = _claim_missions(mgr, fetched, self.mission_owner)

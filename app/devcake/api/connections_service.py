@@ -20,7 +20,7 @@ from ..harness import HARNESSES
 from ..ports.forge import ForgeError, mission_branch
 from ..ports.pmo import PMOTransient
 from ..security import redact
-from .health import reset_protection_cache
+from .health import reset_health_caches
 
 log = logging.getLogger("devcake.connections")
 
@@ -78,7 +78,7 @@ async def put_secret(scope: str, instance: str, field: str, body: dict, *,
         secrets_store.write_connection_secret(scope, instance, field, value)
         if scope == "repo":
             forge_runtime.breakers.pop(instance, None)
-            reset_protection_cache()
+            reset_health_caches()
         # adapters capture credentials by VALUE at construction — a rotated
         # secret takes effect only through a rebuild, same as a config PUT
         reload()
@@ -93,7 +93,7 @@ async def delete_secret(scope: str, instance: str, field: str, *,
         secrets_store.delete_connection_field(scope, instance, field)
         if scope == "repo":
             forge_runtime.breakers.pop(instance, None)
-            reset_protection_cache()
+            reset_health_caches()
         reload()
     return {"present": False}
 
@@ -252,7 +252,7 @@ async def clear_secrets(body: dict, *, forge_runtime, reload, config,
             shared_breakers.pop(dev_type, None)
 
         if repo_touched:
-            reset_protection_cache()
+            reset_health_caches()
         if connections:
             # connection secrets are captured at adapter construction
             reload()

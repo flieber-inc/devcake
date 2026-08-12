@@ -105,7 +105,30 @@ def test_prod_wires_a_real_workspace_store():
     MUST inject the real WorkspaceStore, or every dispatch would run onto an
     unmanaged workspace with no pre-create, cleanup, or fail-closed gate.
     Guard the wiring so dropping it fails CI rather than silently degrading.
-    ADR-0028: the composition root lives in api/services.py now."""
+    ADR-0028: the composition root lives in api/services.py now.
+
+    AST, not substring (2026-08-12 audit test-gap): `"WorkspaceStore(" in src`
+    is ALSO satisfied by `NullWorkspaceStore(` — the exact silent-no-op
+    regression the guard exists to catch — and by `workspaces=workspaces`
+    even if the object bound there is null. This checks a real call to the
+    class whose name is EXACTLY WorkspaceStore, passed as workspaces=."""
+    tree = ast.parse((ROOT / "api" / "services.py").read_text())
+    real_ctor = any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        and n.func.id == "WorkspaceStore"
+        for n in ast.walk(tree))
+    assert real_ctor, (
+        "prod must construct a REAL WorkspaceStore (exact name) — "
+        "NullWorkspaceStore does not satisfy the AUD-016 guard")
+    wired = any(
+        isinstance(n, ast.Call)
+        and any(kw.arg == "workspaces"
+                and isinstance(kw.value, ast.Name)
+                and kw.value.id == "workspaces"
+                for kw in n.keywords)
+        for n in ast.walk(tree))
+    assert wired, "RunManager must be wired workspaces=<the real store>"
+    # the legacy substring assertions kept as a cheap belt-and-braces
     src = (ROOT / "api" / "services.py").read_text()
     assert "WorkspaceStore(" in src, "prod must construct a real WorkspaceStore"
     assert "workspaces=workspaces" in src, \

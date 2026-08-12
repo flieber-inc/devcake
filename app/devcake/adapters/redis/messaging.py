@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 import hashlib
 import logging
@@ -28,6 +29,10 @@ log = logging.getLogger("devcake.messaging")
 tracer = trace.get_tracer("devcake")
 
 INGRESS = "devcake:ingress"
+# concurrent run.artifacts finalizes (audit F11) — bounded so a burst of
+# completions cannot stampede the PMO/forge; heartbeats are not budgeted
+FINALIZE_CONCURRENCY = 4
+FINALIZE_KINDS = frozenset({"run.artifacts"})
 GROUP = "app"
 CONSUMER = "app-1"
 REPLY_TTL_SECONDS = 900          # secret material must not linger (docs/09 §5)
@@ -62,6 +67,17 @@ class Messaging:
     def __init__(self, url: str, password: str):
         self.redis = aioredis.from_url(url, password=password or None, decode_responses=True)
         self._chunks: dict[tuple[str, str, str], dict[str, Any]] = {}
+        # finalize offload (2026-08-12 audit F11): the ingress consumer was
+        # ONE serialized loop, so two slow finalizes against a lagging PMO
+        # starved heartbeat consumption past HEARTBEAT_GRACE and the
+        # watchdog killed HEALTHY runs. run.artifacts handling now rides
+        # per-run task chains (per-run ordering preserved) under a global
+        # concurrency bound; heartbeats/runspec traffic stays inline and
+        # always drains. Ack-after-handle is unchanged — a crash before a
+        # worker acks leaves the entry for redelivery (at-least-once).
+        self._finalize_tasks: dict[str, asyncio.Task] = {}   # run_id → chain tail
+        self._inflight_entries: set[str] = set()             # reclaim guard
+        self._finalize_sem = asyncio.Semaphore(FINALIZE_CONCURRENCY)
 
     async def setup(self) -> None:
         try:
@@ -117,8 +133,11 @@ class Messaging:
             "v": 1, "run_id": run_id, "kind": kind,
             "ts": datetime.now(timezone.utc).isoformat(), "payload": payload,
         }
-        await self.redis.xadd(stream, {"m": json.dumps(envelope)})
-        await self.redis.expire(stream, REPLY_TTL_SECONDS)
+        pipe = self.redis.pipeline(transaction=False)
+        pipe.xadd(stream, {"m": json.dumps(envelope)})
+        pipe.expire(stream, REPLY_TTL_SECONDS)   # one round-trip: the TTL is
+        # the docs/09 §5 secret-lingering guard — never separated from the add
+        await pipe.execute()
 
     async def delete_runspec_result(self, run_id: str) -> None:
         """XDEL runspec.result entries as soon as the Dev acknowledges (docs/09 §1a)."""
@@ -148,9 +167,16 @@ class Messaging:
             start, messages = resp[0], resp[1]
             for entry_id, fields in messages:
                 fields = {k: v for k, v in (fields or {}).items()} if isinstance(fields, dict)                     else dict(zip(fields[::2], fields[1::2]))
+                if entry_id in self._inflight_entries:
+                    # a worker is finalizing this entry RIGHT NOW — reclaim
+                    # must not hand it out again in-process (a >idle-window
+                    # finalize would otherwise run twice concurrently)
+                    continue
                 try:
-                    await self._handle_entry(entry_id, fields, handler, verify_auth)
-                    await self._maybe_poison(entry_id, fields)
+                    handled = await self._handle_entry(
+                        entry_id, fields, handler, verify_auth)
+                    if not handled:
+                        await self._maybe_poison(entry_id, fields)
                 except Exception:
                     log.exception("reclaim: failed handling %s", entry_id)
                     await self._maybe_poison(entry_id, fields)
@@ -188,8 +214,14 @@ class Messaging:
             for _stream, messages in entries or []:
                 for entry_id, fields in messages:
                     try:
-                        await self._handle_entry(entry_id, fields, handler, verify_auth)
-                        await self._maybe_poison(entry_id, fields)
+                        handled = await self._handle_entry(
+                            entry_id, fields, handler, verify_auth)
+                        if not handled:
+                            # a mid-group chunk entry stays unacked — the
+                            # poison check here is what eventually dead-
+                            # letters a PERMANENTLY incomplete group (its
+                            # redeliveries are no-progress "successes")
+                            await self._maybe_poison(entry_id, fields)
                     except Exception:
                         log.exception("ingress: failed handling %s", entry_id)
                         await self._maybe_poison(entry_id, fields)
@@ -228,7 +260,12 @@ class Messaging:
     async def _ack_delete(self, entry_ids: list[str]) -> None:
         if not entry_ids:
             return
-        pipe = self.redis.pipeline(transaction=False)
+        # ATOMIC (audit F12): XACK then XDEL in a MULTI/EXEC. A crash between
+        # the two used to leave an entry ACKED but PRESENT — which
+        # unresolved_run_ids (an xrange over present entries) then counted as
+        # "resumable", contradicting its own docstring invariant that handled
+        # entries leave the stream.
+        pipe = self.redis.pipeline(transaction=True)
         pipe.xack(INGRESS, GROUP, *entry_ids)
         pipe.xdel(INGRESS, *entry_ids)
         await pipe.execute()
@@ -361,7 +398,51 @@ class Messaging:
         assembly["parts"][chunk] = data
         assembly["last_progress"] = time.monotonic()   # accepted ⇒ real progress
 
-    async def _handle_entry(self, entry_id, fields, handler, verify_auth) -> None:
+    def _spawn_finalize(self, run_id, kind, payload, entry_ids, fields,
+                        handler, chunk_key=None, chunk_id=None) -> None:
+        """Chain a run.artifacts handling task after the run's previous one
+        (per-run ordering) under the global finalize bound. The WORKER owns
+        ack/complete-key/poison — exactly what the inline path did."""
+        prev = self._finalize_tasks.get(run_id)
+        self._inflight_entries.update(entry_ids)
+
+        async def _work():
+            if prev is not None and not prev.done():
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(prev)
+            async with self._finalize_sem:
+                try:
+                    await handler(run_id, kind, payload)
+                    if chunk_id:
+                        await self.redis.set(
+                            chunk_complete_key(run_id, chunk_id), "1",
+                            ex=REPLY_TTL_SECONDS)
+                    await self._ack_delete(list(entry_ids))
+                    if chunk_key:
+                        self._chunks.pop(chunk_key, None)
+                except Exception:
+                    log.exception("ingress: finalize failed for %s", run_id)
+                    with contextlib.suppress(Exception):
+                        await self._maybe_poison(entry_ids[-1], fields)
+                finally:
+                    self._inflight_entries.difference_update(entry_ids)
+                    if self._finalize_tasks.get(run_id) is task:
+                        self._finalize_tasks.pop(run_id, None)
+
+        task = asyncio.create_task(_work())
+        self._finalize_tasks[run_id] = task
+
+    async def drain_finalizes(self) -> None:
+        """Await every in-flight finalize chain (tests + orderly paths)."""
+        while self._finalize_tasks:
+            tasks = list(self._finalize_tasks.values())
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if all(t.done() for t in tasks) and not any(
+                    t2 for t2 in self._finalize_tasks.values()
+                    if t2 not in tasks):
+                break
+
+    async def _handle_entry(self, entry_id, fields, handler, verify_auth) -> bool:
         envelope = json.loads(fields.get("m", "{}"))
         run_id = envelope.get("run_id", "")
         kind = envelope.get("kind", "")
@@ -380,7 +461,7 @@ class Messaging:
                 log.warning("ingress: FORGED/unauthenticated message dropped "
                             "(run_id=%s kind=%s)", run_id, kind)
                 await self._ack_delete([entry_id])
-            return
+            return True
         if "chunk" in payload:  # reassemble chunked payloads (docs/09 §3)
             if kind != "run.artifacts":
                 raise ValueError("only run.artifacts may be chunked")
@@ -400,7 +481,7 @@ class Messaging:
             key = (run_id, kind, chunk_id)
             if await self.redis.exists(chunk_complete_key(run_id, chunk_id)):
                 await self._ack_delete([entry_id])
-                return
+                return True
             if key not in self._chunks and len(self._chunks) >= MAX_ACTIVE_CHUNK_GROUPS:
                 raise ValueError("too many active chunk groups")
             created = key not in self._chunks
@@ -419,7 +500,7 @@ class Messaging:
             if entry_id not in assembly["entry_ids"]:
                 assembly["entry_ids"].append(entry_id)
             if len(assembly["parts"]) < total:
-                return
+                return False   # unacked mid-group entry: poison check applies
             joined = "".join(assembly["parts"][i] for i in range(1, total + 1))
             if hashlib.sha256(joined.encode("utf-8")).hexdigest() != digest:
                 raise ValueError("assembled chunk sha256 mismatch")
@@ -427,12 +508,18 @@ class Messaging:
             if not isinstance(payload, dict):
                 raise ValueError("assembled payload must be an object")
             payload = self._scrub_envelope_auth(payload, auth)
-            await handler(run_id, kind, payload)
-            await self.redis.set(
-                chunk_complete_key(run_id, chunk_id), "1", ex=REPLY_TTL_SECONDS)
-            await self._ack_delete(list(assembly["entry_ids"]))
-            self._chunks.pop(key, None)
-            return
+            # chunked payloads are run.artifacts by construction (checked
+            # above) — the finalize rides the per-run chain (audit F11)
+            self._spawn_finalize(run_id, kind, payload,
+                                 list(assembly["entry_ids"]), fields, handler,
+                                 chunk_key=key, chunk_id=chunk_id)
+            return True
 
-        await handler(run_id, kind, self._scrub_envelope_auth(payload, auth))
+        payload = self._scrub_envelope_auth(payload, auth)
+        if kind in FINALIZE_KINDS:
+            self._spawn_finalize(run_id, kind, payload, [entry_id], fields,
+                                 handler)
+            return True
+        await handler(run_id, kind, payload)
         await self._ack_delete([entry_id])
+        return True

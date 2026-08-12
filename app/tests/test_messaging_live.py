@@ -117,6 +117,7 @@ def test_chunk_reassembly(msg):
                                "sha256": digest, "data": part}}
             await msg._handle_entry(f"0-{i}", {"m": json.dumps(env)}, handler,
                                     lambda r, a: True)
+        await msg.drain_finalizes()   # run.artifacts rides the F11 offload
         assert len(got) == 1 and got[0]["result"]["outcome"] == "hello"
         assert len(got[0]["data"]) == 900_000
     run(main())
@@ -226,6 +227,7 @@ def test_active_chunk_group_survives_poison_threshold(msg, monkeypatch):
         await msg.redis.xreadgroup("app", "app-1", {test_stream: ">"}, count=10)
         await msg._handle_entry(entry2, {"m": json.dumps(env2)}, handler,
                                 lambda r, a: True)
+        await msg.drain_finalizes()   # F11 offload owns handle+ack+pop
         assert len(got) == 1 and got[0]["result"]["outcome"] == "hello"
         assert (rid, "run.artifacts", chunk_id) not in msg._chunks
         await msg.redis.delete(test_stream)
@@ -321,6 +323,7 @@ def test_completing_chunk_admitted_at_global_cap(msg, monkeypatch):
         env2 = _chunk_env(rid, 2, 2, chunk_id, digest, blob[half:])
         await msg._handle_entry("0-4", {"m": json.dumps(env2)}, handler,
                                 lambda r, a: True)
+        await msg.drain_finalizes()   # F11 offload owns handle+ack+pop
         assert len(got) == 1 and got[0]["result"]["outcome"] == "drained"
         assert key not in msg._chunks
         assert _buffered_bytes(msg) < 1000            # its memory is released
@@ -436,6 +439,7 @@ def test_chunk_group_metadata_mismatch_rejected_cleanly(msg):
         await msg._handle_entry("0-4", {"m": json.dumps(
             _chunk_env(rid, 2, 2, chunk_id, digest, blob[half:]))},
             handler, lambda r, a: True)
+        await msg.drain_finalizes()   # F11 offload owns handle+ack+pop
         assert len(got) == 1 and got[0]["result"]["outcome"] == "gen-one"
         assert key not in msg._chunks
     run(main())
@@ -485,4 +489,67 @@ def test_run_user_password_registered_for_redaction(msg):
         assert pw not in redact(f"leak {pw} end")
         await msg.delete_run_user(rid)
         assert pw in redact(f"leak {pw} end")
+    run(main())
+
+
+def test_slow_finalize_does_not_starve_heartbeat_consumption(msg, monkeypatch):
+    """2026-08-12 audit F11: the ingress consumer was ONE serialized loop, so
+    a slow run.artifacts handler blocked heartbeat consumption for OTHER runs
+    past HEARTBEAT_GRACE and the watchdog killed healthy runs. Now finalize
+    handling rides a bounded per-run offload; a heartbeat delivered while a
+    finalize is mid-flight is handled without waiting on it."""
+    import devcake.adapters.redis.messaging as mm
+    test_stream = f"devcake:test:ingress:{uuid.uuid4().hex[:6]}"
+    monkeypatch.setattr(mm, "INGRESS", test_stream)
+
+    async def main():
+        order = []
+        release = asyncio.Event()
+
+        async def handler(run_id, kind, payload):
+            if kind == "run.artifacts":
+                await release.wait()           # a slow finalize, held open
+            order.append((kind, run_id))
+
+        # a run.artifacts entry (offloaded) then a heartbeat for another run
+        art = {"v": 1, "run_id": "SLOW", "auth": "pw", "kind": "run.artifacts",
+               "payload": {"result": {"outcome": "x"}}}
+        hb = {"v": 1, "run_id": "OTHER", "auth": "pw", "kind": "run.heartbeat",
+              "payload": {"phase": "working"}}
+        h1 = await msg._handle_entry("0-1", {"m": json.dumps(art)}, handler,
+                                     lambda r, a: True)
+        h2 = await msg._handle_entry("0-2", {"m": json.dumps(hb)}, handler,
+                                     lambda r, a: True)
+        assert h1 is True and h2 is True
+        # the heartbeat was handled INLINE despite the finalize still blocked
+        assert ("run.heartbeat", "OTHER") in order
+        assert ("run.artifacts", "SLOW") not in order
+        release.set()
+        await msg.drain_finalizes()
+        assert ("run.artifacts", "SLOW") in order
+
+    run(main())
+
+
+def test_per_run_finalize_ordering_preserved(msg):
+    """At-least-once + per-run ordering: two run.artifacts for the SAME run
+    handle in arrival order even though each rides the offload."""
+    async def main():
+        order = []
+        gate = asyncio.Event()
+
+        async def handler(run_id, kind, payload):
+            if payload["n"] == 1:
+                await gate.wait()              # first one is slow
+            order.append(payload["n"])
+
+        for n in (1, 2):
+            env = {"v": 1, "run_id": "R", "auth": "pw", "kind": "run.artifacts",
+                   "payload": {"n": n}}
+            await msg._handle_entry(f"0-{n}", {"m": json.dumps(env)}, handler,
+                                    lambda r, a: True)
+        gate.set()
+        await msg.drain_finalizes()
+        assert order == [1, 2], "same-run finalizes must stay ordered"
+
     run(main())

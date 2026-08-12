@@ -6,9 +6,14 @@ and stage references are exempt; every devcake/* compose service must declare
 `pull_policy: never` (otherwise a typo'd tag would pull from the public —
 squattable — Docker Hub `devcake` namespace). Exit non-zero listing offenders.
 
-Files are DISCOVERED (rglob Dockerfile*, glob docker-compose*.yml), not
-hardcoded — a new Dockerfile or a docker-compose.override.yml (which compose
-auto-loads) is scanned the moment it exists (audit A14).
+Files are DISCOVERED (rglob Dockerfile*, glob docker-compose*.yml, glob
+scripts/*.sh + scripts/*.py), not hardcoded — a new Dockerfile or a
+docker-compose.override.yml (which compose auto-loads) is scanned the moment
+it exists (audit A14). `docker run` invocations in ops scripts are covered
+too (2026-08-12 audit OPS-M1: the backup/restore containers — root, RW on
+secrets-bearing volumes — ran floating `alpine`, structurally invisible to
+this gate): the image token must be pinned, a devcake/* local image, or a
+variable whose in-file default resolves to one.
 
 Bump procedure: docker buildx imagetools inspect <image:tag> → paste the
 manifest-list digest.
@@ -20,7 +25,9 @@ This checker covers image refs only; the exception lives here so it is
 auditable.
 """
 
+import ast
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -39,6 +46,11 @@ def _dockerfiles() -> list[Path]:
 def _compose_files() -> list[Path]:
     return sorted(ROOT.glob("docker-compose*.yml")) + sorted(
         ROOT.glob("docker-compose*.yaml"))
+
+
+def _script_files() -> tuple[list[Path], list[Path]]:
+    scripts = ROOT / "scripts"
+    return (sorted(scripts.glob("*.sh")), sorted(scripts.glob("*.py")))
 
 
 def _strip_platform(tokens: list[str]) -> list[str]:
@@ -148,12 +160,180 @@ def _service_block_has(lines: list[str], image_idx: int, indent: int,
     return False
 
 
+# --- `docker run` in ops scripts (2026-08-12 audit OPS-M1) -----------------
+
+# docker-run flags that consume the NEXT token as their value — the walk must
+# skip both, or a flag value would be mistaken for the image ref.
+_RUN_FLAGS_WITH_VALUE = {
+    "-e", "--env", "--env-file", "-v", "--volume", "--mount", "-w",
+    "--workdir", "-u", "--user", "--name", "--network", "--network-alias",
+    "--entrypoint", "--platform", "-p", "--publish", "--expose", "-l",
+    "--label", "--hostname", "--tmpfs", "--add-host", "--cap-add",
+    "--cap-drop", "--device", "--gpus", "--restart", "--memory", "-m",
+    "--cpus", "--pids-limit", "--security-opt", "--log-driver", "--log-opt",
+    "--stop-timeout", "--pull", "--health-cmd", "--health-interval",
+}
+
+_ARRAY_SPLICE = re.compile(r"\$\{\w+\[@\]\}")
+_VAR_TOKEN = re.compile(r"\$\{?(\w+)\}?$")
+
+_UNRESOLVED = ""  # sentinel: an image token exists but is not a literal
+
+
+def _walk_run_args(tokens: list) -> str | None:
+    """First non-flag token after `run` is the image ref. Entries are str
+    for literal tokens, None for opaque ones (python f-strings). Returns the
+    token, _UNRESOLVED for an opaque image position, None if none found."""
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok is None:
+            return _UNRESOLVED
+        tok = tok.strip("\"'")
+        if _ARRAY_SPLICE.fullmatch(tok):
+            i += 1                       # bash array splice: args, not image
+            continue
+        if tok in _RUN_FLAGS_WITH_VALUE:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1                       # standalone flag or --flag=value
+            continue
+        return tok
+    return None
+
+
+def _shell_logical_lines(text: str) -> list[tuple[int, str]]:
+    out: list[tuple[int, str]] = []
+    buf: list[str] = []
+    start = 1
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        if not buf:
+            start = lineno
+        line = raw.rstrip()
+        if line.endswith("\\"):
+            buf.append(line[:-1])
+            continue
+        buf.append(line)
+        out.append((start, " ".join(buf)))
+        buf = []
+    if buf:
+        out.append((start, " ".join(buf)))
+    return out
+
+
+def _resolve_shell_default(name: str, text: str) -> str | None:
+    """Resolve NAME=VALUE to a literal, unwrapping ${VAR:-default} layers —
+    `IMG="${OVERRIDE:-alpine@sha256:…}"` pins via its in-file default."""
+    m = re.search(rf"^\s*{re.escape(name)}=(\S+)", text, re.MULTILINE)
+    if not m:
+        return None
+    val = m.group(1).strip().strip("\"'")
+    while True:
+        inner = re.fullmatch(r"\$\{\w+:-(.*)\}", val)
+        if not inner:
+            return val
+        val = inner.group(1)
+
+
+def _check_script_image(rel, lineno: int, img, text: str,
+                        offenders: list[str]) -> None:
+    if img is None:
+        offenders.append(
+            f"{rel}:{lineno}: `docker run` with no locatable image token — "
+            f"restructure so the gate can verify the pin")
+        return
+    if img is not _UNRESOLVED:
+        var = _VAR_TOKEN.fullmatch(img)
+        if var:
+            resolved = _resolve_shell_default(var.group(1), text)
+            if resolved is None:
+                offenders.append(
+                    f"{rel}:{lineno}: image ${var.group(1)} has no in-file "
+                    f"literal default to verify — give it a pinned default")
+                return
+            img = resolved
+    if img is _UNRESOLVED:
+        offenders.append(
+            f"{rel}:{lineno}: image ref is not a resolvable literal — "
+            f"pin it via a module/script constant")
+        return
+    if img.startswith(LOCAL_PREFIX) or PINNED.search(img):
+        return
+    offenders.append(f"{rel}:{lineno}: docker run {img}")
+
+
+def check_shell_script(path: Path, offenders: list[str]) -> None:
+    rel = path.relative_to(ROOT)
+    text = path.read_text()
+    for lineno, line in _shell_logical_lines(text):
+        if "docker run" not in line or line.lstrip().startswith("#"):
+            continue
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError:
+            # unterminated quote — a `docker run … sh -c '…multi-line…'`
+            # whose payload opens on this logical line; naive split still
+            # exposes the flag/image tokens, quotes stripped in the walk
+            tokens = line.split()
+        idx = next((i for i in range(len(tokens) - 1)
+                    if tokens[i].strip("\"'").split("(")[-1] == "docker"
+                    and tokens[i + 1] == "run"), None)
+        if idx is None:
+            continue
+        img = _walk_run_args(tokens[idx + 2:])
+        _check_script_image(rel, lineno, img, text, offenders)
+
+
+def check_python_script(path: Path, offenders: list[str]) -> None:
+    """Scan list literals shaped ["docker", "run", …] — the subprocess
+    idiom. Module-level str constants resolve (export_receipts.ALPINE_IMAGE);
+    anything non-literal in image position is an offender, fail-closed."""
+    rel = path.relative_to(ROOT)
+    try:
+        tree = ast.parse(path.read_text())
+    except SyntaxError:
+        return
+    consts: dict[str, str] = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            try:
+                val = ast.literal_eval(node.value)
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(val, str):
+                consts[node.targets[0].id] = val
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.List) and len(node.elts) >= 3):
+            continue
+        head = [e.value for e in node.elts[:2]
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if head != ["docker", "run"]:
+            continue
+        tokens: list = []
+        for e in node.elts[2:]:
+            if isinstance(e, ast.Constant) and isinstance(e.value, str):
+                tokens.append(e.value)
+            elif isinstance(e, ast.Name) and e.id in consts:
+                tokens.append(consts[e.id])
+            else:
+                tokens.append(None)
+        img = _walk_run_args(tokens)
+        _check_script_image(rel, node.lineno, img, "", offenders)
+
+
 def main() -> int:
     offenders: list[str] = []
     for df in _dockerfiles():
         check_dockerfile(df, offenders)
     for cf in _compose_files():
         check_compose(cf, offenders)
+    sh_files, py_files = _script_files()
+    for f in sh_files:
+        check_shell_script(f, offenders)
+    for f in py_files:
+        check_python_script(f, offenders)
     if offenders:
         print("UNPINNED image references (ISSUES #29 — pin tag@sha256:…):")
         for o in offenders:

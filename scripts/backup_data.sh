@@ -18,6 +18,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Digest-pinned (ISSUES #29 rider, 2026-08-12 audit OPS-M1): this container
+# runs as root with RW on the secrets-bearing output dir — the one place a
+# floating :latest was least acceptable. check_image_pins.py enforces.
+ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
+
 VOLUME="${DEVCAKE_DATA_VOLUME:-devcake_devcake_data}"
 if [[ $# -gt 0 ]]; then
   OUT="$1"
@@ -42,12 +47,13 @@ if docker ps --format '{{.Names}}' | grep -q devcake-app; then
 fi
 
 # tar as root (container default) so 0600/0700 secret files under
-# /data/secrets are readable regardless of the operator's host uid; basename
-# rides an ENV VAR (never shell-interpolated — re-audit #5); umask 077 keeps
-# the tarball non-world-readable; the chown hands it to the invoker (audit
-# D5 #19).
+# /data/secrets are readable regardless of the operator's host uid. The
+# payload (scripts/lib/backup_payload.sh — shared with the pytest restore
+# drill) owns umask/marker/verify/chown; basename rides an ENV VAR (never
+# shell-interpolated — re-audit #5).
 docker run --rm \
-  -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" \
-  -v "$VOLUME":/src:ro -v "$OUT_DIR":/out alpine \
-  sh -c 'umask 077 && tar czf "/out/$OUT_BASE" -C /src . && chown "$OWNER" "/out/$OUT_BASE"'
-echo "wrote $OUT_DIR/$OUT_BASE — contains EVERY operator secret in plaintext; store like a password export"
+  -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" -e KIND=data \
+  -v "$VOLUME":/src:ro -v "$OUT_DIR":/out \
+  -v "$(pwd)/scripts/lib":/lib:ro \
+  "$ALPINE_IMAGE" sh /lib/backup_payload.sh
+echo "wrote $OUT_DIR/$OUT_BASE (verified readable) — contains EVERY operator secret in plaintext; store like a password export"

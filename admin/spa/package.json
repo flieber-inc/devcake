@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "check:ui": "node tests/run.mjs",
-    "test:helpers": "node tests/markdown_helpers.mjs && node tests/format_helpers.mjs && node tests/deps_helpers.mjs && node tests/board_helpers.mjs && node tests/config_draft.mjs"
+    "test:helpers": "node tests/markdown_helpers.mjs && node tests/format_helpers.mjs && node tests/deps_helpers.mjs && node tests/board_helpers.mjs && node tests/config_draft.mjs && node tests/contracts.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.2.10",

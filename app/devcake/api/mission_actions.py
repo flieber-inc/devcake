@@ -87,11 +87,31 @@ class _RunManager(Protocol):
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
-def _find_row(missions_cache: list[dict], pmo_id: str) -> dict:
-    for row in missions_cache:
-        if row.get("pmo_id") == pmo_id:
-            return row
-    raise HTTPException(status_code=404, detail="mission not found")
+def _find_row(missions_cache: list[dict], pmo_id: str,
+              instance: str | None = None) -> dict:
+    """Resolve one mission row. `pmo_id` alone matched the FIRST cache row
+    (mission_actions.py:90, 2026-08-12 audit) — but gitea_issues pmo_ids are
+    per-repo issue NUMBERS, so #3 collides across instances and the action
+    could land on the wrong board. When the caller qualifies with `instance`
+    (the SPA does whenever ≥2 PMOs are configured), match both; a bare id
+    that now resolves to >1 instance is a 409, not a silent wrong-board hit."""
+    if instance:
+        for row in missions_cache:
+            if row.get("pmo_id") == pmo_id and row.get("instance") == instance:
+                return row
+        raise HTTPException(
+            status_code=404,
+            detail=f"mission {pmo_id} not found on instance {instance!r}")
+    matches = [row for row in missions_cache if row.get("pmo_id") == pmo_id]
+    if not matches:
+        raise HTTPException(status_code=404, detail="mission not found")
+    if len({row.get("instance") for row in matches}) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=f"mission id {pmo_id} exists on multiple instances "
+                   f"({sorted({r.get('instance') for r in matches})}) — "
+                   f"retry with an explicit instance")
+    return matches[0]
 
 
 def _resolve_mgr(managers: dict[str, Any], instance_name: str) -> Any:
@@ -122,6 +142,7 @@ async def label_action(
     *,
     missions_cache: list[dict],
     managers: dict[str, Any],
+    instance: str | None = None,
 ) -> dict:
     """Apply the label swap for one UI action. Returns the projected label list."""
     spec = ACTION_SPECS.get(action)
@@ -131,7 +152,7 @@ async def label_action(
             detail=f"unknown action: {action!r}; "
                    f"expected one of {sorted(ACTION_SPECS)}")
 
-    row = _find_row(missions_cache, pmo_id)
+    row = _find_row(missions_cache, pmo_id, instance)
     mgr = _resolve_mgr(managers, row["instance"])
 
     labels = set(row.get("labels") or [])
@@ -174,12 +195,13 @@ async def post_steering(
     *,
     missions_cache: list[dict],
     managers: dict[str, Any],
+    instance: str | None = None,
 ) -> dict:
     """Post a human-authored feed comment (no sentinel) on behalf of the operator."""
     if not (body and body.strip()):
         raise HTTPException(status_code=422, detail="body must not be blank")
 
-    row = _find_row(missions_cache, pmo_id)
+    row = _find_row(missions_cache, pmo_id, instance)
     mgr = _resolve_mgr(managers, row["instance"])
 
     ref = MissionRef(pmo_id, row["kind"])

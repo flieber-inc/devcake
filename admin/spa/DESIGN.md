@@ -251,6 +251,33 @@ semantically distinct:
 - **A11y minimums**: icon-only buttons get `aria-label`; menus get
   `aria-haspopup`/`aria-expanded` + `role="menu"`/`menuitem`; glyphs get
   `role="img"` + `aria-label`; decorative icons get `aria-hidden`.
+- **Optimistic overrides key on the (instance, pmo_id) ref, never the bare
+  id** (`lib/reqSeq.js`'s sibling concern): gitea_issues pmo_ids are per-repo
+  issue numbers, so #3 collides across boards — a bare-id key painted a Park
+  on one board onto the colliding id on another (2026-08-12 audit). Every
+  action/comment also sends `instance` so the server resolves the right board
+  (`mission_actions._find_row`). And an override self-heals after
+  `PROJECTION_MAX_POLLS` even if the server advanced to a state the projection
+  never predicted — an exact-label-match test alone would stick forever.
+- **Stale responses are dropped, not committed** (`lib/reqSeq.js`): loaders
+  that re-fire on changing deps (RunsPage's eight filters) or from many call
+  sites with no in-flight guard (ConfigDraftContext.reload) tag each request
+  with a monotonic token; a resolution that is not the latest is dropped. A
+  config rebase resolving out of order otherwise rolled the server baseline
+  backward, and since config does not poll the phantom dirt persisted.
+
+### Accepted single-operator scope (ledgered, NOT built — founder ruling
+2026-08-12)
+
+The control plane is single-operator by construction and stays that way for
+now: `PUT /config` is last-write-wins with an edits-win rebase, and there is
+no `If-Match`/version stamp on config or secret writes. With two admins, a
+second operator's change is overwritten with no conflict surface. This is a
+real liability the day there are two admins and the deliberate fix is
+end-to-end config versioning (backend version stamp → SPA `If-Match` → 409 +
+conflict UI) — out of scope for the audit-remediation campaign, which
+addressed only the single-operator correctness bugs above. Do not add
+optimistic multi-writer behavior without that versioning.
 
 ---
 

@@ -313,10 +313,12 @@ TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}
 
 class _MissionActionBody(BaseModel):
     action: str
+    instance: str | None = None   # disambiguates colliding pmo_ids (F: SPA)
 
 
 class _SteeringBody(BaseModel):
     body: str
+    instance: str | None = None
 
 
 class _CreateAttachment(BaseModel):
@@ -355,7 +357,7 @@ async def mission_action(pmo_id: str, body: _MissionActionBody):
     s = svc()
     return await label_action(pmo_id, body.action,
                               missions_cache=s.poll_rt.missions_cache,
-                              managers=s.managers)
+                              managers=s.managers, instance=body.instance)
 
 
 @app.post("/api/v1/missions/{pmo_id}/comment")
@@ -366,7 +368,7 @@ async def mission_comment(pmo_id: str, body: _SteeringBody):
     s = svc()
     return await post_steering(pmo_id, body.body,
                                missions_cache=s.poll_rt.missions_cache,
-                               managers=s.managers)
+                               managers=s.managers, instance=body.instance)
 
 
 @app.post("/api/v1/poll/run")

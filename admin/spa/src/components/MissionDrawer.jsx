@@ -66,6 +66,7 @@ export default function MissionDrawer({ mission, multiPmo, syncing, rows, adopti
     try {
       await send("POST", `/missions/${encodeURIComponent(mission.pmo_id)}/comment`, {
         body,
+        instance: mission.instance,   // disambiguate a colliding pmo_id
       });
       setComment("");
       setFlash(

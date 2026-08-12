@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink, SquareTerminal } from "lucide-react";
 import { get, send } from "../api.js";
+import { makeReqSeq } from "../lib/reqSeq.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Card } from "../components/Card.jsx";
 import Button from "../components/Button.jsx";
@@ -55,6 +56,9 @@ export default function RunsPage() {
   // orders GROUPS by their aggregate (founder decision 2026-08-02)
   const [grouped, setGrouped] = useState(false);
 
+  // stale-response guard: eight filter deps re-fire load; an old query
+  // resolving after a newer one must not overwrite the fresh rows (2026-08-12)
+  const seq = useRef(makeReqSeq());
   const load = () => {
     const q = `/runs?limit=${PAGE}&offset=${offset}` +
       (query ? `&mission_key=${encodeURIComponent(query)}` : "") +
@@ -63,7 +67,10 @@ export default function RunsPage() {
       (toDate ? `&created_to=${toDate}` : "") +
       `&sort=${sortKey}&dir=${sortDir}` +
       (grouped ? "&group_by=mission" : "");
-    return get(q).then(setData).catch(() => {});
+    const mine = seq.current.next();
+    return get(q).then((d) => {
+      if (seq.current.isLatest(mine)) setData(d);   // drop out-of-order
+    }).catch(() => {});
   };
 
   usePoll(load, 10000, [offset, query, pmoRef, fromDate, toDate,

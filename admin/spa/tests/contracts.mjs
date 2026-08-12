@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { columnOf, needsHumanReason } from "../src/lib/board.js";
-import { INSTANCE_NAME_RE } from "../src/lib/instanceNames.js";
 import { newPmoCard, newRepoCard } from "../src/lib/cards.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -29,7 +28,11 @@ const check = (name, fn) => {
 };
 
 check("instance-name regex matches config._INSTANCE_NAME_RE", () => {
-  assert.equal(INSTANCE_NAME_RE.source, contracts.instance_name_re);
+  // source scan, not an import: instanceNames.js also hosts a React hook,
+  // and this suite runs hermetically (CI has no node_modules)
+  const src = readFileSync(join(here, "../src/lib/instanceNames.js"), "utf8");
+  assert.ok(src.includes(`/${contracts.instance_name_re}/`),
+    "instanceNames.js INSTANCE_NAME_RE drifted from the contract");
 });
 
 check("harness-var regex matches config.HARNESS_VAR_PATTERN", () => {

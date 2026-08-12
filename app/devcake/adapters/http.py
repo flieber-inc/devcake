@@ -44,6 +44,29 @@ class PooledClient:
             await self._client.aclose()
 
 
+async def forge_request(client: httpx.AsyncClient, method: str, url: str, *,
+                        path_label: str, headers: dict | None = None,
+                        raw: bool = False, **kwargs):
+    """THE forge wire call (ADR-0034; 2026-08-12 audit F7). ports/forge.py
+    declares "adapters must never leak httpx exceptions upward" — yet all
+    three forge `_req`s let ConnectError/ReadTimeout escape raw while both
+    PMO adapters wrapped correctly (the audit's first-tenant/second-tenant
+    pattern). Network failures become ForgeError(status=None), which
+    health_probe's definitive-status check already reads as transient."""
+    from ..ports.forge import ForgeError
+    try:
+        resp = await client.request(method, url, headers=headers, **kwargs)
+    except httpx.HTTPError as e:
+        raise ForgeError(f"{method} {path_label} → network: {e}",
+                         status=None) from e
+    if resp.status_code >= 400:
+        raise ForgeError(f"{method} {path_label} → {resp.status_code}: "
+                         f"{resp.text[:200]}", status=resp.status_code)
+    if raw:                           # file_content wants bytes, not JSON
+        return resp.content
+    return resp.json() if resp.text else None
+
+
 def aclose_adapters(adapters) -> None:
     """Best-effort async close of an outgoing adapter set from a SYNC caller
     (rebuild). No running loop (boot, sync tests) ⇒ skip — finalizers cover

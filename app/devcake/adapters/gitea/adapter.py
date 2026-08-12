@@ -109,15 +109,13 @@ class GiteaForge:
 
     async def _req(self, method: str, path: str, *, reviewer: bool = False,
                    **kwargs) -> Any:
-        client = self._http.get()   # pooled (F16); adapter aclose() owns it
-        resp = await client.request(
-            method,
+        from ..http import forge_request
+        # THE forge wire call (adapters/http.forge_request, ADR-0034):
+        # httpx exceptions become ForgeError(status=None) per the port
+        return await forge_request(
+            self._http.get(), method,
             f"{self.api}/api/v1/repos/{self.owner}/{self.repo}{path}",
-            headers=self._headers(reviewer), **kwargs)
-        if resp.status_code >= 400:
-            raise ForgeError(f"{method} {path} → {resp.status_code}: "
-                             f"{resp.text[:200]}", status=resp.status_code)
-        return resp.json() if resp.text else None
+            path_label=path, headers=self._headers(reviewer), **kwargs)
 
     async def aclose(self) -> None:
         await self._http.aclose()

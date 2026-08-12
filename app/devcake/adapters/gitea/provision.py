@@ -99,6 +99,8 @@ class GiteaProvisioner:
         self._auth = (admin_user or os.environ.get("GITEA_ADMIN_USER", ""),
                       admin_password or os.environ.get("GITEA_ADMIN_PASSWORD", ""))
         self._transport = transport      # test injection (LinearAdapter pattern)
+        from ..http import PooledClient
+        self._http = PooledClient(timeout=20, transport=transport)  # F16
 
     async def _req(self, method: str, path: str, ok=(200, 201, 204),
                    tolerate=(), tolerate_only_if: str | None = None, **kw):
@@ -108,9 +110,10 @@ class GiteaProvisioner:
         username" (a bug, must fail loud), so a bare status check silently
         accepted a user that was never created and left the confusing 422 to
         the next call (audit A11/A19/A20 fail-loud provisioning)."""
-        async with httpx.AsyncClient(timeout=20, auth=self._auth,
-                                     transport=self._transport) as client:
-            resp = await client.request(method, f"{self.url}/api/v1{path}", **kw)
+        # pooled (F16 — this path runs ~8 requests per mission intake; the
+        # per-call client here was the exact anti-pattern PooledClient killed)
+        resp = await self._http.get().request(
+            method, f"{self.url}/api/v1{path}", auth=self._auth, **kw)
         if resp.status_code in ok:
             return resp.json() if resp.text else None
         if resp.status_code in tolerate and (
@@ -118,6 +121,9 @@ class GiteaProvisioner:
             return None
         raise RuntimeError(f"internal forge: {method} {path} → "
                            f"{resp.status_code}: {resp.text[:200]}")
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
 
     # ── boot provisioning ────────────────────────────────────────────────────
 

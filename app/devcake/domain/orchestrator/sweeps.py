@@ -11,7 +11,7 @@ from ...ports.forge import legacy_branch, mission_branch
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import utcnow
-from . import dispatch, feed, freshness, review
+from . import completion, dispatch, feed
 from .markers import MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -108,15 +108,16 @@ async def merge_sweep(mgr, m: Mission) -> None:
             span.set_attribute("devcake.mission.key", m.key)
             span.set_attribute("devcake.outcome",
                                "merged" if state.merged else "closed")
-            await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
             if state.merged:
-                await mgr.pmo.set_status(m.ref, "done")
-                await mgr._feed(
-                    m.pmo_id, "issue",
-                    f"✅ PR {state.url} merged — mission done (merge sweep).")
-                mgr._audit(m.pmo_id, "merge_sweep_done", state.url)
-                await mgr.deliver_internal_zip_for_mission(m, state)
+                await completion.complete_merged(
+                    mgr, completion.MergedCause.SWEEP_EXTERNAL_MERGE,
+                    ref=m.ref, mission_key=m.key,
+                    pr=state, pr_url=state.url, mission=m)
             else:
+                # a CLOSED-unmerged PR is a cancellation, not a completion —
+                # deliberately outside the chokepoint (ADR-0034 scope note)
+                await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE},
+                                          add=set())
                 await mgr.pmo.cancel_mission(m.ref)
                 await mgr._feed(
                     m.pmo_id, "issue",
@@ -225,12 +226,9 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             # rework — IDENTICAL doctrine to finalize (review.py capability
             # branch). Without this, the sweep routed Gitea conflicts to
             # EXECUTE while finalize handed them off — a doctrine split.
-            caps = getattr(forge, "capabilities", None)
-            trust_conflict = verdict is False and (
-                caps is None or caps.mergeable_tristate)
-            if trust_conflict:
+            if completion.trusted_conflict(forge, verdict):
                 span.set_attribute("devcake.outcome", "conflict")
-                if not await review._maybe_route_conflict_to_execute(
+                if not await completion.route_conflict_to_execute(
                         mgr, m.pmo_id, m.key, pr_url, LABEL_MERGE, inst):
                     span.set_attribute("devcake.outcome", "conflict_handoff")
                     await mgr._feed(
@@ -250,17 +248,11 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
                           exc_info=True)
             return
         span.set_attribute("devcake.outcome", "merged")
-        # ADR-0031 D1 (deferred-merge row): DISCLOSE-ONLY — the finalize-time
-        # gate passed minutes-to-hours ago; material landing since still
-        # closes (the merge was operator-sanctioned) but never silently
-        await freshness.disclose_unread_at_close(mgr, m)
-        await mgr.pmo.swap_labels(m.ref, remove={LABEL_MERGE}, add=set())
-        await mgr.pmo.set_status(m.ref, "done")
-        await mgr._feed(
-            m.pmo_id, "issue",
-            f"✅ Merged after deferred retry ({pr_url}). Mission done.")
-        mgr._audit(m.pmo_id, "merge_retry_succeeded", pr_url)
-        await mgr.deliver_internal_zip_for_mission(m, pr)
+        # disclose-only freshness pre-step rides the cause table
+        # (DEFERRED_RETRY_MERGE → disclose_before=True)
+        await completion.complete_merged(
+            mgr, completion.MergedCause.DEFERRED_RETRY_MERGE,
+            ref=m.ref, mission_key=m.key, pr=pr, pr_url=pr_url, mission=m)
 
 
 async def tracking_sweep(mgr, m: Mission) -> None:

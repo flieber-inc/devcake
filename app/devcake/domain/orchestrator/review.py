@@ -8,12 +8,11 @@ from ...security import redact
 from .. import costing
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
-from ...ports.forge import mission_branch, run_branch
-from .feed import _unquoted
+from ...ports.forge import run_branch
+from . import completion
 from .freshness import review_freshness_gate
-from .markers import (CONFLICT_MARKER, HANDOFF_APPEND_MAX, HANDOFF_MARKER,
-                      MAX_CONFLICT_RESOLVES, MERGE_HANDOFF_MARKER,
-                      MERGE_RETRY_MARKER)
+from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
+                      MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER)
 
 log = logging.getLogger("devcake.missions")
 
@@ -55,54 +54,6 @@ async def _flag_out_of_pipeline_merge(mgr, run: Run) -> None:
     except Exception:  # noqa: BLE001 — anomaly probe is best-effort; failure logged (debug), the review flow is unaffected
         log.debug("out-of-pipeline merge check failed for %s",
                   run.mission_key, exc_info=True)
-
-
-async def _conflict_attempts(mgr, pmo_id: str) -> int:
-    """Prior auto-resolve attempts, derived from feed markers — the PMO is
-    the source of truth (docs/03), so the count survives restarts and a
-    human deleting directive comments deliberately resets it."""
-    act = await mgr.pmo.get_activity(MissionRef(pmo_id, "issue"))
-    hits = [int(mt.group(1)) for e in act.entries
-            for mt in CONFLICT_MARKER.finditer(_unquoted(e.body))]
-    return max(hits) if hits else 0
-
-
-async def _maybe_route_conflict_to_execute(mgr, pmo_id: str, key: str,
-                                           pr_url: str,
-                                           from_label: str, inst) -> bool:
-    """docs/03 §4.1 — on an auto-resolvable merge failure (conflict or
-    stale branch), route the mission back to EXECUTE with a resolve
-    directive, max MAX_CONFLICT_RESOLVES attempts per mission. Returns
-    True when routed; any failure or decline returns False so the caller's
-    human fallback (DEVCAKE-MERGE) is never blocked. ``inst`` is the
-    mission's RepoInstance (per-repo doctrine, ADR-0020)."""
-    if not inst.auto_resolve_merge_conflicts:
-        return False
-    try:
-        n = await _conflict_attempts(mgr, pmo_id)
-        if n >= MAX_CONFLICT_RESOLVES:
-            mgr._audit(pmo_id, "conflict_resolve_exhausted", pr_url)
-            return False
-        # directive FIRST, then swap (mirrors the reject path): if the
-        # post fails the mission stays put and the marker count never
-        # undercounts. The EXECUTE playbook tells the Dev a 🧩 resolve
-        # directive overrides its normal implement-the-mission job (🧩 is
-        # reserved for this directive — 🔀 already means "PR opened").
-        await mgr._feed(
-            pmo_id, "issue",
-            f"🧩 Auto-merge hit a merge conflict on {pr_url} (auto-resolve "
-            f"attempt {n + 1}/{MAX_CONFLICT_RESOLVES}) — back to EXECUTE. "
-            f"Next Dev: sync `{mission_branch(mgr.instance_name, key)}` with the default branch, "
-            f"resolve the conflicts, and push; the PR then returns to "
-            f"REVIEW. `devcake:conflict-resolve:{n + 1}`")
-        await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                   remove={from_label}, add={LABEL_EXECUTE})
-        mgr._audit(pmo_id, "conflict_resolve_dispatched",
-                    f"attempt {n + 1} ({pr_url})")
-        return True
-    except Exception:
-        log.exception("conflict auto-resolve routing failed for %s", key)
-        return False
 
 
 async def _append_handoff(mgr, run: Run, result: dict) -> None:
@@ -198,65 +149,59 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     async def _merge():
                         await forge.merge(pr.number)
                     await mgr._checkpoint(run, "review:merge", _merge)
-                    async def _done():
-                        await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
-                                             remove={LABEL_REVIEW}, add=set())
-                        await mgr.pmo.set_status(MissionRef(pmo_id, "issue"), "done")
-                        await mgr._feed(
-                            pmo_id, "issue",
-                            f"✅ REVIEW approved; PR merged ({pr_url}). "
-                            f"Mission done.")
-                        mgr._audit(pmo_id, "review_approve_merged", pr_url)
-                    await mgr._checkpoint(run, "review:done", _done)
-                    await mgr.deliver_internal_zip(run, pr)
-                except Exception as e:  # noqa: BLE001 — every merge failure, whatever its type, must enter the re-probe → conflict-route → merge-failed recovery ladder; escaping would strand the mission mid-REVIEW
-                    # Capture for nested async defs (static F821 + safe if
-                    # await order changes later); not a known production 500.
+                except Exception as e:  # noqa: BLE001 — every MERGE failure, whatever its type, must enter the re-probe → conflict-route → merge-failed recovery ladder; escaping would strand the mission mid-REVIEW
                     merge_err = e
+                    handled_below = True
+                else:
+                    # merge landed: complete via the chokepoint. Its failures
+                    # PROPAGATE (F4) — the run stays finalizing and converges
+                    # via redelivery (the four-way guard above doesn't block;
+                    # "review:merge" no-ops; "review:done" retries) or, past
+                    # the stalled-finalize deadline, the next REVIEW cycle's
+                    # re-probe of an already-merged PR.
+                    await completion.complete_merged(
+                        mgr, completion.MergedCause.REVIEW_AUTO_MERGE,
+                        ref=MissionRef(pmo_id, "issue"),
+                        mission_key=run.mission_key,
+                        pr=pr, pr_url=pr_url, run=run)
+                    handled_below = False
+                if handled_below:
                     # Already-merged treated as success by forge.merge; if we
-                    # still fail, re-probe before posting merge-failed (ISSUES #6).
+                    # still fail, re-probe before posting merge-failed
+                    # (ISSUES #6). The try covers ONLY the probe (2026-08-12
+                    # audit F4): the old scope also swallowed completion's
+                    # PMO transients, misattributed them to the probe, and
+                    # posted "auto-merge failed" on an already-merged PR.
+                    merged = False
                     try:
-                        state = await forge.pr_state(pr.number)
-                        if state.merged:
-                            async def _done_merged():
-                                if "review:merge" not in run.finalized_steps:
-                                    run.finalized_steps.append("review:merge")
-                                    mgr.runs.store.save(run)
-                                await mgr.pmo.swap_labels(
-                                    MissionRef(pmo_id, "issue"),
-                                    remove={LABEL_REVIEW}, add=set())
-                                await mgr.pmo.set_status(
-                                    MissionRef(pmo_id, "issue"), "done")
-                                await mgr._feed(
-                                    pmo_id, "issue",
-                                    f"✅ REVIEW approved; PR merged ({pr_url}). "
-                                    f"Mission done.")
-                                mgr._audit(pmo_id, "review_approve_merged", pr_url)
-                            await mgr._checkpoint(run, "review:done", _done_merged)
-                            await mgr.deliver_internal_zip(run, pr)
-                            return
+                        merged = (await forge.pr_state(pr.number)).merged
                     except Exception:
                         log.exception("pr_state probe after merge fail for %s",
                                       pr_url)
+                    if merged:
+                        # absorb the found-merged stamp so a redelivery
+                        # skips the merge checkpoint, then complete via the
+                        # chokepoint — its failures PROPAGATE (run stays
+                        # finalizing; redelivery/stalled-finalize converge)
+                        if "review:merge" not in run.finalized_steps:
+                            run.finalized_steps.append("review:merge")
+                            mgr.runs.store.save(run)
+                        await completion.complete_merged(
+                            mgr, completion.MergedCause.REVIEW_AUTO_MERGE,
+                            ref=MissionRef(pmo_id, "issue"),
+                            mission_key=run.mission_key,
+                            pr=pr, pr_url=pr_url, run=run)
+                        return
                     mstate = None
                     try:
                         mstate = await forge.mergeable(pr.number)
                     except Exception:
                         log.exception("mergeable check failed for %s", pr_url)
-                    # capability branch (M11): a `False` verdict is trustworthy
-                    # as a real conflict only when the forge exposes a genuine
-                    # mergeable tri-state (GitHub/GitLab). On a boolean-only
-                    # forge (Gitea) it can be a transient not-computed-yet, so
-                    # don't route to EXECUTE rework on the verdict alone — the
-                    # merge already failed above; hand off to a human instead
-                    caps = getattr(forge, "capabilities", None)
-                    trust_conflict = mstate is False and (
-                        caps is None or caps.mergeable_tristate)
-                    if trust_conflict:
+                    if completion.trusted_conflict(forge, mstate):
                         if "review:conflict_routed" in run.finalized_steps:
                             return
                         try:
-                            routed = await _maybe_route_conflict_to_execute(
+                            routed = await completion.route_conflict_to_execute(
                                 mgr, pmo_id, run.mission_key, pr_url,
                                 LABEL_REVIEW, inst)
                         except Exception:

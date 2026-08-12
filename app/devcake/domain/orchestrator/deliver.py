@@ -18,12 +18,12 @@ import logging
 import zipfile
 
 from ...ports.forge import PRFile, run_branch
-from . import feed
+from . import feed, steps
 from .markers import DELIVERABLE_MARKER
 
 log = logging.getLogger("devcake.deliver")
 
-_DELIVER_STEP = "deliver:zip"
+_DELIVER_STEP = steps.DELIVER_ZIP
 # leave headroom under the PMO attachment cap for the zip container overhead
 _SAFETY = 64 * 1024
 

@@ -672,3 +672,141 @@ def test_secrets_only_apply_orders_adds_before_destructive(monkeypatch, tmp_path
                     or j == "conn_write:pmo-linear.api_key")
     adds = [i for i, j in enumerate(journal) if j == "harness_write:NEW_ONLY"]
     assert adds and max(adds) < first_mut
+
+
+# ── credential files: the one-way door closed (2026-08-12 audit SEC-2) ──────
+
+
+def test_credential_files_export_apply_round_trip(monkeypatch, tmp_path):
+    """Host migration as advertised: exported credential files ARRIVE on the
+    target — written 0600 through the one writer seam — and the group is
+    replace-the-world (an unlisted host file is deleted)."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path / "src")
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "grok-auth.json",
+                                  '{"tok": "oauth-secret-abc123"}')
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True,
+                                  include_credential_files=True)
+    assert "credential_files" in bundle["secrets"]
+
+    dst = tmp_path / "dst"
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(dst))
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        dst / "config" / "config.yaml")
+    # a stale credential on the target that the bundle does not list
+    secrets.write_credential_file("senior-dev", "stale-auth.json", "old")
+    result = sb.apply_bundle(bundle, config=config_mod.AppConfig(),
+                             dev_types={}, reload=lambda: None)
+    target = dst / "secrets" / "senior-dev" / "grok-auth.json"
+    assert target.read_text() == '{"tok": "oauth-secret-abc123"}'
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert not (dst / "secrets" / "senior-dev" / "stale-auth.json").exists()
+    assert "dev-type credential files" not in result["untouched"]
+
+
+def test_credential_files_absent_key_leaves_files_untouched(monkeypatch, tmp_path):
+    """No `credential_files` key (every pre-SEC-2 profile/bundle) → the group
+    is untouched: an ordinary profile apply must never wipe OAuth creds."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "grok-auth.json", "keep-me")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)   # no creds
+    result = sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                             reload=lambda: None)
+    assert (tmp_path / "secrets" / "senior-dev" / "grok-auth.json"
+            ).read_text() == "keep-me"
+    assert "dev-type credential files" in result["untouched"]
+
+
+def test_credential_files_validation_refusals(monkeypatch, tmp_path):
+    import base64
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+
+    def bundle_with(dev, entry):
+        b = sb.serialize_current(cfg, dts, include_secrets=True)
+        b["secrets"]["credential_files"] = {dev: [entry]}
+        return b
+
+    ok = base64.b64encode(b"x").decode()
+    with pytest.raises(sb.BundleError, match="invalid credential filename"):
+        sb.validate_bundle(bundle_with(
+            "senior-dev", {"filename": "../../etc/passwd", "content_b64": ok}))
+    with pytest.raises(sb.BundleError, match="invalid credential dev_type"):
+        sb.validate_bundle(bundle_with(
+            "connections", {"filename": "a.json", "content_b64": ok}))
+    with pytest.raises(sb.BundleError, match="UTF-8"):
+        sb.validate_bundle(bundle_with(
+            "senior-dev", {"filename": "a.json",
+                           "content_b64": base64.b64encode(b"\xff\xfe").decode()}))
+    big = base64.b64encode(b"x" * (secrets.MAX_CREDENTIAL_FILE_BYTES + 1)).decode()
+    with pytest.raises(sb.BundleError, match="exceeds"):
+        sb.validate_bundle(bundle_with(
+            "senior-dev", {"filename": "a.json", "content_b64": big}))
+
+
+def test_credential_files_unknown_dev_type_skipped_with_warning(
+        monkeypatch, tmp_path):
+    import base64
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["credential_files"] = {
+        "ghost-dev": [{"filename": "a.json",
+                       "content_b64": base64.b64encode(b"v").decode()}]}
+    result = sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                             reload=lambda: None)
+    assert any("ghost-dev" in w and "skipped" in w for w in result["warnings"])
+    assert not (tmp_path / "secrets" / "ghost-dev").exists()
+
+
+def test_rollback_restores_overwritten_credential_file(monkeypatch, tmp_path):
+    """The rollback snapshot must carry the group when the bundle touches it
+    — without the include_credential_files flag on `previous`, a failed
+    apply that already overwrote grok-auth.json could not restore it."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "grok-auth.json", "NEWER-oauth")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True,
+                                  include_credential_files=True)
+    # bundle captured, then simulate the export being stale vs a re-OAuth
+    import base64 as b64mod
+    bundle["secrets"]["credential_files"]["senior-dev"] = [
+        {"filename": "grok-auth.json",
+         "content_b64": b64mod.b64encode(b"OLDER-oauth").decode()}]
+
+    calls = {"n": 0}
+
+    def failing_reload():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("adapter reload blew up")
+
+    with pytest.raises(sb.BundleError, match="previous settings restored"):
+        sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                        reload=failing_reload)
+    assert (tmp_path / "secrets" / "senior-dev" / "grok-auth.json"
+            ).read_text() == "NEWER-oauth"
+
+
+def test_diff_previews_credential_file_names_only(monkeypatch, tmp_path):
+    import base64
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    secrets.write_credential_file("senior-dev", "replaced.json", "current")
+    secrets.write_credential_file("senior-dev", "removed.json", "current")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["credential_files"] = {
+        "senior-dev": [
+            {"filename": "replaced.json",
+             "content_b64": base64.b64encode(b"incoming").decode()},
+            {"filename": "added.json",
+             "content_b64": base64.b64encode(b"incoming").decode()},
+        ]}
+    out = sb.diff_bundle(bundle, cfg, dts)
+    delta = out["sections"]["secrets"]["credential_files"]
+    assert delta == {"added": ["senior-dev/added.json"],
+                     "replaced": ["senior-dev/replaced.json"],
+                     "removed": ["senior-dev/removed.json"]}
+    blob = str(out)
+    assert "incoming" not in blob and "current" not in blob

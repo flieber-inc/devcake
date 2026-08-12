@@ -412,11 +412,15 @@ def test_config_put_survives_secret_cleanup_failure(tmp_path, monkeypatch):
     # PUT persisted repos:[] to the real config path).
     monkeypatch.setattr(config_service, "save_config", lambda c: None)
     monkeypatch.setattr(app_main.secrets_store, "delete_connection_instance", boom)
-    # ADR-0028: a fresh per-test graph — no module-global repos to restore
+    # ADR-0028: a fresh per-test graph — no module-global repos to restore.
+    # Dev types must cover the default assignments: the PUT validates the
+    # reference unconditionally since SEC-3 (boot always seeds these).
+    from devcake.config import DEFAULT_DEV_TYPES
     monkeypatch.setattr(app_main, "services", make_services(
         config=AppConfig(repos=[RepoInstance(name="gone",
                                              url="https://github.com/o/r")]),
-        dev_types={}, managers={}, repo_cache=None,
+        dev_types={dt.name: dt for dt in DEFAULT_DEV_TYPES},
+        managers={}, repo_cache=None,
         poll_rt=SimpleNamespace(lock=asyncio.Lock()),
         reload_connections=lambda: None))
     out = run_coro(app_main.put_config({"repos": []}))   # must not raise

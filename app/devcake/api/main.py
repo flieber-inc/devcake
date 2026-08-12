@@ -35,6 +35,7 @@ from ..domain.orchestrator import StewardBusy, StewardUnconfigured
 from ..domain.reconcile import reconcile_runs
 from ..domain.watchdog import watchdog_loop
 from ..prompts import templates as prompt_templates
+from ..settings_bundle import BundleError, validate_config_semantics
 from ..telemetry import setup_telemetry
 from ..telemetry.oo_provision import ensure_oo_ingest_user_at_boot
 from .auth import credentials_configured, enforce_control_plane_auth
@@ -134,6 +135,21 @@ async def lifespan(app: FastAPI):
     # /data template seeding, moved here from import time (ADR-0028)
     prompt_templates.seed_default_templates()   # /data defaults (v0.1.1)
     prompt_templates.seed_devtype_prompts(s.dev_types)   # per-dev-type (2026-07-15)
+    # Cross-store semantics at BOOT (2026-08-12 audit SEC-3): a hand-edited
+    # config referencing a deleted custom Dev Type (or a missing template)
+    # must refuse HERE with remediation, not KeyError inside the poll cycle
+    # at dispatch time. Runs after template seeding so builtins resolve.
+    # ONE implementation shared with PUT /config and bundle apply.
+    try:
+        validate_config_semantics(
+            s.config, set(s.dev_types),
+            template_exists=lambda mt, name:
+                not prompt_templates.resolve_playbook(mt, name)[1])
+    except BundleError as e:
+        raise RuntimeError(
+            f"config.yaml failed cross-store validation: {e} — repair "
+            f"/data/config.yaml or /data/dev_types (docs/10 §3), then "
+            f"restart") from e
     log.info("boot: schema_version=%s dagu pull_policy=missing image tags "
              "devcake/dev-*:%s — re-run `docker buildx bake all` lockstep "
              "with app upgrades", s.config.schema_version,

@@ -534,12 +534,15 @@ def test_secret_env_blocklist_covers_registry_and_protocol():
 
 
 def test_harness_var_regex_shared():
-    """One shape definition: api.connections_service._HARNESS_VAR_RE compiles
-    from config.HARNESS_VAR_PATTERN — the validator and the store gate can't
-    drift apart."""
+    """One shape definition: BOTH downstream copies compile from
+    config.HARNESS_VAR_PATTERN — the endpoint validator, the bundle
+    validator, and the store gate can't drift apart (2026-08-12 audit SEC-8:
+    settings_bundle carried a hand-copied literal)."""
     from devcake.api.connections_service import _HARNESS_VAR_RE
     from devcake.config import HARNESS_VAR_PATTERN
+    from devcake.settings_bundle import _HARNESS_RE
     assert _HARNESS_VAR_RE.pattern == f"^{HARNESS_VAR_PATTERN}$"
+    assert _HARNESS_RE.pattern == f"^{HARNESS_VAR_PATTERN}$"
 
 
 def test_reference_repos_validated_and_disjoint():
@@ -616,3 +619,64 @@ def test_assignment_for_resolves_override_wholesale_or_global():
     assert (a.dev_type, a.extra_cli_args) == ("implementer", "")
     # non-overridden type on the overriding instance still inherits
     assert assignment_for(cfg, cs, "EXECUTE").dev_type == "implementer"
+
+
+def test_global_assignments_validated_at_the_model(tmp_path):
+    """SEC-3 (2026-08-12 audit): the global map is validated where EVERY
+    entry point funnels — model_validate — so a hand-edited config.yaml
+    refuses at boot with remediation instead of KeyErroring inside the poll
+    cycle at assignment_for()."""
+    base = _base()
+    # missing mission types refused, remediation names the fix
+    base["assignments"] = {
+        "ONBOARD": {"dev_type": "judgment", "extra_cli_args": ""}}
+    with pytest.raises(Exception, match="delete the `assignments:` key"):
+        AppConfig.model_validate(base)
+    # empty-typed row refused (the PUT used to be the only guard)
+    base["assignments"] = {
+        mt: {"dev_type": "judgment" if mt != "EXECUTE" else "",
+             "extra_cli_args": ""}
+        for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")}
+    with pytest.raises(Exception, match="must name a\\s+Dev Type"):
+        AppConfig.model_validate(base)
+    # unknown key refused with the valid-keys hint
+    base["assignments"] = {
+        **{mt: {"dev_type": "judgment", "extra_cli_args": ""}
+           for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")},
+        "DEPLOY": {"dev_type": "judgment", "extra_cli_args": ""}}
+    with pytest.raises(Exception, match="unknown mission type"):
+        AppConfig.model_validate(base)
+    # deleting the key restores the default factory — the remediation is real
+    base["assignments"] = None
+    del base["assignments"]
+    cfg = AppConfig.model_validate(base)
+    assert set(cfg.assignments) == {"ONBOARD", "PLAN", "EXECUTE", "REVIEW"}
+
+
+def test_put_assignments_rejects_unknown_mission_type_key(
+        tmp_path, monkeypatch):
+    """The PUT accepted unknown mission-type keys before the shared rule
+    (latent bug closed by SEC-3's one-validation-path move)."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from devcake.api.devtypes_service import put_assignments
+    from devcake.config import DevType
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    cfg = AppConfig()
+    dts = {"judgment": DevType(name="judgment",
+                               harness_template="claude-code")}
+    body = {mt: {"dev_type": "judgment", "extra_cli_args": ""}
+            for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")}
+    bad = {**body, "DEPLOY": {"dev_type": "judgment", "extra_cli_args": ""}}
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            loop.run_until_complete(
+                put_assignments(bad, config=cfg, dev_types=dts))
+        assert exc.value.status_code == 422
+        assert "unknown mission type" in exc.value.detail
+    finally:
+        loop.close()

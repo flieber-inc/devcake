@@ -44,6 +44,21 @@ export default function DraftChrome({ registerNavGuard, health }) {
     setSaveBusy(true);
     const diff = dr.diff;
     const results = {};
+    // Dev Types FIRST: the config PUT may carry per-instance assignment
+    // overrides (cfg.pmos[].assignments) naming a Dev Type created in this
+    // same draft, and the server validates that reference unconditionally
+    // (one validation path — 2026-08-12 audit SEC-3). Saving config first
+    // would 422 on its own draft.
+    const dtNames = [...new Set(diff.filter((x) => x.path.startsWith("devTypes."))
+      .map((x) => x.path.split(".")[1]))];
+    for (const nm of dtNames) {
+      try {
+        await send("PUT", `/dev-types/${nm}`, dr.draft.devTypes[nm]);
+        results[`dev type ${nm}`] = { ok: true };
+      } catch (e) {
+        results[`dev type ${nm}`] = { ok: false, error: String(e.message || e) };
+      }
+    }
     const cfgKeys = [...new Set(diff.filter((x) => x.path.startsWith("cfg."))
       .map((x) => x.path.split(".")[1]))];
     if (cfgKeys.length) {
@@ -60,16 +75,6 @@ export default function DraftChrome({ registerNavGuard, health }) {
       }
       try { await send("PUT", "/config", patch); results["config"] = { ok: true }; }
       catch (e) { results["config"] = { ok: false, error: String(e.message || e) }; }
-    }
-    const dtNames = [...new Set(diff.filter((x) => x.path.startsWith("devTypes."))
-      .map((x) => x.path.split(".")[1]))];
-    for (const nm of dtNames) {
-      try {
-        await send("PUT", `/dev-types/${nm}`, dr.draft.devTypes[nm]);
-        results[`dev type ${nm}`] = { ok: true };
-      } catch (e) {
-        results[`dev type ${nm}`] = { ok: false, error: String(e.message || e) };
-      }
     }
     if (diff.some((x) => x.path.startsWith("assignments."))) {
       try { await send("PUT", "/assignments", dr.draft.assignments); results["assignments"] = { ok: true }; }

@@ -288,7 +288,11 @@ def test_rename_dev_type_moves_templates_and_refs(monkeypatch, tmp_path):
                  identifying_prompt="I am old.")
     # ADR-0028: a fresh per-test graph — the old try/finally that restored
     # the module-global config/dev_types is gone with the globals themselves
-    cfg = AppConfig(assignments={"EXECUTE": Assignment(dev_type="olddev")})
+    # complete map: the global assignments field refuses partial maps since
+    # SEC-3 (a partial map KeyErrors at dispatch for the missing types)
+    cfg = AppConfig(assignments={
+        mt: Assignment(dev_type="olddev")
+        for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")})
     cfg.active_devtype_prompts = {"olddev": "Customer Success"}
     monkeypatch.setattr(app_main, "services", make_services(
         config=cfg, dev_types={"olddev": dt}, shared_breakers={}))

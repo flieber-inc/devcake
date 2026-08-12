@@ -50,7 +50,8 @@ def _require_secret_ref(scope: str, instance: str, field: str) -> None:
 
 def _require_harness_var(var: str) -> None:
     if not _HARNESS_VAR_RE.fullmatch(var):
-        raise HTTPException(422, "harness var must match ^[A-Z][A-Z0-9_]{0,63}$")
+        raise HTTPException(
+            422, f"harness var must match ^{HARNESS_VAR_PATTERN}$")
 
 
 def _cycle(lock: asyncio.Lock | None):

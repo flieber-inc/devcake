@@ -37,7 +37,8 @@ from opentelemetry import trace
 from pydantic import ValidationError
 
 from . import secrets as secrets_store
-from .config import (AppConfig, DevType, _INSTANCE_NAME_RE, delete_dev_type,
+from .config import (AppConfig, DevType, HARNESS_VAR_PATTERN,
+                     _INSTANCE_NAME_RE, delete_dev_type,
                      reconcile_managed_pmos, reject_stale_patch, save_config,
                      save_dev_type)
 from .prompts import PLAYBOOK_VARS
@@ -243,7 +244,7 @@ def _scrub_validation_error(e: ValidationError) -> str:
 
 _CONN_FIELDS = secrets_store.CONNECTION_FIELDS
 _INSTANCE_RE = re.compile(_INSTANCE_NAME_RE)
-_HARNESS_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_HARNESS_RE = re.compile(f"^{HARNESS_VAR_PATTERN}$")   # one definition: config.py
 
 
 def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
@@ -314,7 +315,6 @@ def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
                 template_exists=lambda mt, name:
                     name in prompt_templates._builtins() or name == "default"
                     or name in templates.get(mt, {}),
-                check_assignments=True,
                 warnings=warnings)
         else:
             # rollback path: still drop impossible active_devtype_prompts
@@ -418,7 +418,7 @@ def _validate_secrets(sec, cfg: AppConfig | None, warnings: list[str]) -> dict:
     for var, value in (sec.get("harness") or {}).items():
         if not _HARNESS_RE.fullmatch(str(var)):
             raise BundleError(422, f"secrets.harness[{var!r}]: var must match "
-                                   "^[A-Z][A-Z0-9_]{0,63}$")
+                                   f"^{HARNESS_VAR_PATTERN}$")
         if not isinstance(value, str) or not value:
             raise BundleError(422, f"secrets.harness[{var}]: value must be a "
                                    "non-empty string")
@@ -548,14 +548,15 @@ def prune_stale_active_devtype_prompts(cfg: AppConfig,
 
 def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
                               template_exists: Callable[[str, str], bool],
-                              *, check_assignments: bool = False,
-                              warnings: list[str] | None = None) -> None:
-    """Cross-store checks shared by PUT /config and bundle apply.
+                              *, warnings: list[str] | None = None) -> None:
+    """Cross-store checks shared by boot, PUT /config, and bundle apply —
+    ONE path, no caller-specific carve-outs (2026-08-12 audit SEC-3; the old
+    `check_assignments` flag made the bundle path strict and the PUT path
+    blind, and the two had already drifted on empty dev_type). The SPA saves
+    Dev Types before the config PUT so a draft that creates-and-references a
+    Dev Type in one Save still validates (DraftChrome ordering note).
     template_exists decides against the caller's template universe — disk
-    for the PUT, bundle ∪ builtins for an apply. check_assignments is
-    apply-only: the PUT keeps today's split where PUT /assignments owns that
-    validation (the SPA saves assignments separately, possibly before a new
-    Dev Type lands).
+    for the PUT/boot, bundle ∪ builtins for an apply.
 
     Stale active_devtype_prompts keys are pruned (with optional warnings),
     never hard-422 — delete/rename/export paths must stay healable after an
@@ -578,17 +579,19 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
     elif dropped:
         for msg in dropped:
             log.warning(msg)
-    if check_assignments:
-        for mt, a in (cfg.assignments or {}).items():
-            if a.dev_type and a.dev_type not in dev_type_names:
-                raise BundleError(422, f"assignments[{mt}]: unknown Dev Type "
-                                       f"{a.dev_type!r}")
-        for inst in cfg.pmos:                     # ADR-0019 override maps
-            for mt, a in inst.assignments.items():
-                if a.dev_type not in dev_type_names:
-                    raise BundleError(
-                        422, f"pmos[{inst.name}].assignments[{mt}]: unknown "
-                             f"Dev Type {a.dev_type!r}")
+    # emptiness is impossible post-model (config.validate_assignment_map runs
+    # as a field validator on every model_validate) — only the cross-store
+    # dev-type reference is checked here
+    for mt, a in (cfg.assignments or {}).items():
+        if a.dev_type not in dev_type_names:
+            raise BundleError(422, f"assignments[{mt}]: unknown Dev Type "
+                                   f"{a.dev_type!r}")
+    for inst in cfg.pmos:                     # ADR-0019 override maps
+        for mt, a in inst.assignments.items():
+            if a.dev_type not in dev_type_names:
+                raise BundleError(
+                    422, f"pmos[{inst.name}].assignments[{mt}]: unknown "
+                         f"Dev Type {a.dev_type!r}")
 
 
 def dry_run_adapters(cfg: AppConfig) -> None:

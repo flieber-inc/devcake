@@ -9,7 +9,7 @@ from .. import costing
 from ..model import LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, MissionRef
 from ..run import Run
 from ...ports.forge import run_branch
-from . import completion
+from . import completion, steps
 from .freshness import review_freshness_gate
 from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
                       MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER)
@@ -81,7 +81,7 @@ async def _append_handoff(mgr, run: Run, result: dict) -> None:
                 MissionRef(pmo_id, "issue"), note)
         except Exception as e:  # noqa: BLE001 — best-effort BY DESIGN (lineage-note precedent): the close proceeds, the failure is audited
             mgr._audit(pmo_id, "handoff_append_failed", str(e)[:200])
-    await mgr._checkpoint(run, "review:handoff", _note)
+    await mgr._checkpoint(run, steps.REVIEW_HANDOFF, _note)
 
 
 async def finalize_review(mgr, run: Run, result: dict) -> None:
@@ -122,7 +122,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     pr.number,
                     "## DevCake REVIEW: APPROVED-BY-DEVCAKE ✅\n\n"
                     + report + footer)
-            await mgr._checkpoint(run, "review:pr_comment", _pr_comment)
+            await mgr._checkpoint(run, steps.REVIEW_PR_COMMENT, _pr_comment)
 
             async def _formal():
                 try:
@@ -130,25 +130,25 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 except Exception:
                     log.exception("formal approval failed — falling back to marker")
                     return False
-            if "review:formal_approve" not in run.finalized_steps:
+            if steps.REVIEW_FORMAL_APPROVE not in run.finalized_steps:
                 formal = await _formal()
-                run.finalized_steps.append("review:formal_approve")
+                run.finalized_steps.append(steps.REVIEW_FORMAL_APPROVE)
                 if formal:
-                    run.finalized_steps.append("review:formal_approve_ok")
+                    run.finalized_steps.append(steps.REVIEW_FORMAL_APPROVE_OK)
                 mgr.runs.store.save(run)
             else:
                 # redelivery: only claim formal approval if it succeeded
-                formal = "review:formal_approve_ok" in run.finalized_steps
+                formal = steps.REVIEW_FORMAL_APPROVE_OK in run.finalized_steps
 
         if inst.auto_merge and pr:
-            if "review:done" not in run.finalized_steps \
-                    and "review:merge_failed" not in run.finalized_steps \
-                    and "review:merge_deferred" not in run.finalized_steps \
-                    and "review:conflict_routed" not in run.finalized_steps:
+            if steps.REVIEW_DONE not in run.finalized_steps \
+                    and steps.REVIEW_MERGE_FAILED not in run.finalized_steps \
+                    and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \
+                    and steps.REVIEW_CONFLICT_ROUTED not in run.finalized_steps:
                 try:
                     async def _merge():
                         await forge.merge(pr.number)
-                    await mgr._checkpoint(run, "review:merge", _merge)
+                    await mgr._checkpoint(run, steps.REVIEW_MERGE, _merge)
                 except Exception as e:  # noqa: BLE001 — every MERGE failure, whatever its type, must enter the re-probe → conflict-route → merge-failed recovery ladder; escaping would strand the mission mid-REVIEW
                     merge_err = e
                     handled_below = True
@@ -156,7 +156,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     # merge landed: complete via the chokepoint. Its failures
                     # PROPAGATE (F4) — the run stays finalizing and converges
                     # via redelivery (the four-way guard above doesn't block;
-                    # "review:merge" no-ops; "review:done" retries) or, past
+                    # steps.REVIEW_MERGE no-ops; steps.REVIEW_DONE retries) or, past
                     # the stalled-finalize deadline, the next REVIEW cycle's
                     # re-probe of an already-merged PR.
                     await completion.complete_merged(
@@ -183,8 +183,8 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                         # skips the merge checkpoint, then complete via the
                         # chokepoint — its failures PROPAGATE (run stays
                         # finalizing; redelivery/stalled-finalize converge)
-                        if "review:merge" not in run.finalized_steps:
-                            run.finalized_steps.append("review:merge")
+                        if steps.REVIEW_MERGE not in run.finalized_steps:
+                            run.finalized_steps.append(steps.REVIEW_MERGE)
                             mgr.runs.store.save(run)
                         await completion.complete_merged(
                             mgr, completion.MergedCause.REVIEW_AUTO_MERGE,
@@ -198,7 +198,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     except Exception:
                         log.exception("mergeable check failed for %s", pr_url)
                     if completion.trusted_conflict(forge, mstate):
-                        if "review:conflict_routed" in run.finalized_steps:
+                        if steps.REVIEW_CONFLICT_ROUTED in run.finalized_steps:
                             return
                         try:
                             routed = await completion.route_conflict_to_execute(
@@ -209,11 +209,11 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                           run.mission_key)
                             routed = False
                         if routed:
-                            run.finalized_steps.append("review:conflict_routed")
+                            run.finalized_steps.append(steps.REVIEW_CONFLICT_ROUTED)
                             mgr.runs.store.save(run)
                             return
-                    if "review:merge_failed" not in run.finalized_steps \
-                            and "review:merge_deferred" not in run.finalized_steps:
+                    if steps.REVIEW_MERGE_FAILED not in run.finalized_steps \
+                            and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps:
                         async def _fail_path():
                             await mgr.pmo.swap_labels(
                                 MissionRef(pmo_id, "issue"),
@@ -233,7 +233,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                             str(merge_err)[:120])
                                 mgr._merge_window_closed.discard(pmo_id)
                                 run.finalized_steps.append(
-                                    "review:merge_deferred")
+                                    steps.REVIEW_MERGE_DEFERRED)
                             else:
                                 await mgr._feed(
                                     pmo_id, "issue",
@@ -245,12 +245,12 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                             "review_approve_merge_failed",
                                             str(merge_err)[:120])
                                 run.finalized_steps.append(
-                                    "review:merge_failed")
+                                    steps.REVIEW_MERGE_FAILED)
                             mgr.runs.store.save(run)
                         await _fail_path()
         elif inst.auto_merge and inst.merge_retry_window_minutes > 0 \
-                and "review:merge_deferred" not in run.finalized_steps \
-                and "review:awaiting_merge" not in run.finalized_steps:
+                and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \
+                and steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
             # AUD-006: auto_merge is ON but the PR wasn't visible at finalize
             # (forge list lag / branch-naming miss). Pure human-await copy
             # would strand app-driven merge FOREVER — the sweep silent-returns
@@ -270,10 +270,10 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     f"{MERGE_RETRY_MARKER}")
                 mgr._audit(pmo_id, "review_approve_defer_missing_pr", pr_url)
                 mgr._merge_window_closed.discard(pmo_id)
-                run.finalized_steps.append("review:merge_deferred")
+                run.finalized_steps.append(steps.REVIEW_MERGE_DEFERRED)
                 mgr.runs.store.save(run)
             await _defer_missing_pr()
-        elif "review:awaiting_merge" not in run.finalized_steps:
+        elif steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
             async def _await_merge():
                 await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                            remove={LABEL_REVIEW}, add={LABEL_MERGE})
@@ -284,7 +284,7 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                     f"Awaiting human merge of {pr_url} — the merge sweep completes "
                     f"this mission once it merges." + footer)
                 mgr._audit(pmo_id, "review_approve_awaiting_merge", pr_url)
-            await mgr._checkpoint(run, "review:awaiting_merge", _await_merge)
+            await mgr._checkpoint(run, steps.REVIEW_AWAITING_MERGE, _await_merge)
     else:  # reject
         rejections = 1 + sum(
             1 for r in mgr.runs.store.all()
@@ -354,13 +354,13 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 await forge.post_pr_comment(pr.number, warn)
             mgr._audit(pmo_id, "loop_warning", f"{rejections} rejections")
 
-        await mgr._checkpoint(run, "review:reject:feed", _reject_feed)
-        await mgr._checkpoint(run, "review:reject:pr_comment",
+        await mgr._checkpoint(run, steps.REVIEW_REJECT_FEED, _reject_feed)
+        await mgr._checkpoint(run, steps.REVIEW_REJECT_PR_COMMENT,
                                _reject_pr_comment)
-        await mgr._checkpoint(run, "review:reject:labels", _reject_labels)
-        await mgr._checkpoint(run, "review:reject:loop_warn",
+        await mgr._checkpoint(run, steps.REVIEW_REJECT_LABELS, _reject_labels)
+        await mgr._checkpoint(run, steps.REVIEW_REJECT_LOOP_WARN,
                                _reject_loop_warn)
-        if "review:reject" not in run.finalized_steps:
-            run.finalized_steps.append("review:reject")
+        if steps.REVIEW_REJECT not in run.finalized_steps:
+            run.finalized_steps.append(steps.REVIEW_REJECT)
             mgr.runs.store.save(run)
 

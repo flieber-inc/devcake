@@ -10,6 +10,7 @@ from ...security import redact
 from ..model import (LABEL_CREATED, LABEL_NEEDS_HUMAN, LABEL_OPTIN, LABEL_SKIP,
                      LABEL_TRACKING, MissionRef)
 from ..run import Run
+from . import steps
 from .markers import (COMMENT_SENTINEL, at_decomposition_limit,
                       decomposition_depth, decomposition_marker)
 
@@ -25,7 +26,8 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     # under the limit of that moment — a config change mid-resume must finish
     # the wiring, not strand live children behind a SKIP park.
     limit = mgr.config.max_decomposition_depth
-    committed = any(s.startswith("decomp:child:") for s in run.finalized_steps)
+    committed = any(s.startswith(steps.DECOMP_CHILD_PREFIX)
+                    for s in run.finalized_steps)
     if not committed and at_decomposition_limit(live, limit):
         depth = decomposition_depth(live)
         async def _depth_limit():
@@ -42,7 +44,7 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 f"again. Parked with `DEVCAKE-SKIP` for a human to "
                 f"re-scope.")
             mgr._audit(pmo_id, "depth_limit_rejected", run.run_id)
-        await mgr._checkpoint(run, "decomp:depth_limit", _depth_limit)
+        await mgr._checkpoint(run, steps.DECOMP_DEPTH_LIMIT, _depth_limit)
         run.verdict = "handed off: decomposition depth limit"
         return
     # children of an unknown-depth parent (unlimited mode) record depth 2 —
@@ -126,7 +128,7 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                     MissionRef(pmo_id, "project"),
                     redact(baton) + "\n\n" + COMMENT_SENTINEL)
             mgr._audit(pmo_id, "decomposition_conflict", detail)
-        await mgr._checkpoint(run, "decomp:conflict", _decomp_conflict)
+        await mgr._checkpoint(run, steps.DECOMP_CONFLICT, _decomp_conflict)
         run.verdict = "handed off: decomposition replay conflict"
         return
 
@@ -149,7 +151,7 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
 
     for i, d in enumerate(normalized, start=1):
         title = d["title"]
-        key_child = f"decomp:child:{i}"
+        key_child = steps.DECOMP_CHILD(i)
         if i in existing:
             child_id, key = existing[i], existing_keys[i]
         elif key_child in run.finalized_steps:
@@ -188,7 +190,7 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         for j in d["blocked_by"]:
             blocker_id = child_ids.get(j)
             if blocker_id:
-                rel_key = f"decomp:rel:{j}->{i}"
+                rel_key = steps.DECOMP_REL(j, i)
                 async def _rel(blocker_id=blocker_id, child_id=child_id, j=j):
                     await mgr.pmo.create_relation(blocker_id, child_id)
                     mgr._audit(child_id, "relation_created",
@@ -247,11 +249,11 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
             for b in open_blockers:
                 async def _in(b=b, child_id=child_id):
                     await _inherit(b, child_id)
-                await mgr._checkpoint(run, f"decomp:inherit:in:{b}->{i}", _in)
+                await mgr._checkpoint(run, steps.DECOMP_INHERIT_IN(b, i), _in)
             for dep in dependents:
                 async def _out(child_id=child_id, dep=dep):
                     await _inherit(child_id, dep)
-                await mgr._checkpoint(run, f"decomp:inherit:out:{i}->{dep}",
+                await mgr._checkpoint(run, steps.DECOMP_INHERIT_OUT(i, dep),
                                        _out)
 
         # lineage note (ADR-0012 hygiene): best-effort BY DESIGN — the note
@@ -269,7 +271,7 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                     MissionRef(pmo_id, "issue"), note)
             except Exception as e:  # noqa: BLE001 — lineage note is best-effort BY DESIGN (comment above); failure recorded in the audit, the cancel proceeds
                 mgr._audit(pmo_id, "lineage_note_failed", str(e)[:200])
-        await mgr._checkpoint(run, "decomp:parent_note", _parent_note)
+        await mgr._checkpoint(run, steps.DECOMP_PARENT_NOTE, _parent_note)
 
     links = ", ".join(created) or "(all already existed)"
     async def _tracking():
@@ -284,4 +286,4 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
                 f"{links}. This issue is canceled in their favor.")
             await mgr.pmo.cancel_mission(MissionRef(pmo_id, "issue"))
             mgr._audit(pmo_id, "decomposed_canceled", links)
-    await mgr._checkpoint(run, "decomp:tracking", _tracking)
+    await mgr._checkpoint(run, steps.DECOMP_TRACKING, _tracking)

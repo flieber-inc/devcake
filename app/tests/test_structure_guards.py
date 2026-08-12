@@ -185,3 +185,148 @@ def test_main_module_level_is_wiring_only():
     assert not offenders, (
         "api/main.py module scope grew non-wiring calls — move them into "
         "build_services() / lifespan (ADR-0028): " + "; ".join(offenders))
+
+
+# ── ADR-0034: checkpoint step keys resolve to the registry ───────────────────
+
+DOMAIN = Path(__file__).parents[1] / "devcake" / "domain"
+
+# The two sanctioned domain→adapters seams (2026-08-12 audit, docs audit §3):
+# git is the single subprocess seam (ADR-0024 §"single subprocess seam");
+# adapters.http's pool cleanup rides the hot-reload path (F16 — documented
+# by this allowlist entry and the module's own comment).
+DOMAIN_ADAPTER_IMPORT_ALLOWLIST = {
+    ("repo_mirror.py", "adapters.git"),
+    ("forge_runtime.py", "adapters.http"),
+}
+
+
+def _steps_module():
+    from devcake.domain.orchestrator import steps
+    return steps
+
+
+def _step_key_expr_ok(node, local_assigns, steps) -> bool:
+    """A registered key expression: a literal in EXACT_KEYS, `steps.<CONST>`
+    naming a registered constant, a family constructor call, or a local Name
+    assigned from one of those."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value in steps.EXACT_KEYS
+    if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+            and node.value.id == "steps"):
+        val = getattr(steps, node.attr, None)
+        return isinstance(val, str) and val in steps.EXACT_KEYS
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "steps"):
+        return node.func.attr in steps.FAMILY_CONSTRUCTORS
+    if isinstance(node, ast.Name):
+        assigned = local_assigns.get(node.id)
+        return assigned is not None and _step_key_expr_ok(assigned, {}, steps)
+    return False
+
+
+def scan_step_key_sites(source: str, steps) -> list[str]:
+    """Offending `_checkpoint(...)` / `finalized_steps.append(...)` key
+    expressions — anything that does not resolve to the registry. Anti-
+    accident, not anti-adversary: it resolves literals, `steps.*` constants,
+    family constructor calls, and simple local assignments of those; it does
+    not chase arbitrary dataflow. The checkpoint MECHANISM itself
+    (finalize._checkpoint's own `append(key)`) is exempt by name."""
+    tree = ast.parse(source)
+    local_assigns: dict[str, ast.AST] = {}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            local_assigns[node.targets[0].id] = node.value
+    # drop the mechanism's own body from the scan
+    mechanism = {id(n) for fn in ast.walk(tree)
+                 if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and fn.name == "_checkpoint"
+                 for n in ast.walk(fn)}
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or id(node) in mechanism:
+            continue
+        f = node.func
+        key = None
+        if isinstance(f, ast.Attribute) and f.attr == "_checkpoint":
+            # mgr._checkpoint(run, key, fn) → args[1];
+            # finalize._checkpoint(mgr, run, key, fn) → args[2]
+            if len(node.args) >= 3:
+                key = node.args[1] if len(node.args) == 3 else node.args[2]
+        elif (isinstance(f, ast.Attribute) and f.attr == "append"
+                and isinstance(f.value, ast.Attribute)
+                and f.value.attr == "finalized_steps"):
+            key = node.args[0] if node.args else None
+        if key is not None and not _step_key_expr_ok(key, local_assigns, steps):
+            offenders.append(f"line {node.lineno}: {ast.unparse(key)}")
+    return offenders
+
+
+def test_every_checkpoint_key_resolves_to_the_registry():
+    """ADR-0034 / audit F13: `run.finalized_steps` strings are the
+    redelivery control flow — every producer site must use a registered
+    constant or family constructor from orchestrator/steps.py, never a bare
+    literal the two derived tables (swap-marker stage, past-gate) can't see.
+    Remediation: register the key in steps.py (declaring stage_after /
+    past_freshness_gate) or use its family constructor."""
+    steps = _steps_module()
+    offenders = []
+    for p in sorted(DOMAIN.rglob("*.py")):
+        if p.name == "steps.py" or "__pycache__" in p.parts:
+            continue
+        offenders += [f"{p.relative_to(DOMAIN)}: {o}"
+                      for o in scan_step_key_sites(p.read_text(), steps)]
+    assert not offenders, (
+        "unregistered checkpoint keys (register in orchestrator/steps.py or "
+        "use its family constructor): " + "; ".join(offenders))
+
+
+def test_every_registry_key_is_used():
+    """Reverse ratchet: the registry accumulates no dead rows — every exact
+    key's constant and every family constructor is referenced somewhere in
+    domain/ (as `steps.<NAME>`)."""
+    steps = _steps_module()
+    used: set[str] = set()
+    for p in sorted(DOMAIN.rglob("*.py")):
+        if p.name == "steps.py" or "__pycache__" in p.parts:
+            continue
+        for node in ast.walk(ast.parse(p.read_text())):
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "steps"):
+                used.add(node.attr)
+    const_by_key = {getattr(steps, name): name for name in dir(steps)
+                    if isinstance(getattr(steps, name), str)
+                    and not name.startswith("_")}
+    dead = sorted(const_by_key[s.key] for s in steps.REGISTRY
+                  if not s.dynamic and const_by_key.get(s.key) not in used)
+    dead += sorted(f for f in steps.FAMILY_CONSTRUCTORS if f not in used)
+    assert not dead, f"registry rows with no producer in domain/: {dead}"
+
+
+def test_domain_never_imports_adapters():
+    """The layering rule (docs/01: domain depends on port Protocols, never
+    adapter packages), previously enforced by prose and review culture only
+    (2026-08-12 docs audit). Two sanctioned seams are allowlisted above;
+    a third needs its own documented ruling, not a quiet import."""
+    offenders = []
+    for p in sorted(DOMAIN.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        for node in ast.walk(ast.parse(p.read_text())):
+            mods = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if "adapters" in node.module.split("."):
+                    mods.append(node.module)
+            elif isinstance(node, ast.Import):
+                mods += [a.name for a in node.names
+                         if "adapters" in a.name.split(".")]
+            for m in mods:
+                short = m[m.index("adapters"):]
+                if (p.name, short) not in DOMAIN_ADAPTER_IMPORT_ALLOWLIST:
+                    offenders.append(f"{p.relative_to(DOMAIN)}: imports {m}")
+    assert not offenders, (
+        "domain must not import adapter packages (ADR-0034 layering ratchet; "
+        "sanctioned seams live in the allowlist): " + "; ".join(offenders))

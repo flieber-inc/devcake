@@ -8,7 +8,7 @@ from ...security import redact
 from ..model import (LABEL_EXECUTE, LABEL_NEEDS_HUMAN, LABEL_PLAN, LABEL_REVIEW,
                      LABEL_SKIP, MissionRef)
 from ..run import Run
-from . import decomposition, feed, review
+from . import decomposition, feed, review, steps
 from .markers import COMMENT_SENTINEL, LEGAL_OUTCOMES, _SWAP_MARKER_STAGE
 
 log = logging.getLogger("devcake.missions")
@@ -31,7 +31,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"human to inspect.")
             mgr._audit(pmo_id, "illegal_outcome",
                         f"{outcome or '(empty)'} from {run.mission_type}")
-        await mgr._checkpoint(run, "transition:illegal", _illegal)
+        await mgr._checkpoint(run, steps.TRANSITION_ILLEGAL, _illegal)
         run.verdict = redact(
             f"rejected: outcome {outcome or '(empty)'} is illegal "
             f"for {run.mission_type} — parked with DEVCAKE-SKIP")
@@ -44,7 +44,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "project"),
                                        remove=set(), add={LABEL_SKIP})
             mgr._audit(pmo_id, "project_bad_outcome_parked", outcome)
-        await mgr._checkpoint(run, "transition:project_park", _proj_park)
+        await mgr._checkpoint(run, steps.TRANSITION_PROJECT_PARK, _proj_park)
         run.verdict = redact(
             f"rejected: project returned {outcome} (only decomposed "
             f"is legal) — parked with DEVCAKE-SKIP")
@@ -72,7 +72,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"this mission's state was changed externally while it ran. The output is "
                 f"posted above; **no status or label changes were applied**.")
             mgr._audit(pmo_id, "external_transition", run.run_id)
-        await mgr._checkpoint(run, "transition:external", _external)
+        await mgr._checkpoint(run, steps.TRANSITION_EXTERNAL, _external)
         run.verdict = ("skipped: mission state changed externally while the "
                        "run was in flight — no transition applied")
         log.warning("EXTERNAL_TRANSITION on %s — no labels applied", run.run_id)
@@ -102,11 +102,11 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                                        remove={LABEL_PLAN}, add={LABEL_EXECUTE})
             mgr._audit(pmo_id, "label_swap", f"{LABEL_PLAN}→{LABEL_EXECUTE}")
 
-        await mgr._checkpoint(run, "transition:planned:upload", _plan_upload)
-        await mgr._checkpoint(run, "transition:planned:feed", _plan_feed)
-        await mgr._checkpoint(run, "transition:planned:labels", _plan_labels)
-        if "transition:planned" not in run.finalized_steps:
-            run.finalized_steps.append("transition:planned")
+        await mgr._checkpoint(run, steps.TRANSITION_PLANNED_UPLOAD, _plan_upload)
+        await mgr._checkpoint(run, steps.TRANSITION_PLANNED_FEED, _plan_feed)
+        await mgr._checkpoint(run, steps.TRANSITION_PLANNED_LABELS, _plan_labels)
+        if steps.TRANSITION_PLANNED not in run.finalized_steps:
+            run.finalized_steps.append(steps.TRANSITION_PLANNED)
             mgr.runs.store.save(run)
     elif outcome == "executed":
         async def _executed_labels():
@@ -122,10 +122,10 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"🔀 DevCake opened/updated the {noun}: "
                 f"{result.get('pr_url', '(no url reported)')} — awaiting REVIEW.")
 
-        await mgr._checkpoint(run, "transition:executed:labels", _executed_labels)
-        await mgr._checkpoint(run, "transition:executed:feed", _executed_feed)
-        if "transition:executed" not in run.finalized_steps:
-            run.finalized_steps.append("transition:executed")
+        await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_LABELS, _executed_labels)
+        await mgr._checkpoint(run, steps.TRANSITION_EXECUTED_FEED, _executed_feed)
+        if steps.TRANSITION_EXECUTED not in run.finalized_steps:
+            run.finalized_steps.append(steps.TRANSITION_EXECUTED)
             mgr.runs.store.save(run)
     elif outcome == "reviewed":
         await review.finalize_review(mgr, run, result)
@@ -153,21 +153,21 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                                        remove=set(), add={LABEL_EXECUTE})
             mgr._audit(pmo_id, "label_add", LABEL_EXECUTE)
 
-        await mgr._checkpoint(run, "transition:plan_needed_attach:upload",
+        await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED_ATTACH_UPLOAD,
                                _plan_attach_upload)
-        await mgr._checkpoint(run, "transition:plan_needed_attach:feed",
+        await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED_ATTACH_FEED,
                                _plan_attach_feed)
-        await mgr._checkpoint(run, "transition:plan_needed_attach:labels",
+        await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED_ATTACH_LABELS,
                                _plan_attach_labels)
-        if "transition:plan_needed_attach" not in run.finalized_steps:
-            run.finalized_steps.append("transition:plan_needed_attach")
+        if steps.TRANSITION_PLAN_NEEDED_ATTACH not in run.finalized_steps:
+            run.finalized_steps.append(steps.TRANSITION_PLAN_NEEDED_ATTACH)
             mgr.runs.store.save(run)
     elif outcome == "plan_needed":
         async def _plan_needed():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                        remove=set(), add={LABEL_PLAN})
             mgr._audit(pmo_id, "label_add", LABEL_PLAN)
-        await mgr._checkpoint(run, "transition:plan_needed", _plan_needed)
+        await mgr._checkpoint(run, steps.TRANSITION_PLAN_NEEDED, _plan_needed)
     elif outcome == "human_needed":
         # deliberate hand-off (docs/03 §4a, ADR-0007): the run finished
         # cleanly, so it never counts toward max_attempts; the stage label
@@ -205,7 +205,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                                 run.mission_key, exc_info=True)
             mgr._audit(pmo_id, "devcake_needs_human",
                         f"#{nth}: " + (result.get("summary") or "")[:110])
-        await mgr._checkpoint(run, "transition:human_needed", _human)
+        await mgr._checkpoint(run, steps.TRANSITION_HUMAN_NEEDED, _human)
         run.verdict = f"handed off: needs human on {run.mission_type}"
         mgr.needs_human[pmo_id] = (
             f"{run.mission_key}: needs human on {run.mission_type}"
@@ -220,7 +220,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 f"`DEVCAKE-SKIP` for a human to inspect.")
             mgr._audit(pmo_id, "label_add",
                         f"{LABEL_SKIP} (unknown outcome {outcome})")
-        await mgr._checkpoint(run, "transition:unknown_park", _unknown)
+        await mgr._checkpoint(run, steps.TRANSITION_UNKNOWN_PARK, _unknown)
         run.verdict = redact(
             f"rejected: unknown outcome {outcome} — parked with DEVCAKE-SKIP")
 

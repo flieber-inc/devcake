@@ -383,14 +383,17 @@ class RunManager:
             span.set_attribute("devcake.outcome", str((run.result or {}).get("outcome")))
             # Mission runs post transcripts/token reports in MissionManager
             # .finalize (INV-5); this path serves runs with no PMO host.
-            for step in ("acl_user_deleted", "reply_stream_deleted"):
-                if step not in run.finalized_steps:
-                    if step == "acl_user_deleted":
-                        await self.messaging.delete_run_user(run.run_id)
-                    else:
-                        await self.messaging.delete_reply_stream(run.run_id)
-                    run.finalized_steps.append(step)
-                    self.store.save(run)
+            # lazy: importing orchestrator.steps at module top would cycle
+            # (runs -> orchestrator/__init__ -> manager -> runs)
+            from .orchestrator import steps
+            if steps.ACL_USER_DELETED not in run.finalized_steps:
+                await self.messaging.delete_run_user(run.run_id)
+                run.finalized_steps.append(steps.ACL_USER_DELETED)
+                self.store.save(run)
+            if steps.REPLY_STREAM_DELETED not in run.finalized_steps:
+                await self.messaging.delete_reply_stream(run.run_id)
+                run.finalized_steps.append(steps.REPLY_STREAM_DELETED)
+                self.store.save(run)
             run.state, run.ended_at = "finished", utcnow()
             self.store.save(run)
             log.info("finalized %s → finished", run.run_id)

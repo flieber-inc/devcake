@@ -36,7 +36,7 @@ from ...ports.forge import mission_branch
 from ..model import (LABEL_EXECUTE, LABEL_MERGE, LABEL_REVIEW, Mission,
                      MissionRef)
 from ..run import Run
-from . import freshness
+from . import freshness, steps
 from .feed import _unquoted
 from .markers import CONFLICT_MARKER, MAX_CONFLICT_RESOLVES
 
@@ -108,7 +108,7 @@ async def complete_merged(mgr, cause: MergedCause, *, ref: MissionRef,
             mgr._audit(ref.pmo_id, spec.audit_action, pr_url)
 
         if run is not None:
-            await mgr._checkpoint(run, "review:done", _core)
+            await mgr._checkpoint(run, steps.REVIEW_DONE, _core)
         else:
             await _core()
         try:

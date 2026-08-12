@@ -18,6 +18,7 @@ from datetime import datetime
 
 from ..model import MissionRef
 from ..run import Run
+from . import steps
 from .dispatch import _aware, _mission_cost
 from .feed import _is_devcake_comment, _unquoted
 from .markers import (ELEVATED_MARKERS, FRESHNESS_MARKER,
@@ -29,9 +30,10 @@ log = logging.getLogger("devcake.missions")
 # withholding the transition is coherent (merged or parked pre-upgrade) —
 # the gate must not run for the first time on a redelivery that already
 # merged the PR.
-_PAST_GATE_STEPS = ("review:done", "review:merge", "review:merge_failed",
-                    "review:merge_deferred", "review:conflict_routed",
-                    "review:awaiting_merge")
+# DERIVED from the step registry (ADR-0034): a step declares
+# past_freshness_gate at registration — the old hand-enumeration of
+# review.py's step names cannot drift anymore.
+_PAST_GATE_STEPS = steps.past_gate_steps()
 
 # Synthetic finding when the adapter's hard stop truncated the fetch: the
 # gitea_issues adapter pages ASCENDING and drops the NEWEST entries at its
@@ -133,14 +135,15 @@ async def review_freshness_gate(mgr, run: Run) -> str:
     duplicate. Returns 'pass' | 'tripped' | 'exhausted'; 'tripped' means the
     caller must return without transitioning ('exhausted' proceeds — the
     disclosure was posted here)."""
-    steps = run.finalized_steps
-    if "review:freshness_tripped" in steps:
+    done_steps = run.finalized_steps
+    if steps.REVIEW_FRESHNESS_TRIPPED in done_steps:
         # redelivery of a tripped finalize: stay tripped — re-running a
         # check that can fail open would close the mission directly under a
         # directive that just promised a re-review
         return "tripped"
-    if "review:freshness_ok" in steps or "review:freshness_exhausted" in steps \
-            or any(s in steps for s in _PAST_GATE_STEPS):
+    if steps.REVIEW_FRESHNESS_OK in done_steps \
+            or steps.REVIEW_FRESHNESS_EXHAUSTED in done_steps \
+            or any(s in done_steps for s in _PAST_GATE_STEPS):
         return "pass"
 
     try:
@@ -150,7 +153,7 @@ async def review_freshness_gate(mgr, run: Run) -> str:
                       run.mission_key)
         found, count = [], 0
     if not found:
-        steps.append("review:freshness_ok")
+        done_steps.append(steps.REVIEW_FRESHNESS_OK)
         mgr.runs.store.save(run)
         return "pass"
 
@@ -172,7 +175,7 @@ async def review_freshness_gate(mgr, run: Run) -> str:
             mgr.anomalies[pmo_id] = (
                 f"{run.mission_key}: closed with unevaluated feed activity "
                 f"(re-review budget spent)")  # transient — pruned once done
-        await mgr._checkpoint(run, "review:freshness_exhausted", _disclose)
+        await mgr._checkpoint(run, steps.REVIEW_FRESHNESS_EXHAUSTED, _disclose)
         return "exhausted"
 
     n = count + 1
@@ -183,11 +186,11 @@ async def review_freshness_gate(mgr, run: Run) -> str:
                    f"re-review {n}/{MAX_FRESHNESS_REREVIEWS}: "
                    f"{len(found)} unread entries")
     try:
-        await mgr._checkpoint(run, "review:freshness_directive", _directive)
+        await mgr._checkpoint(run, steps.REVIEW_FRESHNESS_DIRECTIVE, _directive)
     except Exception:  # noqa: BLE001 — a failed post must NOT fail open past found material (that would close on known-unread entries) and must not wedge finalize either: with no marker posted the count cannot inflate, and the next plain REVIEW's mirror carries the material anyway
         log.exception("freshness directive post failed for %s — the "
                       "re-review proceeds undirected", run.mission_key)
-    steps.append("review:freshness_tripped")
+    done_steps.append(steps.REVIEW_FRESHNESS_TRIPPED)
     run.verdict = (f"handed off: freshness re-review "
                    f"{n}/{MAX_FRESHNESS_REREVIEWS} dispatched")
     mgr.runs.store.save(run)

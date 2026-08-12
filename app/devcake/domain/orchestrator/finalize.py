@@ -11,7 +11,7 @@ from ...security import redact, redact_value
 from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, utcnow
-from . import transitions
+from . import steps, transitions
 from .feed import _blockquote, _stage_of
 from .markers import FEED_INLINE_MAX, REPLY_MARKER
 
@@ -99,13 +99,13 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
             span.set_attribute("devcake.continuations", run.continuations_used)
 
         # 1 — transcript (idempotent via finalized_steps)
-        if "transcript" not in run.finalized_steps:
+        if steps.TRANSCRIPT not in run.finalized_steps:
             if _pre_wipe(mgr, run):
                 log.info("abort finalize (transcript) pre-wipe %s", run.run_id)
                 return
             await _post_transcript(mgr, run, transcript,
                                         payload.get("last_message_md"))
-            run.finalized_steps.append("transcript")
+            run.finalized_steps.append(steps.TRANSCRIPT)
             mgr.runs.store.save(run)
 
         # 1b — the answer as its own marked comment (ADR-0014 D2 quarantine
@@ -113,7 +113,7 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         # the answer without parsing our transcript header or opening the zip.
         # REVIEW/`reviewed` is suppressed (see _post_reply) so a trailing
         # "LGTM" cannot displace the EXECUTE answer as the newest REPLY.
-        await _checkpoint(mgr, run, "reply", lambda: _post_reply(
+        await _checkpoint(mgr, run, steps.REPLY, lambda: _post_reply(
             mgr, run, payload.get("last_message_md"), outcome,
         ))
 
@@ -123,7 +123,7 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
 
         run.token_report = redact_value(token_report)  # persisted cost source
         # 2 — token report (INV-5: always)
-        if "token_report" not in run.finalized_steps:
+        if steps.TOKEN_REPORT not in run.finalized_steps:
             await mgr._feed(pmo_id, run.pmo_kind,
                              _token_report_md(run, token_report,
                                               mgr.config.cost_inputs))
@@ -131,7 +131,7 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                 log.info("abort finalize after token_report pre-wipe %s",
                          run.run_id)
                 return
-            run.finalized_steps.append("token_report")
+            run.finalized_steps.append(steps.TOKEN_REPORT)
             mgr.runs.store.save(run)
 
         # failure artifact (docs/07 §4 nonzero exits): evidence posted above,
@@ -163,7 +163,7 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
         # counted attempt (docs/15 §2), NOT an exception to propagate: the
         # run must fail cleanly so the mission reschedules next cycle
         # instead of stranding in `finalizing` until the watchdog timeout.
-        if "transition" not in run.finalized_steps:
+        if steps.TRANSITION not in run.finalized_steps:
             if _pre_wipe(mgr, run):
                 return
             try:
@@ -191,7 +191,7 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
                 return
             if _pre_wipe(mgr, run):
                 return
-            run.finalized_steps.append("transition")
+            run.finalized_steps.append(steps.TRANSITION)
             mgr.runs.store.save(run)
 
         await mgr.messaging.delete_run_user(run.run_id)

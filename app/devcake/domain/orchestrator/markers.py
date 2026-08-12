@@ -6,8 +6,8 @@ import os
 import re
 from pathlib import Path
 
-from ..model import (LABEL_CREATED, LABEL_EXECUTE, LABEL_PLAN, LABEL_REVIEW,
-                     MissionType)
+from ..model import LABEL_CREATED, MissionType
+from . import steps
 
 # The full state machine is dispatchable, projects included (ADR-0006).
 DISPATCHABLE_TYPES = {MissionType.ONBOARD, MissionType.PLAN,
@@ -37,20 +37,10 @@ STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
 # removed). Consulted by the redelivery external-transition check in
 # _transition: a live stage matching a present marker's value is our own swap
 # resuming, anything else is an external change and halts the finalize.
-# Stage-label-swapping checkpoints MUST be registered here, or their
-# redeliveries will misread the swap as external (cosmetic skip, safe).
-_SWAP_MARKER_STAGE: dict[str, str | None] = {
-    "transition:planned:labels": LABEL_EXECUTE,
-    "transition:executed:labels": LABEL_REVIEW,
-    "transition:plan_needed_attach:labels": LABEL_EXECUTE,
-    "transition:plan_needed": LABEL_PLAN,
-    "review:reject:labels": LABEL_EXECUTE,
-    "review:conflict_routed": LABEL_EXECUTE,
-    "review:done": None,           # REVIEW removed, mission done
-    "review:merge_failed": None,   # REVIEW→MERGE; MERGE is not a stage label
-    "review:merge_deferred": None,
-    "review:awaiting_merge": None,  # REVIEW→MERGE (auto_merge off; audit A6)
-}
+# DERIVED from the step registry (ADR-0034) — a new stage-swapping checkpoint
+# declares its stage_after at registration in steps.py; the old hand-copy
+# ("MUST be registered here") cannot drift anymore.
+_SWAP_MARKER_STAGE: dict[str, str | None] = steps.swap_marker_stage()
 
 # docs/05 §4: feed comments longer than this are uploaded as .md attachments
 # and referenced from a short comment (POST-time only — the Dev-side mirror

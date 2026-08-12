@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -725,10 +726,27 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     poll loop can never observe a half-applied world. The caller holds the
     runs-active guard.
 
-    Ordering (crash honesty, ADR-0013): additive file writes first, then the
-    config.yaml commit point, then deletions. A crash before the commit
-    leaves the old world authoritative with inert extra files; after it, the
-    new world is authoritative and a re-apply prunes the stale extras.
+    Ordering (crash honesty, ADR-0013; made true by the 2026-08-12 audit
+    SEC-1 fix — deletions used to run before the commit): three phases —
+      1. ADDITIVE writes: config files, then secret keys the old world
+         never stored (_apply_secret_adds);
+      2. the config.yaml COMMIT POINT (in-memory swap + save_config +
+         config-file prunes);
+      3. DESTRUCTIVE secret ops (_apply_secret_destructive): overwrites,
+         then deletions.
+    Invariant: a crash BEFORE the commit never modifies or removes any value
+    the old world stored — the old config stays authoritative over a store
+    with, at worst, inert extra keys, pruned by a re-apply. After the commit
+    the new world is authoritative and a re-apply converges the stragglers.
+    A secrets-only apply has no config.yaml commit; its commit point is the
+    ADD→MUT boundary, with the correspondingly weaker (but honest)
+    guarantee: every file replacement is individually atomic, no stored
+    value is modified before all additions are durable, no deletion happens
+    before all writes, and a crash leaves a well-formed mixed key set that
+    re-applying either bundle converges. One residual, named honestly: an
+    ADD-phase secret for an instance the old config has but never stored a
+    value for becomes visible to the old world after a crash — additive,
+    never a modification.
     """
     parsed = validate_bundle(bundle, _strict=not _is_rollback)
     warnings = list(parsed["warnings"])
@@ -760,14 +778,19 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
     prev_repos = list(config.repos) if new_cfg is not None else []
 
     applied: list[str] = []
+    # the plan is computed inside the same synchronous, lock-held window as
+    # the phases that execute it — it cannot go stale
+    ops = (_plan_secret_ops(parsed["secrets"],
+                            new_cfg if new_cfg is not None else config,
+                            restore_exact=_is_rollback)
+           if parsed["secrets"] is not None else None)
+    if ops is not None:
+        warnings.extend(ops.warnings)
     try:
         if new_cfg is not None:
             _apply_config_files(parsed)
-        if parsed["secrets"] is not None:
-            warnings.extend(_apply_secrets(
-                parsed["secrets"],
-                new_cfg if new_cfg is not None else config,
-                restore_exact=_is_rollback))
+        if ops is not None:
+            _apply_secret_adds(ops)          # phase ADD — pre-commit safe
         if new_cfg is not None:
             # commit point: config.yaml swaps the authoritative world
             live_alerts = list(config.dismissed_alerts)
@@ -780,7 +803,8 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
             dev_types.update(parsed["dev_types"])
             prompt_templates.seed_devtype_prompts(dev_types)
             applied.append("config")
-        if parsed["secrets"] is not None:
+        if ops is not None:
+            _apply_secret_destructive(ops)   # phase MUT — post-commit only
             applied.append("secrets")
         if _is_rollback:
             # files restored is the load-bearing part — a rollback reload
@@ -857,10 +881,27 @@ def _prune_config_files(parsed: dict, old_dev_types: dict) -> None:
                 p.unlink(missing_ok=True)
 
 
-def _apply_secrets(sec: dict, target_cfg: AppConfig, *,
-                   restore_exact: bool = False) -> list[str]:
-    """Replace the secret stores. Unknown-instance entries are SKIPPED with a
-    warning — never an orphan secret file on disk (ADR-0013 hardening).
+@dataclass(frozen=True)
+class _SecretOps:
+    """Pure plan of secret-store mutations, partitioned by crash class
+    (2026-08-12 audit SEC-1): ADDS create keys the old world never stored —
+    safe before the commit point; overwrites and deletions are DESTRUCTIVE
+    and run only after it."""
+    warnings: tuple[str, ...]
+    conn_adds: tuple[tuple[str, str, str, str], ...]       # scope, inst, field, value
+    conn_overwrites: tuple[tuple[str, str, str, str], ...]
+    conn_field_deletes: tuple[tuple[str, str, str], ...]
+    conn_instance_deletes: tuple[tuple[str, str], ...]
+    harness_adds: tuple[tuple[str, str], ...]
+    harness_overwrites: tuple[tuple[str, str], ...]
+    harness_deletes: tuple[str, ...]
+
+
+def _plan_secret_ops(sec: dict, target_cfg: AppConfig, *,
+                     restore_exact: bool = False) -> _SecretOps:
+    """Partition the bundle's secret section against the live store. Pure
+    read (store listings only). Unknown-instance entries are SKIPPED with a
+    warning — never an orphan secret file on disk (ADR-0013 hardening);
     restore_exact (rollback only) disables the skip: a live world may
     legitimately hold a secret whose instance card isn't saved yet, and a
     rollback must restore byte-exact, not editorialize."""
@@ -875,18 +916,58 @@ def _apply_secrets(sec: dict, target_cfg: AppConfig, *,
             continue
         wanted[key] = fields
     current = secrets_store.list_connection_secrets()
-    for key in set(current) - set(wanted):
-        scope, _, instance = key.partition("-")
-        secrets_store.delete_connection_instance(scope, instance)
+    conn_adds: list[tuple[str, str, str, str]] = []
+    conn_overwrites: list[tuple[str, str, str, str]] = []
+    conn_field_deletes: list[tuple[str, str, str]] = []
     for key, fields in wanted.items():
         scope, _, instance = key.partition("-")
-        for field in set(current.get(key, {})) - set(fields):
-            secrets_store.delete_connection_field(scope, instance, field)
+        have = current.get(key, {})
         for field, value in fields.items():
-            secrets_store.write_connection_secret(scope, instance, field, value)
+            row = (scope, instance, field, value)
+            (conn_overwrites if field in have else conn_adds).append(row)
+        for field in set(have) - set(fields):
+            conn_field_deletes.append((scope, instance, field))
+    conn_instance_deletes = []
+    for key in sorted(set(current) - set(wanted)):
+        scope, _, instance = key.partition("-")
+        conn_instance_deletes.append((scope, instance))
     cur_h = secrets_store.list_harness_secrets()
-    for var in set(cur_h) - set(sec["harness"]):
-        secrets_store.delete_harness_secret(var)
-    for var, value in sec["harness"].items():
+    return _SecretOps(
+        warnings=tuple(warnings),
+        conn_adds=tuple(conn_adds),
+        conn_overwrites=tuple(conn_overwrites),
+        conn_field_deletes=tuple(conn_field_deletes),
+        conn_instance_deletes=tuple(conn_instance_deletes),
+        harness_adds=tuple((v, val) for v, val in sec["harness"].items()
+                           if v not in cur_h),
+        harness_overwrites=tuple((v, val) for v, val in sec["harness"].items()
+                                 if v in cur_h),
+        harness_deletes=tuple(sorted(set(cur_h) - set(sec["harness"]))),
+    )
+
+
+def _apply_secret_adds(ops: _SecretOps) -> None:
+    """Phase ADD (pre-commit): only writes that create keys the old world
+    never stored — through the store choke points, so 0600/atomicity/
+    redaction registration come free. A crash after any prefix leaves the
+    old world authoritative; nothing it stored was modified or removed."""
+    for scope, instance, field, value in ops.conn_adds:
+        secrets_store.write_connection_secret(scope, instance, field, value)
+    for var, value in ops.harness_adds:
         secrets_store.write_harness_secret(var, value)
-    return warnings
+
+
+def _apply_secret_destructive(ops: _SecretOps) -> None:
+    """Phase MUT (post-commit): overwrites first, then deletions — once the
+    new world is authoritative, converging to it wins over preserving the
+    old one."""
+    for scope, instance, field, value in ops.conn_overwrites:
+        secrets_store.write_connection_secret(scope, instance, field, value)
+    for var, value in ops.harness_overwrites:
+        secrets_store.write_harness_secret(var, value)
+    for scope, instance, field in ops.conn_field_deletes:
+        secrets_store.delete_connection_field(scope, instance, field)
+    for scope, instance in ops.conn_instance_deletes:
+        secrets_store.delete_connection_instance(scope, instance)
+    for var in ops.harness_deletes:
+        secrets_store.delete_harness_secret(var)

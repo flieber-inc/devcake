@@ -525,3 +525,150 @@ def test_semantics_refuse_unknown_devtype_in_any_assignment_map(
         "EXECUTE": config_mod.Assignment(dev_type="ghost")}
     with pytest.raises(sb.BundleError, match="linear.*ghost|ghost.*linear"):
         sb.validate_config_semantics(bad_override, names, exists)
+
+
+# ── apply ordering: crash honesty (2026-08-12 audit SEC-1) ───────────────────
+
+
+def _journaled(monkeypatch, sb, secrets):
+    """Wrap the commit point + every secret-store mutation to append to one
+    shared journal, preserving behavior."""
+    journal: list[str] = []
+
+    def wrap(mod, name, tag):
+        real = getattr(mod, name)
+
+        def logged(*a, **k):
+            journal.append(tag(*a, **k))
+            return real(*a, **k)
+        monkeypatch.setattr(mod, name, logged)
+
+    wrap(sb, "save_config", lambda c: "COMMIT")
+    wrap(secrets, "write_connection_secret",
+         lambda s, i, f, v: f"conn_write:{s}-{i}.{f}")
+    wrap(secrets, "delete_connection_field",
+         lambda s, i, f: f"conn_del_field:{s}-{i}.{f}")
+    wrap(secrets, "delete_connection_instance",
+         lambda s, i: f"conn_del_inst:{s}-{i}")
+    wrap(secrets, "write_harness_secret", lambda v, val: f"harness_write:{v}")
+    wrap(secrets, "delete_harness_secret", lambda v: f"harness_del:{v}")
+    return journal
+
+
+def test_apply_orders_adds_then_commit_then_destructive(monkeypatch, tmp_path):
+    """Phase order IS the crash-safety property: keys the old world never
+    stored land before the config.yaml commit; every overwrite and deletion
+    lands after it."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    # bundle world: replaces the pmo api_key (overwrite), drops repo main's
+    # token (instance delete via config w/o that repo? keep repo; field del),
+    # adds a NEW harness key, drops the old one
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-1"
+    del bundle["secrets"]["connections"]["repo-main"]
+    bundle["secrets"]["harness"] = {"NEW_KEY": "brand-new-value-42"}
+
+    journal = _journaled(monkeypatch, sb, secrets)
+    live_dts = dict(dts)
+    sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
+                    reload=lambda: None)
+
+    assert "COMMIT" in journal
+    commit_at = journal.index("COMMIT")
+    adds = [j for j in journal if j == "harness_write:NEW_KEY"]
+    assert adds and all(journal.index(a) < commit_at for a in adds), (
+        "new keys must land before the commit point")
+    destructive = [j for j in journal if j.startswith(
+        ("conn_del", "harness_del")) or j == "conn_write:pmo-linear.api_key"]
+    assert destructive, "expected overwrites + deletions in the plan"
+    assert all(journal.index(d, commit_at) > commit_at for d in destructive), (
+        "every overwrite/deletion must land after the commit point")
+    # end state converged
+    assert secrets.read_connection_secret("pmo", "linear", "api_key") == "rotated-key-1"
+    assert secrets.read_connection_secret("repo", "main", "token") == ""
+    assert secrets.read_harness_secret("NEW_KEY") == "brand-new-value-42"
+    assert secrets.read_harness_secret("ANTHROPIC_API_KEY") == ""
+
+
+def test_commit_failure_leaves_secret_store_untouched(monkeypatch, tmp_path):
+    """New property of the reorder: if save_config raises, the store still
+    holds every OLD value — including the instance the bundle would have
+    deleted and the value it would have overwritten (rollback then prunes
+    the inert ADD-phase extras)."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-1"
+    del bundle["secrets"]["connections"]["repo-main"]
+    bundle["secrets"]["harness"]["NEW_KEY"] = "brand-new-value-42"
+
+    real_save = sb.save_config
+    calls = {"n": 0}
+
+    def boom_once(cfg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("disk full at the commit point")
+        return real_save(cfg)          # the rollback's own commit succeeds
+
+    monkeypatch.setattr(sb, "save_config", boom_once)
+    live_dts = dict(dts)
+    with pytest.raises(sb.BundleError, match="previous settings restored"):
+        sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
+                        reload=lambda: None)
+    # old values intact — never modified pre-commit
+    assert (secrets.read_connection_secret("pmo", "linear", "api_key")
+            == "lin_api_secret_value_0001")
+    assert (secrets.read_connection_secret("repo", "main", "token")
+            == "ghp_secret_value_0002")
+    assert secrets.read_harness_secret("ANTHROPIC_API_KEY") == "sk-ant-secret-0003"
+    # and the rollback pruned the inert ADD-phase extra
+    assert secrets.read_harness_secret("NEW_KEY") == ""
+
+
+def test_destructive_phase_failure_rolls_back_overwrites(monkeypatch, tmp_path):
+    """A failure INSIDE phase MUT (post-commit) restores both config and the
+    already-overwritten secret values via rollback-by-reapply."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-1"
+    del bundle["secrets"]["connections"]["repo-main"]   # → instance delete
+
+    def boom(scope, instance):
+        raise RuntimeError("store failure mid-deletes")
+
+    monkeypatch.setattr(secrets, "delete_connection_instance", boom)
+    monkeypatch.setattr(sb.secrets_store, "delete_connection_instance", boom)
+    live_dts = dict(dts)
+    with pytest.raises(sb.BundleError, match="previous settings restored"):
+        sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
+                        reload=lambda: None)
+    # the overwrite that already landed was rolled back to the old value
+    assert (secrets.read_connection_secret("pmo", "linear", "api_key")
+            == "lin_api_secret_value_0001")
+    assert (secrets.read_connection_secret("repo", "main", "token")
+            == "ghp_secret_value_0002")
+
+
+def test_secrets_only_apply_orders_adds_before_destructive(monkeypatch, tmp_path):
+    """No config section → no config.yaml commit; the declared commit point
+    is the ADD→MUT boundary and the order must still hold."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    bundle = sb.serialize_current(cfg, dts, include_config=False,
+                                  include_secrets=True)
+    bundle["secrets"]["connections"]["pmo-linear"]["api_key"] = "rotated-key-2"
+    bundle["secrets"]["harness"] = {"NEW_ONLY": "value-brand-new"}
+
+    journal = _journaled(monkeypatch, sb, secrets)
+    result = sb.apply_bundle(bundle, config=cfg, dev_types=dict(dts),
+                             reload=lambda: None)
+    assert result["applied"] == ["secrets"]
+    assert "COMMIT" not in journal
+    first_mut = min(i for i, j in enumerate(journal)
+                    if j.startswith(("conn_del", "harness_del"))
+                    or j == "conn_write:pmo-linear.api_key")
+    adds = [i for i, j in enumerate(journal) if j == "harness_write:NEW_ONLY"]
+    assert adds and max(adds) < first_mut

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import Button from "../components/Button.jsx";
@@ -9,6 +9,8 @@ import { ConfirmDialog } from "../components/Modal.jsx";
 import { Select } from "../components/Field.jsx";
 import { get, send } from "../api.js";
 import usePoll from "../lib/usePoll.js";
+import { makeReqSeq } from "../lib/reqSeq.js";
+import { liveMission, refKey } from "../lib/missionIdentity.js";
 import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 
 // Board refresh cadence — /missions reflects the last PMO poll (~30s at the
@@ -16,12 +18,11 @@ import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 // to expect a faster PMO round-trip than exists.
 const POLL_MS = 10_000;
 
-// Optimistic-override identity: gitea_issues pmo_ids are per-repo issue
-// numbers, so an override must be keyed by (instance, pmo_id), never the bare
-// id (2026-08-12 audit — a Park on one board bled onto a colliding id on
-// another). `instance` may be "" on a single-PMO deployment; that is fine —
-// there is exactly one board to collide on.
-const refKey = (instance, pmo_id) => `${instance || ""}::${pmo_id}`;
+// Optimistic-override identity: `refKey` is the ONE definition, imported from
+// lib/missionIdentity.js (2026-08-12 review — a second divergent copy would
+// re-open the cross-board Park-bleed bug). gitea_issues pmo_ids are per-repo
+// issue numbers, so an override keys by (instance, pmo_id), never the bare id;
+// `instance` may be "" on a single-PMO deployment — one board to collide on.
 
 // Self-heal bound: the scheduler can advance a mission to a THIRD state the
 // optimistic projection never predicted, and an exact-label-match test would
@@ -135,6 +136,7 @@ export default function MissionsPage() {
   // entry is { labels, syncing, polls } — `polls` bounds the self-heal so a
   // projection can never stick forever if the server advances PAST it.
   const [pending, setPending] = useState({});
+  const loadSeq = useRef(makeReqSeq());
   const [openMission, setOpenMission] = useState(null);
   const [showAllDone, setShowAllDone] = useState(false);
   const [hiddenStages, setHiddenStages] = useState(readHiddenStages);
@@ -191,11 +193,13 @@ export default function MissionsPage() {
   }, []);
 
   const load = useCallback(async () => {
+    const mine = loadSeq.current.next();
     try {
       const [missionsBody, healthBody] = await Promise.all([
         get("/missions"),
         get("/health").catch(() => null),
       ]);
+      if (!loadSeq.current.isLatest(mine)) return;
       setData(missionsBody);
       if (healthBody) {
         setPollState({
@@ -608,7 +612,7 @@ export default function MissionsPage() {
           // mission — a half-typed guidance draft must never post to the
           // newly opened mission
           key={`${openMission.instance}:${openMission.pmo_id}`}
-          mission={openMission}
+          mission={liveMission(rows, openMission)}
           multiPmo={multiPmo}
           syncing={!!pending[refKey(openMission.instance, openMission.pmo_id)]?.syncing}
           rows={rows}

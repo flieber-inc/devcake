@@ -233,6 +233,20 @@ async def lifespan(app: FastAPI):
     for t in tasks:
         t.add_done_callback(_log_task_death)
     yield
+    # Stop accepting ingress first so no new finalize tasks spawn, then
+    # drain in-flight finalizes (F11 leftover: cancel used to kill them
+    # mid-PMO-write; checkpoints resume, but a clean stop should finish).
+    for t in tasks:
+        if t.get_name() == "ingress_consumer":
+            t.cancel()
+    for t in tasks:
+        if t.get_name() == "ingress_consumer":
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
+    try:
+        await asyncio.wait_for(s.messaging.drain_finalizes(), timeout=30)
+    except Exception:  # noqa: BLE001 — shutdown must proceed; unacked entries redeliver
+        log.exception("drain_finalizes on shutdown")
     for t in tasks:
         t.cancel()
     for t in tasks:

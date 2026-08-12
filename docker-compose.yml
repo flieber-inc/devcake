@@ -30,6 +30,7 @@ x-local-logs: &local_logs
 
 services:
   app:
+    <<: *local_logs
     image: devcake/app:${DEVCAKE_TAG:-latest}
     pull_policy: never                  # local bake only — never pull from a registry
     env_file: .env

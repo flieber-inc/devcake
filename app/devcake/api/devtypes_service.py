@@ -239,9 +239,11 @@ async def put_assignments(body: dict, *, config, dev_types):
                                 context="assignments")
     except ValueError as e:
         raise HTTPException(422, str(e))
-    unknown = {a.dev_type for a in new.values()} - set(dev_types)
-    if unknown:
-        raise HTTPException(422, f"unknown dev types: {sorted(unknown)}")
+    from ..settings_bundle import BundleError, assert_assignment_dev_types
+    try:
+        assert_assignment_dev_types(new, set(dev_types))
+    except BundleError as e:
+        raise HTTPException(e.status, str(e)) from e
     # Shared EXECUTE/REVIEW Dev Type is a performance tip (skills / identifying
     # prompt), not a security control — the reviewer token is. Soft advisory only.
     warnings: list[str] = []

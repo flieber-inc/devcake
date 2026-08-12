@@ -347,6 +347,30 @@ def test_started_accepts_only_the_dispatched_transition():
     assert store.get(fin.run_id).state == "finalizing"     # NOT reverted
 
 
+def test_activity_get_does_not_clobber_a_finished_run():
+    """F11 leftover: activity.get get()s, awaits activity_payload, then
+    saved that stale object. A finalize that finished during the await
+    lost finalized_steps / finished to last-writer-wins."""
+    store = InMemoryStore()
+    run = _run("R-1-1-EXECUTE-ACTGET", state="running", mission_pmo_id="p1")
+    store.save(run)
+
+    class _Fin:
+        async def activity_payload(self, held):
+            fresh = store.get(held.run_id)
+            fresh.state = "finished"
+            fresh.finalized_steps = ["transcript", "transition"]
+            store.save(fresh)
+            return {"feed_watermark": {"entry_id": "e9", "ts": "t"}}
+
+    mgr, _ = _mgr(store)
+    mgr.set_finalizer(_Fin())
+    run_coro(mgr.handle(run.run_id, "activity.get", {}))
+    after = store.get(run.run_id)
+    assert after.state == "finished"
+    assert after.finalized_steps == ["transcript", "transition"]
+
+
 # ── phase-scoped runspec (R1) ────────────────────────────────────────────────
 
 def test_provision_runspec_reply_is_secret_free_for_mirrored_work_repos():

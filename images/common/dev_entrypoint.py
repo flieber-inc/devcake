@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -27,6 +28,7 @@ for _p in (_here, pathlib.Path("/")):
 
 # Env must be present before bus import (Redis client constructed at import).
 from devcake_dev.adapters.bus import (  # noqa: E402
+    ARTIFACTS_SENT,
     CHUNK_LIMIT,
     CHUNK_SIZE,
     MAX_ARTIFACT_BYTES,
@@ -200,6 +202,24 @@ def _fail_20(stop: threading.Event | None, headline: str, detail: str) -> None:
                     "token_report": unavailable_report()})
     if stop is not None:
         stop.set()
+    sys.exit(20)
+
+
+def _on_term(signum, frame):
+    """Dagu stop is SIGTERM → 30s → SIGKILL. Flush a classified artifact
+    so the run does not die as an unclassified crash (live drill on PR 7)."""
+    import devcake_dev.adapters.bus as bus
+    if bus.ARTIFACTS_SENT:
+        sys.exit(20)
+    try:
+        send_artifacts({
+            "result": None, "exit_code": 20, "error_class": "DEV_CRASH",
+            "error_detail": f"signal {signum}",
+            "transcript_md": f"container stopped (signal {signum})",
+            "token_report": unavailable_report(),
+        })
+    except Exception:
+        pass
     sys.exit(20)
 
 
@@ -394,6 +414,8 @@ def harness_main() -> None:
     # phase-2 boot fault (runspec timeout, Redis trouble) keeps the liveness
     # clock ticking on a run provision already marked running
     stop = _start_heartbeats()
+    signal.signal(signal.SIGTERM, _on_term)
+    signal.signal(signal.SIGINT, _on_term)
     spec = _fetch_spec("harness")
     env = spec.get("env", {})
     os.environ.update(env)
@@ -472,8 +494,11 @@ def harness_main() -> None:
     plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
     model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
-    cmd = harness_argv(harness, prompt, plan_mode=plan_mode, model=model,
-                       extra=extra)
+    try:
+        cmd = harness_argv(harness, prompt, plan_mode=plan_mode, model=model,
+                           extra=extra)
+    except ValueError as e:
+        _fail_20(stop, "unknown harness", str(e))
     inv_prompt = prompt   # THIS invocation's prompt — the nudge on relaunches;
     #                       it is what anchors grok_export_activity honestly
 
@@ -504,8 +529,11 @@ def harness_main() -> None:
     harness_started_at = time.time()
 
     # per-type legality (docs/03 §6) — loop-invariant; the nudge prompts name
-    # this legal outcome set. First-line defense only — the app enforces the
-    # same table authoritatively at finalization (missions.LEGAL_OUTCOMES).
+    # this legal outcome set. First-line defense only. Mission-step rows
+    # MUST match orchestrator.markers.LEGAL_OUTCOMES (pinned by
+    # test_legal_outcomes_pin). STEWARD is extra here: the app does not
+    # park steward failures (no host mission) — finalize_steward fails the
+    # run instead.
     result_path = WORKSPACE / "out" / "result.json"
     legal_outcomes = {
         "ONBOARD": {"plan_needed", "decomposed", "human_needed"},

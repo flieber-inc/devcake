@@ -224,20 +224,40 @@ fi
 # diagnostic command instead of failing the script (the containers are up;
 # the operator may want to inspect logs rather than have up.sh exit non-zero).
 echo "── waiting for the app to report healthy…"
-_app_healthy() {
+_app_live() {
   docker compose exec -T app python -c \
     "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health/live', timeout=3)" \
     >/dev/null 2>&1
 }
+_app_deps() {
+  # /health needs basic auth; the app container already has ADMIN_*.
+  # Compose healthcheck stays on /health/live (must stay cheap / never 500).
+  docker compose exec -T app python -c '
+import base64, json, os, urllib.request
+u, p = os.environ.get("ADMIN_USER", ""), os.environ.get("ADMIN_PASSWORD", "")
+tok = base64.b64encode(f"{u}:{p}".encode()).decode()
+req = urllib.request.Request(
+    "http://localhost:8000/api/v1/health",
+    headers={"Authorization": f"Basic {tok}"})
+body = json.loads(urllib.request.urlopen(req, timeout=10).read())
+bad = [k for k in ("redis", "dagu") if body.get(k) is False]
+raise SystemExit(1 if bad else 0)
+' >/dev/null 2>&1
+}
 _ok=0
 for _ in $(seq 1 30); do
-  if _app_healthy; then _ok=1; break; fi
+  if _app_live; then _ok=1; break; fi
   sleep 2
 done
 if [[ "$_ok" -eq 1 ]]; then
-  echo "── app healthy ✓"
+  echo "── app live ✓"
+  if _app_deps; then
+    echo "── app redis+dagu probes ok ✓"
+  else
+    echo "── WARNING: app is live but redis/dagu probe is red — check: docker compose logs --tail=50 app" >&2
+  fi
 else
-  echo "── WARNING: app did not report healthy within ~60s. The stack is up," >&2
+  echo "── WARNING: app did not report live within ~60s. The stack is up," >&2
   echo "   but the app may be wedged — check: docker compose logs --tail=50 app" >&2
 fi
 

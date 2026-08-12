@@ -530,9 +530,9 @@ def test_semantics_refuse_unknown_devtype_in_any_assignment_map(
 # ── apply ordering: crash honesty (2026-08-12 audit SEC-1) ───────────────────
 
 
-def _journaled(monkeypatch, sb, secrets):
-    """Wrap the commit point + every secret-store mutation to append to one
-    shared journal, preserving behavior."""
+def _journaled(monkeypatch, sb, secrets, *, tpl=None):
+    """Wrap the commit point + every secret-store / config-file mutation to
+    append to one shared journal, preserving behavior."""
     journal: list[str] = []
 
     def wrap(mod, name, tag):
@@ -552,6 +552,10 @@ def _journaled(monkeypatch, sb, secrets):
          lambda s, i: f"conn_del_inst:{s}-{i}")
     wrap(secrets, "write_harness_secret", lambda v, val: f"harness_write:{v}")
     wrap(secrets, "delete_harness_secret", lambda v: f"harness_del:{v}")
+    wrap(sb, "save_dev_type", lambda dt: f"dev_type_write:{dt.name}")
+    if tpl is not None:
+        wrap(tpl, "save_template",
+             lambda mt, name, text: f"tpl_write:{mt}/{name}")
     return journal
 
 
@@ -569,7 +573,12 @@ def test_apply_orders_adds_then_commit_then_destructive(monkeypatch, tmp_path):
     del bundle["secrets"]["connections"]["repo-main"]
     bundle["secrets"]["harness"] = {"NEW_KEY": "brand-new-value-42"}
 
-    journal = _journaled(monkeypatch, sb, secrets)
+    # existing config files must already be on disk so apply can tell
+    # ADD (new name) from MUT (overwrite)
+    for dt in dts.values():
+        config_mod.save_dev_type(dt)
+
+    journal = _journaled(monkeypatch, sb, secrets, tpl=tpl)
     live_dts = dict(dts)
     sb.apply_bundle(bundle, config=cfg, dev_types=live_dts,
                     reload=lambda: None)
@@ -584,6 +593,12 @@ def test_apply_orders_adds_then_commit_then_destructive(monkeypatch, tmp_path):
     assert destructive, "expected overwrites + deletions in the plan"
     assert all(journal.index(d, commit_at) > commit_at for d in destructive), (
         "every overwrite/deletion must land after the commit point")
+    overwrites = [j for j in journal if j.startswith("dev_type_write:")
+                  or j.startswith("tpl_write:")]
+    assert overwrites, "expected existing config-file overwrites in the plan"
+    assert all(journal.index(w) > commit_at for w in overwrites), (
+        "overwriting an existing dev-type/template must wait until after "
+        "the config.yaml commit")
     # end state converged
     assert secrets.read_connection_secret("pmo", "linear", "api_key") == "rotated-key-1"
     assert secrets.read_connection_secret("repo", "main", "token") == ""

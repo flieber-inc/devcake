@@ -10,11 +10,16 @@ import ast
 import json
 from pathlib import Path
 
+_HERE = Path(__file__).resolve()
 HELLO = Path("/srv/images/hello/hello_dev.py")
+if not HELLO.exists():
+    HELLO = _HERE.parents[2] / "images" / "hello" / "hello_dev.py"
 BUS = Path("/srv/images/common/devcake_dev/adapters/bus.py")
+if not BUS.exists():
+    BUS = _HERE.parents[2] / "images" / "common" / "devcake_dev" / "adapters" / "bus.py"
 
 _CONSTS = ("MAX_ARTIFACT_BYTES", "SHRINKABLE_FIELDS", "TRUNCATE_FLOOR",
-           "CHUNK_LIMIT", "CHUNK_SIZE")
+           "CHUNK_LIMIT", "CHUNK_SIZE", "SEND_ATTEMPTS_RESILIENT")
 
 
 def _extract(path: Path) -> dict:

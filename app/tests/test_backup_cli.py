@@ -29,9 +29,9 @@ def _run_backup_payload(src: Path, out_dir: Path, kind: str,
 
 
 def _run_restore_payload(dst: Path, in_dir: Path, kind: str,
-                         tarfile_name: str = "t.tar.gz"):
+                         tarfile_name: str = "t.tar.gz", extra_env=None):
     env = {**os.environ, "DST": str(dst), "IN_DIR": str(in_dir),
-           "TARFILE": tarfile_name, "KIND": kind}
+           "TARFILE": tarfile_name, "KIND": kind, **(extra_env or {})}
     return subprocess.run(["sh", str(_payload("restore_payload.sh"))],
                           capture_output=True, text=True, env=env)
 
@@ -133,19 +133,21 @@ def test_restore_refuses_wrong_kind_without_touching_dst(tmp_path):
     assert not list(dst.glob(".pre-restore-*"))
 
 
-def test_restore_accepts_legacy_markerless_backup_with_warning(tmp_path):
+def test_restore_refuses_tarball_without_kind_marker(tmp_path):
     out, dst = tmp_path / "out", tmp_path / "dst"
     out.mkdir(), dst.mkdir()
-    legacy_src = tmp_path / "legacy"
-    legacy_src.mkdir()
-    (legacy_src / "old.txt").write_text("pre-marker era")
+    src = tmp_path / "plain"
+    src.mkdir()
+    (src / "old.txt").write_text("not a marked backup")
+    (dst / "precious.txt").write_text("only copy")
     with tarfile.open(out / "t.tar.gz", "w:gz") as tf:
-        tf.add(legacy_src / "old.txt", arcname="./old.txt")
+        tf.add(src / "old.txt", arcname="./old.txt")
 
     r = _run_restore_payload(dst, out, "data")
-    assert r.returncode == 0, r.stderr
-    assert "legacy backup" in r.stderr and "unverified" in r.stderr
-    assert _tree(dst) == {"old.txt": "pre-marker era"}
+    assert r.returncode == 2
+    assert "DEVCAKE_BACKUP_KIND" in r.stderr
+    assert _tree(dst) == {"precious.txt": "only copy"}
+    assert not list(dst.glob(".pre-restore-*"))
 
 
 def test_backup_verifies_the_archive_it_wrote(tmp_path):
@@ -170,6 +172,62 @@ def test_backup_verifies_the_archive_it_wrote(tmp_path):
         src, out, "data",
         extra_env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
     assert r.returncode != 0, "verify pass must catch the truncated archive"
+
+
+def test_backup_czf_failure_does_not_clobber_an_existing_archive(tmp_path):
+    """In-place czf to $OUT_BASE truncated a previously verified file if
+    tar died mid-write. Write via *.partial; dest is replaced only by mv."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    src.mkdir(), out.mkdir()
+    (src / "a.txt").write_text("new")
+    good = out / "t.tar.gz"
+    good.write_bytes(b"PREVIOUS-GOOD-ARCHIVE")
+    fake_bin = tmp_path / "tarbin"
+    fake_bin.mkdir()
+    wrapper = fake_bin / "tar"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = czf ]; then\n'
+        '  command -p tar "$@"\n'
+        '  truncate -s 40 "$2"\n'
+        "  exit 0\n"
+        "fi\n"
+        'exec command -p tar "$@"\n'
+    )
+    wrapper.chmod(0o700)
+    r = _run_backup_payload(
+        src, out, "data",
+        extra_env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
+    assert r.returncode != 0
+    assert good.read_bytes() == b"PREVIOUS-GOOD-ARCHIVE", (
+        "a failed backup must not overwrite the last good archive"
+    )
+
+
+def test_restore_extract_failure_puts_original_tree_back(tmp_path):
+    """tzf can succeed and xzf still fail. The aside must come back to
+    the original paths — a follow-up compose up must not boot a partial."""
+    src, out, dst = tmp_path / "src", tmp_path / "out", tmp_path / "dst"
+    src.mkdir(), out.mkdir(), dst.mkdir()
+    (src / "new.txt").write_text("incoming")
+    (dst / "precious.txt").write_text("only copy")
+    assert _run_backup_payload(src, out, "data").returncode == 0
+    fake_bin = tmp_path / "tarbin"
+    fake_bin.mkdir()
+    wrapper = fake_bin / "tar"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = xzf ]; then echo "xzf boom" >&2; exit 1; fi\n'
+        'exec command -p tar "$@"\n'
+    )
+    wrapper.chmod(0o700)
+    r = _run_restore_payload(
+        dst, out, "data",
+        extra_env={"PATH": f"{fake_bin}:{os.environ['PATH']}"})
+    assert r.returncode != 0
+    assert _tree(dst) == {"precious.txt": "only copy"}, (
+        "extract failure must restore the previous tree to its original paths"
+    )
 
 
 # --- host-side contract: the scripts drive docker with the pinned image ---

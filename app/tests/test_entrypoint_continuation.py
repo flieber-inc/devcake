@@ -137,9 +137,8 @@ def test_resume_argv_extras_come_last_so_they_can_override():
 
 
 def test_resume_argv_unknown_harness_is_none_not_the_claude_fallback():
-    """harness_argv falls back to the claude dialect for unknown names; the
-    resume builder deliberately must NOT — an unverified resume flag on the
-    wrong CLI is a crash, not a default."""
+    """Both builders fail closed on unknown ids — resume already returned
+    None; harness_argv now raises instead of falling through to Claude."""
     assert ep.harness_resume_argv("other", "S", "P") is None
 
 

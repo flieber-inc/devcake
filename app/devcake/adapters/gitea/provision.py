@@ -112,8 +112,11 @@ class GiteaProvisioner:
         the next call (audit A11/A19/A20 fail-loud provisioning)."""
         # pooled (F16 — this path runs ~8 requests per mission intake; the
         # per-call client here was the exact anti-pattern PooledClient killed)
-        resp = await self._http.get().request(
-            method, f"{self.url}/api/v1{path}", auth=self._auth, **kw)
+        try:
+            resp = await self._http.get().request(
+                method, f"{self.url}/api/v1{path}", auth=self._auth, **kw)
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"internal forge: {method} {path} → network: {e}") from e
         if resp.status_code in ok:
             return resp.json() if resp.text else None
         if resp.status_code in tolerate and (

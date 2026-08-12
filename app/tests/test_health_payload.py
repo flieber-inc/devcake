@@ -47,6 +47,48 @@ def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
         repo_cache=repo_cache, workspaces=workspaces))
 
 
+def test_merged_advisories_qualify_keys_when_n_gt_1(monkeypatch):
+    """Dual-PMO colliding pmo_ids (gitea issue numbers) must not clobber
+    each other in merge_handoffs / needs_human. Keys follow the same
+    `{instance}:{id}` prefix dependency_cycles already uses."""
+    a = SimpleNamespace(
+        needs_human={"1": "ENG-1: needs human"},
+        merge_handoffs={"1": "ENG-1: awaiting human merge"},
+        anomalies={"1": "ENG-1: oops"},
+        blocked_reasons={"1": "gated"},
+        cycles=[["1", "2"]],
+    )
+    b = SimpleNamespace(
+        needs_human={"1": "CS-1: needs human"},
+        merge_handoffs={},
+        anomalies={},
+        blocked_reasons={},
+        cycles=[],
+    )
+    fr = _forge_runtime()
+
+    async def _true(*a, **k):
+        return True
+    async def _ingest():
+        return {"ok": True, "detail": ""}
+    monkeypatch.setattr(health_mod, "_check_redis", _true)
+    monkeypatch.setattr(health_mod, "_check_http", _true)
+    monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
+    health_mod.reset_health_caches()
+    got = run_coro(health_mod.build_health_payload(
+        config=AppConfig(), dev_types={},
+        managers={"eng": a, "cs": b}, stewards={},
+        forge_runtime=fr, shared_breakers={},
+        store=SimpleNamespace(active=lambda: []),
+        internal_forge=None,
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+    assert "eng:1" in got["needs_human"]
+    assert "cs:1" in got["needs_human"]
+    assert got["needs_human"]["eng:1"].startswith("[eng]")
+    assert got["merge_handoffs"]["eng:1"].startswith("[eng]")
+    assert got["dependency_cycles"] == [["eng:1", "eng:2"]]
+
+
 def test_forge_probe_pending_then_complete(monkeypatch):
     fr = _forge_runtime(forges={"a": object(), "b": object()},
                         health={"a": {"ok": True}})

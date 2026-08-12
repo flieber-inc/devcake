@@ -28,18 +28,21 @@ const check = (name, fn) => {
 };
 
 check("instance-name regex matches config._INSTANCE_NAME_RE", () => {
-  // source scan, not an import: instanceNames.js also hosts a React hook,
-  // and this suite runs hermetically (CI has no node_modules)
   const src = readFileSync(join(here, "../src/lib/instanceNames.js"), "utf8");
   assert.ok(src.includes(`/${contracts.instance_name_re}/`),
     "instanceNames.js INSTANCE_NAME_RE drifted from the contract");
+  const re = new RegExp(`^${contracts.instance_name_re}$`);
+  assert.ok(re.test("linear"), "accepts a valid instance name");
+  assert.ok(!re.test("Bad-Name"), "rejects uppercase / hyphen");
 });
 
 check("harness-var regex matches config.HARNESS_VAR_PATTERN", () => {
-  // useConfigDraft.js validates secret-env var names with an inline regex
   const src = readFileSync(join(here, "../src/lib/useConfigDraft.js"), "utf8");
   assert.ok(src.includes(`/^${contracts.harness_var_pattern}$/`),
     "useConfigDraft's inline harness-var regex drifted from the contract");
+  const re = new RegExp(`^${contracts.harness_var_pattern}$`);
+  assert.ok(re.test("ANTHROPIC_API_KEY"), "accepts a harness var");
+  assert.ok(!re.test("not-a-var"), "rejects lowercase / hyphen");
 });
 
 check("PMO card scaffold equals the server-model defaults", () => {

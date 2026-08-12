@@ -295,8 +295,18 @@ class RunManager:
                 # re-review, the wasteful direction).
                 wm = reply.get("feed_watermark")
                 if wm:
-                    run.feed_watermark = wm
-                    self.store.save(run)
+                    # Re-read: this handle() object was parsed before the
+                    # await. An offloaded finalize can have finished the
+                    # run in that window; saving `run` would last-writer-
+                    # wins over finalized_steps / state (F11 leftover).
+                    fresh = self.store.get(run_id)
+                    if fresh is None or fresh.state not in (
+                            "dispatched", "running"):
+                        await self.messaging.reply(
+                            run_id, "activity.result", reply)
+                        return
+                    fresh.feed_watermark = wm
+                    self.store.save(fresh)
                 await self.messaging.reply(run_id, "activity.result", reply)
             else:
                 await self.messaging.reply(

@@ -567,13 +567,12 @@ until that run exists, field evidence below stays operator-self-reported.
   a poll-cycle label once-latch, ingress finalize offload (slow finalizes no
   longer starve heartbeats), run-store lost-update fence + single-process
   contract ledger (docs/10 §6), entrypoint resilience (guarded first
-  heartbeat, capture-truncation warning), the test-gap closure (grace-cycle
-  e2e, `clear_*` bodies executed, AUD-016 AST guard, cycle_lock wiring), and
-  minimal SPA concurrency (instance-qualified refs + self-healing projection
-  + stale-response guards). **Two items deferred, honestly:** a SIGTERM
-  artifact-flush in the Dev entrypoint (sits in the watchdog/dagu kill path
-  the ADR-0025 R-series was verified against — needs a live kill-drill, not
-  a blind change) and a `/health` warning on repeated exit-10s with
+  heartbeat, capture-truncation warning), the test-gap closure (grace-cycle schedule-skip + poll rotate site,
+  live Redis `clear_redis`, AUD-016 WorkspaceStore bind, cycle_lock wiring),
+  and minimal SPA concurrency (instance-qualified refs + self-healing
+  projection + stale-response guards). **SIGTERM artifact-flush** ships in
+  the post-#137 leftover train (unit + live Stop/SIGTERM on the operator
+  stack). Still deferred: a `/health` warning on repeated exit-10s with
   auth-suspicious stderr (soft signal, deliberate backend change). **One
   accepted risk unchanged (founder ruling):** agent-container CPU/mem/pids
   limits stay deferred (ISSUES #20) — Dagu's container schema rejects them
@@ -828,10 +827,9 @@ long-lived incomplete dialect API.
   construction) ·
   **unifying the three failure-taxonomy encodings** (numeric exit /
   `error_class` string / reconcile's stderr regex) ·
-  **cycle-lock the remaining reload paths** (secret PUT/DELETE and
-  `POST /secrets/clear` call `reload_connections` without `poll_rt.lock`, so
-  a suspended poll cycle can still resume against a swapped adapter graph;
-  config PUT and profile apply hold the lock since PR #104) ·
+  **cycle-lock harness-secret / credential-upload / OAuth-land writers**
+  (connection PUT/DELETE/clear and config/profile apply already hold
+  `poll_rt.lock`; harness keys are live-read at dispatch) ·
   **`dispatch.py` vertical split** (`domain/orchestrator/dispatch.py` is the
   ~1k-LOC gravity well left after the façade removal; split at public seams,
   tests at the seams only) ·

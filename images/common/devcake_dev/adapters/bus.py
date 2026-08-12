@@ -73,10 +73,22 @@ def _fit_payload(payload: dict) -> dict:
     return payload
 
 
+ARTIFACTS_SENT = False
+
+
 def send_artifacts(payload: dict) -> None:
     # FINALIZE send (OPS-M5): the artifacts are the run's whole verdict — a
     # transient Redis blip here must not lose them to an unclassified crash,
     # so ride the wider retry budget.
+    #
+    # ARTIFACTS_SENT is set BEFORE the send starts (2026-08-12 review): a
+    # SIGTERM arriving MID-send would otherwise still see it False and the
+    # signal handler would send a competing DEV_CRASH artifact over a run
+    # that was in the middle of reporting its real verdict. Once the real
+    # send has begun, the handler backs off — the in-flight send completes
+    # or the run dies, but the app never gets two conflicting artifacts.
+    global ARTIFACTS_SENT
+    ARTIFACTS_SENT = True
     payload = _fit_payload(payload)
     blob = json.dumps(payload)
     if len(blob) <= CHUNK_LIMIT:

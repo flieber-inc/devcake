@@ -97,18 +97,13 @@ MAX_BLOCKER_WORK_EXTRAS = 8
 
 
 def _blocker_mount_ok(mgr, name: str) -> bool:
-    """Mirror of `_extra_repos_for`'s blocker branch: True when a read
-    credential exists for `name` right now. A dispatch-time snapshot only —
-    a clear between dispatch and runspec still omits silently at runspec
-    (non-fatal); this check keeps the PROMPT from listing a mount that is
-    already known to be gone (cleared internal repo, removed instance)."""
-    if mgr.internal_forge is not None:
-        creds = mgr.internal_forge.mission_credentials(name)
-        if creds is not None and creds.token_read:
-            return True
-    inst = mgr.forges.instance(name)
-    return (inst is not None and mgr.forges.get(name) is not None
-            and bool(inst.token_ro or inst.token))
+    """True when a read credential exists for `name` right now — THE shared
+    rule (repo_sourcing.blocker_read_credential, ADR-0034; this used to be
+    a hand-mirror of `_extra_repos_for`'s blocker branch). This check keeps
+    the PROMPT from listing a mount that is already known to be gone
+    (cleared internal repo, removed instance)."""
+    from ..repo_sourcing import blocker_read_credential
+    return blocker_read_credential(mgr, name) is not None
 
 
 async def resolve_blocker_work(
@@ -711,25 +706,36 @@ def _mirrored(mgr, run: Run, name: str) -> bool:
 def _extra_repos_for(mgr, run: Run) -> list[dict]:
     """Read-only sibling clones for a run, built at request time (nothing
     secret at rest); read tokens preferred, write fallback (same rule as
-    the primary token). Three sources:
-    - the routing set's OTHER repos: ONBOARD only (multi-repo triage)
-    - the instance's REFERENCE repos: EVERY mission stage
-    - done blockers' work repos snapshotted on run.blocker_work (pipeline
-      continuity — internal uses mission token_read; configured uses RO)
+    the primary token). Sourcing comes from THE shared rule
+    (repo_sourcing.sourced_repo_names, ADR-0034) — the same list the mirror
+    gate freshens, so the two structurally cannot disagree; this function
+    only enriches each name with its clone credential/mirror.
 
     Tokens that resolve empty are omitted (a clone with no credential is
     never useful and would only burn a non-fatal failure note).
     """
-    wanted: list[str] = []
-    if run.mission_type == "ONBOARD":
-        wanted += list(mgr.instance.repos or [])
-    if run.mission_type in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW"):
-        wanted += list(mgr.instance.reference_repos or [])
-    extras, seen = [], {run.repo_ref}
-    for name in wanted:
-        if name in seen:
-            continue
-        seen.add(name)
+    from ..repo_sourcing import blocker_read_credential, sourced_repo_names
+    blocker_names = {(bw.get("repo_ref") or "")
+                     for bw in run.blocker_work or []}
+    extras = []
+    for name in sourced_repo_names(
+            work_repo=run.repo_ref, mission_type=run.mission_type,
+            instance=mgr.instance, blocker_entries=run.blocker_work):
+        if name == run.repo_ref:
+            continue                     # the primary clone rides separately
+        if name in blocker_names:
+            cred = blocker_read_credential(mgr, name)
+            if cred is not None and cred[0] == "internal":
+                # internal mission work repo: token_read from stored
+                # credentials. Gitea ignores userinfo in the clone URL
+                # (descriptor clone_user is "devcake"); askpass carries
+                # token_read.
+                creds = cred[1]
+                extras.append({
+                    "name": name, "url": creds.clone_url,
+                    "clone_user": creds.username or "devcake",
+                    "token": creds.token_read})
+                continue
         inst_x = mgr.forges.instance(name)
         forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
@@ -749,43 +755,6 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
         extras.append({"name": name, "url": inst_x.url,
                        "clone_user": forge_x.descriptor.clone_user,
                        "token": token})
-    if run.mission_type in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW"):
-        for bw in run.blocker_work or []:
-            name = bw.get("repo_ref") or ""
-            if not name or name in seen:
-                continue
-            # internal mission work repo: token_read from stored credentials
-            if mgr.internal_forge is not None:
-                creds = mgr.internal_forge.mission_credentials(name)
-                if creds is not None and creds.token_read:
-                    # Gitea ignores userinfo in the clone URL (descriptor
-                    # clone_user is "devcake"); askpass carries token_read.
-                    extras.append({
-                        "name": name, "url": creds.clone_url,
-                        "clone_user": creds.username or "devcake",
-                        "token": creds.token_read})
-                    seen.add(name)
-                    continue
-            inst_x = mgr.forges.instance(name)
-            forge_x = mgr.forges.get(name)
-            if inst_x is None or forge_x is None:
-                continue     # cleared / vanished — non-fatal omit
-            if _mirrored(mgr, run, name):
-                # ADR-0024: configured blocker-work repos ride the mirror
-                # like every other configured card (same rationale as above)
-                extras.append({"name": name, "url": inst_x.url,
-                               "clone_user": forge_x.descriptor.clone_user,
-                               "mirror_path": str(
-                                   mgr.repo_cache.mirror_path(name))})
-                seen.add(name)
-                continue
-            token = inst_x.token_ro or inst_x.token
-            if not token:
-                continue
-            extras.append({"name": name, "url": inst_x.url,
-                           "clone_user": forge_x.descriptor.clone_user,
-                           "token": token})
-            seen.add(name)
     return extras
 
 

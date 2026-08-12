@@ -107,20 +107,15 @@ class RepoCache:
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict]) -> list[str]:
         """The mirror-eligible repo set one run must have fresh (docs/07 §5a).
-        Mirrors _extra_repos_for's sourcing exactly, so the gate and the
-        runspec can never disagree about which repos ride the mirror."""
-        wanted: list[str] = [work_repo]
-        if mission_type == "ONBOARD":
-            wanted += list(instance.repos or [])
-        if mission_type in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW"):
-            wanted += list(instance.reference_repos or [])
-            wanted += [bw.get("repo_ref") or "" for bw in blocker_entries or []]
-        out, seen = [], set()
-        for name in wanted:
-            if name and name not in seen and self.eligible(name):
-                seen.add(name)
-                out.append(name)
-        return out
+        Sourcing comes from THE shared rule (repo_sourcing.sourced_repo_names,
+        ADR-0034) — the gate and the runspec structurally cannot disagree
+        about which repos ride the mirror; this method only applies the
+        mirror-eligibility filter."""
+        from .repo_sourcing import sourced_repo_names
+        return [name for name in sourced_repo_names(
+                    work_repo=work_repo, mission_type=mission_type,
+                    instance=instance, blocker_entries=blocker_entries)
+                if self.eligible(name)]
 
     # ── the gate primitive ───────────────────────────────────────────────────
 

@@ -83,7 +83,10 @@ def _main(monkeypatch, tmp_path):
     monkeypatch.setattr(app_main, "services", make_services(
         config=AppConfig(), dev_types={}, shared_breakers={},
         forge_runtime=SimpleNamespace(breakers={}),
-        reload_connections=lambda: None))
+        reload_connections=lambda: None,
+        # the secret routes serialize their write+reload against the poll
+        # cycle (L-1) — wire the lock they now take
+        poll_rt=SimpleNamespace(lock=asyncio.Lock())))
     return app_main
 
 

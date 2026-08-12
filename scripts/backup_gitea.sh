@@ -13,6 +13,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Digest-pinned (ISSUES #29 rider, 2026-08-12 audit OPS-M1): this container
+# runs as root with RW on the output dir — check_image_pins.py enforces.
+ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
+
 VOLUME="${GITEA_VOLUME:-devcake_gitea_data}"
 OUT="${1:-devcake-gitea-$(date -u +%Y%m%d-%H%M).tar.gz}"
 
@@ -35,12 +39,12 @@ fi
 # tar runs as ROOT (the container default) so it can read gitea's rootless
 # 0700 data dirs (git/, custom/, jwt/private.pem — owned by the in-container
 # uid 1000, unreadable to a host operator whose uid != 1000; re-audit #4).
-# The basename rides an ENV VAR, never interpolated into the shell string, so
-# a filename with quotes/spaces is safe (re-audit #5). umask 077 keeps the
-# tarball non-world-readable, and a trailing chown hands it to the invoking
-# operator instead of leaving it root-owned (audit D5 #19).
+# The payload (scripts/lib/backup_payload.sh — shared with the pytest restore
+# drill) owns umask/marker/verify/chown; the basename rides an ENV VAR, never
+# interpolated into the shell string (re-audit #5).
 docker run --rm \
-  -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" \
-  -v "$VOLUME":/src:ro -v "$OUT_DIR":/out alpine \
-  sh -c 'umask 077 && tar czf "/out/$OUT_BASE" -C /src . && chown "$OWNER" "/out/$OUT_BASE"'
-echo "wrote $OUT_DIR/$OUT_BASE — contains repo content AND Gitea's credential DB; store like a password export"
+  -e OUT_BASE="$OUT_BASE" -e OWNER="$(id -u):$(id -g)" -e KIND=gitea \
+  -v "$VOLUME":/src:ro -v "$OUT_DIR":/out \
+  -v "$(pwd)/scripts/lib":/lib:ro \
+  "$ALPINE_IMAGE" sh /lib/backup_payload.sh
+echo "wrote $OUT_DIR/$OUT_BASE (verified readable) — contains repo content AND Gitea's credential DB; store like a password export"

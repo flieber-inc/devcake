@@ -15,6 +15,7 @@ import { ADOPTION_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
+import { newPmoCard } from "../lib/cards.js";
 
 export default function PmoSection({ newNamesState, health = {}, healthError = false,
                                      onHealthChange }) {
@@ -388,10 +389,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           newPmoNames.track(name);
           setExpandedPmos((prev) => new Set(prev).add(cfg.pmos.length));
           const defaultSystem = (registry.pmo_systems || [])[0]?.id || "linear";
-          setField("cfg.pmos", [...cfg.pmos,
-            { name, system: defaultSystem,
-              team_key: "", api_base: null, repos: [],
-              reference_repos: [] }]);
+          setField("cfg.pmos", [...cfg.pmos, newPmoCard(name, defaultSystem)]);
         }}>
           + Add PMO instance
         </Button>

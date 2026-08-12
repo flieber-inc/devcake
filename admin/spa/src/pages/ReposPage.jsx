@@ -16,6 +16,7 @@ import { AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { nextFreeName, useNewNames } from "../lib/instanceNames.js";
+import { newRepoCard } from "../lib/cards.js";
 
 // Repositories page (v0.1.1 B4, founder request): the repository cards +
 // merge policy lifted out of Configuration, plus the internal-forge
@@ -546,11 +547,7 @@ export default function ReposPage({ onHealthChange }) {
           const name = nextFreeName("repo", cfg.repos, dr.server.cfg.repos);
           newNames.track(name);
           setExpandedRepos((prev) => new Set(prev).add(cfg.repos.length));
-          setField("cfg.repos", [...cfg.repos,
-            { name, forge: "github", url: "",
-              api_base: null, default_branch: "main",
-              auto_merge: false, auto_resolve_merge_conflicts: true,
-              merge_retry_window_minutes: 30 }]);
+          setField("cfg.repos", [...cfg.repos, newRepoCard(name)]);
         }}>
           + Add repository
         </Button>

@@ -18,7 +18,11 @@ export const ADOPTION_COPY =
   "label DEVCAKE.";
 
 const onOff = (v) => (v ? "on" : "off");
-const orEmpty = (v) => (v === null || v === undefined || v === "" ? "(empty)" : String(v));
+// objects/arrays reaching a generic formatter render as JSON — a diff row
+// must never show [object Object]
+const orEmpty = (v) =>
+  v === null || v === undefined || v === "" ? "(empty)"
+    : typeof v === "object" ? JSON.stringify(v) : String(v);
 const lines = (v) => ((v || []).length ? (v || []).join("\n") : "(none)");
 // rate-card rows diff atomically (the Cost Inputs modal PUTs the whole
 // list) — render them as readable per-1M lines, never [object Object]
@@ -144,11 +148,14 @@ export function metaFor(path) {
       label: `Repo #${+m[1] + 1} · ${f.label}`,
     };
   }
-  m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base)$/);
+  m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base|intake_paused|managed)$/);
   if (m) {
     const FIELDS = { name: "Instance name", system: "System",
-                     team_key: "Team key", api_base: "API base" };
-    return { group: "PMO", multiline: false, format: orEmpty,
+                     team_key: "Team key", api_base: "API base",
+                     intake_paused: "Intake paused",
+                     managed: "Managed (default board)" };
+    const bool = m[2] === "intake_paused" || m[2] === "managed";
+    return { group: "PMO", multiline: false, format: bool ? onOff : orEmpty,
              label: `PMO #${+m[1] + 1} · ${FIELDS[m[2]]}` };
   }
   m = path.match(/^cfg\.active_prompt_templates\.([^.]+)$/);
@@ -183,6 +190,15 @@ export function metaFor(path) {
              format: (v) => (v == null ? "(inherit global)"
                              : `${v.dev_type || "(unassigned)"}` +
                                (v.extra_cli_args ? ` · ${v.extra_cli_args}` : "")) };
+  }
+  m = path.match(/^cfg\.pmos\.(\d+)\.assignments$/);
+  if (m) {
+    return { group: "Mission Types", multiline: false,
+             label: `Stage overrides (PMO #${+m[1] + 1})`,
+             format: (v) => {
+               const keys = Object.keys(v || {});
+               return keys.length ? keys.join(", ") : "(none)";
+             } };
   }
   m = path.match(/^devTypes\.([^.]+)\.(.+)$/);
   if (m && DEV_TYPE_FIELDS[m[2]]) {

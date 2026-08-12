@@ -91,6 +91,9 @@ REVIEW_FRESHNESS_DIRECTIVE = "review:freshness_directive"
 REVIEW_FRESHNESS_OK = "review:freshness_ok"
 REVIEW_FRESHNESS_TRIPPED = "review:freshness_tripped"
 
+# ── discovery.py (ADR-0033 harvest) ──────────────────────────────────────────
+DISCOVERY_POST = "discovery:post"
+
 # ── decomposition.py ─────────────────────────────────────────────────────────
 DECOMP_DEPTH_LIMIT = "decomp:depth_limit"
 DECOMP_CONFLICT = "decomp:conflict"
@@ -165,6 +168,7 @@ REGISTRY: tuple[Step, ...] = (
     Step(REVIEW_FRESHNESS_DIRECTIVE),
     Step(REVIEW_FRESHNESS_OK),
     Step(REVIEW_FRESHNESS_TRIPPED),
+    Step(DISCOVERY_POST),
     Step(DECOMP_DEPTH_LIMIT),
     Step(DECOMP_CONFLICT),
     Step(DECOMP_PARENT_NOTE),

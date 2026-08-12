@@ -135,6 +135,12 @@ class MissionManager:
         # once every parked mission on it was reached (not on a PR-lookup miss).
         # Reset at the top of each `sweeps()`.
         self._rearm_satisfied: set[str] = set()
+        # ADR-0033: source pmo_ids with harvested-but-unrouted discoveries.
+        # Advisory only — the discovery label + feed markers are the board
+        # truth (discovery.pending_from_board repopulates after a restart at
+        # one feed read per labeled mission); the routing lane (PR-2) is the
+        # consumer that drains it.
+        self._discoveries_pending: set[str] = set()
 
     def rotate_grace(self) -> None:
         self._grace, self._grace_next = self._grace_next, set()

@@ -51,6 +51,22 @@ const EXACT = {
     group: "Limits & Traffic", label: "Decomposition depth",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
+  "cfg.budgets.freshness_rereviews": {
+    group: "Limits & Traffic", label: "Freshness re-review budget",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.budgets.discoveries_per_run": {
+    group: "Limits & Traffic", label: "Discoveries per run",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.budgets.discovery_routes_per_source": {
+    group: "Limits & Traffic", label: "Discovery routes per source",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.budgets.discovery_in_per_recipient": {
+    group: "Limits & Traffic", label: "Discoveries per recipient",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
   "cfg.concurrency.global_max": { group: "Limits & Traffic", label: "Global max Devs" },
   "cfg.dev_timeout_minutes": { group: "Limits & Traffic", label: "Dev run timeout (min)" },
   "cfg.review_loop_warning_every": { group: "Limits & Traffic", label: "Loop warning every N rejections" },

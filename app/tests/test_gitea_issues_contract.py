@@ -545,6 +545,25 @@ def test_swap_labels_reads_all_label_pages_and_preserves_overflow():
     assert "DEVCAKE" in names and "DEVCAKE-PLAN" in names
 
 
+def test_ensure_labels_finds_or_creates_discovery_label_once():
+    """ADR-0033 adds an 11th managed label (DEVCAKE-DISCOVERY): find-or-
+    create must locate it across label pages on a crowded registry and a
+    second ensure must create nothing (the >50-label repo scenario from the
+    2026-08-12 audit, extended to the new label)."""
+    router = Router()
+    for i in range(60):                        # crowded registry, >1 page
+        router.labels[f"F{i:03d}"] = {"id": 4000 + i, "name": f"F{i:03d}",
+                                      "color": "ffffff"}
+    pmo = make_pmo(router)
+    run(pmo.ensure_labels("o/r", ALL_LABELS))
+    assert "DEVCAKE-DISCOVERY" in router.labels
+    before = dict(router.labels["DEVCAKE-DISCOVERY"])
+    total = len(router.labels)
+    run(pmo.ensure_labels("o/r", ALL_LABELS))
+    assert router.labels["DEVCAKE-DISCOVERY"] == before
+    assert len(router.labels) == total         # idempotent — no duplicates
+
+
 def test_label_ceiling_refuses_loudly_with_zero_writes():
     router = Router()
     for i in range(520):

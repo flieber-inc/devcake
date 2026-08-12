@@ -124,6 +124,60 @@ def test_turn_discipline_in_result_writing_playbooks():
     assert "Never end your turn" not in plan_prompt("ID", M)
 
 
+def test_discoveries_epilogue_in_authoring_playbooks():
+    """ADR-0033 D1: the discoveries contract rides every result.json author
+    (code-owned, survives operator templates). PLAN cannot author (its
+    result is entrypoint-synthesized — the relay below is its channel) and
+    STEWARD never authors (Decision 7's chain-reaction damper)."""
+    for p in (onboard_prompt("ID", M), execute_prompt("ID", M, "repo", GH_PR),
+              review_prompt("ID", M)):
+        assert '"discoveries"' in p
+        assert "memory this otherwise memoryless system" in p
+        assert "an entry without evidence is an opinion" in p
+        assert "At most 3 discoveries" in p       # default cap rendered
+    assert '"discoveries"' not in plan_prompt("ID", M)
+    assert '"discoveries"' not in steward_prompt("ID", [M])
+
+
+def test_discoveries_cap_wording_tracks_the_knob():
+    assert "At most 5 discoveries" in execute_prompt(
+        "ID", M, "repo", GH_PR, discoveries_cap=5)
+    unlimited = execute_prompt("ID", M, "repo", GH_PR, discoveries_cap=0)
+    assert "At most" not in unlimited.split("### Discoveries")[1] \
+        .split("###")[0]
+    assert "self-regulate" in unlimited
+
+
+def _flat(text: str) -> str:
+    """Whitespace-normalized view — playbook prose wraps at 79 cols, so
+    contract assertions must not depend on where the line breaks fall."""
+    return " ".join(text.split())
+
+
+def test_plan_relay_and_execute_carry_forward():
+    """ADR-0033 D1 relay: PLAN's off-mission findings ride a marked PLAN.md
+    section; EXECUTE verifies and carries them into its own discoveries."""
+    from devcake.prompts import EXECUTE_PLAYBOOK, PLAN_PLAYBOOK
+    assert "## Findings beyond this mission" in _flat(PLAN_PLAYBOOK)
+    assert "leads for the pipeline, not plan content" in _flat(PLAN_PLAYBOOK)
+    assert "Findings beyond this mission" in _flat(EXECUTE_PLAYBOOK)
+    assert "verify each finding's evidence yourself" in _flat(EXECUTE_PLAYBOOK)
+
+
+def test_handoff_carries_discovery_consequences_downstream():
+    """Founder ruling (2026-08-13): a handoff is a DELIVERY METHOD for
+    discoveries that matter immediately downstream — the successor must not
+    block on asynchronous routing. The contract instructs the duplication
+    instead of forbidding it."""
+    from devcake.prompts import REVIEW_PLAYBOOK
+    from devcake.prompts.customer_success import CS_PLAYBOOKS
+    assert "carry its consequence here too" in _flat(REVIEW_PLAYBOOK)
+    assert "must not wait on it" in _flat(REVIEW_PLAYBOOK)
+    assert "carry its consequence here too" in _flat(CS_PLAYBOOKS["REVIEW"])
+    # the old phrasing that made handoff the discovery record is gone
+    assert "what was DISCOVERED along the way" not in _flat(REVIEW_PLAYBOOK)
+
+
 def test_steward_prompt_embeds_missions():
     a = Mission(instance="linear", pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
                 description="x" * 500, status="backlog",

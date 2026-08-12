@@ -103,7 +103,7 @@ def test_trip_posts_no_approval_artifacts(tmp_path):
 
 def test_exhausted_budget_closes_with_disclosure(tmp_path):
     m, mgr, fake = _gate_mgr(tmp_path, [
-        _entry("e1", "🔄 directive `devcake:freshness-rereview:2`\n\n"
+        _entry("e1", "🔄 directive `devcake:freshness-rereview:5`\n\n"
                + SENTINEL, author="devcake"),
         _entry("e2", "another human comment")])
     run = _review_run(watermark_id="e1")
@@ -111,8 +111,40 @@ def test_exhausted_budget_closes_with_disclosure(tmp_path):
     assert "done" in fake.statuses                    # proceeds, never holds
     warn = [c for c in fake.comments if "unevaluated activity" in c]
     assert len(warn) == 1 and "Cumulative recorded mission cost" in warn[0]
-    assert not any("freshness-rereview:3" in c for c in fake.comments)
+    assert "budget (5)" in warn[0]                    # names the config knob
+    assert not any("freshness-rereview:6" in c for c in fake.comments)
     assert "review:freshness_exhausted" in run.finalized_steps
+
+
+def test_operator_lowered_budget_exhausts_at_the_knob(tmp_path):
+    # the bound is AppConfig.budgets.freshness_rereviews (ADR-0033 D7 as
+    # amended) — an operator sizing it down to 2 exhausts at 2, not 5
+    m, mgr, fake = _gate_mgr(tmp_path, [
+        _entry("e1", "🔄 directive `devcake:freshness-rereview:2`\n\n"
+               + SENTINEL, author="devcake"),
+        _entry("e2", "another human comment")])
+    mgr.config.budgets.freshness_rereviews = 2
+    _approve(mgr, _review_run(watermark_id="e1"))
+    assert "done" in fake.statuses
+    assert any("budget (2)" in c for c in fake.comments)
+
+
+def test_zero_freshness_budget_is_unlimited(tmp_path):
+    # 0 = unlimited: never exhausts, keeps tripping, directive renders the
+    # bare count (no /cap)
+    m, mgr, fake = _gate_mgr(tmp_path, [
+        _entry("e1", "🔄 directive `devcake:freshness-rereview:40`\n\n"
+               + SENTINEL, author="devcake"),
+        _entry("e2", "another human comment")])
+    mgr.config.budgets.freshness_rereviews = 0
+    run = _review_run(watermark_id="e1")
+    _approve(mgr, run)
+    assert fake.statuses == []                        # withheld, not closed
+    directives = [c for c in fake.comments
+                  if "`devcake:freshness-rereview:41`" in c]
+    assert len(directives) == 1
+    assert "re-review 41:" in directives[0]           # bare count, no /cap
+    assert not any("unevaluated activity" in c for c in fake.comments)
 
 
 def test_quoted_freshness_marker_does_not_count(tmp_path):

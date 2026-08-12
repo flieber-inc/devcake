@@ -534,16 +534,26 @@ until that run exists, field evidence below stays operator-self-reported.
   cache-export resilience fix (#113, `ignore-error=true` on `type=gha`
   cache-to across all three lanes); the live stack has **not** yet been
   redeployed onto them (R9 ritual + image rebake owed).
-- **Discovery routing: designed, not shipped.** ADR-0031's elevated-marker
-  seam ships deliberately empty (`ELEVATED_MARKERS = []` — nothing is
-  elevated implicitly), and STEWARD's only duty is proposing missing
-  `blocked_by` edges (ADR-0007). No code reads, collects, or routes a
-  `DISCOVERY.md` today. This is a **different lane** from HANDOFF notes
-  (ADR-0032, shipped): a handoff closes a *finished* mission's narrative for
-  graph-ordered readers; discovery routing would push *mid-work* findings to
-  downstream/sibling missions. STEWARD finalization + discovery routing is
-  the next planned code work — it graduates only with red→green tests at the
-  public seam plus a live multi-mission smoke.
+- **Discovery routing: harvest shipped, routing next.** The ADR-0033
+  harvest half landed 2026-08-13: the optional `discoveries` result key
+  (ONBOARD/EXECUTE/REVIEW; PLAN relays via a marked PLAN.md section),
+  finalize memorialization (`DISCOVERY_<seq>.md` always attached as the
+  step's deliverable + the marked source-feed comment), the
+  `DEVCAKE-DISCOVERY` sweep-gate label (derivation-inert, AST-guarded), the
+  label-gated pending detection (`posted − routed receipts`, pure board
+  arithmetic), and the operator budget knobs (`AppConfig.budgets`, founder
+  amendment to ADR-0033 D7 — 0 = unlimited). The label accumulates until
+  routing ships and drains it — expected, visible, honest board state.
+  **Routing is NOT shipped**: `ELEVATED_MARKERS` is still empty, STEWARD's
+  only duty is proposing missing `blocked_by` edges (ADR-0007), and nothing
+  routes a discovery across the family yet. This is a **different lane**
+  from HANDOFF notes (ADR-0032, shipped): a handoff is the delivery method
+  for discovery consequences that matter immediately downstream; the
+  discovery record itself is the family-wide memory the steward will route.
+  The routing half graduates only with red→green tests at the
+  steward-finalize seam plus a live multi-mission smoke (one mission's
+  discovery reaching a sibling's MISSION.md and tripping an in-flight
+  recipient's freshness re-review).
 
 - **Skeptical-audit intervention campaign** (ADR-0034 + 18 PRs #119–#136,
   2026-08-12): a seven-reviewer skeptical audit at `ccc6da9` found the

@@ -304,6 +304,59 @@ the Decision 7 constants remain constants.
 - The freshness/handoff evaluation window on the refreshed host tunes the
   constants with real incident data.
 
+## Addendum — implementation rulings (2026-08-13, founder)
+
+Recorded at PR-1 (harvest) implementation; the design above is the record,
+these rulings amend it where implementation surfaced better information.
+
+1. **Decision 7 AMENDED — budgets are operator knobs, not constants.**
+   Rationale: *discoveries are a proxy for memory-building on an otherwise
+   memoryless system — strictly the memory useful to the tasks at hand* —
+   and with playbook guidance Devs self-regulate, so the bounds are sized by
+   the operator, not tuned centrally. The constants moved to
+   `AppConfig.budgets` (draft-edited, settings-bundle-carried): defaults
+   `freshness_rereviews=5`, `discoveries_per_run=3`,
+   `discovery_routes_per_source=3`, `discovery_in_per_recipient=5`; **0 =
+   unlimited** everywhere. The freshness default rises 2→5, eliminating the
+   numeric tension between `DISCOVERY_IN_PER_RECIPIENT_MAX = 5` and the old
+   re-review budget of 2 (the ADR-0031 "constant, not operator config"
+   stance is superseded for these counting budgets). Counting stays
+   marker-derived from the feed — only the bound moved to config.
+2. **Handoff vs discovery, clarified.** A handoff is not a discovery; it is
+   a *delivery method* that carries discovery consequences to the immediate
+   successor, which must never block on asynchronous steward routing.
+   `discoveries` is the canonical structured family-wide record; the same
+   fact appearing in both is the design working, not duplication noise. The
+   REVIEW handoff contract instructs this explicitly.
+3. **Decision 2 amplified.** `DISCOVERY_<seq>.md` is ALWAYS uploaded as a
+   deliverable attachment of the Mission Step (transcript pattern), with the
+   marked comment as the scan surface (`externalize=False` — the counted
+   marker never leaves the feed body). The marker carries parameters inside
+   the token — `` `devcake:discovery:v1 step=<seq> n=<count>` ``
+   (decomposition-marker precedent) — so pending detection and the
+   per-source budget stay board-derivable without opening attachments.
+4. **Recovery is label-gated.** Harvest adds a `DEVCAKE-DISCOVERY` label — a
+   pure sweep gate (the poll cycle has no unconditional per-mission feed
+   reads; the DEVCAKE-MERGE precedent). The label may never affect
+   derivation, scheduling, or dispatch (AST-guarded); it accumulates until
+   the routing half ships and drains it, and pending work is the pure board
+   arithmetic `posted markers − routed receipts`
+   (`` `devcake:discovery-routed:v1 step=<n> to=<KEY>` ``).
+5. **Provenance drops the commit-sha segment** (`[KEY · step n · date]`): no
+   structured anchor field is captured at harvest, and parsing shas out of
+   evidence prose would violate the never-parse-prose rule — shas live
+   inside the verbatim evidence text where the discoverer put them.
+6. **Chokepoint rulings** (same task ⇒ same pipe): one attachment+comment
+   pipe (`feed.post_attachment_comment`, transcript posting retrofitted);
+   one marker-defang transformation (`markers.defang`, handoff append
+   retrofitted); one pending-scan pipe (`discovery.scan_source`, shared by
+   recovery and the future routing sweep); one feed-comment entry renderer
+   (`discovery.render_entry_lines`, shared with the future delivery
+   comment).
+7. **The per-PMO `discovery_routing` toggle ships as a draft field**
+   (Save-applied), not an instant toggle — routing is not an emergency
+   control; the caps bound the blast radius. (Lands with the routing half.)
+
 ## Related
 
 - Implement: `domain/orchestrator/markers.py` (two marker classes,

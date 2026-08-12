@@ -91,6 +91,29 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
 
 
+async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,
+                                  filename: str, content: str,
+                                  comment_of) -> str | None:
+    """The ONE attachment+comment pipe (ADR-0033 chokepoint ruling): upload
+    `content` as `filename`, then post the comment `comment_of(url)` builds —
+    url is None when the upload failed, so the builder picks its inline
+    fallback (an upload outage must never lose feed content). comment_of
+    returns (body, externalize): callers keep their exact externalization
+    semantics — a counted marker must ride the comment (False), a plain
+    pointer comment may keep the size second-chance (True). Callers redact
+    `content`; the comment body still passes through _feed's redact."""
+    url = None
+    try:
+        url = await mgr.pmo.upload_attachment(pmo_id, filename,
+                                              content.encode())
+    except Exception:  # noqa: BLE001 — fall back to the builder's inline form
+        log.exception("attachment upload failed for %s — inline fallback",
+                      filename)
+    body, externalize = comment_of(url)
+    await mgr._feed(pmo_id, kind, body, externalize=externalize)
+    return url
+
+
 def blockquote(text: str) -> str:
     """Inverse of unquoted: prefix EVERY line with '> ' (bare '>' for blank
     lines, so lazy-continuation can't leak) — the ADR-0014 D2 quarantine for

@@ -37,3 +37,28 @@ def test_vector_sweep_is_the_full_powerset():
     data = build()
     assert len(data["board"]["vectors"]) == 4 * 2 * 256
     assert len(data["board"]["reasons"]) >= 8
+
+
+def test_discovery_label_is_derivation_inert():
+    """ADR-0033 founder ruling 2a: DEVCAKE-DISCOVERY is a pure sweep gate —
+    adding it to ANY label combination must leave derive() untouched (the
+    label may never impede a mission's progression). Full powerset sweep,
+    the executable twin of the AST guard in test_structure_guards."""
+    import itertools
+    from datetime import datetime, timezone
+
+    from devcake.domain.model import LABEL_DISCOVERY, Mission, derive
+    from tests.gen_spa_contracts import _ADOPTION, _LABELS, _STATUSES
+
+    now = datetime.now(timezone.utc)
+    for status, adoption in itertools.product(_STATUSES, _ADOPTION):
+        for r in range(len(_LABELS) + 1):
+            for combo in itertools.combinations(_LABELS, r):
+                def _m(labels):
+                    return Mission(pmo_id="1", pmo_kind="issue", key="T-1",
+                                   title="t", description="", status=status,
+                                   labels=set(labels), updated_at=now,
+                                   url="", instance="x")
+                base = derive(_m(combo), adoption)
+                spiked = derive(_m(set(combo) | {LABEL_DISCOVERY}), adoption)
+                assert base == spiked, (status, adoption, combo)

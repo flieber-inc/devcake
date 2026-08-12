@@ -150,8 +150,9 @@ its handoff_md forward, amending only what the newer entries change.
   "pr_url": "<the PR url from the activity feed>",
   "summary": "<one-paragraph verdict rationale>",
   "handoff_md": "<REQUIRED on approve: the closing note for downstream
-  issues — what was produced, what was discovered, what follow-up work must
-  know. A few sentences; omit on reject.>"}
+  issues — what was produced and what follow-up work must know; where a
+  reported discovery matters to the immediate successor, carry its
+  consequence here too. A few sentences; omit on reject.>"}
 
 ### The issue
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}

@@ -245,6 +245,27 @@ class Steward(BaseModel):
     dev_type: str | None = "steward"
 
 
+class Budgets(BaseModel):
+    """Operator-owned counting budgets (ADR-0033 Decision 7 AS AMENDED,
+    founder ruling 2026-08-13): discoveries are a proxy for memory-building
+    on an otherwise memoryless system — strictly the memory useful to the
+    tasks at hand — so the bounds are knobs the operator sizes to their
+    board, not evaluation constants. Devs carry self-regulation guidance in
+    the playbooks; these are the backstops. 0 = unlimited, everywhere.
+    `discovery_routes_per_source` and `discovery_in_per_recipient` take
+    effect when discovery ROUTING ships (ADR-0033 PR-2); harvest and the
+    freshness gate consume the other two today."""
+    # per-mission-lifetime cap on freshness re-review directives (ADR-0031;
+    # shared by human steering posts and routed discoveries alike)
+    freshness_rereviews: int = Field(5, ge=0)
+    # max discovery entries harvested from one run's result.json
+    discoveries_per_run: int = Field(3, ge=0)
+    # max routed deliveries counted from one source mission's receipts
+    discovery_routes_per_source: int = Field(3, ge=0)
+    # max distinct (source, step) deliveries accumulated on one recipient
+    discovery_in_per_recipient: int = Field(5, ge=0)
+
+
 def migrate_steward_names(data: dict) -> dict:
     """MAPPER→STEWARD one-time raw-config migration (2026-08-06 rename, no
     aliases in code): `relations_mapper` → `steward` top-level key, and the
@@ -614,6 +635,8 @@ class AppConfig(BaseModel):
     # the fission backstop by explicit operator choice (docs/03 §1.3)
     max_decomposition_depth: int = Field(2, ge=0)
     steward: Steward = Field(default_factory=Steward)
+    # counting budgets (ADR-0033 D7 as amended) — see the Budgets docstring
+    budgets: Budgets = Field(default_factory=Budgets)
     # ADR-0024 — mandatory source mirror; see the RepoMirror docstring
     repo_mirror: RepoMirror = Field(default_factory=RepoMirror)
     # operator rate card + display-override switch for app-side cost

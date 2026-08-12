@@ -137,6 +137,48 @@ write /workspace/out/result.json EXACTLY as:
 human must do to unblock this mission, including the exact error you hit>"}
 """
 
+# ADR-0033 — appended to ONBOARD/EXECUTE/REVIEW, the result.json authors
+# (not PLAN: entrypoint-synthesized; never STEWARD: the chain-reaction
+# damper, Decision 7). Code-owned like HUMAN_HANDOFF — appended AFTER
+# render, so operator template overrides keep the contract. Single braces
+# are literal here.
+DISCOVERIES_EPILOGUE_HEAD = """
+### Discoveries (optional result field)
+Discoveries are the only memory this otherwise memoryless system keeps
+between runs: record exactly what a future colleague working near this code
+would pay to know, and nothing else. They are EXCEPTIONAL, not routine —
+most runs ship none. When your work collides with reality — a fact that
+contradicts the plan, a trap, a surprise other missions in this family must
+know — add it to result.json alongside your other fields:
+"discoveries": [{"finding": "<the fact, stated for a stranger with zero
+session context — no coined terminology, no unanchored references>",
+"evidence": "<the receipt: file paths, exact error text, the reproducing
+command, the commit sha — an entry without evidence is an opinion and is
+dropped>", "scope": "<what it applies to, and what it does not>"}]
+"""
+DISCOVERIES_EPILOGUE_TAIL = """
+Discoveries vs handoff: `discoveries` is the canonical, structured record
+routed across the mission family; the closing handoff (written at REVIEW
+approve) is what the direct successor reads first. A finding that matters
+immediately downstream belongs in BOTH — routing is asynchronous and the
+successor must not be blocked on it.
+"""
+
+
+def discoveries_epilogue(cap: int) -> str:
+    """The shared discoveries contract; `cap` is
+    budgets.discoveries_per_run (0 = unlimited — the self-regulation
+    wording replaces the count)."""
+    cap_line = (
+        f"At most {cap} discoveries are harvested per run — spend them on "
+        f"the findings with the widest consequences."
+        if cap else
+        "No fixed cap applies on this instance — self-regulate: record only "
+        "what reduces a future reader's uncertainty; volume that does not is "
+        "contamination.")
+    return DISCOVERIES_EPILOGUE_HEAD + cap_line + DISCOVERIES_EPILOGUE_TAIL
+
+
 # Appended to all four playbooks. Provenance is sentinel-based (docs/03 §8a):
 # ACTIVITY.md marks each entry 🧑 HUMAN or 🤖 DevCake.
 HUMAN_COMMENTS_NOTE = """
@@ -193,7 +235,8 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
                    repo_options: str = "",
                    reference_repos: str = "",
                    blocker_repos: str = "",
-                   decomposition_rule: str = "") -> str:
+                   decomposition_rule: str = "",
+                   discoveries_cap: int = 3) -> str:
     """repo_options: the multi-repo triage section (item 2 full scope) —
     dispatch builds it from the instance's repo set; empty for single-repo
     and zero-repo instances (renders to nothing, like project_note).
@@ -212,7 +255,8 @@ def onboard_prompt(identifying_prompt: str, mission: Mission,
          "blocker_repos": blocker_repos,
          "decomposition_rule": decomposition_rule})
     return (identifying_prompt + "\n" + text
-            + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
+            + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
+            + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
 PLAN_PLAYBOOK = """
@@ -226,6 +270,14 @@ it without asking questions: goals, file-by-file changes, new files, testing
 strategy, and acceptance checks. Study /workspace/repo, the brief in
 /workspace/activity/MISSION.md, and the mission history in
 /workspace/activity/ (reference material — read what you need).
+
+Findings beyond this mission: if planning uncovers something genuinely
+off-mission that OTHER missions must know (a broken invariant, a misleading
+doc, a dependency surprise), end the plan with a section titled exactly
+"## Findings beyond this mission" — one bullet per finding WITH its evidence
+(paths, error text, the reproducing command). These are leads for the
+pipeline, not plan content; the EXECUTE step verifies and carries them
+forward.
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -256,7 +308,9 @@ Implement the mission's plan. The latest plan (PLAN*.md) and any review reports
 are in /workspace/activity/ — read the plan first; if a review report exists,
 its findings take priority. The mission brief is /workspace/activity/MISSION.md.
 Where reality contradicts the plan, implement the smallest sound deviation and
-document it in your summary.
+document it in your summary. If the plan ends with a "Findings beyond this
+mission" section, verify each finding's evidence yourself and carry the ones
+that hold into your own `discoveries` (contract below).
 
 SPECIAL CASE — conflict-resolve directive: if the most recent DevCake entry in
 /workspace/activity/ACTIVITY.md is a 🧩 conflict-resolve directive, your ONLY
@@ -296,7 +350,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
                    pr_instructions: str, default_branch: str = "main",
                    playbook: str | None = None,
                    reference_repos: str = "",
-                   blocker_repos: str = "") -> str:
+                   blocker_repos: str = "",
+                   discoveries_cap: int = 3) -> str:
     """pr_instructions is the forge descriptor's CLI-dialect template
     (docs/06) — placeholders: {key} {title} {default} {branch}. It is
     code-owned, so it keeps str.format; its rendered result becomes the
@@ -313,7 +368,8 @@ def execute_prompt(identifying_prompt: str, mission: Mission, repo_name: str,
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos})
     return (identifying_prompt + "\n" + text
-            + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
+            + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
+            + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
 REVIEW_PLAYBOOK = """
@@ -348,11 +404,13 @@ its handoff_md forward, amending only what the newer entries change.
   address>", "pr_url": "<the PR url from the activity feed>",
   "summary": "<one-paragraph verdict rationale>",
   "handoff_md": "<REQUIRED on approve: the mission's closing note for
-  downstream missions — what changed, what was DISCOVERED along the way, and
-  what work that builds on this must know (deviations from the plan, renamed
-  or moved things, gotchas, deferred items). Compress anything inherited from
-  this mission's own blockers instead of repeating it. A few sentences to one
-  short paragraph; omit on reject.>"}}
+  downstream missions — what changed and what work that builds on this must
+  know (deviations from the plan, renamed or moved things, gotchas, deferred
+  items). Where a discovery reported in `discoveries` matters to the
+  immediate successor, carry its consequence here too, in one sentence —
+  discovery routing is asynchronous and the successor must not wait on it.
+  Compress anything inherited from this mission's own blockers instead of
+  repeating it. A few sentences to one short paragraph; omit on reject.>"}}
 
 ### The mission
 - Key: {key}   ·   Priority: {priority}   ·   URL: {url}
@@ -365,7 +423,8 @@ its handoff_md forward, amending only what the newer entries change.
 def review_prompt(identifying_prompt: str, mission: Mission,
                   playbook: str | None = None,
                   reference_repos: str = "",
-                  blocker_repos: str = "") -> str:
+                  blocker_repos: str = "",
+                  discoveries_cap: int = 3) -> str:
     text = render_playbook(
         playbook if playbook is not None else DEFAULT_PLAYBOOKS["REVIEW"],
         {"key": mission.key, "priority": mission.priority, "url": mission.url,
@@ -375,7 +434,8 @@ def review_prompt(identifying_prompt: str, mission: Mission,
          "reference_repos": reference_repos,
          "blocker_repos": blocker_repos})
     return (identifying_prompt + "\n" + text
-            + HUMAN_HANDOFF + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
+            + HUMAN_HANDOFF + discoveries_epilogue(discoveries_cap)
+            + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
 STEWARD_PLAYBOOK = """

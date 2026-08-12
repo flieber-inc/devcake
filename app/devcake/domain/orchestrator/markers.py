@@ -98,15 +98,59 @@ MAX_CONFLICT_RESOLVES = 2
 # comment must stay under FEED_INLINE_MAX so the marker is never externalized
 # into an attachment.
 FRESHNESS_MARKER = re.compile(r"`devcake:freshness-rereview:(\d+)`")
-# The ONLY terminator of the re-review loop (per mission lifetime, like the
-# conflict budget). A constant, not operator config, until live data
-# demonstrates a need — knobs are debt too (docs/08 §1).
-MAX_FRESHNESS_REREVIEWS = 2
+# The re-review budget itself lives at AppConfig.budgets.freshness_rereviews
+# (ADR-0033 Decision 7 as amended, founder ruling 2026-08-13): counting
+# budgets are operator knobs sized to the board, 0 = unlimited. The COUNT
+# stays marker-derived from the feed — only the bound moved to config.
 # ADR-0031 Decision 3 — sentinel'd feed entries matching one of these regexes
 # are material to the Freshness Gate DESPITE being DevCake-posted. Shipped
 # EMPTY; the routed DISCOVERY-IN class joins when discovery routing ships.
 # Nothing is elevated implicitly.
 ELEVATED_MARKERS: list[re.Pattern[str]] = []
+
+# ── ADR-0033 — discovery markers (the counterflow lane, harvest half) ────────
+# Harvest memorializes a run's `discoveries` on the SOURCE mission's feed:
+# the full DISCOVERY_<seq>.md is always attached as a step deliverable
+# (founder ruling 2026-08-13) and the marked comment is the scan surface.
+# Counted, never trusted; posted with externalize=False so the marker can
+# never leave the feed body; a human deleting the comment deliberately
+# resets the derived state. Parameters ride inside the backticked token
+# (decomposition-marker precedent): step= is the Mission Step seq, n= the
+# entry count — pending detection and the per-source budget stay
+# board-derivable without opening attachments. NOT in ELEVATED_MARKERS: a
+# mission's own discovery post must never trip its own freshness gate.
+DISCOVERY_MARKER_RE = re.compile(r"`devcake:discovery:v1 step=(\d+) n=(\d+)`")
+# Routed-receipt twin, posted on the source feed by the ROUTING half
+# (ADR-0033 PR-2) once a step's discoveries are dispositioned: pending =
+# posted − receipted, pure board arithmetic from day one.
+DISCOVERY_ROUTED_MARKER_RE = re.compile(
+    r"`devcake:discovery-routed:v1 step=(\d+) to=(\S+)`")
+# Byte bounds, not operator knobs (AppConfig.budgets owns the COUNTS):
+# per-field cap inside DISCOVERY_<seq>.md, per-entry preview bound in the
+# source comment.
+DISCOVERY_FIELD_MAX = 2000
+DISCOVERY_PREVIEW_MAX = 200
+
+
+def discovery_marker(seq: int, n: int) -> str:
+    """Render twin of DISCOVERY_MARKER_RE (round-trip pinned in tests)."""
+    return f"`devcake:discovery:v1 step={seq} n={n}`"
+
+
+def discovery_posts(unquoted_text: str) -> list[tuple[int, int]]:
+    """(step, n) for every discovery marker in unquoted feed text. The
+    parameter name is the contract: callers pass feed.unquoted(body) — this
+    module cannot import feed (cycle), so the IRON RULE is enforced at the
+    call site."""
+    return [(int(m.group(1)), int(m.group(2)))
+            for m in DISCOVERY_MARKER_RE.finditer(unquoted_text)]
+
+
+def discovery_receipts(unquoted_text: str) -> set[tuple[int, str]]:
+    """(step, target) for every routed receipt in unquoted feed text —
+    set-cardinality shape (distinct deliveries), not max-of-int."""
+    return {(int(m.group(1)), m.group(2))
+            for m in DISCOVERY_ROUTED_MARKER_RE.finditer(unquoted_text)}
 
 # ADR-0032 — the HANDOFF note: a marked section APPENDED to a completed
 # mission's description at approve-finalize (description, not feed: zero
@@ -124,6 +168,17 @@ HANDOFF_MARKER = "`devcake:handoff:v1`"
 HANDOFF_APPEND_MAX = 4000
 # Per-blocker excerpt bound in the prompt note and MISSION.md.
 HANDOFF_EXCERPT_MAX = 700
+
+
+def defang(text: str) -> str:
+    """The ONE marker-neutralizing transformation for model-authored text on
+    any append path (ADR-0032 D3, ADR-0033 consequences): strip the opening
+    backtick from `devcake:…` / `devcake-repo:…` tokens so quoted markers
+    keep their words but lose their teeth — every scan matches the backticked
+    form only. Extracted from review._append_handoff before harvest grew a
+    second copy (the multi-site drift ADR-0034 exists to prevent)."""
+    return text.replace("`devcake:", "devcake:").replace(
+        "`devcake-repo:", "devcake-repo:")
 
 
 def handoff_of(description: str | None) -> str:

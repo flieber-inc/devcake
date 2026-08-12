@@ -383,3 +383,28 @@ def test_domain_never_imports_adapters():
     assert not offenders, (
         "domain must not import adapter packages (ADR-0034 layering ratchet; "
         "sanctioned seams live in the allowlist): " + "; ".join(offenders))
+
+
+# ADR-0033, founder ruling 2026-08-13 (2a): DEVCAKE-DISCOVERY is a pure
+# sweep gate. The definition and the harvest/scan seam may reference it;
+# NOTHING else in domain/ may — so derive/gate_map/schedule/dispatch can
+# never quietly grow a read that would impede a mission's progression.
+# (PR-2's routing lane extends this list deliberately, with its own ruling.)
+DISCOVERY_LABEL_ALLOWLIST_REL = {"model.py", "orchestrator/discovery.py"}
+
+
+def test_discovery_label_never_joins_scheduling():
+    offenders = []
+    for p in sorted(DOMAIN.rglob("*.py")):
+        if "__pycache__" in p.parts:
+            continue
+        rel = p.relative_to(DOMAIN).as_posix()
+        if rel in DISCOVERY_LABEL_ALLOWLIST_REL:
+            continue
+        src = p.read_text()
+        if "LABEL_DISCOVERY" in src or "DEVCAKE-DISCOVERY" in src:
+            offenders.append(rel)
+    assert not offenders, (
+        "DEVCAKE-DISCOVERY is a sweep gate only (ADR-0033 founder ruling): "
+        "a new consumer needs its own documented ruling and an allowlist "
+        "entry, never a quiet read: " + "; ".join(offenders))

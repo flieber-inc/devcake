@@ -13,18 +13,39 @@ cd "$(dirname "$0")/.."
 if [[ -f .env ]]; then
   while IFS= read -r line; do
     export "${line?}"
-  done < <(grep -E '^(REDIS_PASSWORD|ADMIN_USER|ADMIN_PASSWORD)=' .env)
+  done < <(grep -E '^(REDIS_PASSWORD|ADMIN_USER|ADMIN_PASSWORD|DEVCAKE_TAG)=' .env)
 fi
 
 : "${REDIS_PASSWORD:?REDIS_PASSWORD must be set (compose .env)}"
 : "${ADMIN_USER:?ADMIN_USER must be set (compose .env)}"
 : "${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set (compose .env)}"
 
+# AUD-004 applied to the SUITE (2026-08-12 audit OPS-M3): on a pinned
+# install the suite used to bake app-test:latest from the working tree while
+# the dispatch battery graded the LIVE, pinned stack — green then proved a
+# MIX of two code versions. DEVCAKE_TAG now rides from .env into the bake
+# and every docker run below (tag lockstep, like up.sh); and when the live
+# app container is not running the freshly-baked image, the run is loudly
+# labeled so a mixed-version green can never read as tree evidence.
+mixed_version_banner() {
+  local live_id local_id
+  live_id="$(docker inspect -f '{{.Image}}' devcake-app-1 2>/dev/null || true)"
+  local_id="$(docker image inspect -f '{{.Id}}' "devcake/app:${DEVCAKE_TAG:-latest}" 2>/dev/null || true)"
+  if [[ -n "$live_id" && -n "$local_id" && "$live_id" != "$local_id" ]]; then
+    echo "⚠️  MIXED-VERSION RUN: the live app container is NOT running the"
+    echo "    local devcake/app:${DEVCAKE_TAG:-latest} image (stack predates"
+    echo "    the last bake). Unit lanes grade the TREE; the dispatch and"
+    echo "    contract batteries grade the LIVE STACK. Redeploy (./up.sh)"
+    echo "    before reading this green as evidence for the tree."
+  fi
+}
+
 echo "── digest-pin gate (ISSUES #29)"
 python3 scripts/check_image_pins.py
 
-echo "── bake app-test (prod image has no pytest)"
+echo "── bake app-test (prod image has no pytest; DEVCAKE_TAG=${DEVCAKE_TAG:-latest} lockstep)"
 docker buildx bake -f docker-bake.hcl app-test
+mixed_version_banner
 
 echo "── ruff (syntax / undefined names / blanket-except policy, docs/15 §7)"
 docker run --rm -e RUFF_CACHE_DIR=/tmp/ruff-cache -w /srv \
@@ -40,6 +61,7 @@ docker run --rm \
   -e "REDIS_URL=redis://redis:6379/0" \
   -e "REDIS_PASSWORD=${REDIS_PASSWORD}" \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
+  -v "$(pwd)/images/hello:/srv/images/hello:ro" \
   -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \
   -v "$(pwd)/app/Dockerfile:/srv/app.Dockerfile:ro" \
   -v "$(pwd)/docs:/srv/docs:ro" \
@@ -58,4 +80,5 @@ docker compose exec -T app python - < scripts/contract_tests_pmo.py
 
 # Full Dagu → hello container → Redis → finalize (also wired into GHA ci.yml)
 ./scripts/ci_dispatch_hello.sh
+mixed_version_banner
 echo "── CI suite green"

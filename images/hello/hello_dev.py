@@ -49,8 +49,13 @@ def send(kind: str, payload: dict) -> None:
             time.sleep(0.25 * (2 ** attempt))
 
 
+# PINNED MIRROR of devcake_dev/adapters/bus.py (ADR-0034): the hello image
+# stays a standalone one-file CI fixture on purpose, so these constants and
+# _fit_payload are a copy — tests/test_hello_bus_contract.py compares both
+# sides field-by-field and turns red on drift (this copy HAD drifted:
+# last_message_md was missing from SHRINKABLE_FIELDS).
 MAX_ARTIFACT_BYTES = 50 * 1024 * 1024 - 256 * 1024  # headroom under ingress caps
-SHRINKABLE_FIELDS = ("transcript_md", "plan_md")     # never result/exit_code/token_report
+SHRINKABLE_FIELDS = ("transcript_md", "plan_md", "last_message_md")
 TRUNCATE_FLOOR = 10_000
 
 

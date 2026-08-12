@@ -54,22 +54,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# ONE derivation, shared with the CI bring-up (ADR-0034; policy stays here)
+# shellcheck source=scripts/lib/stack_env.sh
+source "$(dirname "$0")/scripts/lib/stack_env.sh"
+
 discover_docker_gid() {
-  if [[ ! -e "$SOCK" ]]; then
-    echo "error: $SOCK not found — is the Docker daemon running?" >&2
-    exit 1
-  fi
   local gid=""
-  if gid=$(stat -c '%g' "$SOCK" 2>/dev/null); then
-    :
-  elif gid=$(stat -f '%g' "$SOCK" 2>/dev/null); then
-    : # BSD/macOS
-  else
-    echo "error: cannot read group id of $SOCK" >&2
-    exit 1
-  fi
-  if [[ ! "$gid" =~ ^[0-9]+$ ]]; then
-    echo "error: unexpected DOCKER_GID from $SOCK: ${gid@Q}" >&2
+  if ! gid="$(devcake_docker_gid "$SOCK")"; then
+    echo "error: cannot derive DOCKER_GID from $SOCK — is the Docker daemon running?" >&2
     exit 1
   fi
   printf '%s\n' "$gid"
@@ -114,10 +106,7 @@ echo "── DOCKER_GID=${GID}  (from ${SOCK})"
 # bind sources resolve on the daemon host. Existing .env value wins (operator
 # relocation); default is ./workspaces in this checkout. 0700: the tree holds
 # repo source, activity transcripts and agent output (docs/14 §1).
-WS_HOST="$(grep -E '^DEVCAKE_WS_HOST=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)"
-if [[ -z "$WS_HOST" ]]; then
-  WS_HOST="$(pwd)/workspaces"
-fi
+WS_HOST="$(devcake_ws_host .env "$(pwd)")"
 if [[ "$WS_HOST" != /* ]]; then
   echo "error: DEVCAKE_WS_HOST must be an absolute host path, got: ${WS_HOST@Q}" >&2
   exit 1

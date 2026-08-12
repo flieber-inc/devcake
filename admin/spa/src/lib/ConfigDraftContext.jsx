@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { get } from "../api.js";
 import useConfigDraft from "./useConfigDraft.js";
+import { makeReqSeq } from "./reqSeq.js";
 
 // ONE unified draft over {cfg, devTypes, assignments}, shared by the
 // Configuration, Repositories and PMO pages (v0.1.1 B4 + 2026-08-02 nav
@@ -15,6 +16,7 @@ export function ConfigDraftProvider({ children }) {
   const [healthInfo, setHealthInfo] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const firstLoad = useRef(true);
+  const reloadSeq = useRef(makeReqSeq());
   // "new card" name tracking for PMO and repo cards lives HERE (audit D5
   // #12, extended): pages unmount on navigation, and a card added this
   // session must keep its editable-name status when the operator returns —
@@ -23,10 +25,16 @@ export function ConfigDraftProvider({ children }) {
   const repoNewNamesState = useState(() => new Set());
 
   const reload = async () => {
+    // stale-response guard: reload() fires from six places; two overlapping
+    // reloads resolving out of order used to rebase() the OLDER snapshot last
+    // — rolling the server baseline backward, and since config does not poll,
+    // the phantom dirt persisted until the next action (2026-08-12 audit)
+    const mine = reloadSeq.current.next();
     const [c, d, a, hs, h] = await Promise.all([
       get("/config"), get("/dev-types"), get("/assignments"),
       get("/harnesses"), get("/health").catch(() => null),
     ]);
+    if (!reloadSeq.current.isLatest(mine)) return;   // a newer reload won
     setHarnesses(hs);
     setHealthInfo(h);
     if (firstLoad.current) { dr.load(c, d, a); firstLoad.current = false; }

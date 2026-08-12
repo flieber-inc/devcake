@@ -16,6 +16,19 @@ import { bucketize, COLUMNS, unadoptedHiddenCount } from "../lib/board.js";
 // to expect a faster PMO round-trip than exists.
 const POLL_MS = 10_000;
 
+// Optimistic-override identity: gitea_issues pmo_ids are per-repo issue
+// numbers, so an override must be keyed by (instance, pmo_id), never the bare
+// id (2026-08-12 audit — a Park on one board bled onto a colliding id on
+// another). `instance` may be "" on a single-PMO deployment; that is fine —
+// there is exactly one board to collide on.
+const refKey = (instance, pmo_id) => `${instance || ""}::${pmo_id}`;
+
+// Self-heal bound: the scheduler can advance a mission to a THIRD state the
+// optimistic projection never predicted, and an exact-label-match test would
+// then keep overriding the real row FOREVER. Drop the override after this
+// many polls (~this×10s) regardless — the server row is authoritative.
+const PROJECTION_MAX_POLLS = 6;
+
 // Done is history, not work: the section previews the newest few and unfolds
 // on demand (bucketize itself already caps Done at its 30 newest).
 const DONE_PREVIEW = 10;
@@ -116,8 +129,11 @@ export default function MissionsPage() {
     dependency_cycles: [],
   });
   const [error, setError] = useState("");
-  // per-mission optimistic overrides (pmo_id → { labels, syncing:true }).
-  // Cleared once the next /missions poll confirms the change.
+  // per-mission optimistic overrides, keyed by the INSTANCE-QUALIFIED ref
+  // (2026-08-12 audit): gitea_issues pmo_ids are per-repo issue numbers, so a
+  // bare-pmo_id key painted a Park on gitea1's #3 onto linear1's #3 too. Each
+  // entry is { labels, syncing, polls } — `polls` bounds the self-heal so a
+  // projection can never stick forever if the server advances PAST it.
   const [pending, setPending] = useState({});
   const [openMission, setOpenMission] = useState(null);
   const [showAllDone, setShowAllDone] = useState(false);
@@ -139,7 +155,7 @@ export default function MissionsPage() {
       } catch { /* storage unavailable — the toggle still works this session */ }
       return next;
     });
-  const [confirmAction, setConfirmAction] = useState(null); // {pmo_id, action}
+  const [confirmAction, setConfirmAction] = useState(null); // {ref:{pmo_id,instance}, action}
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [flash, setFlash] = useState("");
   const [pollBusy, setPollBusy] = useState(false);
@@ -191,11 +207,22 @@ export default function MissionsPage() {
       }
       setPending((prev) => {
         const next = {};
-        for (const [pmo_id, entry] of Object.entries(prev)) {
-          const row = missionsBody.missions.find((m) => m.pmo_id === pmo_id);
+        for (const [key, entry] of Object.entries(prev)) {
+          // match the SAME (instance, pmo_id) the override was minted for —
+          // never a colliding id on another board
+          const row = missionsBody.missions.find(
+            (m) => refKey(m.instance, m.pmo_id) === key,
+          );
           const serverLabels = row ? [...(row.labels || [])].sort().join(",") : null;
           const projected = [...(entry.labels || [])].sort().join(",");
-          if (serverLabels !== projected) next[pmo_id] = entry;
+          const polls = (entry.polls || 0) + 1;
+          // drop when the server confirms the projection OR after the
+          // self-heal bound — the scheduler may advance the mission to a
+          // THIRD state the projection never predicted, and a bare
+          // exact-match test would then override the real row forever
+          if (serverLabels !== projected && polls < PROJECTION_MAX_POLLS) {
+            next[key] = { ...entry, polls };
+          }
         }
         return next;
       });
@@ -209,7 +236,7 @@ export default function MissionsPage() {
 
   const rows = useMemo(() => {
     return (data.missions || []).map((row) => {
-      const p = pending[row.pmo_id];
+      const p = pending[refKey(row.instance, row.pmo_id)];
       if (!p) return row;
       return { ...row, labels: p.labels };
     });
@@ -246,14 +273,17 @@ export default function MissionsPage() {
     [filteredRows, data.adoption_mode]
   );
 
-  const doAction = async (pmo_id, action) => {
+  const doAction = async ({ pmo_id, instance }, action) => {
     try {
       const result = await send("POST", `/missions/${encodeURIComponent(pmo_id)}/actions`, {
         action,
+        instance,   // disambiguates a colliding pmo_id server-side
       });
       setPending((prev) => ({
         ...prev,
-        [pmo_id]: { labels: result.labels || [], syncing: true },
+        [refKey(instance, pmo_id)]: {
+          labels: result.labels || [], syncing: true, polls: 0,
+        },
       }));
       setFlash(`${action} sent — waiting for the next poll to confirm.`);
       setTimeout(() => setFlash(""), 4000);
@@ -262,11 +292,11 @@ export default function MissionsPage() {
     }
   };
 
-  const requestAction = (pmo_id, action) => {
+  const requestAction = (ref, action) => {
     if (CONFIRM_COPY[action]) {
-      setConfirmAction({ pmo_id, action });
+      setConfirmAction({ ref, action });
     } else {
-      doAction(pmo_id, action);
+      doAction(ref, action);
     }
   };
 
@@ -274,7 +304,7 @@ export default function MissionsPage() {
     if (!confirmAction) return;
     setConfirmBusy(true);
     try {
-      await doAction(confirmAction.pmo_id, confirmAction.action);
+      await doAction(confirmAction.ref, confirmAction.action);
       setConfirmAction(null);
     } finally {
       setConfirmBusy(false);
@@ -561,10 +591,10 @@ export default function MissionsPage() {
                     key={`${row.instance}:${row.pmo_id}`}
                     row={row}
                     multiPmo={multiPmo}
-                    syncing={!!pending[row.pmo_id]?.syncing}
+                    syncing={!!pending[refKey(row.instance, row.pmo_id)]?.syncing}
                     sectionReason={shared}
                     onOpen={() => setOpenMission(row)}
-                    onAction={(action) => requestAction(row.pmo_id, action)}
+                    onAction={(action) => requestAction({ pmo_id: row.pmo_id, instance: row.instance }, action)}
                   />
                 ))}
               </div>
@@ -580,13 +610,13 @@ export default function MissionsPage() {
           key={`${openMission.instance}:${openMission.pmo_id}`}
           mission={openMission}
           multiPmo={multiPmo}
-          syncing={!!pending[openMission.pmo_id]?.syncing}
+          syncing={!!pending[refKey(openMission.instance, openMission.pmo_id)]?.syncing}
           rows={rows}
           adoptionMode={data.adoption_mode}
           cycles={pollState.dependency_cycles}
           onOpenMission={(row) => setOpenMission(row)}
           onClose={() => setOpenMission(null)}
-          onAction={(action) => requestAction(openMission.pmo_id, action)}
+          onAction={(action) => requestAction({ pmo_id: openMission.pmo_id, instance: openMission.instance }, action)}
         />
       )}
       {confirmAction && (

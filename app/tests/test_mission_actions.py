@@ -447,3 +447,48 @@ def test_stop_all_isolates_a_failing_kill():
     assert out["ok"] is False
     assert out["errors"][0]["run_id"] == "r-2"
     assert "read-only" in out["errors"][0]["error"]
+
+
+# ── instance-qualified resolution (2026-08-12 audit: colliding pmo_ids) ──────
+
+
+def test_colliding_pmo_id_without_instance_is_a_409():
+    """gitea_issues pmo_ids are per-repo issue numbers: #3 exists on two
+    boards. A bare id used to hit the FIRST cache row (wrong board); it now
+    refuses so the SPA must qualify."""
+    cache = [_row(pmo_id="3", instance="gitea1", labels={"DEVCAKE", "DEVCAKE-FAILED"}),
+             _row(pmo_id="3", instance="gitea2", labels={"DEVCAKE", "DEVCAKE-FAILED"})]
+    managers = {"gitea1": FakeMgr(), "gitea2": FakeMgr()}
+    with pytest.raises(HTTPException) as exc:
+        run(ma.label_action("3", "retry", missions_cache=cache,
+                            managers=managers))
+    assert exc.value.status_code == 409
+    assert "multiple instances" in exc.value.detail
+    assert not managers["gitea1"].pmo.swaps and not managers["gitea2"].pmo.swaps
+
+
+def test_instance_qualifier_lands_on_the_right_board():
+    cache = [_row(pmo_id="3", instance="gitea1", labels={"DEVCAKE", "DEVCAKE-FAILED"}),
+             _row(pmo_id="3", instance="gitea2", labels={"DEVCAKE", "DEVCAKE-FAILED"})]
+    managers = {"gitea1": FakeMgr(), "gitea2": FakeMgr()}
+    run(ma.label_action("3", "retry", missions_cache=cache,
+                        managers=managers, instance="gitea2"))
+    assert not managers["gitea1"].pmo.swaps, "the other board is untouched"
+    assert len(managers["gitea2"].pmo.swaps) == 1
+
+
+def test_instance_qualifier_not_found_is_404():
+    cache = [_row(pmo_id="3", instance="gitea1", labels={"DEVCAKE"})]
+    with pytest.raises(HTTPException) as exc:
+        run(ma.label_action("3", "retry", missions_cache=cache,
+                            managers={"gitea1": FakeMgr()}, instance="ghost"))
+    assert exc.value.status_code == 404
+
+
+def test_bare_id_single_instance_still_works():
+    """The common single-PMO case: a bare id with exactly one match resolves
+    unchanged (no qualifier needed)."""
+    cache, managers = _fresh_env(row_labels={"DEVCAKE", "DEVCAKE-FAILED"})
+    result = run(ma.label_action("pmo-1", "retry", missions_cache=cache,
+                                 managers=managers))
+    assert "DEVCAKE-FAILED" not in result["labels"]

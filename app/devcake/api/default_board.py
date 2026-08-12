@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import nullcontext
 
 from ..config import MANAGED_BOARD_NAME, PMOInstance, save_config
 
@@ -28,37 +29,49 @@ async def ensure_default_board(s) -> None:
         return
     async with _lock:
         info = await s.internal_forge.ensure_pmo_board()
-        # adopt-don't-crash: an operator who manually configured this exact
-        # board pre-feature would collide with the duplicate-target validator
-        # — their instance IS the board; skip injection and say so
-        for inst in s.config.pmos:
-            if (not inst.managed and inst.system == "gitea_issues"
-                    and inst.team_key == info["team_key"]
-                    and (inst.api_base or "").rstrip("/") == info["api_base"]):
-                log.info("default board: operator instance %r already targets "
-                         "%s — adopting it, no managed row injected",
-                         inst.name, info["team_key"])
+        # L-2 (2026-08): the config mutation + reload below must not race a
+        # suspended poll cycle — same contract as config PUT and the secret
+        # endpoints. Lock ordering is always _lock → poll_rt.lock and never
+        # inverted: reload_connections is sync and only SPAWNS the re-ensure
+        # (services.py create_task), so no cycle-lock holder ever awaits this
+        # function inline. Fakes without poll_rt run lock-free, like a
+        # missing cycle_lock elsewhere. Held across the network call above?
+        # No — acquired after it, so a poll waits only on local work.
+        poll_rt = getattr(s, "poll_rt", None)
+        async with (poll_rt.lock if poll_rt is not None else nullcontext()):
+            # adopt-don't-crash: an operator who manually configured this
+            # exact board pre-feature would collide with the duplicate-target
+            # validator — their instance IS the board; skip injection and say
+            # so
+            for inst in s.config.pmos:
+                if (not inst.managed and inst.system == "gitea_issues"
+                        and inst.team_key == info["team_key"]
+                        and (inst.api_base or "").rstrip("/") == info["api_base"]):
+                    log.info("default board: operator instance %r already "
+                             "targets %s — adopting it, no managed row "
+                             "injected", inst.name, info["team_key"])
+                    return
+            desired = {"name": MANAGED_BOARD_NAME, "system": "gitea_issues",
+                       "team_key": info["team_key"],
+                       "api_base": info["api_base"], "managed": True}
+            row = next((p for p in s.config.pmos
+                        if p.managed and p.name == MANAGED_BOARD_NAME), None)
+            if row is not None and all(getattr(row, k) == v
+                                       for k, v in desired.items()):
+                if info["minted"]:
+                    # the running adapter cached the dead PAT at construction
+                    # — rebuild so the fresh one takes (managers reconciled
+                    # in place)
+                    s.reload_connections()
                 return
-        desired = {"name": MANAGED_BOARD_NAME, "system": "gitea_issues",
-                   "team_key": info["team_key"], "api_base": info["api_base"],
-                   "managed": True}
-        row = next((p for p in s.config.pmos
-                    if p.managed and p.name == MANAGED_BOARD_NAME), None)
-        if row is not None and all(getattr(row, k) == v
-                                   for k, v in desired.items()):
-            if info["minted"]:
-                # the running adapter cached the dead PAT at construction —
-                # rebuild so the fresh one takes (managers reconciled in place)
-                s.reload_connections()
-            return
-        if row is None:
-            s.config.pmos = [*s.config.pmos, PMOInstance(**desired)]
-            log.info("default board: managed instance %r registered (%s)",
-                     MANAGED_BOARD_NAME, info["team_key"])
-        else:
-            for k, v in desired.items():
-                setattr(row, k, v)
-            log.info("default board: managed instance %r repaired (%s)",
-                     MANAGED_BOARD_NAME, info["team_key"])
-        save_config(s.config)
-        s.reload_connections()
+            if row is None:
+                s.config.pmos = [*s.config.pmos, PMOInstance(**desired)]
+                log.info("default board: managed instance %r registered (%s)",
+                         MANAGED_BOARD_NAME, info["team_key"])
+            else:
+                for k, v in desired.items():
+                    setattr(row, k, v)
+                log.info("default board: managed instance %r repaired (%s)",
+                         MANAGED_BOARD_NAME, info["team_key"])
+            save_config(s.config)
+            s.reload_connections()

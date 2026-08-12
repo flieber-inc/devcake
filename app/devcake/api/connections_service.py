@@ -6,8 +6,10 @@ thin forwards that pass the composition root's singletons at call time
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from contextlib import nullcontext
 
 from fastapi import HTTPException
 
@@ -51,8 +53,19 @@ def _require_harness_var(var: str) -> None:
         raise HTTPException(422, "harness var must match ^[A-Z][A-Z0-9_]{0,63}$")
 
 
+def _cycle(lock: asyncio.Lock | None):
+    """Serialize the write + adapter-graph swap against an in-flight poll
+    cycle — the config-PUT precedent (PR #104). The poll loop holds
+    `poll_rt.lock` for a whole cycle but suspends at awaits; without this,
+    a secret write mid-cycle swaps the graph (or deletes the credential)
+    underneath the suspended cycle. None (tests, scripts) = no
+    serialization, mirroring `apply_config_patch`."""
+    return lock if lock is not None else nullcontext()
+
+
 async def put_secret(scope: str, instance: str, field: str, body: dict, *,
-                     forge_runtime, reload):
+                     forge_runtime, reload,
+                     cycle_lock: asyncio.Lock | None = None):
     """Store a connection secret VALUE (never echoed). scope ∈ pmo|repo;
     instance is the config instance name; field ∈ api_key|token|token_ro|
     reviewer_token. Writing a repo/pmo secret clears any latched breaker."""
@@ -60,24 +73,27 @@ async def put_secret(scope: str, instance: str, field: str, body: dict, *,
     value = body.get("value")
     if not isinstance(value, str) or not value:
         raise HTTPException(422, "value must be a non-empty string")
-    secrets_store.write_connection_secret(scope, instance, field, value)
-    if scope == "repo":
-        forge_runtime.breakers.pop(instance, None)
-        reset_protection_cache()
-    # adapters capture credentials by VALUE at construction — a rotated
-    # secret takes effect only through a rebuild, same as a config PUT
-    reload()
+    async with _cycle(cycle_lock):
+        secrets_store.write_connection_secret(scope, instance, field, value)
+        if scope == "repo":
+            forge_runtime.breakers.pop(instance, None)
+            reset_protection_cache()
+        # adapters capture credentials by VALUE at construction — a rotated
+        # secret takes effect only through a rebuild, same as a config PUT
+        reload()
     return secrets_store.connection_status(scope, instance, field)
 
 
 async def delete_secret(scope: str, instance: str, field: str, *,
-                        forge_runtime, reload):
+                        forge_runtime, reload,
+                        cycle_lock: asyncio.Lock | None = None):
     _require_secret_ref(scope, instance, field)
-    secrets_store.delete_connection_field(scope, instance, field)
-    if scope == "repo":
-        forge_runtime.breakers.pop(instance, None)
-        reset_protection_cache()
-    reload()
+    async with _cycle(cycle_lock):
+        secrets_store.delete_connection_field(scope, instance, field)
+        if scope == "repo":
+            forge_runtime.breakers.pop(instance, None)
+            reset_protection_cache()
+        reload()
     return {"present": False}
 
 
@@ -129,7 +145,8 @@ async def secrets_inventory():
 
 
 async def clear_secrets(body: dict, *, forge_runtime, reload, config,
-                        shared_breakers, dev_types):
+                        shared_breakers, dev_types,
+                        cycle_lock: asyncio.Lock | None = None):
     """Delete the operator-selected subset of stored secrets.
 
     Body:
@@ -139,9 +156,10 @@ async def clear_secrets(body: dict, *, forge_runtime, reload, config,
       pause_intake: bool  (optional; default false when omitted)
 
     Order is load-bearing: validate → optional master intake pause (fail
-    aborts with no deletes) → deletes → breakers/reload → audit. Pausing
-    first means a residual poll race can only fire before keys are gone,
-    not after (no poll lock in this path).
+    aborts with no deletes) → deletes → breakers/reload → audit. The
+    pause-through-reload transaction runs under the poll-cycle lock
+    (`_cycle`): a cycle observes either the pre-clear world or the
+    post-reload one, never a half-swapped adapter graph over deleted keys.
 
     SPA always sends pause_intake explicitly; API-safe default when omitted
     is false so scripts do not freeze intake by accident.
@@ -202,40 +220,41 @@ async def clear_secrets(body: dict, *, forge_runtime, reload, config,
             raise HTTPException(422, str(e)) from e
         credential_files.append((dev_type, filename))
 
-    # ── pause first (if requested) — no deletes yet ─────────────────────────
-    if pause_intake:
-        config.intake_paused = True
-        save_config(config)
+    async with _cycle(cycle_lock):
+        # ── pause first (if requested) — no deletes yet ─────────────────────
+        if pause_intake:
+            config.intake_paused = True
+            save_config(config)
 
-    deleted_h: list[str] = []
-    for var in harness_vars:
-        secrets_store.delete_harness_secret(var)
-        deleted_h.append(var)
-        for dt_name, dt in dev_types.items():
-            if var in HARNESSES[dt.harness_template].credential_env:
-                shared_breakers.pop(dt_name, None)
+        deleted_h: list[str] = []
+        for var in harness_vars:
+            secrets_store.delete_harness_secret(var)
+            deleted_h.append(var)
+            for dt_name, dt in dev_types.items():
+                if var in HARNESSES[dt.harness_template].credential_env:
+                    shared_breakers.pop(dt_name, None)
 
-    deleted_c: list[dict] = []
-    repo_touched = False
-    for scope, instance, field in connections:
-        secrets_store.delete_connection_field(scope, instance, field)
-        deleted_c.append({"scope": scope, "instance": instance,
-                          "field": field})
-        if scope == "repo":
-            forge_runtime.breakers.pop(instance, None)
-            repo_touched = True
+        deleted_c: list[dict] = []
+        repo_touched = False
+        for scope, instance, field in connections:
+            secrets_store.delete_connection_field(scope, instance, field)
+            deleted_c.append({"scope": scope, "instance": instance,
+                              "field": field})
+            if scope == "repo":
+                forge_runtime.breakers.pop(instance, None)
+                repo_touched = True
 
-    deleted_f: list[dict] = []
-    for dev_type, filename in credential_files:
-        secrets_store.delete_credential_file(dev_type, filename)
-        deleted_f.append({"dev_type": dev_type, "filename": filename})
-        shared_breakers.pop(dev_type, None)
+        deleted_f: list[dict] = []
+        for dev_type, filename in credential_files:
+            secrets_store.delete_credential_file(dev_type, filename)
+            deleted_f.append({"dev_type": dev_type, "filename": filename})
+            shared_breakers.pop(dev_type, None)
 
-    if repo_touched:
-        reset_protection_cache()
-    if connections:
-        # connection secrets are captured at adapter construction
-        reload()
+        if repo_touched:
+            reset_protection_cache()
+        if connections:
+            # connection secrets are captured at adapter construction
+            reload()
 
     audit_event(
         "secrets_cleared",

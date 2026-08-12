@@ -655,7 +655,8 @@ async def put_secret(scope: str, instance: str, field: str, body: dict):
     s = svc()
     return await connections_service.put_secret(
         scope, instance, field, body,
-        forge_runtime=s.forge_runtime, reload=s.reload_connections)
+        forge_runtime=s.forge_runtime, reload=s.reload_connections,
+        cycle_lock=s.poll_rt.lock)
 
 
 @app.delete("/api/v1/secrets/{scope}/{instance}/{field}")
@@ -663,7 +664,8 @@ async def delete_secret(scope: str, instance: str, field: str):
     s = svc()
     return await connections_service.delete_secret(
         scope, instance, field,
-        forge_runtime=s.forge_runtime, reload=s.reload_connections)
+        forge_runtime=s.forge_runtime, reload=s.reload_connections,
+        cycle_lock=s.poll_rt.lock)
 
 
 @app.put("/api/v1/harness-secrets/{var}")
@@ -696,7 +698,7 @@ async def clear_secrets(body: dict):
     return await connections_service.clear_secrets(
         body, forge_runtime=s.forge_runtime, reload=s.reload_connections,
         config=s.config, shared_breakers=s.shared_breakers,
-        dev_types=s.dev_types)
+        dev_types=s.dev_types, cycle_lock=s.poll_rt.lock)
 
 
 @app.get("/api/v1/connections/registry")

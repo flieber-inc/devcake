@@ -55,7 +55,27 @@ class RunStore:
                 run.run_id, gen, self.wipe_generation,
             )
             return
-        self._write_text(self.root / f"{run.run_id}.json", run.model_dump_json(indent=2))
+        path = self.root / f"{run.run_id}.json"
+        # lost-update fence (audit F8): the single-process contract says
+        # "mutate-then-save promptly" on ONE object per run — but get()
+        # (fresh parse) and all() (shared cache) can hand two writers two
+        # different objects, and a save from the stale one silently discards
+        # the other's fields. Last-writer-wins is PRESERVED (refusing could
+        # wedge a finalize on a benign race); the collision is now LOUD.
+        if path.exists():
+            try:
+                disk_rev = json.loads(path.read_text()).get("rev", 0)
+            except Exception:  # noqa: BLE001 — unreadable record: the quarantine path owns that failure mode, the fence stays quiet
+                disk_rev = None
+            if disk_rev is not None and disk_rev != run.rev:
+                log.error(
+                    "lost-update fence tripped for %s: on-disk rev=%s, this "
+                    "object holds rev=%s — two writers held different Run "
+                    "objects (single-process contract, docs/10 §6); "
+                    "last-writer-wins preserved, fields from the other "
+                    "writer may be gone", run.run_id, disk_rev, run.rev)
+        run.rev += 1
+        self._write_text(path, run.model_dump_json(indent=2))
 
     @staticmethod
     def _sensitive_env_name(name: str) -> bool:

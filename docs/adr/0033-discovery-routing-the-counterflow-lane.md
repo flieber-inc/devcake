@@ -95,7 +95,9 @@ holds a discovery — with **at most one discovery run in flight per family
 graph**. Arrivals during a run queue; the next run drains the whole queue.
 A quiet board gets near-instant routing; a busy board gets natural
 batching at one chokepoint, which is what prevents parallel finalizes from
-re-creating the fan-in problem as concurrent STEWARDs. Recovery is
+re-creating the fan-in problem as concurrent STEWARDs. This is the
+**discovery flavor only** — the relations cadence (ADR-0007's interval
+service) is unchanged. Recovery is
 board-derived, not queue-trusted: a `devcake:discovery:v1` post on a
 source feed with no corresponding routed receipts in the family is
 pending work the sweep re-detects. The in-memory queue is advisory,
@@ -114,7 +116,19 @@ applies to its own machinery):
   labeled prior context;
 - for **backlog and in-flight** missions: descriptions;
 - the **full new `DISCOVERY_<seq>.md`** entries and their source mission's
-  description — the one place full fidelity earns its tokens.
+  description — the one place full fidelity earns its tokens;
+- the **family's work repositories, read-only** (founder ruling): the
+  union of repos the family's missions route to — not the instance's
+  whole configured set — mount-capped like blocker mounts (8, ADR-0017)
+  and presented as consult-as-needed reference, never dumped into the
+  prompt. Purpose: anchoring relevance — evidence anchors are paths and
+  shas, and a steward that can grep the tree judges scope against ground
+  truth. Precedent: `dispatch_steward` already refuses to run without a
+  repository. One selection carve-out: the steward **may decline to route
+  a finding whose cited evidence it cannot locate**, recording that in
+  its run summary — anchor-existence is mechanical, and an unlocatable
+  anchor is more likely hallucination than load-bearing fact. This is
+  selection, not truth adjudication; verbatim transport stands.
 
 Not the family's full feeds: that is accumulated context, the
 anti-pattern. If evaluation shows the model starved, widening is a
@@ -222,14 +236,34 @@ permitted act remains what ADR-0007 already grants — proposing an edge.
 Cancel and rescope stay above the membrane (docs/19 §6). A discovery
 orders information crossing a flow boundary; it never originates intent.
 
-## Open decision (founder ruling wanted at review)
+## Decision 10 — staffing: the steward class is EXECUTE-grade (founder ruling)
 
-- **Staffing:** which Dev Type runs the discovery flavor. Family-wide
-  relevance judgment is a heavier ask than edge proposal; recommendation:
-  make it assignable via ADR-0019 overrides and default it to the
-  judgment class, keeping the seeded Haiku steward for the relations
-  cadence. Alternative: one steward staffing for both duties, upgraded
-  when evaluation shows thin routing.
+The steward duty class carries a normative capability bar: **at least the
+level the EXECUTE role demands** — for both duties. Discovery routing is
+family-wide relevance judgment; edge proposal always was critical (a wrong
+`blocked_by` edge silently reorders a family's execution). The seeded
+steward Dev Type re-pins from `claude-haiku-4-5` to **Claude Opus** on the
+`claude-code` harness (the base-harness stance); operators staff
+differently via the existing steward Dev Type selection and ADR-0019
+overrides (e.g. Grok 4.5 on Grok Build — capable and competitively fast).
+The seed affects fresh boots only: existing deployments keep their
+configured staffing and upgrade via the admin UI. Docs/00 glossary and
+docs/08 seeded-table rows update with the implementation.
+
+## Decision 11 — per-PMO routing toggle; harvest is unconditional (founder ruling)
+
+Each PMO instance gains a **`discovery_routing` toggle** gating the
+steward discovery runs and cross-mission delivery for that instance's
+families (families never span instances — DevCake creates no
+cross-instance edges, so the toggle's unit matches the routing unit).
+Default **on**: caps and family scoping bound the blast radius, and a
+default-off feature never generates evaluation data. The **harvest half
+is unconditional** — like HANDOFF, `DISCOVERY_<seq>.md` on the source
+feed is pure memorialization: receipts cost nothing, stand alone as the
+knowledge-base record, and keep the board complete for a later toggle-on.
+Precedent: per-PMO intake toggles; ADR-0017's zip opt-in. This is
+operator sovereignty over cross-mission feed noise, not a tuning knob —
+the Decision 7 constants remain constants.
 
 ## Consequences
 
@@ -257,8 +291,10 @@ orders information crossing a flow boundary; it never originates intent.
 
 - **PR-1 (harvest):** result key + finalize rendering + source-feed post +
   queue + board-derived pending detection. Red→green at the finalize seam.
-- **PR-2 (routing):** STEWARD discovery flavor (dispatch/prompt/finalize),
-  `ELEVATED_MARKERS` join, MISSION.md block, budgets. Red→green at the
+- **PR-2 (routing):** STEWARD discovery flavor (dispatch/prompt/finalize
+  + family work-repo mounts), `ELEVATED_MARKERS` join, MISSION.md block,
+  budgets, the per-PMO `discovery_routing` toggle, and the steward seed
+  re-pin to Opus (config seed + docs/00/08 rows). Red→green at the
   steward-finalize and renderer seams.
 - **Graduation:** a live multi-mission family smoke — one mission's
   discovery reaching a sibling's MISSION.md and an in-flight recipient's
@@ -274,6 +310,7 @@ orders information crossing a flow boundary; it never originates intent.
   (harvest chokepoint), `steward.py` / `steward_service.py` (discovery
   flavor beside the relations cadence), `activity_payload.py` (MISSION.md
   block), `prompts/` (contract + playbook line + laminarity test),
+  `config.py` (per-PMO `discovery_routing` toggle + steward seed re-pin),
   entrypoint unchanged.
 - Doctrine: INV-1/INV-4, ADR-0007 (propose-only), ADR-0012 (edge
   permanence), ADR-0014 (mirror discipline), ADR-0019 (assignability),

@@ -37,7 +37,7 @@ def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
     monkeypatch.setattr(health_mod, "_check_redis", _true)
     monkeypatch.setattr(health_mod, "_check_http", _true)
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
-    health_mod.reset_protection_cache()
+    health_mod.reset_health_caches()
     return run_coro(health_mod.build_health_payload(
         config=AppConfig(), dev_types={}, managers={}, stewards={},
         forge_runtime=fr, shared_breakers={},
@@ -90,7 +90,7 @@ def test_unused_repo_names_and_payload_block(monkeypatch):
     monkeypatch.setattr(health_mod, "_check_redis", _true)
     monkeypatch.setattr(health_mod, "_check_http", _true)
     monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
-    health_mod.reset_protection_cache()
+    health_mod.reset_health_caches()
     payload = run_coro(health_mod.build_health_payload(
         config=cfg, dev_types={}, managers={}, stewards={},
         forge_runtime=_forge_runtime(), shared_breakers={},
@@ -123,10 +123,10 @@ def test_branch_protection_probes_concurrently(monkeypatch):
     inst = SimpleNamespace(reference_only=False, default_branch="main")
     fr = SimpleNamespace(forges={f"r{i}": _Forge() for i in range(3)},
                          instance=lambda name: inst)
-    health_mod.reset_protection_cache()
+    health_mod.reset_health_caches()
     out = run_coro(asyncio.wait_for(health_mod._branch_protection(fr), timeout=5))
     assert out == {f"r{i}": {"rendezvous": True} for i in range(3)}
-    health_mod.reset_protection_cache()   # don't leak the fake into others
+    health_mod.reset_health_caches()   # don't leak the fake into others
 
 
 def test_repo_mirror_block_shape(monkeypatch):
@@ -181,3 +181,91 @@ def test_workspaces_block_shape(monkeypatch):
     assert got["disk"] == {"total_bytes": 100, "free_bytes": 9}
     bare = _payload(fr, monkeypatch)["workspaces"]
     assert bare == {"volume_error": None, "leaked": 0, "disk": None}
+
+
+# ── PMO probe cache + concurrency (2026-08-12 audit F3) ──────────────────────
+
+
+def _pmo_world(probe, tmp_path, monkeypatch, name="linear", team="ENG"):
+    """A config with one CONFIGURED instance (stored api_key — `configured`
+    reads the secret store) whose manager probe is `probe`."""
+    from devcake import secrets as secrets_store
+    from devcake.config import PMOInstance
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    secrets_store.write_connection_secret("pmo", name, "api_key", "k-test")
+    cfg = AppConfig(pmos=[PMOInstance(name=name, team_key=team)])
+    mgr = SimpleNamespace(pmo=SimpleNamespace(health_probe=probe),
+                          anomalies={}, blocked_reasons={}, needs_human={},
+                          merge_handoffs={}, cycles=[])
+    return cfg, {name: mgr}
+
+
+def _pmo_payload(cfg, managers, monkeypatch, *, reset=True):
+    async def _true(*a, **k):
+        return True
+
+    async def _ingest():
+        return {"ok": True, "detail": ""}
+
+    monkeypatch.setattr(health_mod, "_check_redis", _true)
+    monkeypatch.setattr(health_mod, "_check_http", _true)
+    monkeypatch.setattr(health_mod, "_oo_ingest_check", _ingest)
+    if reset:
+        health_mod.reset_health_caches()
+    return run_coro(health_mod.build_health_payload(
+        config=cfg, dev_types={}, managers=managers, stewards={},
+        forge_runtime=_forge_runtime(), shared_breakers={},
+        store=SimpleNamespace(active=lambda: []),
+        internal_forge=None,
+        poll_rt=SimpleNamespace(last_poll_at=None, poll_degraded={})))
+
+
+def test_pmo_probe_is_cached_between_health_calls(tmp_path, monkeypatch):
+    """The SPA polls /health every 10 s; the vendor needs one look a minute.
+    (The gitea probe used to WRITE per call — F3; caching bounds even the
+    read cost.)"""
+    calls = []
+
+    async def probe(team):
+        calls.append(team)
+        return SimpleNamespace(ok=True)
+
+    cfg, managers = _pmo_world(probe, tmp_path, monkeypatch)
+    assert _pmo_payload(cfg, managers, monkeypatch)["pmo"] is True
+    assert _pmo_payload(cfg, managers, monkeypatch,
+                        reset=False)["pmo"] is True
+    assert len(calls) == 1, "second /health inside the TTL must not reprobe"
+    health_mod.reset_health_caches()
+    _pmo_payload(cfg, managers, monkeypatch, reset=False)
+    assert len(calls) == 2, "reset_health_caches must force a reprobe"
+
+
+def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
+    """Per-probe 5 s timeout + concurrent gather: a sick PMO reports
+    ok:False; /health returns without waiting out a 30 s client timeout."""
+    from devcake.config import PMOInstance
+
+    async def hang(team):
+        await asyncio.sleep(3600)
+
+    async def fine(team):
+        return SimpleNamespace(ok=True)
+
+    from devcake import secrets as secrets_store
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    secrets_store.write_connection_secret("pmo", "sick", "api_key", "k1")
+    secrets_store.write_connection_secret("pmo", "fine", "api_key", "k2")
+    cfg = AppConfig(pmos=[PMOInstance(name="sick", team_key="A"),
+                          PMOInstance(name="fine", team_key="B")])
+    def _mgr(probe):
+        return SimpleNamespace(pmo=SimpleNamespace(health_probe=probe),
+                               anomalies={}, blocked_reasons={},
+                               needs_human={}, merge_handoffs={},
+                               cycles=[])
+
+    managers = {"sick": _mgr(hang), "fine": _mgr(fine)}
+    monkeypatch.setattr(health_mod, "_PMO_PROBE_TIMEOUT", 0.05)
+    payload = _pmo_payload(cfg, managers, monkeypatch)
+    assert payload["pmo_instances"]["sick"]["ok"] is False, (
+        "the timeout must convert a hang into ok:False")
+    assert payload["pmo_instances"]["fine"]["ok"] is True

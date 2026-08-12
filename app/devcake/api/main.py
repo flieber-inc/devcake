@@ -207,6 +207,7 @@ async def lifespan(app: FastAPI):
     for mgr in list(s.managers.values()):
         try:
             await mgr.pmo.ensure_labels(mgr.instance.team_key, ALL_LABELS)   # step 2
+            mgr.labels_ready = True        # the poll's F3 once-latch is fed
             log.info("labels ensured in team %s (instance %s)",
                      mgr.instance.team_key, mgr.instance_name)
         except Exception:

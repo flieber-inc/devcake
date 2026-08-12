@@ -39,10 +39,21 @@ async def _check_redis() -> bool:
 # by the SPA, the forge API needs at most one look every few minutes
 _protection_cache: dict = {"ts": 0.0, "value": {}}
 
+# per-instance PMO probe cache (2026-08-12 audit F3): same rationale — the
+# vendor needs at most one look a minute, not one per SPA poll. Keyed by
+# (instance, team_key) so a team repoint reprobes immediately.
+_PMO_PROBE_TTL = 60
+_PMO_PROBE_TIMEOUT = 5   # one sick PMO must not stall /health (audit F3)
+_pmo_probe_cache: dict = {}
 
-def reset_protection_cache() -> None:
-    """Config reload hook: repos may have changed — reprobe on next /health."""
+
+def reset_health_caches() -> None:
+    """THE config-reload hook (one reset path, ADR-0034): connections or
+    repos may have changed — every cached probe reprobes on the next
+    /health. The admin 'Test' endpoint stays live and uncached."""
     _protection_cache["ts"] = 0.0
+    _pmo_probe_cache.clear()
+
 
 
 async def _branch_protection(forge_runtime) -> dict:
@@ -138,24 +149,37 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
     )
     # per-instance PMO health (schema v3): unconfigured instances show grey
     # (ok: None), never red; the scalar `pmo` aggregate keeps the SPA's
-    # health dot working (true = every configured instance probes ok)
-    pmo_instances: dict[str, dict] = {}
-    for inst in config.pmos:
+    # health dot working (true = every configured instance probes ok).
+    # Cached (60 s TTL) + CONCURRENT with a per-probe timeout (audit F3):
+    # the old sequential uncached loop let one sick PMO stall /health ~30 s
+    # while the SPA's 10 s cadence piled up overlapping requests.
+    async def _probe_one(inst) -> tuple[str, dict]:
         if not inst.configured:
-            pmo_instances[inst.name] = {
+            return inst.name, {
                 "ok": None, "configured": False, "team": "",
                 "intake_paused": bool(inst.intake_paused),
             }
-            continue
-        mgr = managers.get(inst.name)
-        try:
-            ok = bool(mgr) and (await mgr.pmo.health_probe(inst.team_key)).ok
-        except Exception:  # noqa: BLE001 — probe contract: any failure → ok:False for this instance; /health must never 500
-            ok = False
-        pmo_instances[inst.name] = {
+        key = (inst.name, inst.team_key)
+        cached = _pmo_probe_cache.get(key)
+        now = time.monotonic()
+        if cached is not None and now - cached["ts"] < _PMO_PROBE_TTL:
+            ok = cached["ok"]
+        else:
+            mgr = managers.get(inst.name)
+            try:
+                async with asyncio.timeout(_PMO_PROBE_TIMEOUT):
+                    ok = bool(mgr) and (
+                        await mgr.pmo.health_probe(inst.team_key)).ok
+            except Exception:  # noqa: BLE001 — probe contract: any failure (incl. the 5s timeout) → ok:False; /health must never 500
+                ok = False
+            _pmo_probe_cache[key] = {"ts": now, "ok": ok}
+        return inst.name, {
             "ok": ok, "configured": True, "team": inst.team_key,
             "intake_paused": bool(inst.intake_paused),
         }
+
+    pmo_instances: dict[str, dict] = dict(
+        await asyncio.gather(*(_probe_one(i) for i in config.pmos)))
     configured_ok = [v["ok"] for v in pmo_instances.values() if v["configured"]]
     prefixed = len(managers) > 1   # advisory text carries the instance when N>1
 

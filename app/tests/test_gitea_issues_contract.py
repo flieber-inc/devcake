@@ -276,6 +276,9 @@ def test_create_mission_returns_key_and_id():
 
 
 def test_health_probe_counts_managed_labels_only():
+    """READ-ONLY since audit F3: the probe REPORTS the managed-label deficit
+    honestly (healing rides the poll once-latch) and a custom label never
+    inflates the count."""
     r = Router()
     r.labels["CUSTOM-EXTRA"] = {"id": 99, "name": "CUSTOM-EXTRA", "color": "fff"}
     pmo = make_pmo(r)
@@ -283,8 +286,13 @@ def test_health_probe_counts_managed_labels_only():
     assert h.ok
     assert h.workspace == "o/r"
     assert h.managed_labels_expected == len(ALL_LABELS)
-    # ensure created all managed; CUSTOM-EXTRA must not inflate present beyond managed ∩ remote
+    assert h.managed_labels_present == 1      # only DEVCAKE seeded; no healing
+    # a healed repo (the poll latch ran ensure_labels) reports the full set
+    run(pmo.ensure_labels("o/r", ALL_LABELS))
+    r.calls.clear()
+    h = run(pmo.health_probe("o/r"))
     assert h.managed_labels_present == len(ALL_LABELS)
+    assert not any(c.startswith(("POST", "PATCH")) for c in r.calls)
 
 
 def test_capabilities_issue_only():
@@ -562,3 +570,17 @@ def test_list_all_skips_dependency_fetch_for_closed_issues():
                 if c.startswith("GET") and "/dependencies" in c]
     assert any("/issues/1/" in c for c in dep_gets)
     assert not any("/issues/3/" in c for c in dep_gets)
+
+
+def test_health_probe_is_strictly_read_only():
+    """PMOHealth contract (2026-08-12 audit F3): the probe rides the SPA's
+    10 s /health poll — the old one ran ensure_labels (repo-settings PATCH +
+    label POSTs) per call, forever. Reads only now; healing lives on the
+    poll cycle's once-latch."""
+    router = Router()
+    pmo = make_pmo(router)
+    health = run(pmo.health_probe("o/r"))
+    assert health.ok is True
+    writes = [c for c in router.calls
+              if c.startswith(("POST", "PATCH", "PUT", "DELETE"))]
+    assert not writes, f"probe must not write: {writes}"

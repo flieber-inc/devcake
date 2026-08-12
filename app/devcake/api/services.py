@@ -46,7 +46,7 @@ from ..domain.repo_mirror import RepoCache
 from ..domain.workspaces import WorkspaceStore
 from ..domain.runs import RunManager
 from ..domain.skills import SkillService
-from .health import reset_protection_cache
+from .health import reset_health_caches
 from .poll import PollRuntime
 
 log = logging.getLogger("devcake")
@@ -100,6 +100,7 @@ class Services:
             if name in self.managers:
                 mgr = self.managers[name]
                 mgr.pmo, mgr.forges, mgr.config = p, self.forge_runtime, self.config
+                mgr.labels_ready = False   # repoint may change team_key (F3 latch)
                 mgr.instance, mgr.instance_name = inst, name
                 mgr.internal_forge = self.internal_forge
                 mgr.skills = self.skill_service
@@ -133,7 +134,7 @@ class Services:
         team_key would run unlabeled until restart."""
         self.forge_runtime.rebuild(self.config.repos, make_forge)
         self.build_managers()
-        reset_protection_cache()           # repos may have changed — reprobe
+        reset_health_caches()              # connections/repos may have changed — reprobe
         # the adapter set feeds secret_env_vars (descriptor env lists), so the
         # redaction scan cache must rebuild with it (2026-08 F17)
         security.invalidate_secret_scan()

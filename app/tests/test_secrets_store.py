@@ -430,7 +430,7 @@ def test_secrets_clear_repo_pops_forge_breaker_and_reloads(monkeypatch, tmp_path
     # clear_secrets binds reload/forge_runtime at the route — call the service
     # with fakes so we can assert the side effects without full composition.
     from devcake.api import connections_service as cs
-    monkeypatch.setattr(cs, "reset_protection_cache",
+    monkeypatch.setattr(cs, "reset_health_caches",
                         lambda: resets.append(True))
 
     out = run_coro(cs.clear_secrets(

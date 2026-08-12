@@ -55,6 +55,10 @@ class MissionManager:
                  blocker_locator=None, repo_cache=None):
         self.config = config
         self.dev_types = dev_types
+        # per-config-generation once-latch (audit F3): the poll cycle
+        # ensures the managed labels ONCE after each boot/repoint —
+        # the /health probe is read-only now and heals nothing
+        self.labels_ready = False
         self.pmo = pmo
         # the SHARED per-repo forge runtime (M10, docs/16 F3): repos belong
         # to the deployment, not to a PMO instance — one runtime, injected

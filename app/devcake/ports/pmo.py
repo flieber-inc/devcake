@@ -17,7 +17,11 @@ class PMOTransient(Exception):
 
 class PMOHealth(BaseModel):
     """Neutral connection-probe result (docs/05): replaces the old private
-    reach-ins into vendor JSON from /health and the admin test endpoint."""
+    reach-ins into vendor JSON from /health and the admin test endpoint.
+    Probes MUST NOT write (2026-08-12 audit F3): /health rides the SPA's
+    10 s poll, so a probe that heals labels or PATCHes repo settings is a
+    write path at poll cadence — healing belongs to the poll cycle's
+    once-latch, never here."""
     ok: bool
     workspace: str = ""                 # resolved team/workspace reference
     managed_labels_present: int = 0     # of DevCake's managed set, found remotely

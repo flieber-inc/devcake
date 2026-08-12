@@ -545,6 +545,42 @@ until that run exists, field evidence below stays operator-self-reported.
   the next planned code work — it graduates only with red→green tests at the
   public seam plus a live multi-mission smoke.
 
+- **Skeptical-audit intervention campaign** (ADR-0034 + 18 PRs #119–#136,
+  2026-08-12): a seven-reviewer skeptical audit at `ccc6da9` found the
+  codebase sound but with two structural weaknesses — guarantees enforced by
+  *discipline* not *structure*, and singular processes with multiple
+  parallel implementations. The campaign closed both. **Data-safety
+  (Phase 0):** restores now verify-before-wipe with a kind marker
+  (`scripts/lib/`), gitea_issues label pagination + fail-loud project refs +
+  no truncated-rewrite destruction, crash-honest bundle apply (adds →
+  commit → destructive) + credential-file migration + one assignment
+  validation path (boot-refusal), the RETRY_TOKEN unquoted-scan fix.
+  **Chokepoints (Phase 1, ADR-0034):** mission completion unified from four
+  sites into `orchestrator/completion.py` (with the mis-scoped-except F4
+  fix), the checkpoint step-key registry `orchestrator/steps.py` (derived
+  swap/gate tables + AST guard + domain→adapters import ban), one
+  repo-sourcing rule, the adapter toolkit (`_toolkit` + `http.forge_request`
+  — the port's no-httpx-leak contract now enforced), promoted underscore
+  APIs, CI single-path (DEVCAKE_TAG lockstep + shared bring-up derivation +
+  hello pinned mirror), and the SPA↔backend cross-language contract fixture.
+  **Robustness (Phase 2):** read-only cached-concurrent `/health` probe with
+  a poll-cycle label once-latch, ingress finalize offload (slow finalizes no
+  longer starve heartbeats), run-store lost-update fence + single-process
+  contract ledger (docs/10 §6), entrypoint resilience (guarded first
+  heartbeat, capture-truncation warning), the test-gap closure (grace-cycle
+  e2e, `clear_*` bodies executed, AUD-016 AST guard, cycle_lock wiring), and
+  minimal SPA concurrency (instance-qualified refs + self-healing projection
+  + stale-response guards). **Two items deferred, honestly:** a SIGTERM
+  artifact-flush in the Dev entrypoint (sits in the watchdog/dagu kill path
+  the ADR-0025 R-series was verified against — needs a live kill-drill, not
+  a blind change) and a `/health` warning on repeated exit-10s with
+  auth-suspicious stderr (soft signal, deliberate backend change). **One
+  accepted risk unchanged (founder ruling):** agent-container CPU/mem/pids
+  limits stay deferred (ISSUES #20) — Dagu's container schema rejects them
+  and app concurrency caps remain the only throttle, revisited when Dagu
+  ships host-config support. Multi-admin config `If-Match`/versioning is
+  ledgered as accepted single-operator scope (admin/spa/DESIGN.md).
+
 ### Field evidence (operator-self-reported)
 
 Production use reported by the founder-operator, 2026-08. Evidence class:

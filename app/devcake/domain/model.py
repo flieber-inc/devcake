@@ -159,8 +159,8 @@ class AttachmentRef(BaseModel):
     """An asset referenced from a feed entry. `name` is the markdown link text
     when the feed carried one — the adapter resolves it so the domain never
     parses vendor asset URLs. `kind` (ADR-0014 D3): "file" = downloadable
-    bytes; "link" = external reference (PR, Slack thread) the builder renders
-    as a markdown link instead of downloading."""
+    bytes; "link" = external reference (e.g. a PR or a thread in the upstream
+    tool) the builder renders as a markdown link instead of downloading."""
     url: str
     name: Optional[str] = None
     kind: Literal["file", "link"] = "file"

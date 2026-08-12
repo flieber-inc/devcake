@@ -21,8 +21,7 @@ from . import steps
 from ..run import Run, aware
 from .dispatch import mission_cost
 from .feed import is_devcake_comment, unquoted
-from .markers import (ELEVATED_MARKERS, FRESHNESS_MARKER,
-                      MAX_FRESHNESS_REREVIEWS)
+from .markers import ELEVATED_MARKERS, FRESHNESS_MARKER
 
 log = logging.getLogger("devcake.missions")
 
@@ -116,11 +115,16 @@ async def _unread_material(mgr, run: Run) -> tuple[list, int]:
     return [e for e in new if _is_material(e.body)], count
 
 
-def _directive_body(run: Run, n: int, found: list) -> str:
+def _count_label(n: int, cap: int) -> str:
+    """"{n}/{cap}", or bare "{n}" under an unlimited (0) budget."""
+    return f"{n}/{cap}" if cap else f"{n}"
+
+
+def _directive_body(run: Run, n: int, found: list, cap: int) -> str:
     what = (_TRUNCATED if found and found[0] == _TRUNCATED
             else f"{len(found)} new feed entr{'y' if len(found) == 1 else 'ies'}")
     return (
-        f"🔄 **Freshness re-review {n}/{MAX_FRESHNESS_REREVIEWS}:** {what} "
+        f"🔄 **Freshness re-review {_count_label(n, cap)}:** {what} "
         f"arrived after this review's context was assembled, so the approve "
         f"verdict is withheld (report: `{run.seq}_REVIEW.md` in the feed). "
         f"The next REVIEW evaluates ONLY whether the newer entries change "
@@ -158,7 +162,9 @@ async def review_freshness_gate(mgr, run: Run) -> str:
         return "pass"
 
     pmo_id = run.mission_pmo_id
-    if count >= MAX_FRESHNESS_REREVIEWS:
+    # operator knob (ADR-0033 D7 as amended): 0 = unlimited — never exhausts
+    cap = mgr.config.budgets.freshness_rereviews
+    if cap and count >= cap:
         names = "; ".join(_describe(found)[:5])
         more = f" (+{len(found) - 5} more)" if len(found) > 5 else ""
 
@@ -166,7 +172,7 @@ async def review_freshness_gate(mgr, run: Run) -> str:
             await mgr._feed(
                 pmo_id, "issue",
                 f"⚠️ Closing with unevaluated activity: the freshness "
-                f"re-review budget ({MAX_FRESHNESS_REREVIEWS}) is spent, so "
+                f"re-review budget ({cap}) is spent, so "
                 f"the standing approve verdict proceeds. Unevaluated: "
                 f"{names}{more}. Cumulative recorded mission cost: "
                 f"${mission_cost(mgr, pmo_id):.2f}.")
@@ -181,9 +187,9 @@ async def review_freshness_gate(mgr, run: Run) -> str:
     n = count + 1
 
     async def _directive():
-        await mgr._feed(pmo_id, "issue", _directive_body(run, n, found))
+        await mgr._feed(pmo_id, "issue", _directive_body(run, n, found, cap))
         mgr._audit(pmo_id, "freshness_tripped",
-                   f"re-review {n}/{MAX_FRESHNESS_REREVIEWS}: "
+                   f"re-review {_count_label(n, cap)}: "
                    f"{len(found)} unread entries")
     try:
         await mgr._checkpoint(run, steps.REVIEW_FRESHNESS_DIRECTIVE, _directive)
@@ -192,7 +198,7 @@ async def review_freshness_gate(mgr, run: Run) -> str:
                       "re-review proceeds undirected", run.mission_key)
     done_steps.append(steps.REVIEW_FRESHNESS_TRIPPED)
     run.verdict = (f"handed off: freshness re-review "
-                   f"{n}/{MAX_FRESHNESS_REREVIEWS} dispatched")
+                   f"{_count_label(n, cap)} dispatched")
     mgr.runs.store.save(run)
     return "tripped"
 

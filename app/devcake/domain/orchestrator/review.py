@@ -11,7 +11,7 @@ from ...ports.forge import run_branch
 from . import completion, dispatch, steps
 from .freshness import review_freshness_gate
 from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
-                      MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER)
+                      MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER, defang)
 
 log = logging.getLogger("devcake.missions")
 
@@ -72,8 +72,7 @@ async def _append_handoff(mgr, run: Run, result: dict) -> None:
     pmo_id = run.mission_pmo_id
 
     async def _note():
-        body = redact(text).replace("`devcake:", "devcake:").replace(
-            "`devcake-repo:", "devcake-repo:")[:HANDOFF_APPEND_MAX]
+        body = defang(redact(text))[:HANDOFF_APPEND_MAX]
         note = f"\n\n---\n{HANDOFF_MARKER}\n{body}\n"
         try:
             await mgr.pmo.append_description(

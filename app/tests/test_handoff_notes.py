@@ -28,6 +28,19 @@ def run_coro(c):
         loop.close()
 
 
+# ── defang: the ONE marker-neutralizing transformation ──────────────────────
+
+def test_defang_neutralizes_both_marker_families():
+    from devcake.domain.orchestrator.markers import defang
+    text = ("quoting `devcake:handoff:v1` and `devcake-repo:web` and "
+            "`devcake:discovery:v1 step=1 n=1` verbatim")
+    out = defang(text)
+    assert "`devcake:" not in out and "`devcake-repo:" not in out
+    assert "devcake:handoff:v1" in out          # text kept, teeth pulled
+    assert "devcake-repo:web" in out
+    assert "devcake:discovery:v1 step=1 n=1" in out
+
+
 # ── handoff_of: the LAST marker wins ─────────────────────────────────────────
 
 def test_handoff_of_absent_and_single():

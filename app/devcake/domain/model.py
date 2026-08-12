@@ -19,10 +19,15 @@ LABEL_FAILED = "DEVCAKE-FAILED"
 LABEL_SKIP = "DEVCAKE-SKIP"
 LABEL_TRACKING = "DEVCAKE-TRACKING"
 LABEL_NEEDS_HUMAN = "DEVCAKE-NEEDS-HUMAN"
+# ADR-0033 (founder ruling 2026-08-13): a pure SWEEP GATE — "this mission's
+# feed carries harvested-but-unrouted discoveries". Never read by derive(),
+# gate_map, schedule, or dispatch (AST-guarded in test_structure_guards):
+# the label must not impede the mission's progression in any way.
+LABEL_DISCOVERY = "DEVCAKE-DISCOVERY"
 
 ALL_LABELS = {LABEL_OPTIN, LABEL_PLAN, LABEL_EXECUTE, LABEL_REVIEW, LABEL_MERGE,
               LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, LABEL_TRACKING,
-              LABEL_NEEDS_HUMAN}
+              LABEL_NEEDS_HUMAN, LABEL_DISCOVERY}
 STAGE_LABELS = {LABEL_PLAN, LABEL_EXECUTE, LABEL_REVIEW}
 
 NormalizedStatus = Literal["backlog", "in_progress", "done", "canceled"]

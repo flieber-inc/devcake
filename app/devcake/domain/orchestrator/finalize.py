@@ -11,8 +11,8 @@ from ...security import redact, redact_value
 from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
 from ..run import Run, utcnow
-from . import steps, transitions
-from .feed import blockquote, stage_of
+from . import discovery, steps, transitions
+from .feed import blockquote, post_attachment_comment, stage_of
 from .markers import FEED_INLINE_MAX, REPLY_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -156,6 +156,14 @@ async def finalize(mgr, run: Run, payload: dict) -> None:
             log.warning("run %s failed (exit %s, attempt %d)",
                         run.run_id, exit_code, run.attempt_of_step)
             return
+
+        # 2b — ADR-0033 harvest: unconditional memorialization of the run's
+        # discoveries (Decision 11), BEFORE the transition so even an outcome
+        # the transition parks or rejects keeps its receipts. Best-effort
+        # inside — never wedges the close.
+        harvested = await discovery.harvest(mgr, run, result)
+        if harvested:
+            span.set_attribute("devcake.discoveries.harvested", harvested)
 
         # 3 — compare-and-transition. A ValueError from a transition means
         # the Dev's payload was structurally invalid (e.g. malformed
@@ -369,37 +377,37 @@ async def _post_transcript(mgr, run: Run, transcript: str,
                          f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)"
                          f"\n\n---\n\n{transcript}")
         return
-    attached = False
-    try:  # docs/05 §4: transcripts always live as attachments, never inline
-        url = await mgr.pmo.upload_attachment(run.mission_pmo_id, name,
-                                               transcript.encode())
+    def _comment(url):
+        if url is None:
+            # INV-5: the transcript is always posted, even inline —
+            # QUARANTINED (ADR-0014 D2): the dump is model text; only the
+            # step-marker header line stays unquoted for seq derivation.
+            # No attachment ⇒ the last message already rides inside the
+            # quoted dump; externalization stays on as the size second-chance
+            return (f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n"
+                    + blockquote(f"---\n\n{transcript}")), True
         # the backticked `{name}` must stay in the comment — STEP_MARKER
         # counts it for seq derivation (docs/02 §8)
         body = (f"🧾 DevCake transcript `{name}` (run `{run.run_id}`) — "
                 f"attached: [{name}]({url})")
-        attached = True
-    except Exception:  # INV-5: the transcript is always posted, even inline —
-        # QUARANTINED (ADR-0014 D2): the dump is model text; only the
-        # step-marker header line stays unquoted for seq derivation
-        log.exception("transcript upload failed — posting inline (quoted)")
-        body = (f"🧾 DevCake transcript `{name}` (run `{run.run_id}`)\n\n"
-                + blockquote(f"---\n\n{transcript}"))
-    if last_message and attached:
+        if not last_message:
+            return body, True
         # redact BEFORE truncate+quote: truncation must never split a secret
         # across the boundary, and quoting must never break a multi-line
         # value's exact-match redaction (review 1.3-1.5 finding 1)
-        last_message = redact(last_message)
-        if len(last_message) > FEED_INLINE_MAX:
-            last_message = (last_message[:FEED_INLINE_MAX]
-                            + "\n\n… (truncated — full text in the attachment)")
+        lm = redact(last_message)
+        if len(lm) > FEED_INLINE_MAX:
+            lm = (lm[:FEED_INLINE_MAX]
+                  + "\n\n… (truncated — full text in the attachment)")
         # quoting quarantines the model text from every feed scan; the
         # opt-out is safe because the full text already rides the attachment
-        body += "\n\n" + blockquote(last_message)
-        await mgr._feed(run.mission_pmo_id, "issue", body, externalize=False)
-    else:
-        # no attachment ⇒ the last message already rides inside the (quoted)
-        # inline dump; externalization stays on as the size second-chance
-        await mgr._feed(run.mission_pmo_id, "issue", body)
+        return body + "\n\n" + blockquote(lm), False
+
+    # docs/05 §4: transcripts always live as attachments, never inline —
+    # via the ONE attachment+comment pipe (ADR-0033 chokepoint ruling)
+    await post_attachment_comment(mgr, run.mission_pmo_id, "issue",
+                                  filename=name, content=transcript,
+                                  comment_of=_comment)
     mgr._audit(run.mission_pmo_id, "transcript", name)
 
 

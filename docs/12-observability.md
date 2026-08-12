@@ -65,6 +65,8 @@ devcake.tokens.input        devcake.tokens.output      devcake.tokens.total
 devcake.tokens.cache_read   devcake.tokens.cache_write devcake.tokens.reasoning
 devcake.cost.usd            devcake.cost.usd_estimated devcake.cost.rate_card
 devcake.outcome             (result.json outcome | error class)
+devcake.discoveries.harvested  (run.finalize; count only — discovery CONTENT
+                                never leaves the board, ADR-0033 D8)
 ```
 
 Every log line from app and Dev entrypoint carries `devcake.run.id` and `devcake.mission.key` for correlation.

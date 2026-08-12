@@ -93,6 +93,52 @@ export default function LimitsSection() {
         </div>
       </Section>
 
+      <Section id="limits-budgets" title="Counting budgets"
+        description="Feed-counted bounds on re-reviews and discoveries (ADR-0033). 0 = unlimited.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Freshness re-reviews"
+            desc={Number(cfg.budgets?.freshness_rereviews) === 0
+              ? "0 — unlimited: the gate keeps re-reviewing, never closes over unread material."
+              : `Up to ${cfg.budgets?.freshness_rereviews} re-reviews per mission; past that, close with a disclosure.`}
+            help="When material feed activity lands after a REVIEW's context was assembled, the approve verdict is withheld and a counted re-review dispatches instead. This bounds those loops per mission lifetime — human steering posts and routed discoveries draw from the same budget. Discoveries are the memory this otherwise memoryless system keeps; size the budget to how much of it you want re-examined at close.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.freshness_rereviews ?? 5}
+              aria-label="Freshness re-review budget"
+              onChange={(e) => setField("cfg.budgets.freshness_rereviews", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Discoveries per run"
+            desc={Number(cfg.budgets?.discoveries_per_run) === 0
+              ? "0 — unlimited: every valid discovery a run reports is harvested."
+              : `At most ${cfg.budgets?.discoveries_per_run} discovery entries harvested from one run.`}
+            help="A Dev may report structured discoveries (finding / evidence / scope) in its result. This caps how many one run can memorialize; extras are dropped with an audit note.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.discoveries_per_run ?? 3}
+              aria-label="Discoveries per run"
+              onChange={(e) => setField("cfg.budgets.discoveries_per_run", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Discovery routes per source"
+            desc={Number(cfg.budgets?.discovery_routes_per_source) === 0
+              ? "0 — unlimited routed deliveries per source mission."
+              : `Up to ${cfg.budgets?.discovery_routes_per_source} routed deliveries per source mission.`}
+            help="Takes effect when discovery ROUTING ships (ADR-0033 PR-2): bounds how many times one mission's discoveries fan out across its family, counted from routing receipts on its feed.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.discovery_routes_per_source ?? 3}
+              aria-label="Discovery routes per source"
+              onChange={(e) => setField("cfg.budgets.discovery_routes_per_source", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Discoveries per recipient"
+            desc={Number(cfg.budgets?.discovery_in_per_recipient) === 0
+              ? "0 — unlimited routed discoveries may accumulate on one mission."
+              : `Up to ${cfg.budgets?.discovery_in_per_recipient} routed discoveries accumulate on one mission.`}
+            help="Takes effect when discovery ROUTING ships (ADR-0033 PR-2): bounds how many distinct routed findings one recipient mission accumulates, counted from delivery markers on its feed. A human deleting a delivery comment deliberately frees the slot.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.discovery_in_per_recipient ?? 5}
+              aria-label="Discoveries per recipient"
+              onChange={(e) => setField("cfg.budgets.discovery_in_per_recipient", Number(e.target.value))} />
+          </SettingRow>
+        </div>
+      </Section>
+
       <Section id="limits-recovery" title="Result recovery"
         description="What happens when a run ends without its result file.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">

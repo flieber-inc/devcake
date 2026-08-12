@@ -281,7 +281,7 @@ def test_logrelay_batches_truncates_and_caps(monkeypatch):
     sent = []
     # LogRelay calls bus.send (not the entrypoint façade name).
     monkeypatch.setattr("devcake_dev.adapters.bus.send",
-                        lambda kind, payload: sent.append((kind, payload)))
+                        lambda kind, payload, **_k: sent.append((kind, payload)))
     relay = ep.LogRelay()
     relay.add("a" * 5000)                     # truncated to LINE_LIMIT
     relay.add("multi\nline")                  # split into two entries
@@ -303,7 +303,7 @@ def test_logrelay_batches_truncates_and_caps(monkeypatch):
 
 
 def test_logrelay_swallows_send_failures(monkeypatch):
-    def boom(kind, payload):
+    def boom(kind, payload, **_k):
         raise RuntimeError("redis down")
     monkeypatch.setattr("devcake_dev.adapters.bus.send", boom)
     relay = ep.LogRelay()
@@ -513,7 +513,7 @@ def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     import hashlib
     sent = []
     monkeypatch.setattr("devcake_dev.adapters.bus.send",
-                        lambda kind, payload: sent.append((kind, payload)))
+                        lambda kind, payload, **_k: sent.append((kind, payload)))
     ep.send_artifacts({"result": {"outcome": "hello"},
                        "transcript_md": "y" * 900_000})
     assert len(sent) > 1

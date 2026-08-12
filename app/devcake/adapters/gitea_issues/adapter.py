@@ -267,27 +267,16 @@ class GiteaIssuesAdapter:
     # ── reads ───────────────────────────────────────────────────────────────
 
     async def _list_issues(self, *, state: str = "all") -> list[dict]:
-        issues: list[dict] = []
-        page = 1
-        while page <= MAX_ISSUE_PAGES:
-            batch = await self._req(
+        from .._toolkit import paginate_rest
+        raw, _ = await paginate_rest(
+            lambda page: self._req(
                 "GET", self._repo_path("/issues"),
                 params={"state": state, "type": "issues",
-                        "page": page, "limit": ISSUES_PAGE})
-            if not batch:
-                break
-            # Gitea may include PRs in /issues — keep pure issues only
-            for it in batch:
-                if it.get("pull_request"):
-                    continue
-                issues.append(it)
-            if len(batch) < ISSUES_PAGE:
-                break
-            page += 1
-        else:
-            log.warning("gitea_issues list_issues hit page ceiling (%s)",
-                        MAX_ISSUE_PAGES)
-        return issues
+                        "page": page, "limit": ISSUES_PAGE}),
+            page_size=ISSUES_PAGE, max_pages=MAX_ISSUE_PAGES,
+            what="gitea_issues list_issues", on_ceiling="warn")
+        # Gitea may include PRs in /issues — keep pure issues only
+        return [it for it in raw if not it.get("pull_request")]
 
     async def list_missions(self, team_ref: str) -> list[Mission]:
         self._apply_team(team_ref)
@@ -335,25 +324,21 @@ class GiteaIssuesAdapter:
         # and the old fabricated Mission answer made misroutes invisible.
         self._require_issue(ref)
         mission = await self.get(ref)
+        from .._toolkit import paginate_rest
         max_pages = MAX_COMMENT_PAGES_FULL if full else MAX_COMMENT_PAGES
-        entries: list[ActivityEntry] = []
-        truncated = False
-        page = 1
-        while page <= max_pages:
-            batch = await self._req(
+        raw_comments, truncated = await paginate_rest(
+            lambda page: self._req(
                 "GET", self._repo_path(f"/issues/{ref.pmo_id}/comments"),
-                params={"page": page, "limit": COMMENTS_PAGE})
-            if not batch:
-                break
-            for c in batch:
-                entries.append(self._comment_entry(c, full=full))
-            if len(batch) < COMMENTS_PAGE:
-                break
-            page += 1
-        else:
-            truncated = True
+                params={"page": page, "limit": COMMENTS_PAGE}),
+            page_size=COMMENTS_PAGE, max_pages=max_pages,
+            what="gitea_issues get_activity", on_ceiling="flag")
+        if truncated:
+            # caller-owned disclosure ('flag'): the freshness gate reads
+            # Activity.truncated as material-unknown (ADR-0031 D2)
             log.error("gitea_issues get_activity truncated at %s pages",
                       max_pages)
+        entries: list[ActivityEntry] = [
+            self._comment_entry(c, full=full) for c in raw_comments]
         # Gitea returns oldest-first typically; sort by ts for safety
         entries.sort(key=lambda e: e.ts)
         mission_attachments: list[AttachmentRef] = []
@@ -543,24 +528,18 @@ class GiteaIssuesAdapter:
         `_refuse_truncated_rewrite`). Raise at the ceiling, never truncate:
         every consumer of this read feeds a full-set rewrite, a create
         decision, or an ensure that would mint an uppercase duplicate."""
-        labels: list[dict] = []
-        page = 1
-        while page <= MAX_LABEL_PAGES:
-            batch = await self._req("GET", self._repo_path("/labels"),
-                                    params={"page": page,
-                                            "limit": LABELS_PAGE})
-            if not batch:
-                break
-            labels.extend(batch)
-            if len(batch) < LABELS_PAGE:
-                break
-            page += 1
-        else:
-            raise RuntimeError(
+        from .._toolkit import paginate_rest
+        labels, _ = await paginate_rest(
+            lambda page: self._req("GET", self._repo_path("/labels"),
+                                   params={"page": page,
+                                           "limit": LABELS_PAGE}),
+            page_size=LABELS_PAGE, max_pages=MAX_LABEL_PAGES,
+            what="gitea_issues labels", on_ceiling="raise",
+            ceiling_error=(
                 f"gitea_issues: more than {MAX_LABEL_PAGES * LABELS_PAGE} "
                 f"labels on {self._owner}/{self._repo} — refusing (a label "
                 f"past the ceiling would be silently erased by the next "
-                f"full-set label rewrite)")
+                f"full-set label rewrite)"))
         return labels
 
     async def ensure_labels(self, team_ref: str, names: set[str]) -> None:
@@ -643,7 +622,7 @@ class GiteaIssuesAdapter:
         (docs/14 §11)."""
         from ...domain.asset_fetch import (
             AssetUrlError, assert_downloadable_asset_url,
-            enforce_download_byte_cap, resolve_redirect_location,
+            enforce_download_byte_cap,
         )
         if not self._origin:
             raise RuntimeError(
@@ -660,26 +639,28 @@ class GiteaIssuesAdapter:
         headers = self._headers()
         cap = self.capabilities().attachment_max_bytes
         try:
+            # THE credentialed redirect walk (adapters/_toolkit, ADR-0034):
+            # allow_http=True is deliberate — self-hosted Gitea origins are
+            # legitimately plain-http (the policy difference vs Linear is
+            # stated at the call sites now, not drifted between copies).
+            # `pin` re-applies the presentation→origin rewrite + netloc/path
+            # pin per hop.
+            from .._toolkit import fetch_following_safe_redirects
             async with httpx.AsyncClient(
                     timeout=60, transport=self._transport,
                     follow_redirects=False) as client:
-                for _ in range(5):
-                    resp = await client.get(current, headers=headers)
-                    if resp.status_code in (301, 302, 303, 307, 308):
-                        loc = resp.headers.get("location") or ""
-                        try:
-                            nxt = resolve_redirect_location(current, loc)
-                            nxt = assert_downloadable_asset_url(
-                                nxt, allowed_hosts=allowed, allow_http=True)
-                            current = self._finalize_fetch_url(nxt)
-                        except AssetUrlError as e:
-                            raise RuntimeError(
-                                f"gitea_issues download redirect refused: {e}"
-                            ) from e
-                        continue
-                    break
-                else:
-                    raise RuntimeError("gitea_issues download: too many redirects")
+                try:
+                    resp = await fetch_following_safe_redirects(
+                        client, current, allowed_hosts=allowed,
+                        headers=headers, allow_http=True,
+                        pin=self._finalize_fetch_url)
+                except AssetUrlError as e:
+                    raise RuntimeError(
+                        f"gitea_issues download redirect refused: {e}"
+                    ) from e
+                except RuntimeError:
+                    raise RuntimeError(
+                        "gitea_issues download: too many redirects")
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitea_issues download network: {e}") from e
         if resp.status_code in (429, 500, 502, 503, 504):

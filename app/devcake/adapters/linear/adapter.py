@@ -914,7 +914,8 @@ class LinearAdapter:
         uf = up["uploadFile"]
         headers = {h["key"]: h["value"] for h in uf["headers"]}
         headers["Content-Type"] = "text/markdown"
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60,
+                                     transport=self._transport) as client:
             resp = await client.put(uf["uploadUrl"], content=data, headers=headers)
             resp.raise_for_status()
         return uf["assetUrl"]
@@ -925,44 +926,43 @@ class LinearAdapter:
         Host allowlist + no off-host redirects + size cap (docs/14 §11)."""
         from ...domain.asset_fetch import (
             AssetUrlError, assert_downloadable_asset_url,
-            enforce_download_byte_cap, resolve_redirect_location,
+            enforce_download_byte_cap,
         )
         allowed = {"uploads.linear.app"}
         try:
             url = assert_downloadable_asset_url(url, allowed_hosts=allowed)
         except AssetUrlError as e:
             raise RuntimeError(f"linear download refused: {e}") from e
-        # Manual redirects only when the next hop stays on the allowlist —
-        # never follow an open redirect with the Linear Authorization header.
+        # THE credentialed redirect walk (adapters/_toolkit, ADR-0034):
+        # every hop re-validated on the allowlist — never follow an open
+        # redirect with the Linear Authorization header. allow_http=False:
+        # uploads.linear.app is https-only (the policy is stated HERE, not
+        # drifted — the gitea_issues twin legitimately passes True).
+        from .._toolkit import fetch_following_safe_redirects
         headers = {"Authorization": self._headers["Authorization"]}
         cap = self.capabilities().attachment_max_bytes
         async with httpx.AsyncClient(
                 timeout=60, transport=self._transport,
                 follow_redirects=False) as client:
-            current = url
-            for _ in range(5):
-                resp = await client.get(current, headers=headers)
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    loc = resp.headers.get("location") or ""
-                    try:
-                        nxt = resolve_redirect_location(current, loc)
-                        current = assert_downloadable_asset_url(
-                            nxt, allowed_hosts=allowed)
-                    except AssetUrlError as e:
-                        raise RuntimeError(
-                            f"linear download redirect refused: {e}") from e
-                    continue
-                resp.raise_for_status()
-                try:
-                    return enforce_download_byte_cap(
-                        resp.content,
-                        content_length=resp.headers.get("content-length"),
-                        max_bytes=cap,
-                    )
-                except AssetUrlError as e:
-                    raise RuntimeError(
-                        f"linear download refused: {e}") from e
-            raise RuntimeError("linear download: too many redirects")
+            try:
+                resp = await fetch_following_safe_redirects(
+                    client, url, allowed_hosts=allowed, headers=headers,
+                    allow_http=False)
+            except AssetUrlError as e:
+                raise RuntimeError(
+                    f"linear download redirect refused: {e}") from e
+            except RuntimeError:
+                raise RuntimeError("linear download: too many redirects")
+            resp.raise_for_status()
+            try:
+                return enforce_download_byte_cap(
+                    resp.content,
+                    content_length=resp.headers.get("content-length"),
+                    max_bytes=cap,
+                )
+            except AssetUrlError as e:
+                raise RuntimeError(
+                    f"linear download refused: {e}") from e
 
     def capabilities(self) -> PMOCapabilities:
         return PMOCapabilities(projects_supported=True, project_labels_supported=True,

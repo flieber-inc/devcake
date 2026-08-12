@@ -78,18 +78,14 @@ class GitLabForge:
 
     async def _req(self, method: str, path: str, *, reviewer: bool = False,
                    raw: bool = False, **kwargs) -> Any:
-        client = self._http.get()   # pooled (F16); adapter aclose() owns it
-        resp = await client.request(
-            method, f"{self.base}/api/v4/projects/{self.project}{path}",
-            headers=self._headers(reviewer), **kwargs)
-        if resp.status_code >= 400:
-            # normalized error type across adapters (docs/06): callers
-            # handle ForgeError only, never httpx exceptions
-            raise ForgeError(f"{method} {path} → {resp.status_code}: "
-                             f"{resp.text[:200]}", status=resp.status_code)
-        if raw:                       # file_content wants bytes, not JSON
-            return resp.content
-        return resp.json() if resp.text else None
+        from ..http import forge_request
+        # THE forge wire call (adapters/http.forge_request, ADR-0034):
+        # callers handle ForgeError only, never httpx exceptions — now true
+        return await forge_request(
+            self._http.get(), method,
+            f"{self.base}/api/v4/projects/{self.project}{path}",
+            path_label=path, headers=self._headers(reviewer), raw=raw,
+            **kwargs)
 
     async def aclose(self) -> None:
         await self._http.aclose()

@@ -44,6 +44,12 @@ def auth_digest(value: str) -> str:
 
 class Run(BaseModel):
     schema_version: int = 2
+    # lost-update fence (2026-08-12 audit F8): bumped by RunStore.save() on
+    # every write. Two writers holding DIFFERENT objects for the same run
+    # (a fresh get() vs a shared all()-cache object) used to last-writer-
+    # wins SILENTLY; the fence makes the collision loud. Additive — legacy
+    # records parse as rev 0.
+    rev: int = 0
     run_id: str
     mission_key: str
     mission_pmo_id: str = ""

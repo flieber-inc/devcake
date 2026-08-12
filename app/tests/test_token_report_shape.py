@@ -140,6 +140,9 @@ def test_unavailable_is_explicit_not_silent():
 # everything else must stay scalar-typed. Widening either list is a deliberate,
 # reviewed diff — that is the point.
 RUN_SCALAR_COLUMNS = {
+    # rev: the lost-update fence counter (2026-08-12 audit F8) — deliberate
+    # widening per this guard's own instruction; INTEGER DEFAULT 0 in DDL
+    "rev",
     "schema_version", "run_id", "mission_key", "mission_pmo_id", "pmo_kind",
     "pmo_ref", "repo_ref", "mission_type", "dev_type", "seq",
     "attempt_of_step", "stage_label_at_dispatch", "branch", "spec_prompt",

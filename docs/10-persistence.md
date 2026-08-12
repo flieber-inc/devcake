@@ -172,3 +172,20 @@ Direct file edits are tolerated but take effect on the next app start, when `loa
 | `/data/config/profiles` + `/data/secrets/profiles` | Saved profile snapshots are gone; **live settings are untouched** (profiles are fire-and-forget snapshots, ADR-0013). |
 | the `/mirrors` volume (`docker volume rm devcake_mirrors`, stack stopped) | Nothing durable lost — the mirror is a mandatory but DISPOSABLE cache (ADR-0024): the next dispatch's fail-closed freshness gate re-clones every needed repo (one full re-fetch per repo of cost). Deleting it while the stack runs instead trips the volume error → dispatch refuses with a visible reason until `verify_writable` clears. |
 | the `$DEVCAKE_WS_HOST` tree | Per-run scratch only (ADR-0025). In-flight runs' containers lose their bind and fail (counted per docs/15); terminal residue is exactly what the periodic sweep reclaims anyway. Never part of the backup set. |
+
+## 6. The single-process contract (normative; 2026-08-12 audit F8/F9)
+
+Three load-bearing invariants rest on the app being ONE process with ONE
+event loop. They were previously documented only at their definition sites;
+this section is the ledger, and each carries its tripwire:
+
+| Invariant | Where it lives | What breaks multi-process | Tripwire |
+| --- | --- | --- | --- |
+| Run records: one mutating object per run, "mutate-then-save promptly". `all()` returns SHARED cached objects; `get()` re-parses. | `adapters/files/run_store.py` parse cache | Two writers holding different objects last-writer-wins each other's fields | `Run.rev` lost-update fence in `save()` — collisions log loudly (`lost-update fence tripped`); writes still land |
+| Give-up cursor: byte-offset incremental reader over `events.jsonl`, lock-free because the writer is synchronous in the same loop | `orchestrator/markers.py` `_GIVEUP_STATE` | A second writer interleaves records mid-read; attempt counting miscounts | none mechanical — the fence above catches the downstream symptom; a second process is out of contract |
+| `unlimited`-mode warning dedup: process-local set, at most one repeat per restart | `orchestrator/dispatch.py` `_UNLIMITED_WARNED` | Duplicate loop warnings per cycle (loud direction — annoying, safe) | none needed |
+
+Deployment rule this implies: exactly one app container per `/data` volume
+(`docker-compose.yml` runs a single `app` service; uvicorn has no
+`--workers`). Running a second app process against the same volume is out
+of contract — the fence makes the corruption visible, not safe.

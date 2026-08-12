@@ -64,3 +64,63 @@ def test_corrupt_files_stay_skipped_on_every_call(tmp_path):
     (tmp_path / "runs" / "junk.json").write_text("{not json")
     assert [r.run_id for r in store.all()] == [_run(1).run_id]
     assert [r.run_id for r in store.all()] == [_run(1).run_id]
+
+
+# ── the lost-update fence (2026-08-12 audit F8) ──────────────────────────────
+
+
+def test_lost_update_fence_trips_loudly_but_preserves_last_writer(
+        tmp_path, caplog):
+    """get() and all() can hand two writers two different objects for the
+    same run; the stale writer's save used to discard the other's fields
+    SILENTLY. Semantics preserved (last writer wins), collision now loud."""
+    import logging
+
+    store = RunStore(tmp_path)
+    r = _run("fence1")
+    store.save(r)                       # rev 0 → 1
+
+    a = store.get(r.run_id)             # two INDEPENDENT objects
+    b = store.get(r.run_id)
+    a.verdict = "from writer A"
+    store.save(a)                       # rev 1 → 2, clean
+    b.verdict = "from writer B"
+    with caplog.at_level(logging.ERROR):
+        store.save(b)                   # stale rev 1 vs disk 2 → fence
+    assert any("lost-update fence tripped" in rec.message
+               for rec in caplog.records)
+    assert store.get(r.run_id).verdict == "from writer B"  # last writer wins
+
+
+def test_same_object_resaves_never_trip_the_fence(tmp_path, caplog):
+    """The sanctioned pattern — mutate-then-save the SAME object repeatedly
+    (checkpoints, heartbeats) — must stay silent."""
+    import logging
+
+    store = RunStore(tmp_path)
+    r = _run("fence2")
+    with caplog.at_level(logging.ERROR):
+        for i in range(5):
+            r.verdict = f"step {i}"
+            store.save(r)
+    assert not any("lost-update fence" in rec.message
+                   for rec in caplog.records)
+    assert store.get(r.run_id).rev == 5
+
+
+def test_legacy_record_without_rev_parses_and_fences_forward(tmp_path):
+    import json
+
+    store = RunStore(tmp_path)
+    r = _run("legacy1")
+    store.save(r)
+    # simulate a pre-rev record on disk
+    p = tmp_path / f"{r.run_id}.json"
+    raw = json.loads(p.read_text())
+    raw.pop("rev")
+    p.write_text(json.dumps(raw))
+    got = store.get(r.run_id)
+    assert got.rev == 0
+    got.verdict = "migrated forward"
+    store.save(got)
+    assert store.get(r.run_id).rev == 1

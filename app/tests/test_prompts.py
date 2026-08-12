@@ -189,4 +189,4 @@ def test_steward_prompt_embeds_missions():
     assert "T-1" in p and "T-2" in p
     assert "blocked by: T-1" in p                 # existing blockers shown as keys
     assert "x" * 300 in p and "x" * 301 not in p  # description head capped
-    assert "relations_mapped" in p
+    assert "stewarded" in p

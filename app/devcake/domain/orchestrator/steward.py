@@ -119,7 +119,7 @@ async def finalize_steward(mgr, run: Run, payload: dict) -> None:
         span.set_attribute("devcake.outcome", outcome or "(failure artifact)")
         await mgr.messaging.delete_run_user(run.run_id)
         await mgr.messaging.delete_reply_stream(run.run_id)
-        if outcome != "relations_mapped":
+        if outcome != "stewarded":
             run.state = "failed"
             run.error = mgr.dev_failure_error(run, payload)
             run.ended_at = utcnow()

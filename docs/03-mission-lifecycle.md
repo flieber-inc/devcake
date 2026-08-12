@@ -122,7 +122,7 @@ A **team-scoped run kind** (not a Mission Type — it has no host Mission and no
 **Cadence & degradation (`StewardService`):** one lock serializes the manual and periodic paths (no double dispatch); the interval watermark advances only after a successful dispatch (a transient executor error costs one poll cycle, not a full interval); and when the 3 most recent STEWARD runs all died, the periodic service **backs off** — surfaced as `steward_degraded` in `/health` and on the admin card — while "Run now" stays available and a successful run clears the condition (store-derived, restart-safe).
 
 - **Dispatch:** the app inlines every open, adopted, issue-kind Mission into the prompt — `key · status · existing blocker keys · title · first ~300 chars of description` (capped at 200 missions; truncation logged). No PMO writes at dispatch. Skipped while the global master `intake_paused` is on **or** that instance's `pmos[].intake_paused` is on; max one STEWARD run in flight; counts toward `global_max`.
-- **Output:** `result.json` `{"outcome": "relations_mapped", "edges": [{"blocker": "<key>", "blocked": "<key>"}, …], "summary": "…"}` — an empty `edges` list is valid and common. The playbook demands conservatism: propose only edges where one Mission clearly consumes another's output; never invent keys.
+- **Output:** `result.json` `{"outcome": "stewarded", "edges": [{"blocker": "<key>", "blocked": "<key>"}, …], "summary": "…"}` — an empty `edges` list is valid and common. The playbook demands conservatism: propose only edges where one Mission clearly consumes another's output; never invent keys.
 - **Finalization (the app is the gatekeeper):** each proposed edge is validated against a live snapshot and dropped (audited `steward_edge_rejected`) if it references an unknown or terminal key, is a self-edge, duplicates an existing relation, or would create a cycle in the blocked-by graph. Surviving edges become native PMO relations, and the blocked Mission gets a sentinel-signed comment naming its blocker ("delete the relation in Linear if wrong"). No transcript/token-report comments — there is no host Mission; failures are logged only and the next interval retries.
 
 ## 5. The approval-command footer (normative)
@@ -143,7 +143,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
 ```jsonc
 {
   "schema_version": 1,
-  "outcome": "plan_needed | decomposed | planned | executed | reviewed | human_needed | relations_mapped",
+  "outcome": "plan_needed | decomposed | planned | executed | reviewed | human_needed | stewarded",
   "summary": "one-paragraph human summary of what was done/found",   // required, all outcomes
   "verdict": "approve | reject",          // REVIEW only
   "report_md": "…full review report…",    // REVIEW only
@@ -154,7 +154,7 @@ rendered with the *concrete* URL/IID substituted — one paste must suffice. Eac
                                            // supplies create_mission's parent_ref
                                            // (02-domain-model.md §11)
   ],
-  "edges": [                               // STEWARD 'relations_mapped' only (§4b)
+  "edges": [                               // STEWARD 'stewarded' only (§4b)
     {"blocker": "ENG-10", "blocked": "ENG-12"}
   ],
   "pr_url": "https://…",                   // executed / reviewed
@@ -170,7 +170,7 @@ A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.
 
 **Discoveries (ADR-0033, harvest half).** `discoveries` is optional and exceptional — surplus learning, not a run summary; it is *the memory this otherwise memoryless system keeps between runs* (founder ruling 2026-08-13). Authorship follows result.json authorship: **ONBOARD, EXECUTE, REVIEW**. PLAN cannot author (its result.json is entrypoint-synthesized); its channel is the relay — a plan ending with a marked **"Findings beyond this mission"** section, which the next EXECUTE verifies and carries into its own `discoveries`. Steward runs never author (the Decision-7 chain-reaction damper). At finalize, valid entries (non-empty string `finding`/`evidence`/`scope` — evidence is the receipt; an entry without one is dropped) are capped at `budgets.discoveries_per_run` (`11-admin-panel.md` Limits; 0 = unlimited) and memorialized **unconditionally** (Decision 11): the full `DISCOVERY_<seq>.md` is uploaded as the Mission Step's deliverable attachment, a comment marked `` `devcake:discovery:v1 step=<seq> n=<count>` `` (marker first, never externalized) lands on the source feed, and the mission gains the `DEVCAKE-DISCOVERY` label — a **pure sweep gate** that never affects derivation, scheduling, or dispatch (AST-guarded). Missing/invalid entries degrade silently; harvest is best-effort throughout and never wedges a close. Routing — the STEWARD discovery flavor that carries findings across the family — is the second half of ADR-0033 (not yet shipped; the label and the pending arithmetic `posted − routed receipts` are already board-derivable for it). A handoff is the *delivery method* for discovery consequences that matter immediately downstream (the successor must not wait on asynchronous routing); `discoveries` is the canonical structured record.
 
-**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome on a mission step is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on. The Dev entrypoint applies a related first-line check (exit 11) that also knows STEWARD's `relations_mapped`; the app table below is the mission-step invariant (old images may run):
+**Outcome legality (normative — the trust boundary).** Devs ingest untrusted text (mission descriptions, human comments), so a forged outcome must never let a run transition outside its step. The app enforces this table at finalization (`domain/orchestrator/markers.py`, `LEGAL_OUTCOMES`) — an illegal outcome on a mission step is parked with `DEVCAKE-SKIP` + comment + audit `illegal_outcome`, never acted on. The Dev entrypoint applies a related first-line check (exit 11) that also knows STEWARD's `stewarded`; the app table below is the mission-step invariant (old images may run):
 
 | Run type | Legal outcomes |
 |---|---|
@@ -179,7 +179,7 @@ A `plan_needed` outcome may additionally be accompanied by `/workspace/out/PLAN.
 | EXECUTE | `executed` · `human_needed` |
 | REVIEW | `reviewed` · `human_needed` |
 
-**STEWARD is not in `LEGAL_OUTCOMES`.** Steward runs finalize through a separate path (`finalize_steward`): the only accepted outcome is `relations_mapped`; anything else marks the run **`failed`** (no `DEVCAKE-SKIP` parking — there is no host mission to park).
+**STEWARD is not in `LEGAL_OUTCOMES`.** Steward runs finalize through a separate path (`finalize_steward`): the only accepted outcome is `stewarded` (renamed from `relations_mapped` — ADR-0033 addendum: one duty-agnostic outcome for every steward flavor); anything else marks the run **`failed`** (no `DEVCAKE-SKIP` parking — there is no host mission to park).
 
 A **structurally invalid payload** behind a legal outcome (empty decomposition, forward/self `blocked_by` index) is different: it fails the run as `DEV_BAD_OUTPUT` — a counted attempt that retries naturally (`15-errors-and-retries.md` §2) — because a formatting slip deserves a retry where a forged outcome does not.
 

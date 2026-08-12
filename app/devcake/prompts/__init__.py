@@ -455,7 +455,7 @@ blockers — only propose edges that are missing. Never invent mission keys.
 {mission_table}
 
 ### Required output — /workspace/out/result.json
-{{"schema_version": 1, "outcome": "relations_mapped",
+{{"schema_version": 1, "outcome": "stewarded",
   "edges": [{{"blocker": "<key that must finish first>",
              "blocked": "<key that must wait>"}}, ...],
   "summary": "<one paragraph: what you mapped and why — or why nothing>"}}

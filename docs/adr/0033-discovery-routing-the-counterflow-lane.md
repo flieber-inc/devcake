@@ -54,7 +54,23 @@ Each entry is structured, not free text:
   without evidence is an opinion; the schema demands the receipt.
 - `scope` — what the discoverer believes it applies to, and what it does not.
 
-Any stage may author discoveries (EXCLUDING steward runs — Decision 7).
+Authorship follows result.json authorship: **ONBOARD, EXECUTE, and REVIEW**
+may contribute discoveries (steward runs are excluded — Decision 7).
+**PLAN cannot** — plan mode is read-only and its `result.json` is
+entrypoint-synthesized (docs/03: the same reason PLAN cannot emit
+`human_needed`), and extracting discoveries from plan prose would violate
+the never-parse-prose rule (docs/03 §0; ADR-0032 chose structured fields
+over marker-scraping for the same reason). The coverage hole is small
+under the counterflow model — reflections happen where work collides with
+reality, and PLAN reads what ONBOARD surveyed and EXECUTE is about to
+touch — and it has a doctrine-clean relay: the PLAN playbook directs
+genuinely off-mission findings into a marked *"Findings beyond this
+mission"* section of `PLAN.md` (already a posted, human-visible
+deliverable), and the EXECUTE playbook instructs carrying qualifying ones
+forward into its own `discoveries` with its own evidence check. The relay
+is Dev-to-Dev through an artifact they already share; the app parses
+nothing.
+
 The playbook instruction is one sentence and the field is **optional and
 exceptional**: handoffs summarize the work; discoveries are surplus
 learning. Requiring one per run would manufacture noise. Missing/empty
@@ -222,6 +238,11 @@ orders information crossing a flow boundary; it never originates intent.
   derivable from it.
 - Pre-ADR runs and operator prompt overrides that omit `discoveries`
   degrade silently to today's behavior.
+- PLAN-stage findings route only via the PLAN.md → EXECUTE relay
+  (Decision 1) — one deliberate lossy hop, accepted because the
+  alternative is prose-parsing. If evaluation shows PLAN discoveries
+  systematically lost, the escalation is a structured side-channel for
+  plan mode's synthesized result — its own change, not this ADR's.
 - The discovery's quality ceiling is the discoverer's write-time
   discipline; the structured contract (finding/evidence/scope) is the
   enforcement surface, and thin or context-bound findings are a playbook

@@ -166,9 +166,10 @@ material that crossed a mission boundary; it is marked as such and never
 laundered into spec-register text (quoting-quarantine, extended).
 
 Recipients: **the whole family graph, including in-flight Missions, from
-v1** (founder ruling). Running **Dev containers are never interrupted** —
-not a version choice but flow doctrine: intervention lands at step
-boundaries, never inside one. A discovery waits on the feed like a
+the feature's first release** (founder ruling — this ADR ships in a
+pre-v1 product release; nothing here marks or gates product v1). Running
+**Dev containers are never interrupted** — not a version choice but flow
+doctrine: intervention lands at step boundaries, never inside one. A discovery waits on the feed like a
 colleague's comment and is seen at the next boundary; the mechanism
 inherits the guarantee rather than needing an exception. Discoveries do
 not cross between unconnected families: a board-global finding is the

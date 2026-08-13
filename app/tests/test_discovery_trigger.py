@@ -218,3 +218,32 @@ def test_harvest_notify_seam_is_best_effort(tmp_path):
     store.save(r2)
     n = run_coro(discovery.harvest(mgr2, r2, {"discoveries": [entry]}))
     assert n == 1                                  # close never wedged
+
+
+def test_gate_filters_mirror_ineligible_family_repos(tmp_path, monkeypatch):
+    """The family's work repos legitimately include INTERNAL per-mission
+    repos — valid clone extras, never mirrored (ADR-0024 §5). The gate must
+    pass only mirror-ELIGIBLE names to ensure_fresh: an internal name would
+    401 the unauthenticated mirror fetch and wedge the lane mirror_stale
+    forever on zero-repo boards (graduation-smoke prep find, 2026-08-13)."""
+    from devcake.domain.orchestrator import family_graph
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    missions[1].repo = "intmission1"          # the sibling's internal repo
+    monkeypatch.setattr(family_graph, "blocker_read_credential",
+                        lambda mgr_, name: ("internal", object()))
+    asked: list[list[str]] = []
+
+    class Cache:
+        def eligible(self, name):
+            return name == "home"             # only the steward's card
+        async def ensure_fresh(self, names):
+            asked.append(sorted(names))
+            assert "intmission1" not in names, \
+                "internal repo reached the mirror gate"
+            return True, {}
+
+    mgr.repo_cache = Cache()
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert len(calls) == 1        # dispatched despite the internal sibling
+    assert asked and all("intmission1" not in a for a in asked)

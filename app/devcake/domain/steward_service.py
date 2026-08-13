@@ -179,8 +179,16 @@ class StewardService:
                     mgr._discoveries_pending.discard(s.pmo_id)
             if not pending:
                 return
+            # mirror-ELIGIBLE names only (the needed_for precedent): the
+            # family's work repos legitimately include INTERNAL per-mission
+            # repos — valid clone extras (direct, mission-scoped creds) but
+            # never mirrored (ADR-0024 §5 security ruling). Passing one to
+            # ensure_fresh would 401 the unauthenticated mirror fetch and
+            # wedge the gate mirror_stale forever on zero-repo boards
+            # (found by the graduation-smoke prep, 2026-08-13).
             fam_repos = [e["repo_ref"] for e in family_graph.family_work_repos(
-                mgr, fam, exclude=frozenset({repo}))]
+                mgr, fam, exclude=frozenset({repo}))
+                if mgr.repo_cache.eligible(e["repo_ref"])]
             mirror_ok, mirror_why = await mgr.repo_cache.ensure_fresh(
                 [repo] + fam_repos)
             if not mirror_ok:

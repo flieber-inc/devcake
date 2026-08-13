@@ -149,6 +149,15 @@ async def harvest(mgr, run: Run, result: dict) -> int:
             mgr._audit(pmo_id, "discovery_label_failed", str(e)[:200])
         mgr._discoveries_pending.add(pmo_id)
         mgr._audit(pmo_id, "discovery_post", f"{name}: {len(entries)} entries")
+        # event trigger for the routing lane (composition root injects the
+        # callable; None in tests / pre-wiring) — best-effort, the sweep is
+        # the durable path
+        notify = getattr(mgr, "discovery_notify", None)
+        if notify is not None:
+            try:
+                notify()
+            except Exception:  # noqa: BLE001 — never let the trigger touch the close
+                log.debug("discovery notify failed", exc_info=True)
 
     try:
         await mgr._checkpoint(run, steps.DISCOVERY_POST, _post)
@@ -198,3 +207,59 @@ async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
         if state.pending:
             out[m.pmo_id] = state.pending
     return out
+
+
+async def discovery_sweep(mgr, m) -> None:
+    """The per-mission sweep arm (called from sweeps() for every issue; the
+    label gate lives HERE so sweeps.py never reads the label — the guard
+    allowlist stays tight). Re-seeds the advisory queue for pending batches,
+    self-heals the label off fully-receipted sources, and terminates batches
+    whose source run record is gone (clear-runs) with a sentinel'd
+    unroutable comment + a `to=-` receipt so the board arithmetic closes.
+    Toggle-off (D11) leaves everything untouched — the label stays as
+    honest board state until the operator re-enables routing."""
+    if m.pmo_kind != "issue" or LABEL_DISCOVERY not in m.labels:
+        return
+    if not mgr.instance.discovery_routing:
+        return
+    state = await scan_source(mgr, m)
+    if not state.posted:
+        return   # label without markers (human relabel) — humans own labels
+    pending = state.pending
+    if not pending:
+        try:     # fully receipted — self-heal the gate off
+            await mgr.pmo.swap_labels(MissionRef(m.pmo_id, "issue"),
+                                      remove={LABEL_DISCOVERY}, add=set())
+        except Exception as ex:  # noqa: BLE001 — the label is a hint; retried next sweep
+            mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
+        mgr._discoveries_pending.discard(m.pmo_id)
+        return
+    run_ix = {(r.mission_pmo_id, r.seq): r for r in mgr.runs.store.all()
+              if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)}
+    gone = [(step, n) for step, n in pending
+            if (m.pmo_id, step) not in run_ix
+            or not valid_entries(run_ix[(m.pmo_id, step)].result or {})]
+    if gone:
+        lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
+                 for s, _n in sorted(gone)]
+        try:
+            await mgr._feed(
+                m.pmo_id, "issue",
+                "⚠️ Unroutable discoveries — the source run record was "
+                "cleared, so verbatim transport is impossible. The full "
+                "DISCOVERY file above remains the record; disposition "
+                "receipts:\n" + "\n".join(lines), externalize=False)
+            mgr._audit(m.pmo_id, "discovery_unroutable",
+                       f"steps {[s for s, _ in gone]}: run record cleared")
+        except Exception as ex:  # noqa: BLE001 — retried next sweep
+            mgr._audit(m.pmo_id, "discovery_receipt_failed", str(ex)[:200])
+            return
+    if [p for p in pending if p not in gone]:
+        mgr._discoveries_pending.add(m.pmo_id)   # routable work remains
+    else:
+        try:
+            await mgr.pmo.swap_labels(MissionRef(m.pmo_id, "issue"),
+                                      remove={LABEL_DISCOVERY}, add=set())
+        except Exception as ex:  # noqa: BLE001 — retried next sweep
+            mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
+        mgr._discoveries_pending.discard(m.pmo_id)

@@ -48,6 +48,11 @@ class StewardService:
         # first auto-run lands one interval after boot; "Run now" covers immediacy
         self._last_at = time.monotonic()
         self._last_periodic_outcome: str | None = None  # span-on-transition dedupe
+        # ADR-0033 discovery lane: per-instance single-flight — a sound
+        # COARSENING of the ADR's per-family rule, since families never span
+        # instances. Event-kicked by harvest; re-driven by the label sweep.
+        self._discovery_lock = asyncio.Lock()
+        self._last_discovery_outcome: str | None = None
 
     def dev_type(self) -> DevType | None:
         rm = self.config.steward
@@ -119,6 +124,100 @@ class StewardService:
                 if error:
                     span.set_status(Status(StatusCode.ERROR, error[:200]))
         self._last_periodic_outcome = outcome
+
+    async def maybe_dispatch_discovery(self, missions: list[Mission]) -> None:
+        """The ADR-0033 discovery lane: drain ONE family's pending batches
+        per call (single-flight; the advisory queue keeps the rest for the
+        next kick/cycle). Shares active()/global_max/degraded() with the
+        relations cadence — both are board-tending runs on the same live
+        board, and deferral is the design (batching calm over fan-out)."""
+        mgr = self.mgr
+        if not mgr.instance.discovery_routing:   # D11 — direct field access,
+            return                               # fail-closed on rename
+        dt = self.dev_type()
+        repo = mgr.steward_repo()
+        if dt is None or repo is None or repo in mgr.forges.breakers:
+            return
+        if not mgr._discoveries_pending:
+            return
+        from .orchestrator import discovery, family_graph
+        outcome, error = None, None
+        degraded = self.degraded()
+        if degraded:
+            outcome, error = "degraded_skip", degraded
+        elif (missing := missing_referenced_secret_env(dt)):
+            outcome = "secret_env_gate"
+            error = (f"secret env {', '.join(missing)} referenced by "
+                     "mcp_setup_commands but not stored")
+        else:
+            by_id = {m.pmo_id: m for m in missions}
+            sources = [by_id[p] for p in sorted(mgr._discoveries_pending)
+                       if p in by_id]
+            if not sources:
+                # off-snapshot ids: drop — the label sweep re-seeds real ones
+                mgr._discoveries_pending.clear()
+                return
+            fam = family_graph.family_of(sources[0], missions)
+            group = [s for s in sources if s.pmo_id in fam.by_id]
+            pending: dict[str, list[tuple[int, int]]] = {}
+            for s in group:
+                state = await discovery.scan_source(mgr, s)
+                if state.pending:
+                    pending[s.pmo_id] = state.pending
+                else:                             # already receipted — done
+                    mgr._discoveries_pending.discard(s.pmo_id)
+            if not pending:
+                return
+            fam_repos = [e["repo_ref"] for e in family_graph.family_work_repos(
+                mgr, fam, exclude=frozenset({repo}))]
+            mirror_ok, mirror_why = await mgr.repo_cache.ensure_fresh(
+                [repo] + fam_repos)
+            if not mirror_ok:
+                outcome = "mirror_stale"          # fail-closed, retry later
+                error = f"family mirrors not fresh: {mirror_why}"
+                log.warning("discovery steward skipped — %s", error)
+            else:
+                async with self._discovery_lock:
+                    if self.active():
+                        outcome = "already_active"
+                    elif (len(mgr.runs.store.active())
+                          >= self.config.concurrency.global_max):
+                        outcome = "concurrency_deferred"
+                    else:
+                        run = await mgr.dispatch_steward_discovery(
+                            dt, fam, pending)
+                        if run is None:
+                            outcome = "dispatch_skipped"   # workspace/empty
+                        else:
+                            # served — finalize receipts them; a crash is
+                            # re-detected from the board by the sweep
+                            for pid in pending:
+                                mgr._discoveries_pending.discard(pid)
+                            outcome = "dispatched"
+        if outcome and (outcome == "dispatched"
+                        or outcome != self._last_discovery_outcome):
+            with tracer.start_as_current_span("steward.discovery") as span:
+                span.set_attribute("devcake.outcome", outcome)
+                if error:
+                    span.set_status(Status(StatusCode.ERROR, error[:200]))
+        self._last_discovery_outcome = outcome
+
+    def kick_discovery(self) -> None:
+        """Event trigger (harvest enqueued from the ingress task context):
+        fire-and-forget one discovery pass with a fresh board fetch. Errors
+        are swallowed — the poll-cycle sweep is the durable retry path."""
+        async def _once():
+            try:
+                missions = await self.mgr.pmo.list_all(
+                    self.mgr.instance.team_key)
+                await self.maybe_dispatch_discovery(missions)
+            except Exception:  # noqa: BLE001 — best-effort by design
+                log.debug("discovery kick failed — the sweep re-drives",
+                          exc_info=True)
+        try:
+            asyncio.create_task(_once())
+        except RuntimeError:  # no running loop (sync test contexts)
+            log.debug("discovery kick without a running loop — skipped")
 
     async def run_now(self) -> Run:
         """Manual trigger: works regardless of the periodic toggle and of the

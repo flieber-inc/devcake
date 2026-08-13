@@ -140,6 +140,19 @@ def test_max_decomposition_depth_defaults_and_bounds():
     assert AppConfig.model_validate(merged).max_decomposition_depth == 1
 
 
+def test_discovery_routing_defaults_on_and_round_trips():
+    """ADR-0033 D11 (draft field): per-instance gate on the routing lane,
+    default ON, plain bool riding the normal draft/save path."""
+    base = _base()
+    assert AppConfig.model_validate(base).pmos[0].discovery_routing is True
+    tuned = {**base, "pmos": [dict(base["pmos"][0],
+                                   discovery_routing=False)]}
+    got = AppConfig.model_validate(tuned)
+    assert got.pmos[0].discovery_routing is False
+    redumped = AppConfig.model_validate(got.model_dump())
+    assert redumped.pmos[0].discovery_routing is False
+
+
 def test_budgets_defaults_bounds_and_round_trip():
     """ADR-0033 D7 as amended (founder 2026-08-13): counting budgets are
     operator knobs — defaults 5/3/3/5, 0 = unlimited, negatives refused,

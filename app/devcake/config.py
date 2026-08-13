@@ -91,6 +91,13 @@ class PMOInstance(BaseModel):
     # in-flight finalization and sweeps continue. Default open so a multi-PMO
     # deployment starts with every configured team active.
     intake_paused: bool = False
+    # ADR-0033 D11 (draft field, founder ruling): gates the steward
+    # discovery lane + cross-mission delivery for THIS instance's families
+    # (families never span instances, so the toggle's unit matches the
+    # routing unit). Harvest stays unconditional — the board stays complete
+    # for a later toggle-on. Default ON: a default-off feature never
+    # generates evaluation data; budgets + family scoping bound the radius.
+    discovery_routing: bool = True
     # Per-instance Mission Type → Dev Type overrides (ADR-0019, dual-crew
     # staffing): a present key replaces the global AppConfig.assignments row
     # WHOLESALE — extra_cli_args included, because CLI flags are harness-

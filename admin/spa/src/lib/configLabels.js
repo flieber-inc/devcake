@@ -59,6 +59,18 @@ const EXACT = {
     group: "Limits & Traffic", label: "Discoveries per run",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
+  "cfg.container_limits.memory_mb": {
+    group: "Limits & Traffic", label: "Container memory (MB)",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.container_limits.cpus": {
+    group: "Limits & Traffic", label: "Container CPUs",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
+  "cfg.container_limits.pids": {
+    group: "Limits & Traffic", label: "Container PIDs",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
   "cfg.concurrency.global_max": { group: "Limits & Traffic", label: "Global max Devs" },
   "cfg.dev_timeout_minutes": { group: "Limits & Traffic", label: "Dev run timeout (min)" },
   "cfg.review_loop_warning_every": { group: "Limits & Traffic", label: "Loop warning every N rejections" },

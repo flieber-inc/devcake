@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 
-// Client-side mirror of the server's instance-name rule (config.py
-// _INSTANCE_NAME_RE): the draft validates names BEFORE Save, so a bad name
-// surfaces inline instead of as a raw 422 from the config PUT.
-export const INSTANCE_NAME_RE = /^[a-z][a-z0-9]{0,11}$/;
-export const INSTANCE_NAME_RULE =
-  "a lowercase letter, then lowercase letters/digits, 12 max (no spaces, no hyphens)";
+// The name-rule constants live in draftErrors.js (dependency-free for the
+// hermetic helper suite); re-exported here for the react-side consumers.
+export { INSTANCE_NAME_RE, INSTANCE_NAME_RULE } from "./draftErrors.js";
 
 // Next free default name ("repo2", "linear3"): skips names used by the draft
 // OR still saved on the server. Without the server check, a card added right

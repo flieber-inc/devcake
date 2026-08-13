@@ -249,9 +249,11 @@ Mission-type **playbook templates** (`GET/PUT/DELETE /prompt-templates/{TYPE}/{n
 
 ### Limits (rendered inside Limits & Traffic, above the Traffic card)
 
-Five story-grouped cards (four since the 2026-08 reviewer round, plus
-**Counting budgets** with ADR-0033): **Concurrency & timeouts**, **Attempts &
-retries**, **Counting budgets**, **Result recovery**, **Repository mirrors**.
+Six story-grouped cards (four since the 2026-08 reviewer round, plus
+**Counting budgets** with ADR-0033 and **Dev containers** with the 2026-08-13
+container-limits delivery): **Concurrency & timeouts**, **Attempts &
+retries**, **Counting budgets**, **Dev containers**, **Result recovery**,
+**Repository mirrors**.
 
 - **Global max Devs** integer (help text: effective ceiling = min(global, sum of per-type caps)).
 - **Dev run timeout** minutes (default 120).
@@ -259,6 +261,7 @@ retries**, **Counting budgets**, **Result recovery**, **Repository mirrors**.
 - **Attempt reset** select (ADR-0026, `attempt_reset`): Strict (DEVCAKE-RETRY / labels, default) / Any comment / Unlimited (never give up). The help text is normative UX — it must explain the reset idiosyncrasy: what always resets (label removal, later step finishing), the chatty-integration hole in `any-comment`, that strict mode's human gesture is a comment containing `DEVCAKE-RETRY`, and that `unlimited` forfeits give-up entirely (breakers and `DEVCAKE-SKIP` still act) with a cumulative-cost feed warning at the review-loop cadence.
 - **Brake on missing results** toggle (ADR-0026, `brake_on_bad_output`, default off): widens the §4a backend brake's evidence to exit 11. The help text explains both brake arms — attempt excusal and throttle-to-probe — and states plainly that at per-type concurrency 1 the throttle arm is inert.
 - **Counting budgets** (ADR-0033 D7 as amended — operator knobs, `budgets.*`, all `0 = unlimited`): **Freshness re-reviews** (`budgets.freshness_rereviews`, default 5 — per-mission-lifetime bound on ADR-0031 re-review directives, shared by human steering posts and routed discoveries); **Discoveries per run** (`budgets.discoveries_per_run`, default 3 — harvest cap on one run's `discoveries` entries). Routing itself carries **no numeric budget** (ADR-0033 addendum 14): the `(source, step)` delivery dedup and family size bound fan-out structurally, and the steward's judgment is the selection layer — the former per-source / per-recipient knobs were deleted because a spent numeric budget could only hold or kill work.
+- **Dev containers** (`container_limits.*`, all `0 = unlimited`, applied at the next dispatch to BOTH steps of every run — kernel cgroups via Docker HostConfig, `07-dev-runtime.md` §7): **Memory (MB)** (default 4096 — over-cap = kernel OOM-kill, a normal counted failure), **CPUs** (default 2.0, fractions allowed — throttles, never kills), **PIDs** (default 0/off — the fork-bomb backstop; the help text warns that a low cap fails innocent build/test process trees).
 - **Accept misplaced result files** toggle (ADR-0018, `recover_misplaced_result`, default on).
 - **Continuation policy** select (ADR-0022, `continuation_policy`): Auto / Resume only / Fresh only / Off; the help text states that resume-only fails as before when resume is unavailable and that plan runs never continue.
 - **Max continuations per run** integer (ADR-0022, `max_continuations`, default 2, `0` = off, no upper bound): the help text names the two operator-relevant facts — the budget is the ONLY terminator (stalls escalate resume→fresh, never stop), and each relaunch resets the harness's own `--max-turns` (effective turn budget = (budget + 1) × max-turns).

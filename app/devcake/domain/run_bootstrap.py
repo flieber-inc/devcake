@@ -22,6 +22,20 @@ if TYPE_CHECKING:
     from .workspaces import WorkspaceStore
 
 
+def container_limit_params(config) -> dict[str, str]:
+    """AppConfig.container_limits → dev-run DAG params — the ONE conversion
+    site: memory_mb → bytes, cpus → NanoCPUs (×1e9, int), pids verbatim.
+    0 = unlimited everywhere (the engine leaves the cgroup unset —
+    measured end-to-end 2026-08-13). String-typed on purpose: Dagu params
+    are strings; the executor decode weak-types them back to int64."""
+    cl = getattr(config, "container_limits", None)
+    if cl is None:
+        return {"MEMORY_BYTES": "0", "NANO_CPUS": "0", "PIDS": "0"}
+    return {"MEMORY_BYTES": str(cl.memory_mb * 1024 * 1024),
+            "NANO_CPUS": str(int(cl.cpus * 1_000_000_000)),
+            "PIDS": str(cl.pids)}
+
+
 class RunBootstrap:
     def __init__(
         self,
@@ -29,11 +43,15 @@ class RunBootstrap:
         messaging: MessagingPort,
         executor: ExecutorPort,
         workspaces: "WorkspaceStore | None" = None,
+        config=None,
     ) -> None:
         self.store = store
         self.messaging = messaging
         self.executor = executor
         self.workspaces = workspaces or NullWorkspaceStore()
+        # AppConfig (shared identity — hot reload mutates in place); None in
+        # tests ⇒ unlimited container-limit params
+        self.config = config
         # THE serialization point for every dispatch flavor (audit re-audit
         # #0/#6): clear-runs holds this lock across its whole wipe, so no run
         # can create a `dev-<run_id>` ACL user or start a container while the
@@ -94,6 +112,9 @@ class RunBootstrap:
                     "TRACEPARENT": run.traceparent or "",
                     "REDIS_USER": f"dev-{run.run_id}",
                     "REDIS_PASSWORD": password,
+                    # per-container cgroup limits (ContainerLimits) — the
+                    # dev-run DAG threads these into Docker HostConfig
+                    **container_limit_params(self.config),
                 },
                 dag_run_id=run.run_id,
             )

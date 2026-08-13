@@ -146,8 +146,9 @@ Audited: two breaking changes in range, neither applies (v2.11.0 CORS
 hardening — DevCake talks server-side, the SPA only links to Dagu's own
 UI; v2.10.6 token-TTL cap — basic auth, no tokens); no REST or container
 schema changes across our six endpoints; `volumes:` is now officially
-documented; container cpu/memory/pids limits still DO NOT exist (the
-`14` §11 debt stands). Explicitly NOT adopted: controller DAGs, LLM
+documented; container cpu/memory/pids limits did not exist at 2.11.3
+(delivered 2026-08-13 at 2.13.0 via the docker-executor form's nested
+`resources:` — `14` §6). Explicitly NOT adopted: controller DAGs, LLM
 steps, human-task API — all business logic stays in the app; the DAG
 remains a dumb launcher. All three volume probes re-measured green on
 2.11.3; digest pinned. If live smoke ever implicates the bump, revert

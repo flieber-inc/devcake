@@ -189,7 +189,8 @@ def build_services() -> Services:
     # ADR-0025: per-run workspace tree on the host bind (compose mounts
     # $DEVCAKE_WS_HOST here rw; the dev-run DAG binds per-run subdirs)
     workspaces = WorkspaceStore("/workspaces")
-    manager = RunManager(store, messaging, executor, workspaces=workspaces)
+    manager = RunManager(store, messaging, executor, workspaces=workspaces,
+                         config=config)
 
     # ── multi-instance wiring (schema v3, ADR-0009; repos plural per M10) ──
     # One MissionManager per CONFIGURED PMO instance; shared state is

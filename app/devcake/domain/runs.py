@@ -103,6 +103,7 @@ class RunManager:
         executor: ExecutorPort,
         finalizer: RunFinalizer | None = None,
         workspaces=None,
+        config=None,
     ):
         self.store = store
         self.messaging = messaging
@@ -111,7 +112,8 @@ class RunManager:
         # existing construction — tests included — a no-op, like NullRepoCache)
         self.workspaces = workspaces or NullWorkspaceStore()
         self.bootstrap = RunBootstrap(store, messaging, executor,
-                                      workspaces=self.workspaces)
+                                      workspaces=self.workspaces,
+                                      config=config)
         self.finalizer = finalizer  # MissionManager (or fake); optional for hello-only
         self.oauth_mgr = None       # wired by main (OAuthManager)
         self.runlog = None          # wired by main (RunLogStore)

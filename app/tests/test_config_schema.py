@@ -719,3 +719,21 @@ def test_put_assignments_rejects_unknown_mission_type_key(
         assert "unknown mission type" in exc.value.detail
     finally:
         loop.close()
+
+
+def test_container_limits_defaults_bounds_and_round_trip():
+    """Per-container cgroup knobs (2026-08-13): defaults mirror the old
+    best-effort DAG budget (4g / 2 cpus), pids off; 0 = unlimited;
+    negatives refused; rides the settings bundle via model_dump."""
+    cfg = AppConfig()
+    cl = cfg.container_limits
+    assert (cl.memory_mb, cl.cpus, cl.pids) == (4096, 2.0, 0)
+    got = AppConfig.model_validate(
+        {**_base(), "container_limits": {"memory_mb": 0, "cpus": 0.5}})
+    assert got.container_limits.memory_mb == 0     # 0 = unlimited
+    assert got.container_limits.cpus == 0.5
+    assert got.container_limits.pids == 0          # sibling default holds
+    with pytest.raises(Exception):
+        AppConfig.model_validate(
+            {**_base(), "container_limits": {"memory_mb": -1}})
+    assert AppConfig.model_validate(cfg.model_dump()).container_limits == cl

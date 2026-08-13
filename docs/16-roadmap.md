@@ -368,6 +368,12 @@ until that run exists, field evidence below stays operator-self-reported.
   composition; domain-only skills; `skills_required` + tri-state chips; role
   Dev Types (`judgment` / `implementer` / `steward`); registry `skills_dir`
   snapshotted onto the Run. Normative ADR + `app/devcake/skills/README.md`.
+  **External skill repos SHIPPED 2026-08-13** (ADR-0016 addendum, founder
+  ruling "just a forge adapter"): `<card>/<skill>` names serve read-only
+  from the card's ADR-0024 mirror (no second cache), fail-closed via the
+  existing gate's needed-set union, payload paths flattened so the
+  container contract is untouched, `Run.skill_repo_heads` provenance,
+  private repos via card tokens day one.
   **built**.
 - **Admin skill/prompt Markdown View** (PR #45, post-ADR-0016): skill and
   prompt View render as Markdown in the SPA. **built**.

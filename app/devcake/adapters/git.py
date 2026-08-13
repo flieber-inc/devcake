@@ -33,6 +33,9 @@ class GitResult:
     stdout: str
     stderr: str
     timed_out: bool = False
+    # verbatim stdout bytes — file-content reads (`git show`) must not ride
+    # the lossy text decode (ADR-0016 addendum: skill payloads are base64)
+    raw_stdout: bytes = b""
 
 
 async def run_git(args: list[str], *, cwd: Path | None = None,
@@ -65,4 +68,5 @@ async def run_git(args: list[str], *, cwd: Path | None = None,
                                   f"after {timeout:.0f}s", timed_out=True)
     return GitResult(proc.returncode or 0,
                      out.decode("utf-8", "replace"),
-                     err.decode("utf-8", "replace"))
+                     err.decode("utf-8", "replace"),
+                     raw_stdout=out)

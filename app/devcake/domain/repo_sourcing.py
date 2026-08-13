@@ -64,3 +64,12 @@ def blocker_read_credential(mgr, name: str):
             and (inst.token_ro or inst.token)):
         return ("configured", inst, forge, inst.token_ro or inst.token)
     return None
+
+
+def skill_source_cards(skill_names) -> set[str]:
+    """Repo cards referenced as `<card>/<skill>` in a Dev Type's skills —
+    the ADR-0016-addendum addition to the mirror gate's needed-set
+    (fail-closed, founder ruling). Deliberately NOT part of
+    sourced_repo_names: skill cards feed the runspec skills payload from
+    the mirror READ-side and are never cloned into /workspace."""
+    return {n.split("/", 1)[0] for n in (skill_names or []) if "/" in n}

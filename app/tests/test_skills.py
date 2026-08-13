@@ -29,11 +29,27 @@ def test_devtype_skills_accepts_valid_names_and_dedupes():
 
 
 @pytest.mark.parametrize("bad", [
-    "", "UPPER", "has space", "-leading-hyphen", "a" * 65, "dot.name", "sl/ash",
+    "", "UPPER", "has space", "-leading-hyphen", "a" * 65, "dot.name",
+    # external `<card>/<skill>` shape violations (ADR-0016 addendum): one
+    # slash max, prefix in repo-card shape (starts alpha, no hyphens, ≤12)
+    "a/b/c", "SL/ash", "1x/skill", "has-hyphen/skill", "toolongcardxx/skill",
+    "/ash", "sl/",
 ])
 def test_devtype_skills_rejects_bad_names(bad):
     with pytest.raises(ValueError):
         _dt(skills=[bad])
+
+
+def test_devtype_external_skill_names_and_basename_collisions():
+    """`<card>/<skill>` selects from an external repo card (ADR-0016
+    addendum). Basenames must be unique across the selection — the payload
+    flattens external paths to the basename dir."""
+    dt = _dt(skills=["sl/ash", "tdd"], skills_required=["sl/ash"])
+    assert dt.skills == ["sl/ash", "tdd"]
+    with pytest.raises(ValueError, match="share the install dir"):
+        _dt(skills=["tdd", "myrepo/tdd"])
+    with pytest.raises(ValueError, match="share the install dir"):
+        _dt(skills=["repoa/tdd", "repob/tdd"])
 
 
 def test_devtype_skills_required_subset_of_skills():
@@ -623,3 +639,126 @@ def test_payload_ships_skill_md_first_under_mid_skill_cap(tmp_path):
     assert b_entry is not None, "skill b lost its manifest to the cap"
     assert [f["path"] for f in b_entry["files"]] == ["b/SKILL.md"]
     assert any("cap" in w for w in warnings)
+
+
+# ── external skills: `<card>/<skill>` from the repo-card mirror ──────────────
+# (ADR-0016 addendum: no second cache — the ADR-0024 mirror's read-side)
+
+class _FakeMirror:
+    """RepoCache read-side stub: fixed head, one tree per (card, subdir)."""
+
+    def __init__(self, trees=None, head="abc123", files=None):
+        self.trees = trees or {}     # (card, subdir) -> {skill: {rel: size}}
+        self.head = head             # None = unreadable mirror
+        self.files = files or {}     # (card, skill, rel) -> bytes
+        self.reads: list[tuple] = []
+
+    async def tree_head(self, name):
+        return self.head
+
+    async def read_skill_tree(self, name, subdir, sha):
+        return self.trees.get((name, subdir), {})
+
+    async def read_skill_file(self, name, subdir, sha, skill, rel):
+        self.reads.append((name, skill, rel))
+        return self.files.get((name, skill, rel))
+
+
+def _ext_svc(tmp_path, *, subdir="", head="abc123"):
+    from devcake.config import AppConfig, RepoInstance
+    from devcake.domain.skills import SkillService
+    card = RepoInstance(name="myrepo", url="https://gh.example/o/skills",
+                        skills_subdir=subdir)
+    cfg = AppConfig(pmos=[], repos=[card])
+    mirror = _FakeMirror(head=head)
+    return SkillService(builtin_dir=_builtin_tree(tmp_path),
+                        repo_cache=mirror, config=cfg), mirror
+
+
+def test_payload_external_flattens_to_the_basename_dir(tmp_path):
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {"tdd": {"SKILL.md": 20, "notes.md": 10}}
+    mirror.files[("myrepo", "tdd", "SKILL.md")] = b"---\nname: tdd\n---\nEXT\n"
+    mirror.files[("myrepo", "tdd", "notes.md")] = b"notes"
+    payload, warnings = _run(svc.payload_for(["myrepo/tdd"]))
+    assert warnings == []
+    assert [s["name"] for s in payload] == ["myrepo/tdd"]
+    # paths flattened to the BASENAME dir — install_skills and harness
+    # discovery stay byte-identical to a store skill named `tdd`
+    assert {f["path"] for f in payload[0]["files"]} == {
+        "tdd/SKILL.md", "tdd/notes.md"}
+    assert _b64(payload, "myrepo/tdd", "tdd/SKILL.md").endswith(b"EXT\n")
+    # SKILL.md is read FIRST (the _collect anchor rule)
+    assert mirror.reads[0] == ("myrepo", "tdd", "SKILL.md")
+
+
+def test_payload_external_never_falls_back_to_store_or_builtin(tmp_path):
+    # builtin has `tdd`; the external namespace is DISJOINT — a missing
+    # external skill warns + skips, it never serves someone else's `tdd`
+    svc, mirror = _ext_svc(tmp_path)
+    payload, warnings = _run(svc.payload_for(["myrepo/tdd"]))
+    assert payload == []
+    assert any("no tdd/SKILL.md" in w for w in warnings)
+
+
+def test_payload_external_unconfigured_card_and_dead_mirror_warn(tmp_path):
+    svc, mirror = _ext_svc(tmp_path)
+    payload, warnings = _run(svc.payload_for(["ghost/tdd"]))
+    assert payload == [] and any("not configured" in w for w in warnings)
+    svc2, _m = _ext_svc(tmp_path / "b", head=None)
+    payload, warnings = _run(svc2.payload_for(["myrepo/tdd"]))
+    assert payload == [] and any("no readable head" in w for w in warnings)
+
+
+def test_payload_external_caps_apply_before_reading(tmp_path):
+    from devcake.domain import skills as skills_mod
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {"tdd": {
+        "SKILL.md": 20, "huge.bin": skills_mod.MAX_FILE_BYTES + 1}}
+    mirror.files[("myrepo", "tdd", "SKILL.md")] = b"---\nname: tdd\n---\n"
+    payload, warnings = _run(svc.payload_for(["myrepo/tdd"]))
+    assert {f["path"] for f in payload[0]["files"]} == {"tdd/SKILL.md"}
+    assert any("huge.bin" in w for w in warnings)
+    assert ("myrepo", "tdd", "huge.bin") not in mirror.reads
+
+
+def test_payload_external_respects_skills_subdir(tmp_path):
+    svc, mirror = _ext_svc(tmp_path, subdir="skills")
+    mirror.trees[("myrepo", "skills")] = {"tdd": {"SKILL.md": 5}}
+    mirror.files[("myrepo", "tdd", "SKILL.md")] = b"x"
+    payload, _w = _run(svc.payload_for(["myrepo/tdd"]))
+    assert [s["name"] for s in payload] == ["myrepo/tdd"]
+
+
+def test_get_skill_external_reads_the_mirror_and_stays_read_only(tmp_path):
+    from devcake.domain.skills import SkillStoreError
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {"tdd": {"SKILL.md": 30}}
+    mirror.files[("myrepo", "tdd", "SKILL.md")] = (
+        b"---\nname: tdd\ndescription: External copy\n---\nbody")
+    got = _run(svc.get_skill("myrepo/tdd"))
+    assert (got["source"], got["origin"], got["builtin"]) == (
+        "external", "myrepo", False)
+    assert got["description"] == "External copy"
+    assert [f["path"] for f in got["files"]] == ["SKILL.md"]
+    with pytest.raises(SkillStoreError) as e:
+        _run(svc.get_skill("myrepo/none"))
+    assert e.value.status == 404
+    # read-only BY CONSTRUCTION: authoring names refuse the slash
+    with pytest.raises(SkillStoreError):
+        _run(svc.delete_skill("myrepo/tdd"))
+
+
+def test_external_infos_lists_every_skill_in_referenced_cards(tmp_path):
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {
+        "tdd": {"SKILL.md": 5}, "review": {"SKILL.md": 5, "extra.md": 3}}
+    mirror.files[("myrepo", "tdd", "SKILL.md")] = (
+        b"---\ndescription: A\n---\n")
+    mirror.files[("myrepo", "review", "SKILL.md")] = (
+        b"---\ndescription: B\n---\n")
+    infos = _run(svc.external_infos(["myrepo/tdd"]))
+    assert [(i.name, i.source, i.origin, i.files) for i in infos] == [
+        ("myrepo/review", "external", "myrepo", 2),
+        ("myrepo/tdd", "external", "myrepo", 1)]
+    assert _run(svc.external_infos(["flat-name"])) == []

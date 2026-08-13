@@ -403,9 +403,16 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # ADR-0024: fail-closed mirror precondition (docs/07 §5a). NOT a run
     # failure — no container launches, no attempt burns; the reason lands on
     # the missions row via the shared gate dict and retries next cycle.
+    # ADR-0016 addendum: skill-source cards (`<card>/<skill>` in the Dev
+    # Type's skills) JOIN the same needed-set — fail-closed by founder
+    # ruling, as a set-union in the ONE gate, never a second gate. They are
+    # deliberately NOT in sourced_repo_names: skills feed the payload, they
+    # are never cloned into /workspace.
+    from ..repo_sourcing import skill_source_cards
     needed = mgr.repo_cache.needed_for(
         work_repo=repo_name, mission_type=mtype.value,
         instance=mgr.instance, blocker_entries=blocker_entries)
+    needed = sorted(set(needed) | skill_source_cards(dev_type.skills))
     ok, why = await mgr.repo_cache.ensure_fresh(needed)
     if not ok:
         mgr.blocked_reasons[live.pmo_id] = (
@@ -502,6 +509,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         )
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
+        run.skill_repo_heads = await _skill_repo_heads(mgr, dev_type)
         run.spec_prompt = append_required_skills(
             prompt, dev_type.skills_required, run.spec_skills)
         run.branch = mission_branch(mgr.instance_name, mission.key)
@@ -554,6 +562,20 @@ async def _skill_payload(mgr, dev_type: DevType) -> list[dict]:
     return payload
 
 
+async def _skill_repo_heads(mgr, dev_type: DevType) -> dict[str, str]:
+    """{card: sha} provenance stamp for `<card>/<skill>` skills (ADR-0016
+    addendum) — read at dispatch, right after the gate proved the mirrors
+    fresh. Best-effort: an unreadable head simply isn't recorded (the
+    payload warning already named it)."""
+    from ..repo_sourcing import skill_source_cards
+    heads: dict[str, str] = {}
+    for card in sorted(skill_source_cards(dev_type.skills)):
+        sha = await mgr.repo_cache.tree_head(card)
+        if sha:
+            heads[card] = sha
+    return heads
+
+
 def append_required_skills(prompt: str, skills_required: list[str],
                            shipped: list[dict]) -> str:
     """Soft-force append: instruct the Dev to consult skills that were both
@@ -566,7 +588,12 @@ def append_required_skills(prompt: str, skills_required: list[str],
     names = [n for n in skills_required if n in have]
     if not names:
         return prompt
-    lines = "\n".join(f"- `{n}`" for n in names)
+    # external `<card>/<skill>` names install under the BASENAME dir
+    # (flattened payload paths) — the instruction must name a dir that
+    # exists in the container, with the origin as provenance
+    lines = "\n".join(
+        f"- `{n.rsplit('/', 1)[-1]}` (from repo `{n.split('/', 1)[0]}`)"
+        if "/" in n else f"- `{n}`" for n in names)
     return (
         f"{prompt}\n\n### Required skills\n"
         "You must consult the following skill(s) before acting on this mission "

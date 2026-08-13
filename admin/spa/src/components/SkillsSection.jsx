@@ -349,8 +349,14 @@ export default function SkillsSection({ setPageErr }) {
                       <span className={"inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs "
                         + (s.source === "store"
                           ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
-                          : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}>
-                        {s.source === "store" ? "store" : "bundled"}
+                          : s.source === "external"
+                            ? "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
+                            : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}
+                        title={s.source === "external"
+                          ? `Served read-only from repo card '${s.origin}' (its mirror syncs before every dispatch)`
+                          : undefined}>
+                        {s.source === "store" ? "store"
+                          : s.source === "external" ? `repo: ${s.origin}` : "bundled"}
                       </span>
                     </td>
                     <td className="py-2.5 text-right">
@@ -371,20 +377,22 @@ export default function SkillsSection({ setPageErr }) {
                         </button>
                         {skillsCatalog.store?.enabled && (
                           <button type="button"
-                            disabled={s.builtin}
+                            disabled={s.builtin || s.source === "external"}
                             title={s.builtin
                               ? `${s.name} is a built-in skill — it re-seeds at boot. Deselect it on Dev Types instead of deleting.`
-                              : `Delete skill ${s.name}`}
-                            aria-label={s.builtin
-                              ? `${s.name} cannot be deleted (built-in)`
+                              : s.source === "external"
+                                ? `${s.name} is read-only — served from repo '${s.origin}'. Deselect it on Dev Types or change the repo.`
+                                : `Delete skill ${s.name}`}
+                            aria-label={s.builtin || s.source === "external"
+                              ? `${s.name} cannot be deleted (${s.builtin ? "built-in" : "external"})`
                               : `Delete skill ${s.name}`}
                             className={`rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
-                              s.builtin
+                              s.builtin || s.source === "external"
                                 ? "cursor-not-allowed text-neutral-300 dark:text-neutral-700"
                                 : "text-neutral-500 hover:text-red-600 dark:text-neutral-400 dark:hover:text-red-400"
                             }`}
                             onClick={() => {
-                              if (s.builtin) return;
+                              if (s.builtin || s.source === "external") return;
                               setConfirm({
                                 title: `Delete skill ${s.name}?`,
                                 body: "Removed from the skill store. Dev Types that "

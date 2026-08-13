@@ -46,7 +46,7 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `POST /api/v1/missions/{pmo_id}/comment` | Drawer **Send guidance** — posts a human feed comment (attempt-counter reset input, `15` §3) |
 | `GET /api/v1/prompt-templates` · `PUT/DELETE /api/v1/prompt-templates/{mission_type}/{name}` | Mission-type playbook templates; active selection rides `config.active_prompt_templates` |
 | `PUT/DELETE /api/v1/devtype-prompts/{dev_type}/{name}` | Per-Dev-Type identifying-prompt templates; active selection rides `config.active_devtype_prompts` |
-| `GET /api/v1/skills` · `GET /api/v1/skills/{name}` · `POST /api/v1/skills` · `POST /api/v1/skills/import` · `DELETE /api/v1/skills/{name}` · `POST /api/v1/skills/sync` | Skill-store catalog CRUD + View content + re-seed built-ins |
+| `GET /api/v1/skills` · `GET /api/v1/skills/{name}` · `POST /api/v1/skills` · `POST /api/v1/skills/import` · `DELETE /api/v1/skills/{name}` · `POST /api/v1/skills/sync` | Skill-store catalog CRUD + View content + re-seed built-ins. GET accepts the `<card>/<skill>` path form for external skills (ADR-0016 addendum); external rows are read-only by construction (authoring names refuse `/`); sync ALSO `ensure_fresh`es the repo cards Dev Types reference for external skills — one refresh gesture |
 | `GET /api/v1/internal-repos` · `POST /api/v1/internal-repos/create` · `DELETE /api/v1/internal-repos/{name}` | Bundled-Gitea operator repos (list / create / clear one) |
 | `POST /api/v1/dev-types/{name}/rename` | Rename a Dev Type (moves files, migrates breakers / active-prompt keys) |
 | `POST /api/v1/system/stop-runs` | Stop every dispatched/running Dev via the run manager (full per-run teardown; each counts as a failed attempt). Finalizing runs are skipped — never killed — and named in the response. Nothing is deleted |
@@ -141,7 +141,11 @@ Internal (zero-repo) missions always auto-merge; operators who want doctrine con
 selects multiple entries from a catalog/list — the PMO **repo set**,
 **reference repos**, Dev Type **skills**, and any future such field — uses
 the shared toggle-chip control
-(`admin/spa/src/components/SelectionChips.jsx`). Since the 2026-08-02
+(`admin/spa/src/components/SelectionChips.jsx`). (Stale-name nuance,
+ADR-0016 addendum: an unknown flat skill name is SKIPPED at dispatch with
+a warning, but an unknown `<card>/` prefix GATES dispatch — a torn-out
+skill-source card is the supply-chain failure the fail-closed mirror union
+exists for.) Since the 2026-08-02
 bulk-scale rework: **selected chips render first, in selection order**
 (the order is load-bearing where a `firstBadge` marks it — the repo set's
 first entry is the default routing target, and every non-first selected
@@ -189,7 +193,7 @@ Card list + editor (the harness combobox is **authoritative**, `08-harness-templ
 - **Skills**: **tri-state chips** from the skill-store catalog (`SkillModeChips` — click-cycle: off → **Available** → **Required** → off). **Available** installs the skill (consult-optional; model description-match). **Required** installs it and soft-forces a “must consult” prompt append (`DevType.skills_required` ⊂ `skills` — instructional, not kernel-enforced). Enabled whenever the selected harness declares a `skills_dir` in the registry (all three current harnesses do — `08-harness-templates.md` §7a); a harness without one renders the chips disabled with a hint and dispatch skips with a warning. A selected-but-missing skill renders as the standard red ✕ stale chip and is skipped at dispatch with a warning. Skills are domain modules, not mission scripts (**ADR-0016**, `app/devcake/skills/README.md`).
 
 ### Skills (anchor `#/config/skills`)
-The skill-store catalog: name / description / source badge (`store` = served from the `devcake-repos/skill-store` repo on the bundled Gitea; `bundled` = fallback copies shipped in the app image, used when the internal forge is disabled or unreachable). Per-row **View** opens a read-only dialog of the skill files (`GET /api/v1/skills/{name}` — store-first, bundled fallback; multi-file skills show file tabs) with **Rendered** Markdown (reading aid; leading YAML frontmatter stripped on `.md` files) and **Source** (stored file bytes). Placeholders are not substituted. Header actions: **Add skill**, **Edit in Gitea →** (store repo, operators push skills straight to `main`) and **Re-seed built-ins** (`POST /api/v1/skills/sync` — restores missing built-in files, never overwrites edits). Skill content is operator-controlled instructions injected into the agent session — same trust class as the MCP command area.
+The skill-store catalog: name / description / source badge (`store` = served from the `devcake-repos/skill-store` repo on the bundled Gitea; `bundled` = fallback copies shipped in the app image, used when the internal forge is disabled or unreachable; `repo: <card>` = **external** skills served read-only from a configured repo card's mirror — ADR-0016 addendum: rows appear for every card some Dev Type references as `<card>/<skill>`, Delete is disabled with the origin named, and the card's `skills_subdir` field on the Repositories page says where the `<skill>/SKILL.md` dirs live). Per-row **View** opens a read-only dialog of the skill files (`GET /api/v1/skills/{name}` — store-first, bundled fallback; multi-file skills show file tabs) with **Rendered** Markdown (reading aid; leading YAML frontmatter stripped on `.md` files) and **Source** (stored file bytes). Placeholders are not substituted. Header actions: **Add skill**, **Edit in Gitea →** (store repo, operators push skills straight to `main`) and **Re-seed built-ins** (`POST /api/v1/skills/sync` — restores missing built-in files, never overwrites edits). Skill content is operator-controlled instructions injected into the agent session — same trust class as the MCP command area.
 
 **Add skill** (no Gitea, no YAML — the non-technical path) opens a dialog with two modes:
 - **Write** — name + "when should the agent use it?" (the trigger description) + a markdown instructions box. The app *generates* the frontmatter and commits `<name>/SKILL.md` to the store (`POST /api/v1/skills`).

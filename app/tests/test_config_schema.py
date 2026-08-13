@@ -737,3 +737,20 @@ def test_container_limits_defaults_bounds_and_round_trip():
         AppConfig.model_validate(
             {**_base(), "container_limits": {"memory_mb": -1}})
     assert AppConfig.model_validate(cfg.model_dump()).container_limits == cl
+
+
+def test_repo_skills_subdir_round_trip_and_validation():
+    """ADR-0016 addendum: repo cards may serve `<card>/<skill>` skills from
+    a subdir; relative-only, `..` refused, additive with a safe default."""
+    from devcake.config import RepoInstance
+    r = RepoInstance(name="main", url="https://github.com/o/r",
+                     skills_subdir="skills/")
+    assert r.skills_subdir == "skills"          # normalized, no slashes
+    assert RepoInstance(name="main", url="https://github.com/o/r"
+                        ).skills_subdir == ""
+    with pytest.raises(Exception):
+        RepoInstance(name="main", url="https://github.com/o/r",
+                     skills_subdir="../escape")
+    cfg = AppConfig(pmos=[], repos=[r])
+    assert AppConfig.model_validate(cfg.model_dump()).repos[0] \
+        .skills_subdir == "skills"

@@ -44,6 +44,11 @@ the SAME volume `devcake_mirrors:/mirrors:ro` (measured on Dagu 2.10.5,
 2.11.3 AND 2.13.0 — the 2026-08-13 drill re-inspected a live provision
 container: `/mirrors=RW:false`, `:ro` kernel-enforced, named volumes
 resolve — this amends `13-deployment.md`'s old "no volumes needed" note).
+2026-08-13 rider (ADR-0016 addendum): the mirror gained a second read-side
+consumer — external `<card>/<skill>` skills are served from the bare
+mirror via app-side git plumbing (`tree_head`/`read_skill_tree`/
+`read_skill_file`), and skill-source cards join the dispatch gate's
+needed-set; the mirror contract itself is unchanged.
 
 ### 2 — Sync is a fail-closed dispatch precondition
 

@@ -27,4 +27,5 @@ export const newRepoCard = (name) => ({
   auto_merge: false,
   auto_resolve_merge_conflicts: true,
   merge_retry_window_minutes: 30,
+  skills_subdir: "",
 });

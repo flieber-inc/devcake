@@ -211,14 +211,17 @@ def build_services() -> Services:
     internal_forge = (make_internal_forge()
                       if os.environ.get("GITEA_ADMIN_PASSWORD") else None)
     # skill store (docs/16 skill store v1): store-first reads via the
-    # internal forge; bundled copies keep built-in skills working forge-less
+    # internal forge; bundled copies keep built-in skills working forge-less;
+    # `<card>/<skill>` external skills read the ADR-0024 mirror (ADR-0016
+    # addendum) — same shared config identity, no second cache
     s = Services(
         config=config, dev_types=dev_types, store=store, runlog=runlog,
         messaging=messaging, executor=executor, workspaces=workspaces,
         manager=manager, shared_breakers={}, shared_backend_degraded={},
         managers={}, stewards={}, forge_runtime=forge_runtime,
         repo_cache=repo_cache, internal_forge=internal_forge,
-        skill_service=SkillService(internal_forge))
+        skill_service=SkillService(internal_forge, repo_cache=repo_cache,
+                                   config=config))
 
     # The poll machinery (ownership claims, cycle driver, missions cache,
     # loop) lives in api/poll.py — constructed ONCE with live references and

@@ -161,6 +161,7 @@ export function metaFor(path) {
         label: "Auto-resolve merge conflicts", format: onOff,
       },
       merge_retry_window_minutes: { label: "Merge retry window (min)" },
+      skills_subdir: { label: "Skills subdir" },
     };
     const f = FIELDS[m[2]] || { label: m[2] };
     return {

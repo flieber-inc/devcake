@@ -232,7 +232,10 @@ Mechanics: commands run before harness launch as uid 1000 with stdin closed, a 3
 Skill-store skills (`02-domain-model.md` `DevType.skills` / `skills_required`)
 are materialized by the entrypoint before harness launch into the harness's
 **registry-declared skills directory** (`harness.py` `skills_dir`, snapshotted
-onto the Run at dispatch and delivered as the runspec `skills_dir` key). All
+onto the Run at dispatch and delivered as the runspec `skills_dir` key).
+External `<card>/<skill>` skills (ADR-0016 addendum) ride the SAME runspec
+field with payload paths flattened to the basename dir — the container
+contract and every read-set below are untouched by the source. All
 three CLIs read the same `SKILL.md` format; the verified read-set per pinned
 or observed CLI:
 

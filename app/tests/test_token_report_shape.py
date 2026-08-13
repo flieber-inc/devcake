@@ -175,6 +175,9 @@ RUN_BLOB_COLUMNS = {
     "steward_batches",
     # ADR-0031 — {entry_id, ts} reading receipt; a two-key JSON column
     "feed_watermark",
+    # ADR-0016 addendum — {card: sha} supply-chain provenance for external
+    # `<card>/<skill>` skills consumed by this run; deliberate widening
+    "skill_repo_heads",
 }
 
 _SCALAR_TYPES = (str, int, float, bool)

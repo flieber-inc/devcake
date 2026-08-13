@@ -536,3 +536,81 @@ def test_null_repo_cache_is_always_fresh_and_never_mirrors():
     assert null.needed_for(work_repo="x", mission_type="EXECUTE",
                            instance=None, blocker_entries=[]) == []
     assert null.health_map() == {} and null.volume_error is None
+
+
+# ── skill-source cards join the gate's needed-set (ADR-0016 addendum) ────────
+
+class RecordingGrantingCache(GrantingCache):
+    def __init__(self):
+        super().__init__()
+        self.asked: list[list[str]] = []
+        self.heads: dict[str, str] = {"skillrepo": "cafe1234"}
+
+    async def ensure_fresh(self, names):
+        self.asked.append(sorted(names))
+        return True, {}
+
+    async def tree_head(self, name):
+        return self.heads.get(name)
+
+
+def test_skill_source_cards_is_gate_only_never_sourcing():
+    from devcake.domain.repo_sourcing import (skill_source_cards,
+                                              sourced_repo_names)
+    assert skill_source_cards(["skillrepo/tdd", "flat", "other/x"]) == {
+        "skillrepo", "other"}
+    assert skill_source_cards([]) == set()
+    # the ONE sourcing rule must NOT grow a skills arm — skill cards are
+    # payload-served, never cloned into /workspace
+    import inspect
+    assert "skill" not in inspect.getsource(sourced_repo_names)
+
+
+def test_dispatch_gate_unions_skill_cards_and_stamps_heads(tmp_path):
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.domain.model import MissionType
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, FakeInternalForge())
+    cache = RecordingGrantingCache()
+    mgr.repo_cache = cache
+    dt = mgr.dev_types["senior-dev"]
+    dt.skills = ["skillrepo/tdd"]
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE, dt))
+    assert run is not None
+    assert any("skillrepo" in asked for asked in cache.asked)
+    assert "skillrepo" in run.mirror_repos          # truthful gate snapshot
+    assert run.skill_repo_heads == {"skillrepo": "cafe1234"}
+
+
+def test_dispatch_defers_when_a_skill_card_is_stale(tmp_path):
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.domain.model import MissionType
+
+    class SkillStale(GrantingCache):
+        async def ensure_fresh(self, names):
+            bad = {n: "unknown card" for n in names if n == "ghost"}
+            return (not bad), bad
+
+    forge = FakeInternalForge()
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, forge)
+    mgr.repo_cache = SkillStale()
+    dt = mgr.dev_types["senior-dev"]
+    dt.skills = ["ghost/tdd"]
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE, dt))
+    assert run is None and launched == [] and forge.pushes == []
+    assert "ghost" in mgr.blocked_reasons[m.pmo_id]
+
+
+def test_dispatch_without_external_skills_asks_for_no_cards(tmp_path):
+    from test_activity_repos import _dispatch_setup
+    from fakes import FakeInternalForge
+    from devcake.domain.model import MissionType
+    mgr, fake, m, launched = _dispatch_setup(tmp_path, FakeInternalForge())
+    cache = RecordingGrantingCache()
+    mgr.repo_cache = cache
+    run = run_coro(mgr.dispatch(m, MissionType.EXECUTE,
+                                mgr.dev_types["senior-dev"]))
+    assert run is not None
+    assert all("skillrepo" not in asked for asked in cache.asked)
+    assert run.skill_repo_heads == {}

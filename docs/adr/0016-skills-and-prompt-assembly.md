@@ -166,6 +166,58 @@ manuals.
   domain-only content, additivity, zero-skills, and soft-force honesty — or
   amend this ADR.
 
+## Addendum — external skill repos (2026-08-13, founder rulings)
+
+The ops-quartet campaign adds a THIRD skill source: **external git
+repositories, as configured repo cards** — the founder's ruling collapsed an
+earlier dedicated-machinery design onto existing pipes ("they should
+essentially work just like a forge adapter — and could just be one").
+
+1. **Source = a `RepoInstance` card.** A Dev Type selects an external skill
+   as `<card>/<skill>` (one slash; prefix in card shape — `SKILL_NAME_RE`
+   stays slash-free, so the store/builtin and external namespaces are
+   STRUCTURALLY disjoint: no precedence rules exist anywhere). The card's
+   optional `skills_subdir` names where `<skill>/SKILL.md` dirs live.
+   Credentials, URL validation, branch (`default_branch`, moving — founder
+   ruling), health, alerts and the SPA card UI are all inherited. Private
+   repos work day one via the card's tokens (token_ro preferred).
+2. **Cache = the ADR-0024 mirror, read-side.** No second cache, no
+   checkout, no new volume: `RepoCache` gains `tree_head` /
+   `read_skill_tree` / `read_skill_file` (git plumbing over the bare
+   mirror; reads pin a sha first, so a concurrent fetch cannot tear them).
+   Supply-chain guards live at that seam: only blob modes 100644/100755
+   (symlink entries skipped), only dir names matching the skill regex, and
+   the payload caps run against `ls-tree -l` sizes BEFORE content reads.
+   `adapters/git.GitResult` gains `raw_stdout` (verbatim bytes) so file
+   content never rides the lossy text decode.
+3. **Fail-closed sync (founder ruling), as a set-union in the EXISTING
+   ADR-0024 gate.** Skill-source cards join `needed_for`'s result before
+   the ONE `ensure_fresh` call (`repo_sourcing.skill_source_cards` — a
+   deliberately separate function: skill cards are NEVER part of
+   `sourced_repo_names`, they feed the runspec payload and are not cloned
+   into /workspace). An unconfigured prefix or internal-forge card fails
+   the sync with a named reason and defers dispatch. The same union guards
+   the three StewardService gates. **Scoping of Decision 3:** the
+   fail-closed boundary is the SYNC GATE; payload READS stay additive — a
+   read failure after a passed gate warns and drops the skill, never
+   refuses the run. Zero-skills is intact (no external names ⇒ the union
+   is empty ⇒ byte-identical behavior).
+4. **Payload flattening keeps the container contract untouched.** An
+   external skill `myrepo/tdd` ships payload paths under the BASENAME dir
+   (`tdd/…`), so `install_skills` and every harness's discovery rule work
+   unchanged — `images/common/*` is deliberately untouched. A per-Dev-Type
+   basename-uniqueness validator refuses selections that would fight over
+   one install dir. The Required-skills prompt append names the basename
+   with its origin.
+5. **Provenance:** `Run.skill_repo_heads` records {card: sha} consumed at
+   dispatch (docs/14 trust-class: the operator owns WHICH repo and its
+   credentials; upstream owns the moving content; the app records the
+   consumed commit per run).
+6. **Read-only by construction:** authoring names refuse `/` (save/delete),
+   the admin catalog tags external rows with their origin and disables
+   Delete; `GET /skills/{name}` accepts the path form. `/skills/sync` also
+   `ensure_fresh`es referenced cards — one refresh gesture.
+
 ## Related
 
 - `app/devcake/skills/README.md` — operator/author contract

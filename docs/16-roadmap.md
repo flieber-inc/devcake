@@ -562,12 +562,26 @@ until that run exists, field evidence below stays operator-self-reported.
   marker is on the feed; family clones unpack `resolve_repo`'s
   `(name, reason)` tuple on the kick path; both steward flavors share one
   lock; intake pause gates the harvest kick; `scan_source` is `full=True`
-  and fail-closed on truncation. **Not yet graduated**: per
-  the living-log criteria the feature may not join field-evidence claims
-  until the live multi-mission family smoke passes (one mission's discovery
-  reaching a sibling's MISSION.md and tripping an in-flight recipient's
-  freshness re-review) — owed after the stack redeploys onto this code
-  (R9; `#140` already changed the entrypoint).
+  and fail-closed on truncation. **GRADUATED 2026-08-13** — the live
+  multi-mission family smoke PASSED on the dev stack (R9-redeployed the
+  same day, images+app lockstep): family `board:missions#1←(#2,#3)` on the
+  managed zero-repo board, all-grok staffing. Receipts, end to end: #3's
+  ONBOARD discovery harvested (`DISCOVERY_3.md` attached,
+  `devcake:discovery:v1 step=3 n=1` marker, gate label added); the
+  event-kicked discovery steward routed it (`stewarded`, receipt
+  `devcake:discovery-routed:v1 step=3 to=…#2`, gate label retired);
+  the delivery (`devcake:discovery-in:v1 src=…#3 step=3`) landed on #2
+  MID-REVIEW → **freshness re-review 1/5 withheld the approve** and the
+  re-review dispatched; #3's later steps re-harvested (steps 4–5), wave 2
+  tripped **2/5**, wave 3 converged with a clean approve — the counting
+  budget arithmetic and `(source, step)` dedup behaved exactly as
+  specified, no runaway. The re-review runs' MISSION.md carried the
+  advisory block ("leads, not truths…") with per-batch provenance —
+  durable in the activity repo. Both missions completed; whole smoke
+  ≈ $0.25 effective / 1.9M tokens. Two incidental finds, both fixed
+  same-day: the zero-repo family gate wedge (#147, verified live BY this
+  smoke) and stale per-dev-type grok credential copies (device-bound —
+  heal via the OAuth device flow, never file copies).
 
 - **Skeptical-audit intervention campaign** (ADR-0034 + 18 PRs #119–#136,
   2026-08-12): a seven-reviewer skeptical audit at `ccc6da9` found the

@@ -332,6 +332,17 @@ def test_csv_neutralizes_formula_cells_but_not_numbers(tmp_path):
     assert row["cost_usd"] == "0.1234"                       # numbers stay raw
 
 
+def test_csv_cell_neutralizes_every_cwe1236_lead_in():
+    """Audit find: the first cut guarded only =/+/-/@ — Excel and Sheets
+    also strip a leading TAB/CR/space before evaluating what follows."""
+    from devcake.api.runs_service import _csv_cell
+    for lead in ("=", "+", "-", "@", "\t", "\r", " "):
+        cell = lead + 'HYPERLINK("http://evil")'
+        assert _csv_cell(cell) == "'" + cell, repr(lead)
+    assert _csv_cell(-3.5) == -3.5           # negative numbers stay numeric
+    assert _csv_cell("claude-fable-5") == "claude-fable-5"   # benign strings
+
+
 def test_csv_sort_orders_the_whole_set_and_leaks_nothing(tmp_path):
     store = _store(tmp_path, [_run(1, tr=CLAUDE_TR), _run(2, tr=GROK_TR)])
     resp = runs_csv_response(store, CostInputs(), sort="cost",

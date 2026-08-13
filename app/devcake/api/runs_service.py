@@ -291,15 +291,16 @@ _CSV_COLUMNS = ("run_id", "pmo_ref", "mission_key", "mission_type", "dev_type",
 
 
 def _csv_cell(v):
-    """Spreadsheet-faithful cell. Strings leading with =/+/-/@ get a `'`
-    prefix — error text and model ids are attacker-influenced, and csv
-    quoting alone does not stop Excel/Sheets from executing a formula cell.
+    """Spreadsheet-faithful cell. Strings leading with any CWE-1236 lead-in
+    (=/+/-/@, plus TAB/CR/space which Excel and Sheets strip before
+    evaluating what follows) get a `'` prefix — error text and model ids are
+    attacker-influenced, and csv quoting alone does not stop a formula cell.
     The isinstance(str) guard keeps negative numbers numeric."""
     if v is None:
         return ""
     if isinstance(v, datetime):
         return v.isoformat()
-    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@"):
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r", " "):
         return "'" + v
     return v
 

@@ -39,6 +39,7 @@ export async function getText(path) {
 export async function download(path, body, method = "POST") {
   const r = await fetch(`/api/v1${path}`, method === "GET" ? {
     method: "GET",
+    cache: "no-store",
     headers: { "X-DevCake-Request": "1" },
   } : {
     method,

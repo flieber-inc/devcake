@@ -331,7 +331,7 @@ export default function RunsPage() {
             <MoreMenu label="More run actions" items={[
               { label: "Export to CSV…",
                 desc: "Downloads the filtered set as a spreadsheet — every matching run, not just this page.",
-                onClick: () => { download(`/runs.csv?${filterQuery().slice(1)}`, null, "GET").catch(() => {}); } },
+                onClick: () => { download(`/runs.csv?${filterQuery().slice(1)}`, null, "GET").catch((e) => setStopErr(String(e.message || e))); } },
               { label: "Cost inputs…",
                 desc: "Per-model rates behind estimated costs. Changes apply immediately.",
                 onClick: () => setCostOpen(true) },

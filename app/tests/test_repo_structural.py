@@ -123,3 +123,36 @@ def test_structural_mounts_are_enforced_not_optional():
     """Belt for the belt: both mounted files must exist — if a runner drops a
     mount, every test above must fail loudly rather than skip silently."""
     assert DAG.exists() and DOCKERFILE.exists()
+
+
+def test_both_steps_carry_the_nested_engine_knobs():
+    """ADR-0023 addendum (founder go 2026-08-13): rootless podman rides a
+    CUSTOM seccomp profile — Docker's default plus ONE allow rule for the
+    userns/mount syscall set — inline in the DAG (the Docker API takes
+    profile CONTENT; only the docker CLI reads files). NOT unconfined: this
+    pin json-parses the blob and asserts the rule, so a lazy
+    'seccomp=unconfined' can never slip in. /dev/fuse rides the nested
+    Resources block (embedded-struct decode, dagucloud/dagu#2557) as the
+    fuse-overlayfs fallback for kernels <5.13."""
+    import json
+    steps = _steps()
+    blobs = set()
+    for sid in ("provision", "run_dev"):
+        host = steps[sid]["with"]["host"]
+        so = host["SecurityOpt"]
+        assert len(so) == 1 and so[0].startswith("seccomp={"), \
+            "nested-engine seccomp must be an inline profile, never unconfined"
+        blobs.add(so[0])
+        prof = json.loads(so[0][len("seccomp="):])
+        assert prof["defaultAction"] != "SCMP_ACT_ALLOW"
+        assert any(set(r.get("names", [])) >= {
+            "clone", "unshare", "setns", "mount", "umount2", "pivot_root",
+            "sethostname"}
+            for r in prof["syscalls"]), "the nested-engine allow rule is gone"
+        devs = host["resources"]["Devices"]
+        assert {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse",
+                "CgroupPermissions": "rwm"} in devs
+        assert {"PathOnHost": "/dev/net/tun",
+                "PathInContainer": "/dev/net/tun",
+                "CgroupPermissions": "rwm"} in devs   # pasta tap networking
+    assert len(blobs) == 1               # anchor+alias: ONE profile, two steps

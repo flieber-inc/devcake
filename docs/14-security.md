@@ -322,6 +322,13 @@ Not claimed:
 
 - Multi-tenant isolation between hostile customers.
 - Egress allowlists (optional future ops hardening, §11).
+- Nested containers (rootless podman, ADR-0023 addendum 2026-08-13): Devs
+  run a container engine INSIDE their own container — no socket, no
+  privilege; the recorded cost is the dev-run seccomp profile widening
+  Docker's default by ONE 15-syscall allow rule (userns/mount set — inline
+  in the DAG, structurally pinned as never-unconfined). Kernel attack
+  surface grows by exactly those syscalls; accepted (single-operator,
+  dedicated host, Devs already non-sandbox §6).
 - ~~Docker HostConfig CPU/memory/PID limits on the Dev container~~ —
   **DELIVERED 2026-08-13**: kernel cgroup limits ride every Dev container via
   `AppConfig.container_limits` → dev-run docker-executor `host:` (the old

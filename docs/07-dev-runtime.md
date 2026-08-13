@@ -310,8 +310,15 @@ open-ended and runtime `apt` rightly does not exist (no root):
   document/spreadsheet floor: pandoc, poppler-utils, pandas + openpyxl in
   the system Python.
 
-Deliberately absent: sudo, docker CLI, databases/services, cloud/vendor
-CLIs, media tooling (`adr/0023` records the rationale for each). The long
+Deliberately absent: sudo, databases/services, cloud/vendor CLIs, media
+tooling (`adr/0023` records the rationale for each). The container engine
+JOINED the floor 2026-08-13 (`adr/0023` addendum): **rootless podman**
+(`docker` = compat symlink) runs nested containers inside the Dev's own
+namespaces — no `docker.sock`, no privilege, sandbox intact; enabled by the
+dev-run DAG's custom seccomp profile (default + one 15-syscall rule, never
+unconfined) + /dev/fuse + /dev/net/tun. Nested storage lives under $HOME →
+per-run ephemeral; the container's cgroup limits bound the nested engine
+too. The long
 tail is per-Dev-Type via `mcp_setup_commands` or runtime user-space
 installs. The base build ends with a smoke RUN **as uid 1000** proving the
 floor (headless shell launches, imports resolve, binaries exist) — CI's

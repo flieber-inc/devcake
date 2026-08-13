@@ -11,6 +11,12 @@ checklist before first real EXECUTE: `14-security.md` §9.
 
 Bake builds images; Compose runs the stack only (never builds `devcake/*`).
 
+**Nested-engine host prerequisites** (ADR-0023 addendum — rootless podman in
+Dev containers): unprivileged user namespaces enabled on the host kernel
+(default on modern distros; measured working on WSL2 6.6), and kernel ≥5.13
+recommended (native rootless overlay — older kernels fall back to
+fuse-overlayfs via the DAG's /dev/fuse device).
+
 ## 1. Service names, volumes, network (normative — these are DNS names other docs reference)
 
 - Services: `app`, `dagu`, `redis`, `openobserve`, `admin`, `otel-collector`,

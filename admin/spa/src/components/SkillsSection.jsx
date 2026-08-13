@@ -350,7 +350,7 @@ export default function SkillsSection({ setPageErr }) {
                         + (s.source === "store"
                           ? "bg-stone-100 text-stone-700 dark:bg-neutral-800 dark:text-neutral-300"
                           : s.source === "external"
-                            ? "bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
+                            ? "bg-accent-50 text-accent-800 dark:bg-accent-950/70 dark:text-accent-200"
                             : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}
                         title={s.source === "external"
                           ? `Served read-only from repo card '${s.origin}' (its mirror syncs before every dispatch)`

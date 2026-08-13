@@ -31,6 +31,12 @@ log = logging.getLogger("devcake.skills")
 BUILTIN_DIR = Path(__file__).parents[1] / "skills"      # app/devcake/skills/
 MAX_FILE_BYTES = 200 * 1024    # oversized supporting file → skipped + warning
 MAX_TOTAL_BYTES = 1024 * 1024  # per-run payload cap → later files dropped
+
+
+def _over_file_cap(size) -> bool:
+    """THE per-file cap comparison — the payload pipe (`_collect`) and the
+    catalog's SKILL.md reads share it, so no second cap arithmetic exists."""
+    return int(size) > MAX_FILE_BYTES
 # One poll interval: dispatches within a sweep share one store read instead
 # of re-fetching per mission. Operator edits reach new runs within ~TTL.
 CACHE_TTL_SECONDS = 30.0
@@ -259,32 +265,28 @@ class SkillService:
         if not (re.fullmatch(r"[a-z][a-z0-9]{0,11}", card)
                 and re.fullmatch(SKILL_NAME_RE, skill)):
             raise SkillStoreError(422, f"invalid skill name {name!r}")
-        inst = self._card(card)
-        if inst is None or self.repo_cache is None:
+        if self._card(card) is None or self.repo_cache is None:
             raise SkillStoreError(404, f"repo card {card!r} not configured")
-        sha = await self.repo_cache.tree_head(card)
-        if sha is None:
+        # ONE capped read path (audit 2026-08-13: the first cut re-read every
+        # blob here UNCAPPED — a large third-party file on default_branch
+        # could OOM the shared app, the exact class the store forbids). The
+        # dispatch pipe's `_collect_external` does sha-pin + sizes-before-
+        # fetch + MAX_FILE_BYTES/MAX_TOTAL_BYTES; the View only decodes and
+        # strips the basename-dir prefix. Skipped files surface as warnings.
+        entry, _used, warns = await self._collect_external(name, 0)
+        if not entry:
             raise SkillStoreError(
-                404, f"mirror for {card!r} has no readable head — has it "
-                     f"synced yet?")
-        tree = await self.repo_cache.read_skill_tree(
-            card, inst.skills_subdir, sha)
-        rels = tree.get(skill)
-        if not rels:
-            raise SkillStoreError(404, f"skill {name!r} not found")
-        files = []
-        for rel in sorted(rels, key=lambda r: (r != "SKILL.md", r)):
-            data = await self.repo_cache.read_skill_file(
-                card, inst.skills_subdir, sha, skill, rel)
-            files.append({"path": rel,
-                          "content": (data or b"").decode("utf-8",
-                                                          errors="replace")})
-        skill_md = next(f["content"] for f in files if f["path"] == "SKILL.md")
+                404, warns[0] if warns else f"skill {name!r} not found")
+        files = [{"path": e["path"].partition("/")[2],
+                  "content": base64.b64decode(e["content_b64"]).decode(
+                      "utf-8", errors="replace")} for e in entry]
+        skill_md = next((f["content"] for f in files
+                         if f["path"] == "SKILL.md"), "")
         return {"name": name,
                 "description": str(
                     parse_frontmatter(skill_md).get("description", "")),
                 "source": "external", "builtin": False, "origin": card,
-                "files": files}
+                "warnings": warns, "files": files}
 
     async def external_infos(self, referenced: list[str]) -> list[SkillInfo]:
         """Catalog rows for the repo cards that Dev Types reference via
@@ -305,6 +307,18 @@ class SkillService:
                 tree = await self.repo_cache.read_skill_tree(
                     card, inst.skills_subdir, sha)
                 for skill, rels in sorted(tree.items()):
+                    # size gate BEFORE the read (audit 2026-08-13): the
+                    # catalog renders every referenced card — an oversized
+                    # third-party SKILL.md must not be pulled into memory
+                    if _over_file_cap(rels.get("SKILL.md", 0)):
+                        out.append(SkillInfo(
+                            name=f"{card}/{skill}",
+                            description=f"(SKILL.md exceeds the "
+                                        f"{MAX_FILE_BYTES}-byte cap — "
+                                        f"not read)",
+                            source="external", files=len(rels),
+                            builtin=False, origin=card))
+                        continue
                     md = await self.repo_cache.read_skill_file(
                         card, inst.skills_subdir, sha, skill, "SKILL.md")
                     desc = str(parse_frontmatter(
@@ -579,7 +593,7 @@ class SkillService:
         anchor = f"{name}/SKILL.md"
         sized = sorted(sized, key=lambda ps: (ps[0] != anchor, ps[0]))
         for path, size in sized:
-            if size > MAX_FILE_BYTES:
+            if _over_file_cap(size):
                 warns.append(f"skill {name!r}: {path} exceeds "
                              f"{MAX_FILE_BYTES} bytes — skipped")
                 continue

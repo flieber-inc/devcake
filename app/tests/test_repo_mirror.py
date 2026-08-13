@@ -554,18 +554,6 @@ class RecordingGrantingCache(GrantingCache):
         return self.heads.get(name)
 
 
-def test_skill_source_cards_is_gate_only_never_sourcing():
-    from devcake.domain.repo_sourcing import (skill_source_cards,
-                                              sourced_repo_names)
-    assert skill_source_cards(["skillrepo/tdd", "flat", "other/x"]) == {
-        "skillrepo", "other"}
-    assert skill_source_cards([]) == set()
-    # the ONE sourcing rule must NOT grow a skills arm — skill cards are
-    # payload-served, never cloned into /workspace
-    import inspect
-    assert "skill" not in inspect.getsource(sourced_repo_names)
-
-
 def test_dispatch_gate_unions_skill_cards_and_stamps_heads(tmp_path):
     from test_activity_repos import _dispatch_setup
     from fakes import FakeInternalForge

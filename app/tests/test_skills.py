@@ -762,3 +762,35 @@ def test_external_infos_lists_every_skill_in_referenced_cards(tmp_path):
         ("myrepo/review", "external", "myrepo", 2),
         ("myrepo/tdd", "external", "myrepo", 1)]
     assert _run(svc.external_infos(["flat-name"])) == []
+
+
+def test_get_skill_external_caps_ride_the_one_collect_pipe(tmp_path):
+    """Audit 2026-08-13: the admin View read every third-party blob with no
+    size check — the OOM class the skills module forbids for the store. The
+    View now rides `_collect_external`, so an oversized blob is never
+    fetched and the omission surfaces as a warning."""
+    from devcake.domain import skills as skills_mod
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {"tdd": {
+        "SKILL.md": 30, "huge.bin": skills_mod.MAX_FILE_BYTES + 1}}
+    mirror.files[("myrepo", "tdd", "SKILL.md")] = (
+        b"---\nname: tdd\ndescription: D\n---\nbody")
+    got = _run(svc.get_skill("myrepo/tdd"))
+    assert [f["path"] for f in got["files"]] == ["SKILL.md"]
+    assert any("huge.bin" in w for w in got["warnings"])
+    assert ("myrepo", "tdd", "huge.bin") not in mirror.reads
+
+
+def test_external_infos_skips_oversized_manifests_without_reading(tmp_path):
+    """Same audit class for the catalog: an oversized SKILL.md on a
+    referenced card gets a placeholder description, never a fetch."""
+    from devcake.domain import skills as skills_mod
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {
+        "big": {"SKILL.md": skills_mod.MAX_FILE_BYTES + 1},
+        "ok": {"SKILL.md": 5}}
+    mirror.files[("myrepo", "ok", "SKILL.md")] = b"---\ndescription: A\n---\n"
+    infos = _run(svc.external_infos(["myrepo/ok"]))
+    assert [(i.name, i.description.startswith("(SKILL.md exceeds"))
+            for i in infos] == [("myrepo/big", True), ("myrepo/ok", False)]
+    assert ("myrepo", "big", "SKILL.md") not in mirror.reads

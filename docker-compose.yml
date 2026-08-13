@@ -85,6 +85,13 @@ services:
       # must be host-absolute (up.sh derives it; `:?` fails loud, because an
       # EMPTY expansion would silently bind-mount junk at the host root)
       - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}
+      # 2.13 compat (measured at the 2026-08-13 drill): the 2.12 wiki/
+      # documents store defaults to <dags_dir>/wiki and crash-loops the
+      # server against our deliberately-RO dags bind (docs/14 §5 — trusted
+      # launch code stays RO). No disable knob exists; point it at the
+      # writable state volume instead. The feature stays unused (all
+      # business logic in the app; the DAG is a dumb launcher, docs/13 §4).
+      - DAGU_WIKI_DIR=/var/lib/dagu/wiki
     # Stock /entrypoint.sh only runs /etc/custom-init.d/* when the file is +x.
     # The bind is :ro, so a non-executable host file is a silent skip → alpine
     # `addgroup` fails on this ubuntu image → `sudo: unknown group #$DOCKER_GID`

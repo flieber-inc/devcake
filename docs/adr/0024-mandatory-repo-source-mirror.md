@@ -40,8 +40,9 @@ volume); the app image gained `git`+`git-lfs`, its first and only
 subprocess seam (`adapters/git.py`: minimal env, 900 s timeout, never
 raises). Storage: compose named volume `mirrors: {}` → real name
 `devcake_mirrors`; app mounts it rw at `/mirrors`; `dev-run.yaml` mounts
-the SAME volume `devcake_mirrors:/mirrors:ro` (measured on Dagu 2.10.5
-AND 2.11.3: `volumes:` accepted, `:ro` kernel-enforced, named volumes
+the SAME volume `devcake_mirrors:/mirrors:ro` (measured on Dagu 2.10.5,
+2.11.3 AND 2.13.0 — the 2026-08-13 drill re-inspected a live provision
+container: `/mirrors=RW:false`, `:ro` kernel-enforced, named volumes
 resolve — this amends `13-deployment.md`'s old "no volumes needed" note).
 
 ### 2 — Sync is a fail-closed dispatch precondition

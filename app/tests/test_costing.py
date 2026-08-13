@@ -77,7 +77,7 @@ def test_null_cache_write_prices_as_zero_not_blocking():
 
 def test_unmapped_model_means_no_estimate():
     assert costing.estimate_cost_usd(
-        _grok_report(model="claude-opus-5"), GROK_45) is None
+        _grok_report(model="gemini-3-pro"), GROK_45) is None
     assert costing.estimate_cost_usd(_grok_report(model=None), GROK_45) is None
 
 

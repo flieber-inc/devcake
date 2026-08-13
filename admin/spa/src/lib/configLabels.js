@@ -164,13 +164,15 @@ export function metaFor(path) {
       label: `Repo #${+m[1] + 1} · ${f.label}`,
     };
   }
-  m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base|intake_paused|managed)$/);
+  m = path.match(/^cfg\.pmos\.(\d+)\.(name|system|team_key|api_base|intake_paused|discovery_routing|managed)$/);
   if (m) {
     const FIELDS = { name: "Instance name", system: "System",
                      team_key: "Team key", api_base: "API base",
                      intake_paused: "Intake paused",
+                     discovery_routing: "Discovery routing",
                      managed: "Managed (default board)" };
-    const bool = m[2] === "intake_paused" || m[2] === "managed";
+    const bool = m[2] === "intake_paused" || m[2] === "managed"
+      || m[2] === "discovery_routing";
     return { group: "PMO", multiline: false, format: bool ? onOff : orEmpty,
              label: `PMO #${+m[1] + 1} · ${FIELDS[m[2]]}` };
   }

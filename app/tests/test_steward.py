@@ -78,8 +78,28 @@ def test_finalize_steward_stamps_rate_card_estimate(tmp_path):
         mgr, run, {"result": {"outcome": "nope"}, "token_report": grok}))
     saved = mgr.runs.store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60
-    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["rate_card_id"] == "builtin-v2"
     assert saved["cost_usd"] is None
+
+
+def test_opus_steward_reports_price_at_the_new_rate_row(tmp_path):
+    """ADR-0033 D10: the re-pinned Opus steward must not run cost-blind —
+    the claude-opus rate row prices its reports ($5/$0.50/$6.25/$25 per M;
+    claude harnesses DO report cache-write, unlike grok)."""
+    mgr = make_mgr(tmp_path, MapPMO([]))
+    run = Run(run_id="SYS-STEWARD-2-ZZZZZZ", mission_key="STEWARD",
+              mission_type="STEWARD", dev_type="steward", seq=2,
+              state="finalizing")
+    mgr.runs.store.save(run)
+    claude = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+              "cache_write_tokens": 400_000, "output_tokens": 100_000,
+              "total_tokens": 3_500_000, "cost_usd": None,
+              "model": "claude-opus-5", "extraction_method": "session_json"}
+    run_coro(steward.finalize_steward(
+        mgr, run, {"result": {"outcome": "nope"}, "token_report": claude}))
+    saved = mgr.runs.store.get(run.run_id).token_report
+    assert saved["cost_usd_estimated"] == 11.00     # 5 + 1 + 2.5 + 2.5
+    assert saved["rate_card_id"] == "builtin-v2"
 
 
 def test_apply_steward_edges_validates_everything(tmp_path):
@@ -398,7 +418,9 @@ def test_steward_seq_scoped_to_own_instance():
     human-visible seq counted OTHER instances' STEWARD runs too."""
     import inspect
     from devcake.domain.orchestrator import steward as steward_mod
-    assert "_run_is_ours" in inspect.getsource(steward_mod.dispatch_steward)
+    # the seq computation lives in the shared launch body (ADR-0033) —
+    # both flavors inherit the own-instance scoping
+    assert "_run_is_ours" in inspect.getsource(steward_mod._launch_steward)
 
 
 def test_activity_payload_marks_unavailable_attachment(tmp_path):
@@ -468,3 +490,291 @@ def test_activity_payload_basenames_slashed_attachment_names(tmp_path):
         ["report.md", "report-2.md"]
     assert "[attachment: report.md]" in payload["activity_md"]
     assert "v1/report.md" not in payload["activity_md"]
+
+
+# ── ADR-0033: the discovery flavor (dispatch + package) ──────────────────────
+
+def _src_run(store, mgr, pmo_id="src", seq=2, n_entries=3):
+    entries = [{"finding": f"finding {i} about the config",
+                "evidence": f"src/x.py:{i}; repro: pytest -k f{i}",
+                "scope": f"scope {i}"} for i in range(n_entries)]
+    r = Run(run_id=f"L-T-S-{seq}-EXECUTE-AAAAAA", mission_key="T-S",
+            mission_pmo_id=pmo_id, mission_type="EXECUTE",
+            dev_type="senior-dev", seq=seq, state="finished",
+            pmo_ref=mgr.instance_name)
+    r.result = {"outcome": "executed", "summary": "s", "discoveries": entries}
+    store.save(r)
+    return r
+
+
+def _fam(*members):
+    from devcake.domain.orchestrator.family_graph import Family
+    return Family(members=list(members))
+
+
+def test_build_discovery_package_curates_not_accumulates(tmp_path):
+    from devcake.domain.orchestrator.markers import HANDOFF_MARKER
+    done = m("d1", "T-D", status="done")
+    done.description = (f"built the schema\n\n---\n{HANDOFF_MARKER}\n"
+                        f"renamed Store to Vault\n")
+    src = m("src", "T-S", status="in_progress")
+    src.description = "implement the API"
+    open_m = m("o1", "T-O")
+    mgr = make_mgr(tmp_path, MapPMO([done, src, open_m]))
+    _src_run(mgr.runs.store, mgr, n_entries=3)
+    package, included = steward.build_discovery_package(
+        mgr, _fam(done, src, open_m), {"src": [(2, 2)]},
+        mgr.runs.store.all())
+    assert included == [("src", 2)]
+    assert "**T-D** · done" in package and "Handoff: renamed Store" in package
+    assert "**T-O**" in package
+    assert "From **T-S** step 2" in package
+    assert "finding 0 about the config" in package
+    assert "finding 1 about the config" in package
+    assert "finding 2" not in package          # marker n=2 bounds the batch
+    assert "Evidence: src/x.py:0" in package   # full fidelity, not excerpts
+
+
+def test_build_discovery_package_skips_gone_run_records(tmp_path):
+    src = m("src", "T-S")
+    mgr = make_mgr(tmp_path, MapPMO([src]))
+    package, included = steward.build_discovery_package(
+        mgr, _fam(src), {"src": [(7, 1)]}, mgr.runs.store.all())
+    assert included == []                      # sweep terminates it, not us
+    assert "(none)" in package
+
+
+def test_dispatch_steward_discovery_stamps_duty_and_excludes_primary(
+        tmp_path, monkeypatch):
+    from devcake.domain.orchestrator import family_graph
+    src = m("src", "T-S", status="in_progress")
+    src.repo = "web"
+    mgr = make_mgr(tmp_path, MapPMO([src]))
+    _src_run(mgr.runs.store, mgr, n_entries=1)
+    captured = {}
+
+    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None):
+        captured.update(duty=duty, prompt=prompt_text, bw=blocker_work)
+        return "RUN-SENTINEL"
+    monkeypatch.setattr(steward, "_launch_steward", fake_launch)
+    monkeypatch.setattr(steward.dispatch, "steward_repo", lambda m_: "home")
+    monkeypatch.setattr(family_graph, "blocker_read_credential",
+                        lambda mgr_, name: ("configured", None, None, "tok"))
+    dt = DevType(name="steward", harness_template="claude-code")
+    out = asyncio.new_event_loop().run_until_complete(
+        steward.dispatch_steward_discovery(mgr, dt, _fam(src),
+                                           {"src": [(2, 1)]}))
+    assert out == "RUN-SENTINEL"
+    assert captured["duty"] == "discovery"
+    assert "laminarity" in captured["prompt"].lower()
+    assert '"outcome": "stewarded"' in captured["prompt"]
+    assert "finding 0 about the config" in captured["prompt"]
+    assert captured["bw"] == [{"repo_ref": "web", "mission_key": "T-S"}]
+
+
+def test_dispatch_steward_discovery_no_batches_no_run(tmp_path, monkeypatch):
+    src = m("src", "T-S")
+    mgr = make_mgr(tmp_path, MapPMO([src]))
+    monkeypatch.setattr(steward.dispatch, "steward_repo", lambda m_: "home")
+    out = asyncio.new_event_loop().run_until_complete(
+        steward.dispatch_steward_discovery(
+            mgr, DevType(name="steward", harness_template="claude-code"),
+            _fam(src), {"src": [(9, 1)]}))     # record gone ⇒ nothing to route
+    assert out is None
+
+
+def test_relations_dispatch_still_builds_the_relations_prompt(
+        tmp_path, monkeypatch):
+    a = m("a", "T-1")
+    mgr = make_mgr(tmp_path, MapPMO([a]))
+    captured = {}
+
+    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None):
+        captured.update(duty=duty, prompt=prompt_text, bw=blocker_work)
+        return "R"
+    monkeypatch.setattr(steward, "_launch_steward", fake_launch)
+    asyncio.new_event_loop().run_until_complete(steward.dispatch_steward(
+        mgr, DevType(name="steward", harness_template="claude-code"), [a]))
+    assert captured["duty"] == ""              # relations = the legacy duty
+    assert "RELATIONS STEWARD" in captured["prompt"]
+    assert captured["bw"] is None
+
+
+# ── ADR-0033: apply_discovery_routes (validate / deliver / receipt) ─────────
+
+class RoutePMO(MapPMO):
+    """Per-mission feeds that ABSORB posts — the board stays self-
+    consistent, so the receipt→re-scan→label-drop arithmetic is exercised
+    for real, not against a frozen fixture."""
+
+    def __init__(self, missions, feeds=None):
+        super().__init__(missions)
+        self.feeds = feeds or {}          # pmo_id → Activity
+        self.swaps = []
+
+    def _mission(self, pmo_id):
+        return next((mm for mm in self.missions if mm.pmo_id == pmo_id),
+                    self.missions[0])
+
+    async def get_activity(self, ref, full=False):
+        self.activity_calls.append((ref.pmo_id, full))
+        return self.feeds.setdefault(
+            ref.pmo_id, Activity(mission=self._mission(ref.pmo_id),
+                                 entries=[], truncated=False))
+
+    async def post_feed(self, ref, markdown):
+        self.comments.append((ref.pmo_id, markdown))
+        self.feeds.setdefault(
+            ref.pmo_id, Activity(mission=self._mission(ref.pmo_id),
+                                 entries=[], truncated=False)
+        ).entries.append(ActivityEntry(
+            ts=NOW, author="devcake", kind="comment", body=markdown,
+            entry_id=f"e{len(self.comments)}"))
+
+    async def swap_labels(self, ref, remove, add):
+        self.swaps.append((ref.pmo_id, set(remove), set(add)))
+
+
+def _ae(body):
+    return ActivityEntry(ts=NOW, author="devcake", kind="comment",
+                         body=body, entry_id=body[:24])
+
+
+def _route_setup(tmp_path, *, n=2, entries=3, recipient_bodies=(),
+                 recipient_truncated=False, extra_missions=()):
+    from devcake.domain.orchestrator.markers import discovery_marker
+    src = m("src", "T-S", status="in_progress")
+    tgt = m("tgt", "T-T", status="in_progress", blocked_by=["src"])
+    pmo = RoutePMO([src, tgt, *extra_missions])
+    pmo.feeds["src"] = Activity(
+        mission=src, entries=[_ae(discovery_marker(2, n))], truncated=False)
+    pmo.feeds["tgt"] = Activity(
+        mission=tgt, entries=[_ae(b) for b in recipient_bodies],
+        truncated=recipient_truncated)
+    mgr = make_mgr(tmp_path, pmo)
+    _src_run(mgr.runs.store, mgr, seq=2, n_entries=entries)
+    run = Run(run_id="L-TEAM-1-STEWARD-AAAAAA", mission_key="TEAM",
+              mission_type="STEWARD", dev_type="steward", seq=1,
+              pmo_ref=mgr.instance_name, steward_duty="discovery",
+              steward_batches=[{"pmo_id": "src", "key": "T-S", "step": 2}])
+    return pmo, mgr, run
+
+
+def _route(target="T-T", source="T-S", step=2, finding=1,
+           because="target touches the same config"):
+    return {"target": target, "source": source, "step": step,
+            "finding": finding, "because": because}
+
+
+def _apply(mgr, run, routes):
+    return asyncio.new_event_loop().run_until_complete(
+        steward.apply_discovery_routes(mgr, run, routes))
+
+
+def test_apply_routes_delivers_receipts_and_drops_label(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    mgr._discoveries_pending.add("src")
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (1, 0)
+    tgt_posts = [md for pid, md in pmo.comments if pid == "tgt"]
+    assert len(tgt_posts) == 1
+    body = tgt_posts[0]
+    assert "`devcake:discovery-in:v1 src=T-S step=2`" in body
+    assert "leads, not truths" in body
+    assert "finding 0 about the config" in body        # verbatim from record
+    assert "— steward:" in body
+    src_posts = [md for pid, md in pmo.comments if pid == "src"]
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in src_posts)
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+    assert "src" not in mgr._discoveries_pending
+
+
+def test_apply_routes_reject_ladder(tmp_path):
+    done = m("d", "T-D", status="done", blocked_by=["src"])
+    outside = m("o", "T-O")                    # no edges — its own family
+    pmo, mgr, run = _route_setup(tmp_path, extra_missions=(done, outside))
+    delivered, rejected = _apply(mgr, run, [
+        _route(target="T-X"),                  # unknown target
+        _route(target="T-S"),                  # self-route
+        _route(target="T-D"),                  # terminal recipient
+        _route(target="T-O"),                  # outside the family
+        _route(step=9),                        # not in this run's package
+        _route(finding=3),                     # marker n=2 bounds the batch
+        "not a dict",                          # malformed
+    ])
+    assert delivered == 0 and rejected == 7
+    assert not any(pid == "tgt" for pid, _ in pmo.comments)
+
+
+def test_apply_routes_because_is_defanged(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    _apply(mgr, run, [_route(because="see `devcake:handoff:v1` upstream")])
+    body = next(md for pid, md in pmo.comments if pid == "tgt")
+    assert "devcake:handoff:v1" in body
+    assert "`devcake:handoff:v1`" not in body
+
+
+def test_apply_routes_dedup_and_idempotent_rerun(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    d1, _ = _apply(mgr, run, [_route()])
+    assert d1 == 1
+    before = len(pmo.comments)
+    d2, _ = _apply(mgr, run, [_route()])       # redelivered finalize
+    assert d2 == 0                             # dup skipped via live feed
+    tgt_posts = [md for pid, md in pmo.comments if pid == "tgt"]
+    assert len(tgt_posts) == 1                 # ONE delivery, ever
+    # no duplicate receipt comment either (receipts pre-filtered)
+    assert len(pmo.comments) == before
+
+
+def test_apply_routes_recipient_budget(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=(
+        "`devcake:discovery-in:v1 src=T-Z step=1`",))
+    mgr.config.budgets.discovery_in_per_recipient = 1
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 1)
+    assert not any("discovery-in:v1 src=T-S" in md
+                   for pid, md in pmo.comments if pid == "tgt")
+
+
+def test_apply_routes_source_budget(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    pmo.feeds["src"].entries.append(
+        _ae("`devcake:discovery-routed:v1 step=1 to=T-Q`"))
+    mgr.config.budgets.discovery_routes_per_source = 1
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 1)
+
+
+def test_apply_routes_truncated_recipient_fails_closed(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path, recipient_truncated=True)
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 1)
+    assert not any(pid == "tgt" for pid, _ in pmo.comments)
+
+
+def test_apply_routes_routed_nowhere_still_receipts(tmp_path):
+    # empty routes is a valid steward result — the batch must still be
+    # dispositioned (`to=-`) or the sweep would re-dispatch forever
+    pmo, mgr, run = _route_setup(tmp_path)
+    delivered, rejected = _apply(mgr, run, [])
+    assert (delivered, rejected) == (0, 0)
+    src_posts = [md for pid, md in pmo.comments if pid == "src"]
+    assert any("`devcake:discovery-routed:v1 step=2 to=-`" in md
+               for md in src_posts)
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+
+
+def test_finalize_steward_branches_on_duty(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    mgr.runs.store.save(run)
+    payload = {"result": {"outcome": "stewarded", "summary": "s",
+                          "routes": [_route()]},
+               "token_report": {"extraction_method": "unavailable"}}
+    asyncio.new_event_loop().run_until_complete(
+        steward.finalize_steward(mgr, run, payload))
+    assert run.state == "finished"
+    assert any("discovery-in:v1" in md for pid, md in pmo.comments
+               if pid == "tgt")
+    assert pmo.relations == []                 # the relations arm never ran

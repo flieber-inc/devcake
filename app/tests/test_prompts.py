@@ -178,6 +178,22 @@ def test_handoff_carries_discovery_consequences_downstream():
     assert "what was DISCOVERED along the way" not in _flat(REVIEW_PLAYBOOK)
 
 
+def test_steward_discovery_prompt_contract():
+    """ADR-0033 PR-2: the discovery flavor's code-owned playbook — package
+    embedded, laminarity test, propose-only routes under the duty-agnostic
+    `stewarded` outcome, TURN_DISCIPLINE riding along, and NEVER the
+    authoring epilogue (Decision 7 chain-reaction damper)."""
+    from devcake.prompts import steward_discovery_prompt
+    p = steward_discovery_prompt("ID", "PACKAGE-SENTINEL")
+    assert "PACKAGE-SENTINEL" in p
+    assert "laminarity" in p.lower()
+    assert '"outcome": "stewarded"' in p
+    assert '"routes"' in p and '"declined"' in p
+    assert "Verbatim transport" in p
+    assert "Never end your turn" in p
+    assert '"discoveries"' not in p
+
+
 def test_steward_prompt_embeds_missions():
     a = Mission(instance="linear", pmo_id="ida", pmo_kind="issue", key="T-1", title="write docs",
                 description="x" * 500, status="backlog",
@@ -189,4 +205,4 @@ def test_steward_prompt_embeds_missions():
     assert "T-1" in p and "T-2" in p
     assert "blocked by: T-1" in p                 # existing blockers shown as keys
     assert "x" * 300 in p and "x" * 301 not in p  # description head capped
-    assert "relations_mapped" in p
+    assert "stewarded" in p

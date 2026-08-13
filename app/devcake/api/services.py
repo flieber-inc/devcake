@@ -118,6 +118,11 @@ class Services:
                     repo_cache=self.repo_cache)
                 self.stewards[name] = StewardService(
                     self.config, self.dev_types, self.managers[name])
+                # ADR-0033: harvest's event trigger for the discovery lane —
+                # injected here so domain never imports upward (the
+                # breakers-injection precedent)
+                self.managers[name].discovery_notify = \
+                    self.stewards[name].kick_discovery
 
     def managers_in_config_order(self) -> list[MissionManager]:
         return [self.managers[i.name] for i in self.config.pmos

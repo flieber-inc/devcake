@@ -75,6 +75,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `app`, `redis`, `dagu`, `openobserve`, `pmo` | booleans (live probes; `pmo` is the aggregate over configured instances) |
 | `oo_ingest` | ingest-path probe (`{ok, detail}`) — distinct from the OO admin UI boolean; used by the operator drill / readiness |
 | `pmo_instances` | per-instance PMO health (`ok` / `configured` / `team` / `intake_paused`); unconfigured instances show grey (`ok: null`) |
+| *(PMO page, drafted)* | each PMO card also carries the **Discovery routing** toggle (ADR-0033 D11, `pmos[].discovery_routing`, default on) — a DRAFT field applied on Save, unlike the instant intake toggle; help copy states that harvest continues and pending discoveries stay visible while off |
 | `forge` | per-repo `ForgeHealth` map (`ok`, `can_push`, `can_read`, `transient`, `detail`, …) — fills incrementally while the initial sweep runs |
 | `forge_probe` | initial-sweep progress: `{complete, completed_at, probed, configured}` — `complete: false` means the poll task's full forge sweep hasn't finished yet (`04` §6 step 5), so an empty `forge` map is "pending", not "no repos" |
 | `circuit_breakers` | per-Dev-Type auth breakers + **per-repo** `repo:{name}` forge breakers (`15-errors-and-retries.md` §4) |

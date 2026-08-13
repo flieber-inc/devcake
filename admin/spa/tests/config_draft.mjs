@@ -76,10 +76,10 @@ check("rename inside a same-length list still wins over fresh", () => {
   assert.equal(getIn(next, "cfg.pmos.0.name"), "renamed");
 });
 
-check("scaffolds carry every server-model field (pmo: 9, repo: 8)", () => {
+check("scaffolds carry every server-model field (pmo: 10, repo: 8)", () => {
   assert.deepEqual(Object.keys(newPmoCard("x", "linear")).sort(),
-    ["api_base", "assignments", "intake_paused", "managed", "name",
-     "reference_repos", "repos", "system", "team_key"]);
+    ["api_base", "assignments", "discovery_routing", "intake_paused",
+     "managed", "name", "reference_repos", "repos", "system", "team_key"]);
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
      "default_branch", "forge", "merge_retry_window_minutes", "name", "url"]);
@@ -87,6 +87,8 @@ check("scaffolds carry every server-model field (pmo: 9, repo: 8)", () => {
 
 check("pmo card fields have real labels, not raw paths", () => {
   assert.match(metaFor("cfg.pmos.1.intake_paused").label, /Intake paused/);
+  assert.match(metaFor("cfg.pmos.1.discovery_routing").label,
+    /Discovery routing/);
   assert.match(metaFor("cfg.pmos.1.managed").label, /Managed/);
   assert.notEqual(metaFor("cfg.pmos.1.assignments").group, "Other");
 });

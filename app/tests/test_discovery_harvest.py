@@ -59,6 +59,26 @@ def test_marker_line_is_far_below_inline_max():
     assert len(discovery_marker(999, 99)) < 64 < FEED_INLINE_MAX
 
 
+def test_discovery_in_keys_are_a_distinct_pair_set():
+    from devcake.domain.orchestrator.markers import discovery_in_keys
+    text = ("`devcake:discovery-in:v1 src=T-7 step=2`\n"
+            "`devcake:discovery-in:v1 src=T-7 step=2`\n"   # idempotent re-run
+            "`devcake:discovery-in:v1 src=T-9 step=1`")
+    assert discovery_in_keys(text) == {("T-7", 2), ("T-9", 1)}
+    assert discovery_in_keys("no markers") == set()
+
+
+def test_elevated_markers_carry_exactly_the_delivery_class():
+    # ADR-0031's seam gains its first member (ADR-0033); the SOURCE-side
+    # marker must never join — a mission's own discovery post would trip
+    # its own freshness gate
+    from devcake.domain.orchestrator.markers import (DISCOVERY_IN_MARKER_RE,
+                                                     DISCOVERY_MARKER_RE,
+                                                     ELEVATED_MARKERS)
+    assert ELEVATED_MARKERS == [DISCOVERY_IN_MARKER_RE]
+    assert DISCOVERY_MARKER_RE not in ELEVATED_MARKERS
+
+
 # ── the harvest seam (finalize hook, full path) ──────────────────────────────
 
 from datetime import datetime, timezone  # noqa: E402
@@ -321,3 +341,38 @@ def test_dev_bad_output_at_transition_still_memorializes(tmp_path):
     assert run.state == "failed"
     assert "DEV_BAD_OUTPUT" in (run.error or "")
     assert any("devcake:discovery:v1" in c for c in fake.comments)
+
+
+# ── MISSION.md discovery block (ADR-0033 D6, PR-2) ──────────────────────────
+
+def test_mission_md_renders_the_advisory_discovery_block(tmp_path):
+    m, mgr, fake, store = _harvest_mgr(tmp_path)
+    fake.activity_entries = [
+        _entry("e1", "`devcake:discovery-in:v1 src=T-7 step=2`\n\nlead text"
+               "\n\n`devcake:v1`", author="devcake"),
+        _entry("e2", "quoting:\n> `devcake:discovery-in:v1 src=T-9 step=1`"),
+    ]
+    md = run_coro(mgr.activity_payload("p1", "issue"))["mission_md"]
+    assert "leads, not truths" in md               # the founder's register
+    assert "[T-7 · step 2" in md
+    assert "DISCOVERY_2.md" in md
+    assert "T-9" not in md                         # quoted never counts
+
+
+def test_mission_md_without_deliveries_has_no_block(tmp_path):
+    m, mgr, fake, store = _harvest_mgr(tmp_path)
+    fake.activity_entries = [_entry("e1", "plain human comment")]
+    md = run_coro(mgr.activity_payload("p1", "issue"))["mission_md"]
+    assert "leads, not truths" not in md
+
+
+def test_mission_md_dedupes_delivery_pairs(tmp_path):
+    m, mgr, fake, store = _harvest_mgr(tmp_path)
+    fake.activity_entries = [
+        _entry("e1", "`devcake:discovery-in:v1 src=T-7 step=2`\n\n`devcake:v1`",
+               author="devcake"),
+        _entry("e2", "`devcake:discovery-in:v1 src=T-7 step=2`\n\n`devcake:v1`",
+               author="devcake"),
+    ]
+    md = run_coro(mgr.activity_payload("p1", "issue"))["mission_md"]
+    assert md.count("[T-7 · step 2") == 1

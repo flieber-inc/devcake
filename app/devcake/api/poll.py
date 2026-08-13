@@ -188,6 +188,9 @@ class PollRuntime:
             mp = self.stewards.get(mgr.instance_name)
             if mp is not None:
                 await mp.maybe_dispatch(missions)
+                # ADR-0033: the discovery lane rides the same segment (and
+                # the same intake guard — pause freezes all new dispatches)
+                await mp.maybe_dispatch_discovery(missions)
         mgr.rotate_grace()
         # anomalies are advisory and per-mission: prune on the FETCHED set (not
         # just claimed missions — a dedupe anomaly references a mission this

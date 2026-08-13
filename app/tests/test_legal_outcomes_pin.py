@@ -40,7 +40,7 @@ def test_mission_rows_match_and_steward_is_entrypoint_only():
     for mt, outcomes in LEGAL_OUTCOMES.items():
         assert entry[mt] == set(outcomes), (
             f"entrypoint {mt} drifted from markers.LEGAL_OUTCOMES")
-    assert entry["STEWARD"] == {"relations_mapped"}
+    assert entry["STEWARD"] == {"stewarded"}
     assert "STEWARD" not in LEGAL_OUTCOMES
     # Reverse direction (2026-08-12 review): the forward loop only pins the
     # rows the APP knows about — an entrypoint-only extra key would sail

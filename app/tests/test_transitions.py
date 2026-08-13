@@ -1102,7 +1102,7 @@ def test_finalize_stamps_rate_card_estimate(tmp_path):
     run_coro(mgr.finalize(run, _finalize_payload(token_report=grok_report)))
     saved = store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60      # $2/$0.30/$6 per 1M
-    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["rate_card_id"] == "builtin-v2"
     assert saved["cost_usd_native"] is None
 
 
@@ -1113,7 +1113,7 @@ def test_finalize_leaves_unmapped_model_unstamped(tmp_path):
     claude_report = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
                      "cache_write_tokens": 2_000, "output_tokens": 1_000,
                      "total_tokens": 18_000, "cost_usd_native": 0.1234,
-                     "model": "claude-opus-5",
+                     "model": "gemini-3-pro",
                      "source": "session_json"}
     run_coro(mgr.finalize(run, _finalize_payload(token_report=claude_report)))
     saved = store.get(run.run_id).token_report
@@ -1143,7 +1143,7 @@ def test_feed_shows_estimated_cost_and_reasoning(tmp_path):
     run_coro(mgr.finalize(run, _finalize_payload(
         token_report=_grok_shaped_report())))
     report = next(c for c in fake.comments if "token report" in c)
-    assert "cost (estimated, builtin-v1): $5.6000" in report
+    assert "cost (estimated, builtin-v2): $5.6000" in report
     assert "\ncost: $" not in report
     assert "reasoning: 20616" in report
 
@@ -1178,7 +1178,7 @@ def test_feed_override_native_shows_both_cost_lines(tmp_path):
         token_report=_grok_shaped_report(cost_usd_native=4.4321))))
     report = next(c for c in fake.comments if "token report" in c)
     assert "\ncost: $4.4321" in report
-    assert "cost (estimated, builtin-v1): $5.6000" in report
+    assert "cost (estimated, builtin-v2): $5.6000" in report
 
 
 def _finalize_payload(**over):

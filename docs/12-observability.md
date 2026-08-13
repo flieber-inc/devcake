@@ -28,12 +28,13 @@ observability gap.
 |---|---|---|---|
 | `poll.cycle` | root | app | counts: missions seen/candidates/dispatched; `PMO_TRANSIENT`/`cycle_error` outcomes |
 | `poll.instance` | `poll.cycle` | app | one child per configured PMO instance (`devcake.instance`); a per-instance failure marks THIS span, not the cycle |
-| `mission.dispatch` | `poll.cycle` (steward runs: `steward.periodic`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
+| `mission.dispatch` | `poll.cycle` (steward runs: `steward.periodic` / `steward.discovery`) | app | `devcake.mission.*`, `devcake.run.id`, `devcake.dev_type`; covers the ACL-user creation, run persist, and Dagu trigger |
 | `mission.give_up` | `poll.cycle` | app | ERROR status; covers the `DEVCAKE-FAILED` label write + feed post |
 | `sweep.merge` | `poll.cycle` | app | emitted only when the sweep acts (`merged`/`closed`); covers the PMO writes |
 | `sweep.merge_retry` | `poll.cycle` | app | one span per acting deferred-retry decision: `merged` / `conflict` / `conflict_handoff` / `merge_failed_transient` / `window_exhausted` (ERROR) |
 | `sweep.tracking` | `poll.cycle` | app | emitted when a project auto-completes; covers the PMO writes |
 | `steward.periodic` | `poll.cycle` | app | how a DUE periodic steward run resolved: `dispatched` / `already_active` / `concurrency_deferred` / `degraded_skip` (ERROR). Emitted on outcome **transitions** (and every dispatch), not per tick — a steward stuck degraded for hours yields one span, not thousands |
+| `steward.discovery` | `poll.cycle` (or the harvest kick's task) | app | how a discovery-lane pass resolved: `dispatched` / `already_active` / `concurrency_deferred` / `degraded_skip` / `mirror_stale` / `secret_env_gate` / `dispatch_skipped` (ADR-0033). Same on-transition emission rule as `steward.periodic` |
 | `dev.run` | *linked to `mission.dispatch` via TRACEPARENT env* | Dev entrypoint | full registry incl. `devcake.tokens.*`, `devcake.cost.usd`, `devcake.outcome` |
 | `harness.exec` | `dev.run` | Dev entrypoint | `devcake.harness` |
 | `ingress.handle` | `dev.run` (via the run's traceparent) | app | one span per handled ingress message (`devcake.kind`: `run.started`, `runspec.get`, `activity.get`, `oauth.result`, `run.artifacts`, OAuth-shaped `run.log`, …). Deliberately span-free: `run.heartbeat` (2/min/run) and streamed `run.log {lines}` batches (one every few seconds while a harness talks) — pure liveness/output noise that would drown the trace |
@@ -67,6 +68,11 @@ devcake.cost.usd            devcake.cost.usd_estimated devcake.cost.rate_card
 devcake.outcome             (result.json outcome | error class)
 devcake.discoveries.harvested  (run.finalize; count only — discovery CONTENT
                                 never leaves the board, ADR-0033 D8)
+devcake.steward.duty           (mission.dispatch — "relations" | "discovery")
+devcake.steward.edges_created  devcake.steward.edges_rejected   (run.finalize,
+                                relations flavor)
+devcake.steward.routes_delivered  devcake.steward.routes_rejected
+                               (run.finalize, discovery flavor; counts only)
 ```
 
 Every log line from app and Dev entrypoint carries `devcake.run.id` and `devcake.mission.key` for correlation.

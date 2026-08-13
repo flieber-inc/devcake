@@ -102,13 +102,7 @@ FRESHNESS_MARKER = re.compile(r"`devcake:freshness-rereview:(\d+)`")
 # (ADR-0033 Decision 7 as amended, founder ruling 2026-08-13): counting
 # budgets are operator knobs sized to the board, 0 = unlimited. The COUNT
 # stays marker-derived from the feed — only the bound moved to config.
-# ADR-0031 Decision 3 — sentinel'd feed entries matching one of these regexes
-# are material to the Freshness Gate DESPITE being DevCake-posted. Shipped
-# EMPTY; the routed DISCOVERY-IN class joins when discovery routing ships.
-# Nothing is elevated implicitly.
-ELEVATED_MARKERS: list[re.Pattern[str]] = []
-
-# ── ADR-0033 — discovery markers (the counterflow lane, harvest half) ────────
+# ── ADR-0033 — discovery markers (the counterflow lane) ─────────────────────
 # Harvest memorializes a run's `discoveries` on the SOURCE mission's feed:
 # the full DISCOVERY_<seq>.md is always attached as a step deliverable
 # (founder ruling 2026-08-13) and the marked comment is the scan surface.
@@ -151,6 +145,39 @@ def discovery_receipts(unquoted_text: str) -> set[tuple[int, str]]:
     set-cardinality shape (distinct deliveries), not max-of-int."""
     return {(int(m.group(1)), m.group(2))
             for m in DISCOVERY_ROUTED_MARKER_RE.finditer(unquoted_text)}
+
+
+# Delivery-side marker (ADR-0033 routing): one comment per recipient per
+# steward run, one marker line per source batch — src= is the source
+# mission KEY, step= its Mission Step. Set-cardinality counting: dedup (a
+# pair already on the recipient feed is never re-delivered) and the
+# per-recipient budget read the same distinct-pair set. A human deleting a
+# delivery comment deliberately frees the slot — humans own the feed. The
+# comment is posted externalize=False; long finding bodies are excerpted
+# (DISCOVERY_IN_EXCERPT_MAX) with a pointer to the source's DISCOVERY_<n>.md
+# attachment, so the marker can never be pushed off the feed body.
+DISCOVERY_IN_MARKER_RE = re.compile(
+    r"`devcake:discovery-in:v1 src=(\S+) step=(\d+)`")
+DISCOVERY_IN_EXCERPT_MAX = 700
+
+
+def discovery_in_keys(unquoted_text: str) -> set[tuple[str, int]]:
+    """(src key, step) pairs delivered to a recipient, parsed from unquoted
+    feed text (caller applies feed.unquoted — the IRON RULE call-site
+    contract, same as discovery_posts)."""
+    return {(m.group(1), int(m.group(2)))
+            for m in DISCOVERY_IN_MARKER_RE.finditer(unquoted_text)}
+
+
+# ADR-0031 Decision 3 — sentinel'd feed entries matching one of these
+# regexes are material to the Freshness Gate DESPITE being DevCake-posted.
+# First member (ADR-0033): a routed discovery landing after a REVIEW's
+# context was assembled counts as material at the context-closing finalize —
+# the seam doing exactly what it was built for. The SOURCE-side
+# devcake:discovery:v1 marker is deliberately NOT here: a mission's own
+# discovery post must never trip its own gate. Nothing is elevated
+# implicitly.
+ELEVATED_MARKERS: list[re.Pattern[str]] = [DISCOVERY_IN_MARKER_RE]
 
 # ADR-0032 — the HANDOFF note: a marked section APPENDED to a completed
 # mission's description at approve-finalize (description, not feed: zero

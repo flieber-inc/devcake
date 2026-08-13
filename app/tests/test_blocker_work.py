@@ -324,13 +324,21 @@ def test_extra_repos_includes_blocker_work_internal(tmp_path, monkeypatch):
     assert item["token"] == "read-secret"
     assert "linear-t-a" in item["url"]
 
-    # STEWARD never gets blocker extras
+    # STEWARD (ADR-0033): family work repos ride the blocker_work snapshot —
+    # a discovery-flavor steward carrying entries DOES get the extras…
     steward = Run(run_id="LINEAR-TEAM-1-STEWARD-AAAAAA", mission_key="TEAM",
                  mission_type="STEWARD", dev_type="judgment", seq=1,
                  repo_ref="alpha",
                  blocker_work=[{"repo_ref": "linear-t-a", "mission_key": "T-A"}])
-    assert "linear-t-a" not in [
+    assert "linear-t-a" in [
         x["name"] for x in dispatch._extra_repos_for(mgr, steward)]
+    # …and the relations flavor (no entries stamped at dispatch) still gets
+    # none — pinned to the pre-ADR-0033 behavior
+    relations = Run(run_id="LINEAR-TEAM-2-STEWARD-AAAAAA", mission_key="TEAM",
+                    mission_type="STEWARD", dev_type="judgment", seq=2,
+                    repo_ref="alpha")
+    assert "linear-t-a" not in [
+        x["name"] for x in dispatch._extra_repos_for(mgr, relations)]
 
 
 def test_extra_repos_includes_blocker_work_configured(tmp_path, monkeypatch):

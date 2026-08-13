@@ -138,9 +138,12 @@ class MissionManager:
         # ADR-0033: source pmo_ids with harvested-but-unrouted discoveries.
         # Advisory only — the discovery label + feed markers are the board
         # truth (discovery.pending_from_board repopulates after a restart at
-        # one feed read per labeled mission); the routing lane (PR-2) is the
-        # consumer that drains it.
+        # one feed read per labeled mission); the routing lane drains it.
         self._discoveries_pending: set[str] = set()
+        # ADR-0033: harvest's event trigger for the routing lane — the
+        # composition root injects StewardService.kick_discovery (None in
+        # tests / pre-wiring; harvest calls it best-effort)
+        self.discovery_notify = None
 
     def rotate_grace(self) -> None:
         self._grace, self._grace_next = self._grace_next, set()
@@ -219,6 +222,11 @@ class MissionManager:
 
     async def dispatch_steward(self, dev_type: DevType, missions: list[Mission]):
         return await steward.dispatch_steward(self, dev_type, missions)
+
+    async def dispatch_steward_discovery(self, dev_type: DevType, family,
+                                         pending: dict):
+        return await steward.dispatch_steward_discovery(
+            self, dev_type, family, pending)
 
     async def finalize_steward(self, run: Run, payload: dict):
         return await steward.finalize_steward(self, run, payload)

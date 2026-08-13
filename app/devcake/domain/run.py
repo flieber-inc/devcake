@@ -63,8 +63,19 @@ class Run(BaseModel):
     attempt_of_step: int = 1
     # Done direct blockers' work repos (non-secret snapshot at dispatch):
     # [{repo_ref, mission_key}] — tokens are attached at runspec time.
-    # Empty on legacy / STEWARD / no-blocker runs.
+    # Empty on legacy / relations-steward / no-blocker runs. The ADR-0033
+    # discovery steward reuses this shape for the FAMILY's work repos.
     blocker_work: list[dict[str, str]] = Field(default_factory=list)
+    # ADR-0033: which steward duty this run serves — "" (legacy/relations)
+    # or "discovery". The flavor lives on the run record, never in the
+    # outcome (one duty-agnostic `stewarded` outcome, founder ruling).
+    steward_duty: str = ""
+    # ADR-0033: the discovery run's dispatch snapshot of the batches its
+    # package carried — [{pmo_id, key, step}]. Finalize disposition-receipts
+    # exactly this set (a batch harvested AFTER dispatch was not in the
+    # package and must stay pending); a routed-nowhere batch gets a `to=-`
+    # receipt so the counterflow terminates instead of re-dispatching.
+    steward_batches: list[dict] = Field(default_factory=list)
     # The mirror gate's needed_for set, snapshotted at dispatch (2026-08
     # evaluation F12): which repos this run's extras serve via mirror_path is
     # decided ONCE, when the gate proved them fresh — exactly like the

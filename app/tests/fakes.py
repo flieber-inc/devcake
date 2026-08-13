@@ -155,7 +155,7 @@ def make_mission_manager(
         "judgment": DevType(name="judgment", harness_template="claude-code"),
         "implementer": DevType(name="implementer", harness_template="grok-build"),
         "steward": DevType(name="steward", harness_template="claude-code",
-                          model="claude-haiku-4-5"),
+                          model="claude-opus-5"),
     }
     fr = forge_runtime if forge_runtime is not None else FakeForgeRuntime(forge)
     msg = messaging if messaging is not None else NullMessaging()

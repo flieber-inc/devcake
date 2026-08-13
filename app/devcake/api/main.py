@@ -831,6 +831,8 @@ async def run_steward(instance: str | None = None):
         raise HTTPException(422, str(e))
     except StewardBusy as e:
         raise HTTPException(409, str(e))
+    if run is None:  # belt — run_now raises on the skip path already
+        raise HTTPException(503, "steward dispatch skipped — see app logs")
     return {"run_id": run.run_id, "state": run.state, "instance": target}
 
 

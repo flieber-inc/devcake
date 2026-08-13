@@ -11,7 +11,7 @@ from ...ports.forge import legacy_branch, mission_branch
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
-from . import completion, dispatch, feed
+from . import completion, discovery, dispatch, feed
 from .markers import MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER
 
 log = logging.getLogger("devcake.missions")
@@ -56,6 +56,9 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
             if m.pmo_kind == "project" and LABEL_TRACKING in m.labels \
                     and m.status not in ("done", "canceled"):
                 await tracking_sweep(mgr, m)
+            # ADR-0033: label-gated INSIDE the helper — sweeps.py never
+            # reads the discovery label (guard allowlist stays tight)
+            await discovery.discovery_sweep(mgr, m)
         except Exception:
             log.exception("sweep failed for %s", m.key)
     # Keep a repo armed iff a parked DEVCAKE-MERGE mission on it was NOT

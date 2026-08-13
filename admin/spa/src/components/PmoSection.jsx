@@ -369,6 +369,16 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     ✗ {dr.errors[`cfg.pmos.${idx}.reference_repos`]}
                   </p>
                 )}
+                <SettingRow label="Discovery routing"
+                  desc={inst.discovery_routing === false
+                    ? "OFF — discoveries are still harvested and attached; nothing is routed across the family until re-enabled."
+                    : "ON — a steward run routes harvested discoveries across each mission family (drafted; applies on Save)."}
+                  help="ADR-0033: Devs may report structured discoveries (finding / evidence / scope); they are always memorialized on the source mission. With routing on, a Discovery Steward selects which family missions should see each finding and delivers it as an advisory comment (leads, not truths). Budgets on Limits & Traffic bound the volume; turning this off leaves pending discoveries visible on the board (DEVCAKE-DISCOVERY label) for a later toggle-on.">
+                  <Toggle on={inst.discovery_routing !== false}
+                    label={`Discovery routing for ${inst.name}`}
+                    onClick={() => setField(`cfg.pmos.${idx}.discovery_routing`,
+                      inst.discovery_routing === false)} />
+                </SettingRow>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>

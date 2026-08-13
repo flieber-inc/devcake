@@ -30,6 +30,13 @@ def sourced_repo_names(*, work_repo: str, mission_type: str, instance,
     if mission_type in STAGES_WITH_EXTRAS:
         wanted += list(instance.reference_repos or [])
         wanted += [bw.get("repo_ref") or "" for bw in blocker_entries or []]
+    if mission_type == "STEWARD":
+        # ADR-0033 discovery flavor: the family's work repos ride
+        # blocker-entry-shaped extras (RO clones for evidence anchoring).
+        # Deliberately WITHOUT reference_repos — family WORK repos only;
+        # the relations flavor passes no entries, so it still sources
+        # exactly [work_repo].
+        wanted += [bw.get("repo_ref") or "" for bw in blocker_entries or []]
     out: list[str] = []
     seen: set[str] = set()
     for name in wanted:

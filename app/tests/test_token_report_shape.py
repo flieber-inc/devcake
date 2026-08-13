@@ -146,6 +146,8 @@ RUN_SCALAR_COLUMNS = {
     "schema_version", "run_id", "mission_key", "mission_pmo_id", "pmo_kind",
     "pmo_ref", "repo_ref", "mission_type", "dev_type", "seq",
     "attempt_of_step", "stage_label_at_dispatch", "branch", "spec_prompt",
+    # steward_duty: ADR-0033 flavor discriminator — deliberate widening
+    "steward_duty",
     "spec_skills_dir", "state", "created_at", "started_at", "ended_at",
     "last_heartbeat", "timeout_seconds", "traceparent", "auth_digest",
     "artifact_bytes", "error", "error_class", "attempt_counted", "verdict",
@@ -154,6 +156,9 @@ RUN_SCALAR_COLUMNS = {
 RUN_BLOB_COLUMNS = {
     "blocker_work", "mirror_repos", "spec_skills", "spec_env",
     "finalized_steps", "result", "token_report",
+    # ADR-0033 — the discovery steward's dispatch snapshot of the batches
+    # its package carried: [{pmo_id, key, step}]; deliberate widening
+    "steward_batches",
     # ADR-0031 — {entry_id, ts} reading receipt; a two-key JSON column
     "feed_watermark",
 }

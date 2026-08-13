@@ -91,6 +91,13 @@ class PMOInstance(BaseModel):
     # in-flight finalization and sweeps continue. Default open so a multi-PMO
     # deployment starts with every configured team active.
     intake_paused: bool = False
+    # ADR-0033 D11 (draft field, founder ruling): gates the steward
+    # discovery lane + cross-mission delivery for THIS instance's families
+    # (families never span instances, so the toggle's unit matches the
+    # routing unit). Harvest stays unconditional — the board stays complete
+    # for a later toggle-on. Default ON: a default-off feature never
+    # generates evaluation data; budgets + family scoping bound the radius.
+    discovery_routing: bool = True
     # Per-instance Mission Type → Dev Type overrides (ADR-0019, dual-crew
     # staffing): a present key replaces the global AppConfig.assignments row
     # WHOLESALE — extra_cli_args included, because CLI flags are harness-
@@ -329,11 +336,17 @@ class ModelRate(BaseModel):
 DEFAULT_MODEL_RATES: list[ModelRate] = [
     ModelRate(model_prefix="grok-4.5", input_per_mtok=2.00,
               cache_read_per_mtok=0.30, output_per_mtok=6.00),
+    # Anthropic list prices for Claude Opus 5 (the seeded steward vehicle,
+    # ADR-0033 D10) — cache write at the 5m-TTL 1.25× premium; claude
+    # harnesses DO report cache-write counters, unlike grok
+    ModelRate(model_prefix="claude-opus", input_per_mtok=5.00,
+              cache_read_per_mtok=0.50, cache_write_per_mtok=6.25,
+              output_per_mtok=25.00),
 ]
 
 # Bump the -vN suffix whenever DEFAULT_MODEL_RATES change, so a stamped
 # feed line ("cost (estimated, builtin-v1)") names an unambiguous vintage.
-BUILTIN_RATE_CARD_ID = "builtin-v1"
+BUILTIN_RATE_CARD_ID = "builtin-v2"
 
 
 class CostInputs(BaseModel):
@@ -520,10 +533,12 @@ IMPLEMENTER_PROMPT = (
     "current mission playbook asks."
 )
 STEWARD_PROMPT = (
-    "You are **Steward**, DevCake's fast, literal assistant for narrow structured "
-    "tasks. You do exactly the task you are given — no more. You never improvise "
-    "scope, you follow output formats to the letter, and when you are unsure you say "
-    "so instead of guessing. Do exactly what your current mission playbook asks."
+    "You are **Steward**, DevCake's board-tending engineer. You reason "
+    "about a whole team's missions at once — ordering dependencies and "
+    "cross-mission relevance — with the judgment of a staff engineer and "
+    "the restraint of a librarian: you follow output formats exactly, you "
+    "propose only what the evidence supports, and when you are unsure you "
+    "propose nothing. Do exactly what your current mission playbook asks."
 )
 
 DEFAULT_DEV_TYPES = [
@@ -532,11 +547,15 @@ DEFAULT_DEV_TYPES = [
             model="claude-fable-5"),  # founder decision 2026-07-12: judgment runs on Fable
     DevType(name="implementer", harness_template="grok-build",
             identifying_prompt=IMPLEMENTER_PROMPT, max_concurrency=2),
-    # cheap, literal worker for narrow structured tasks — the Relations Steward's
-    # default vehicle (ADR-0007 addendum); same harness/credentials as judgment
+    # EXECUTE-grade for BOTH steward duties (ADR-0033 D10, founder ruling):
+    # a wrong blocked_by edge silently reorders a family's execution, and
+    # discovery routing is family-wide relevance judgment — the steward
+    # class carries at least the bar EXECUTE demands. Same harness/
+    # credentials as judgment; fresh boots only (existing deployments keep
+    # their configured staffing and upgrade via the admin UI).
     DevType(name="steward", harness_template="claude-code",
             identifying_prompt=STEWARD_PROMPT, max_concurrency=1,
-            model="claude-haiku-4-5"),
+            model="claude-opus-5"),
 ]
 
 

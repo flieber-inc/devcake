@@ -140,7 +140,7 @@ echoes the work-repo token for whatever host a Dev fetches.
 - Success metric vs the incident workload: per-run forge transfer drops
   from ~300 MB × N Devs to delta fetches from one app IP.
 
-### 7 — Dagu 2.10.5 → 2.11.3 (severable rider)
+### 7 — Dagu 2.10.5 → 2.11.3 → 2.13.0 (severable rider)
 
 Audited: two breaking changes in range, neither applies (v2.11.0 CORS
 hardening — DevCake talks server-side, the SPA only links to Dagu's own
@@ -152,6 +152,12 @@ steps, human-task API — all business logic stays in the app; the DAG
 remains a dumb launcher. All three volume probes re-measured green on
 2.11.3; digest pinned. If live smoke ever implicates the bump, revert
 its commit alone — the mirror does not depend on it.
+
+2026-08-13 — 2.13.0: same posture, re-audited (2.12/2.13 notes: UI,
+webhook, documents, build-workflow — nothing on our six endpoints) and
+live-drilled per `13-deployment.md` §4; §4 above records the volume
+probes re-measured on 2.13.0. One real break (2.12 wiki store vs our RO
+dags bind) fixed in compose via `DAGU_WIKI_DIR`.
 
 ## Related
 

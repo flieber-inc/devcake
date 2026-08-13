@@ -31,12 +31,17 @@ export async function getText(path) {
   if (!r.ok) await fail(r);
   return r.text();
 }
-// POST that answers with a FILE: fetch → Blob → synthetic <a download> click.
-// The server names the file via Content-Disposition (the client only falls
-// back). Auth rides the browser session like every other call.
-export async function download(path, body) {
-  const r = await fetch(`/api/v1${path}`, {
-    method: "POST",
+// Request that answers with a FILE: fetch → Blob → synthetic <a download>
+// click. POST by default (existing callers unchanged); pass method "GET" for
+// query-param exports (no body is sent). The server names the file via
+// Content-Disposition (the client only falls back). Auth rides the browser
+// session like every other call.
+export async function download(path, body, method = "POST") {
+  const r = await fetch(`/api/v1${path}`, method === "GET" ? {
+    method: "GET",
+    headers: { "X-DevCake-Request": "1" },
+  } : {
+    method,
     headers: { "Content-Type": "application/json", "X-DevCake-Request": "1" },
     body: JSON.stringify(body ?? {}),
   });

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink, SquareTerminal } from "lucide-react";
-import { get, send } from "../api.js";
+import { download, get, send } from "../api.js";
 import { makeReqSeq } from "../lib/reqSeq.js";
 import PageHeader from "../components/PageHeader.jsx";
 import { Card } from "../components/Card.jsx";
@@ -59,13 +59,16 @@ export default function RunsPage() {
   // stale-response guard: eight filter deps re-fire load; an old query
   // resolving after a newer one must not overwrite the fresh rows (2026-08-12)
   const seq = useRef(makeReqSeq());
+  // the ONE filter/sort query builder — the list fetch and the CSV export
+  // must never disagree about what "the filtered set" means
+  const filterQuery = () =>
+    (query ? `&mission_key=${encodeURIComponent(query)}` : "") +
+    (pmoRef ? `&pmo_ref=${encodeURIComponent(pmoRef)}` : "") +
+    (fromDate ? `&created_from=${fromDate}` : "") +
+    (toDate ? `&created_to=${toDate}` : "") +
+    `&sort=${sortKey}&dir=${sortDir}`;
   const load = () => {
-    const q = `/runs?limit=${PAGE}&offset=${offset}` +
-      (query ? `&mission_key=${encodeURIComponent(query)}` : "") +
-      (pmoRef ? `&pmo_ref=${encodeURIComponent(pmoRef)}` : "") +
-      (fromDate ? `&created_from=${fromDate}` : "") +
-      (toDate ? `&created_to=${toDate}` : "") +
-      `&sort=${sortKey}&dir=${sortDir}` +
+    const q = `/runs?limit=${PAGE}&offset=${offset}` + filterQuery() +
       (grouped ? "&group_by=mission" : "");
     const mine = seq.current.next();
     return get(q).then((d) => {
@@ -316,6 +319,9 @@ export default function RunsPage() {
               Open Dagu <ExternalLink size={13} aria-hidden />
             </a>
             <MoreMenu label="More run actions" items={[
+              { label: "Export to CSV…",
+                desc: "Downloads the filtered set as a spreadsheet — every matching run, not just this page.",
+                onClick: () => { download(`/runs.csv?${filterQuery().slice(1)}`, null, "GET").catch(() => {}); } },
               { label: "Cost inputs…",
                 desc: "Per-model rates behind estimated costs. Changes apply immediately.",
                 onClick: () => setCostOpen(true) },

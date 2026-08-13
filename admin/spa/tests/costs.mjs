@@ -65,6 +65,8 @@ await withPage(async (page) => {
 
   // ⋯ → Cost inputs modal: structure only, then Cancel
   await page.click('button[aria-label="More run actions"]');
+  const csvItem = page.locator('[role="menuitem"]:has-text("Export to CSV")');
+  check("⋯ offers Export to CSV…", (await csvItem.count()) === 1);
   const item = page.locator('[role="menuitem"]:has-text("Cost inputs")');
   check("⋯ offers Cost inputs…", (await item.count()) === 1);
   await item.click();

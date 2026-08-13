@@ -11,7 +11,8 @@ from fastapi import HTTPException
 
 from devcake.adapters.files.run_store import RunStore
 from devcake.config import CostInputs, ModelRate
-from devcake.api.runs_service import list_runs_response, run_detail
+from devcake.api.runs_service import (list_runs_response, run_detail,
+                                      runs_csv_response)
 from devcake.domain.run import Run
 
 T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -274,3 +275,69 @@ def test_rows_and_detail_never_leak_prompts_results_or_notes(tmp_path):
         assert banned not in detail
     assert detail["cost_usd_estimated"] == 5.60
     assert detail["input_tokens"] == 1_000_000
+
+
+# ── CSV export (docs/11: the Runs ⋯ menu's spreadsheet) ──────────────────────
+
+def _csv_rows(resp):
+    import csv as _csv
+    import io as _io
+    return list(_csv.reader(_io.StringIO(resp.body.decode())))
+
+
+def test_csv_exports_whole_filtered_set_with_header(tmp_path):
+    # no pagination: 39 runs is more than one page and ALL of them export
+    store = _store(tmp_path, [_run(i, tr=GROK_TR) for i in range(1, 40)])
+    resp = runs_csv_response(store, CostInputs())
+    rows = _csv_rows(resp)
+    assert rows[0][0] == "run_id" and "cost_usd_effective" in rows[0]
+    assert len(rows) == 40
+    assert resp.media_type == "text/csv"
+    assert resp.headers["content-disposition"].startswith(
+        'attachment; filename="devcake-runs-')
+
+
+def test_csv_respects_filters_via_the_shared_pipe(tmp_path):
+    store = _store(tmp_path, [_run(1, pmo_ref="alpha", tr=GROK_TR),
+                              _run(2, pmo_ref="beta", tr=CLAUDE_TR)])
+    rows = _csv_rows(runs_csv_response(store, CostInputs(), pmo_ref="beta"))
+    assert len(rows) == 2
+    row = dict(zip(rows[0], rows[1]))
+    assert row["pmo_ref"] == "beta" and row["mission_key"] == "A-2"
+    assert row["created_at"] == (T0 + timedelta(hours=2)).isoformat()
+
+
+def test_csv_effective_cost_matches_the_ui_rule(tmp_path):
+    # native present + override off ⇒ native; override on ⇒ current estimate
+    store = _store(tmp_path, [_run(1, tr=CLAUDE_TR)])
+    row = dict(zip(*_csv_rows(runs_csv_response(store, CostInputs()))[:2]))
+    assert row["cost_usd_effective"] == "0.1234"
+    assert row["rate_card_id"] == "builtin-v2"
+    over = CostInputs(override_native=True)
+    row = dict(zip(*_csv_rows(runs_csv_response(store, over))[:2]))
+    assert row["cost_usd_effective"] == "0.09"
+
+
+def test_csv_neutralizes_formula_cells_but_not_numbers(tmp_path):
+    r = _run(1, tr=CLAUDE_TR)
+    r.state, r.error = "failed", "=HYPERLINK(\"http://evil\")"
+    store = _store(tmp_path, [r])
+    row = dict(zip(*_csv_rows(runs_csv_response(store, CostInputs()))[:2]))
+    assert row["error"] == "'=HYPERLINK(\"http://evil\")"    # inert in Excel
+    assert row["cost_usd"] == "0.1234"                       # numbers stay raw
+
+
+def test_csv_sort_orders_the_whole_set_and_leaks_nothing(tmp_path):
+    store = _store(tmp_path, [_run(1, tr=CLAUDE_TR), _run(2, tr=GROK_TR)])
+    resp = runs_csv_response(store, CostInputs(), sort="cost",
+                             direction="desc")
+    rows = _csv_rows(resp)
+    assert [r[2] for r in rows[1:]] == ["A-2", "A-1"]   # grok est 5.60 first
+    assert "SECRET" not in resp.body.decode()
+    with pytest.raises(HTTPException):
+        runs_csv_response(store, CostInputs(), sort="bogus")
+
+
+def test_csv_empty_store_is_header_only(tmp_path):
+    rows = _csv_rows(runs_csv_response(_store(tmp_path, []), CostInputs()))
+    assert len(rows) == 1

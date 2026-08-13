@@ -110,9 +110,10 @@ def test_claude_thinking_tokens_land_in_the_reasoning_slot():
     first-class v1 reasoning slot like grok/codex; a pre-2.1.229 stream
     without the key stays None (never a fabricated 0)."""
     r = _report_for("claude_healthy")
-    assert r["reasoning_tokens"] == r["raw"]["usage"][
-        "output_tokens_details"]["thinking_tokens"]
-    assert r["reasoning_tokens"] is not None
+    # fixture LITERAL, not extractor-vs-its-own-raw (audit nit): the
+    # claude_healthy capture carries thinking_tokens: 0, and 0-read-from-
+    # the-key vs None-no-key is exactly the distinction that matters
+    assert r["reasoning_tokens"] == 0
     old = tokens.claude_token_report({"usage": {"output_tokens": 5}})
     assert old["reasoning_tokens"] is None
 

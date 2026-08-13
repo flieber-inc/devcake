@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019fcdc6-a6ea-7dd3-a8f0-c69f766cd015"}
+{"type":"thread.started","thread_id":"019ffc18-36fc-73b0-8a90-8628c4c49513"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"error","message":"{\"type\": \"error\", \"error\": {\"type\": \"invalid_request_error\", \"message\": \"stub injected HTTP 400\"}}"}

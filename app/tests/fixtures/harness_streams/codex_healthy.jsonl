@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019fcdc6-a001-7291-8c84-9d741951ccc0"}
+{"type":"thread.started","thread_id":"019ffc18-166e-71c3-bf3a-d238a7448266"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Done. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. Detail. "}}

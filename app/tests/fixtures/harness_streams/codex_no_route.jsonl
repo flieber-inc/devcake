@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019fcdc7-7e30-74a2-93a6-9c3165303614"}
+{"type":"thread.started","thread_id":"019ffc18-5d6b-76e2-88b0-fccbeddde926"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"error","message":"unexpected status 404 Not Found: /v1/responses not found, url: http://devcake-capture-stub-codex:8080/s/no_route/v1/responses"}

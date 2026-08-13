@@ -30,12 +30,14 @@ committed files on every test run.
 
 Four older claude streams predate the rig and have **no** sidecar; they are
 asserted only by `test_entrypoint_fault.py`. The rig-covered claude captures
-(`claude_healthy`, `claude_refusal`, the resume pair) are at **2.1.221**
-(2026-08 bump — result-event shape unchanged from 2.1.210 apart from a benign
-`fast_mode_disabled_reason` field we do not read). The full codex battery is
-at **0.146.0** (same bump — usage gained `cache_write_input_tokens`, absorbed
-by the TokenReport v1 extractor; every intended class reproduced, resume
-usage re-measured cumulative).
+(`claude_healthy`, `claude_refusal`, the resume pair) are at **2.1.229**
+(2026-08-13 bump — usage gained `output_tokens_details.thinking_tokens`,
+absorbed into the v1 reasoning slot; result-event shape otherwise
+unchanged). The full codex battery is at **0.147.0** (same bump, full
+16-lane recapture — ZERO structural drift from 0.146.0: identical event
+sequences, usage keys, exit codes, and classifier verdicts; resume usage
+re-measured CUMULATIVE despite openai/codex#35621's restored-usage replay
+skip).
 
 ## Why structural activity, not token counts
 
@@ -64,7 +66,7 @@ Intended DevCake exit / class is what `test_harness_captures.py` asserts (or
 | `claude_healthy` | normal completion | 0 | no fault |
 | `claude_refusal` | model refusal text | 0 | no fault |
 
-### codex-cli 0.146.0
+### codex-cli 0.147.0
 
 | Name | Scenario | CLI exit | Asserted class |
 |---|---|---|---|

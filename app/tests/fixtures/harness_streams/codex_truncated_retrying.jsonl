@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019fcdc7-5d89-7750-bdb2-92f49fe55166"}
+{"type":"thread.started","thread_id":"019ffc18-65ce-76f2-b30d-589843b3bf13"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"error","message":"Reconnecting... 1/5 (stream disconnected before completion: Transport error: network error: error decoding response body)"}

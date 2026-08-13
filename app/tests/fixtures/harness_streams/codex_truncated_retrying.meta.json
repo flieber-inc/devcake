@@ -1,9 +1,9 @@
 {
   "name": "codex_truncated_retrying",
   "harness": "codex",
-  "cli_version": "codex-cli 0.146.0",
+  "cli_version": "codex-cli 0.147.0",
   "entrypoint_source": "/srv/images/common/dev_entrypoint.py",
-  "condition": "stub /s/truncated DEFAULT retries; recapture at 0.146.0",
+  "condition": "stub /s/truncated DEFAULT retries; recapture at 0.147.0",
   "model": "stub-model",
   "plan_mode": false,
   "argv": [
@@ -32,20 +32,20 @@
   "preflight": {
     "url": "http://devcake-capture-stub-codex:8080/healthz",
     "status": 200,
-    "latency_ms": 32,
+    "latency_ms": 24,
     "body_head": "{\"ok\": true, \"stub\": true}"
   },
   "concurrency": 1,
   "concurrency_note": null,
   "exit_code": 1,
   "timed_out": false,
-  "duration_ms": 6798,
+  "duration_ms": 6769,
   "stdout_bytes": 1329,
   "stdout_lines": 10,
   "stderr_bytes": 39,
   "dump_bytes": 0,
   "last_message_bytes": 0,
-  "session_id": "019fcdc7-5d89-7750-bdb2-92f49fe55166",
+  "session_id": "019ffc18-65ce-76f2-b30d-589843b3bf13",
   "resume_of": null,
   "first_session_id": null,
   "observed_reason": "terminal_error",
@@ -53,5 +53,5 @@
   "devcake_exit_now": 15,
   "devcake_class_now": "DEV_HARNESS_FAULT",
   "devcake_exit_before_adr0018": 10,
-  "captured_at": "2026-08-04T17:17:09Z"
+  "captured_at": "2026-08-13T17:08:11Z"
 }

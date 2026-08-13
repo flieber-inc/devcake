@@ -1,4 +1,4 @@
-{"type":"thread.started","thread_id":"019fcdc6-c0dc-70b2-af35-40c48a024258"}
+{"type":"thread.started","thread_id":"019ffc18-3169-73d0-80e5-e45029d480ff"}
 {"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `stub-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
 {"type":"turn.started"}
 {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc stub","aggregated_output":"","exit_code":null,"status":"in_progress"}}

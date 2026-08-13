@@ -156,6 +156,9 @@ def test_cap_applies_and_zero_is_unlimited(tmp_path):
     run_coro(mgr.finalize(_exec_run(store), _payload(five)))
     disc = [c for c in fake.comments if "devcake:discovery:v1" in c]
     assert discovery_posts(unquoted(disc[0])) == [(1, 3)]   # default cap 3
+    uploaded = next(u[1].decode() for u in fake.uploads if u[0] == "DISCOVERY_1.md")
+    assert "finding 3" not in uploaded and "finding 4" not in uploaded
+    assert "finding 0" in uploaded and "finding 2" in uploaded
     m2, mgr2, fake2, store2 = _harvest_mgr(tmp_path / "b")
     mgr2.config.budgets.discoveries_per_run = 0             # 0 = unlimited
     run_coro(mgr2.finalize(_exec_run(store2), _payload(five)))
@@ -175,6 +178,17 @@ def test_invalid_entries_dropped_silently(tmp_path):
     assert LABEL_DISCOVERY not in m.labels
     assert "discovery:post" not in run.finalized_steps
     assert run.state == "finished"                          # close unharmed
+
+
+def test_mixed_list_keeps_only_valid_entries(tmp_path):
+    m, mgr, fake, store = _harvest_mgr(tmp_path)
+    run_coro(mgr.finalize(_exec_run(store), _payload(
+        [ENTRY, {"finding": "x", "scope": "y"}])))
+    disc = [c for c in fake.comments if "devcake:discovery:v1" in c]
+    assert discovery_posts(unquoted(disc[0])) == [(1, 1)]
+    uploaded = next(u[1].decode() for u in fake.uploads if u[0] == "DISCOVERY_1.md")
+    assert ENTRY["finding"] in uploaded
+    assert uploaded.count("## ") == 1
 
 
 def test_missing_key_changes_nothing(tmp_path):
@@ -203,6 +217,9 @@ def test_entry_text_is_defanged_and_quarantined(tmp_path):
     assert discovery_posts(unquoted(disc)) == [(1, 1)]
     assert "devcake:handoff:v1" in disc            # text kept, teeth pulled
     assert "`devcake:handoff:v1`" not in disc
+    uploaded = next(u[1].decode() for u in fake.uploads if u[0] == "DISCOVERY_1.md")
+    assert "`devcake:handoff:v1`" not in uploaded
+    assert "devcake:handoff:v1" in uploaded
 
 
 def test_label_added_and_queue_seeded(tmp_path):
@@ -231,6 +248,8 @@ def test_upload_failure_falls_back_inline_and_close_proceeds(tmp_path):
 def test_post_failure_is_audited_and_never_wedges(tmp_path):
     m, mgr, fake, store = _harvest_mgr(tmp_path)
     orig = fake.post_feed
+    audits = []
+    mgr._audit = lambda *a, **k: audits.append(a)
 
     async def _refuse(ref, markdown):
         if "devcake:discovery:v1" in markdown:
@@ -240,7 +259,17 @@ def test_post_failure_is_audited_and_never_wedges(tmp_path):
     run = _exec_run(store)
     run_coro(mgr.finalize(run, _payload([ENTRY])))
     assert run.state == "finished"                 # the close proceeded
-    assert (set(), {LABEL_DISCOVERY}) in fake.swaps  # later sub-steps still ran
+    assert "discovery:post" not in run.finalized_steps
+    assert LABEL_DISCOVERY not in m.labels
+    assert (set(), {LABEL_DISCOVERY}) not in fake.swaps
+    assert any(len(a) > 1 and a[1] == "discovery_post_failed" for a in audits)
+    assert not any(len(a) > 1 and a[1] == "discovery_post" for a in audits)
+    # redelivery retries the post
+    fake.post_feed = orig
+    run_coro(mgr.finalize(run, _payload([ENTRY])))
+    assert any("devcake:discovery:v1" in c for c in fake.comments)
+    assert "discovery:post" in run.finalized_steps
+    assert LABEL_DISCOVERY in m.labels
 
 
 def test_redelivery_posts_once(tmp_path):
@@ -256,11 +285,13 @@ def test_redelivery_posts_once(tmp_path):
 def test_failed_runs_never_harvest(tmp_path):
     m, mgr, fake, store = _harvest_mgr(tmp_path)
     run = _exec_run(store)
-    payload = {"result": {}, "transcript_md": "T", "exit_code": 11,
+    payload = {"result": {"discoveries": [ENTRY]}, "transcript_md": "T",
+               "exit_code": 11,
                "token_report": {"extraction_method": "unavailable"}}
     run_coro(mgr.finalize(run, payload))
     assert run.state == "failed"
     assert not any("devcake:discovery" in c for c in fake.comments)
+    assert "discovery:post" not in run.finalized_steps
 
 
 def test_plan_project_and_steward_shapes_never_harvest(tmp_path):
@@ -310,6 +341,23 @@ def test_pending_from_board_is_label_gated(tmp_path):
     out = run_coro(discovery.pending_from_board(mgr, [m]))
     assert out == {"p1": [(1, 2)]}
     assert fake.get_activity_calls == 1
+    assert getattr(fake, "get_activity_full_calls", 0) == 1
+
+
+def test_truncated_source_is_unreadable_not_empty(tmp_path):
+    m, mgr, fake, store = _harvest_mgr(tmp_path)
+    m.labels = m.labels | {LABEL_DISCOVERY}
+    fake.activity_entries = [
+        _entry("e1", discovery_marker(1, 2) + "\n\n" + SENTINEL,
+               author="devcake"),
+    ]
+    fake.activity_truncated = True
+    state = run_coro(discovery.scan_source(mgr, m))
+    assert state.truncated
+    assert run_coro(discovery.pending_from_board(mgr, [m])) == {}
+    run_coro(discovery.discovery_sweep(mgr, m))
+    assert ({LABEL_DISCOVERY}, set()) not in fake.swaps
+    assert not any("to=-" in c for c in fake.comments)
 
 
 def test_pending_excludes_receipted_steps(tmp_path):

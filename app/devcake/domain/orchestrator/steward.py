@@ -310,13 +310,19 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     against the LIVE board and feed-counted budgets, copy finding text from
     the source run record — verbatim transport is structural, steward text
     never lands beyond its one-line "because" — deliver one marked comment
-    per recipient, receipt every dispatched batch (a routed-nowhere batch
-    receipts `to=-` so the counterflow terminates), and drop the sweep-gate
-    label once a source has nothing pending. Idempotent against the board:
-    a redelivered finalize re-checks the recipient's delivery markers and
-    the source's receipts before every write."""
+    per recipient, receipt a batch only when it was *dispositioned*
+    (delivered, or deliberately routed nowhere / a terminal reject), and
+    drop the sweep-gate label once a source has nothing pending.
+    Transient holds (budget, truncated/unreadable feed, failed post,
+    routing toggle off) write no ``to=-`` — the sweep re-drives.
+    Idempotent against the board: a redelivered finalize re-checks the
+    recipient's delivery markers and the source's receipts before every
+    write."""
     from .discovery import render_entry_lines, scan_source, valid_entries
     from .family_graph import family_of
+
+    if not mgr.instance.discovery_routing:          # D11 — delivery too
+        return 0, 0
 
     budgets = mgr.config.budgets
     missions = await mgr.pmo.list_all(mgr.instance.team_key)
@@ -330,10 +336,16 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                for b in (run.steward_batches or [])}
 
     delivered = rejected = 0
+    # (source pmo_id, step) held for a transient — no to=- (cap/outage
+    # is a pause; a human deleting a delivery comment frees the slot)
+    held: set[tuple[str, int]] = set()
 
-    def reject(pmo_id: str, detail: str) -> None:
+    def reject(pmo_id: str, detail: str, *,
+               hold: tuple[str, int] | None = None) -> None:
         nonlocal rejected
         rejected += 1
+        if hold is not None:
+            held.add(hold)
         mgr._audit(pmo_id or "", "discovery_route_rejected", detail)
         log.info("discovery route rejected: %s", detail)
 
@@ -375,6 +387,10 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         state = src_state.get(src.pmo_id)
         if state is None:
             state = src_state[src.pmo_id] = await scan_source(mgr, src)
+        if getattr(state, "truncated", False):
+            reject(src.pmo_id, f"{src_key}: source feed truncated",
+                   hold=(src.pmo_id, step))
+            continue
         n = next((n_ for s_, n_ in state.posted if s_ == step), 0)
         source_run = run_ix.get((src.pmo_id, step))
         entries = valid_entries(source_run.result)[:n] if source_run else []
@@ -382,11 +398,13 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
             reject(src.pmo_id, f"{src_key} step {step}: no finding #{index}")
             continue
         cap = budgets.discovery_routes_per_source
-        planned = sum(1 for xs in accepted.values() for x in xs
-                      if x["src"].pmo_id == src.pmo_id)
-        if cap and len(state.receipted) + planned >= cap:
+        planned = {(x["step"], x["tgt"].key.upper())
+                   for xs in accepted.values() for x in xs
+                   if x["src"].pmo_id == src.pmo_id}
+        if cap and len(state.receipted | planned) >= cap:
             reject(src.pmo_id,
-                   f"{src_key}: source route budget spent ({cap})")
+                   f"{src_key}: source route budget spent ({cap})",
+                   hold=(src.pmo_id, step))
             continue
         accepted.setdefault(tgt.pmo_id, []).append(
             {"src": src, "tgt": tgt, "step": step, "index": index,
@@ -403,14 +421,16 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         except Exception as ex:  # noqa: BLE001 — recipient skipped; the board re-drives via the sweep
             for x in batch:
                 reject(x["src"].pmo_id,
-                       f"→{tgt.key}: recipient feed unreadable ({ex})")
+                       f"→{tgt.key}: recipient feed unreadable ({ex})",
+                       hold=(x["src"].pmo_id, x["step"]))
             continue
         if act.truncated:
             # gitea pages ascending and drops the NEWEST — counts unknown
             # ⇒ fail closed (the freshness-gate truncation doctrine)
             for x in batch:
                 reject(x["src"].pmo_id,
-                       f"→{tgt.key}: recipient feed truncated")
+                       f"→{tgt.key}: recipient feed truncated",
+                       hold=(x["src"].pmo_id, x["step"]))
             continue
         existing: set[tuple[str, int]] = set()
         for en in act.entries:
@@ -435,7 +455,8 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
             if cap_in and len(existing) >= cap_in:
                 for x in xs:
                     reject(src.pmo_id,
-                           f"→{tgt.key}: recipient budget spent ({cap_in})")
+                           f"→{tgt.key}: recipient budget spent ({cap_in})",
+                           hold=(src.pmo_id, step))
                 continue
             existing.add((skey, step))
             head = [f"`devcake:discovery-in:v1 src={skey} step={step}`",
@@ -464,17 +485,22 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         try:
             await mgr._feed(tgt_id, "issue", body, externalize=False)
             delivered += len(landed)
-        except Exception as ex:  # noqa: BLE001 — nothing landed for this recipient; drop its receipts so the sweep re-drives
+        except Exception as ex:  # noqa: BLE001 — nothing landed; hold the
+            # batch so phase 3 cannot stamp to=- (the sweep re-drives)
             for x in landed:
                 receipts.get(x["src"].pmo_id, set()).discard(
                     (x["step"], tgt.key.upper()))
                 reject(x["src"].pmo_id,
-                       f"→{tgt.key}: delivery post failed ({ex})")
+                       f"→{tgt.key}: delivery post failed ({ex})",
+                       hold=(x["src"].pmo_id, x["step"]))
 
-    # 3 — receipts: every dispatched batch gets a disposition (routed
-    # targets, or `-` for routed-nowhere), then the label drops when the
-    # source has nothing pending
+    # 3 — receipts: a batch is dispositioned when something landed, the
+    # steward routed nowhere, or every proposal was a *terminal* reject.
+    # Transient holds (budget / truncated / unreadable / post-fail) stay
+    # pending — to=- is deliberate/clear-runs only (ADR-0033 addendum).
     for (pid, step), b in batches.items():
+        if (pid, step) in held:
+            continue
         receipts.setdefault(pid, set())
         if not any(s == step for s, _t in receipts[pid]):
             receipts[pid].add((step, "-"))

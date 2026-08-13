@@ -370,25 +370,39 @@ these rulings amend it where implementation surfaced better information.
 10. **Termination is receipt-complete.** Every batch a discovery run's
     package carried is dispositioned at finalize — routed targets get
     per-target receipts; a batch the steward deliberately routed NOWHERE
-    gets a `to=-` receipt (else the sweep would re-dispatch it forever).
-    Batches whose source run record was cleared (clear-runs) are terminated
-    by the sweep with a sentinel'd unroutable comment + the same `to=-`
-    disposition. `pending = posted − receipted` therefore always converges.
+    (empty `routes[]`) **or** whose every proposal was a *terminal* reject
+    (unknown / self / terminal recipient / outside family / malformed /
+    not in the package) gets a `to=-` receipt. Batches whose source run
+    record was cleared (clear-runs) are terminated by the sweep with a
+    sentinel'd unroutable comment + the same `to=-`. **Transient holds
+    do not receipt:** spent budget, truncated or unreadable feed, failed
+    delivery post — the step stays pending so a human deleting a comment
+    (or a later healthy fetch) can free the slot. `pending = posted −
+    receipted` converges when counts are known; a truncated `scan_source`
+    (`full=True`, fail-closed) writes nothing.
 11. **Single-flight is per-instance**, a sound coarsening of Decision 3's
     per-family rule: families never span instances, so one in-flight
-    discovery run per instance implies at most one per family. Both steward
-    flavors also share the deployment-wide one-STEWARD `active()` slot and
-    `global_max` — on multi-instance deployments discovery bursts serialize
-    behind it; accepted (batching calm over fan-out).
+    discovery run per instance implies at most one per family. Both
+    flavors **and** `run_now` share **one lock** around the deployment-wide
+    one-STEWARD `active()` slot and `global_max` — two locks around the
+    same check would double-dispatch. Intake pause freezes the harvest
+    kick as well as the poll path. `pmos[].discovery_routing` off gates
+    apply-time delivery too (no `to=-`, board stays pending).
 12. **Delivery quarantine harmonized**: in feed comments (source previews
     AND recipient deliveries) marker/provenance lines stay unquoted while
     finding text is defanged AND blockquoted (quoted lines never count in
-    any scan — belt and suspenders); MISSION.md's advisory block renders
-    provenance lines with pointers only (the full delivery text rides
-    ACTIVITY.md's faithful mirror). Provenance drops the ADR's `at sha`
-    segment: no structured anchor exists at harvest and parsing shas from
-    evidence prose would violate never-parse-prose — shas live inside the
-    verbatim evidence text.
+    any scan — belt and suspenders); `DISCOVERY_<seq>.md` is defanged too
+    (a discovery must not smuggle a live marker). MISSION.md's advisory
+    block renders provenance lines with pointers only (the full delivery
+    text rides ACTIVITY.md's faithful mirror). Provenance drops the ADR's
+    `at sha` segment: no structured anchor exists at harvest and parsing
+    shas from evidence prose would violate never-parse-prose — shas live
+    inside the verbatim evidence text.
+13. **Harvest commit point is the comment write.** Label, pending, success
+    audit, notify, and the `discovery:post` checkpoint happen only after
+    the marked comment is on the feed. A failed post is audited
+    (`discovery_post_failed`), not checkpointed; redelivery retries. The
+    close still cannot wedge.
 
 ## Related
 

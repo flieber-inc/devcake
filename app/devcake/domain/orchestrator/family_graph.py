@@ -103,7 +103,10 @@ def family_work_repos(mgr, family: Family, all_runs=None, *,
     for m in family.members:
         if m.pmo_kind != "issue":
             continue
-        name = m.repo or dispatch.resolve_repo(mgr, m, all_runs)
+        if m.repo:
+            name = m.repo
+        else:
+            name, _reason = dispatch.resolve_repo(mgr, m, all_runs)
         if not name or name in seen:
             continue
         if blocker_read_credential(mgr, name) is None:

@@ -553,12 +553,17 @@ until that run exists, field evidence below stays operator-self-reported.
   (`builtin-v2`). Distinct from HANDOFF (ADR-0032): a handoff is the
   delivery method for discovery consequences that matter immediately
   downstream; `discoveries` is the family-wide memory the steward routes.
-  **Not yet graduated**: per the living-log criteria the feature may not
-  join field-evidence claims until the live multi-mission family smoke
-  passes (one mission's discovery reaching a sibling's MISSION.md and
-  tripping an in-flight recipient's freshness re-review) — owed after the
-  stack redeploys onto this code (R9; the deploy carries an entrypoint
-  change, so images and app move in lockstep).
+  Post-ship audit closed the leftover cracks: `to=-` is deliberate/clear-runs
+  only (budget / truncated / failed post stay pending); harvest checkpoints
+  only after the marker is on the feed; family clones unpack
+  `resolve_repo`'s `(name, reason)` tuple on the kick path; both steward
+  flavors share one lock; intake pause gates the harvest kick; `scan_source`
+  is `full=True` and fail-closed on truncation. **Not yet graduated**: per
+  the living-log criteria the feature may not join field-evidence claims
+  until the live multi-mission family smoke passes (one mission's discovery
+  reaching a sibling's MISSION.md and tripping an in-flight recipient's
+  freshness re-review) — owed after the stack redeploys onto this code
+  (R9; `#140` already changed the entrypoint).
 
 - **Skeptical-audit intervention campaign** (ADR-0034 + 18 PRs #119–#136,
   2026-08-12): a seven-reviewer skeptical audit at `ccc6da9` found the

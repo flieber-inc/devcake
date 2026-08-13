@@ -144,6 +144,20 @@ class PMOInstance(BaseModel):
         return secrets.read_connection_secret("pmo", self.name, "api_key")
 
 
+def intake_blocks_dispatch(config: "AppConfig", instance: PMOInstance) -> bool:
+    """True when NEW dispatches must not start for this PMO instance.
+
+    The global `intake_paused` master switch freezes every instance. Each
+    instance's own `intake_paused` freezes only that instance. Direct field
+    access: a rename must fail closed, never silently leave intake open.
+    Lives here (not api/poll) so domain callers — the harvest kick — share
+    the same predicate without importing the API layer.
+    """
+    if config.intake_paused:
+        return True
+    return bool(instance.intake_paused)
+
+
 def _default_forge() -> str:
     # lazy: config stays import-light; the default forge id is registry
     # knowledge, not config knowledge (F1)
@@ -242,8 +256,8 @@ class Concurrency(BaseModel):
 class Steward(BaseModel):
     """The out-of-the-loop Dev class (STEWARD — renamed from MAPPER,
     founder decision 2026-08-06): board-tending runs outside any mission's
-    pipeline. Today's sole duty is mapping missing blocked-by relations
-    (ADR-0007); discovery routing joins later. Manual-only by default
+    pipeline. Duties: mapping missing blocked-by relations (ADR-0007)
+    and discovery routing (ADR-0033). Manual-only by default
     (enabled=False → the admin "Run now" button); the periodic service is
     opt-in. dev_type must name an existing Dev Type whenever enabled — the
     seeded steward (cheap model) is the default vehicle."""
@@ -259,9 +273,7 @@ class Budgets(BaseModel):
     tasks at hand — so the bounds are knobs the operator sizes to their
     board, not evaluation constants. Devs carry self-regulation guidance in
     the playbooks; these are the backstops. 0 = unlimited, everywhere.
-    `discovery_routes_per_source` and `discovery_in_per_recipient` take
-    effect when discovery ROUTING ships (ADR-0033 PR-2); harvest and the
-    freshness gate consume the other two today."""
+    All four knobs are live (harvest + freshness + routing)."""
     # per-mission-lifetime cap on freshness re-review directives (ADR-0031;
     # shared by human steering posts and routed discoveries alike)
     freshness_rereviews: int = Field(5, ge=0)

@@ -66,9 +66,9 @@ def render_discovery_md(run: Run, entries: list[dict]) -> str:
              f"({run.mission_type})",
              f"run: `{run.run_id}` · {utcnow():%Y-%m-%d}", ""]
     for i, e in enumerate(entries, 1):
-        lines += [f"## {i}. Finding", e["finding"], "",
-                  f"**Evidence:** {e['evidence']}", "",
-                  f"**Scope:** {e['scope']}", ""]
+        lines += [f"## {i}. Finding", defang(e["finding"]), "",
+                  f"**Evidence:** {defang(e['evidence'])}", "",
+                  f"**Scope:** {defang(e['scope'])}", ""]
     return "\n".join(lines)
 
 
@@ -124,24 +124,28 @@ async def harvest(mgr, run: Run, result: dict) -> int:
     if not entries:
         return 0
     pmo_id = run.mission_pmo_id
-    cap = mgr.config.budgets.discoveries_per_run
-    if cap and len(entries) > cap:
-        mgr._audit(pmo_id, "discovery_capped",
-                   f"{len(entries) - cap} of {len(entries)} entries dropped "
-                   f"(budgets.discoveries_per_run={cap})")
-        entries = entries[:cap]
     name = f"DISCOVERY_{run.seq}.md"
 
     async def _post():
-        # HANDOFF doctrine: each sub-step best-effort — a PMO hiccup is
-        # audited, never propagated into the close
+        # The comment write is the commit point: label / pending / success
+        # audit / notify happen only after the marker is on the feed.
+        # A failed post is audited and re-raised so _checkpoint does not
+        # record discovery:post — redelivery retries. The outer harvest
+        # try still swallows so the close cannot wedge.
+        cap = mgr.config.budgets.discoveries_per_run
+        if cap and len(entries) > cap:
+            mgr._audit(pmo_id, "discovery_capped",
+                       f"{len(entries) - cap} of {len(entries)} entries "
+                       f"dropped (budgets.discoveries_per_run={cap})")
+            del entries[cap:]
         try:
             await post_attachment_comment(
                 mgr, pmo_id, "issue", filename=name,
                 content=redact(render_discovery_md(run, entries)),
                 comment_of=lambda url: comment_body(run, entries, name, url))
-        except Exception as e:  # noqa: BLE001 — best-effort BY DESIGN
+        except Exception as e:  # noqa: BLE001 — audited; raise so we do not checkpoint
             mgr._audit(pmo_id, "discovery_post_failed", str(e)[:200])
+            raise
         try:
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                       remove=set(), add={LABEL_DISCOVERY})
@@ -173,9 +177,12 @@ async def harvest(mgr, run: Run, result: dict) -> int:
 class SourceState:
     posted: list[tuple[int, int]]     # (step, n) markers on the source feed
     receipted: set[tuple[int, str]]   # (step, target) routing receipts (PR-2)
+    truncated: bool = False           # fail-closed: counts unknown
 
     @property
     def pending(self) -> list[tuple[int, int]]:
+        if self.truncated:
+            return []
         done = {s for s, _ in self.receipted}
         return [(s, n) for s, n in self.posted if s not in done]
 
@@ -183,16 +190,19 @@ class SourceState:
 async def scan_source(mgr, m) -> SourceState:
     """The ONE labeled-mission feed scan (shared with PR-2's sweep arm):
     posted markers and routing receipts, both over unquoted bodies (IRON
-    RULE). pending = posted − receipted — restart-proof board arithmetic,
-    no local ledger (ADR-0033 D3)."""
-    act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"))
+    RULE). full=True so newest receipts (gitea pages oldest-first) cannot
+    fall off the window. truncated ⇒ fail-closed: callers must not treat
+    the feed as empty or write to=-. pending = posted − receipted when
+    counts are known — restart-proof board arithmetic, no local ledger."""
+    act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
     posted: list[tuple[int, int]] = []
     receipted: set[tuple[int, str]] = set()
     for e in act.entries:
         text = unquoted(e.body)
         posted += discovery_posts(text)
         receipted |= discovery_receipts(text)
-    return SourceState(posted=posted, receipted=receipted)
+    return SourceState(posted=posted, receipted=receipted,
+                       truncated=bool(act.truncated))
 
 
 async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
@@ -204,6 +214,8 @@ async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
         if m.pmo_kind != "issue" or LABEL_DISCOVERY not in m.labels:
             continue
         state = await scan_source(mgr, m)
+        if state.truncated:
+            continue
         if state.pending:
             out[m.pmo_id] = state.pending
     return out
@@ -223,6 +235,8 @@ async def discovery_sweep(mgr, m) -> None:
     if not mgr.instance.discovery_routing:
         return
     state = await scan_source(mgr, m)
+    if state.truncated:
+        return   # counts unknown — do not drop the label or write to=-
     if not state.posted:
         return   # label without markers (human relabel) — humans own labels
     pending = state.pending

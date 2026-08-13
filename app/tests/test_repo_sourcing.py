@@ -110,3 +110,16 @@ def test_sourcing_lives_only_in_repo_sourcing():
             f"{fn.__qualname__} re-implements sourcing")
     assert "blocker_read_credential" in inspect.getsource(
         dispatch._blocker_mount_ok)
+
+
+def test_skill_source_cards_is_gate_only_never_sourcing():
+    """Ratchet sibling (ADR-0016 addendum, audit-moved here beside the
+    ADR-0034 ratchet): skill cards feed the mirror GATE and the payload —
+    the ONE sourcing rule must never grow a skills arm, or a skill card
+    would be cloned into /workspace."""
+    from devcake.domain.repo_sourcing import (skill_source_cards,
+                                              sourced_repo_names)
+    assert skill_source_cards(["skillrepo/tdd", "flat", "other/x"]) == {
+        "skillrepo", "other"}
+    assert skill_source_cards([]) == set()
+    assert "skill" not in inspect.getsource(sourced_repo_names)

@@ -209,6 +209,9 @@ HARNESS container (dev-<run_id>, DEVCAKE_PHASE=harness, workspace ONLY)
   │      default ~/.claude/skills — never into the repo clone, the Dev would
   │      commit them); path-traversal-safe, per-file failures non-fatal;
   │      consult is optional unless the prompt soft-forces Required skills
+  │      (external `<card>/<skill>` skills arrive in the SAME field with
+  │      basename-flattened paths — the container cannot tell the source;
+  │      their card joins the fail-closed mirror gate app-side, ADR-0016)
   │ 5. run mcp_setup_commands — stdin closed, own process group, 300 s cap per
   │      command; first failure/timeout → run.artifacts {exit_code: 14,
   │      DEV_MCP_SETUP, command + stderr tail} then exit 14

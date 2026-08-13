@@ -90,6 +90,7 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
         )
         run.spec_skills = await dispatch._skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
+        run.skill_repo_heads = await dispatch._skill_repo_heads(mgr, dev_type)
         run.spec_prompt = dispatch.append_required_skills(
             prompt_text, dev_type.skills_required, run.spec_skills)
         try:

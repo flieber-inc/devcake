@@ -183,6 +183,11 @@ class RepoInstance(BaseModel):
     auto_merge: bool = False
     auto_resolve_merge_conflicts: bool = True
     merge_retry_window_minutes: int = Field(30, ge=0)
+    # ADR-0016 addendum: where `<skill>/SKILL.md` dirs live in this card's
+    # tree when Dev Types select `<card>/<skill>` skills ("" = repo root).
+    # Served from the ADR-0024 mirror read-side — never cloned into
+    # workspaces, never a new cache.
+    skills_subdir: str = ""
     # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
     # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);
@@ -215,6 +220,15 @@ class RepoInstance(BaseModel):
             raise ValueError(
                 f"invalid repository URL {v!r}: need a host and an "
                 f"owner/repo project path (e.g. https://<host>/owner/repo)")
+        return v
+
+    @field_validator("skills_subdir")
+    @classmethod
+    def _skills_subdir_relative(cls, v: str) -> str:
+        v = v.strip().strip("/")
+        if v and (".." in v.split("/") or v.startswith("/")):
+            raise ValueError(
+                f"skills_subdir {v!r}: relative path inside the repo, no ..")
         return v
 
     @property
@@ -437,12 +451,19 @@ class DevType(BaseModel):
 
     @staticmethod
     def _dedupe_skill_names(v: list[str], *, field: str) -> list[str]:
+        # `<card>/<skill>` selects a skill from an EXTERNAL repo card's tree
+        # (ADR-0016 addendum): one slash max, prefix in repo-card shape.
+        # SKILL_NAME_RE (store/builtin authoring) stays slash-free, so the
+        # namespaces are structurally disjoint — no precedence rules exist.
         out: list[str] = []
         for name in v:
-            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
+            if not re.fullmatch(
+                    r"(?:[a-z][a-z0-9]{0,11}/)?[a-z0-9][a-z0-9_-]{0,63}",
+                    name):
                 raise ValueError(
                     f"{field} name {name!r}: lowercase alnum with - or _ "
-                    "(≤64 chars), starting alphanumeric")
+                    "(≤64 chars), starting alphanumeric; external skills as "
+                    "<repo-card>/<skill>")
             if name not in out:
                 out.append(name)
         return out
@@ -465,6 +486,21 @@ class DevType(BaseModel):
             raise ValueError(
                 f"skills_required must be a subset of skills; not installed: "
                 f"{', '.join(missing)}")
+        return self
+
+    @model_validator(mode="after")
+    def _skill_basenames_unique(self):
+        """Materialization dir = the BASENAME (external payload paths are
+        flattened so harness discovery stays untouched) — so `tdd` and
+        `myrepo/tdd` selected together would fight over one directory."""
+        seen: dict[str, str] = {}
+        for name in self.skills:
+            base = name.rsplit("/", 1)[-1]
+            if base in seen and seen[base] != name:
+                raise ValueError(
+                    f"skills {seen[base]!r} and {name!r} share the install "
+                    f"dir {base!r} — pick one per Dev Type")
+            seen.setdefault(base, name)
         return self
 
     @field_validator("secret_env")

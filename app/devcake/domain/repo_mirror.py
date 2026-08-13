@@ -263,6 +263,71 @@ class RepoCache:
             _ASKPASS.write_text(_ASKPASS_BODY)
             _ASKPASS.chmod(stat.S_IRWXU)
 
+    # ── skill-tree reads (ADR-0016 addendum) ─────────────────────────────────
+    # External skills ride THIS mirror read-side: no second cache, no
+    # workspace clone. Reads pin a sha first, then read from it — atomic vs
+    # a concurrent fetch. Freshness is the DISPATCH GATE's job (needed-set
+    # union); these reads never sync.
+
+    async def tree_head(self, name: str) -> str | None:
+        """The commit skill reads pin: refs/heads/<default_branch> in the
+        bare mirror, falling back to the mirror's HEAD. None = unresolvable
+        (mirror absent / branch missing) — the caller warns and skips."""
+        inst = self.forges.instance(name)
+        p = self.mirror_path(name)
+        refs = ([f"refs/heads/{inst.default_branch}"]
+                if inst is not None and inst.default_branch else []) + ["HEAD"]
+        for ref in refs:
+            r = await self.git(["-C", str(p), "rev-parse", "--verify",
+                                f"{ref}^{{commit}}"])
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+        return None
+
+    async def read_skill_tree(self, name: str, subdir: str,
+                              sha: str) -> dict[str, dict[str, object]]:
+        """{skill_name: {rel_path: size}} for every skill dir under `subdir`
+        at `sha` — a skill dir is a direct child matching SKILL_NAME_RE that
+        contains SKILL.md (the store rule). Only blob modes 100644/100755
+        count: mode-120000 symlink entries are SKIPPED (third-party content;
+        a symlink target must never be followed) and dir names outside the
+        skill regex never surface. Sizes come from `ls-tree -r -l` so the
+        caller can apply payload caps BEFORE reading content."""
+        import re as _re
+        skill_re = _re.compile(r"[a-z0-9][a-z0-9_-]{0,63}$")
+        p = self.mirror_path(name)
+        spec = f"{sha}:{subdir}" if subdir else sha
+        r = await self.git(["-C", str(p), "ls-tree", "-r", "-l", spec])
+        if r.returncode != 0:
+            return {}
+        out: dict[str, dict[str, object]] = {}
+        for line in r.stdout.splitlines():
+            # "<mode> blob <sha>\t<size>\t<path>" (ls-tree -l pads size)
+            try:
+                meta, path = line.split("\t", 1) if "\t" in line else (line, "")
+                parts = meta.split()
+                mode, otype, size = parts[0], parts[1], int(parts[-1])
+            except (ValueError, IndexError):
+                continue
+            if otype != "blob" or mode not in ("100644", "100755"):
+                continue
+            top, _, rest = path.partition("/")
+            if not rest or not skill_re.fullmatch(top):
+                continue
+            out.setdefault(top, {})[rest] = size
+        return {k: v for k, v in out.items() if "SKILL.md" in v}
+
+    async def read_skill_file(self, name: str, subdir: str, sha: str,
+                              skill: str, rel_path: str) -> bytes | None:
+        """One blob, verbatim bytes (`git show sha:path`). None on any
+        failure — the payload builder warns and drops the file, additive
+        doctrine (the gate already proved the mirror fresh)."""
+        p = self.mirror_path(name)
+        prefix = f"{subdir}/" if subdir else ""
+        r = await self.git(["-C", str(p), "show",
+                            f"{sha}:{prefix}{skill}/{rel_path}"])
+        return r.raw_stdout if r.returncode == 0 else None
+
     # ── background warm-up ───────────────────────────────────────────────────
 
     async def warm_all(self) -> None:
@@ -343,6 +408,15 @@ class NullRepoCache:
 
     async def ensure_fresh(self, names) -> tuple[bool, dict[str, str]]:
         return True, {}
+
+    async def tree_head(self, name: str) -> str | None:
+        return None
+
+    async def read_skill_tree(self, name, subdir, sha) -> dict:
+        return {}
+
+    async def read_skill_file(self, name, subdir, sha, skill, rel_path):
+        return None
 
     async def warm_all(self) -> None:
         return None

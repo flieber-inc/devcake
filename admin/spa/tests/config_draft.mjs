@@ -83,7 +83,8 @@ check("scaffolds carry every server-model field (pmo: 10, repo: 8)", () => {
      "managed", "name", "reference_repos", "repos", "system", "team_key"]);
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
-     "default_branch", "forge", "merge_retry_window_minutes", "name", "url"]);
+     "default_branch", "forge", "merge_retry_window_minutes", "name",
+     "skills_subdir", "url"]);
 });
 
 check("pmo card fields have real labels, not raw paths", () => {

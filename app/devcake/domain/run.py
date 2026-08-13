@@ -82,6 +82,12 @@ class Run(BaseModel):
     # primary's DEVCAKE_MIRROR_PATH in spec_env. Empty on legacy records
     # (pre-field) → runspec falls back to the live derivation.
     mirror_repos: list[str] = Field(default_factory=list)
+    # ADR-0016 addendum — supply-chain provenance: {card: sha} of every
+    # skill-source repo card at the moment this run's `<card>/<skill>`
+    # skills were read into spec_skills. Records WHICH third-party commit
+    # produced the skills a run consumed (docs/14 trust-class shift); not
+    # exposed on the runs API.
+    skill_repo_heads: dict[str, str] = Field(default_factory=dict)
     # ADR-0031 — the run's reading receipt: {entry_id, ts(iso)} of the newest
     # feed entry in the ACTIVITY.md mirror this run received. Captured only
     # from a SUCCESSFUL snapshot push (a failed push serves the previous,

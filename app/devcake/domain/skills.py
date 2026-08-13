@@ -31,6 +31,12 @@ log = logging.getLogger("devcake.skills")
 BUILTIN_DIR = Path(__file__).parents[1] / "skills"      # app/devcake/skills/
 MAX_FILE_BYTES = 200 * 1024    # oversized supporting file → skipped + warning
 MAX_TOTAL_BYTES = 1024 * 1024  # per-run payload cap → later files dropped
+
+
+def _over_file_cap(size) -> bool:
+    """THE per-file cap comparison — the payload pipe (`_collect`) and the
+    catalog's SKILL.md reads share it, so no second cap arithmetic exists."""
+    return int(size) > MAX_FILE_BYTES
 # One poll interval: dispatches within a sweep share one store read instead
 # of re-fetching per mission. Operator edits reach new runs within ~TTL.
 CACHE_TTL_SECONDS = 30.0
@@ -66,20 +72,36 @@ def parse_frontmatter(text: str) -> dict:
 class SkillInfo(BaseModel):
     name: str
     description: str = ""
-    source: Literal["store", "builtin"]
+    source: Literal["store", "builtin", "external"]
     files: int = 1
     # shipped in the app image: re-seeds at boot, so it can be edited but
     # never deleted — the UI offers delete only when this is False
     builtin: bool = False
+    # external skills only (ADR-0016 addendum): the repo card the skill is
+    # served from — read-only by construction (save/delete refuse `/`)
+    origin: str = ""
 
 
 class SkillService:
-    def __init__(self, internal_forge=None, builtin_dir: Path | None = None):
+    def __init__(self, internal_forge=None, builtin_dir: Path | None = None,
+                 repo_cache=None, config=None):
         self.forge = internal_forge
         self.builtin_dir = builtin_dir if builtin_dir is not None else BUILTIN_DIR
+        # ADR-0016 addendum: `<card>/<skill>` names read the ADR-0024 mirror
+        # (RepoCache) — external skills, read-only, no second cache. config
+        # supplies the repo cards (skills_subdir); both None in tests that
+        # never touch external names.
+        self.repo_cache = repo_cache
+        self.config = config
         self._tree_at = 0.0                       # monotonic stamp
         self._tree: list[dict] | None = None      # [{path, size}]
         self._file_bytes: dict[str, bytes] = {}
+
+    def _card(self, name: str):
+        for r in (self.config.repos if self.config is not None else []):
+            if r.name == name:
+                return r
+        return None
 
     # ── store reads (TTL-cached — a sweep dispatches many runs) ─────────────
 
@@ -178,8 +200,11 @@ class SkillService:
 
     async def get_skill(self, name: str) -> dict:
         """Admin View: full skill tree as UTF-8 text files (store-first when
-        the forge is up, bundled fallback). Raises SkillStoreError 404/422.
-        Paths are relative to the skill dir (SKILL.md, not name/SKILL.md)."""
+        the forge is up, bundled fallback; `<card>/<skill>` reads the repo
+        mirror). Raises SkillStoreError 404/422. Paths are relative to the
+        skill dir (SKILL.md, not name/SKILL.md)."""
+        if "/" in (name or ""):
+            return await self._get_external(name)
         if not re.fullmatch(SKILL_NAME_RE, name or ""):
             raise SkillStoreError(
                 422, f"invalid skill name {name!r}")
@@ -232,6 +257,81 @@ class SkillService:
                 "files": files,
             }
         raise SkillStoreError(404, f"skill {name!r} not found")
+
+    # ── external reads (ADR-0016 addendum: repo-card mirror, read-only) ──────
+
+    async def _get_external(self, name: str) -> dict:
+        card, _, skill = name.partition("/")
+        if not (re.fullmatch(r"[a-z][a-z0-9]{0,11}", card)
+                and re.fullmatch(SKILL_NAME_RE, skill)):
+            raise SkillStoreError(422, f"invalid skill name {name!r}")
+        if self._card(card) is None or self.repo_cache is None:
+            raise SkillStoreError(404, f"repo card {card!r} not configured")
+        # ONE capped read path (audit 2026-08-13: the first cut re-read every
+        # blob here UNCAPPED — a large third-party file on default_branch
+        # could OOM the shared app, the exact class the store forbids). The
+        # dispatch pipe's `_collect_external` does sha-pin + sizes-before-
+        # fetch + MAX_FILE_BYTES/MAX_TOTAL_BYTES; the View only decodes and
+        # strips the basename-dir prefix. Skipped files surface as warnings.
+        entry, _used, warns = await self._collect_external(name, 0)
+        if not entry:
+            raise SkillStoreError(
+                404, warns[0] if warns else f"skill {name!r} not found")
+        files = [{"path": e["path"].partition("/")[2],
+                  "content": base64.b64decode(e["content_b64"]).decode(
+                      "utf-8", errors="replace")} for e in entry]
+        skill_md = next((f["content"] for f in files
+                         if f["path"] == "SKILL.md"), "")
+        return {"name": name,
+                "description": str(
+                    parse_frontmatter(skill_md).get("description", "")),
+                "source": "external", "builtin": False, "origin": card,
+                "warnings": warns, "files": files}
+
+    async def external_infos(self, referenced: list[str]) -> list[SkillInfo]:
+        """Catalog rows for the repo cards that Dev Types reference via
+        `<card>/<skill>` names — EVERY skill in those cards' trees (so the
+        operator can discover what else a card offers), best-effort: an
+        unsynced or unreadable mirror contributes nothing (the Dev-Type
+        chips still render unknown names with the stale chip)."""
+        out: list[SkillInfo] = []
+        cards = sorted({n.split("/", 1)[0] for n in referenced if "/" in n})
+        for card in cards:
+            inst = self._card(card)
+            if inst is None or self.repo_cache is None:
+                continue
+            try:
+                sha = await self.repo_cache.tree_head(card)
+                if sha is None:
+                    continue
+                tree = await self.repo_cache.read_skill_tree(
+                    card, inst.skills_subdir, sha)
+                for skill, rels in sorted(tree.items()):
+                    # size gate BEFORE the read (audit 2026-08-13): the
+                    # catalog renders every referenced card — an oversized
+                    # third-party SKILL.md must not be pulled into memory
+                    if _over_file_cap(rels.get("SKILL.md", 0)):
+                        out.append(SkillInfo(
+                            name=f"{card}/{skill}",
+                            description=f"(SKILL.md exceeds the "
+                                        f"{MAX_FILE_BYTES}-byte cap — "
+                                        f"not read)",
+                            source="external", files=len(rels),
+                            builtin=False, origin=card))
+                        continue
+                    md = await self.repo_cache.read_skill_file(
+                        card, inst.skills_subdir, sha, skill, "SKILL.md")
+                    desc = str(parse_frontmatter(
+                        (md or b"").decode("utf-8", errors="replace")
+                    ).get("description", ""))
+                    out.append(SkillInfo(
+                        name=f"{card}/{skill}", description=desc,
+                        source="external", files=len(rels), builtin=False,
+                        origin=card))
+            except Exception as e:  # noqa: BLE001 — the catalog is advisory; a broken mirror never takes the Skills page down
+                log.warning("external skill listing for card %r failed: %s",
+                            card, e)
+        return out
 
     # ── authoring (admin UI: create / import / delete — docs/11) ────────────
 
@@ -390,9 +490,21 @@ class SkillService:
         builtin = self._builtin_skills()
         total = 0
         for idx, name in enumerate(names):
-            in_store = bool(store_index) and f"{name}/SKILL.md" in store_index
+            external = "/" in name        # <card>/<skill> — structurally
+            #                               disjoint from store/builtin names
+            in_store = (not external and bool(store_index)
+                        and f"{name}/SKILL.md" in store_index)
             entry, size_used = [], 0
-            if in_store:
+            if external:
+                try:
+                    entry, size_used, warns = await self._collect_external(
+                        name, total)
+                except Exception as e:  # noqa: BLE001 — skills are additive: a mirror read failure skips the skill, recorded in warnings
+                    warnings.append(f"skill {name!r}: mirror read failed "
+                                    f"({e}) — skipped")
+                    entry, size_used, warns = [], 0, []
+                warnings.extend(warns)
+            elif in_store:
                 sized = [(p, store_index[p])
                          for p in sorted(pp for pp in store_index
                                          if pp.startswith(f"{name}/"))]
@@ -404,7 +516,7 @@ class SkillService:
                                     "— trying the bundled copy")
                     entry, size_used, warns = [], 0, []
                 warnings.extend(warns)
-            if not entry and name in builtin:
+            if not entry and not external and name in builtin:
                 sized = [(f.relative_to(self.builtin_dir).as_posix(),
                           f.stat().st_size) for f in builtin[name]]
 
@@ -414,7 +526,8 @@ class SkillService:
                 entry, size_used, warns = await self._collect(
                     name, sized, total, _read_builtin)
                 warnings.extend(warns)
-            if not entry and not in_store and name not in builtin:
+            if not entry and not external and not in_store \
+                    and name not in builtin:
                 warnings.append(f"skill {name!r} not found in the store or "
                                 "bundled copies — skipped")
                 continue
@@ -427,6 +540,44 @@ class SkillService:
                     f"dropped without fetching: {', '.join(names[idx + 1:])}")
                 break
         return payload, warnings
+
+    async def _collect_external(self, name: str, total: int
+                                ) -> tuple[list[dict], int, list[str]]:
+        """One `<card>/<skill>` skill from the repo-card mirror (ADR-0016
+        addendum): pin the sha, list sized blobs (mirror-side filters already
+        dropped symlink modes and hostile dir names), rebase payload paths to
+        the BASENAME dir — so `install_skills` and harness discovery stay
+        untouched — and run the same `_collect` caps. Deliberately uncached:
+        the dispatch gate just proved the mirror fresh, and this read pins
+        one sha so a concurrent fetch cannot tear it."""
+        card, _, skill = name.partition("/")
+        inst = self._card(card)
+        if self.repo_cache is None or inst is None:
+            return [], 0, [f"skill {name!r}: repo card {card!r} is not "
+                           "configured — skipped"]
+        sha = await self.repo_cache.tree_head(card)
+        if sha is None:
+            return [], 0, [f"skill {name!r}: mirror for {card!r} has no "
+                           "readable head — skipped"]
+        tree = await self.repo_cache.read_skill_tree(
+            card, inst.skills_subdir, sha)
+        files = tree.get(skill)
+        if not files:
+            where = f"{card}:{inst.skills_subdir}" if inst.skills_subdir \
+                else card
+            return [], 0, [f"skill {name!r}: no {skill}/SKILL.md under "
+                           f"{where} — skipped"]
+        sized = [(f"{skill}/{rel}", int(size))
+                 for rel, size in sorted(files.items())]
+
+        async def _read(path: str) -> bytes:
+            data = await self.repo_cache.read_skill_file(
+                card, inst.skills_subdir, sha, skill, path[len(skill) + 1:])
+            if data is None:
+                raise SkillStoreError(502, f"mirror read failed: {path}")
+            return data
+
+        return await self._collect(skill, sized, total, _read)
 
     async def _collect(self, name: str, sized: list[tuple[str, int]],
                        total: int, fetch) -> tuple[list[dict], int, list[str]]:
@@ -442,7 +593,7 @@ class SkillService:
         anchor = f"{name}/SKILL.md"
         sized = sorted(sized, key=lambda ps: (ps[0] != anchor, ps[0]))
         for path, size in sized:
-            if size > MAX_FILE_BYTES:
+            if _over_file_cap(size):
                 warns.append(f"skill {name!r}: {path} exceeds "
                              f"{MAX_FILE_BYTES} bytes — skipped")
                 continue

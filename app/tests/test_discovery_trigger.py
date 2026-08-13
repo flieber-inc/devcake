@@ -256,3 +256,34 @@ def test_gate_filters_mirror_ineligible_family_repos(tmp_path, monkeypatch):
     run_coro(svc.maybe_dispatch_discovery(missions))
     assert len(calls) == 1        # dispatched despite the internal sibling
     assert asked and all("intmission1" not in a for a in asked)
+
+
+def test_gate_combines_eligible_filter_and_skill_card_union(tmp_path,
+                                                            monkeypatch):
+    """Audit B2: 147's eligible() filter and the ADR-0016 skill-card union
+    edit the SAME gate block — this pins both halves in ONE ensure_fresh
+    call: the internal family repo is filtered OUT while the skill card is
+    unioned IN un-filtered (deliberate: an unconfigured skill card must
+    gate loudly, fail-closed ruling)."""
+    from devcake.domain.orchestrator import family_graph
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    missions[1].blocked_by = ["src"]          # sibling JOINS src's family
+    missions[1].repo = "intmission1"          # the sibling's internal repo
+    monkeypatch.setattr(family_graph, "blocker_read_credential",
+                        lambda mgr_, name: ("internal", object()))
+    svc.dev_types["steward"].skills = ["skillcard/tdd"]   # external skill
+    asked: list[list[str]] = []
+
+    class Cache:
+        def eligible(self, name):
+            return name == "home"             # only the steward's card
+        async def ensure_fresh(self, names):
+            asked.append(sorted(names))
+            return True, {}
+
+    mgr.repo_cache = Cache()
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert len(calls) == 1
+    assert asked and "skillcard" in asked[0]              # union half
+    assert all("intmission1" not in a for a in asked)     # filter half

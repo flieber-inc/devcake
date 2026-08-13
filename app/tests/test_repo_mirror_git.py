@@ -180,3 +180,60 @@ def test_fetch_during_a_concurrent_clone_smoke(rig):
 
     rc, st = run_coro(race())
     assert rc == 0 and st.ok
+
+
+# ── skill-tree reads off the bare mirror (ADR-0016 addendum) ─────────────────
+
+def _skills_origin(rig):
+    """Grow the rig's origin a skills tree: valid skill, nested file, an
+    in-repo symlink, a hostile dir name, junk without SKILL.md."""
+    origin, cache, tmp = rig
+    d = origin / "skills"
+    (d / "tdd" / "sub").mkdir(parents=True)
+    (d / "tdd" / "SKILL.md").write_text(
+        "---\nname: tdd\ndescription: Ext\n---\nbody\n")
+    (d / "tdd" / "sub" / "deep.md").write_text("deep\n")
+    (d / "tdd" / "link.md").symlink_to("SKILL.md")        # mode 120000
+    (d / "UPPER-Bad!" ).mkdir()
+    (d / "UPPER-Bad!" / "SKILL.md").write_text("hostile dir name\n")
+    (d / "junk").mkdir()
+    (d / "junk" / "notes.txt").write_text("no SKILL.md\n")
+    sh("git", "add", "-A", cwd=origin)
+    sh("git", "commit", "-qm", "skills", cwd=origin)
+    return origin, cache, tmp
+
+
+def test_skill_tree_reads_pin_a_sha_and_filter_hostile_content(rig):
+    origin, cache, _ = _skills_origin(rig)
+    assert run_coro(cache.sync_one("alpha")).ok
+    sha = run_coro(cache.tree_head("alpha"))
+    assert sha and len(sha) == 40
+    tree = run_coro(cache.read_skill_tree("alpha", "skills", sha))
+    # symlink entries (mode 120000) and non-regex dir names never surface
+    assert set(tree) == {"tdd"}
+    assert set(tree["tdd"]) == {"SKILL.md", "sub/deep.md"}
+    data = run_coro(cache.read_skill_file(
+        "alpha", "skills", sha, "tdd", "SKILL.md"))
+    assert data is not None and b"description: Ext" in data
+    assert run_coro(cache.read_skill_file(
+        "alpha", "skills", sha, "tdd", "missing.md")) is None
+    # repo root as subdir="" lists nothing here (skills live under skills/)
+    assert run_coro(cache.read_skill_tree("alpha", "", sha)) == {}
+
+
+def test_skill_reads_follow_upstream_commits_after_resync(rig):
+    origin, cache, _ = _skills_origin(rig)
+    assert run_coro(cache.sync_one("alpha")).ok
+    sha1 = run_coro(cache.tree_head("alpha"))
+    (origin / "skills" / "tdd" / "SKILL.md").write_text(
+        "---\nname: tdd\n---\nv2\n")
+    sh("git", "commit", "-aqm", "bump skill", cwd=origin)
+    # the OLD sha still serves the OLD content (pinned reads are stable)
+    assert run_coro(cache.sync_one("alpha")).ok
+    sha2 = run_coro(cache.tree_head("alpha"))
+    assert sha2 != sha1
+    old = run_coro(cache.read_skill_file("alpha", "skills", sha1,
+                                         "tdd", "SKILL.md"))
+    new = run_coro(cache.read_skill_file("alpha", "skills", sha2,
+                                         "tdd", "SKILL.md"))
+    assert b"body" in old and b"v2" in new

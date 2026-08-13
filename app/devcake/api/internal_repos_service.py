@@ -47,11 +47,16 @@ async def create_internal_repo(body: dict, *, internal_forge):
         raise HTTPException(502, f"internal forge: {str(e)[:200]}")
 
 
-async def list_skills(*, skill_service):
+async def list_skills(*, skill_service, dev_types=None):
     """Skill store catalog (v1): store-listed when the internal forge is up,
     bundled fallback otherwise — `store` tells the UI which it is (and where
-    to edit)."""
+    to edit). External `<card>/<skill>` rows (ADR-0016 addendum) join for
+    every repo card some Dev Type references — read-only, origin-tagged."""
     skills, store_status = await skill_service.list_skills()
+    referenced = sorted({n for dt in (dev_types or {}).values()
+                         for n in dt.skills if "/" in n})
+    if referenced:
+        skills = skills + await skill_service.external_infos(referenced)
     return {"skills": [s.model_dump() for s in skills], "store": store_status}
 
 
@@ -106,10 +111,20 @@ async def delete_skill_endpoint(name: str, *, skill_service):
     return {"ok": True}
 
 
-async def sync_skills(*, internal_forge, skill_service):
+async def sync_skills(*, internal_forge, skill_service, repo_cache=None,
+                      dev_types=None):
     """Re-seed missing built-in skills without a restart — heals a first
     boot where Gitea came up after the app, and re-seeds after upgrades.
-    Never overwrites operator edits (missing paths only)."""
+    Never overwrites operator edits (missing paths only). ONE refresh
+    gesture (chokepoint ruling): also ensure_fresh the repo cards Dev Types
+    reference for `<card>/<skill>` skills — best-effort, failures land in
+    the mirror ledger/health, never a refused sync."""
+    if repo_cache is not None:
+        cards = sorted({n.split("/", 1)[0]
+                        for dt in (dev_types or {}).values()
+                        for n in dt.skills if "/" in n})
+        if cards:
+            await repo_cache.ensure_fresh(cards)
     if internal_forge is None:
         raise HTTPException(503, "internal forge is disabled "
                                  "(GITEA_ADMIN_PASSWORD unset)")

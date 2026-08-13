@@ -84,12 +84,15 @@ class StewardService:
         if time.monotonic() - self._last_at < rm.interval_minutes * 60:
             self._last_periodic_outcome = None
             return
+        from .repo_sourcing import skill_source_cards
+        skill_cards = sorted(skill_source_cards(dt.skills))
         # a periodic run is DUE — resolve it, then trace the outcome only on
         # TRANSITIONS: a steward stuck degraded/waiting for hours would
         # otherwise emit an identical (ERROR) span every poll tick
         outcome, error = None, None
         degraded = self.degraded()
-        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh([repo])
+        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh(
+            [repo] + skill_cards)   # skill-source cards join (ADR-0016)
         if not mirror_ok:
             # ADR-0024 fail-closed precondition — same semantics as mission
             # dispatch: skip this cycle, retry next; NEVER raises into the
@@ -189,8 +192,14 @@ class StewardService:
             fam_repos = [e["repo_ref"] for e in family_graph.family_work_repos(
                 mgr, fam, exclude=frozenset({repo}))
                 if mgr.repo_cache.eligible(e["repo_ref"])]
+            # skill cards deliberately DO NOT ride the eligible() filter:
+            # an unconfigured/internal skill card must gate LOUDLY
+            # (fail-closed ruling), unlike family work repos which are
+            # legitimate internal clone extras (audit B2: keep BOTH halves).
+            from .repo_sourcing import skill_source_cards
             mirror_ok, mirror_why = await mgr.repo_cache.ensure_fresh(
-                [repo] + fam_repos)
+                [repo] + fam_repos
+                + sorted(skill_source_cards(dt.skills)))  # ADR-0016 union
             if not mirror_ok:
                 outcome = "mirror_stale"          # fail-closed, retry later
                 error = f"family mirrors not fresh: {mirror_why}"
@@ -259,7 +268,9 @@ class StewardService:
         if repo in self.mgr.forges.breakers:
             raise StewardUnconfigured(
                 f"repo '{repo}' is not writable; fix its token first")
-        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh([repo])
+        from .repo_sourcing import skill_source_cards
+        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh(
+            [repo] + sorted(skill_source_cards(dt.skills)))  # ADR-0016 union
         if not mirror_ok:
             raise StewardUnconfigured(
                 f"repository mirror for '{repo}' is not fresh: "

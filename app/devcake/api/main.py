@@ -784,11 +784,12 @@ async def create_internal_repo(body: dict):
 
 @app.get("/api/v1/skills")
 async def list_skills():
+    s = svc()
     return await internal_repos_service.list_skills(
-        skill_service=svc().skill_service)
+        skill_service=s.skill_service, dev_types=s.dev_types)
 
 
-@app.get("/api/v1/skills/{name}")
+@app.get("/api/v1/skills/{name:path}")
 async def get_skill(name: str):
     return await internal_repos_service.get_skill(
         name, skill_service=svc().skill_service)
@@ -816,7 +817,8 @@ async def delete_skill_endpoint(name: str):
 async def sync_skills():
     s = svc()
     return await internal_repos_service.sync_skills(
-        internal_forge=s.internal_forge, skill_service=s.skill_service)
+        internal_forge=s.internal_forge, skill_service=s.skill_service,
+        repo_cache=s.repo_cache, dev_types=s.dev_types)
 
 
 @app.delete("/api/v1/internal-repos/{name}")

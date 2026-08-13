@@ -48,6 +48,46 @@ preconditions:
   # in-container sentinel (exit 20); the daemon-autocreate residue remains
   # tracked debt (docs/14 §11).
 
+# Workspace ownership reclaim (audit 2026-08-13 B1): nested rootless podman
+# writes land on the /workspace bind as host uid 100000+ (the dev user's
+# subuid range) — the app (uid 1000) can neither chmod nor unlink them, so
+# WorkspaceStore's reclaim would silently leak. This exit handler re-chowns
+# the per-run workspace back to uid 1000 as root; DELETION stays in the app
+# (workspaces.py — the one reclaim seam). `exit` runs on success, failure,
+# AND abort (REST stop kills the step containers, not the agent — measured
+# in the 2.13 source); by handler time no nested writer is alive (podman
+# processes die with the harness container's pid namespace). Residual: a
+# dagu crash mid-run skips the handler — the app logs the unreclaimable
+# tree loudly and /health counts it (workspaces.leaked).
+handler_on:
+  exit:
+    # Step-level fence, load-bearing: Dagu runs exit handlers even when the
+    # DAG-level preconditions REJECT the run — with an empty RUN_ID the bind
+    # source would degrade to the workspaces ROOT and chown every live
+    # run's tree. Same regex as the DAG-level fence above.
+    preconditions:
+      - condition: "${params.RUN_ID}"
+        expected: "re:^[A-Za-z0-9_-]{6,64}$"
+    action: docker.run
+    timeout_sec: 300              # a pathological tree must not hang the DAG
+    with:
+      image: ${params.IMAGE}      # already present locally (pull: missing)
+      container_name: reclaim-${params.RUN_ID}
+      pull: missing
+      auto_remove: true
+      volumes:
+        - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace
+      container:
+        User: "0"
+        # -h: never chown through symlinks; || true: a reclaim hiccup must
+        # never flip a green run. Root in the initial userns owns subuid
+        # files; every image this DAG launches ships GNU coreutils (the
+        # ADR-0023 floor — hello included).
+        Entrypoint: ["/bin/sh", "-c",
+                     "chown -R -h 1000:1000 /workspace || true"]
+      host:
+        NetworkMode: none         # ownership surgery needs no network
+
 params:
   - name: RUN_ID
     default: ""

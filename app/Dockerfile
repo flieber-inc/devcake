@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# (frontend digest-pinned — see images/Dockerfile line 1 for why + bump how)
 # DevCake orchestrator (FastAPI).
 # Targets: runtime (prod, default) | test (pytest + tests/ for CI)
 #

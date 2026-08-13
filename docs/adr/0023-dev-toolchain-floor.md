@@ -137,16 +137,22 @@ image bake therefore asserts the floor on every PR that touches images.
 The original exclusion — "docker CLI / DinD — needs socket or privilege;
 the container boundary IS the sandbox" — is AMENDED, not reversed: Devs
 gain **rootless podman inside their own container** (`docker` = podman
-compat symlink), and the sandbox premise SURVIVES — no `docker.sock`, no
-privilege, nested containers live and die inside the Dev container's own
-namespaces. docs/14 §5 is unchanged and proud: the socket still never
-reaches a Dev.
+compat symlink), and the sandbox premise SURVIVES IN KIND — no
+`docker.sock`, no privilege, nested containers live and die inside the Dev
+container's own namespaces — at the stated cost in point 4 below: 15
+additional syscalls + 2 device nodes for EVERY container the dev-run DAG
+launches (hello included), recorded as the docs/14 §6 risk row. docs/14 §5
+is unchanged and proud: the socket still never reaches a Dev.
 
 Measured recipe (feasibility matrix + live probes, 2026-08-13):
 
 1. **Engine:** pinned podman-static bundle (5.8.4 — Debian bookworm's 4.3
    fails rootless-in-container; apt cannot serve this floor), sha256-pinned
    per arch, shipping crun/conmon/netavark/pasta/fuse-overlayfs.
+   Provenance, recorded: the bundle is `mgoltzsche/podman-static` — an
+   UNOFFICIAL upstream, accepted because the artifacts are sha256-pinned
+   per arch and no distro ships a rootless-in-container-capable 5.x;
+   revisit when one does.
 2. **Helpers:** Debian's SETUID `newuidmap`/`newgidmap` EPERM on the
    uid_map write inside a container on the measured host while the
    Fedora-style FILE-CAPS flavor works — the base re-packages them with
@@ -159,11 +165,16 @@ Measured recipe (feasibility matrix + live probes, 2026-08-13):
    (structural test enforces); `/dev/fuse` (fuse-overlayfs fallback for
    kernels <5.13; ≥5.13 uses native rootless overlay) and `/dev/net/tun`
    (pasta tap) via the nested Resources block.
-4. **Costs, recorded:** the seccomp delta (15 syscalls over default) is
-   the entire doctrine cost (docs/14 §6); nested images live under the
+4. **Costs, recorded:** the seccomp delta (15 syscalls over default) plus
+   /dev/fuse + /dev/net/tun, applied to EVERY container the dev-run DAG
+   launches, hello included (docs/14 §6); nested images live under the
    harness $HOME → per-run ephemeral (re-pulled each run — egress, no
-   cross-run contamination); the Dev-container cgroup limits bound the
-   nested engine too (pids budget must accommodate it).
+   cross-run contamination) — with ONE exception: nested writes onto the
+   /workspace BIND outlive the run as foreign-uid files, which is why the
+   DAG's exit handler re-chowns the workspace to uid 1000 at run end
+   (audit 2026-08-13 B1; deletion stays in workspaces.py); the
+   Dev-container cgroup limits bound the nested engine too (pids budget
+   must accommodate it).
 5. **Host prerequisites** (docs/13): unprivileged user namespaces enabled;
    kernel ≥5.13 recommended (native rootless overlay).
 

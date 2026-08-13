@@ -145,10 +145,19 @@ def test_both_steps_carry_the_nested_engine_knobs():
         blobs.add(so[0])
         prof = json.loads(so[0][len("seccomp="):])
         assert prof["defaultAction"] != "SCMP_ACT_ALLOW"
-        assert any(set(r.get("names", [])) >= {
-            "clone", "unshare", "setns", "mount", "umount2", "pivot_root",
-            "sethostname"}
-            for r in prof["syscalls"]), "the nested-engine allow rule is gone"
+        # the FULL measured 15-name rule, as one unconditional entry — set
+        # EQUALITY (audit: a >= subset check would tolerate a rule that
+        # silently grew, and Docker's own CAP_SYS_ADMIN rule nearly
+        # satisfies a subset)
+        engine_rule = {
+            "clone", "clone3", "unshare", "setns", "mount", "umount2",
+            "pivot_root", "keyctl", "move_mount", "open_tree", "fsopen",
+            "fsconfig", "fsmount", "sethostname", "setdomainname"}
+        assert any(set(r.get("names", [])) == engine_rule
+                   and r.get("action") == "SCMP_ACT_ALLOW"
+                   and not r.get("includes") and not r.get("excludes")
+                   for r in prof["syscalls"]), \
+            "the exact 15-syscall nested-engine allow rule is gone"
         devs = host["resources"]["Devices"]
         assert {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse",
                 "CgroupPermissions": "rwm"} in devs
@@ -156,3 +165,30 @@ def test_both_steps_carry_the_nested_engine_knobs():
                 "PathInContainer": "/dev/net/tun",
                 "CgroupPermissions": "rwm"} in devs   # pasta tap networking
     assert len(blobs) == 1               # anchor+alias: ONE profile, two steps
+
+
+def test_exit_handler_reclaims_workspace_ownership():
+    """Audit 2026-08-13 B1: nested podman writes land on /workspace as host
+    uid 100000+ — the app (uid 1000) could neither chmod nor unlink them.
+    The DAG's exit handler re-chowns as root; DELETION stays in
+    workspaces.py (the one reclaim seam). Live-drilled on 2.13.0: runs on
+    failure AND abort, SKIPPED on rejected runs (the step precondition —
+    without it, an empty RUN_ID would degrade the bind to the workspaces
+    ROOT and chown every live run's tree)."""
+    doc = _dag()
+    h = doc["handler_on"]["exit"]
+    # the fence is load-bearing — same regex as the DAG-level precondition
+    assert h["preconditions"] == [
+        {"condition": "${params.RUN_ID}",
+         "expected": "re:^[A-Za-z0-9_-]{6,64}$"}], \
+        "exit handler must carry its own RUN_ID fence (runs even on Rejected)"
+    assert h["action"] == "docker.run"
+    w = h["with"]
+    # ONLY the per-run workspace — never the base, never the mirrors
+    assert w["volumes"] == ["$DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace"]
+    assert w["container"]["User"] == "0"
+    ep = " ".join(w["container"]["Entrypoint"])
+    assert "chown -R -h 1000:1000 /workspace" in ep and "|| true" in ep
+    assert w["host"] == {"NetworkMode": "none"}
+    assert w["auto_remove"] is True
+    assert h["timeout_sec"] > 0

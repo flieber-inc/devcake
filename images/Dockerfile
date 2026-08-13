@@ -1,4 +1,7 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# (frontend digest-pinned like every external image — a floating tag here
+#  does a Docker Hub round-trip on every cold bake, and one transient 502
+#  reds CI; bump = imagetools inspect docker/dockerfile:1 → paste digest)
 #
 # DevCake Dev harness images — multi-target Dockerfile.
 # Shared `base` stage is built once (BuildKit) and reused by every harness.
@@ -119,7 +122,8 @@ RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
 # fuse-overlayfs): Debian bookworm's podman 4.3 fails rootless-in-container
 # at the newuidmap step (measured), so apt cannot serve this floor. sha256-
 # verified like every pinned artifact. `docker` = podman symlink (compat CLI);
-# uidmap (apt, below) supplies the setuid newuidmap/newgidmap helpers.
+# uidmap (apt, below) supplies newuidmap/newgidmap — re-packaged Fedora-style
+# below: setuid bit STRIPPED, file caps applied (the measured fix).
 # Runtime needs the dev-run DAG's seccomp profile + /dev/fuse (kernels ≥5.13
 # use native rootless overlay and ignore fuse) — matrix measured 2026-08-13.
 ARG PODMAN_STATIC_VERSION=v5.8.4

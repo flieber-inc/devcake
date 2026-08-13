@@ -313,7 +313,7 @@ world-writable DAG trees on the host.
 Intentional controls:
 
 - Non-root harness user (uid 1000).
-- No `docker.sock`; no host/volume SECRET mounts (runspec delivery). The only mounts the **agent** container sees are its own per-run workspace bind (ADR-0025) — no ambient anything: the ADR-0024 source mirrors are mounted RO into the **provision** container ONLY, so the agent never sees `/mirrors`, a bare-pack duplicate of its own repo, or any other repo's source (this SUPERSEDES the old deployment-wide ambient read surface — ADR-0025 §8). The workspace bind carries repo CONTENT and agent/tool OUTPUT (which may embed a secret the tool printed), never delivered secret material, and is reclaimed at run end (§1 asset row).
+- No `docker.sock`; no host/volume SECRET mounts (runspec delivery). The only mounts the **agent** container sees are its own per-run workspace bind (ADR-0025) — no ambient anything: the ADR-0024 source mirrors are mounted RO into the **provision** container ONLY, so the agent never sees `/mirrors`, a bare-pack duplicate of its own repo, or any other repo's source (this SUPERSEDES the old deployment-wide ambient read surface — ADR-0025 §8). The workspace bind carries repo CONTENT and agent/tool OUTPUT (which may embed a secret the tool printed), never delivered secret material, and is reclaimed at run end (§1 asset row) — nested-podman writes land there as foreign-uid files, so the dev-run DAG's exit handler re-chowns the workspace to uid 1000 at run end (success, failure, AND stop — live-drilled 2026-08-13) before the app deletes it; a dagu crash mid-run skips the handler and the app then logs the unreclaimable tree loudly (`/health` counts it as `workspaces.leaked`). The workspace/host disk itself is NOT covered by the container cgroup limits (pre-existing class — a Dev could always fill its bind; the nested engine makes that no easier and no harder).
 - Attach only to `devcake_runtime`: Redis, otel-collector, internal Gitea.
   App/admin/Dagu/OpenObserve stay on `devcake_control` (OO left runtime — A23).
 - Outbound network **enabled** (forge, packages, model APIs).
@@ -322,6 +322,15 @@ Not claimed:
 
 - Multi-tenant isolation between hostile customers.
 - Egress allowlists (optional future ops hardening, §11).
+- Nested containers (rootless podman, ADR-0023 addendum 2026-08-13): Devs
+  run a container engine INSIDE their own container — no socket, no
+  privilege; the recorded cost is the dev-run seccomp profile widening
+  Docker's default by ONE 15-syscall allow rule (userns/mount set — inline
+  in the DAG, structurally pinned as never-unconfined) plus the /dev/fuse
+  and /dev/net/tun device nodes. Kernel attack surface grows by exactly
+  those syscalls + devices — for EVERY container the dev-run DAG launches,
+  hello included, engine user or not; accepted (single-operator, dedicated
+  host, Devs already non-sandbox §6).
 - ~~Docker HostConfig CPU/memory/PID limits on the Dev container~~ —
   **DELIVERED 2026-08-13**: kernel cgroup limits ride every Dev container via
   `AppConfig.container_limits` → dev-run docker-executor `host:` (the old
@@ -439,7 +448,7 @@ occurrence.
 | Prompt injection via ticket/repo | Bad PR content; push; **merge if unprotected**; secret exfil | Design + operator (team/repo ACL + branch protection) | Accepted — the capability is design; per-run outcome is weather |
 | Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) | Verify — set the RO PAT (§9) |
 | Open egress | Exfil of env | Design | Accepted |
-| Workspace host bind (ADR-0025) | The agent sees ONLY its own run's `/workspace` — no `/mirrors`, no other repo's source. On the HOST, the `$DEVCAKE_WS_HOST` tree holds repo content + agent output until run end | Design (`0700`, DevCake-exclusive, reclaimed at run end) + operator (host FS access) | Accepted — SUPERSEDES the old "shared RO mirror mount" ambient-read row; the agent's ambient read surface is now zero (mirrors are provision-only) |
+| Workspace host bind (ADR-0025) | The agent sees ONLY its own run's `/workspace` — no `/mirrors`, no other repo's source. On the HOST, the `$DEVCAKE_WS_HOST` tree holds repo content + agent output until run end | Design (`0700`, DevCake-exclusive, reclaimed at run end — the dev-run exit handler re-chowns nested-podman residue to uid 1000 first) + operator (host FS access) | Accepted — SUPERSEDES the old "shared RO mirror mount" ambient-read row; the agent's ambient read surface is now zero (mirrors are provision-only). Residual: a dagu crash mid-run skips the re-chown — the app warns loudly and `/health` gauges the leak |
 | Dev cgroup HostConfig limits | Host resource exhaustion | **Closed 2026-08-13** — `container_limits` knobs, kernel-enforced per container (memory/CPU/PIDs; defaults 4g/2.0/off; live-verified `docker inspect`) | Retired — the residual is an operator choosing 0 = unlimited |
 | Cross-Dev reachability on `devcake_runtime` | Concurrent Devs share one bridge with ICC on: Dev A can port-scan and connect to Dev B's in-container services — post-ADR-0023 that includes dev servers and a Chromium DevTools port (read B's page context, drive its browser) | Design (2026-08 evaluation) | Accepted — tracked debt (§11). ICC-off is NOT the fix: measured 2026-08-04, `enable_icc=false` blocks ALL container-to-container traffic on the bridge including Dev→Redis, severing the run bus. The real fix is per-run networks (docs/16 Candidates) |
 | Malicious `MAXLEN` on the shared ingress stream | Any Dev holds `+xadd`, and XADD accepts MAXLEN: a hostile Dev can trim OTHER runs' unconsumed entries (artifact loss for concurrent runs). The flood variant is bounded: `maxmemory 1gb + noeviction` errors the writer instead of OOMing redis, and the app XDELs after every handled batch | Design (ticket-writer trust zone) | Accepted — per-run ingress streams are the real fix (docs/16 Candidates) |

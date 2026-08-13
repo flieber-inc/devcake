@@ -123,3 +123,72 @@ def test_structural_mounts_are_enforced_not_optional():
     """Belt for the belt: both mounted files must exist — if a runner drops a
     mount, every test above must fail loudly rather than skip silently."""
     assert DAG.exists() and DOCKERFILE.exists()
+
+
+def test_both_steps_carry_the_nested_engine_knobs():
+    """ADR-0023 addendum (founder go 2026-08-13): rootless podman rides a
+    CUSTOM seccomp profile — Docker's default plus ONE allow rule for the
+    userns/mount syscall set — inline in the DAG (the Docker API takes
+    profile CONTENT; only the docker CLI reads files). NOT unconfined: this
+    pin json-parses the blob and asserts the rule, so a lazy
+    'seccomp=unconfined' can never slip in. /dev/fuse rides the nested
+    Resources block (embedded-struct decode, dagucloud/dagu#2557) as the
+    fuse-overlayfs fallback for kernels <5.13."""
+    import json
+    steps = _steps()
+    blobs = set()
+    for sid in ("provision", "run_dev"):
+        host = steps[sid]["with"]["host"]
+        so = host["SecurityOpt"]
+        assert len(so) == 1 and so[0].startswith("seccomp={"), \
+            "nested-engine seccomp must be an inline profile, never unconfined"
+        blobs.add(so[0])
+        prof = json.loads(so[0][len("seccomp="):])
+        assert prof["defaultAction"] != "SCMP_ACT_ALLOW"
+        # the FULL measured 15-name rule, as one unconditional entry — set
+        # EQUALITY (audit: a >= subset check would tolerate a rule that
+        # silently grew, and Docker's own CAP_SYS_ADMIN rule nearly
+        # satisfies a subset)
+        engine_rule = {
+            "clone", "clone3", "unshare", "setns", "mount", "umount2",
+            "pivot_root", "keyctl", "move_mount", "open_tree", "fsopen",
+            "fsconfig", "fsmount", "sethostname", "setdomainname"}
+        assert any(set(r.get("names", [])) == engine_rule
+                   and r.get("action") == "SCMP_ACT_ALLOW"
+                   and not r.get("includes") and not r.get("excludes")
+                   for r in prof["syscalls"]), \
+            "the exact 15-syscall nested-engine allow rule is gone"
+        devs = host["resources"]["Devices"]
+        assert {"PathOnHost": "/dev/fuse", "PathInContainer": "/dev/fuse",
+                "CgroupPermissions": "rwm"} in devs
+        assert {"PathOnHost": "/dev/net/tun",
+                "PathInContainer": "/dev/net/tun",
+                "CgroupPermissions": "rwm"} in devs   # pasta tap networking
+    assert len(blobs) == 1               # anchor+alias: ONE profile, two steps
+
+
+def test_exit_handler_reclaims_workspace_ownership():
+    """Audit 2026-08-13 B1: nested podman writes land on /workspace as host
+    uid 100000+ — the app (uid 1000) could neither chmod nor unlink them.
+    The DAG's exit handler re-chowns as root; DELETION stays in
+    workspaces.py (the one reclaim seam). Live-drilled on 2.13.0: runs on
+    failure AND abort, SKIPPED on rejected runs (the step precondition —
+    without it, an empty RUN_ID would degrade the bind to the workspaces
+    ROOT and chown every live run's tree)."""
+    doc = _dag()
+    h = doc["handler_on"]["exit"]
+    # the fence is load-bearing — same regex as the DAG-level precondition
+    assert h["preconditions"] == [
+        {"condition": "${params.RUN_ID}",
+         "expected": "re:^[A-Za-z0-9_-]{6,64}$"}], \
+        "exit handler must carry its own RUN_ID fence (runs even on Rejected)"
+    assert h["action"] == "docker.run"
+    w = h["with"]
+    # ONLY the per-run workspace — never the base, never the mirrors
+    assert w["volumes"] == ["$DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace"]
+    assert w["container"]["User"] == "0"
+    ep = " ".join(w["container"]["Entrypoint"])
+    assert "chown -R -h 1000:1000 /workspace" in ep and "|| true" in ep
+    assert w["host"] == {"NetworkMode": "none"}
+    assert w["auto_remove"] is True
+    assert h["timeout_sec"] > 0

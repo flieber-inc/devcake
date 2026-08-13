@@ -108,8 +108,12 @@ class WorkspaceStore:
             shutil.rmtree(p)
             return True
         except OSError:
-            # Dev-created mode-0000 subdir etc.: we own everything (uid
-            # 1000), so chmod-and-retry clears what a plain walk cannot
+            # Dev-created mode-0000 subdir etc.: the dev-run DAG's exit
+            # handler re-chowned everything to uid 1000 at run end (audit
+            # 2026-08-13 B1 — nested rootless podman writes land as host
+            # uid 100000+ otherwise), so chmod-and-retry clears what a
+            # plain walk cannot. If dagu crashed mid-run the handler never
+            # ran and a foreign-uid tree survives — reported loudly below.
             with contextlib.suppress(OSError):
                 for dirpath, dirnames, _files in os.walk(p):
                     for d in [dirpath] + [os.path.join(dirpath, x)
@@ -117,7 +121,15 @@ class WorkspaceStore:
                         with contextlib.suppress(OSError):
                             os.chmod(d, 0o700)
             shutil.rmtree(p, ignore_errors=True)
-            return not p.exists()
+            if os.path.lexists(p):
+                # not silent (audit): the leak is otherwise invisible until
+                # /health's workspaces.leaked gauge creeps
+                log.warning(
+                    "workspace %s not fully reclaimable (foreign-uid files? "
+                    "the dev-run exit handler normally re-chowns — a dagu "
+                    "crash mid-run skips it); the sweep will retry", p)
+                return False
+            return True
 
     def _candidates(self, store) -> list[os.DirEntry]:
         """Sweep-eligible children: run-id charset, older than the age
@@ -149,6 +161,23 @@ class WorkspaceStore:
         Runs at boot (reconcile, before anything serves) and periodically
         from the watchdog. Never raises."""
         removed = 0
+        # Exit-handler bind re-creation (audit B1, measured live): the DAG's
+        # reclaim container mounts $WS/<run_id> AFTER run_dev exits, and the
+        # docker daemon auto-creates a missing bind source — so when finalize
+        # cleanup wins the race, an EMPTY run dir is resurrected moments
+        # later. os.rmdir is atomic and fails on non-empty, so empties whose
+        # record is TERMINAL (never absent — a mid-create dir may briefly
+        # predate its record) go immediately, no age guard.
+        with contextlib.suppress(OSError):
+            for e in os.scandir(self.root):
+                if not RUN_ID_RE.match(e.name):
+                    continue
+                run = store.get(e.name)
+                if run is None or run.state not in TERMINAL_STATES:
+                    continue
+                with contextlib.suppress(OSError):
+                    os.rmdir(e.path)          # no-op unless empty dir
+                    removed += 1
         for e in self._candidates(store):
             try:
                 if not e.is_dir(follow_symlinks=False):

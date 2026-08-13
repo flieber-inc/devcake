@@ -276,6 +276,49 @@ def test_leaked_count_matches_sweep_candidates(tmp_path):
     assert ws.leaked_count(store) == 1
 
 
+def test_sweep_reclaims_young_empty_dirs_with_terminal_records(tmp_path):
+    """Audit B1 follow-through (measured live): the dev-run exit handler's
+    per-run bind can resurrect an EMPTY run dir moments after finalize
+    cleanup removed it — the docker daemon auto-creates a missing bind
+    source. Young empties with a TERMINAL record go immediately (rmdir is
+    atomic, fails on non-empty); record-absent young dirs stay (a
+    mid-create dir may briefly predate its record)."""
+    ws = WorkspaceStore(tmp_path)
+    store = InMemoryStore()
+    store.save(_run("R-1-1-EXECUTE-DONE00", state="finished"))
+    (tmp_path / "R-1-1-EXECUTE-DONE00").mkdir()     # bind-resurrected: EMPTY
+    store.save(_run("R-1-1-EXECUTE-BUSY00", state="finished"))
+    ws.create("R-1-1-EXECUTE-BUSY00")               # sentinel inside: NOT empty
+    (tmp_path / "R-1-1-EXECUTE-NOREC1").mkdir()     # young empty, recordless
+    removed = ws.sweep(store)
+    assert removed == 1
+    assert not (tmp_path / "R-1-1-EXECUTE-DONE00").exists()
+    assert (tmp_path / "R-1-1-EXECUTE-BUSY00").exists()   # age guard owns it
+    assert (tmp_path / "R-1-1-EXECUTE-NOREC1").exists()
+
+
+def test_unreclaimable_tree_warns_loudly(tmp_path, caplog, monkeypatch):
+    """Audit B1: a foreign-uid tree (dagu crashed before the exit handler
+    re-chowned it) used to vanish into a silent False — now it warns."""
+    import logging
+
+    import devcake.domain.workspaces as wmod
+    ws = WorkspaceStore(tmp_path)
+    p = tmp_path / "R-1-1-EXECUTE-AAAAAA"
+    p.mkdir()
+    (p / "f").write_text("x")
+
+    def stubborn_rmtree(path, ignore_errors=False):
+        if not ignore_errors:
+            raise OSError(1, "Operation not permitted")
+        # ignore_errors variant swallows AND removes nothing (foreign uid)
+
+    monkeypatch.setattr(wmod.shutil, "rmtree", stubborn_rmtree)
+    with caplog.at_level(logging.WARNING):
+        assert ws.cleanup("R-1-1-EXECUTE-AAAAAA") is False
+    assert any("not fully reclaimable" in r.message for r in caplog.records)
+
+
 def test_wipe_all_ignores_age_and_records_but_keeps_charset_fence(tmp_path):
     ws = WorkspaceStore(tmp_path)
     store = InMemoryStore()

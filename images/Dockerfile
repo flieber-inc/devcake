@@ -1,4 +1,7 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# (frontend digest-pinned like every external image — a floating tag here
+#  does a Docker Hub round-trip on every cold bake, and one transient 502
+#  reds CI; bump = imagetools inspect docker/dockerfile:1 → paste digest)
 #
 # DevCake Dev harness images — multi-target Dockerfile.
 # Shared `base` stage is built once (BuildKit) and reused by every harness.
@@ -113,6 +116,49 @@ RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Nested-engine floor (ADR-0023 addendum, founder go 2026-08-13): rootless
+# podman INSIDE the Dev container — no docker.sock, the container boundary
+# stays the sandbox. Pinned STATIC bundle (podman+crun+conmon+netavark+pasta+
+# fuse-overlayfs): Debian bookworm's podman 4.3 fails rootless-in-container
+# at the newuidmap step (measured), so apt cannot serve this floor. sha256-
+# verified like every pinned artifact. `docker` = podman symlink (compat CLI);
+# uidmap (apt, below) supplies newuidmap/newgidmap — re-packaged Fedora-style
+# below: setuid bit STRIPPED, file caps applied (the measured fix).
+# Runtime needs the dev-run DAG's seccomp profile + /dev/fuse (kernels ≥5.13
+# use native rootless overlay and ignore fuse) — matrix measured 2026-08-13.
+ARG PODMAN_STATIC_VERSION=v5.8.4
+# per-arch sha256 (the bake builds the HOST platform; both pinned)
+ARG PODMAN_STATIC_SHA256_AMD64=a58765fe8be6ab3fb79f892f1a027b4ce4a7e8eb589df1ef960c167cbde08d69
+ARG PODMAN_STATIC_SHA256_ARM64=a2f6b73cc0f7018e2e8518338a4ec27db70148e1af86e16719235605aefd1df3
+RUN apt-get update && apt-get install -y --no-install-recommends uidmap libcap2-bin \
+    && rm -rf /var/lib/apt/lists/* \
+    # MEASURED 2026-08-13 (WSL2 kernel 6.6, engine 29): Debian's SETUID
+    # newuidmap/newgidmap EPERM on the uid_map write inside a container,
+    # while Fedora's FILE-CAPS flavor works on the same host+flags — so we
+    # re-package Debian's binaries the Fedora way (cap_setuid/cap_setgid=ep,
+    # setuid bit dropped). Mechanism unexplained, behavior pinned by the
+    # live nested-matrix probe.
+    && chmod u-s /usr/bin/newuidmap /usr/bin/newgidmap \
+    && setcap cap_setuid+ep /usr/bin/newuidmap \
+    && setcap cap_setgid+ep /usr/bin/newgidmap \
+    && arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+         amd64) sha="${PODMAN_STATIC_SHA256_AMD64}" ;; \
+         arm64) sha="${PODMAN_STATIC_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch $arch for podman-static" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/podman.tgz "https://github.com/mgoltzsche/podman-static/releases/download/${PODMAN_STATIC_VERSION}/podman-linux-${arch}.tar.gz" \
+    && echo "${sha}  /tmp/podman.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/podman.tgz -C /tmp \
+    && cp -r "/tmp/podman-linux-${arch}/usr/local/." /usr/local/ \
+    && mkdir -p /etc/containers \
+    && cp -r "/tmp/podman-linux-${arch}/etc/containers/." /etc/containers/ \
+    && rm -rf /tmp/podman.tgz "/tmp/podman-linux-${arch}" \
+    && ln -s /usr/local/bin/podman /usr/local/bin/docker \
+    && touch /etc/containers/nodocker
+    # subordinate id ranges for `dev` come from useradd below (shadow's
+    # auto-allocation — one canonical range, no hand-written duplicate)
+
 # Non-root harness user (docs/07 §7; Claude Code refuses root).
 # Create user before setting HOME so installers (e.g. Grok CLI) can write $HOME.
 # The .npmrc prefix makes RUNTIME `npm i -g` a user-space self-serve (root
@@ -124,6 +170,9 @@ RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
 RUN useradd -m -u 1000 -d /home/dev -s /bin/bash dev \
     && mkdir -p /workspace /home/dev/.npm-global /home/dev/.local/bin \
     && printf 'prefix=/home/dev/.npm-global\n' > /home/dev/.npmrc \
+    && mkdir -p /home/dev/.config/containers \
+    && printf '[engine]\ncgroup_manager = "cgroupfs"\nevents_logger = "file"\n' \
+        > /home/dev/.config/containers/containers.conf \
     && chown -R dev:dev /home/dev /workspace /opt/pw-browsers
 
 ENV HOME=/home/dev \
@@ -150,6 +199,7 @@ RUN su dev -s /bin/sh -c ' \
             && rm /opt/pw-browsers/.devcake-writable; \
         python -c "import pandas, openpyxl"; \
         uv --version; \
+        podman --version && docker --version; \
         command -v tini jq rg pandoc pdftotext sqlite3 unzip zip gcc make >/dev/null'
 
 # Shared entrypoint façade + Dev-side package (domain/fault pure; more slices later).

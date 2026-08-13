@@ -36,7 +36,7 @@ export default function LimitsSection() {
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Global max Devs"
             desc="Effective ceiling = min(global, Σ per-type caps)."
-            help="Primary host-protection control. Dagu (verified through 2.11.3) cannot apply Docker CPU/memory/PID limits to Dev containers — this cap is the effective throttle; hard per-container limits are planned.">
+            help="Primary host-protection control for fleet WIDTH — how many Devs run at once. Per-container DEPTH is governed by the hard cgroup limits in the Dev-containers section below (delivered 2026-08-13); budget host RAM as concurrency × the memory limit.">
             <Input type="number" className="w-24" value={cfg.concurrency.global_max}
               aria-label="Global max Devs"
               onChange={(e) => setField("cfg.concurrency.global_max", Number(e.target.value))} />

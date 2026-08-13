@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { diffLeaves, applyEditsOnto, getIn } from "../src/lib/objectPath.js";
 import { metaFor, describeDiff } from "../src/lib/configLabels.js";
 import { newPmoCard, newRepoCard } from "../src/lib/cards.js";
-import { draftErrors } from "../src/lib/useConfigDraft.js";
+import { draftErrors } from "../src/lib/draftErrors.js";
 
 let failed = 0;
 const check = (name, fn) => {

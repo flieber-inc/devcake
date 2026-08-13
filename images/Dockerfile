@@ -17,8 +17,8 @@
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3
 # Pinned harness CLIs (npm view @anthropic-ai/claude-code / @openai/codex).
-ARG CLAUDE_CODE_VERSION=2.1.221
-ARG CODEX_VERSION=0.146.0
+ARG CLAUDE_CODE_VERSION=2.1.229
+ARG CODEX_VERSION=0.147.0
 # Toolchain floor (ADR-0023): playwright pinned to the SPA suite's family
 # (admin/spa/package.json playwright-core) so the whole repo speaks one
 # browser stack; python doc/spreadsheet libs pinned like the entrypoint deps.

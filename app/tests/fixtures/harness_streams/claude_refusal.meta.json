@@ -1,9 +1,9 @@
 {
   "name": "claude_refusal",
   "harness": "claude-code",
-  "cli_version": "2.1.221 (Claude Code)",
+  "cli_version": "2.1.229 (Claude Code)",
   "entrypoint_source": "/srv/images/common/dev_entrypoint.py",
-  "condition": "ANTHROPIC_BASE_URL /s/refusal; recapture at 2.1.221",
+  "condition": "ANTHROPIC_BASE_URL /s/refusal; recapture at 2.1.229",
   "model": null,
   "plan_mode": false,
   "argv": [
@@ -17,22 +17,22 @@
   ],
   "extra": null,
   "preflight": {
-    "url": "http://devcake-capture-stub-codex:8080/healthz",
+    "url": "http://capture-stub:8080/healthz",
     "status": 200,
-    "latency_ms": 37,
+    "latency_ms": 26,
     "body_head": "{\"ok\": true, \"stub\": true}"
   },
   "concurrency": 1,
   "concurrency_note": null,
   "exit_code": 0,
   "timed_out": false,
-  "duration_ms": 1185,
-  "stdout_bytes": 3367,
+  "duration_ms": 1099,
+  "stdout_bytes": 3533,
   "stdout_lines": 3,
   "stderr_bytes": 0,
   "dump_bytes": 23,
   "last_message_bytes": 0,
-  "session_id": "2bd98622-8632-45d3-bafc-15d35a9c91e8",
+  "session_id": "7165e749-1ed6-4f2b-b33e-707f11f4378b",
   "resume_of": null,
   "first_session_id": null,
   "observed_reason": null,
@@ -40,5 +40,5 @@
   "devcake_exit_now": 11,
   "devcake_class_now": "",
   "devcake_exit_before_adr0018": 11,
-  "captured_at": "2026-08-04T17:17:56Z"
+  "captured_at": "2026-08-13T05:26:17Z"
 }

@@ -143,7 +143,8 @@ CAPTURES = [
     ("claude_healthy", NO_FAULT),
     ("claude_refusal", NO_FAULT),
 
-    # ── codex-cli 0.146.0 ────────────────────────────────────────────────────
+    # ── codex-cli 0.146.0 (0.147.0 bump: rig re-run, streams measured
+    #    shape-identical — fixtures keep their recorded truth) ───────────────
     # Reaches empty_completion only because error items are bucketed apart from
     # tool activity: with `-m` naming a model the backend does not advertise,
     # codex emits an `item.completed` whose item type is "error" (`Model

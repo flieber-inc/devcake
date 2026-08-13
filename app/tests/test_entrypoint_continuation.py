@@ -153,7 +153,10 @@ def test_codex_usage_is_cumulative_and_the_others_are_not():
     codex resume leg's turn.completed reports BOTH calls' tokens (240/48 vs
     the first leg's 120/24); grok and claude report one invocation's worth.
     Token VALUES are the stub's; the aggregation behaviour is the CLI's own
-    (fixtures README)."""
+    (fixtures README). RE-MEASURED at 0.147.0 (audit B4: openai/codex#35621
+    'skip restored token usage replay' did NOT change the final
+    turn.completed aggregation — still cumulative on our wire path); the >0
+    guard kills the (0, 0) degeneracy the 2× relation would tolerate."""
     def usage(name, kind, key):
         for line in fx(f"{name}.jsonl").splitlines():
             try:
@@ -163,8 +166,13 @@ def test_codex_usage_is_cumulative_and_the_others_are_not():
             if isinstance(ev, dict) and ev.get("type") == kind:
                 return (ev.get("usage") or {}).get(key)
         return None
+    first_in = usage("codex_resume_nudge", "turn.completed", "input_tokens")
+    first_out = usage("codex_resume_nudge", "turn.completed", "output_tokens")
+    assert first_in and first_in > 0 and first_out and first_out > 0
     assert usage("codex_resume_nudge_resume", "turn.completed", "input_tokens") \
-        == 2 * usage("codex_resume_nudge", "turn.completed", "input_tokens")
+        == 2 * first_in
+    assert usage("codex_resume_nudge_resume", "turn.completed", "output_tokens") \
+        == 2 * first_out
     assert usage("grok_resume_nudge_resume", "end", "input_tokens") \
         == usage("grok_resume_nudge", "end", "input_tokens")
     assert ep.RESUME_SPECS["codex"].usage_cumulative is True

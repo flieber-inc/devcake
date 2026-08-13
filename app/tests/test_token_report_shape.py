@@ -104,6 +104,20 @@ def test_grok_end_event_report_is_v1_with_provenance():
     assert r["raw"]["usage"]["input_tokens"] == r["input_tokens"]
 
 
+def test_claude_thinking_tokens_land_in_the_reasoning_slot():
+    """NEW at claude-code 2.1.229 (capture-verified): thinking tokens ride
+    usage.output_tokens_details — a subset of output_tokens absorbed into the
+    first-class v1 reasoning slot like grok/codex; a pre-2.1.229 stream
+    without the key stays None (never a fabricated 0)."""
+    r = _report_for("claude_healthy")
+    # fixture LITERAL, not extractor-vs-its-own-raw (audit nit): the
+    # claude_healthy capture carries thinking_tokens: 0, and 0-read-from-
+    # the-key vs None-no-key is exactly the distinction that matters
+    assert r["reasoning_tokens"] == 0
+    old = tokens.claude_token_report({"usage": {"output_tokens": 5}})
+    assert old["reasoning_tokens"] is None
+
+
 def test_signals_fallback_names_itself(tmp_path):
     """Pre-v1 the signals path masqueraded as "session_json" — provenance is
     data now, so the fallback names its actual path."""

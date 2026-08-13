@@ -493,8 +493,9 @@ nothing is often the right answer.
 - If a finding implies the plan itself is wrong (a mission mooted, a
   decomposition mis-cut), say so in that route's "because" — a human acts
   on topology; you route information, never intent.
-- Budgets are wide by design (discoveries are the system's memory between
-  runs): spend routes on the findings with the widest consequences.
+- There is no numeric route budget — your judgment IS the budget
+  (discoveries are the system's memory between runs): route the findings
+  with the widest consequences and decline the rest.
 
 ### Required output — /workspace/out/result.json
 {{"schema_version": 1, "outcome": "stewarded",

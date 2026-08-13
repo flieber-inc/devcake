@@ -268,21 +268,21 @@ class Steward(BaseModel):
 
 class Budgets(BaseModel):
     """Operator-owned counting budgets (ADR-0033 Decision 7 AS AMENDED,
-    founder ruling 2026-08-13): discoveries are a proxy for memory-building
+    founder rulings 2026-08-13): discoveries are a proxy for memory-building
     on an otherwise memoryless system — strictly the memory useful to the
     tasks at hand — so the bounds are knobs the operator sizes to their
     board, not evaluation constants. Devs carry self-regulation guidance in
     the playbooks; these are the backstops. 0 = unlimited, everywhere.
-    All four knobs are live (harvest + freshness + routing)."""
+    ROUTING deliberately has no numeric budget (addendum 14): the
+    (source, step) delivery dedup and family size already bound fan-out
+    structurally, and the steward is the designed judgment layer — a
+    numeric reject would only manufacture the spent-budget retry
+    pathology."""
     # per-mission-lifetime cap on freshness re-review directives (ADR-0031;
     # shared by human steering posts and routed discoveries alike)
     freshness_rereviews: int = Field(5, ge=0)
     # max discovery entries harvested from one run's result.json
     discoveries_per_run: int = Field(3, ge=0)
-    # max routed deliveries counted from one source mission's receipts
-    discovery_routes_per_source: int = Field(3, ge=0)
-    # max distinct (source, step) deliveries accumulated on one recipient
-    discovery_in_per_recipient: int = Field(5, ge=0)
 
 
 def migrate_steward_names(data: dict) -> dict:

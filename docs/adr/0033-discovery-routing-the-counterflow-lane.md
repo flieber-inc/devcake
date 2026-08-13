@@ -322,6 +322,9 @@ these rulings amend it where implementation surfaced better information.
    re-review budget of 2 (the ADR-0031 "constant, not operator config"
    stance is superseded for these counting budgets). Counting stays
    marker-derived from the feed — only the bound moved to config.
+   *Superseded in part by ruling 14: the two ROUTING knobs
+   (`discovery_routes_per_source`, `discovery_in_per_recipient`) were
+   deleted; `freshness_rereviews` and `discoveries_per_run` remain.*
 2. **Handoff vs discovery, clarified.** A handoff is not a discovery; it is
    a *delivery method* that carries discovery consequences to the immediate
    successor, which must never block on asynchronous steward routing.
@@ -333,8 +336,8 @@ these rulings amend it where implementation surfaced better information.
    marked comment as the scan surface (`externalize=False` — the counted
    marker never leaves the feed body). The marker carries parameters inside
    the token — `` `devcake:discovery:v1 step=<seq> n=<count>` ``
-   (decomposition-marker precedent) — so pending detection and the
-   per-source budget stay board-derivable without opening attachments.
+   (decomposition-marker precedent) — so pending detection stays
+   board-derivable without opening attachments.
 4. **Recovery is label-gated.** Harvest adds a `DEVCAKE-DISCOVERY` label — a
    pure sweep gate (the poll cycle has no unconditional per-mission feed
    reads; the DEVCAKE-MERGE precedent). The label may never affect
@@ -372,14 +375,17 @@ these rulings amend it where implementation surfaced better information.
     per-target receipts; a batch the steward deliberately routed NOWHERE
     (empty `routes[]`) **or** whose every proposal was a *terminal* reject
     (unknown / self / terminal recipient / outside family / malformed /
-    not in the package) gets a `to=-` receipt. Batches whose source run
-    record was cleared (clear-runs) are terminated by the sweep with a
-    sentinel'd unroutable comment + the same `to=-`. **Transient holds
-    do not receipt:** spent budget, truncated or unreadable feed, failed
-    delivery post — the step stays pending so a human deleting a comment
-    (or a later healthy fetch) can free the slot. `pending = posted −
-    receipted` converges when counts are known; a truncated `scan_source`
-    (`full=True`, fail-closed) writes nothing.
+    not in the package / a recipient past the full-read page ceiling,
+    ruling 14) gets a `to=-` receipt. Batches whose source run record was
+    cleared (clear-runs) are terminated by the sweep with a sentinel'd
+    unroutable comment + the same `to=-`. **Genuinely transient holds do
+    not receipt:** an unreadable feed or a failed delivery post — the
+    step stays pending and the sweep re-drives once the board answers
+    again. A condition that cannot heal must never be held as pending:
+    "pending forever" means a steward re-dispatch every cycle (ruling
+    14's retry pathology). `pending = posted − receipted` converges when
+    counts are known; a truncated `scan_source` (`full=True`,
+    fail-closed) writes nothing.
 11. **Single-flight is per-instance**, a sound coarsening of Decision 3's
     per-family rule: families never span instances, so one in-flight
     discovery run per instance implies at most one per family. Both
@@ -403,6 +409,26 @@ these rulings amend it where implementation surfaced better information.
     the marked comment is on the feed. A failed post is audited
     (`discovery_post_failed`), not checkpointed; redelivery retries. The
     close still cannot wedge.
+14. **The numeric routing budgets are DELETED** (founder ruling
+    2026-08-13, second pass). `discovery_routes_per_source` and
+    `discovery_in_per_recipient` had no justification the design didn't
+    already provide: the `(source, step)` delivery dedup caps a recipient
+    at one delivery per source batch ever, family size caps fan-out, and
+    the steward is the designed judgment layer — selection is the cost
+    only the map-holder pays cheaply. Worse, a spent numeric budget can
+    only *hold* (no receipt ⇒ the sweep re-seeds ⇒ a steward re-dispatch
+    every cycle, forever — the retry pathology) or *kill* (a `to=-` on
+    work a raised knob was supposed to free). Neither is acceptable, so
+    the knobs go; `freshness_rereviews` and `discoveries_per_run` remain
+    (different seams, no hold semantics). Corollary rulings: **full
+    feed reads stay policy** (`full=True` everywhere counts are read),
+    and the **page-ceiling case raises to the human** instead of holding
+    — a ceiling-truncated *recipient* is a terminal reject whose `to=-`
+    receipt carries a human-directed reason (carry the DISCOVERY file
+    manually); a ceiling-truncated *source* is retired by the sweep with
+    one loud comment, the gate label removed, and the advisory queue
+    cleared. Feeds only grow: treating the ceiling as transient would
+    hold forever.
 
 ## Related
 

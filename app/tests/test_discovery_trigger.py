@@ -82,6 +82,17 @@ def test_receipted_source_is_discarded_without_dispatch(tmp_path):
     assert mgr._discoveries_pending == set()
 
 
+def test_truncated_source_is_discarded_without_dispatch(tmp_path):
+    # the ceiling case belongs to the sweep (raise to humans + retire);
+    # holding the id here would re-fetch a full feed every cycle for nothing
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    pmo.feeds["src"].truncated = True
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert calls == []
+    assert mgr._discoveries_pending == set()
+
+
 def test_off_snapshot_pending_ids_are_dropped(tmp_path):
     pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
     mgr._discoveries_pending.add("ghost")

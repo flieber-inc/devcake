@@ -168,7 +168,11 @@ class StewardService:
             for s in group:
                 state = await discovery.scan_source(mgr, s)
                 if state.truncated:
-                    continue                      # counts unknown — keep id
+                    # ceiling case — the sweep raises it to the humans and
+                    # retires the gate; holding the id here would re-fetch
+                    # a full feed every cycle for nothing
+                    mgr._discoveries_pending.discard(s.pmo_id)
+                    continue
                 if state.pending:
                     pending[s.pmo_id] = state.pending
                 else:                             # already receipted — done

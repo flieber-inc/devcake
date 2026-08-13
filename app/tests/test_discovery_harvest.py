@@ -344,7 +344,11 @@ def test_pending_from_board_is_label_gated(tmp_path):
     assert getattr(fake, "get_activity_full_calls", 0) == 1
 
 
-def test_truncated_source_is_unreadable_not_empty(tmp_path):
+def test_truncated_source_is_raised_to_humans_and_retired(tmp_path):
+    # past the full-read ceiling the board arithmetic is permanently
+    # unknowable (feeds only grow): scan stays fail-closed, and the sweep
+    # writes no to=- — it posts ONE human-directed raise, drops the gate
+    # label, and clears the advisory queue (addendum 14)
     m, mgr, fake, store = _harvest_mgr(tmp_path)
     m.labels = m.labels | {LABEL_DISCOVERY}
     fake.activity_entries = [
@@ -355,9 +359,12 @@ def test_truncated_source_is_unreadable_not_empty(tmp_path):
     state = run_coro(discovery.scan_source(mgr, m))
     assert state.truncated
     assert run_coro(discovery.pending_from_board(mgr, [m])) == {}
+    mgr._discoveries_pending.add(m.pmo_id)
     run_coro(discovery.discovery_sweep(mgr, m))
-    assert ({LABEL_DISCOVERY}, set()) not in fake.swaps
     assert not any("to=-" in c for c in fake.comments)
+    assert any("readable page ceiling" in c for c in fake.comments)
+    assert ({LABEL_DISCOVERY}, set()) in fake.swaps
+    assert mgr._discoveries_pending == set()
 
 
 def test_pending_excludes_receipted_steps(tmp_path):

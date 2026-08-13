@@ -116,26 +116,6 @@ export default function LimitsSection() {
               aria-label="Discoveries per run"
               onChange={(e) => setField("cfg.budgets.discoveries_per_run", Number(e.target.value))} />
           </SettingRow>
-          <SettingRow label="Discovery routes per source"
-            desc={Number(cfg.budgets?.discovery_routes_per_source) === 0
-              ? "0 — unlimited routed deliveries per source mission."
-              : `Up to ${cfg.budgets?.discovery_routes_per_source} routed deliveries per source mission.`}
-            help="Bounds how many times one mission's discoveries fan out across its family, counted from routing receipts on its feed.">
-            <Input type="number" className="w-24" min={0}
-              value={cfg.budgets?.discovery_routes_per_source ?? 3}
-              aria-label="Discovery routes per source"
-              onChange={(e) => setField("cfg.budgets.discovery_routes_per_source", Number(e.target.value))} />
-          </SettingRow>
-          <SettingRow label="Discoveries per recipient"
-            desc={Number(cfg.budgets?.discovery_in_per_recipient) === 0
-              ? "0 — unlimited routed discoveries may accumulate on one mission."
-              : `Up to ${cfg.budgets?.discovery_in_per_recipient} routed discoveries accumulate on one mission.`}
-            help="Bounds how many distinct routed findings one recipient mission accumulates, counted from delivery markers on its feed. A human deleting a delivery comment deliberately frees the slot.">
-            <Input type="number" className="w-24" min={0}
-              value={cfg.budgets?.discovery_in_per_recipient ?? 5}
-              aria-label="Discoveries per recipient"
-              onChange={(e) => setField("cfg.budgets.discovery_in_per_recipient", Number(e.target.value))} />
-          </SettingRow>
         </div>
       </Section>
 

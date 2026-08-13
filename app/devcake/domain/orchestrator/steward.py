@@ -313,18 +313,21 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     per recipient, receipt a batch only when it was *dispositioned*
     (delivered, or deliberately routed nowhere / a terminal reject), and
     drop the sweep-gate label once a source has nothing pending.
-    Transient holds (budget, truncated/unreadable feed, failed post,
-    routing toggle off) write no ``to=-`` — the sweep re-drives.
-    Idempotent against the board: a redelivered finalize re-checks the
-    recipient's delivery markers and the source's receipts before every
-    write."""
+    Transient holds (unreadable feed, failed post, routing toggle off)
+    write no ``to=-`` — the sweep re-drives. A recipient past the
+    full-read page ceiling is NOT transient (feeds only grow): terminal
+    ``to=-`` with a human-directed reason on the receipt comment
+    (addendum 14). No numeric route budgets — the (source, step) dedup
+    and family size are the structural bounds; the steward is the
+    judgment layer. Idempotent against the board: a redelivered finalize
+    re-checks the recipient's delivery markers and the source's receipts
+    before every write."""
     from .discovery import render_entry_lines, scan_source, valid_entries
     from .family_graph import family_of
 
     if not mgr.instance.discovery_routing:          # D11 — delivery too
         return 0, 0
 
-    budgets = mgr.config.budgets
     missions = await mgr.pmo.list_all(mgr.instance.team_key)
     by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
     by_id = {m.pmo_id: m for m in missions if m.pmo_kind == "issue"}
@@ -336,16 +339,22 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                for b in (run.steward_batches or [])}
 
     delivered = rejected = 0
-    # (source pmo_id, step) held for a transient — no to=- (cap/outage
-    # is a pause; a human deleting a delivery comment frees the slot)
+    # (source pmo_id, step) held for a transient — no to=- (an outage is
+    # a pause; the sweep re-drives once the board answers again)
     held: set[tuple[str, int]] = set()
+    # (source pmo_id, step) → human-directed lines that ride the receipt
+    # comment (posted once — the receipt pre-scan is the dedup)
+    reasons: dict[tuple[str, int], list[str]] = {}
 
     def reject(pmo_id: str, detail: str, *,
-               hold: tuple[str, int] | None = None) -> None:
+               hold: tuple[str, int] | None = None,
+               reason: tuple[tuple[str, int], str] | None = None) -> None:
         nonlocal rejected
         rejected += 1
         if hold is not None:
             held.add(hold)
+        if reason is not None:
+            reasons.setdefault(reason[0], []).append(reason[1])
         mgr._audit(pmo_id or "", "discovery_route_rejected", detail)
         log.info("discovery route rejected: %s", detail)
 
@@ -388,6 +397,9 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         if state is None:
             state = src_state[src.pmo_id] = await scan_source(mgr, src)
         if getattr(state, "truncated", False):
+            # hold, don't receipt: receipts on an unreadable-in-full feed
+            # can never be re-read — the sweep raises the ceiling case to
+            # the humans and retires the gate (addendum 14)
             reject(src.pmo_id, f"{src_key}: source feed truncated",
                    hold=(src.pmo_id, step))
             continue
@@ -396,15 +408,6 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         entries = valid_entries(source_run.result)[:n] if source_run else []
         if not 1 <= index <= len(entries):
             reject(src.pmo_id, f"{src_key} step {step}: no finding #{index}")
-            continue
-        cap = budgets.discovery_routes_per_source
-        planned = {(x["step"], x["tgt"].key.upper())
-                   for xs in accepted.values() for x in xs
-                   if x["src"].pmo_id == src.pmo_id}
-        if cap and len(state.receipted | planned) >= cap:
-            reject(src.pmo_id,
-                   f"{src_key}: source route budget spent ({cap})",
-                   hold=(src.pmo_id, step))
             continue
         accepted.setdefault(tgt.pmo_id, []).append(
             {"src": src, "tgt": tgt, "step": step, "index": index,
@@ -425,17 +428,23 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                        hold=(x["src"].pmo_id, x["step"]))
             continue
         if act.truncated:
-            # gitea pages ascending and drops the NEWEST — counts unknown
-            # ⇒ fail closed (the freshness-gate truncation doctrine)
+            # past the full-read page ceiling: the dedup markers cannot all
+            # be seen and feeds only grow, so this never heals — terminal,
+            # raised to the humans on the receipt comment (addendum 14)
             for x in batch:
                 reject(x["src"].pmo_id,
-                       f"→{tgt.key}: recipient feed truncated",
-                       hold=(x["src"].pmo_id, x["step"]))
+                       f"→{tgt.key}: recipient feed past the read ceiling",
+                       reason=((x["src"].pmo_id, x["step"]),
+                               f"⚠️ step {x['step']} → {tgt.key} declined: "
+                               f"its feed exceeds the readable page ceiling, "
+                               f"so duplicate-delivery checks are impossible "
+                               f"— routing to it is permanently off. Carry "
+                               f"`DISCOVERY_{x['step']}.md` over manually if "
+                               f"it matters."))
             continue
         existing: set[tuple[str, int]] = set()
         for en in act.entries:
             existing |= discovery_in_keys(unquoted(en.body))
-        cap_in = budgets.discovery_in_per_recipient
         by_pair: dict[tuple[str, int], list[dict]] = {}
         for x in batch:
             by_pair.setdefault((x["src"].key.upper(), x["step"]),
@@ -452,13 +461,6 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                 mgr._audit(src.pmo_id, "discovery_route_duplicate",
                            f"{skey} step {step}→{tgt.key}")
                 continue
-            if cap_in and len(existing) >= cap_in:
-                for x in xs:
-                    reject(src.pmo_id,
-                           f"→{tgt.key}: recipient budget spent ({cap_in})",
-                           hold=(src.pmo_id, step))
-                continue
-            existing.add((skey, step))
             head = [f"`devcake:discovery-in:v1 src={skey} step={step}`",
                     f"🔎 [{skey} · step {step} · {utcnow():%Y-%m-%d}] — "
                     f"leads, not truths: verify against the source before "
@@ -495,8 +497,9 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
                        hold=(x["src"].pmo_id, x["step"]))
 
     # 3 — receipts: a batch is dispositioned when something landed, the
-    # steward routed nowhere, or every proposal was a *terminal* reject.
-    # Transient holds (budget / truncated / unreadable / post-fail) stay
+    # steward routed nowhere, or every proposal was a *terminal* reject
+    # (incl. a ceiling-truncated recipient, whose human-directed reason
+    # rides this comment). Transient holds (unreadable / post-fail) stay
     # pending — to=- is deliberate/clear-runs only (ADR-0033 addendum).
     for (pid, step), b in batches.items():
         if (pid, step) in held:
@@ -515,11 +518,14 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
         if new:
             lines = [f"`devcake:discovery-routed:v1 step={s} to={t}`"
                      for s, t in new]
+            notes = [note for s in sorted({s for s, _t in new})
+                     for note in reasons.get((pid, s), [])]
             try:
                 await mgr._feed(
                     pid, "issue",
                     "🧭 Discovery routing receipts (dispositioned batches; "
-                    "`to=-` = routed nowhere):\n" + "\n".join(lines),
+                    "`to=-` = routed nowhere):\n" + "\n".join(lines)
+                    + ("\n\n" + "\n".join(notes) if notes else ""),
                     externalize=False)
             except Exception as ex:  # noqa: BLE001 — receipts missing ⇒ the sweep re-detects; never fail the finalize
                 mgr._audit(pid, "discovery_receipt_failed", str(ex)[:200])

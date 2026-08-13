@@ -554,11 +554,15 @@ until that run exists, field evidence below stays operator-self-reported.
   delivery method for discovery consequences that matter immediately
   downstream; `discoveries` is the family-wide memory the steward routes.
   Post-ship audit closed the leftover cracks: `to=-` is deliberate/clear-runs
-  only (budget / truncated / failed post stay pending); harvest checkpoints
-  only after the marker is on the feed; family clones unpack
-  `resolve_repo`'s `(name, reason)` tuple on the kick path; both steward
-  flavors share one lock; intake pause gates the harvest kick; `scan_source`
-  is `full=True` and fail-closed on truncation. **Not yet graduated**: per
+  only, plus the never-healing ceiling case (raised to humans); genuinely
+  transient failures (unreadable feed / failed post) stay pending; the
+  numeric route budgets were **deleted** (addendum 14 — a spent budget
+  could only hold or kill work; the `(source, step)` dedup and family
+  size are the structural bounds); harvest checkpoints only after the
+  marker is on the feed; family clones unpack `resolve_repo`'s
+  `(name, reason)` tuple on the kick path; both steward flavors share one
+  lock; intake pause gates the harvest kick; `scan_source` is `full=True`
+  and fail-closed on truncation. **Not yet graduated**: per
   the living-log criteria the feature may not join field-evidence claims
   until the live multi-mission family smoke passes (one mission's discovery
   reaching a sibling's MISSION.md and tripping an in-flight recipient's

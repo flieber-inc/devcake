@@ -225,18 +225,46 @@ async def discovery_sweep(mgr, m) -> None:
     """The per-mission sweep arm (called from sweeps() for every issue; the
     label gate lives HERE so sweeps.py never reads the label — the guard
     allowlist stays tight). Re-seeds the advisory queue for pending batches,
-    self-heals the label off fully-receipted sources, and terminates batches
+    self-heals the label off fully-receipted sources, terminates batches
     whose source run record is gone (clear-runs) with a sentinel'd
-    unroutable comment + a `to=-` receipt so the board arithmetic closes.
-    Toggle-off (D11) leaves everything untouched — the label stays as
-    honest board state until the operator re-enables routing."""
+    unroutable comment + a `to=-` receipt so the board arithmetic closes,
+    and retires ceiling-truncated sources with a raise-to-human comment
+    (addendum 14). Toggle-off (D11) leaves everything untouched — the label
+    stays as honest board state until the operator re-enables routing."""
     if m.pmo_kind != "issue" or LABEL_DISCOVERY not in m.labels:
         return
     if not mgr.instance.discovery_routing:
         return
     state = await scan_source(mgr, m)
     if state.truncated:
-        return   # counts unknown — do not drop the label or write to=-
+        # past the full-read page ceiling — feeds only grow, so the board
+        # arithmetic is permanently unknowable here. Raise to the humans
+        # and retire the gate (addendum 14): no to=- (nothing countable to
+        # disposition), one loud comment, label off, pending dropped. A
+        # failed comment retries next sweep (rare duplicate on a failed
+        # label drop is accepted — the alternative is silence).
+        try:
+            await mgr._feed(
+                m.pmo_id, "issue",
+                "⚠️ This mission's feed exceeds the readable page ceiling, "
+                "so discovery-routing bookkeeping (delivery dedup, receipt "
+                "arithmetic) is impossible and now retired for it. The "
+                "DISCOVERY_<n>.md attachments above remain the record — "
+                "carry them to related missions manually if they matter.",
+                externalize=False)
+            mgr._audit(m.pmo_id, "discovery_unreadable",
+                       "feed past the full-read ceiling — routing "
+                       "bookkeeping retired, raised to humans")
+        except Exception as ex:  # noqa: BLE001 — retried next sweep
+            mgr._audit(m.pmo_id, "discovery_receipt_failed", str(ex)[:200])
+            return
+        try:
+            await mgr.pmo.swap_labels(MissionRef(m.pmo_id, "issue"),
+                                      remove={LABEL_DISCOVERY}, add=set())
+        except Exception as ex:  # noqa: BLE001 — the label is a hint; retried next sweep
+            mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
+        mgr._discoveries_pending.discard(m.pmo_id)
+        return
     if not state.posted:
         return   # label without markers (human relabel) — humans own labels
     pending = state.pending

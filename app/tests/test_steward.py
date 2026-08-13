@@ -755,37 +755,33 @@ def test_apply_routes_dedup_and_idempotent_rerun(tmp_path):
     assert len(pmo.comments) == before
 
 
-def test_apply_routes_recipient_budget(tmp_path):
+def test_apply_routes_no_numeric_budgets(tmp_path):
+    """Addendum 14: routing has NO numeric budget — the (src, step) dedup
+    and family size are the structural bounds. Prior receipts and prior
+    deliveries of OTHER pairs never block a fresh route."""
     pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=(
         "`devcake:discovery-in:v1 src=T-Z step=1`",))
-    mgr.config.budgets.discovery_in_per_recipient = 1
-    delivered, rejected = _apply(mgr, run, [_route()])
-    assert (delivered, rejected) == (0, 1)
-    assert not any("discovery-in:v1 src=T-S" in md
-                   for pid, md in pmo.comments if pid == "tgt")
-    # cap is a pause, not a kill — a human deleting a delivery frees the slot
-    assert not _receipted_nowhere(pmo)
-    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) not in pmo.swaps
-
-
-def test_apply_routes_source_budget(tmp_path):
-    pmo, mgr, run = _route_setup(tmp_path)
     pmo.feeds["src"].entries.append(
         _ae("`devcake:discovery-routed:v1 step=1 to=T-Q`"))
-    mgr.config.budgets.discovery_routes_per_source = 1
     delivered, rejected = _apply(mgr, run, [_route()])
-    assert (delivered, rejected) == (0, 1)
-    assert not _receipted_nowhere(pmo)
-    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) not in pmo.swaps
+    assert (delivered, rejected) == (1, 0)
+    assert any("discovery-in:v1 src=T-S" in md
+               for pid, md in pmo.comments if pid == "tgt")
 
 
-def test_apply_routes_truncated_recipient_fails_closed(tmp_path):
+def test_apply_routes_truncated_recipient_is_terminal_raised(tmp_path):
+    """A recipient past the full-read ceiling never heals (feeds only
+    grow): the batch dispositions to=- and the receipt comment carries a
+    human-directed reason (addendum 14) — no hold, no re-dispatch loop."""
     pmo, mgr, run = _route_setup(tmp_path, recipient_truncated=True)
     delivered, rejected = _apply(mgr, run, [_route()])
     assert (delivered, rejected) == (0, 1)
     assert not any(pid == "tgt" for pid, _ in pmo.comments)
-    assert not _receipted_nowhere(pmo)
-    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) not in pmo.swaps
+    assert _receipted_nowhere(pmo)
+    raised = [md for md in _src_comments(pmo) if "to=-" in md]
+    assert any("readable page ceiling" in md and "T-T" in md
+               and "DISCOVERY_2.md" in md for md in raised)
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
 
 
 def test_apply_routes_unreadable_recipient_does_not_receipt(tmp_path):

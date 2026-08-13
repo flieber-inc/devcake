@@ -11,14 +11,22 @@
 #
 # $DEVCAKE_WS_HOST expands from the dagu SERVICE env (compose) and MUST be a
 # host-absolute path: bind sources resolve on the daemon host (docs/13 §4).
-# ${params.RUN_ID} interpolates inside volume sources (probe-verified 2.11.3).
+# ${params.RUN_ID} interpolates inside volume sources (probe-verified 2.11.3;
+# re-verified through the docker.run form on 2.13.0).
 #
-# Resource limits (ISSUES #20): Dagu's step `container:` schema does NOT
-# accept cpus/memory/pids_limit (additionalProperties: false — unknown keys
-# fail validation). DAG-level `resources.limits` is best-effort process cgroup
-# for the DAG run, not Docker HostConfig for the sibling Dev containers. True
-# container cgroup limits need Dagu host-config support (v0.1). Primary
-# throttle remains app concurrency caps.
+# Resource limits (closes the old ISSUES #20 deferral): both steps use the
+# docker.run action form, whose `host:` block passes Docker SDK HostConfig.
+# The cgroup fields live in HostConfig's EMBEDDED Resources struct, and Dagu
+# 2.13.0 decodes `host:` without mapstructure Squash — so they only land via
+# the NESTED `resources:` key below (measured 2026-08-13: flat `Memory:` at
+# host level silently decodes to 0; nested lands; params interpolate and
+# weak-type to int64; 0 ⇒ unlimited end-to-end).
+#
+# ⚠ FUTURE DAGU BUMP (upstream fix: dagucloud/dagu#2557): once Dagu ships
+# the Squash fix, the nested `resources:` form STOPS matching (measured
+# post-fix: decodes to 0) and the flat form becomes correct — on the first
+# bump past that fix, move Memory/NanoCPUs/PidsLimit up one level into
+# `host:` and delete this note. docs/13 §4 carries the same reminder.
 
 timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
@@ -40,12 +48,6 @@ preconditions:
   # in-container sentinel (exit 20); the daemon-autocreate residue remains
   # tracked debt (docs/14 §11).
 
-# Best-effort DAG-run resource budget (process cgroup where supported).
-resources:
-  limits:
-    cpu: "2"
-    memory: "4g"
-
 params:
   - name: RUN_ID
     default: ""
@@ -57,47 +59,68 @@ params:
     default: ""
   - name: REDIS_PASSWORD
     default: ""
+  # Per-container hard limits (AppConfig.container_limits — the app computes
+  # and sends these every dispatch; the "0" defaults apply only to manual UI
+  # runs and mean UNLIMITED, engine-verified).
+  - name: MEMORY_BYTES
+    default: "0"
+  - name: NANO_CPUS
+    default: "0"
+  - name: PIDS
+    default: "0"
 
 steps:
   - id: provision
-    container:
+    action: docker.run
+    with:
       image: ${params.IMAGE}
-      name: prov-${params.RUN_ID}
-      network: devcake_runtime
-      pull_policy: missing
-      keep_container: false
-      startup: entrypoint
+      container_name: prov-${params.RUN_ID}
+      pull: missing
+      auto_remove: true
       # ADR-0024: the app-maintained source mirrors, READ-ONLY (kernel-
-      # enforced). Real docker volume name on purpose: Dagu speaks the raw
-      # daemon API (network: precedent). ADR-0025: mounted in THIS step only
-      # — the agent never sees it.
+      # enforced; re-measured on 2.13.0 through this form). Real docker
+      # volume name on purpose. ADR-0025: mounted in THIS step only — the
+      # agent never sees it.
       volumes:
         - devcake_mirrors:/mirrors:ro
         - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace
-      env:
-        DEVCAKE_PHASE: provision
-        DEVCAKE_RUN_ID: ${params.RUN_ID}
-        TRACEPARENT: ${params.TRACEPARENT}
-        REDIS_URL: redis://redis:6379/0
-        REDIS_USER: ${params.REDIS_USER}
-        REDIS_PASSWORD: ${params.REDIS_PASSWORD}
+      container:
+        Env:
+          - DEVCAKE_PHASE=provision
+          - DEVCAKE_RUN_ID=${params.RUN_ID}
+          - TRACEPARENT=${params.TRACEPARENT}
+          - REDIS_URL=redis://redis:6379/0
+          - REDIS_USER=${params.REDIS_USER}
+          - REDIS_PASSWORD=${params.REDIS_PASSWORD}
+      host:
+        NetworkMode: devcake_runtime
+        resources:                       # nested ON PURPOSE — header note
+          Memory: ${params.MEMORY_BYTES}
+          NanoCPUs: ${params.NANO_CPUS}
+          PidsLimit: ${params.PIDS}
 
   - id: run_dev
     depends: [provision]
-    container:
+    action: docker.run
+    with:
       image: ${params.IMAGE}
-      name: dev-${params.RUN_ID}
-      network: devcake_runtime
-      pull_policy: missing
-      keep_container: false
-      startup: entrypoint
+      container_name: dev-${params.RUN_ID}
+      pull: missing
+      auto_remove: true
       # ONLY the per-run workspace — no mirrors line; that is the point.
       volumes:
         - $DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace
-      env:
-        DEVCAKE_PHASE: harness
-        DEVCAKE_RUN_ID: ${params.RUN_ID}
-        TRACEPARENT: ${params.TRACEPARENT}
-        REDIS_URL: redis://redis:6379/0
-        REDIS_USER: ${params.REDIS_USER}
-        REDIS_PASSWORD: ${params.REDIS_PASSWORD}
+      container:
+        Env:
+          - DEVCAKE_PHASE=harness
+          - DEVCAKE_RUN_ID=${params.RUN_ID}
+          - TRACEPARENT=${params.TRACEPARENT}
+          - REDIS_URL=redis://redis:6379/0
+          - REDIS_USER=${params.REDIS_USER}
+          - REDIS_PASSWORD=${params.REDIS_PASSWORD}
+      host:
+        NetworkMode: devcake_runtime
+        resources:                       # nested ON PURPOSE — header note
+          Memory: ${params.MEMORY_BYTES}
+          NanoCPUs: ${params.NANO_CPUS}
+          PidsLimit: ${params.PIDS}

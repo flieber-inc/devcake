@@ -31,10 +31,11 @@ def test_agent_step_never_mounts_the_mirrors():
     """ADR-0025's whole point, previously enforced by a comment ("no mirrors
     line; that is the point") and a one-time manual probe: the agent's
     container must not see /mirrors — only the provision step may, and only
-    read-only."""
+    read-only. (2026-08-13: steps moved to the docker.run action form —
+    volumes live under `with:`; mount semantics re-measured live on 2.13.0.)"""
     steps = _steps()
-    prov = steps["provision"]["container"]["volumes"]
-    dev = steps["run_dev"]["container"]["volumes"]
+    prov = steps["provision"]["with"]["volumes"]
+    dev = steps["run_dev"]["with"]["volumes"]
     assert any(v == "devcake_mirrors:/mirrors:ro" for v in prov), \
         "provision must mount the mirror volume READ-ONLY"
     assert not any("/mirrors" in v for v in dev), \
@@ -45,10 +46,33 @@ def test_both_steps_share_exactly_the_per_run_workspace():
     steps = _steps()
     ws = "$DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace"
     for sid in ("provision", "run_dev"):
-        vols = steps[sid]["container"]["volumes"]
+        vols = steps[sid]["with"]["volumes"]
         assert ws in vols, f"{sid} must bind the per-run workspace"
     # and nothing else rides into the agent container
-    assert steps["run_dev"]["container"]["volumes"] == [ws]
+    assert steps["run_dev"]["with"]["volumes"] == [ws]
+
+
+def test_both_steps_thread_the_container_limits_nested():
+    """ContainerLimits ride the NESTED `resources:` key on BOTH steps —
+    nested ON PURPOSE at Dagu 2.13.0 (its host: decode lacks mapstructure
+    Squash, so the flat form silently drops embedded Resources fields —
+    measured; upstream fix dagucloud/dagu#2557). When a future bump ships
+    the fix, the nested form stops matching: FLATTEN the keys into host:
+    and update this pin WITH a live inspect proof (Memory lands nonzero)."""
+    steps = _steps()
+    for sid in ("provision", "run_dev"):
+        host = steps[sid]["with"]["host"]
+        res = host["resources"]
+        assert res["Memory"] == "${params.MEMORY_BYTES}"
+        assert res["NanoCPUs"] == "${params.NANO_CPUS}"
+        assert res["PidsLimit"] == "${params.PIDS}"
+        assert host["NetworkMode"] == "devcake_runtime"
+        # env must ride the SDK container.Env list — the docker.run `env:`
+        # key is silently DROPPED by 2.13.0's decode (measured: a hello run
+        # died phaseless at the startup grace before this moved)
+        env = steps[sid]["with"]["container"]["Env"]
+        assert any(e.startswith("DEVCAKE_PHASE=") for e in env)
+        assert "env" not in steps[sid]["with"]
 
 
 def test_run_id_precondition_fences_the_charset():

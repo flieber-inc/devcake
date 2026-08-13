@@ -119,6 +119,42 @@ export default function LimitsSection() {
         </div>
       </Section>
 
+      <Section id="limits-containers" title="Dev containers"
+        description="Hard kernel limits (cgroups) applied to every Dev container — both steps of every run. 0 = unlimited.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Memory (MB)"
+            desc={Number(cfg.container_limits?.memory_mb) === 0
+              ? "0 — unlimited: containers may use all host memory."
+              : `Each Dev container is capped at ${cfg.container_limits?.memory_mb} MB.`}
+            help="Docker HostConfig memory limit, kernel-enforced per container. A Dev exceeding it is OOM-killed by the kernel (the run fails and is counted normally). Applies at the next dispatch.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.container_limits?.memory_mb ?? 4096}
+              aria-label="Container memory limit (MB)"
+              onChange={(e) => setField("cfg.container_limits.memory_mb", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="CPUs"
+            desc={Number(cfg.container_limits?.cpus) === 0
+              ? "0 — unlimited: containers may use all host CPUs."
+              : `Each Dev container is capped at ${cfg.container_limits?.cpus} CPU${Number(cfg.container_limits?.cpus) === 1 ? "" : "s"}.`}
+            help="Docker NanoCPUs limit (fractions allowed, e.g. 1.5). Throttles, never kills — a busy Dev just runs slower. Fleet-level pressure is still governed by the concurrency caps above.">
+            <Input type="number" className="w-24" min={0} step={0.5}
+              value={cfg.container_limits?.cpus ?? 2}
+              aria-label="Container CPU limit"
+              onChange={(e) => setField("cfg.container_limits.cpus", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="PIDs"
+            desc={Number(cfg.container_limits?.pids) === 0
+              ? "0 — unlimited processes per container."
+              : `Each Dev container is capped at ${cfg.container_limits?.pids} processes.`}
+            help="pids cgroup cap — the fork-bomb backstop. Devs legitimately spawn build/test process trees, so keep this generous or off; a cap that is too low fails innocent compiles.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.container_limits?.pids ?? 0}
+              aria-label="Container PIDs limit"
+              onChange={(e) => setField("cfg.container_limits.pids", Number(e.target.value))} />
+          </SettingRow>
+        </div>
+      </Section>
+
       <Section id="limits-recovery" title="Result recovery"
         description="What happens when a run ends without its result file.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">

@@ -246,11 +246,24 @@ class RepoInstance(BaseModel):
 
 
 class Concurrency(BaseModel):
-    # concurrency caps are the real host-protection throttle: Dagu (measured
-    # at 2.10.5, re-verified at the pinned 2.11.3) cannot apply Docker
-    # HostConfig limits to Dev containers (docs/07 §7); per-container hard
-    # limits return with Dagu host-config support
+    # concurrency caps remain the fleet-level throttle; PER-CONTAINER hard
+    # limits are real since the 2026-08-13 dev-run migration to Dagu's
+    # docker-executor form (ContainerLimits below — the old "Dagu cannot
+    # apply HostConfig limits" era ended with 2.13.0 + the nested-resources
+    # decode, docs/07 §7)
     global_max: int = Field(3, ge=1)
+
+
+class ContainerLimits(BaseModel):
+    """Per-Dev-container hard limits (kernel cgroups via Docker HostConfig —
+    the 2026-08-13 founder ruling: admin knobs, not static DAG values).
+    Applied to BOTH steps of every dev-run (provision + harness) as DAG
+    params; **0 = unlimited** (the field is left unset on the engine —
+    verified end-to-end). Defaults mirror the old best-effort DAG budget
+    (cpu 2 / memory 4g) that these knobs replace."""
+    memory_mb: int = Field(4096, ge=0)
+    cpus: float = Field(2.0, ge=0)
+    pids: int = Field(0, ge=0)
 
 
 class Steward(BaseModel):
@@ -668,6 +681,8 @@ class AppConfig(BaseModel):
     steward: Steward = Field(default_factory=Steward)
     # counting budgets (ADR-0033 D7 as amended) — see the Budgets docstring
     budgets: Budgets = Field(default_factory=Budgets)
+    # per-Dev-container cgroup limits (2026-08-13) — see ContainerLimits
+    container_limits: ContainerLimits = Field(default_factory=ContainerLimits)
     # ADR-0024 — mandatory source mirror; see the RepoMirror docstring
     repo_mirror: RepoMirror = Field(default_factory=RepoMirror)
     # operator rate card + display-override switch for app-side cost

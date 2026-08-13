@@ -382,3 +382,31 @@ def test_kill_restores_via_finalizer():
 
     assert finalizer.restored == [run.run_id]
     assert store.get(run.run_id).state == "timed_out"
+
+
+def test_launch_threads_container_limit_params():
+    """ContainerLimits → DAG params, the ONE conversion site (2026-08-13):
+    memory_mb → bytes, cpus → NanoCPUs ×1e9 int, pids verbatim; 0 =
+    unlimited; no config (tests) ⇒ all "0" (unlimited)."""
+    from devcake.config import AppConfig
+    from devcake.domain.run_bootstrap import container_limit_params
+
+    store = InMemoryStore()
+    executor = FakeExecutor(store)
+    cfg = AppConfig()
+    bootstrap = RunBootstrap(store, FakeMessaging(), executor, config=cfg)
+    run_coro(bootstrap.launch(_hello_run("HELLO-3-HELLO-CCCCCC"),
+                              image="devcake/dev-hello:latest"))
+    params, _ = executor.starts[0]
+    assert params["MEMORY_BYTES"] == str(4096 * 1024 * 1024)   # default 4g
+    assert params["NANO_CPUS"] == "2000000000"                 # default 2.0
+    assert params["PIDS"] == "0"                               # default off
+
+    cfg.container_limits.memory_mb = 0
+    cfg.container_limits.cpus = 1.5
+    cfg.container_limits.pids = 256
+    assert container_limit_params(cfg) == {
+        "MEMORY_BYTES": "0", "NANO_CPUS": "1500000000", "PIDS": "256"}
+    # configless constructions (every existing test) stay unlimited
+    assert container_limit_params(None) == {
+        "MEMORY_BYTES": "0", "NANO_CPUS": "0", "PIDS": "0"}

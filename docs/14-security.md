@@ -321,11 +321,12 @@ Not claimed:
 
 - Multi-tenant isolation between hostile customers.
 - Egress allowlists (optional future ops hardening, §11).
-- **Docker HostConfig** CPU/memory/PID limits on the Dev container — Dagu's
-  `container:` schema has no HostConfig fields (measured at 2.10.5, re-verified
-  at the pinned 2.11.3); DAG `resources.limits` is
-  process-cgroup only. That is **engineering debt** (noisy-neighbor / fork bomb
-  on the dedicated host), not adult-operator philosophy.
+- ~~Docker HostConfig CPU/memory/PID limits on the Dev container~~ —
+  **DELIVERED 2026-08-13**: kernel cgroup limits ride every Dev container via
+  `AppConfig.container_limits` → dev-run docker-executor `host:` (the old
+  `container:`-shorthand era had no HostConfig path; `07-dev-runtime.md` §7).
+  What is still NOT claimed: the limits bound one container, not a hostile
+  operator config (0 = unlimited is a legitimate setting).
 - MCP free-text commands and harness “skip permissions” flags are powerful on
   purpose (`11-admin-panel.md`, `08-harness-templates.md`).
 
@@ -438,7 +439,7 @@ occurrence.
 | Write token on non-EXECUTE | Push (and potentially merge) from “read” stages | Operator (RO PAT) | Verify — set the RO PAT (§9) |
 | Open egress | Exfil of env | Design | Accepted |
 | Workspace host bind (ADR-0025) | The agent sees ONLY its own run's `/workspace` — no `/mirrors`, no other repo's source. On the HOST, the `$DEVCAKE_WS_HOST` tree holds repo content + agent output until run end | Design (`0700`, DevCake-exclusive, reclaimed at run end) + operator (host FS access) | Accepted — SUPERSEDES the old "shared RO mirror mount" ambient-read row; the agent's ambient read surface is now zero (mirrors are provision-only) |
-| No Dev cgroup HostConfig | Host resource exhaustion | Engineering debt (§11) | Accepted — tracked debt (§11) |
+| Dev cgroup HostConfig limits | Host resource exhaustion | **Closed 2026-08-13** — `container_limits` knobs, kernel-enforced per container (memory/CPU/PIDs; defaults 4g/2.0/off; live-verified `docker inspect`) | Retired — the residual is an operator choosing 0 = unlimited |
 | Cross-Dev reachability on `devcake_runtime` | Concurrent Devs share one bridge with ICC on: Dev A can port-scan and connect to Dev B's in-container services — post-ADR-0023 that includes dev servers and a Chromium DevTools port (read B's page context, drive its browser) | Design (2026-08 evaluation) | Accepted — tracked debt (§11). ICC-off is NOT the fix: measured 2026-08-04, `enable_icc=false` blocks ALL container-to-container traffic on the bridge including Dev→Redis, severing the run bus. The real fix is per-run networks (docs/16 Candidates) |
 | Malicious `MAXLEN` on the shared ingress stream | Any Dev holds `+xadd`, and XADD accepts MAXLEN: a hostile Dev can trim OTHER runs' unconsumed entries (artifact loss for concurrent runs). The flood variant is bounded: `maxmemory 1gb + noeviction` errors the writer instead of OOMing redis, and the app XDELs after every handled batch | Design (ticket-writer trust zone) | Accepted — per-run ingress streams are the real fix (docs/16 Candidates) |
 | Unauth OTLP | Forged/flooded telemetry on this host | Design (dedicated host) | Accepted |
@@ -467,8 +468,8 @@ breaking it.
 Items that improve safety or hygiene **without** changing the adult-operator
 contract:
 
-- Docker HostConfig CPU/memory/PID limits on Dev containers (when Dagu supports
-  them, or via another spawn path). The ADR-0023 browser floor raises the
+- ~~Docker HostConfig CPU/memory/PID limits~~ (delivered 2026-08-13 — see
+  §6). The ADR-0023 browser floor raises the
   ceiling a run CAN reach — RAM is spent only when a Dev actually launches
   the browser (headless shell idle ≈150 MB, active pages 300–800 MB), so
   budget `concurrency × browser working set` for browser-using fleets until

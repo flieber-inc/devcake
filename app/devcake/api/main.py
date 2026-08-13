@@ -308,6 +308,20 @@ async def list_runs(limit: int = 25, offset: int = 0,
                               direction=dir, group_by=group_by)
 
 
+@app.get("/api/v1/runs.csv")
+async def export_runs_csv(mission_key: str | None = None,
+                          pmo_ref: str | None = None,
+                          created_from: str | None = None,
+                          created_to: str | None = None,
+                          sort: str | None = None, dir: str | None = None):
+    from .runs_service import runs_csv_response
+    s = svc()
+    return runs_csv_response(s.store, s.config.cost_inputs,
+                             mission_key=mission_key, pmo_ref=pmo_ref,
+                             created_from=created_from, created_to=created_to,
+                             sort=sort, direction=dir)
+
+
 @app.get("/api/v1/runs/{run_id}")
 async def get_run(run_id: str):
     from .runs_service import run_detail

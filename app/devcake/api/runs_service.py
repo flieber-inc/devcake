@@ -13,9 +13,12 @@ the pmo_refs filter options.
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
+from fastapi.responses import PlainTextResponse
 
 from ..config import CostInputs
 from ..domain import costing
@@ -63,6 +66,11 @@ def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     unmapped) — never the persisted stamp."""
     tr = run.token_report or {}
     out = {k: tr.get(k) for k in _TOKEN_SUMS}
+    # a SUBSET of output_tokens (grok reasoning_tokens / codex
+    # reasoning_output_tokens / claude thinking_tokens at 2.1.229+) —
+    # informational provenance, never priced on top and deliberately NOT
+    # coalesced into any other column (cache writes are input-side)
+    out["reasoning_tokens"] = tr.get("reasoning_tokens")
     out["model"] = tr.get("model")
     # the API row key stays `cost_usd` (SPA contract); the stored v1 key
     # names its provenance (ADR-0029)
@@ -167,21 +175,20 @@ def _row(r: Run, cost_inputs: CostInputs) -> dict:
     return row
 
 
-def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
-                       offset: int = 0, mission_key: str | None = None,
-                       pmo_ref: str | None = None,
-                       created_from: str | None = None,
-                       created_to: str | None = None,
-                       sort: str | None = None,
-                       direction: str | None = None,
-                       group_by: str | None = None) -> dict:
+def _filtered_runs(store, cost_inputs: CostInputs, *,
+                   mission_key: str | None, pmo_ref: str | None,
+                   created_from: str | None, created_to: str | None,
+                   sort: str | None, direction: str | None,
+                   flat_sort: bool) -> tuple[list[Run], list[Run], bool]:
+    """Param validation + the ONE filter pipe + (flat_sort) the flat
+    ordering — shared by the JSON list and the CSV export so the export can
+    never disagree with the page it was clicked from. Returns
+    (filtered runs, everything, descending)."""
     if sort is not None and sort not in _SORTABLE:
         raise HTTPException(400, f"invalid sort {sort!r} — one of "
                                  f"{sorted(_SORTABLE)}")
     if direction not in (None, "asc", "desc"):
         raise HTTPException(400, f"invalid dir {direction!r} — asc or desc")
-    if group_by not in (None, "mission"):
-        raise HTTPException(400, f"invalid group_by {group_by!r} — mission")
     descending = direction != "asc"
     lo = _parse_bound(created_from, end=False) if created_from else None
     hi = _parse_bound(created_to, end=True) if created_to else None
@@ -198,6 +205,27 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
         runs = [r for r in runs if r.created_at >= lo]
     if hi:
         runs = [r for r in runs if r.created_at < hi]
+    if flat_sort and sort is not None:
+        now = datetime.now(timezone.utc)
+        runs = _order(runs, lambda r: _run_sort_value(
+            r, sort, cost_inputs, now), descending)
+    return runs, everything, descending
+
+
+def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
+                       offset: int = 0, mission_key: str | None = None,
+                       pmo_ref: str | None = None,
+                       created_from: str | None = None,
+                       created_to: str | None = None,
+                       sort: str | None = None,
+                       direction: str | None = None,
+                       group_by: str | None = None) -> dict:
+    if group_by not in (None, "mission"):
+        raise HTTPException(400, f"invalid group_by {group_by!r} — mission")
+    runs, everything, descending = _filtered_runs(
+        store, cost_inputs, mission_key=mission_key, pmo_ref=pmo_ref,
+        created_from=created_from, created_to=created_to, sort=sort,
+        direction=direction, flat_sort=group_by is None)
 
     out = {
         "offset": offset, "limit": limit,
@@ -211,10 +239,6 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
     }
 
     if group_by is None:
-        if sort is not None:
-            now = datetime.now(timezone.utc)
-            runs = _order(runs, lambda r: _run_sort_value(
-                r, sort, cost_inputs, now), descending)
         out["total"] = len(runs)
         out["runs"] = [_row(r, cost_inputs) for r in runs[offset:offset + limit]]
         return out
@@ -252,3 +276,57 @@ def run_detail(run: Run, cost_inputs: CostInputs) -> dict:
     body["pr_url"] = _pr_url_of(run)
     body.update(_token_fields(run, cost_inputs))
     return body
+
+
+# CSV export (docs/11): the WHOLE filtered set, flat regardless of the page's
+# grouped view (grouping is a view concern). Column order is the spreadsheet
+# contract; effective cost applies the same override_native rule the UI shows.
+_CSV_COLUMNS = ("run_id", "pmo_ref", "mission_key", "mission_type", "dev_type",
+                "seq", "state", "created_at", "started_at", "ended_at",
+                "error", "error_class", "attempt_counted", "verdict",
+                "continuations_used", "input_tokens", "output_tokens",
+                "cache_read_tokens", "cache_write_tokens", "total_tokens",
+                "reasoning_tokens", "model", "cost_usd", "cost_usd_estimated",
+                "cost_usd_effective", "rate_card_id", "pr_url")
+
+
+def _csv_cell(v):
+    """Spreadsheet-faithful cell. Strings leading with any CWE-1236 lead-in
+    (=/+/-/@, plus TAB/CR/space which Excel and Sheets strip before
+    evaluating what follows) get a `'` prefix — error text and model ids are
+    attacker-influenced, and csv quoting alone does not stop a formula cell.
+    The isinstance(str) guard keeps negative numbers numeric."""
+    if v is None:
+        return ""
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r", " "):
+        return "'" + v
+    return v
+
+
+def runs_csv_response(store, cost_inputs: CostInputs, *,
+                      mission_key: str | None = None,
+                      pmo_ref: str | None = None,
+                      created_from: str | None = None,
+                      created_to: str | None = None,
+                      sort: str | None = None,
+                      direction: str | None = None) -> PlainTextResponse:
+    runs, _everything, _descending = _filtered_runs(
+        store, cost_inputs, mission_key=mission_key, pmo_ref=pmo_ref,
+        created_from=created_from, created_to=created_to, sort=sort,
+        direction=direction, flat_sort=True)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_COLUMNS)
+    for r in runs:
+        row = _row(r, cost_inputs)
+        row["pmo_ref"] = r.pmo_ref
+        row["cost_usd_effective"] = costing.effective_cost(
+            row["cost_usd"], row["cost_usd_estimated"], cost_inputs)
+        row["rate_card_id"] = cost_inputs.rate_card_id
+        writer.writerow([_csv_cell(row.get(c)) for c in _CSV_COLUMNS])
+    name = datetime.now(timezone.utc).strftime("devcake-runs-%Y%m%d-%H%M.csv")
+    return PlainTextResponse(
+        buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})

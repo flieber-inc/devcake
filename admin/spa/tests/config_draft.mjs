@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { diffLeaves, applyEditsOnto, getIn } from "../src/lib/objectPath.js";
 import { metaFor, describeDiff } from "../src/lib/configLabels.js";
 import { newPmoCard, newRepoCard } from "../src/lib/cards.js";
+import { draftErrors } from "../src/lib/useConfigDraft.js";
 
 let failed = 0;
 const check = (name, fn) => {
@@ -102,6 +103,23 @@ check("no diff row ever renders [object Object]", () => {
     assert.ok(!`${r.oldText}${r.newText}`.includes("[object Object]"),
       `${r.path}: ${r.oldText} → ${r.newText}`);
   }
+});
+
+// container-limits Save guard (2026-08-13 audit): a cleared numeric box is
+// stored as null by LimitsSection — Number("") === 0 would silently mean
+// UNLIMITED — and must block Save via the draft's one validation seam.
+check("cleared container-limit field blocks Save with an inline error", () => {
+  const d = snap([BOARD],
+    { container_limits: { memory_mb: null, cpus: 2, pids: 0 } });
+  const errs = draftErrors(d);
+  assert.match(errs["cfg.container_limits.memory_mb"], /0 for unlimited/);
+  assert.equal(Object.keys(errs).length, 1);
+});
+
+check("explicit container-limit zeros (= unlimited) save cleanly", () => {
+  const d = snap([BOARD],
+    { container_limits: { memory_mb: 0, cpus: 0, pids: 0 } });
+  assert.deepEqual(draftErrors(d), {});
 });
 
 if (failed) {

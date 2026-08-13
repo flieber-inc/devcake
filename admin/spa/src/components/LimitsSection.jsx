@@ -121,36 +121,48 @@ export default function LimitsSection() {
 
       <Section id="limits-containers" title="Dev containers"
         description="Hard kernel limits (cgroups) applied to every Dev container — both steps of every run. 0 = unlimited.">
+        {/* A cleared box stores null (Number("") === 0 would silently mean
+            UNLIMITED — audit 2026-08-13); useConfigDraft blocks Save on null
+            with an inline DirtyBar message. Unlimited is an explicit 0. */}
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Memory (MB)"
-            desc={Number(cfg.container_limits?.memory_mb) === 0
-              ? "0 — unlimited: containers may use all host memory."
-              : `Each Dev container is capped at ${cfg.container_limits?.memory_mb} MB.`}
+            desc={cfg.container_limits?.memory_mb === null
+              ? "Cleared — type a number to Save (0 = unlimited)."
+              : Number(cfg.container_limits?.memory_mb) === 0
+                ? "0 — unlimited: containers may use all host memory."
+                : `Each Dev container is capped at ${cfg.container_limits?.memory_mb} MB.`}
             help="Docker HostConfig memory limit, kernel-enforced per container. A Dev exceeding it is OOM-killed by the kernel (the run fails and is counted normally). Applies at the next dispatch.">
             <Input type="number" className="w-24" min={0}
-              value={cfg.container_limits?.memory_mb ?? 4096}
+              value={cfg.container_limits?.memory_mb === null ? "" : (cfg.container_limits?.memory_mb ?? 4096)}
               aria-label="Container memory limit (MB)"
-              onChange={(e) => setField("cfg.container_limits.memory_mb", Number(e.target.value))} />
+              onChange={(e) => setField("cfg.container_limits.memory_mb",
+                e.target.value === "" ? null : Number(e.target.value))} />
           </SettingRow>
           <SettingRow label="CPUs"
-            desc={Number(cfg.container_limits?.cpus) === 0
-              ? "0 — unlimited: containers may use all host CPUs."
-              : `Each Dev container is capped at ${cfg.container_limits?.cpus} CPU${Number(cfg.container_limits?.cpus) === 1 ? "" : "s"}.`}
+            desc={cfg.container_limits?.cpus === null
+              ? "Cleared — type a number to Save (0 = unlimited)."
+              : Number(cfg.container_limits?.cpus) === 0
+                ? "0 — unlimited: containers may use all host CPUs."
+                : `Each Dev container is capped at ${cfg.container_limits?.cpus} CPU${Number(cfg.container_limits?.cpus) === 1 ? "" : "s"}.`}
             help="Docker NanoCPUs limit (fractions allowed, e.g. 1.5). Throttles, never kills — a busy Dev just runs slower. Fleet-level pressure is still governed by the concurrency caps above.">
             <Input type="number" className="w-24" min={0} step={0.5}
-              value={cfg.container_limits?.cpus ?? 2}
+              value={cfg.container_limits?.cpus === null ? "" : (cfg.container_limits?.cpus ?? 2)}
               aria-label="Container CPU limit"
-              onChange={(e) => setField("cfg.container_limits.cpus", Number(e.target.value))} />
+              onChange={(e) => setField("cfg.container_limits.cpus",
+                e.target.value === "" ? null : Number(e.target.value))} />
           </SettingRow>
           <SettingRow label="PIDs"
-            desc={Number(cfg.container_limits?.pids) === 0
-              ? "0 — unlimited processes per container."
-              : `Each Dev container is capped at ${cfg.container_limits?.pids} processes.`}
+            desc={cfg.container_limits?.pids === null
+              ? "Cleared — type a number to Save (0 = unlimited)."
+              : Number(cfg.container_limits?.pids) === 0
+                ? "0 — unlimited processes per container."
+                : `Each Dev container is capped at ${cfg.container_limits?.pids} processes.`}
             help="pids cgroup cap — the fork-bomb backstop. Devs legitimately spawn build/test process trees, so keep this generous or off; a cap that is too low fails innocent compiles.">
             <Input type="number" className="w-24" min={0}
-              value={cfg.container_limits?.pids ?? 0}
+              value={cfg.container_limits?.pids === null ? "" : (cfg.container_limits?.pids ?? 0)}
               aria-label="Container PIDs limit"
-              onChange={(e) => setField("cfg.container_limits.pids", Number(e.target.value))} />
+              onChange={(e) => setField("cfg.container_limits.pids",
+                e.target.value === "" ? null : Number(e.target.value))} />
           </SettingRow>
         </div>
       </Section>

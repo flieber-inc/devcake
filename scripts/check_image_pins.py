@@ -137,6 +137,33 @@ def check_compose(path: Path, offenders: list[str]) -> None:
             offenders.append(f"{rel}:{lineno}: {raw.strip()}")
 
 
+# --- Dagu pin ↔ dev-run.yaml decode coupling (audit 2026-08-13) -------------
+
+# dev-run.yaml's nested `host: {resources: {…}}` block is correct ONLY while
+# the pinned Dagu lacks the mapstructure Squash fix (dagucloud/dagu#2557, our
+# upstream PR): 2.13.0 silently DROPS the embedded HostConfig.Resources
+# fields in the flat form, and post-fix the nested form dies while flattened
+# fields start working. A bump past the fix would silently zero
+# Memory/NanoCPUs/PidsLimit AND drop the /dev/fuse + /dev/net/tun devices —
+# and nothing else in CI would go red. This tripwire does.
+DAGU_COUPLED_TAG = "2.13.0"
+
+
+def check_dagu_coupling(path: Path, offenders: list[str]) -> None:
+    rel = path.relative_to(ROOT)
+    for lineno, raw in enumerate(path.read_text().splitlines(), 1):
+        m = re.match(r"\s*image:\s*\S*dagucloud/dagu:([^@\s]+)", raw)
+        if m and m.group(1) != DAGU_COUPLED_TAG:
+            offenders.append(
+                f"{rel}:{lineno}: Dagu bumped {DAGU_COUPLED_TAG} → "
+                f"{m.group(1)}, but dev-run.yaml's nested host.resources "
+                f"block (Memory/NanoCPUs/PidsLimit/Devices) is decode-coupled "
+                f"to {DAGU_COUPLED_TAG} (dagucloud/dagu#2557): if the Squash "
+                f"fix landed, FLATTEN those fields into direct host: keys, "
+                f"re-verify live per docs/13 §4, then update "
+                f"DAGU_COUPLED_TAG in this gate")
+
+
 def _service_block_has(lines: list[str], image_idx: int, indent: int,
                        needle: str) -> bool:
     """Scan the service block around the image: line — sibling keys share the
@@ -329,6 +356,7 @@ def main() -> int:
         check_dockerfile(df, offenders)
     for cf in _compose_files():
         check_compose(cf, offenders)
+        check_dagu_coupling(cf, offenders)
     sh_files, py_files = _script_files()
     for f in sh_files:
         check_shell_script(f, offenders)

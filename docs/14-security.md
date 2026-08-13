@@ -469,11 +469,12 @@ Items that improve safety or hygiene **without** changing the adult-operator
 contract:
 
 - ~~Docker HostConfig CPU/memory/PID limits~~ (delivered 2026-08-13 — see
-  §6). The ADR-0023 browser floor raises the
-  ceiling a run CAN reach — RAM is spent only when a Dev actually launches
-  the browser (headless shell idle ≈150 MB, active pages 300–800 MB), so
-  budget `concurrency × browser working set` for browser-using fleets until
-  hard limits exist.
+  §6). The ADR-0023 browser floor still sizes the per-container cap a run
+  NEEDS — RAM is spent only when a Dev actually launches the browser
+  (headless shell idle ≈150 MB, active pages 300–800 MB), so set
+  `container_limits.memory_mb` with the browser working set in mind for
+  browser-using fleets, and budget host RAM as
+  `concurrency × container_limits.memory_mb`.
 - Protocol hardens: ~~credential-upload filename allowlist + size cap~~
   (`secrets.require_credential_ref` + `MAX_CREDENTIAL_FILE_BYTES` + atomic
   `write_credential_file`); ~~PMO `download_asset` host allowlist / redirect

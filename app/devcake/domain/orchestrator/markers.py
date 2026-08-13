@@ -110,8 +110,8 @@ FRESHNESS_MARKER = re.compile(r"`devcake:freshness-rereview:(\d+)`")
 # never leave the feed body; a human deleting the comment deliberately
 # resets the derived state. Parameters ride inside the backticked token
 # (decomposition-marker precedent): step= is the Mission Step seq, n= the
-# entry count — pending detection and the per-source budget stay
-# board-derivable without opening attachments. NOT in ELEVATED_MARKERS: a
+# entry count — pending detection stays board-derivable without opening
+# attachments. NOT in ELEVATED_MARKERS: a
 # mission's own discovery post must never trip its own freshness gate.
 DISCOVERY_MARKER_RE = re.compile(r"`devcake:discovery:v1 step=(\d+) n=(\d+)`")
 # Routed-receipt twin, posted on the source feed by the ROUTING half
@@ -149,10 +149,10 @@ def discovery_receipts(unquoted_text: str) -> set[tuple[int, str]]:
 
 # Delivery-side marker (ADR-0033 routing): one comment per recipient per
 # steward run, one marker line per source batch — src= is the source
-# mission KEY, step= its Mission Step. Set-cardinality counting: dedup (a
-# pair already on the recipient feed is never re-delivered) and the
-# per-recipient budget read the same distinct-pair set. A human deleting a
-# delivery comment deliberately frees the slot — humans own the feed. The
+# mission KEY, step= its Mission Step. Set-cardinality counting: the
+# distinct-pair dedup (a pair already on the recipient feed is never
+# re-delivered) IS the fan-out bound — no numeric budget (addendum 14).
+# A human deleting a delivery comment deliberately reopens that pair. The
 # comment is posted externalize=False; long finding bodies are excerpted
 # (DISCOVERY_IN_EXCERPT_MAX) with a pointer to the source's DISCOVERY_<n>.md
 # attachment, so the marker can never be pushed off the feed body.

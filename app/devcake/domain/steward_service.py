@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
-from ..config import AppConfig, DevType
+from ..config import AppConfig, DevType, intake_blocks_dispatch
 from ..harness import missing_referenced_secret_env
 from .model import Mission
 from .run import Run
@@ -48,10 +48,10 @@ class StewardService:
         # first auto-run lands one interval after boot; "Run now" covers immediacy
         self._last_at = time.monotonic()
         self._last_periodic_outcome: str | None = None  # span-on-transition dedupe
-        # ADR-0033 discovery lane: per-instance single-flight — a sound
-        # COARSENING of the ADR's per-family rule, since families never span
-        # instances. Event-kicked by harvest; re-driven by the label sweep.
-        self._discovery_lock = asyncio.Lock()
+        # ADR-0033 discovery lane: event-kicked by harvest; re-driven by
+        # the label sweep. Shares `_lock` with the relations cadence and
+        # run_now — one STEWARD slot (addendum 11), not two locks around
+        # the same active() check.
         self._last_discovery_outcome: str | None = None
 
     def dev_type(self) -> DevType | None:
@@ -115,9 +115,12 @@ class StewardService:
                 elif len(self.mgr.runs.store.active()) >= self.config.concurrency.global_max:
                     outcome = "concurrency_deferred"  # counts toward the global cap
                 else:
-                    await self.mgr.dispatch_steward(dt, missions)
-                    self._last_at = time.monotonic()
-                    outcome = "dispatched"
+                    run = await self.mgr.dispatch_steward(dt, missions)
+                    if run is None:
+                        outcome = "dispatch_skipped"
+                    else:
+                        self._last_at = time.monotonic()
+                        outcome = "dispatched"
         if outcome == "dispatched" or outcome != self._last_periodic_outcome:
             with tracer.start_as_current_span("steward.periodic") as span:
                 span.set_attribute("devcake.outcome", outcome)
@@ -132,6 +135,8 @@ class StewardService:
         relations cadence — both are board-tending runs on the same live
         board, and deferral is the design (batching calm over fan-out)."""
         mgr = self.mgr
+        if intake_blocks_dispatch(self.config, mgr.instance):
+            return
         if not mgr.instance.discovery_routing:   # D11 — direct field access,
             return                               # fail-closed on rename
         dt = self.dev_type()
@@ -162,6 +167,12 @@ class StewardService:
             pending: dict[str, list[tuple[int, int]]] = {}
             for s in group:
                 state = await discovery.scan_source(mgr, s)
+                if state.truncated:
+                    # ceiling case — the sweep raises it to the humans and
+                    # retires the gate; holding the id here would re-fetch
+                    # a full feed every cycle for nothing
+                    mgr._discoveries_pending.discard(s.pmo_id)
+                    continue
                 if state.pending:
                     pending[s.pmo_id] = state.pending
                 else:                             # already receipted — done
@@ -177,7 +188,7 @@ class StewardService:
                 error = f"family mirrors not fresh: {mirror_why}"
                 log.warning("discovery steward skipped — %s", error)
             else:
-                async with self._discovery_lock:
+                async with self._lock:
                     if self.active():
                         outcome = "already_active"
                     elif (len(mgr.runs.store.active())

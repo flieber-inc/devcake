@@ -66,9 +66,9 @@ def render_discovery_md(run: Run, entries: list[dict]) -> str:
              f"({run.mission_type})",
              f"run: `{run.run_id}` · {utcnow():%Y-%m-%d}", ""]
     for i, e in enumerate(entries, 1):
-        lines += [f"## {i}. Finding", e["finding"], "",
-                  f"**Evidence:** {e['evidence']}", "",
-                  f"**Scope:** {e['scope']}", ""]
+        lines += [f"## {i}. Finding", defang(e["finding"]), "",
+                  f"**Evidence:** {defang(e['evidence'])}", "",
+                  f"**Scope:** {defang(e['scope'])}", ""]
     return "\n".join(lines)
 
 
@@ -124,24 +124,28 @@ async def harvest(mgr, run: Run, result: dict) -> int:
     if not entries:
         return 0
     pmo_id = run.mission_pmo_id
-    cap = mgr.config.budgets.discoveries_per_run
-    if cap and len(entries) > cap:
-        mgr._audit(pmo_id, "discovery_capped",
-                   f"{len(entries) - cap} of {len(entries)} entries dropped "
-                   f"(budgets.discoveries_per_run={cap})")
-        entries = entries[:cap]
     name = f"DISCOVERY_{run.seq}.md"
 
     async def _post():
-        # HANDOFF doctrine: each sub-step best-effort — a PMO hiccup is
-        # audited, never propagated into the close
+        # The comment write is the commit point: label / pending / success
+        # audit / notify happen only after the marker is on the feed.
+        # A failed post is audited and re-raised so _checkpoint does not
+        # record discovery:post — redelivery retries. The outer harvest
+        # try still swallows so the close cannot wedge.
+        cap = mgr.config.budgets.discoveries_per_run
+        if cap and len(entries) > cap:
+            mgr._audit(pmo_id, "discovery_capped",
+                       f"{len(entries) - cap} of {len(entries)} entries "
+                       f"dropped (budgets.discoveries_per_run={cap})")
+            del entries[cap:]
         try:
             await post_attachment_comment(
                 mgr, pmo_id, "issue", filename=name,
                 content=redact(render_discovery_md(run, entries)),
                 comment_of=lambda url: comment_body(run, entries, name, url))
-        except Exception as e:  # noqa: BLE001 — best-effort BY DESIGN
+        except Exception as e:  # noqa: BLE001 — audited; raise so we do not checkpoint
             mgr._audit(pmo_id, "discovery_post_failed", str(e)[:200])
+            raise
         try:
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),
                                       remove=set(), add={LABEL_DISCOVERY})
@@ -173,9 +177,12 @@ async def harvest(mgr, run: Run, result: dict) -> int:
 class SourceState:
     posted: list[tuple[int, int]]     # (step, n) markers on the source feed
     receipted: set[tuple[int, str]]   # (step, target) routing receipts (PR-2)
+    truncated: bool = False           # fail-closed: counts unknown
 
     @property
     def pending(self) -> list[tuple[int, int]]:
+        if self.truncated:
+            return []
         done = {s for s, _ in self.receipted}
         return [(s, n) for s, n in self.posted if s not in done]
 
@@ -183,16 +190,19 @@ class SourceState:
 async def scan_source(mgr, m) -> SourceState:
     """The ONE labeled-mission feed scan (shared with PR-2's sweep arm):
     posted markers and routing receipts, both over unquoted bodies (IRON
-    RULE). pending = posted − receipted — restart-proof board arithmetic,
-    no local ledger (ADR-0033 D3)."""
-    act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"))
+    RULE). full=True so newest receipts (gitea pages oldest-first) cannot
+    fall off the window. truncated ⇒ fail-closed: callers must not treat
+    the feed as empty or write to=-. pending = posted − receipted when
+    counts are known — restart-proof board arithmetic, no local ledger."""
+    act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
     posted: list[tuple[int, int]] = []
     receipted: set[tuple[int, str]] = set()
     for e in act.entries:
         text = unquoted(e.body)
         posted += discovery_posts(text)
         receipted |= discovery_receipts(text)
-    return SourceState(posted=posted, receipted=receipted)
+    return SourceState(posted=posted, receipted=receipted,
+                       truncated=bool(act.truncated))
 
 
 async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
@@ -204,6 +214,8 @@ async def pending_from_board(mgr, missions) -> dict[str, list[tuple[int, int]]]:
         if m.pmo_kind != "issue" or LABEL_DISCOVERY not in m.labels:
             continue
         state = await scan_source(mgr, m)
+        if state.truncated:
+            continue
         if state.pending:
             out[m.pmo_id] = state.pending
     return out
@@ -213,16 +225,46 @@ async def discovery_sweep(mgr, m) -> None:
     """The per-mission sweep arm (called from sweeps() for every issue; the
     label gate lives HERE so sweeps.py never reads the label — the guard
     allowlist stays tight). Re-seeds the advisory queue for pending batches,
-    self-heals the label off fully-receipted sources, and terminates batches
+    self-heals the label off fully-receipted sources, terminates batches
     whose source run record is gone (clear-runs) with a sentinel'd
-    unroutable comment + a `to=-` receipt so the board arithmetic closes.
-    Toggle-off (D11) leaves everything untouched — the label stays as
-    honest board state until the operator re-enables routing."""
+    unroutable comment + a `to=-` receipt so the board arithmetic closes,
+    and retires ceiling-truncated sources with a raise-to-human comment
+    (addendum 14). Toggle-off (D11) leaves everything untouched — the label
+    stays as honest board state until the operator re-enables routing."""
     if m.pmo_kind != "issue" or LABEL_DISCOVERY not in m.labels:
         return
     if not mgr.instance.discovery_routing:
         return
     state = await scan_source(mgr, m)
+    if state.truncated:
+        # past the full-read page ceiling — feeds only grow, so the board
+        # arithmetic is permanently unknowable here. Raise to the humans
+        # and retire the gate (addendum 14): no to=- (nothing countable to
+        # disposition), one loud comment, label off, pending dropped. A
+        # failed comment retries next sweep (rare duplicate on a failed
+        # label drop is accepted — the alternative is silence).
+        try:
+            await mgr._feed(
+                m.pmo_id, "issue",
+                "⚠️ This mission's feed exceeds the readable page ceiling, "
+                "so discovery-routing bookkeeping (delivery dedup, receipt "
+                "arithmetic) is impossible and now retired for it. The "
+                "DISCOVERY_<n>.md attachments above remain the record — "
+                "carry them to related missions manually if they matter.",
+                externalize=False)
+            mgr._audit(m.pmo_id, "discovery_unreadable",
+                       "feed past the full-read ceiling — routing "
+                       "bookkeeping retired, raised to humans")
+        except Exception as ex:  # noqa: BLE001 — retried next sweep
+            mgr._audit(m.pmo_id, "discovery_receipt_failed", str(ex)[:200])
+            return
+        try:
+            await mgr.pmo.swap_labels(MissionRef(m.pmo_id, "issue"),
+                                      remove={LABEL_DISCOVERY}, add=set())
+        except Exception as ex:  # noqa: BLE001 — the label is a hint; retried next sweep
+            mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
+        mgr._discoveries_pending.discard(m.pmo_id)
+        return
     if not state.posted:
         return   # label without markers (human relabel) — humans own labels
     pending = state.pending

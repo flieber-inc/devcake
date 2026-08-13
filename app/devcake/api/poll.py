@@ -19,6 +19,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from ..adapters.files.owner_store import OwnerStore
+from ..config import intake_blocks_dispatch
 from ..domain import backend_health
 from ..domain.model import ALL_LABELS, derive
 from ..domain.orchestrator import MissionManager
@@ -50,20 +51,6 @@ def _claim_missions(mgr: MissionManager, fetched: list,
         owner[m.pmo_id] = mgr.instance_name
         missions.append(m)
     return missions
-
-
-def intake_blocks_dispatch(config, instance) -> bool:
-    """True when NEW dispatches must not start for this PMO instance.
-
-    The global `intake_paused` master switch freezes every instance. Each
-    instance's own `intake_paused` freezes only that instance — so a multi-PMO
-    deployment can pause one team's intake while another keeps baking.
-    Direct field access (not getattr-default): a rename must fail closed at
-    call sites, never silently leave intake open.
-    """
-    if config.intake_paused:
-        return True
-    return bool(instance.intake_paused)
 
 
 class PollRuntime:

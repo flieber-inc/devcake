@@ -386,14 +386,34 @@ def test_domain_never_imports_adapters():
 
 
 # ADR-0033, founder ruling 2026-08-13 (2a): DEVCAKE-DISCOVERY is a pure
-# sweep gate. The definition and the harvest/scan seam may reference it;
-# NOTHING else in domain/ may — so derive/gate_map/schedule/dispatch can
-# never quietly grow a read that would impede a mission's progression.
-# steward.py's entry is the routing lane's documented ruling (addendum):
-# finalize REMOVES the gate once a source's batches are all receipted —
-# still never a scheduling read.
+# sweep gate. model.py is allowlisted only for the *constant definition*
+# (ALL_LABELS / ensure_labels). derive() lives in that file — a scheduling
+# read there would pass the file-level grep — so derive() is AST-walked
+# separately. steward.py is allowlisted for *removal* at finalize, never
+# a scheduling read.
 DISCOVERY_LABEL_ALLOWLIST_REL = {"model.py", "orchestrator/discovery.py",
                                  "orchestrator/steward.py"}
+
+
+def test_derive_never_reads_discovery_label():
+    """The behavioral pin is test_spa_contracts.test_discovery_label_is_
+    derivation_inert. This AST walk is the ratchet: derive() cannot grow
+    a LABEL_DISCOVERY / DEVCAKE-DISCOVERY read while model.py stays
+    allowlisted for the constant."""
+    import ast
+    src = (DOMAIN / "model.py").read_text()
+    tree = ast.parse(src)
+    offenders = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "derive":
+            for child in ast.walk(node):
+                if isinstance(child, ast.Name) and child.id == "LABEL_DISCOVERY":
+                    offenders.append("LABEL_DISCOVERY")
+                if isinstance(child, ast.Constant) and isinstance(child.value, str) \
+                        and "DEVCAKE-DISCOVERY" in child.value:
+                    offenders.append(child.value)
+    assert not offenders, (
+        "derive() must stay discovery-label-inert: " + ", ".join(offenders))
 
 
 def test_discovery_label_never_joins_scheduling():

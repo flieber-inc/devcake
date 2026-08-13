@@ -154,20 +154,22 @@ def test_discovery_routing_defaults_on_and_round_trips():
 
 
 def test_budgets_defaults_bounds_and_round_trip():
-    """ADR-0033 D7 as amended (founder 2026-08-13): counting budgets are
-    operator knobs — defaults 5/3/3/5, 0 = unlimited, negatives refused,
-    and the block rides model_dump round-trips (settings bundle for free)."""
+    """ADR-0033 D7 as amended (founder rulings 2026-08-13): counting
+    budgets are operator knobs — defaults 5/3, 0 = unlimited, negatives
+    refused, the block rides model_dump round-trips (settings bundle for
+    free) — and routing deliberately has NO numeric budget (addendum 14):
+    a stored bundle carrying the deleted knobs still validates (ignored)."""
     base = _base()
     b = AppConfig.model_validate(base).budgets
-    assert (b.freshness_rereviews, b.discoveries_per_run,
-            b.discovery_routes_per_source,
-            b.discovery_in_per_recipient) == (5, 3, 3, 5)
+    assert (b.freshness_rereviews, b.discoveries_per_run) == (5, 3)
+    assert not hasattr(b, "discovery_routes_per_source")
+    assert not hasattr(b, "discovery_in_per_recipient")
     got = AppConfig.model_validate(
         {**base, "budgets": {"freshness_rereviews": 0,
-                             "discoveries_per_run": 9}})
+                             "discoveries_per_run": 9,
+                             "discovery_in_per_recipient": 5}})
     assert got.budgets.freshness_rereviews == 0        # 0 = unlimited
     assert got.budgets.discoveries_per_run == 9
-    assert got.budgets.discovery_in_per_recipient == 5  # sibling defaults hold
     with pytest.raises(Exception):
         AppConfig.model_validate(
             {**base, "budgets": {"freshness_rereviews": -1}})

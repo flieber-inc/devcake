@@ -82,6 +82,17 @@ def test_receipted_source_is_discarded_without_dispatch(tmp_path):
     assert mgr._discoveries_pending == set()
 
 
+def test_truncated_source_is_discarded_without_dispatch(tmp_path):
+    # the ceiling case belongs to the sweep (raise to humans + retire);
+    # holding the id here would re-fetch a full feed every cycle for nothing
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    pmo.feeds["src"].truncated = True
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert calls == []
+    assert mgr._discoveries_pending == set()
+
+
 def test_off_snapshot_pending_ids_are_dropped(tmp_path):
     pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
     mgr._discoveries_pending.add("ghost")
@@ -133,6 +144,50 @@ def test_sweep_toggle_off_leaves_board_untouched(tmp_path):
     run_coro(discovery.discovery_sweep(mgr, src))
     assert pmo.activity_calls == [] and pmo.swaps == []
     assert mgr._discoveries_pending == set()
+
+
+def test_intake_pause_blocks_discovery_dispatch(tmp_path):
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    mgr._discoveries_pending.add("src")
+    svc.config.intake_paused = True
+    mgr.config.intake_paused = True
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert calls == []
+    assert mgr._discoveries_pending == {"src"}
+
+
+def test_discovery_and_relations_share_one_lock(tmp_path):
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    mgr._discoveries_pending.add("src")
+    svc.config.steward.enabled = True
+    svc._last_at = __import__("time").monotonic() - 10**6
+    rel = []
+    gate = asyncio.Event()
+
+    async def slow_disc(dt_, fam, pending):
+        calls.append("d")
+        await gate.wait()
+        return object()
+
+    async def rel_dispatch(dt, missions_):
+        rel.append("r")
+        return object()
+
+    mgr.dispatch_steward_discovery = slow_disc
+    mgr.dispatch_steward = rel_dispatch
+
+    async def both():
+        t1 = asyncio.create_task(svc.maybe_dispatch_discovery(missions))
+        await asyncio.sleep(0)
+        t2 = asyncio.create_task(svc.maybe_dispatch(missions))
+        await asyncio.sleep(0)
+        assert rel == []          # still blocked on the shared lock
+        gate.set()
+        await t1
+        await t2
+
+    run_coro(both())
+    assert "d" in calls
 
 
 def test_harvest_notify_seam_is_best_effort(tmp_path):

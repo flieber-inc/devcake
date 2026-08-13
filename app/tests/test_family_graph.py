@@ -90,11 +90,39 @@ def test_family_work_repos_dedupes_filters_and_caps(monkeypatch):
         _m("g", "PROJ", repo="proj", kind="project"),  # projects skipped
     ])
     monkeypatch.setattr(family_graph.dispatch, "resolve_repo",
-                        lambda mgr, m, runs: None)
+                        lambda mgr, m, runs: (None, "unresolved"))
     entries = family_work_repos(_Mgr(), fam,
                                 exclude=frozenset({"steward-home"}))
     assert entries == [{"repo_ref": "web", "mission_key": "T-1"},
                        {"repo_ref": "api", "mission_key": "T-4"}]
+
+
+def test_family_work_repos_unpacks_resolve_repo_tuple(monkeypatch):
+    """dispatch.resolve_repo returns (name, reason). A truthy tuple must
+    not be passed to blocker_read_credential as a repo name — the harvest
+    kick path never stamps m.repo."""
+    seen = []
+
+    def cred(mgr, name):
+        seen.append(name)
+        return ("configured", None, None, "tok") if name == "web" else None
+
+    monkeypatch.setattr(family_graph, "blocker_read_credential", cred)
+    monkeypatch.setattr(family_graph.dispatch, "resolve_repo",
+                        lambda mgr, m, runs: ("web", None))
+
+    class _Store:
+        def all(self):
+            return []
+
+    class _Mgr:
+        class runs:
+            store = _Store()
+
+    entries = family_work_repos(
+        _Mgr(), Family(members=[_m("a", "T-1", repo=None)]))
+    assert seen == ["web"], seen
+    assert entries == [{"repo_ref": "web", "mission_key": "T-1"}]
 
 
 def test_family_work_repos_honors_the_clone_cap(monkeypatch):

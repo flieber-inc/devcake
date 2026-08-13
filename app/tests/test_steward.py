@@ -199,6 +199,21 @@ def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
     assert dispatched == ["steward"]            # watermark advanced
 
 
+def test_watermark_not_advanced_when_dispatch_returns_none(tmp_path):
+    svc, mgr, dispatched = make_service(tmp_path)
+
+    async def skip(dt, missions):
+        dispatched.append("skip")
+        return None
+
+    mgr.dispatch_steward = skip
+    svc._last_at = time.monotonic() - 10**6
+    before = svc._last_at
+    run_coro(svc.maybe_dispatch([]))
+    assert dispatched == ["skip"]
+    assert svc._last_at == before
+
+
 def test_watermark_not_advanced_on_dispatch_failure(tmp_path):
     svc, mgr, dispatched = make_service(tmp_path)
 
@@ -652,6 +667,7 @@ def _route_setup(tmp_path, *, n=2, entries=3, recipient_bodies=(),
         mission=tgt, entries=[_ae(b) for b in recipient_bodies],
         truncated=recipient_truncated)
     mgr = make_mgr(tmp_path, pmo)
+    mgr.instance.discovery_routing = True
     _src_run(mgr.runs.store, mgr, seq=2, n_entries=entries)
     run = Run(run_id="L-TEAM-1-STEWARD-AAAAAA", mission_key="TEAM",
               mission_type="STEWARD", dev_type="steward", seq=1,
@@ -690,6 +706,14 @@ def test_apply_routes_delivers_receipts_and_drops_label(tmp_path):
     assert "src" not in mgr._discoveries_pending
 
 
+def _src_comments(pmo):
+    return [md for pid, md in pmo.comments if pid == "src"]
+
+
+def _receipted_nowhere(pmo):
+    return any("to=-" in md for md in _src_comments(pmo))
+
+
 def test_apply_routes_reject_ladder(tmp_path):
     done = m("d", "T-D", status="done", blocked_by=["src"])
     outside = m("o", "T-O")                    # no edges — its own family
@@ -705,6 +729,9 @@ def test_apply_routes_reject_ladder(tmp_path):
     ])
     assert delivered == 0 and rejected == 7
     assert not any(pid == "tgt" for pid, _ in pmo.comments)
+    # a confused steward must not loop: terminal rejects disposition the batch
+    assert _receipted_nowhere(pmo)
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
 
 
 def test_apply_routes_because_is_defanged(tmp_path):
@@ -728,30 +755,72 @@ def test_apply_routes_dedup_and_idempotent_rerun(tmp_path):
     assert len(pmo.comments) == before
 
 
-def test_apply_routes_recipient_budget(tmp_path):
+def test_apply_routes_no_numeric_budgets(tmp_path):
+    """Addendum 14: routing has NO numeric budget — the (src, step) dedup
+    and family size are the structural bounds. Prior receipts and prior
+    deliveries of OTHER pairs never block a fresh route."""
     pmo, mgr, run = _route_setup(tmp_path, recipient_bodies=(
         "`devcake:discovery-in:v1 src=T-Z step=1`",))
-    mgr.config.budgets.discovery_in_per_recipient = 1
-    delivered, rejected = _apply(mgr, run, [_route()])
-    assert (delivered, rejected) == (0, 1)
-    assert not any("discovery-in:v1 src=T-S" in md
-                   for pid, md in pmo.comments if pid == "tgt")
-
-
-def test_apply_routes_source_budget(tmp_path):
-    pmo, mgr, run = _route_setup(tmp_path)
     pmo.feeds["src"].entries.append(
         _ae("`devcake:discovery-routed:v1 step=1 to=T-Q`"))
-    mgr.config.budgets.discovery_routes_per_source = 1
     delivered, rejected = _apply(mgr, run, [_route()])
-    assert (delivered, rejected) == (0, 1)
+    assert (delivered, rejected) == (1, 0)
+    assert any("discovery-in:v1 src=T-S" in md
+               for pid, md in pmo.comments if pid == "tgt")
 
 
-def test_apply_routes_truncated_recipient_fails_closed(tmp_path):
+def test_apply_routes_truncated_recipient_is_terminal_raised(tmp_path):
+    """A recipient past the full-read ceiling never heals (feeds only
+    grow): the batch dispositions to=- and the receipt comment carries a
+    human-directed reason (addendum 14) — no hold, no re-dispatch loop."""
     pmo, mgr, run = _route_setup(tmp_path, recipient_truncated=True)
     delivered, rejected = _apply(mgr, run, [_route()])
     assert (delivered, rejected) == (0, 1)
     assert not any(pid == "tgt" for pid, _ in pmo.comments)
+    assert _receipted_nowhere(pmo)
+    raised = [md for md in _src_comments(pmo) if "to=-" in md]
+    assert any("readable page ceiling" in md and "T-T" in md
+               and "DISCOVERY_2.md" in md for md in raised)
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) in pmo.swaps
+
+
+def test_apply_routes_unreadable_recipient_does_not_receipt(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+
+    async def _boom(ref, full=False):
+        if ref.pmo_id == "tgt":
+            raise RuntimeError("PMO 502")
+        return await RoutePMO.get_activity(pmo, ref, full=full)
+    pmo.get_activity = _boom
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 1)
+    assert not _receipted_nowhere(pmo)
+
+
+def test_apply_routes_delivery_post_fail_does_not_receipt(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    orig = pmo.post_feed
+
+    async def _refuse(ref, markdown):
+        if ref.pmo_id == "tgt":
+            raise RuntimeError("comment API down")
+        return await orig(ref, markdown)
+    pmo.post_feed = _refuse
+    delivered, rejected = _apply(mgr, run, [_route()])
+    assert (delivered, rejected) == (0, 1)
+    assert not _receipted_nowhere(pmo)
+
+
+def test_apply_routes_toggle_off_writes_nothing(tmp_path):
+    pmo, mgr, run = _route_setup(tmp_path)
+    mgr.instance.discovery_routing = False
+    try:
+        delivered, rejected = _apply(mgr, run, [_route()])
+        assert (delivered, rejected) == (0, 0)
+        assert pmo.comments == []
+        assert pmo.swaps == []
+    finally:
+        mgr.instance.discovery_routing = True
 
 
 def test_apply_routes_routed_nowhere_still_receipts(tmp_path):

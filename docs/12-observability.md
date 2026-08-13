@@ -101,7 +101,7 @@ attributes — OpenObserve is the cost dashboard.
 
 **`devcake.cost.usd` is a claude-code-only attribute.** It keeps its name over
 the stored v1 key (`cost_usd_native`, `adr/0029`) and is set solely from a
-natively reported figure; neither `codex` 0.146.0 nor `grok` 0.2.112 emits a
+natively reported figure; neither `codex` 0.147.0 nor `grok` 0.2.112 emits a
 cost field of any kind (`08-harness-templates.md` §5) — no price table invents
 one, and a missing cost is written as **null, never 0**, so a cost query returns
 claude runs only rather than silently averaging in free-looking runs.

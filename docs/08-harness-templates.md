@@ -33,13 +33,16 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 > what production runs, and each claim carries the version it was last
 > verified at. The 0.146.0 bump is the doctrine's first exhibit: the rig
 > caught codex's new `cache_write_input_tokens` counter, which TokenReport v1
-> (`adr/0029`) absorbed as one extractor line. Infra services (Gitea, OO,
+> (`adr/0029`) absorbed as one extractor line. The 2.1.229 bump is the second:
+> the rig caught claude-code's new `output_tokens_details.thinking_tokens`
+> breakdown, absorbed into the v1 reasoning slot the same way (codex 0.147.0
+> streams measured shape-identical — fixtures stay at their recorded truth). Infra services (Gitea, OO,
 > Dagu, redis) are NOT covered — those bump on a risk-managed cadence.
 
 > Verification is capability- and version-specific, not blanket. Invocation,
 > headless output, plan flags, MCP syntax and token extraction below record live
 > evidence at the version each statement names: **Grok Build 0.2.112**, the pinned
-> **Codex CLI 0.146.0** and **Claude Code 2.1.221**, except the grok skills read-set
+> **Codex CLI 0.147.0** and **Claude Code 2.1.229**, except the grok skills read-set
 > (**0.2.103**, §7a) and the grok plan and MCP claims (**0.2.93**, §3/§7), which are
 > unverified at 0.2.112. Where a 0.2.112 observation supersedes the older 0.2.93
 > record it says so. The Grok image installs latest rather than a pinned artifact,
@@ -84,10 +87,10 @@ grok -p "$PROMPT" --output-format streaming-json --always-approve
 codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
   --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
 ```
-- **Verified on the installed CLI pinned by the image (`@openai/codex@0.146.0`, capture-rig re-verified 2026-08).** `--json` emits a JSONL event stream; **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `item.type: agent_message` is the in-stream equivalent). A run that produced no agent message leaves that file **empty** rather than absent.
-- **What the entrypoint parses**, at 0.146.0 (event stream unchanged from 0.144.4): `thread.started` (`thread_id`, which locates the rollout file below), `item.completed` items, and the terminal `turn.completed` carrying `usage` (§5). A failed turn ends in `turn.failed`, always preceded by a plain `{"type":"error"}` carrying the same text. **stderr says nothing about a failure** — every nonzero exit leaves the same 39 bytes of boilerplate — which is why failure is classified from the stream and never from stderr (`adr/0018-harness-fault-classification-and-backend-brake.md`).
+- **Verified on the installed CLI pinned by the image (`@openai/codex@0.147.0`, capture-rig re-verified 2026-08).** `--json` emits a JSONL event stream; **`-o/--output-last-message FILE` writes the final agent message to a file** — the cleanest result-text source, no JSONL parsing needed (`item.completed` with `item.type: agent_message` is the in-stream equivalent). A run that produced no agent message leaves that file **empty** rather than absent.
+- **What the entrypoint parses**, at 0.147.0 (event stream unchanged from 0.144.4): `thread.started` (`thread_id`, which locates the rollout file below), `item.completed` items, and the terminal `turn.completed` carrying `usage` (§5). A failed turn ends in `turn.failed`, always preceded by a plain `{"type":"error"}` carrying the same text. **stderr says nothing about a failure** — every nonzero exit leaves the same 39 bytes of boilerplate — which is why failure is classified from the stream and never from stderr (`adr/0018-harness-fault-classification-and-backend-brake.md`).
 - **A pinned `-m` costs a benign error item.** When `-m` names a model codex has no metadata for — which is every local or OpenAI-compatible backend — an `item.completed` whose `item.type` is `error` precedes `turn.started` on every run. It is not a failure; anything counting `item.completed` as work must exclude it. Without `-m` the item is absent.
-- **codex has no turn cap** at 0.146.0 (re-probed at the bump) — no `--max-turns` equivalent and no config key for one — so the per-Mission-Type extra CLI args cannot bound a codex Dev the way they bound a claude or grok one. The only bound is DevCake's own run timeout (`07-dev-runtime.md`), which arrives as a signal kill.
+- **codex has no turn cap** at 0.147.0 (re-probed at the bump) — no `--max-turns` equivalent and no config key for one — so the per-Mission-Type extra CLI args cannot bound a codex Dev the way they bound a claude or grok one. The only bound is DevCake's own run timeout (`07-dev-runtime.md`), which arrives as a signal kill.
 - Sandboxing: `--dangerously-bypass-approvals-and-sandbox` is the container invocation — its own help text says "intended solely for running in environments that are externally sandboxed", which is exactly the Dev container. The plan-substitute run uses `--sandbox read-only` instead. `--ephemeral` (no session files) and `--ignore-user-config` exist for hermetic runs.
 - Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` — those four keys and **no others**, so a total must be summed, never read. Present even when the turn produced nothing. On `codex exec resume` these are **cumulative — now measured, not just documented** (`codex_resume_nudge_*` captures: the resumed `turn.completed` reports both invocations' tokens), which is why `RESUME_SPECS["codex"].usage_cumulative` makes the ADR-0022 token merge last-wins within a codex resume chain instead of summing. Headless resume composes as `codex exec resume <thread_id> "$NUDGE" --json -o …`; the resumed stream keeps the same `thread_id` and replays no history. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
@@ -151,8 +154,8 @@ is the `source` field, never key-presence folklore; silence is never acceptable
 (INV-5). The `source` values:
 
 1. **`session_json`** — the harness's own structured output, named for the shape it reads:
-   - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown) → `cost_usd_native`.
-   - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `cache_write_input_tokens→cache_write` (**new at 0.146.0** — 0.144.4 had no write counter, so pre-bump streams read None, never a fabricated 0), `output_tokens→output`, `reasoning_output_tokens→reasoning_tokens`. Capture-verified at 0.146.0: those five keys, **no `total_tokens`**, present on every `turn.completed` including zero-output turns. No native cost field → `cost_usd_native` null.
+   - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown) → `cost_usd_native`. `usage.output_tokens_details.thinking_tokens` (**new at 2.1.229**, capture-verified) → `reasoning_tokens` — a subset of `output_tokens`, never priced on top; pre-2.1.229 streams read None, never a fabricated 0.
+   - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `cache_write_input_tokens→cache_write` (**new at 0.146.0** — 0.144.4 had no write counter, so pre-bump streams read None, never a fabricated 0), `output_tokens→output`, `reasoning_output_tokens→reasoning_tokens`. Capture-verified at 0.147.0 (shape-identical since 0.146.0): those five keys, **no `total_tokens`**, present on every `turn.completed` including zero-output turns. No native cost field → `cost_usd_native` null.
 2. **`end_event`** — `grok-build` **primary** at 0.2.112: the terminal `end` event's `usage` (`input_tokens` / `cache_read_input_tokens` / `output_tokens` / `total_tokens` / `reasoning_tokens`) plus `num_turns`, with `model` taken as the dominant key of `modelUsage` — whose inner keys are **camelCase** (`outputTokens`), unlike claude's `usage` (§1). Read from the stdout stream the entrypoint already parses: no session id, no filesystem access, and it works for a **failed** run, which carries a full `end` event where `signals.json` is absent. Still absent at 0.2.112: any cost field, so `cost_usd_native` is `None` — never `0`, which would read as "this run was free" in the feed report and aggregate as real spend on `devcake.cost.usd`. Standing caveat: grok is installed unpinned, so a rebuild can withdraw these fields again — whereupon extraction falls through to `signals` and then `unavailable`. Grok's **native** cost stays blank forever, but the full split feeds the app-side rate-card estimate (`adr/0021`) — the feed shows a labeled `cost (estimated, …)` line and spend aggregates on `devcake.cost.usd_estimated`, so grok is no longer a blind spot of cost visibility, only of *billed* cost.
 3. **`signals`** — `grok-build` **fallback** (implemented against verified v0.2.93 shapes; pre-v1 it masqueraded as `session_json`): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts), so `input`/`output` stay null and no honest price computation exists. Reached only when `end`-event extraction finds no `usage` — which at 0.2.112 means a run that did not end cleanly (§1).
 4. **`cumulative` / `mixed`** — merge provenance (ADR-0022 continuation chains): `cumulative` marks a resume chain whose harness reports cumulative counters (codex — the last report IS the chain total, summing would double-count); `mixed` marks a multi-chain merge whose inputs disagree on source.
@@ -209,7 +212,7 @@ What the admin panel's free-text MCP command area (`11-admin-panel.md` §3) must
 |---|---|
 | `claude-code` | `claude mcp add [--transport http\|stdio] [--env K=V] <name> -- <command…>` (or per-run `--mcp-config <file>`) |
 | `grok-build` | **Verified (CLI v0.2.93):** `grok mcp add [-t stdio\|http\|sse] [-s user\|project] [-e K=V] [-H "Name: value"] <name> [--] <command…>` (or a URL for http/sse) — writes `~/.grok/config.toml` (user scope) or `./.grok/config.toml` (project). Also `grok mcp list\|remove\|doctor`. |
-| `codex` | **Verified (CLI 0.144.4; syntax re-probed at 0.146.0):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
+| `codex` | **Verified (CLI 0.144.4; syntax re-probed at 0.147.0):** `codex mcp add <name> (--url <url> \| -- <command…>)` — stored in `~/.codex/config.toml`. |
 
 Scope caveat: `claude mcp add`'s default (local) scope is **cwd-keyed**, and the entrypoint runs both the MCP commands and the harness in the **same** directory — the cloned repo root `/workspace/repo/<repo-name>` — so local-scope registrations survive into the harness. Anything that re-registers from a different cwd silently disappears.
 
@@ -278,7 +281,7 @@ three cases (`$DEVCAKE_MODEL`, §1).
 | `codex` | `-c` overrides (extra CLI args) + env `CODEX_API_KEY` | `/v1` suffix, inside `-c …base_url` | the whole `-c` block |
 
 **The `/v1` asymmetry is load-bearing and easy to get wrong.** Each CLI documents its
-own half; observed at claude 2.1.210 (re-verified 2.1.221) and grok 0.2.112:
+own half; observed at claude 2.1.210 (re-verified 2.1.229) and grok 0.2.112:
 
 - `claude-code` defaults to `https://api.anthropic.com` and appends the route itself
   (`/v1/messages`), so `ANTHROPIC_BASE_URL` stops **before** `/v1`.

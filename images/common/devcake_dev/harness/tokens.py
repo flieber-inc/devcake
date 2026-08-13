@@ -222,6 +222,12 @@ def claude_token_report(j) -> dict:
         output_tokens=usage.get("output_tokens"),
         cache_read_tokens=usage.get("cache_read_input_tokens"),
         cache_write_tokens=usage.get("cache_creation_input_tokens"),
+        # NEW at claude-code 2.1.229 (capture-verified): thinking rides an
+        # output_tokens_details breakdown — a SUBSET of output_tokens, so it
+        # lands in the v1 reasoning slot (grok/codex parity), never priced
+        # on top; a pre-2.1.229 stream without the key reads None, never 0
+        reasoning_tokens=_dict(usage.get("output_tokens_details")).get(
+            "thinking_tokens"),
         cost_usd_native=j.get("total_cost_usd"),
         num_turns=j.get("num_turns"),
         duration_ms=j.get("duration_ms"),

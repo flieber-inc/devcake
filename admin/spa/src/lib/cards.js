@@ -13,6 +13,7 @@ export const newPmoCard = (name, system) => ({
   repos: [],
   reference_repos: [],
   intake_paused: false,
+  discovery_routing: true,
   assignments: {},
   managed: false,
 });

@@ -17,7 +17,8 @@ from datetime import datetime  # noqa: F401 — type context for Activity entrie
 from pathlib import Path
 
 from ..model import MissionRef
-from .feed import is_devcake_comment
+from .feed import is_devcake_comment, unquoted
+from .markers import discovery_in_keys
 
 log = logging.getLogger("devcake.missions")
 
@@ -183,7 +184,7 @@ async def push_activity_repo(mgr, mission, mtype, seq: int,
 
 
 def _mission_md(m, attachment_lines=(), document_lines=(),
-                blocker_lines=()) -> str:
+                blocker_lines=(), discovery_lines=()) -> str:
     """ADR-0014 D3: MISSION.md — the brief. Stable regardless of feed length;
     every step playbook points here."""
     lines = [
@@ -200,7 +201,35 @@ def _mission_md(m, attachment_lines=(), document_lines=(),
         lines += ["", "## Project documents", *document_lines]
     if attachment_lines:
         lines += ["", "## Mission attachments", *attachment_lines]
+    if discovery_lines:
+        # ADR-0033 D6 — the dedicated CLOSING block, advisory register:
+        # routed text is model-authored material that crossed a mission
+        # boundary; it is never laundered into spec-register text
+        lines += ["", "## Related missions reported the following "
+                      "discoveries (leads, not truths — verify against "
+                      "each source before relying)", *discovery_lines]
     return "\n".join(lines)
+
+
+def _discovery_lines(entries) -> list[str]:
+    """Routed-discovery deliveries (ADR-0033), collected from delivery
+    markers over UNQUOTED bodies — this module's one feed scan, and the
+    IRON RULE applies to it like every other. MISSION.md lists the leads
+    with provenance + pointers; the full delivery text already rides
+    ACTIVITY.md's faithful mirror, so the brief stays stable and small."""
+    out: list[str] = []
+    seen: set[tuple[str, int]] = set()
+    for e in entries:
+        for src, step in sorted(discovery_in_keys(unquoted(e.body))):
+            if (src, step) in seen:
+                continue
+            seen.add((src, step))
+            ts = getattr(e, "ts", None)
+            date = f" · {ts:%Y-%m-%d}" if ts else ""
+            out.append(f"{len(out) + 1}. [{src} · step {step}{date}] — the "
+                       f"routed delivery is in ACTIVITY.md; full record: "
+                       f"`DISCOVERY_{step}.md` on {src}.")
+    return out
 
 
 def _doc_filename(title: str) -> str:
@@ -346,7 +375,8 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         if n.get("handoff"):
             blocker_lines.append(f"  Handoff: {n['handoff']}")
     return {"mission_md": _mission_md(m, mission_lines, document_lines,
-                                      blocker_lines),
+                                      blocker_lines,
+                                      _discovery_lines(act.entries)),
             "activity_md": "\n".join(lines), "attachments": attachments,
             "feed_watermark": watermark}
 

@@ -72,22 +72,24 @@ def render_discovery_md(run: Run, entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def render_entry_lines(entries: list[dict], *, full: bool = False) -> list[str]:
-    """The ONE entry renderer for feed comments (chokepoint ruling — PR-2's
-    recipient delivery reuses it): per entry a numbered header plus the
-    defanged, blockquoted text — previews by default, the whole record with
-    full=True (the upload-failed fallback). Marker/provenance lines stay
-    unquoted at the caller; entry text is quarantined here (ADR-0014 D2,
-    and quoted lines never count in any scan)."""
+def render_entry_lines(entries: list[dict], *, full: bool = False,
+                       cap: int = DISCOVERY_PREVIEW_MAX) -> list[str]:
+    """The ONE entry renderer for feed comments (chokepoint ruling — the
+    routing delivery reuses it with cap=DISCOVERY_IN_EXCERPT_MAX): per
+    entry a numbered header plus the defanged, blockquoted text — capped
+    excerpts by default, the whole record with full=True (the upload-failed
+    fallback). Marker/provenance lines stay unquoted at the caller; entry
+    text is quarantined here (ADR-0014 D2, and quoted lines never count in
+    any scan)."""
     out = []
     for i, e in enumerate(entries, 1):
         if full:
             text = (f"Finding: {e['finding']}\n\nEvidence: {e['evidence']}"
                     f"\n\nScope: {e['scope']}")
         else:
-            text = e["finding"]
-            if len(text) > DISCOVERY_PREVIEW_MAX:
-                text = text[:DISCOVERY_PREVIEW_MAX] + "…"
+            text = f"{e['finding']}\nEvidence: {e['evidence']}"
+            if len(text) > cap:
+                text = text[:cap] + "…"
         out.append(f"**{i}.**")
         out.append(blockquote(defang(text)))
     return out

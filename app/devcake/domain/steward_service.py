@@ -150,4 +150,11 @@ class StewardService:
             if self.active():
                 raise StewardBusy("a steward run is already active")
             missions = await self.mgr.pmo.list_all(self.mgr.instance.team_key)
-            return await self.mgr.dispatch_steward(dt, missions)
+            run = await self.mgr.dispatch_steward(dt, missions)
+            if run is None:
+                # AUD-001 skip (workspace base unusable) — surfaced as 422,
+                # not an AttributeError 500 in the route (pre-existing bug)
+                raise StewardUnconfigured(
+                    "steward dispatch skipped — workspace base unusable; "
+                    "see the app logs")
+            return run

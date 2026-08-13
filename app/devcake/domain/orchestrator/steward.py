@@ -12,34 +12,38 @@ from ...harness import HARNESSES
 from ...security import redact_value
 from ...config import DevType
 from .. import costing
-from ..model import LABEL_OPTIN, Mission
+# LABEL_DISCOVERY read is a documented ruling (ADR-0033 addendum): the
+# routing lane REMOVES the sweep gate once a source's batches are all
+# receipted — allowlisted in test_structure_guards.
+from ..model import LABEL_DISCOVERY, LABEL_OPTIN, Mission, MissionRef
 from ..workspaces import WorkspaceUnavailable
 from . import dispatch
 from ..run import Run, utcnow
+from .feed import unquoted
+from .markers import (DISCOVERY_IN_EXCERPT_MAX, FEED_INLINE_MAX, defang,
+                      discovery_in_keys)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
-async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> Run:
-    """Dispatch a STEWARD run: a Dev whose only job is proposing missing
-    blocked-by edges. No PMO writes at dispatch (no status, no labels) —
-    finalize_steward validates and applies whatever it proposes."""
+async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
+                          prompt_text: str,
+                          blocker_work: list[dict] | None = None,
+                          batches: list[dict] | None = None) -> Run | None:
+    """The ONE steward launch body, shared by both flavors (chokepoint
+    ruling): repo/forge resolution, seq, span, spec env, skills, launch.
+    `duty` stamps Run.steward_duty ("" = relations); `blocker_work` carries
+    the discovery flavor's family repos (RO clones via the runspec extras).
+    Returns None when the workspace base is unusable (AUD-001: a periodic
+    steward must skip cleanly, never poison the poll segment)."""
     from ..ids import make_run_id
-    from ...prompts import STEWARD_MISSION_CAP, steward_prompt
     repo_name = dispatch.steward_repo(mgr)
     if repo_name is None:
         # spec env carries the forge dialect — no repo, no steward runs either
         raise RuntimeError("no repository configured — steward runs need the "
                            "forge dialect in their run spec")
     repo, forge = mgr.forges.instance(repo_name), mgr.forges.get(repo_name)
-    eligible = [m for m in missions
-                if m.pmo_kind == "issue" and m.status not in ("done", "canceled")
-                and (mgr.config.adoption_mode != "opt_in"
-                     or LABEL_OPTIN in m.labels)]
-    if len(eligible) > STEWARD_MISSION_CAP:
-        log.warning("steward prompt truncated to %d of %d missions",
-                    STEWARD_MISSION_CAP, len(eligible))
     # own-instance STEWARD runs only (audit A29, cosmetic): run ids carry the
     # instance prefix + random suffix, so no collision — but a cross-instance
     # count made the human-visible seq misleading
@@ -52,6 +56,7 @@ async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> R
         span.set_attribute("devcake.mission.key", "TEAM")
         span.set_attribute("devcake.mission.type", "STEWARD")
         span.set_attribute("devcake.dev_type", dev_type.name)
+        span.set_attribute("devcake.steward.duty", duty or "relations")
         carrier: dict[str, str] = {}
         inject(carrier)
         traceparent = carrier.get("traceparent", "")
@@ -74,12 +79,19 @@ async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> R
             timeout_seconds=mgr.config.dev_timeout_minutes * 60,
             traceparent=traceparent,
             spec_env=spec_env,
+            steward_duty=duty,
+            steward_batches=batches or [],
+            blocker_work=blocker_work or [],
+            # F12 snapshot rule: which extras serve via mirror is decided at
+            # dispatch, when the gate proved them fresh (StewardService
+            # widened ensure_fresh to the family set before calling us)
+            mirror_repos=[e["repo_ref"] for e in (blocker_work or [])
+                          if mgr.repo_cache.eligible(e["repo_ref"])],
         )
         run.spec_skills = await dispatch._skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
         run.spec_prompt = dispatch.append_required_skills(
-            steward_prompt(dispatch._identifying_prompt(mgr, dev_type), eligible),
-            dev_type.skills_required, run.spec_skills)
+            prompt_text, dev_type.skills_required, run.spec_skills)
         try:
             await mgr.runs.bootstrap.launch(
                 run, image=HARNESSES[dev_type.harness_template].image)
@@ -90,9 +102,114 @@ async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> R
             log.warning("steward dispatch for %s skipped — workspace base "
                         "unusable: %s", mgr.instance_name, e)
             return None
-        log.info("dispatched steward %s (dev=%s, %d missions in prompt)",
-                 run_id, dev_type.name, len(eligible))
+        log.info("dispatched steward %s (duty=%s, dev=%s)",
+                 run_id, duty or "relations", dev_type.name)
         return run
+
+
+async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> Run:
+    """Dispatch the RELATIONS steward: a Dev whose only job is proposing
+    missing blocked-by edges. No PMO writes at dispatch (no status, no
+    labels) — finalize_steward validates and applies whatever it proposes."""
+    from ...prompts import STEWARD_MISSION_CAP, steward_prompt
+    eligible = [m for m in missions
+                if m.pmo_kind == "issue" and m.status not in ("done", "canceled")
+                and (mgr.config.adoption_mode != "opt_in"
+                     or LABEL_OPTIN in m.labels)]
+    if len(eligible) > STEWARD_MISSION_CAP:
+        log.warning("steward prompt truncated to %d of %d missions",
+                    STEWARD_MISSION_CAP, len(eligible))
+    return await _launch_steward(
+        mgr, dev_type, duty="",
+        prompt_text=steward_prompt(
+            dispatch._identifying_prompt(mgr, dev_type), eligible))
+
+
+async def dispatch_steward_discovery(mgr, dev_type: DevType, family,
+                                     pending: dict) -> Run | None:
+    """Dispatch the DISCOVERY steward (ADR-0033): curated family package,
+    the family's work repos as read-only extras, propose-only routes.
+    `pending` maps source pmo_id → [(step, n)] un-routed batches; batches
+    whose source run record is gone are left for the sweep's unroutable
+    terminal (D7) — if nothing remains, no run dispatches."""
+    from ...prompts import steward_discovery_prompt
+    from .family_graph import family_work_repos
+    primary = dispatch.steward_repo(mgr)
+    if primary is None:
+        raise RuntimeError("no repository configured — steward runs need the "
+                           "forge dialect in their run spec")
+    runs = mgr.runs.store.all()
+    package, included = build_discovery_package(mgr, family, pending, runs)
+    if not included:
+        return None
+    by_id = family.by_id
+    return await _launch_steward(
+        mgr, dev_type, duty="discovery",
+        prompt_text=steward_discovery_prompt(
+            dispatch._identifying_prompt(mgr, dev_type), package),
+        blocker_work=family_work_repos(mgr, family, runs,
+                                       exclude=frozenset({primary})),
+        batches=[{"pmo_id": pid, "key": by_id[pid].key, "step": step}
+                 for pid, step in included])
+
+
+def build_discovery_package(mgr, family, pending: dict,
+                            runs: list) -> tuple[str, list[tuple[str, int]]]:
+    """The curated context package (ADR-0033 D4 — curated, not accumulated):
+    the family map with statuses; finished/canceled members contribute a
+    description head + handoff excerpt; open members description heads; the
+    NEW discovery entries at full fidelity with their source's description.
+    Returns (sections text, included (pmo_id, step) batches). Entries are
+    re-derived from the source run's stored result — the same normalization
+    harvest used, truncated to the marker's n — so the package transports
+    exactly what the board memorialized."""
+    from ...prompts import STEWARD_DESC_HEAD_CHARS, STEWARD_MISSION_CAP
+    from .discovery import valid_entries
+    from .markers import handoff_of
+
+    def head(m) -> str:
+        return (" ".join((m.description or "").split())
+                [:STEWARD_DESC_HEAD_CHARS] or "(no description)")
+
+    by_id = family.by_id
+    rows = []
+    for m in family.members[:STEWARD_MISSION_CAP]:
+        blockers = ", ".join(by_id[b].key for b in (m.blocked_by or [])
+                             if b in by_id) or "(none)"
+        rows.append(f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
+                    f"  {m.title} — {head(m)}")
+        if m.status in ("done", "canceled"):
+            note = handoff_of(m.description)
+            if note:
+                from .markers import HANDOFF_EXCERPT_MAX
+                rows.append(f"  Handoff: {note[:HANDOFF_EXCERPT_MAX]}")
+
+    finds: list[str] = []
+    included: list[tuple[str, int]] = []
+    run_ix = {(r.mission_pmo_id, r.seq): r for r in runs
+              if r.mission_type in ("ONBOARD", "EXECUTE", "REVIEW")
+              and mgr._run_is_ours(r) and r.result}
+    for pmo_id, batches in sorted(pending.items()):
+        src = by_id.get(pmo_id)
+        if src is None:
+            continue
+        for step, n in batches:
+            r = run_ix.get((pmo_id, step))
+            entries = valid_entries(r.result)[:n] if r is not None else []
+            if not entries:
+                continue        # run record gone — the sweep terminates it
+            included.append((pmo_id, step))
+            finds.append(f"From **{src.key}** step {step} — mission: "
+                         f"{head(src)}")
+            for i, e in enumerate(entries, 1):
+                finds.append(f"{i}. Finding: {e['finding']}\n"
+                             f"   Evidence: {e['evidence']}\n"
+                             f"   Scope: {e['scope']}")
+    package = ("### The family (key · status · blocked by · title)\n"
+               + "\n".join(rows)
+               + "\n\n### New discoveries to route\n"
+               + ("\n".join(finds) if finds else "(none)"))
+    return package, included
 
 
 async def finalize_steward(mgr, run: Run, payload: dict) -> None:
@@ -126,14 +243,21 @@ async def finalize_steward(mgr, run: Run, payload: dict) -> None:
             mgr.runs.store.save(run)
             log.warning("steward run %s failed: %s", run.run_id, run.error)
             return
-        created, rejected = await apply_steward_edges(mgr, result.get("edges") or [])
-        span.set_attribute("devcake.steward.edges_created", created)
-        span.set_attribute("devcake.steward.edges_rejected", rejected)
+        if run.steward_duty == "discovery":
+            delivered, rejected = await apply_discovery_routes(
+                mgr, run, result.get("routes") or [])
+            span.set_attribute("devcake.steward.routes_delivered", delivered)
+            span.set_attribute("devcake.steward.routes_rejected", rejected)
+        else:
+            created, rejected = await apply_steward_edges(
+                mgr, result.get("edges") or [])
+            span.set_attribute("devcake.steward.edges_created", created)
+            span.set_attribute("devcake.steward.edges_rejected", rejected)
         run.result = redact_value(result)
         run.state, run.ended_at = "finished", utcnow()
         mgr.runs.store.save(run)
-        log.info("steward %s finished: %d edges created, %d rejected",
-                 run.run_id, created, rejected)
+        log.info("steward %s (%s) finished", run.run_id,
+                 run.steward_duty or "relations")
 
 
 async def apply_steward_edges(mgr, edges: list) -> tuple[int, int]:
@@ -178,6 +302,215 @@ async def apply_steward_edges(mgr, edges: list) -> tuple[int, int]:
             f"the relation in the PMO if this is wrong.")
         created += 1
     return created, rejected
+
+
+async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]:
+    """The Dev is advisory; the app is the gatekeeper (the
+    apply_steward_edges precedent, ADR-0033 D5). Validate every route
+    against the LIVE board and feed-counted budgets, copy finding text from
+    the source run record — verbatim transport is structural, steward text
+    never lands beyond its one-line "because" — deliver one marked comment
+    per recipient, receipt every dispatched batch (a routed-nowhere batch
+    receipts `to=-` so the counterflow terminates), and drop the sweep-gate
+    label once a source has nothing pending. Idempotent against the board:
+    a redelivered finalize re-checks the recipient's delivery markers and
+    the source's receipts before every write."""
+    from .discovery import render_entry_lines, scan_source, valid_entries
+    from .family_graph import family_of
+
+    budgets = mgr.config.budgets
+    missions = await mgr.pmo.list_all(mgr.instance.team_key)
+    by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
+    by_id = {m.pmo_id: m for m in missions if m.pmo_kind == "issue"}
+    runs = mgr.runs.store.all()
+    run_ix = {(r.mission_pmo_id, r.seq): r for r in runs
+              if r.mission_type in ("ONBOARD", "EXECUTE", "REVIEW")
+              and mgr._run_is_ours(r) and r.result}
+    batches = {(b.get("pmo_id"), int(b.get("step") or 0)): b
+               for b in (run.steward_batches or [])}
+
+    delivered = rejected = 0
+
+    def reject(pmo_id: str, detail: str) -> None:
+        nonlocal rejected
+        rejected += 1
+        mgr._audit(pmo_id or "", "discovery_route_rejected", detail)
+        log.info("discovery route rejected: %s", detail)
+
+    src_state: dict[str, object] = {}     # source pmo_id → SourceState
+    families: dict[str, object] = {}      # source pmo_id → Family
+
+    # 1 — validate + resolve, grouped per recipient
+    accepted: dict[str, list[dict]] = {}
+    for raw in routes:
+        e = raw if isinstance(raw, dict) else {}
+        src_key = str(e.get("source") or "").strip().upper()
+        tgt_key = str(e.get("target") or "").strip().upper()
+        try:
+            step, index = int(e.get("step")), int(e.get("finding"))
+        except (TypeError, ValueError):
+            reject("", f"{src_key}→{tgt_key}: malformed route")
+            continue
+        because = " ".join(str(e.get("because") or "").split())[:300]
+        src, tgt = by_key.get(src_key), by_key.get(tgt_key)
+        if src is None or (src.pmo_id, step) not in batches:
+            reject(src.pmo_id if src else "",
+                   f"{src_key} step {step}: not in this run's package")
+            continue
+        if tgt is None:
+            reject(src.pmo_id, f"{src_key}→{tgt_key}: unknown target")
+            continue
+        if tgt.pmo_id == src.pmo_id:
+            reject(src.pmo_id, f"{src_key}→{tgt_key}: self-route")
+            continue
+        if tgt.status in ("done", "canceled"):
+            reject(src.pmo_id, f"{src_key}→{tgt_key}: terminal recipient")
+            continue
+        fam = families.get(src.pmo_id)
+        if fam is None:
+            fam = families[src.pmo_id] = family_of(src, missions)
+        if tgt.pmo_id not in fam.by_id:
+            reject(src.pmo_id, f"{src_key}→{tgt_key}: outside the family")
+            continue
+        state = src_state.get(src.pmo_id)
+        if state is None:
+            state = src_state[src.pmo_id] = await scan_source(mgr, src)
+        n = next((n_ for s_, n_ in state.posted if s_ == step), 0)
+        source_run = run_ix.get((src.pmo_id, step))
+        entries = valid_entries(source_run.result)[:n] if source_run else []
+        if not 1 <= index <= len(entries):
+            reject(src.pmo_id, f"{src_key} step {step}: no finding #{index}")
+            continue
+        cap = budgets.discovery_routes_per_source
+        planned = sum(1 for xs in accepted.values() for x in xs
+                      if x["src"].pmo_id == src.pmo_id)
+        if cap and len(state.receipted) + planned >= cap:
+            reject(src.pmo_id,
+                   f"{src_key}: source route budget spent ({cap})")
+            continue
+        accepted.setdefault(tgt.pmo_id, []).append(
+            {"src": src, "tgt": tgt, "step": step, "index": index,
+             "entry": entries[index - 1], "because": because})
+
+    # 2 — deliver, one comment per recipient; dedup + recipient cap read
+    # from the recipient's LIVE feed just before posting (D6 idempotency)
+    receipts: dict[str, set[tuple[int, str]]] = {}
+    for tgt_id, batch in accepted.items():
+        tgt = batch[0]["tgt"]
+        try:
+            act = await mgr.pmo.get_activity(MissionRef(tgt_id, "issue"),
+                                             full=True)
+        except Exception as ex:  # noqa: BLE001 — recipient skipped; the board re-drives via the sweep
+            for x in batch:
+                reject(x["src"].pmo_id,
+                       f"→{tgt.key}: recipient feed unreadable ({ex})")
+            continue
+        if act.truncated:
+            # gitea pages ascending and drops the NEWEST — counts unknown
+            # ⇒ fail closed (the freshness-gate truncation doctrine)
+            for x in batch:
+                reject(x["src"].pmo_id,
+                       f"→{tgt.key}: recipient feed truncated")
+            continue
+        existing: set[tuple[str, int]] = set()
+        for en in act.entries:
+            existing |= discovery_in_keys(unquoted(en.body))
+        cap_in = budgets.discovery_in_per_recipient
+        by_pair: dict[tuple[str, int], list[dict]] = {}
+        for x in batch:
+            by_pair.setdefault((x["src"].key.upper(), x["step"]),
+                               []).append(x)
+        sections: list[str] = []
+        landed: list[dict] = []
+        for (skey, step), xs in sorted(by_pair.items()):
+            src = xs[0]["src"]
+            if (skey, step) in existing:
+                # already on the recipient — idempotent re-run; the receipt
+                # still records the delivery (self-heal)
+                receipts.setdefault(src.pmo_id, set()).add(
+                    (step, tgt.key.upper()))
+                mgr._audit(src.pmo_id, "discovery_route_duplicate",
+                           f"{skey} step {step}→{tgt.key}")
+                continue
+            if cap_in and len(existing) >= cap_in:
+                for x in xs:
+                    reject(src.pmo_id,
+                           f"→{tgt.key}: recipient budget spent ({cap_in})")
+                continue
+            existing.add((skey, step))
+            head = [f"`devcake:discovery-in:v1 src={skey} step={step}`",
+                    f"🔎 [{skey} · step {step} · {utcnow():%Y-%m-%d}] — "
+                    f"leads, not truths: verify against the source before "
+                    f"relying. Full record: `DISCOVERY_{step}.md` on "
+                    f"{skey}."]
+            body_lines: list[str] = []
+            for x in xs:
+                body_lines += render_entry_lines(
+                    [x["entry"]], cap=DISCOVERY_IN_EXCERPT_MAX)
+                if x["because"]:
+                    body_lines.append(f"*— steward: {defang(x['because'])}*")
+            sections.append("\n\n".join(head + body_lines))
+            landed.extend(xs)
+            receipts.setdefault(src.pmo_id, set()).add(
+                (step, tgt.key.upper()))
+        if not sections:
+            continue
+        body = "\n\n---\n\n".join(sections)
+        if len(body) > FEED_INLINE_MAX:
+            # marker + provenance must stay inline — drop finding bodies,
+            # keep the pointer (never externalize a counted marker)
+            body = "\n\n---\n\n".join(
+                s.split("\n\n**", 1)[0] for s in sections)
+        try:
+            await mgr._feed(tgt_id, "issue", body, externalize=False)
+            delivered += len(landed)
+        except Exception as ex:  # noqa: BLE001 — nothing landed for this recipient; drop its receipts so the sweep re-drives
+            for x in landed:
+                receipts.get(x["src"].pmo_id, set()).discard(
+                    (x["step"], tgt.key.upper()))
+                reject(x["src"].pmo_id,
+                       f"→{tgt.key}: delivery post failed ({ex})")
+
+    # 3 — receipts: every dispatched batch gets a disposition (routed
+    # targets, or `-` for routed-nowhere), then the label drops when the
+    # source has nothing pending
+    for (pid, step), b in batches.items():
+        receipts.setdefault(pid, set())
+        if not any(s == step for s, _t in receipts[pid]):
+            receipts[pid].add((step, "-"))
+    for pid, pairs in receipts.items():
+        state = src_state.get(pid)
+        if state is None and pid in by_id:
+            # routed-nowhere sources were never scanned during validation —
+            # scan now so a redelivered finalize never re-posts receipts
+            state = await scan_source(mgr, by_id[pid])
+        pre = getattr(state, "receipted", set())
+        new = sorted(p for p in pairs if p not in pre)
+        if new:
+            lines = [f"`devcake:discovery-routed:v1 step={s} to={t}`"
+                     for s, t in new]
+            try:
+                await mgr._feed(
+                    pid, "issue",
+                    "🧭 Discovery routing receipts (dispositioned batches; "
+                    "`to=-` = routed nowhere):\n" + "\n".join(lines),
+                    externalize=False)
+            except Exception as ex:  # noqa: BLE001 — receipts missing ⇒ the sweep re-detects; never fail the finalize
+                mgr._audit(pid, "discovery_receipt_failed", str(ex)[:200])
+                continue
+        src = by_id.get(pid)
+        if src is None:
+            continue
+        try:
+            state2 = await scan_source(mgr, src)
+            if not state2.pending:
+                await mgr.pmo.swap_labels(MissionRef(pid, "issue"),
+                                          remove={LABEL_DISCOVERY},
+                                          add=set())
+                mgr._discoveries_pending.discard(pid)
+        except Exception as ex:  # noqa: BLE001 — label is a hint; the sweep self-heals it later
+            mgr._audit(pid, "discovery_label_failed", str(ex)[:200])
+    return delivered, rejected
 
 
 def _creates_cycle(graph: dict[str, set[str]], blocker: str, blocked: str) -> bool:

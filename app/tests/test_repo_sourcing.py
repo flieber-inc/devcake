@@ -23,8 +23,9 @@ def _inst(repos=(), refs=()):
     ("PLAN", "alpha", ["alpha", "pub", "beta", "int-1", "gone"]),
     ("EXECUTE", "beta", ["beta", "pub", "int-1", "gone"]),
     ("REVIEW", "beta", ["beta", "pub", "int-1", "gone"]),
-    # STEWARD and friends: primary only
-    ("STEWARD", "alpha", ["alpha"]),
+    # STEWARD (ADR-0033 discovery flavor): family work repos ride the
+    # blocker-entry shape — and deliberately WITHOUT reference_repos
+    ("STEWARD", "alpha", ["alpha", "beta", "int-1", "gone"]),
 ])
 def test_sourcing_table(mission_type, work, expected):
     blockers = [{"repo_ref": "beta"}, {"repo_ref": "int-1"},
@@ -34,6 +35,17 @@ def test_sourcing_table(mission_type, work, expected):
         instance=_inst(repos=["alpha", "beta"], refs=["pub"]),
         blocker_entries=blockers)
     assert got == expected
+
+
+def test_relations_steward_still_sources_primary_only():
+    """The relations flavor passes no entries — its sourcing is pinned
+    byte-identical to the pre-ADR-0033 behavior: [work_repo], nothing else
+    (the mirror gate and the runspec stay in lockstep through the ONE rule)."""
+    got = sourced_repo_names(
+        work_repo="alpha", mission_type="STEWARD",
+        instance=_inst(repos=["alpha", "beta"], refs=["pub"]),
+        blocker_entries=None)
+    assert got == ["alpha"]
 
 
 def test_gate_set_is_the_filtered_sourcing_set(tmp_path):

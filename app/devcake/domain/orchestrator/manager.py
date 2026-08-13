@@ -220,6 +220,11 @@ class MissionManager:
     async def dispatch_steward(self, dev_type: DevType, missions: list[Mission]):
         return await steward.dispatch_steward(self, dev_type, missions)
 
+    async def dispatch_steward_discovery(self, dev_type: DevType, family,
+                                         pending: dict):
+        return await steward.dispatch_steward_discovery(
+            self, dev_type, family, pending)
+
     async def finalize_steward(self, run: Run, payload: dict):
         return await steward.finalize_steward(self, run, payload)
 

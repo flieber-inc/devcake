@@ -389,8 +389,11 @@ def test_domain_never_imports_adapters():
 # sweep gate. The definition and the harvest/scan seam may reference it;
 # NOTHING else in domain/ may — so derive/gate_map/schedule/dispatch can
 # never quietly grow a read that would impede a mission's progression.
-# (PR-2's routing lane extends this list deliberately, with its own ruling.)
-DISCOVERY_LABEL_ALLOWLIST_REL = {"model.py", "orchestrator/discovery.py"}
+# steward.py's entry is the routing lane's documented ruling (addendum):
+# finalize REMOVES the gate once a source's batches are all receipted —
+# still never a scheduling read.
+DISCOVERY_LABEL_ALLOWLIST_REL = {"model.py", "orchestrator/discovery.py",
+                                 "orchestrator/steward.py"}
 
 
 def test_discovery_label_never_joins_scheduling():

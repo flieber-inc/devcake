@@ -159,7 +159,9 @@ def test_dispatch_stamps_the_dispatching_instances_pmo_ref():
     assert "pmo_ref=mgr.instance_name" in src
     assert "pmo_ref=self.config.pmos[0]" not in src
     from devcake.domain.orchestrator import steward as steward_mod
-    src = inspect.getsource(steward_mod.dispatch_steward)
+    # the Run construction lives in the shared launch body (ADR-0033) —
+    # both steward flavors inherit the stamp
+    src = inspect.getsource(steward_mod._launch_steward)
     assert "pmo_ref=mgr.instance_name" in src
 
 

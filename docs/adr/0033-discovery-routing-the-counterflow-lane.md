@@ -356,6 +356,39 @@ these rulings amend it where implementation surfaced better information.
 7. **The per-PMO `discovery_routing` toggle ships as a draft field**
    (Save-applied), not an instant toggle — routing is not an emergency
    control; the caps bound the blast radius. (Lands with the routing half.)
+8. **"Entrypoint unchanged" (Related, below) is superseded.** The steward
+   outcome renamed `relations_mapped` → **`stewarded`** — one duty-agnostic
+   outcome for every steward flavor, so a future run issuing discoveries
+   AND edge proposals needs no further outcome change. The flavor lives on
+   the run record (`Run.steward_duty`), never in the outcome. Entrypoint
+   legal set + pin test updated; deploy is the normal tag-lockstep ritual.
+9. **The ADR-0019-overrides staffing claim (Decision 10) is corrected**:
+   steward staffing is the global `steward.dev_type` only today —
+   `assignment_for` validates against mission types and STEWARD is not one.
+   A per-PMO steward override would be new machinery, deliberately not
+   built here.
+10. **Termination is receipt-complete.** Every batch a discovery run's
+    package carried is dispositioned at finalize — routed targets get
+    per-target receipts; a batch the steward deliberately routed NOWHERE
+    gets a `to=-` receipt (else the sweep would re-dispatch it forever).
+    Batches whose source run record was cleared (clear-runs) are terminated
+    by the sweep with a sentinel'd unroutable comment + the same `to=-`
+    disposition. `pending = posted − receipted` therefore always converges.
+11. **Single-flight is per-instance**, a sound coarsening of Decision 3's
+    per-family rule: families never span instances, so one in-flight
+    discovery run per instance implies at most one per family. Both steward
+    flavors also share the deployment-wide one-STEWARD `active()` slot and
+    `global_max` — on multi-instance deployments discovery bursts serialize
+    behind it; accepted (batching calm over fan-out).
+12. **Delivery quarantine harmonized**: in feed comments (source previews
+    AND recipient deliveries) marker/provenance lines stay unquoted while
+    finding text is defanged AND blockquoted (quoted lines never count in
+    any scan — belt and suspenders); MISSION.md's advisory block renders
+    provenance lines with pointers only (the full delivery text rides
+    ACTIVITY.md's faithful mirror). Provenance drops the ADR's `at sha`
+    segment: no structured anchor exists at harvest and parsing shas from
+    evidence prose would violate never-parse-prose — shas live inside the
+    verbatim evidence text.
 
 ## Related
 

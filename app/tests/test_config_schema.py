@@ -316,14 +316,15 @@ def test_cost_inputs_defaults_validation_and_round_trip():
     from devcake.config import CostInputs, ModelRate, deep_merge
 
     fresh = AppConfig()
-    assert [r.model_prefix for r in fresh.cost_inputs.rates] == ["grok-4.5"]
+    assert [r.model_prefix for r in fresh.cost_inputs.rates] == [
+        "grok-4.5", "claude-opus"]
     assert fresh.cost_inputs.override_native is False
-    assert fresh.cost_inputs.rate_card_id == "builtin-v1"
+    assert fresh.cost_inputs.rate_card_id == "builtin-v2"
 
     # pre-feature config file (no cost_inputs key) still validates at v4
     base = _base()
     base.pop("cost_inputs", None)
-    assert AppConfig.model_validate(base).cost_inputs.rate_card_id == "builtin-v1"
+    assert AppConfig.model_validate(base).cost_inputs.rate_card_id == "builtin-v2"
 
     # a default-card edit must not write through to DEFAULT_MODEL_RATES
     fresh.cost_inputs.rates[0].input_per_mtok = 99.0
@@ -343,7 +344,8 @@ def test_cost_inputs_defaults_validation_and_round_trip():
     on = AppConfig.model_validate(
         {**_base(), "cost_inputs": {"override_native": True}})
     assert on.cost_inputs.override_native is True
-    assert [r.model_prefix for r in on.cost_inputs.rates] == ["grok-4.5"]
+    assert [r.model_prefix for r in on.cost_inputs.rates] == [
+        "grok-4.5", "claude-opus"]
     merged = deep_merge(on.model_dump(), {"cost_inputs": {"rates": [
         {"model_prefix": "claude-opus", "input_per_mtok": 5.0,
          "cache_read_per_mtok": 0.5, "output_per_mtok": 25.0}]}})

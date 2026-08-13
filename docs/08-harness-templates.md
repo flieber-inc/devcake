@@ -17,7 +17,7 @@ this document (§8); changing a Dev Type's model does not add a template.
 
 | Template id | Harness CLI | Empty `DevType.model` resolves to | Seeded Dev Types |
 |---|---|---|---|
-| `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-haiku-4-5` |
+| `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-opus-5` (ADR-0033 D10) |
 | `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
 

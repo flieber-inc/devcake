@@ -19,7 +19,7 @@ T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 GROK_TR = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
            "cache_write_tokens": None, "output_tokens": 500_000,
            "total_tokens": 3_500_000, "cost_usd_native": None,
-           "cost_usd_estimated": 5.60, "rate_card_id": "builtin-v1",
+           "cost_usd_estimated": 5.60, "rate_card_id": "builtin-v2",
            "reasoning_tokens": 20616,
            "model": "grok-4.5-build", "source": "end_event"}
 CLAUDE_TR = {"input_tokens": 10_000, "cache_read_tokens": 5_000,
@@ -60,10 +60,12 @@ def test_rows_carry_token_scalars_and_read_time_estimate(tmp_path):
     assert grok["model"] == "grok-4.5-build"
     claude = rows["A-2"]
     assert claude["cost_usd"] == 0.1234
-    assert claude["cost_usd_estimated"] is None        # unmapped model
+    # mapped since the ADR-0033 claude-opus rate row (builtin-v2):
+    # 10k×$5 + 5k×$0.50 + 2k×$6.25 + 1k×$25 per M = $0.09
+    assert claude["cost_usd_estimated"] == 0.09
     bare = rows["A-3"]
     assert bare["input_tokens"] is None and bare["cost_usd"] is None
-    assert out["rate_card"] == {"rate_card_id": "builtin-v1",
+    assert out["rate_card"] == {"rate_card_id": "builtin-v2",
                                 "override_native": False}
 
 
@@ -118,7 +120,9 @@ def test_totals_cover_the_whole_filtered_set(tmp_path):
     assert t["input_tokens"] == 3 * 1_000_000 + 10_000
     assert t["cache_write_tokens"] == 2_000            # grok nulls count as 0
     assert t["cost_usd"] == 0.1234
-    assert t["cost_usd_estimated"] == round(3 * 5.60, 6)
+    assert t["cost_usd_estimated"] == round(3 * 5.60 + 0.09, 6)
+    # effective prefers NATIVE per run: the claude run contributes its
+    # 0.1234 native, not its 0.09 estimate
     assert t["cost_usd_effective"] == round(3 * 5.60 + 0.1234, 6)
     # pmo_refs come from ALL runs so the dropdown never collapses
     assert out["pmo_refs"] == ["alpha"]

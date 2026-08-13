@@ -78,8 +78,28 @@ def test_finalize_steward_stamps_rate_card_estimate(tmp_path):
         mgr, run, {"result": {"outcome": "nope"}, "token_report": grok}))
     saved = mgr.runs.store.get(run.run_id).token_report
     assert saved["cost_usd_estimated"] == 5.60
-    assert saved["rate_card_id"] == "builtin-v1"
+    assert saved["rate_card_id"] == "builtin-v2"
     assert saved["cost_usd"] is None
+
+
+def test_opus_steward_reports_price_at_the_new_rate_row(tmp_path):
+    """ADR-0033 D10: the re-pinned Opus steward must not run cost-blind —
+    the claude-opus rate row prices its reports ($5/$0.50/$6.25/$25 per M;
+    claude harnesses DO report cache-write, unlike grok)."""
+    mgr = make_mgr(tmp_path, MapPMO([]))
+    run = Run(run_id="SYS-STEWARD-2-ZZZZZZ", mission_key="STEWARD",
+              mission_type="STEWARD", dev_type="steward", seq=2,
+              state="finalizing")
+    mgr.runs.store.save(run)
+    claude = {"input_tokens": 1_000_000, "cache_read_tokens": 2_000_000,
+              "cache_write_tokens": 400_000, "output_tokens": 100_000,
+              "total_tokens": 3_500_000, "cost_usd": None,
+              "model": "claude-opus-5", "extraction_method": "session_json"}
+    run_coro(steward.finalize_steward(
+        mgr, run, {"result": {"outcome": "nope"}, "token_report": claude}))
+    saved = mgr.runs.store.get(run.run_id).token_report
+    assert saved["cost_usd_estimated"] == 11.00     # 5 + 1 + 2.5 + 2.5
+    assert saved["rate_card_id"] == "builtin-v2"
 
 
 def test_apply_steward_edges_validates_everything(tmp_path):

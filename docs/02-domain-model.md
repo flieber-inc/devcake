@@ -170,7 +170,7 @@ There is deliberately **no stored `docker_image` or credential config**: require
 |---|---|---|
 | `judgment` | `claude-code` (Claude Fable) | ONBOARD, PLAN, REVIEW |
 | `implementer` | `grok-build` (Grok 4.5) | EXECUTE |
-| `steward` | `claude-code` (`claude-haiku-4-5`) | Relations Steward (default vehicle; assignable anywhere) |
+| `steward` | `claude-code` (`claude-opus-5`) | Steward duties — relations + discovery routing (EXECUTE-grade bar, ADR-0033 D10; fresh boots only) |
 
 Dev Types are **vehicles** (harness, model, concurrency, skill chips), not seniority ranks. Mission-step contracts live in playbooks; domain knowledge lives in skills (**ADR-0016**).
 
@@ -274,7 +274,7 @@ provenance as the `source` field instead of key-presence folklore.
 | `duration_ms` | `int \| None` | Harness-reported wall time (claude result event; others none). |
 | `cost_usd_native` | `float \| None` | Only when the harness reports it natively (Claude Code `total_cost_usd`). Never guessed **by the harness layer** — neither `codex` 0.146.0 nor `grok` 0.2.112 emits any cost field, so it stays null for both, forever untouched by estimation (`adr/0021`). |
 | `cost_usd_estimated` | `float \| None` | Ships `None` from the image; the **app-side** rate-card estimate (`domain/costing.py`, `adr/0021`) fills it at finalize when the full input/cache-read/output split exists AND `config.cost_inputs.rates` maps the model. Kept strictly separate from `cost_usd_native`. |
-| `rate_card_id` | `str \| None` | App-stamped alongside the estimate: `builtin-v1` (shipped defaults) or `operator:<hash8>` (edited card). Present iff the estimate is. |
+| `rate_card_id` | `str \| None` | App-stamped alongside the estimate: `builtin-v2` (shipped defaults) or `operator:<hash8>` (edited card). Present iff the estimate is. |
 | `source` | `"session_json" \| "end_event" \| "signals" \| "cumulative" \| "mixed" \| "unavailable"` | Which path actually filled the report — `end_event` grok's terminal stdout event, `session_json` the harness's own JSON (claude/codex), `signals` grok's session-file fallback, `cumulative` a codex resume chain (the harness's counters are cumulative; last-wins), `mixed` a multi-chain merge with disagreeing inputs; silence is never acceptable (INV-5 — `unavailable` is explicit). |
 | `raw` | `dict` | The vendor usage payload, untouched (fidelity); merges carry `{"invocations": [...]}`. The only nested field. |
 

@@ -40,8 +40,9 @@ volume); the app image gained `git`+`git-lfs`, its first and only
 subprocess seam (`adapters/git.py`: minimal env, 900 s timeout, never
 raises). Storage: compose named volume `mirrors: {}` → real name
 `devcake_mirrors`; app mounts it rw at `/mirrors`; `dev-run.yaml` mounts
-the SAME volume `devcake_mirrors:/mirrors:ro` (measured on Dagu 2.10.5
-AND 2.11.3: `volumes:` accepted, `:ro` kernel-enforced, named volumes
+the SAME volume `devcake_mirrors:/mirrors:ro` (measured on Dagu 2.10.5,
+2.11.3 AND 2.13.0 — the 2026-08-13 drill re-inspected a live provision
+container: `/mirrors=RW:false`, `:ro` kernel-enforced, named volumes
 resolve — this amends `13-deployment.md`'s old "no volumes needed" note).
 
 ### 2 — Sync is a fail-closed dispatch precondition
@@ -139,7 +140,7 @@ echoes the work-repo token for whatever host a Dev fetches.
 - Success metric vs the incident workload: per-run forge transfer drops
   from ~300 MB × N Devs to delta fetches from one app IP.
 
-### 7 — Dagu 2.10.5 → 2.11.3 (severable rider)
+### 7 — Dagu 2.10.5 → 2.11.3 → 2.13.0 (severable rider)
 
 Audited: two breaking changes in range, neither applies (v2.11.0 CORS
 hardening — DevCake talks server-side, the SPA only links to Dagu's own
@@ -151,6 +152,12 @@ steps, human-task API — all business logic stays in the app; the DAG
 remains a dumb launcher. All three volume probes re-measured green on
 2.11.3; digest pinned. If live smoke ever implicates the bump, revert
 its commit alone — the mirror does not depend on it.
+
+2026-08-13 — 2.13.0: same posture, re-audited (2.12/2.13 notes: UI,
+webhook, documents, build-workflow — nothing on our six endpoints) and
+live-drilled per `13-deployment.md` §4; §4 above records the volume
+probes re-measured on 2.13.0. One real break (2.12 wiki store vs our RO
+dags bind) fixed in compose via `DAGU_WIKI_DIR`.
 
 ## Related
 

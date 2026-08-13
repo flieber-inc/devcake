@@ -70,7 +70,7 @@ services:
       start_period: 15s
 
   dagu:
-    image: ghcr.io/dagucloud/dagu:2.11.3@sha256:e5f06be4aed0b445028ec133f9c7d5b0c4275025d4b6db2bde41e918345d3901  # docs/13 §4 (ADR-0024 §7 rider)
+    image: ghcr.io/dagucloud/dagu:2.13.0@sha256:8f69fcff4e671433cb42b2f8fd5ae948aeeb0b842ecca29cae13537aed52f15d  # docs/13 §4 (ADR-0024 §7 rider)
     restart: unless-stopped
     ports: [ "127.0.0.1:8525:8080" ]       # loopback only — docs/14
     environment:                          # basic auth: API requires creds; health stays open
@@ -85,6 +85,13 @@ services:
       # must be host-absolute (up.sh derives it; `:?` fails loud, because an
       # EMPTY expansion would silently bind-mount junk at the host root)
       - DEVCAKE_WS_HOST=${DEVCAKE_WS_HOST:?run ./up.sh — it derives the workspace base}
+      # 2.13 compat (measured at the 2026-08-13 drill): the 2.12 wiki/
+      # documents store defaults to <dags_dir>/wiki and crash-loops the
+      # server against our deliberately-RO dags bind (docs/14 §5 — trusted
+      # launch code stays RO). No disable knob exists; point it at the
+      # writable state volume instead. The feature stays unused (all
+      # business logic in the app; the DAG is a dumb launcher, docs/13 §4).
+      - DAGU_WIKI_DIR=/var/lib/dagu/wiki
     # Stock /entrypoint.sh only runs /etc/custom-init.d/* when the file is +x.
     # The bind is :ro, so a non-executable host file is a silent skip → alpine
     # `addgroup` fails on this ubuntu image → `sudo: unknown group #$DOCKER_GID`

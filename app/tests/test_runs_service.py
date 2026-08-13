@@ -59,6 +59,10 @@ def test_rows_carry_token_scalars_and_read_time_estimate(tmp_path):
     assert grok["cost_usd"] is None
     assert grok["cost_usd_estimated"] == 5.60
     assert grok["model"] == "grok-4.5-build"
+    # a SUBSET of output — displayed separately (out-cell tooltip), never
+    # coalesced into another column and never priced on top
+    assert grok["reasoning_tokens"] == 20616
+    assert rows["A-3"]["reasoning_tokens"] is None
     claude = rows["A-2"]
     assert claude["cost_usd"] == 0.1234
     # mapped since the ADR-0033 claude-opus rate row (builtin-v2):
@@ -302,6 +306,7 @@ def test_csv_respects_filters_via_the_shared_pipe(tmp_path):
                               _run(2, pmo_ref="beta", tr=CLAUDE_TR)])
     rows = _csv_rows(runs_csv_response(store, CostInputs(), pmo_ref="beta"))
     assert len(rows) == 2
+    assert "reasoning_tokens" in rows[0]
     row = dict(zip(rows[0], rows[1]))
     assert row["pmo_ref"] == "beta" and row["mission_key"] == "A-2"
     assert row["created_at"] == (T0 + timedelta(hours=2)).isoformat()

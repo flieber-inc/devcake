@@ -66,6 +66,11 @@ def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     unmapped) — never the persisted stamp."""
     tr = run.token_report or {}
     out = {k: tr.get(k) for k in _TOKEN_SUMS}
+    # a SUBSET of output_tokens (grok reasoning_tokens / codex
+    # reasoning_output_tokens / claude thinking_tokens at 2.1.229+) —
+    # informational provenance, never priced on top and deliberately NOT
+    # coalesced into any other column (cache writes are input-side)
+    out["reasoning_tokens"] = tr.get("reasoning_tokens")
     out["model"] = tr.get("model")
     # the API row key stays `cost_usd` (SPA contract); the stored v1 key
     # names its provenance (ADR-0029)
@@ -281,7 +286,7 @@ _CSV_COLUMNS = ("run_id", "pmo_ref", "mission_key", "mission_type", "dev_type",
                 "error", "error_class", "attempt_counted", "verdict",
                 "continuations_used", "input_tokens", "output_tokens",
                 "cache_read_tokens", "cache_write_tokens", "total_tokens",
-                "model", "cost_usd", "cost_usd_estimated",
+                "reasoning_tokens", "model", "cost_usd", "cost_usd_estimated",
                 "cost_usd_effective", "rate_card_id", "pr_url")
 
 

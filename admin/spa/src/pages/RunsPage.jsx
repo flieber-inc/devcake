@@ -92,6 +92,16 @@ export default function RunsPage() {
   const tokenCellTitle = (r) =>
     runTotal(r) != null ? `run total: ${tokens(runTotal(r))} tokens` : undefined;
 
+  // thinking/reasoning tokens are a SUBSET of output (never priced on top)
+  // — surfaced as provenance on the out cell, deliberately NOT a 5th
+  // column and NOT coalesced into cache writes (those are input-side)
+  const outCellTitle = (r) => {
+    const base = tokenCellTitle(r);
+    if (r.reasoning_tokens == null) return base;
+    const note = `thinking: ${tokens(r.reasoning_tokens)} of output`;
+    return base ? `${base} · ${note}` : note;
+  };
+
   // effective displayed cost per row (ADR-0021): native first, estimates
   // fill gaps — flipped when the operator's Cost Inputs override is on
   const overrideOn = !!data.rate_card?.override_native;
@@ -192,7 +202,7 @@ export default function RunsPage() {
         {duration(r.started_at, r.ended_at)}
       </td>
       <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
-      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.output_tokens)}</td>
+      <td className="pr-3 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokens(r.output_tokens)}</td>
       <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
       <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
       <td className="pr-3 text-right text-xs tabular-nums">{costCell(r)}</td>

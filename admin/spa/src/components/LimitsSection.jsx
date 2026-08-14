@@ -143,7 +143,7 @@ export default function LimitsSection() {
             desc={Number(cfg.budgets?.claims_queue_max) === 0
               ? "0 — unlimited: every harvested lead is copied into .claims/."
               : `At most ${cfg.budgets?.claims_queue_max} .claims/*.json files per notebook; new leads are refused, never evicted.`}
-            help="The app copies each harvested discovery onto every memory notebook the run mounted. This caps how many unvalidated leads sit in .claims/ on one notebook. At the cap the new file is refused and health shows claims_queue_capped — old claims are never deleted to make room.">
+            help="When a run reports a discovery, DevCake copies it as a raw lead into every notebook that run consulted, where it queues for the Memory Curator's review. This caps how many unreviewed leads one notebook can hold. At the cap new leads are refused (with a warning on the Overview page) — existing leads are never deleted to make room; the Curator drains them.">
             <Input type="number" className="w-24" min={0}
               value={cfg.budgets?.claims_queue_max ?? 50}
               aria-label="Claims queue max"
@@ -271,13 +271,14 @@ export default function LimitsSection() {
       </Section>
 
       <Section id="limits-memory" title="Memory"
-        description="How notebooks mount and how notes become official.">
+        description="How team-memory notebooks reach workers, and how notes become official."
+        help="Team memory lives in notebooks — ordinary git repositories holding curated notes. Bind one to a board (PMO page) or to a worker profile (Dev Types) and every run gets it mounted read-only. Raw leads that runs leave behind queue inside the notebook until the Memory Curator (Scheduled Tasks) reviews them into notes via pull requests.">
         <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
           <SettingRow label="Context sourcing strict"
             desc={cfg.context_sourcing_strict !== false
-              ? "ON — a missing or stale memory or skill-source card blocks the run (provisioning failure, not a dumb-agent failure)."
-              : "OFF — runs proceed on cached content. A last-good mirror is used and marked stale; a never-synced card is omitted and the run continues."}
-            help="Covers skill-source cards and memory notebooks. Work, reference, and blocker extras stay on their existing rules. Off means a consumer run can proceed without the latest notes.">
+              ? "ON — a run that cannot fetch its notebooks or skills does not start (recommended)."
+              : "OFF — runs proceed on cached copies; a notebook that was never fetched is skipped."}
+            help="Notebooks and external skills are context a run depends on. Strict (ON) means a run whose context cannot be fetched — the forge is down, a token was revoked — waits instead of silently running without it; DevCake records it as an infrastructure problem, never as the worker's failure. OFF trades that guarantee for availability: the run proceeds on the last cached copy (marked stale) or without the missing piece.">
             <Toggle on={cfg.context_sourcing_strict !== false}
               label="Context sourcing strict"
               onClick={() => setField("cfg.context_sourcing_strict",
@@ -285,8 +286,8 @@ export default function LimitsSection() {
           </SettingRow>
           <SettingRow label="Memory auto-merge"
             desc={cfg.memory_auto_merge
-              ? "ON — two models in a row can make a note official."
-              : "OFF — a person merges every note (recommended)."}
+              ? "ON — an AI-written note becomes official once another AI approves it."
+              : "OFF — a person merges every note into the notebook (recommended)."}
             help={MEMORY_AUTO_MERGE_COPY}>
             <Toggle on={!!cfg.memory_auto_merge}
               label="Memory auto-merge"

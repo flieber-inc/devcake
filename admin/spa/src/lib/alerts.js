@@ -95,8 +95,8 @@ export default function deriveAlerts(health) {
       id: `memory-curator-no-board:${card}`,
       severity: "warning",
       dismissable: true,
-      title: `Memory Curator has no board for ${card}`,
-      body: "Create a PMO instance whose only work repository is that notebook.",
+      title: `Notebook ${card} has no Curator board`,
+      body: "Leads are queuing but no worker reviews them. Create a PMO instance whose ONLY repository is this notebook — the Memory Curator then files curation tickets there.",
     });
   }
   for (const card of health.claims_queue_capped || []) {
@@ -104,8 +104,8 @@ export default function deriveAlerts(health) {
       id: `claims-queue-capped:${card}`,
       severity: "warning",
       dismissable: true,
-      title: `Claims queue capped on ${card}`,
-      body: "New leads are being refused. Drain .claims/ — the app will not evict old files to make room.",
+      title: `Memory notebook ${card} is full of unreviewed leads`,
+      body: "New leads are being refused. Run the Memory Curator (Configuration → Scheduled Tasks) to review the queue, or raise the cap under Limits → Counting budgets — old leads are never deleted automatically.",
     });
   }
 

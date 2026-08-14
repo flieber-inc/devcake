@@ -129,7 +129,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             set("skills_required", skills_required);
           }} />
         <RepoChips label="Memory (domain-bound)"
-          help="Notebooks this Dev Type consults under /workspace/memory/<card>/ on every stage, including Steward. Combined with the board's Memory list. The work repo is never remounted here."
+          help="Team-memory notebooks every run of THIS worker profile consults, on any board — mounted read-only next to its work repository. Combined with whatever the board itself binds (PMO page). Use it for expertise that follows the worker rather than the project."
           all={repoCards} selected={d.memory_repos || []}
           excluded={[]}
           excludedNote=""

@@ -34,6 +34,11 @@ await withPage(async (page) => {
       (await page.locator('#scheduled-tasks p:has-text("every Curator board")').count()) >= 1);
   check("Steward Dev Type select moved in",
     (await page.locator('select[aria-label="Relations Steward Dev Type"]').count()) === 1);
+  check("both built-ins expose full-width instruction editors",
+    (await page.locator('textarea[aria-label="Relations Steward instructions"]').count()) === 1 &&
+    (hasCrons
+      ? (await page.locator('textarea[aria-label="Memory Curator instructions"]').count()) === 1
+      : true));
   check("Run now buttons carry the saved-settings badge",
     (await page.locator('#scheduled-tasks span:has-text("runs with saved settings")').count()) === (hasCrons ? 2 : 1));
 

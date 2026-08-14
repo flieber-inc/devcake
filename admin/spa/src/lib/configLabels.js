@@ -55,6 +55,10 @@ const EXACT = {
   "cfg.steward.dev_type": { group: "Scheduled Tasks", label: "Relations Steward · Dev Type", format: orEmpty },
   "cfg.steward.interval_minutes": { group: "Scheduled Tasks", label: "Relations Steward · Interval (minutes)" },
   "cfg.steward.enabled": { group: "Scheduled Tasks", label: "Relations Steward · Periodic service", format: onOff },
+  "cfg.steward.playbook_template": {
+    group: "Scheduled Tasks", label: "Relations Steward · Instructions",
+    format: orEmpty, multiline: true,
+  },
   "cfg.context_sourcing_strict": {
     group: "Limits", label: "Context sourcing strict", format: onOff,
   },

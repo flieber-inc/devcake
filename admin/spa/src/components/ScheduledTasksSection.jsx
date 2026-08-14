@@ -27,6 +27,29 @@ function DegradedPill() {
   );
 }
 
+// Full-width editor for a task's instruction text — a multi-line prompt
+// squeezed into a SettingRow's right column is unusable (founder,
+// 2026-08-14); the big field gets the whole card width instead.
+function PromptBlock({ label, desc, help, aria, value, onChange }) {
+  return (
+    <div className="pt-3">
+      <div className="mb-2">
+        <span className="text-sm font-medium">
+          {label}
+          {help && <Help text={help} />}
+        </span>
+        {desc && (
+          <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+            {desc}
+          </p>
+        )}
+      </div>
+      <Textarea className="min-h-40 w-full text-sm"
+        aria-label={aria} value={value} onChange={onChange} />
+    </div>
+  );
+}
+
 function RunMsg({ msg }) {
   if (!msg) return null;
   return (
@@ -97,7 +120,7 @@ function StewardPanel() {
   return (
     <BuiltinTaskPanel
       name="Relations Steward"
-      help="A Dev tasked strictly with mapping missing 'blocked by' relations between existing missions (it reads every open mission's title and description head). Proposed relations are validated by the app and appear in your PMO; delete a relation there to undo it."
+      help="An AI worker that reads every open ticket's title and the start of its description, then proposes 'this one should wait for that one' orderings. It never edits code or tickets directly — DevCake validates each proposal and records it in your project tool, where deleting the relation undoes it."
       statusLine={rm.enabled
         ? `on · every ${rm.interval_minutes} min`
         : "off — manual only"}
@@ -117,8 +140,8 @@ function StewardPanel() {
         </p>
       )}>
       <SettingRow label="Dev Type"
-        desc="Which Dev Type runs the steward."
-        help="The seeded steward (a cheap, fast model) is the default — ordering judgment from titles and description heads doesn't need a heavyweight.">
+        desc="Which AI worker profile runs this task."
+        help="Dev Types are the worker profiles you define under Configuration → Dev Types (which model, which coding harness). Ordering judgment from ticket titles doesn't need a heavyweight — the built-in 'steward' profile uses a cheap, fast model.">
         <Select className="w-44" value={rm.dev_type || ""}
           aria-label="Relations Steward Dev Type"
           onChange={(e) => {
@@ -131,7 +154,7 @@ function StewardPanel() {
       </SettingRow>
       <SettingRow label="Interval"
         desc="Minutes between automatic passes."
-        help="Cadence of the periodic service when enabled. The first automatic run happens one interval after the app starts; use Run now for an immediate pass.">
+        help="How often the schedule fires when it is on. The first automatic pass happens one interval after DevCake starts; use Run now for an immediate one.">
         <Input type="number" className="w-24" min="1" value={rm.interval_minutes}
           aria-label="Relations Steward interval (minutes)"
           onChange={(e) => setField("cfg.steward.interval_minutes", Number(e.target.value))}
@@ -149,6 +172,13 @@ function StewardPanel() {
             setField("cfg.steward.enabled", !rm.enabled);
           }} />
       </SettingRow>
+      <PromptBlock label="Instructions"
+        desc="What the steward is told to do. {mission_table} is replaced with your open tickets."
+        help="This is the task's playbook, and you may rewrite it. Where you place {mission_table}, DevCake inserts the live list of open tickets (leave it out and the list is appended at the end). The technical output format the worker must produce is managed by DevCake and always appended after your text, so edits here cannot break the pipeline."
+        aria="Relations Steward instructions"
+        value={rm.playbook_template ?? ""}
+        onChange={(e) => setField("cfg.steward.playbook_template",
+          e.target.value)} />
     </BuiltinTaskPanel>
   );
 }
@@ -185,7 +215,7 @@ function CuratorPanel() {
   return (
     <BuiltinTaskPanel
       name="Memory Curator"
-      help="Fires one ticket per Curator board — a PMO whose only work repo is a memory notebook — always at the EXECUTE stage. Automatic fires skip a board whose claims queue is empty; Run now never skips. Proposed notes arrive as pull requests on the notebook. The parallel curation pipelines share the global concurrency cap."
+      help="Team memory in DevCake is a notebook — a git repository of curated notes that workers consult while they work. As runs finish, DevCake copies their raw discoveries into the notebook's incoming queue. This task assigns a worker to review that queue: promote a lead into a proper note or discard it, always through a pull request you can inspect. It fires one ticket per Curator board (a board you set up whose only repository is a notebook). Automatic fires skip empty queues; Run now never skips — handy for a tidy-up pass."
       statusLine={(row.enabled
         ? `on · every ${row.interval_minutes} min`
         : "off — manual only") + " · every Curator board"}
@@ -219,13 +249,6 @@ function CuratorPanel() {
           )}
         </>
       }>
-      <SettingRow label="Periodic service"
-        desc={row.enabled
-          ? "ON — drains queues on the interval."
-          : "OFF — manual only (default)."}>
-        <Toggle on={!!row.enabled} label="Memory Curator periodic service"
-          onClick={() => setField(`cfg.crons.${idx}.enabled`, !row.enabled)} />
-      </SettingRow>
       <SettingRow label="Interval"
         desc="Minutes between automatic fires.">
         <Input type="number" className="w-24" min={1}
@@ -236,15 +259,20 @@ function CuratorPanel() {
           onBlur={(e) => setField(`cfg.crons.${idx}.interval_minutes`,
             Math.max(1, Number(e.target.value) || 60))} />
       </SettingRow>
-      <SettingRow label="Ticket text"
-        desc="Becomes the curation ticket's description."
-        help="The Dev on the Curator board receives this text as its mission. {timestamp} is interpolated; no other substitutions.">
-        <Textarea className="min-h-24 w-72 text-sm"
-          aria-label="Memory Curator ticket text"
-          value={row.description_template || ""}
-          onChange={(e) => setField(`cfg.crons.${idx}.description_template`,
-            e.target.value)} />
+      <SettingRow label="Periodic service"
+        desc={row.enabled
+          ? "ON — drains queues on the interval."
+          : "OFF — manual only (default)."}>
+        <Toggle on={!!row.enabled} label="Memory Curator periodic service"
+          onClick={() => setField(`cfg.crons.${idx}.enabled`, !row.enabled)} />
       </SettingRow>
+      <PromptBlock label="Instructions"
+        desc="Becomes the description of each curation ticket. {timestamp} is replaced with the fire time."
+        help="The worker on the Curator board receives this text as its assignment — edit it to change how incoming leads are reviewed and filed into notes. {timestamp} is the only substitution."
+        aria="Memory Curator instructions"
+        value={row.description_template || ""}
+        onChange={(e) => setField(`cfg.crons.${idx}.description_template`,
+          e.target.value)} />
     </BuiltinTaskPanel>
   );
 }
@@ -274,7 +302,8 @@ function TaskEditor({ idx, onClose }) {
             onChange={(e) => set("name", e.target.value)} />
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Field label="Target board">
+          <Field label="Target board"
+            help="Which project board receives the ticket.">
             <Select value={row.pmo || ""}
               aria-label={`Task ${row.id} target board`}
               onChange={(e) => set("pmo", e.target.value)}>
@@ -284,7 +313,8 @@ function TaskEditor({ idx, onClose }) {
               ))}
             </Select>
           </Field>
-          <Field label="Entry stage">
+          <Field label="Entry stage"
+            help="Where DevCake's pipeline starts for this ticket. EXECUTE is right for most chores — a worker just does the task. ONBOARD lets DevCake triage and plan it first; REVIEW only checks existing work.">
             <Select value={row.entry_stage || "EXECUTE"}
               aria-label={`Task ${row.id} entry stage`}
               onChange={(e) => set("entry_stage", e.target.value)}>
@@ -300,7 +330,7 @@ function TaskEditor({ idx, onClose }) {
           </Field>
         </div>
         <Field label="Ticket text"
-          hint="Becomes the ticket description. {timestamp} is interpolated; no other substitutions.">
+          hint="Becomes the ticket description — write it like an assignment for a colleague. {timestamp} is replaced with the fire time.">
           <Textarea className="min-h-28 text-sm"
             aria-label={`Task ${row.id} ticket text`}
             value={row.description_template || ""}
@@ -385,15 +415,15 @@ export default function ScheduledTasksSection() {
   return (
     <>
       <Section id="scheduled-tasks" title="DevCake tasks"
-        description="Built-in maintenance — always present, never deletable. Schedules ride the draft; Run now is instant."
-        help="Relations Steward maps missing 'blocked by' relations between open missions. Memory Curator drains harvested .claims/ leads into notebook notes, firing one ticket per Curator board. Run now uses the last saved settings, so it is disabled while a task has unsaved edits.">
+        description="Two built-in maintenance workers on a schedule. Settings wait for Save; Run now fires immediately."
+        help="DevCake ships two housekeeping tasks. The Relations Steward reads your open tickets and proposes which should wait for which — the orderings land in your project tool, where you can delete any it got wrong. The Memory Curator tidies team memory: it turns raw leads that runs left behind into reviewed notes, one pull request at a time. Both are permanent and off by default. Run now uses the last SAVED settings, so it is disabled while a task has unsaved edits.">
         <StewardPanel />
         <CuratorPanel />
       </Section>
 
       <Section id="scheduled-tasks-custom" title="Custom tasks"
-        description="Each task creates one labeled ticket on its board — on a schedule, or on demand with Run now."
-        help="One verb: create a ticket at the task's entry stage using its ticket text ({timestamp} is interpolated; no other substitutions). A fire is skipped while the previous ticket is still in flight or the board's intake is paused. Row edits — including new and deleted tasks — ride the draft until Save; Run now is instant and fires the saved row."
+        description="Your own recurring chores — each fires one ticket onto a board, on a schedule or on demand."
+        help="A scheduled task does exactly one thing: on its schedule (or when you press Run now) it creates a ticket on the board you chose, with your text as the description; DevCake's workers pick it up from the stage you chose. Use it for recurring chores — nightly triage, weekly dependency bumps, periodic reports. A fire is skipped while the previous ticket is still open or the board's intake is paused. Edits, new tasks and deletions wait for Save; Run now fires the saved row immediately."
         actions={<ImmediateBadge text="Run now is instant" />}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[40rem] text-left text-sm">

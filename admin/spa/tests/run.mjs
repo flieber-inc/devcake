@@ -24,6 +24,7 @@ const SUITES = [
   "req_seq.mjs",
   "mission_identity.mjs",
   "settings.mjs",
+  "tasks.mjs",
   "hierarchy.mjs",
   "devtypes.mjs",
   "assignments.mjs",

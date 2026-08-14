@@ -334,9 +334,9 @@ def test_csv_neutralizes_formula_cells_but_not_numbers(tmp_path):
 
 def test_csv_cell_neutralizes_every_cwe1236_lead_in():
     """Audit find: the first cut guarded only =/+/-/@ — Excel and Sheets
-    also strip a leading TAB/CR/space before evaluating what follows."""
+    also strip a leading TAB/CR/LF/space before evaluating what follows."""
     from devcake.api.runs_service import _csv_cell
-    for lead in ("=", "+", "-", "@", "\t", "\r", " "):
+    for lead in ("=", "+", "-", "@", "\t", "\r", "\n", " "):
         cell = lead + 'HYPERLINK("http://evil")'
         assert _csv_cell(cell) == "'" + cell, repr(lead)
     assert _csv_cell(-3.5) == -3.5           # negative numbers stay numeric

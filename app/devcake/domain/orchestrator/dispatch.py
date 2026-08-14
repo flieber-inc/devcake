@@ -17,6 +17,13 @@ from ...harness import HARNESSES, missing_referenced_secret_env
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType, assignment_for
+
+MEMORY_MOUNT_SENTENCE = (
+    "Memory notebooks are mounted read-only under /workspace/memory/.\n"
+    "Everything outside the .claims/ folder is a curated note. Files\n"
+    "under .claims/ are unvalidated leads copied from runs. Leads may\n"
+    "contradict notes. Check both. Trust neither blindly."
+)
 from .. import failure_taxonomy
 from ..model import (Activity, LABEL_FAILED, Mission, MissionRef, MissionType,
                      STAGE_LABELS, derive)
@@ -408,19 +415,56 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # ruling, as a set-union in the ONE gate, never a second gate. They are
     # deliberately NOT in sourced_repo_names: skills feed the payload, they
     # are never cloned into /workspace.
-    from ..repo_sourcing import skill_source_cards
+    from ..repo_sourcing import (classify_context_failures, memory_mount_names,
+                                 skill_source_cards, unresolvable_memory_cards)
     needed = mgr.repo_cache.needed_for(
         work_repo=repo_name, mission_type=mtype.value,
-        instance=mgr.instance, blocker_entries=blocker_entries)
-    needed = sorted(set(needed) | skill_source_cards(dev_type.skills))
+        instance=mgr.instance, blocker_entries=blocker_entries,
+        dev_type=dev_type, config=mgr.config)
+    skill_cards = skill_source_cards(dev_type.skills)
+    needed = sorted(set(needed) | skill_cards)
     ok, why = await mgr.repo_cache.ensure_fresh(needed)
+    memory_cards = set(memory_mount_names(
+        instance=mgr.instance, dev_type=dev_type, repo_ref=repo_name))
+    stale_cards: set[str] = set()
+    omit_cards: set[str] = set()
     if not ok:
-        mgr.blocked_reasons[live.pmo_id] = (
-            "repository mirror not fresh — dispatch deferred: "
-            + "; ".join(f"{n}: {r}" for n, r in sorted(why.items())))
-        log.warning("dispatch of %s deferred — %s", live.key,
-                    mgr.blocked_reasons[live.pmo_id])
-        return None
+        defer, stale_cards, omit_cards = classify_context_failures(
+            why, context_cards=memory_cards | skill_cards,
+            strict=mgr.config.context_sourcing_strict,
+            has_mirror=lambda n: mgr.repo_cache.mirror_path(n).is_dir())
+        if defer:
+            # provisioning family (ADR-0025) — no container, no attempt.
+            # Never DEV_BAD_OUTPUT; never a Dev-type breaker.
+            mgr.blocked_reasons[live.pmo_id] = (
+                "repository mirror not fresh — dispatch deferred: "
+                + "; ".join(f"{n}: {r}" for n, r in sorted(defer.items())))
+            log.warning("dispatch of %s deferred — %s", live.key,
+                        mgr.blocked_reasons[live.pmo_id])
+            return None
+    # PLAN_MEMORY §3.5, second half: the mirror gate only sees
+    # mirror-eligible names — dangling bindings and uncredentialed
+    # internal-forge notebooks must resolve here or the run would start
+    # memoryless while its prompt claims the mount.
+    bad_memory = unresolvable_memory_cards(
+        mgr.config, memory_cards - omit_cards,
+        mirror_eligible=mgr.repo_cache.eligible)
+    if bad_memory:
+        if mgr.config.context_sourcing_strict:
+            mgr.blocked_reasons[live.pmo_id] = (
+                "memory mounts unavailable — dispatch deferred: "
+                + "; ".join(f"{n}: {r}" for n, r in sorted(bad_memory.items())))
+            log.warning("dispatch of %s deferred — %s", live.key,
+                        mgr.blocked_reasons[live.pmo_id])
+            return None
+        omit_cards |= set(bad_memory)
+    needed = [n for n in needed if n not in omit_cards]
+    if stale_cards:
+        log.warning("dispatch of %s proceeding on stale cache for %s",
+                    live.key, ", ".join(sorted(stale_cards)))
+    if omit_cards:
+        log.warning("dispatch of %s omitting unavailable context %s",
+                    live.key, ", ".join(sorted(omit_cards)))
 
     # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
     # repo records what this Dev actually receives. NEVER gates dispatch.
@@ -507,11 +551,15 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             mirror_repos=list(needed),
             feed_watermark=dict(feed_watermark),
         )
+        run.memory_mounts = await _memory_mount_snapshot(
+            mgr, dev_type, repo_name, stale=stale_cards, omit=omit_cards)
         run.spec_skills = await _skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
         run.skill_repo_heads = await _skill_repo_heads(mgr, dev_type)
-        run.spec_prompt = append_required_skills(
-            prompt, dev_type.skills_required, run.spec_skills)
+        run.spec_prompt = append_memory_sentence(
+            append_required_skills(
+                prompt, dev_type.skills_required, run.spec_skills),
+            run.memory_mounts)
         run.branch = mission_branch(mgr.instance_name, mission.key)
         run.stage_label_at_dispatch = stage_of(live)
         run.mission_pmo_id = mission.pmo_id
@@ -574,6 +622,53 @@ async def _skill_repo_heads(mgr, dev_type: DevType) -> dict[str, str]:
         if sha:
             heads[card] = sha
     return heads
+
+
+def append_memory_sentence(prompt: str, memory_mounts: list) -> str:
+    """PLAN_MEMORY D1: factual mount sentence, only when the run has
+    consumer memory mounts. Curator runs (empty snapshot) get none."""
+    if not memory_mounts:
+        return prompt
+    return f"{prompt}\n\n{MEMORY_MOUNT_SENTENCE}"
+
+
+async def _memory_mount_snapshot(mgr, dev_type, repo_ref: str, *,
+                                 stale: set[str], omit: set[str]) -> list[dict]:
+    """Dispatch-time provenance for each consumer memory mount (§3.6)."""
+    from ..repo_sourcing import memory_mount_names
+    inst_set = set(mgr.instance.memory_repos or [])
+    dt_set = set(getattr(dev_type, "memory_repos", None) or [])
+    out: list[dict] = []
+    for card in memory_mount_names(
+            instance=mgr.instance, dev_type=dev_type, repo_ref=repo_ref):
+        if card in omit:
+            continue
+        if card in inst_set and card in dt_set:
+            binding = "both"
+        elif card in inst_set:
+            binding = "board"
+        else:
+            binding = "domain"
+        sha = await mgr.repo_cache.tree_head(card) or ""
+        if not sha:
+            # mirror-ineligible card (bundled Gitea): no mirror to read —
+            # ask the forge directly so §3.6 provenance isn't blank in the
+            # pilot's default deployment (review N1)
+            remote_head = getattr(mgr.repo_cache, "remote_head", None)
+            if callable(remote_head):
+                sha = (await remote_head(card)) or ""
+        out.append({
+            "card": card,
+            "binding": binding,
+            "commit": sha,
+            "stale_cache": card in stale,
+            # snapshot the failure class at dispatch (PLAN_MEMORY §3.5):
+            # the provision step makes a strict mount's clone failure fatal,
+            # and a mid-flight toggle must not change a live run's contract
+            "strict": bool(mgr.config.context_sourcing_strict),
+            "path": f"/workspace/memory/{card}",
+        })
+    return out
 
 
 def append_required_skills(prompt: str, skills_required: list[str],
@@ -693,6 +788,9 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     extras = _extra_repos_for(mgr, run)   # references reach zero-repo
     if extras:                            # missions too
         payload["extra_repos"] = extras
+    memory = _memory_repos_for(mgr, run)
+    if memory:
+        payload["memory_repos"] = memory
     if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
         payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
     # ADR-0014 D4: the activity-repo RO clone spec (secret half — the token
@@ -744,15 +842,24 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
     Tokens that resolve empty are omitted (a clone with no credential is
     never useful and would only burn a non-fatal failure note).
     """
-    from ..repo_sourcing import blocker_read_credential, sourced_repo_names
+    from ..repo_sourcing import (blocker_read_credential, memory_mount_names,
+                                 sourced_repo_names)
     blocker_names = {(bw.get("repo_ref") or "")
                      for bw in run.blocker_work or []}
+    dt = (mgr.dev_types.get(run.dev_type)
+          if getattr(mgr, "dev_types", None) else None)
+    memory_names = {m.get("card") for m in (run.memory_mounts or [])
+                    if m.get("card")}
+    if not memory_names:
+        memory_names = set(memory_mount_names(
+            instance=mgr.instance, dev_type=dt, repo_ref=run.repo_ref))
     extras = []
     for name in sourced_repo_names(
             work_repo=run.repo_ref, mission_type=run.mission_type,
-            instance=mgr.instance, blocker_entries=run.blocker_work):
-        if name == run.repo_ref:
-            continue                     # the primary clone rides separately
+            instance=mgr.instance, blocker_entries=run.blocker_work,
+            dev_type=dt, config=getattr(mgr, "config", None)):
+        if name == run.repo_ref or name in memory_names:
+            continue                     # primary / consumer memory dest
         if name in blocker_names:
             cred = blocker_read_credential(mgr, name)
             if cred is not None and cred[0] == "internal":
@@ -786,6 +893,46 @@ def _extra_repos_for(mgr, run: Run) -> list[dict]:
                        "clone_user": forge_x.descriptor.clone_user,
                        "token": token})
     return extras
+
+
+def _memory_repos_for(mgr, run: Run) -> list[dict]:
+    """Consumer memory clones for the runspec — dest is
+    /workspace/memory/<card>/, decided by the dispatch snapshot only."""
+    out: list[dict] = []
+    for mount in run.memory_mounts or []:
+        name = mount.get("card") or ""
+        inst_x = mgr.forges.instance(name)
+        forge_x = mgr.forges.get(name)
+        if inst_x is None or forge_x is None:
+            # unreachable in the normal flow — dispatch resolved every
+            # snapshot card (§3.5); only a mid-flight card deletion lands
+            # here, and the snapshot doctrine says serve what remains
+            log.warning("memory mount %r vanished after dispatch — "
+                        "omitted from the runspec of %s", name, run.run_id)
+            continue
+        entry: dict = {"name": name, "url": inst_x.url,
+                       "clone_user": forge_x.descriptor.clone_user}
+        if mount.get("strict"):
+            entry["strict"] = True
+        if _mirrored(mgr, run, name):
+            entry["mirror_path"] = str(mgr.repo_cache.mirror_path(name))
+        else:
+            token = inst_x.token_ro or inst_x.token
+            if not token:
+                continue
+            if not inst_x.token_ro:
+                # PLAN_MEMORY §4 promises read-only tokens on memory
+                # mounts; the write token is used TRANSIENTLY for the
+                # provision clone only (askpass env, never persisted in
+                # the clone) — store a token_ro to close even that window
+                log.warning("memory mount %r has no token_ro — provision "
+                            "clone will use the write token transiently",
+                            name)
+            entry["token"] = token
+        if mount.get("stale_cache"):
+            entry["stale_cache"] = True
+        out.append(entry)
+    return out
 
 
 def _credential_spec(mgr, dev_type: DevType) -> tuple[dict[str, str], list[dict]]:

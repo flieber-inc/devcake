@@ -31,8 +31,9 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ..adapters.claims_writer import make_claims_writer
 from ..adapters.dagu import DaguExecutor
-from ..adapters.files import RunLogStore, RunStore
+from ..adapters.files import CronStore, RunLogStore, RunStore
 from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import security
@@ -45,6 +46,7 @@ from ..domain.forge_runtime import ForgeRuntime
 from ..domain.repo_mirror import RepoCache
 from ..domain.workspaces import WorkspaceStore
 from ..domain.runs import RunManager
+from ..domain.cron_service import CronService
 from ..domain.skills import SkillService
 from .health import reset_health_caches
 from .poll import PollRuntime
@@ -85,6 +87,8 @@ class Services:
     blocker_locator: Optional[BlockerLocator] = None
     finalizer: Optional[FinalizerRouter] = None
     oauth_mgr: Optional[OAuthManager] = None
+    cron: Any = None
+    claims: Any = None
 
     def build_managers(self) -> None:
         """(Re)build the manager set IN PLACE to match config.pmos: existing
@@ -123,6 +127,7 @@ class Services:
                 # breakers-injection precedent)
                 self.managers[name].discovery_notify = \
                     self.stewards[name].kick_discovery
+            self.managers[name].claims = self.claims
 
     def managers_in_config_order(self) -> list[MissionManager]:
         return [self.managers[i.name] for i in self.config.pmos
@@ -221,7 +226,10 @@ def build_services() -> Services:
         managers={}, stewards={}, forge_runtime=forge_runtime,
         repo_cache=repo_cache, internal_forge=internal_forge,
         skill_service=SkillService(internal_forge, repo_cache=repo_cache,
-                                   config=config))
+                                   config=config),
+        claims=make_claims_writer(config, internal_forge))
+    s.cron = CronService(config, s.managers, claims=s.claims,
+                         dev_types=s.dev_types, store=CronStore())
 
     # The poll machinery (ownership claims, cycle driver, missions cache,
     # loop) lives in api/poll.py — constructed ONCE with live references and
@@ -233,7 +241,8 @@ def build_services() -> Services:
         forge_runtime=s.forge_runtime,
         refresh_forge_health=s.refresh_forge_health,
         managers_in_config_order=s.managers_in_config_order,
-        backend_degraded=s.shared_backend_degraded, repo_cache=s.repo_cache)
+        backend_degraded=s.shared_backend_degraded, repo_cache=s.repo_cache,
+        cron=s.cron)
     poll_rt = s.poll_rt
     # Deployment-wide blocker resolution (ADR-0009 amendment): ONE locator
     # over the LIVE managers dict, so a native blocked_by edge to a peer

@@ -169,7 +169,7 @@ def test_discovery_and_relations_share_one_lock(tmp_path):
         await gate.wait()
         return object()
 
-    async def rel_dispatch(dt, missions_):
+    async def rel_dispatch(dt, missions_, **kw):
         rel.append("r")
         return object()
 

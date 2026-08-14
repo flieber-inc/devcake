@@ -148,7 +148,7 @@ After `max_attempts` (default 3) counted failures of the **same step** (mission 
 3. Stop scheduling the Mission (derivation row 8).
 4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event count toward the next give-up (advisory local state — `10-persistence.md` §5).
 
-The counter is **seq-independent** (failed runs post transcripts and advance `seq`, so per-seq counting could retry forever) and resets at the newest of its anchors. Two are policy-independent: the give-up watermark above, and **any finished run for the mission** (a later step completing implies the failing step was resolved, possibly by hand). What comments do is the operator's `attempt_reset` policy (ADR-0026, Limits & Traffic):
+The counter is **seq-independent** (failed runs post transcripts and advance `seq`, so per-seq counting could retry forever) and resets at the newest of its anchors. Two are policy-independent: the give-up watermark above, and **any finished run for the mission** (a later step completing implies the failing step was resolved, possibly by hand). What comments do is the operator's `attempt_reset` policy (ADR-0026, Limits):
 
 - **`label-ops` (default, strict):** only a non-DevCake comment containing the literal `DEVCAKE-RETRY` resets — the deliberate human gesture. Ordinary comments, human or bot, do not: the pre-0026 rule let any chatty integration (a Linear↔GitHub sync bot, a CI notifier) keep the counter at 1 forever, defeating `max_attempts` entirely.
 - **`any-comment`:** the pre-0026 rule — any non-sentinel-signed comment is an intervention and grants fresh attempts. For boards with no integration traffic.
@@ -218,7 +218,7 @@ predicates key on `error_class == "DEV_HARNESS_FAULT"` — failures that still
 produce text or tools but no `result.json` land on `DEV_BAD_OUTPUT` (exit 11):
 counted, unexcused, unthrottled. Operator-visible cases: codex inventing tool
 syntax as prose (`08-harness-templates.md` §8); grok silent non-progress halt
-(§2b). `brake_on_bad_output` (Limits & Traffic, default **off**) widens the
+(§2b). `brake_on_bad_output` (Limits, default **off**) widens the
 evidence set of every arm to `{DEV_HARNESS_FAULT, DEV_BAD_OUTPUT}`, so a
 fleet-wide bad-output cascade — including MIXED evidence, some containers
 exiting 15 and others 11 — reads as one backend event: correlated exit-11

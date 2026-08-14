@@ -678,6 +678,10 @@ the v0.2 trailer list).
   batteries; live GitLab MRs are field-reported (Field evidence above),
   but the two-forges-in-one-instance demo and the token-spending golden
   paths remain **⏳**.
+- **Memory + Cron (PLAN_MEMORY)**: schema, sourcing, claims conveyor,
+  merge guard, CronService, and admin surfaces are in the tree. **Not
+  called shipped** until the throwaway-box A/B has receipts
+  (`PLAN_MEMORY.md` §14–§15). **⏳**
 - **Fresh-`/data` operator-drill re-run** after the post-v0.2 surface growth
   (profiles, skills, Gitea Issues, per-PMO intake, default board, composer,
   freshness, handoff): **⏳** non-gating trailer. Dual-team production and

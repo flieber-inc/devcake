@@ -220,13 +220,20 @@ class MissionManager:
     async def sweeps(self, missions: list[Mission]):
         return await sweeps.sweeps(self, missions)
 
-    async def dispatch_steward(self, dev_type: DevType, missions: list[Mission]):
-        return await steward.dispatch_steward(self, dev_type, missions)
+    async def dispatch_steward(self, dev_type: DevType, missions: list[Mission],
+                               context_stale=frozenset(),
+                               context_omit=frozenset()):
+        return await steward.dispatch_steward(
+            self, dev_type, missions,
+            context_stale=context_stale, context_omit=context_omit)
 
     async def dispatch_steward_discovery(self, dev_type: DevType, family,
-                                         pending: dict):
+                                         pending: dict,
+                                         context_stale=frozenset(),
+                                         context_omit=frozenset()):
         return await steward.dispatch_steward_discovery(
-            self, dev_type, family, pending)
+            self, dev_type, family, pending,
+            context_stale=context_stale, context_omit=context_omit)
 
     async def finalize_steward(self, run: Run, payload: dict):
         return await steward.finalize_steward(self, run, payload)

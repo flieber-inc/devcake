@@ -66,11 +66,12 @@ dispatcher: it owns the page header, the page-level error line (`pageErr`,
 passed as `setPageErr` to sections that report async failures), the mobile
 section chip row, and the scroll-to-top on section change — then switches on
 the route to exactly ONE section view (sections, in order: `dev-types`,
-`mission-types`, `skills`, `prompts`, `limits`, `profiles`; the `limits` view
-renders `LimitsSection` + `TrafficSection` — the merged Limits & Traffic
-view). Every section is a component in `src/components/`: `DevTypesSection`,
-`SkillsSection`, `AssignmentsSection`, `PromptsSection`, `ProfilesSection`,
-`LimitsSection`, `TrafficSection`. `PmoSection` renders on its own page
+`mission-types`, `skills`, `prompts`, `limits`, `scheduled-tasks`,
+`profiles`). Every section is a component in `src/components/`:
+`DevTypesSection`, `SkillsSection`, `AssignmentsSection`, `PromptsSection`,
+`ProfilesSection`, `LimitsSection`, `ScheduledTasksSection` (DevCake tasks —
+Relations Steward + Memory Curator — over Custom tasks; the card split is
+the built-in-vs-operator segregation). `PmoSection` renders on its own page
 (`#/pmo`, Adapters item) — same shared draft, not a Config section. Most
 sections pull the shared draft themselves via
 `useSharedDraft()` (ConfigDraftContext); `PromptsSection` is the exception —

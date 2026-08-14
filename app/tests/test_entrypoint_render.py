@@ -674,6 +674,31 @@ def test_clone_extra_repos_per_repo_token_and_nonfatal():
     assert any("gamma: clone failed" in n for n in notes)
 
 
+def test_clone_memory_repos_uses_card_name_not_url_slug(tmp_path):
+    """PLAN_MEMORY §3.1: dest is /workspace/memory/<card>/, sibling of
+    repo/ and activity/ — never repo/memory/ and never the forge slug."""
+    calls = []
+
+    class R:
+        def __init__(self, rc=0, stderr=""):
+            self.returncode, self.stderr = rc, stderr
+
+    def runner(cmd, capture_output, text, env):
+        calls.append(cmd)
+        return R(0)
+
+    dest = tmp_path / "memory"
+    notes = ep.clone_memory_repos(
+        [{"name": "nb", "url": "https://github.com/acme/notebook.git",
+          "clone_user": "x-access-token", "mirror_path": "/mirrors/nb.git"}],
+        dest, runner=runner)
+    assert dest.is_dir()
+    clone_cmd = calls[0]
+    assert clone_cmd[-1] == str(dest / "nb")
+    assert "notebook" not in clone_cmd[-1]
+    assert any("memory/nb" in n for n in notes)
+
+
 # ── skill install (runspec skills → the harness's registry skills_dir) ───────
 
 def _b64(data: bytes) -> str:
@@ -824,3 +849,30 @@ def test_materialize_activity_falls_back_on_failure_or_empty_repo(tmp_path):
     dest3 = tmp_path / "a3"                         # old app: no spec key
     ep.materialize_activity({}, dest3, rr)
     assert (dest3 / "ACTIVITY.md").read_text() == "# feed"
+
+
+def test_memory_clone_failures_collected_and_strict_is_fatal(tmp_path):
+    """PLAN_MEMORY §3.5: a strict memory mount's clone failure must be a
+    provision failure; open-mode entries stay a printed note."""
+
+    class R:
+        def __init__(self, rc=0, stderr=""):
+            self.returncode, self.stderr = rc, stderr
+
+    def runner(cmd, capture_output, text, env):
+        return R(1, "fatal: repository not found")
+
+    fails = []
+    notes = ep.clone_memory_repos(
+        [{"name": "nb", "url": "http://gitea:3000/devcake-repos/nb.git",
+          "clone_user": "svc", "token": "t", "strict": True}],
+        tmp_path / "memory", runner=runner, failures=fails)
+    assert any("clone failed" in n for n in notes)
+    assert fails[0]["name"] == "nb" and fails[0]["entry"]["strict"]
+    assert fails[0]["mirror"] is False
+    assert ep.strict_memory_failure(fails) is fails[0]
+    # open mode: same failure, no strict stamp → provision continues
+    assert ep.strict_memory_failure(
+        [{"name": "nb", "detail": "x", "mirror": False, "entry": {}}]) is None
+    # extras keep their non-fatal contract (no failures list at all)
+    assert "extra" not in [f.get("label") for f in fails]

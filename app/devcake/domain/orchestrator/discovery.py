@@ -55,6 +55,10 @@ def valid_entries(result: dict) -> list[dict]:
                 break
             vals[f] = v.strip()[:DISCOVERY_FIELD_MAX]
         else:
+            about = e.get("about")
+            if isinstance(about, list):
+                vals["about"] = [a.strip() for a in about
+                                 if isinstance(a, str) and a.strip()]
             out.append(vals)
     return out
 
@@ -162,6 +166,17 @@ async def harvest(mgr, run: Run, result: dict) -> int:
                 notify()
             except Exception:  # noqa: BLE001 — never let the trigger touch the close
                 log.debug("discovery notify failed", exc_info=True)
+        # PLAN_MEMORY §5.2: copy each entry onto every snapshotted
+        # notebook. Failures stay inside append_from_harvest.
+        writer = getattr(mgr, "claims", None)
+        if writer is not None and entries:
+            from .. import claims as claims_mod
+            try:
+                await claims_mod.append_from_harvest(
+                    writer, mgr.config, run, entries,
+                    audit=mgr._audit)
+            except Exception:  # noqa: BLE001 — conveyor must never wedge harvest
+                log.exception("claims conveyor failed for %s", run.run_id)
 
     try:
         await mgr._checkpoint(run, steps.DISCOVERY_POST, _post)

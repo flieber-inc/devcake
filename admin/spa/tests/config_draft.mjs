@@ -77,10 +77,11 @@ check("rename inside a same-length list still wins over fresh", () => {
   assert.equal(getIn(next, "cfg.pmos.0.name"), "renamed");
 });
 
-check("scaffolds carry every server-model field (pmo: 10, repo: 8)", () => {
+check("scaffolds carry every server-model field (pmo: 11, repo: 8)", () => {
   assert.deepEqual(Object.keys(newPmoCard("x", "linear")).sort(),
     ["api_base", "assignments", "discovery_routing", "intake_paused",
-     "managed", "name", "reference_repos", "repos", "system", "team_key"]);
+     "managed", "memory_repos", "name", "reference_repos", "repos",
+     "system", "team_key"]);
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
      "default_branch", "forge", "merge_retry_window_minutes", "name",
@@ -122,7 +123,58 @@ check("explicit container-limit zeros (= unlimited) save cleanly", () => {
     { container_limits: { memory_mb: 0, cpus: 0, pids: 0 } });
   assert.deepEqual(draftErrors(d), {});
 });
+// ── scheduled tasks (cfg.crons) — draftErrors mirrors config.py ──────────
+const CURATOR = {
+  id: "memory-curator", name: "Memory Curator", enabled: false,
+  interval_minutes: 60, pmo: null, entry_stage: "EXECUTE",
+  description_template: "drain", reserved: true,
+};
+const TASK = {
+  id: "nightly", name: "N", enabled: false, interval_minutes: 60,
+  pmo: "board", entry_stage: "EXECUTE", description_template: "x",
+  reserved: false,
+};
+const cronSnap = (crons) => snap([BOARD], { crons });
 
+check("valid custom task + reserved row produce no cron errors", () => {
+  const errs = draftErrors(cronSnap([CURATOR, TASK]));
+  assert.ok(!Object.keys(errs).some((k) => k.startsWith("cfg.crons")));
+});
+
+check("bad task id slug blocks Save inline", () => {
+  const errs = draftErrors(cronSnap([CURATOR, { ...TASK, id: "Bad Id!" }]));
+  assert.match(errs["cfg.crons.1.id"] || "", /invalid/);
+});
+
+check("duplicate task ids block Save (memory-curator included)", () => {
+  const errs = draftErrors(
+    cronSnap([CURATOR, { ...TASK, id: "memory-curator" }]));
+  assert.match(errs["cfg.crons.1.id"] || "", /duplicate/);
+});
+
+check("custom task without a target board blocks Save", () => {
+  const errs = draftErrors(cronSnap([CURATOR, { ...TASK, pmo: "" }]));
+  assert.match(errs["cfg.crons.1.pmo"] || "", /target board/);
+});
+
+check("custom task targeting a removed board blocks Save", () => {
+  const errs = draftErrors(cronSnap([CURATOR, { ...TASK, pmo: "gone" }]));
+  assert.match(errs["cfg.crons.1.pmo"] || "", /removed board/);
+});
+
+check("reserved row is exempt from the target check", () => {
+  const errs = draftErrors(cronSnap([CURATOR]));
+  assert.equal(errs["cfg.crons.0.pmo"], undefined);
+});
+
+check("cron rows label under Scheduled Tasks in the save review", () => {
+  const meta = metaFor("cfg.crons.1.description_template");
+  assert.equal(meta.group, "Scheduled Tasks");
+  assert.match(meta.label, /Ticket text/);
+  assert.equal(metaFor("cfg.crons").group, "Scheduled Tasks");
+  assert.equal(metaFor("cfg.steward.enabled").group, "Scheduled Tasks");
+  assert.equal(metaFor("cfg.memory_auto_merge").group, "Limits");
+});
 if (failed) {
   console.error(`config_draft: ${failed} check(s) failed`);
   process.exit(1);

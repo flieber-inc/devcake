@@ -11,6 +11,12 @@ export const INSTANCE_NAME_RE = /^[a-z][a-z0-9]{0,11}$/;
 export const INSTANCE_NAME_RULE =
   "a lowercase letter, then lowercase letters/digits, 12 max (no spaces, no hyphens)";
 
+// Client-side mirror of the server's cron-id rule (config.py _CRON_ID_RE):
+// scheduled-task ids validate BEFORE Save, same contract as names above.
+export const CRON_ID_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+export const CRON_ID_RULE =
+  "a lowercase letter, then lowercase letters/digits/hyphen/underscore, 32 max";
+
 
 export function draftErrors(draft) {
   const errs = {};
@@ -76,7 +82,8 @@ export function draftErrors(draft) {
   const repoNames = new Set((draft.cfg.repos || []).map((r) => r.name));
   (draft.cfg.pmos || []).forEach((p, i) => {
     for (const [field, label] of
-         [["repos", "work repo"], ["reference_repos", "reference repo"]]) {
+         [["repos", "work repo"], ["reference_repos", "reference repo"],
+          ["memory_repos", "memory notebook"]]) {
       const missing = (p[field] || []).filter((n) => !repoNames.has(n));
       if (missing.length)
         errs[`cfg.pmos.${i}.${field}`] =
@@ -89,6 +96,27 @@ export function draftErrors(draft) {
         errs[`cfg.pmos.${i}.assignments.${mt}.dev_type`] =
           `PMO "${p.name}": ${mt} override is assigned to "${a.dev_type}", which no longer exists`;
     }
+  });
+  // scheduled tasks (cfg.crons) — mirrors the server validators (config.py
+  // CronJob + _crons_valid): a bad row blocks Save inline, not as a 422.
+  // The reserved memory-curator row is exempt from the target check (the
+  // server canonicalizes pmo=None / entry_stage=EXECUTE on it).
+  const pmoNames = new Set((draft.cfg.pmos || []).map((p) => p.name));
+  const seenCron = new Set();
+  (draft.cfg.crons || []).forEach((c, i) => {
+    if (!CRON_ID_RE.test(c.id || ""))
+      errs[`cfg.crons.${i}.id`] =
+        `scheduled task id ${c.id ? `"${c.id}"` : "(empty)"} is invalid — ${CRON_ID_RULE}`;
+    else if (seenCron.has(c.id))
+      errs[`cfg.crons.${i}.id`] = `duplicate scheduled task id "${c.id}"`;
+    seenCron.add(c.id);
+    if (c.id === "memory-curator" || c.reserved) return;
+    if (!(c.pmo || "").trim())
+      errs[`cfg.crons.${i}.pmo`] =
+        `scheduled task "${c.id}": pick a target board`;
+    else if (!pmoNames.has(c.pmo))
+      errs[`cfg.crons.${i}.pmo`] =
+        `scheduled task "${c.id}" targets removed board "${c.pmo}"`;
   });
   return errs;
 }

@@ -81,6 +81,34 @@ export default function deriveAlerts(health) {
   // adapters no PMO selects (2026-08-01 incident): each one is rebuilt on
   // every config/secret reload and probed on every full forge sweep — pure
   // latency cost. Count in the title so a changed count resurfaces the alert.
+  for (const id of health.cron_degraded || []) {
+    alerts.push({
+      id: `cron-degraded:${id}`,
+      severity: "warning",
+      dismissable: true,
+      title: `Scheduled task ${id} is degraded`,
+      body: "The last 3 automatic fires failed. Automatic fires are paused; Run now still works, and a successful fire resumes the schedule.",
+    });
+  }
+  for (const card of health.memory_curator_no_board || []) {
+    alerts.push({
+      id: `memory-curator-no-board:${card}`,
+      severity: "warning",
+      dismissable: true,
+      title: `Notebook ${card} has no Curator board`,
+      body: "Leads are queuing but no worker reviews them. Create a PMO instance whose ONLY repository is this notebook — the Memory Curator then files curation tickets there.",
+    });
+  }
+  for (const card of health.claims_queue_capped || []) {
+    alerts.push({
+      id: `claims-queue-capped:${card}`,
+      severity: "warning",
+      dismissable: true,
+      title: `Memory notebook ${card} is full of unreviewed leads`,
+      body: "New leads are being refused. Run the Memory Curator (Configuration → Scheduled Tasks) to review the queue, or raise the cap under Limits → Counting budgets — old leads are never deleted automatically.",
+    });
+  }
+
   const unused = health.unused_repos;
   if (unused && unused.count > 0) {
     const shown = unused.names.slice(0, 8).join(", ");

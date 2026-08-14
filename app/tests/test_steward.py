@@ -165,7 +165,7 @@ def make_service(tmp_path, enabled=True, dev_type="steward"):
     mgr = make_mgr(tmp_path, MapPMO([]))
     dispatched = []
 
-    async def fake_dispatch(dt, missions):
+    async def fake_dispatch(dt, missions, **kw):
         dispatched.append(dt.name)
         return Run(run_id=f"TEAM-{len(dispatched)}-STEWARD-AAAAAA",
                    mission_key="TEAM", mission_type="STEWARD",
@@ -202,7 +202,7 @@ def test_maybe_dispatch_respects_interval_and_toggle(tmp_path):
 def test_watermark_not_advanced_when_dispatch_returns_none(tmp_path):
     svc, mgr, dispatched = make_service(tmp_path)
 
-    async def skip(dt, missions):
+    async def skip(dt, missions, **kw):
         dispatched.append("skip")
         return None
 
@@ -217,7 +217,7 @@ def test_watermark_not_advanced_when_dispatch_returns_none(tmp_path):
 def test_watermark_not_advanced_on_dispatch_failure(tmp_path):
     svc, mgr, dispatched = make_service(tmp_path)
 
-    async def boom(dt, missions):
+    async def boom(dt, missions, **kw):
         raise RuntimeError("dagu down")
 
     mgr.dispatch_steward = boom
@@ -568,7 +568,7 @@ def test_dispatch_steward_discovery_stamps_duty_and_excludes_primary(
     _src_run(mgr.runs.store, mgr, n_entries=1)
     captured = {}
 
-    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None):
+    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None, context_stale=frozenset(), context_omit=frozenset()):
         captured.update(duty=duty, prompt=prompt_text, bw=blocker_work)
         return "RUN-SENTINEL"
     monkeypatch.setattr(steward, "_launch_steward", fake_launch)
@@ -604,7 +604,7 @@ def test_relations_dispatch_still_builds_the_relations_prompt(
     mgr = make_mgr(tmp_path, MapPMO([a]))
     captured = {}
 
-    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None):
+    async def fake_launch(mgr_, dt_, *, duty, prompt_text, blocker_work=None, batches=None, context_stale=frozenset(), context_omit=frozenset()):
         captured.update(duty=duty, prompt=prompt_text, bw=blocker_work)
         return "R"
     monkeypatch.setattr(steward, "_launch_steward", fake_launch)

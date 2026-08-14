@@ -105,7 +105,8 @@ class RepoCache:
         return name in self.forges.instances and name not in self.forges.internal
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
-                   blocker_entries: list[dict]) -> list[str]:
+                   blocker_entries: list[dict],
+                   dev_type=None, config=None) -> list[str]:
         """The mirror-eligible repo set one run must have fresh (docs/07 §5a).
         Sourcing comes from THE shared rule (repo_sourcing.sourced_repo_names,
         ADR-0034) — the gate and the runspec structurally cannot disagree
@@ -114,7 +115,8 @@ class RepoCache:
         from .repo_sourcing import sourced_repo_names
         return [name for name in sourced_repo_names(
                     work_repo=work_repo, mission_type=mission_type,
-                    instance=instance, blocker_entries=blocker_entries)
+                    instance=instance, blocker_entries=blocker_entries,
+                    dev_type=dev_type, config=config)
                 if self.eligible(name)]
 
     # ── the gate primitive ───────────────────────────────────────────────────
@@ -249,6 +251,27 @@ class RepoCache:
         self.ledger[name] = st
         self._synced_mono[name] = self._monotonic()
         return st
+
+    async def remote_head(self, name: str) -> str | None:
+        """Best-effort branch head straight from the forge — provenance for
+        mirror-INELIGIBLE cards (bundled Gitea), whose `tree_head` has no
+        mirror to read (PLAN_MEMORY §3.6). One `ls-remote` with the card's
+        read token via askpass; None on any failure."""
+        inst = self.forges.instance(name)
+        forge = self.forges.get(name)
+        if inst is None or forge is None or not (inst.url or "").strip():
+            return None
+        url = inst.url.strip()
+        clone_user = getattr(forge.descriptor, "clone_user", "") or ""
+        if clone_user and "://" in url \
+                and "@" not in url.split("://", 1)[1].split("/", 1)[0]:
+            url = url.replace("://", f"://{clone_user}@", 1)
+        ref = (f"refs/heads/{inst.default_branch}"
+               if inst.default_branch else "HEAD")
+        r = await self.git(["ls-remote", url, ref], env=self._git_env(inst))
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return None
+        return r.stdout.split()[0]
 
     def _git_env(self, inst) -> dict[str, str]:
         token = inst.token_ro or inst.token   # read-preferred, same rule as
@@ -410,6 +433,9 @@ class NullRepoCache:
         return True, {}
 
     async def tree_head(self, name: str) -> str | None:
+        return None
+
+    async def remote_head(self, name: str) -> str | None:
         return None
 
     async def read_skill_tree(self, name, subdir, sha) -> dict:

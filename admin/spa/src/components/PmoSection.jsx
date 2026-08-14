@@ -344,42 +344,65 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     refKey={`pmo:${inst.name}:api_key`} paste
                     locked={!pmoNameLocked(inst.name, idx)} />
                 )}
-                <RepoChips label="Repositories"
-                  help="The ORDERED set of repos this instance's missions may target — only repos with a stored Access token qualify (work needs push). Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
-                  all={cfg.repos} selected={inst.repos || []}
-                  excluded={inst.reference_repos || []}
-                  excludedNote="reference repo"
-                  unavailable={cfg.repos.map((r) => r.name).filter((n) => !repoHasToken[n])}
-                  unavailableNote="no Access token stored — usable only as a reference repo"
-                  firstBadge=" · default"
-                  onChange={(next) => setField(`cfg.pmos.${idx}.repos`, next)} />
-                {dr.errors[`cfg.pmos.${idx}.repos`] && (
-                  <p className="text-xs text-red-600 dark:text-red-400">
-                    ✗ {dr.errors[`cfg.pmos.${idx}.repos`]}
-                  </p>
-                )}
-                <RepoChips label="Reference repos"
-                  help="Read-only consultation material (docs sources, style guides) cloned into EVERY stage's workspace alongside the mission's repository. Never a work target — markers naming one gate. Multiple supported."
-                  all={cfg.repos} selected={inst.reference_repos || []}
-                  excluded={inst.repos || []}
-                  excludedNote="work repo"
-                  onChange={(next) => setField(`cfg.pmos.${idx}.reference_repos`, next)} />
-                {dr.errors[`cfg.pmos.${idx}.reference_repos`] && (
-                  <p className="text-xs text-red-600 dark:text-red-400">
-                    ✗ {dr.errors[`cfg.pmos.${idx}.reference_repos`]}
-                  </p>
-                )}
-                <SettingRow label="Discovery routing"
-                  desc={inst.discovery_routing === false
-                    ? "OFF — discoveries are still harvested and attached; nothing is routed across the family until re-enabled."
-                    : "ON — a steward run routes harvested discoveries across each mission family (drafted; applies on Save)."}
-                  help="ADR-0033: Devs may report structured discoveries (finding / evidence / scope); they are always memorialized on the source mission. With routing on, a Discovery Steward selects which family missions should see each finding and delivers it as an advisory comment (leads, not truths). Budgets on Limits & Traffic bound the volume; turning this off leaves pending discoveries visible on the board (DEVCAKE-DISCOVERY label) for a later toggle-on.">
-                  <Toggle on={inst.discovery_routing !== false}
-                    label={`Discovery routing for ${inst.name}`}
-                    onClick={() => setField(`cfg.pmos.${idx}.discovery_routing`,
-                      inst.discovery_routing === false)} />
-                </SettingRow>
               </div>
+              {/* repo pickers: their OWN grid with fixed slots, so the
+                  controls sit in the same place on every card no matter
+                  how many system-specific fields the grid above holds
+                  (founder, 2026-08-14: buttons must not wander) */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div>
+                  <RepoChips label="Repositories"
+                    help="The repositories this board's tickets may change. Only repos with a stored Access token qualify (writing needs push access). The first selected is the default; a ticket picks another listed repo with a `devcake-repo:<name>` line in its description. With none selected, DevCake creates a private repo per ticket on the bundled forge."
+                    all={cfg.repos} selected={inst.repos || []}
+                    excluded={[...(inst.reference_repos || []), ...(inst.memory_repos || [])]}
+                    excludedNote="reference or memory notebook"
+                    unavailable={cfg.repos.map((r) => r.name).filter((n) => !repoHasToken[n])}
+                    unavailableNote="no Access token stored — usable only as a reference repo"
+                    firstBadge=" · default"
+                    onChange={(next) => setField(`cfg.pmos.${idx}.repos`, next)} />
+                  {dr.errors[`cfg.pmos.${idx}.repos`] && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      ✗ {dr.errors[`cfg.pmos.${idx}.repos`]}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <RepoChips label="Reference repos"
+                    help="Read-only background material — docs, style guides, related code — cloned next to the work repository in every run. Workers can read it, never change it."
+                    all={cfg.repos} selected={inst.reference_repos || []}
+                    excluded={[...(inst.repos || []), ...(inst.memory_repos || [])]}
+                    excludedNote="work repo or memory notebook"
+                    onChange={(next) => setField(`cfg.pmos.${idx}.reference_repos`, next)} />
+                  {dr.errors[`cfg.pmos.${idx}.reference_repos`] && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      ✗ {dr.errors[`cfg.pmos.${idx}.reference_repos`]}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <RepoChips label="Memory (board-bound)"
+                    help="Team-memory notebooks this board's workers consult while working — mounted read-only in every run. A notebook is an ordinary repository card that holds curated notes; it is never a work target here (a separate Curator board maintains it — see Configuration → Scheduled Tasks)."
+                    all={cfg.repos} selected={inst.memory_repos || []}
+                    excluded={[...(inst.repos || []), ...(inst.reference_repos || [])]}
+                    excludedNote="work or reference repo"
+                    onChange={(next) => setField(`cfg.pmos.${idx}.memory_repos`, next)} />
+                  {dr.errors[`cfg.pmos.${idx}.memory_repos`] && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      ✗ {dr.errors[`cfg.pmos.${idx}.memory_repos`]}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <SettingRow label="Discovery routing"
+                desc={inst.discovery_routing === false
+                  ? "OFF — discoveries are still recorded on their source ticket; nothing is shared across related tickets until re-enabled."
+                  : "ON — a steward run shares each worker discovery with the related tickets that should see it (applies on Save)."}
+                help="Workers may report discoveries — surprising findings with evidence. Each is always recorded on the ticket that produced it. With routing on, a steward run decides which RELATED tickets should also see the finding and delivers it there as an advisory comment (leads, not truths). Turning this off leaves pending discoveries visible on the board under the DEVCAKE-DISCOVERY label for a later toggle-on.">
+                <Toggle on={inst.discovery_routing !== false}
+                  label={`Discovery routing for ${inst.name}`}
+                  onClick={() => setField(`cfg.pmos.${idx}.discovery_routing`,
+                    inst.discovery_routing === false)} />
+              </SettingRow>
               <div className="flex flex-wrap items-center gap-3">
                 <Button kind="ghost" onClick={() => testPmo(inst.name)}>Test connection</Button>
                 <ImmediateBadge text="tests saved values" />

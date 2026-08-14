@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { Section } from "./Card.jsx";
 import { Input, Select } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Toggle from "./Toggle.jsx";
+import { ConfirmDialog } from "./Modal.jsx";
+import { MEMORY_AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 const CONTINUATION_POLICIES = ["auto", "resume-only", "fresh-only", "off"];
@@ -24,10 +26,12 @@ const ATTEMPT_RESET_DESC = {
 // fields, same route (#/config/limits); the informational "Service
 // auto-restart" row is gone (it was a knob-shaped non-knob — the restart
 // policy is compose's, documented in docs/13).
+
 export default function LimitsSection() {
   const { dr } = useSharedDraft();
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
+  const [mergeOnConfirm, setMergeOnConfirm] = useState(false);
 
   return (
     <>
@@ -47,6 +51,25 @@ export default function LimitsSection() {
             <Input type="number" className="w-24" value={cfg.dev_timeout_minutes}
               aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Decomposition depth"
+            desc="How many generations of Mission breakdown ONBOARD may create."
+            help="Each ONBOARD pass may split a high-complexity Mission into sub-missions. At 1, a Mission created by a breakdown is never broken down again. At 2 (default), it may be broken down once more — a Project's missions can each split again. Unlimited removes the ceiling entirely and leaves the choice to the ONBOARD Dev on every pass: a runaway Dev could keep splitting work indefinitely.">
+            <Select className="w-40" value={String(cfg.max_decomposition_depth)}
+              aria-label="Decomposition depth limit"
+              onChange={(e) => setField("cfg.max_decomposition_depth", Number(e.target.value))}>
+              {![0, 1, 2].includes(cfg.max_decomposition_depth) && (
+                // an API/YAML-set depth outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={String(cfg.max_decomposition_depth)}>
+                  {cfg.max_decomposition_depth} levels (set via API)
+                </option>
+              )}
+              <option value="1">1 level</option>
+              <option value="2">2 levels</option>
+              <option value="0">Unlimited</option>
+            </Select>
           </SettingRow>
         </div>
       </Section>
@@ -115,6 +138,16 @@ export default function LimitsSection() {
               value={cfg.budgets?.discoveries_per_run ?? 3}
               aria-label="Discoveries per run"
               onChange={(e) => setField("cfg.budgets.discoveries_per_run", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Claims queue max"
+            desc={Number(cfg.budgets?.claims_queue_max) === 0
+              ? "0 — unlimited: every harvested lead is copied into .claims/."
+              : `At most ${cfg.budgets?.claims_queue_max} .claims/*.json files per notebook; new leads are refused, never evicted.`}
+            help="When a run reports a discovery, DevCake copies it as a raw lead into every notebook that run consulted, where it queues for the Memory Curator's review. This caps how many unreviewed leads one notebook can hold. At the cap new leads are refused (with a warning on the Overview page) — existing leads are never deleted to make room; the Curator drains them.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.claims_queue_max ?? 50}
+              aria-label="Claims queue max"
+              onChange={(e) => setField("cfg.budgets.claims_queue_max", Number(e.target.value))} />
           </SettingRow>
         </div>
       </Section>
@@ -236,6 +269,48 @@ export default function LimitsSection() {
           </SettingRow>
         </div>
       </Section>
+
+      <Section id="limits-memory" title="Memory"
+        description="How team-memory notebooks reach workers, and how notes become official."
+        help="Team memory lives in notebooks — ordinary git repositories holding curated notes. Bind one to a board (PMO page) or to a worker profile (Dev Types) and every run gets it mounted read-only. Raw leads that runs leave behind queue inside the notebook until the Memory Curator (Scheduled Tasks) reviews them into notes via pull requests.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Context sourcing strict"
+            desc={cfg.context_sourcing_strict !== false
+              ? "ON — a run that cannot fetch its notebooks or skills does not start (recommended)."
+              : "OFF — runs proceed on cached copies; a notebook that was never fetched is skipped."}
+            help="Notebooks and external skills are context a run depends on. Strict (ON) means a run whose context cannot be fetched — the forge is down, a token was revoked — waits instead of silently running without it; DevCake records it as an infrastructure problem, never as the worker's failure. OFF trades that guarantee for availability: the run proceeds on the last cached copy (marked stale) or without the missing piece.">
+            <Toggle on={cfg.context_sourcing_strict !== false}
+              label="Context sourcing strict"
+              onClick={() => setField("cfg.context_sourcing_strict",
+                cfg.context_sourcing_strict === false)} />
+          </SettingRow>
+          <SettingRow label="Memory auto-merge"
+            desc={cfg.memory_auto_merge
+              ? "ON — an AI-written note becomes official once another AI approves it."
+              : "OFF — a person merges every note into the notebook (recommended)."}
+            help={MEMORY_AUTO_MERGE_COPY}>
+            <Toggle on={!!cfg.memory_auto_merge}
+              label="Memory auto-merge"
+              onClick={() => {
+                if (cfg.memory_auto_merge) {
+                  setField("cfg.memory_auto_merge", false);
+                } else {
+                  setMergeOnConfirm(true);
+                }
+              }} />
+          </SettingRow>
+        </div>
+      </Section>
+      <ConfirmDialog open={mergeOnConfirm}
+        title="Turn memory auto-merge on?"
+        body={MEMORY_AUTO_MERGE_COPY}
+        confirmLabel="Turn on — two models, not a person"
+        confirmKind="primary"
+        onCancel={() => setMergeOnConfirm(false)}
+        onConfirm={() => {
+          setField("cfg.memory_auto_merge", true);
+          setMergeOnConfirm(false);
+        }} />
     </>
   );
 }

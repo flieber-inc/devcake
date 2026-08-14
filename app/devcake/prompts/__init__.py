@@ -438,27 +438,17 @@ def review_prompt(identifying_prompt: str, mission: Mission,
             + HUMAN_COMMENTS_NOTE + TURN_DISCIPLINE)
 
 
-STEWARD_PLAYBOOK = """
-## Your current mission type: RELATIONS STEWARD
-
-Below is every open mission DevCake manages in this team. Your ONLY job is to
-identify ordering dependencies that are not yet mapped: pairs where one mission
-clearly consumes another's output and therefore must not start before it
-finishes (implementation after design/documentation, migration after schema
-change, consumer after API). Do not modify any code — the repository clone is
-context only.
-
-Be conservative: when unsure, propose nothing. Each mission lists its existing
-blockers — only propose edges that are missing. Never invent mission keys.
-
-### The missions (key · status · existing blockers · title + description head)
-{mission_table}
-
+# The relations steward's RESULT CONTRACT — code-owned on purpose: the
+# instruction half above it is the operator-editable
+# `config.Steward.playbook_template` (founder ask 2026-08-14, reversing
+# the 2026-07-14 un-templated ruling), and appending the contract here
+# means no edit can break the machine half of the run.
+STEWARD_RESULT_CONTRACT = """
 ### Required output — /workspace/out/result.json
-{{"schema_version": 1, "outcome": "stewarded",
-  "edges": [{{"blocker": "<key that must finish first>",
-             "blocked": "<key that must wait>"}}, ...],
-  "summary": "<one paragraph: what you mapped and why — or why nothing>"}}
+{"schema_version": 1, "outcome": "stewarded",
+  "edges": [{"blocker": "<key that must finish first>",
+             "blocked": "<key that must wait>"}, ...],
+  "summary": "<one paragraph: what you mapped and why — or why nothing>"}
 An empty "edges" list is a valid and common result.
 """
 
@@ -511,9 +501,10 @@ Empty "routes" and "declined" lists are valid results.
 
 
 def steward_discovery_prompt(identifying_prompt: str, package: str) -> str:
-    """The discovery flavor's prompt — code-owned and un-templated like
-    STEWARD_PLAYBOOK (founder decision 2026-07-14); str.format, so the
-    literal JSON braces above are doubled."""
+    """The discovery flavor's prompt — code-owned and un-templated
+    (founder decision 2026-07-14; the RELATIONS instruction half became
+    operator-editable 2026-08-14, the discovery flavor deliberately did
+    not); str.format, so the literal JSON braces above are doubled."""
     return (identifying_prompt + "\n"
             + STEWARD_DISCOVERY_PLAYBOOK.format(package=package)
             + TURN_DISCIPLINE)
@@ -532,7 +523,9 @@ DEFAULT_PLAYBOOKS: dict[str, str] = {
 }
 
 
-def steward_prompt(identifying_prompt: str, missions: list[Mission]) -> str:
+def steward_prompt(identifying_prompt: str, missions: list[Mission],
+                   template: str | None = None) -> str:
+    from ..config import STEWARD_RELATIONS_TEMPLATE
     id_to_key = {m.pmo_id: m.key for m in missions}
     rows = []
     for m in missions[:STEWARD_MISSION_CAP]:
@@ -541,7 +534,15 @@ def steward_prompt(identifying_prompt: str, missions: list[Mission]) -> str:
         rows.append(f"- **{m.key}** · {m.status} · blocked by: {blockers}\n"
                     f"  {m.title} — {head or '(no description)'}")
     table = "\n".join(rows) or "(no open missions)"
-    # STEWARD stays un-templated (founder decision 2026-07-14) — TURN_DISCIPLINE
-    # is a code-owned epilogue like the others, not a template
-    return (identifying_prompt + "\n"
-            + STEWARD_PLAYBOOK.format(mission_table=table) + TURN_DISCIPLINE)
+    # The instruction half is the operator's (config.Steward
+    # .playbook_template, founder ask 2026-08-14 — supersedes the
+    # 2026-07-14 un-templated ruling); the result contract and
+    # TURN_DISCIPLINE remain code-owned epilogues. `.replace` (never
+    # str.format) so operator text may contain braces freely, and a
+    # template without the placeholder still receives the table.
+    body = (template or "").strip() or STEWARD_RELATIONS_TEMPLATE
+    if "{mission_table}" not in body:
+        body += "\n\n### The missions\n{mission_table}"
+    return (identifying_prompt + "\n\n"
+            + body.replace("{mission_table}", table)
+            + "\n" + STEWARD_RESULT_CONTRACT + TURN_DISCIPLINE)

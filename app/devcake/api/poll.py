@@ -68,12 +68,13 @@ class PollRuntime:
                  stewards: dict, store, forge_runtime, refresh_forge_health,
                  managers_in_config_order, owner_store: OwnerStore | None = None,
                  backend_degraded: dict[str, str] | None = None,
-                 repo_cache=None):
+                 repo_cache=None, cron=None):
         self.config = config
         # ADR-0024: warm-up owner. None only in tests (loop() guards).
         self.repo_cache = repo_cache
         self.managers = managers                    # live reference
         self.stewards = stewards                      # live reference
+        self.cron = cron
         self.store = store
         self.forge_runtime = forge_runtime
         self.refresh_forge_health = refresh_forge_health
@@ -318,6 +319,11 @@ class PollRuntime:
                         row["blocked_by"] = [key_of.get(b, b)
                                              for b in row["blocked_by"]]
                 self.missions_cache[:] = cache_rows
+                if self.cron is not None:
+                    try:
+                        await self.cron.maybe_fire()
+                    except Exception:  # noqa: BLE001 — cron must not kill the poll cycle
+                        log.exception("cron.maybe_fire failed")
                 span.set_attribute("devcake.missions.seen", seen)
                 span.set_attribute("devcake.missions.candidates", cand)
                 span.set_attribute("devcake.missions.dispatched", disp)

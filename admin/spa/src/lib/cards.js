@@ -12,6 +12,7 @@ export const newPmoCard = (name, system) => ({
   api_base: null,
   repos: [],
   reference_repos: [],
+  memory_repos: [],
   intake_paused: false,
   discovery_routing: true,
   assignments: {},

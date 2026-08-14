@@ -10,6 +10,7 @@ import re
 from fastapi import HTTPException
 
 from ..config import _INSTANCE_NAME_RE
+from ..ports.internal_forge import ACTIVITY_PREFIX
 from ..domain.skills import SkillStoreError
 
 
@@ -27,15 +28,16 @@ async def list_internal_repos(*, internal_forge):
 
 
 async def create_internal_repo(body: dict, *, internal_forge):
-    """Operator repo on the bundled Gitea (item 4): created in the separate
-    devcake-repos org (never listed or swept by the per-mission surface
-    above); the card's token set is minted and stored under repo:{name}, so
-    saving a repo card with this name + the returned clone_url completes
-    the setup."""
+    """Operator repo on the bundled Gitea (item 4 / PLAN_MEMORY §8).
+    Never `activity-*`. Empty notebook — no README, no `.claims/`
+    (the conveyor creates `.claims/` on first harvest)."""
     if internal_forge is None:
         raise HTTPException(503, "internal forge is disabled "
                                  "(GITEA_ADMIN_PASSWORD unset)")
     name = str(body.get("name") or "")
+    if name.startswith(ACTIVITY_PREFIX) or name.startswith("activity-"):
+        raise HTTPException(422, "name must not start with activity- "
+                                 "(those repos are swept on Clear)")
     if not re.fullmatch(_INSTANCE_NAME_RE, name):
         raise HTTPException(422, f"name must match {_INSTANCE_NAME_RE} "
                                  f"(it doubles as the repo card name)")

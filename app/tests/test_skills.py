@@ -91,6 +91,17 @@ def test_required_skills_block_lists_shipped_required_only():
     assert out.index("`tdd`") < out.index("`pr-hygiene`")
 
 
+def test_memory_sentence_only_when_mounts_exist():
+    from devcake.domain.orchestrator.dispatch import (
+        MEMORY_MOUNT_SENTENCE, append_memory_sentence)
+    assert append_memory_sentence("base", []) == "base"
+    out = append_memory_sentence("base", [{"card": "nb"}])
+    assert out == f"base\n\n{MEMORY_MOUNT_SENTENCE}"
+    assert "/workspace/memory/" in out
+    assert ".claims/" in out
+    assert "CONTESTED" not in out and "CLAIMS.json" not in out
+
+
 # ── frontmatter (lenient: broken YAML must never raise) ──────────────────────
 
 def test_parse_frontmatter_good():

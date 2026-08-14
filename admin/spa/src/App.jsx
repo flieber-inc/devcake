@@ -25,6 +25,8 @@ const REDIRECTS = [
   [/^#\/config\/repository$/, "#/repos", { page: "repos", section: null }],
   [/^#\/config\/pmo$/, "#/pmo", { page: "pmo", section: null }],
   [/^#\/config\/traffic$/, "#/config/limits", { page: "config", section: "limits" }],
+  [/^#\/config\/cron$/, "#/config/scheduled-tasks",
+    { page: "config", section: "scheduled-tasks" }],
   [/^#\/config\/assignments$/, "#/config/mission-types",
     { page: "config", section: "mission-types" }],
   [/^#\/logs$/, "#/consoles", { page: "consoles", section: null }],

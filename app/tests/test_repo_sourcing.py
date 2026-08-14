@@ -9,11 +9,16 @@ from types import SimpleNamespace
 import pytest
 
 from devcake.domain.repo_sourcing import (blocker_read_credential,
+                                          classify_context_failures,
+                                          inherited_curator_extras,
+                                          memory_mount_names,
                                           sourced_repo_names)
 
 
-def _inst(repos=(), refs=()):
-    return SimpleNamespace(repos=list(repos), reference_repos=list(refs))
+def _inst(repos=(), refs=(), memory=(), name="eng"):
+    return SimpleNamespace(name=name, repos=list(repos),
+                           reference_repos=list(refs),
+                           memory_repos=list(memory))
 
 
 @pytest.mark.parametrize("mission_type,work,expected", [
@@ -112,14 +117,196 @@ def test_sourcing_lives_only_in_repo_sourcing():
         dispatch._blocker_mount_ok)
 
 
-def test_skill_source_cards_is_gate_only_never_sourcing():
-    """Ratchet sibling (ADR-0016 addendum, audit-moved here beside the
-    ADR-0034 ratchet): skill cards feed the mirror GATE and the payload —
-    the ONE sourcing rule must never grow a skills arm, or a skill card
-    would be cloned into /workspace."""
-    from devcake.domain.repo_sourcing import (skill_source_cards,
-                                              sourced_repo_names)
+def test_memory_mount_union_dedupes_excludes_repo_ref_and_includes_steward():
+    """PLAN_MEMORY §3.2 / F2 / D2: instance then Dev Type, minus repo_ref.
+    STEWARD mounts the same union (works discoveries; does not author)."""
+    inst = _inst(memory=["nb", "docs"])
+    dt = SimpleNamespace(memory_repos=["docs", "nb2"])
+    assert memory_mount_names(instance=inst, dev_type=dt,
+                              repo_ref="webapp") == ["nb", "docs", "nb2"]
+    # F2: a Curator whose Dev Type lists the notebook must not remount it
+    assert memory_mount_names(instance=_inst(memory=[]),
+                              dev_type=SimpleNamespace(memory_repos=["nb"]),
+                              repo_ref="nb") == []
+    assert memory_mount_names(instance=_inst(memory=["nb"]),
+                              dev_type=dt, repo_ref="nb") == ["docs", "nb2"]
+    # no mounts when both lists empty
+    assert memory_mount_names(instance=_inst(), dev_type=None,
+                              repo_ref="webapp") == []
+
+
+def test_sourced_includes_memory_on_every_stage_including_steward():
+    inst = _inst(repos=["alpha", "beta"], refs=["pub"], memory=["nb"])
+    dt = SimpleNamespace(memory_repos=["nb2"])
+    blockers = [{"repo_ref": "int-1"}]
+    for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW", "STEWARD"):
+        got = sourced_repo_names(
+            work_repo="alpha", mission_type=mt, instance=inst,
+            blocker_entries=blockers, dev_type=dt)
+        assert "nb" in got and "nb2" in got
+        assert got[0] == "alpha"
+        # F2: primary is never a second clone name
+        assert got.count("alpha") == 1
+
+
+def test_sourced_memory_excluded_when_it_is_the_work_repo():
+    inst = _inst(repos=["nb"], memory=[])
+    dt = SimpleNamespace(memory_repos=["nb"])
+    got = sourced_repo_names(
+        work_repo="nb", mission_type="EXECUTE", instance=inst,
+        blocker_entries=None, dev_type=dt)
+    assert got == ["nb"]
+
+
+def test_inherit_cs_shaped_fixture_not_other_notebooks():
+    """PLAN_MEMORY §7: Curator inherit = consumer repos ∪ reference_repos.
+    Other memory notebooks and `m` itself stay out."""
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    cfg = AppConfig(
+        repos=[RepoInstance(name=n, url=f"https://github.com/acme/{n}")
+               for n in ("webapp", "docs", "nb", "othernb")],
+        pmos=[
+            PMOInstance(name="cs", team_key="A", repos=["webapp"],
+                        reference_repos=["docs"], memory_repos=["nb"]),
+            PMOInstance(name="cur", team_key="B", repos=["nb"],
+                        reference_repos=[]),
+            PMOInstance(name="other", team_key="C", repos=["webapp"],
+                        memory_repos=["othernb"]),
+        ])
+    cur = next(p for p in cfg.pmos if p.name == "cur")
+    got = inherited_curator_extras(cfg, cur, "nb")
+    assert got == ["webapp", "docs"]
+    assert "nb" not in got
+    assert "othernb" not in got
+    # non-curator work repo inherits nothing
+    cs = next(p for p in cfg.pmos if p.name == "cs")
+    assert inherited_curator_extras(cfg, cs, "webapp") == []
+
+
+def test_sourced_curator_includes_inherit_and_needed_matches(tmp_path):
+    from devcake.config import AppConfig, PMOInstance, RepoInstance
+    from test_repo_mirror import PUB, R1, R2, make_cache
+    cfg = AppConfig(
+        repos=[RepoInstance(name=n, url=f"https://github.com/acme/{n}")
+               for n in ("alpha", "beta", "pub", "nb")],
+        pmos=[
+            PMOInstance(name="cs", team_key="A", repos=["alpha"],
+                        reference_repos=["pub"], memory_repos=["nb"]),
+            PMOInstance(name="cur", team_key="B", repos=["nb"]),
+        ])
+    # give the cache cards matching cfg names
+    cache, _, _ = make_cache(tmp_path, [R1, R2, PUB], internal=["int-1"])
+    cur = next(p for p in cfg.pmos if p.name == "cur")
+    sourced = sourced_repo_names(
+        work_repo="nb", mission_type="EXECUTE", instance=cur,
+        blocker_entries=None, config=cfg)
+    assert sourced[0] == "nb"
+    assert "alpha" in sourced and "pub" in sourced
+    assert cache.needed_for(
+        work_repo="nb", mission_type="EXECUTE", instance=cur,
+        blocker_entries=None, config=cfg) == [
+            n for n in sourced if cache.eligible(n)]
+
+
+def test_classify_context_failures_strict_and_open():
+    why = {"nb": "sync failed", "skillrepo": "404", "alpha": "auth"}
+    defer, stale, omit = classify_context_failures(
+        why, context_cards={"nb", "skillrepo"}, strict=True,
+        has_mirror=lambda n: n == "nb")
+    # work-repo failure always defers; context cards defer when strict
+    assert "alpha" in defer and "nb" in defer and "skillrepo" in defer
+    assert stale == set() and omit == set()
+    defer, stale, omit = classify_context_failures(
+        why, context_cards={"nb", "skillrepo"}, strict=False,
+        has_mirror=lambda n: n == "nb")
+    assert defer == {"alpha": "auth"}          # work still fail-closed
+    assert stale == {"nb"}                     # last-good mirror
+    assert omit == {"skillrepo"}               # never synced
+
+
+def test_skill_source_cards_is_gate_only_never_sourcing(tmp_path, monkeypatch):
+    """Skill cards feed the mirror GATE and the payload — never the clone
+    set. A gate snapshot that includes `skillrepo` (145 stamps the union on
+    run.mirror_repos) must not make `_extra_repos_for` emit that card."""
+    from devcake.domain.orchestrator import dispatch
+    from devcake.domain.repo_sourcing import skill_source_cards
+    from test_repo_mirror import _execute_run, _extras_rig
+
     assert skill_source_cards(["skillrepo/tdd", "flat", "other/x"]) == {
         "skillrepo", "other"}
     assert skill_source_cards([]) == set()
-    assert "skill" not in inspect.getsource(sourced_repo_names)
+
+    mgr = _extras_rig(tmp_path, monkeypatch)
+    # gate snapshot includes the skill card (truthful needed-set union)
+    # plus the primary + a real extra (beta is a reference repo)
+    run = _execute_run(mirror_repos=["alpha", "beta", "skillrepo"])
+    names = [x["name"] for x in dispatch._extra_repos_for(mgr, run)]
+    assert "beta" in names
+    assert "skillrepo" not in names
+    assert "alpha" not in names          # primary is not an extra
+
+
+def test_unresolvable_memory_cards_dangling_and_internal_credentials(
+        monkeypatch):
+    """PLAN_MEMORY §3.5 second half: the mirror gate never sees dangling
+    bindings or internal-forge notebooks — resolve them at dispatch."""
+    from devcake.config import AppConfig, RepoInstance
+    from devcake.domain.repo_sourcing import unresolvable_memory_cards
+    monkeypatch.setattr(
+        "devcake.secrets.read_connection_secret",
+        lambda scope, name, field:
+            "ro-tok" if (name, field) == ("nb", "token_ro") else "")
+    cfg = AppConfig(repos=[
+        RepoInstance(name="ext", url="https://github.com/acme/ext"),
+        RepoInstance(name="nb", url="http://gitea:3000/devcake-repos/nb"),
+        RepoInstance(name="bare", url="http://gitea:3000/devcake-repos/bare"),
+    ])
+    bad = unresolvable_memory_cards(
+        cfg, {"gone", "ext", "nb", "bare"},
+        mirror_eligible=lambda n: n == "ext")
+    assert "gone" in bad          # dangling binding (card deleted/hand-edit)
+    assert "ext" not in bad       # mirror-eligible: the gate owns it
+    assert "nb" not in bad        # internal card with a read token
+    assert "bare" in bad          # internal card, no clone credential
+
+
+def test_memory_runspec_entry_carries_strict_flag_from_snapshot():
+    """§3.5: the failure class is decided at dispatch and snapshotted —
+    the runspec entry tells provision whether a clone failure is fatal."""
+    from devcake.domain.orchestrator import dispatch
+    inst_x = SimpleNamespace(url="http://g/x.git", token_ro="ro", token="rw")
+    forge_x = SimpleNamespace(descriptor=SimpleNamespace(clone_user="svc"))
+    mgr = SimpleNamespace(forges=SimpleNamespace(
+        instance=lambda n: inst_x, get=lambda n: forge_x))
+    run = SimpleNamespace(
+        memory_mounts=[{"card": "nb", "strict": True, "stale_cache": False},
+                       {"card": "nb2", "stale_cache": False}],
+        mirror_repos=["other"], run_id="r1")
+    out = dispatch._memory_repos_for(mgr, run)
+    assert out[0]["strict"] is True and out[0]["token"] == "ro"
+    assert "strict" not in out[1]        # open mode: entry stays non-fatal
+
+
+def test_memory_mount_snapshot_resolves_internal_commit_via_remote_head():
+    """N1: a mirror-ineligible notebook (bundled Gitea) has no tree_head —
+    provenance falls back to a forge ls-remote instead of a blank commit."""
+    import asyncio
+    from devcake.domain.orchestrator import dispatch
+
+    async def tree_head(c):
+        return None
+
+    async def remote_head(c):
+        return "deadbeefcafe0123"
+
+    mgr = SimpleNamespace(
+        instance=SimpleNamespace(memory_repos=["nb"]),
+        config=SimpleNamespace(context_sourcing_strict=True),
+        repo_cache=SimpleNamespace(tree_head=tree_head,
+                                   remote_head=remote_head))
+    dt = SimpleNamespace(memory_repos=[])
+    out = asyncio.new_event_loop().run_until_complete(
+        dispatch._memory_mount_snapshot(mgr, dt, "webapp",
+                                        stale=set(), omit=set()))
+    assert out[0]["commit"] == "deadbeefcafe0123"
+    assert out[0]["binding"] == "board" and out[0]["strict"] is True

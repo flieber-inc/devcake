@@ -40,8 +40,9 @@ from pydantic import ValidationError
 from . import secrets as secrets_store
 from .config import (AppConfig, DevType, HARNESS_VAR_PATTERN,
                      _INSTANCE_NAME_RE, delete_dev_type,
-                     reconcile_managed_pmos, reject_stale_patch, save_config,
-                     save_dev_type)
+                     reconcile_managed_pmos, reconcile_reserved_crons,
+                     reject_stale_patch, save_config, save_dev_type,
+                     validate_memory_bindings)
 from .prompts import PLAYBOOK_VARS
 from .prompts import templates as prompt_templates
 from .security import redact
@@ -329,7 +330,7 @@ def validate_bundle(bundle: dict, *, _strict: bool = True) -> dict:
                 template_exists=lambda mt, name:
                     name in prompt_templates._builtins() or name == "default"
                     or name in templates.get(mt, {}),
-                warnings=warnings)
+                warnings=warnings, dev_types=dts)
         else:
             # rollback path: still drop impossible active_devtype_prompts
             # keys so a restored world does not re-poison PUT /config
@@ -598,7 +599,8 @@ def assert_assignment_dev_types(assignments, dev_type_names: set[str],
 
 def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
                               template_exists: Callable[[str, str], bool],
-                              *, warnings: list[str] | None = None) -> None:
+                              *, warnings: list[str] | None = None,
+                              dev_types: dict | None = None) -> None:
     """Cross-store checks shared by boot, PUT /config, and bundle apply —
     ONE path, no caller-specific carve-outs (2026-08-12 audit SEC-3; the old
     `check_assignments` flag made the bundle path strict and the PUT path
@@ -637,6 +639,9 @@ def validate_config_semantics(cfg: AppConfig, dev_type_names: set[str],
         assert_assignment_dev_types(
             inst.assignments, dev_type_names,
             prefix=f"pmos[{inst.name}].assignments")
+    # I2 with Dev Type memory_repos — AppConfig validation only sees
+    # instance lists; this is the cross-store chokepoint.
+    validate_memory_bindings(cfg, dev_types=dev_types)
 
 
 def dry_run_adapters(cfg: AppConfig) -> None:
@@ -837,6 +842,13 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
         if reconciled != incoming:
             new_cfg = AppConfig.model_validate(
                 {**new_cfg.model_dump(), "pmos": reconciled})
+            parsed["config"] = new_cfg
+        incoming_crons = [c.model_dump() for c in new_cfg.crons]
+        reconciled_crons = reconcile_reserved_crons(
+            [c.model_dump() for c in config.crons], incoming_crons)
+        if reconciled_crons != incoming_crons:
+            new_cfg = AppConfig.model_validate(
+                {**new_cfg.model_dump(), "crons": reconciled_crons})
             parsed["config"] = new_cfg
         dry_run_adapters(new_cfg)
 

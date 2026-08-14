@@ -136,7 +136,8 @@ async def merge_sweep(mgr, m: Mission) -> None:
         # (_deferred_merge_retry pops the entry while it drives the window)
         mgr.merge_handoffs[m.pmo_id] = (
             f"{m.key}: awaiting human merge — {state.url}")
-        if inst.auto_merge:
+        from ...config import auto_merge_permitted
+        if auto_merge_permitted(mgr.config, inst, m.repo, mgr.dev_types):
             await _deferred_merge_retry(mgr, m, pr, state.url, inst)
 
 

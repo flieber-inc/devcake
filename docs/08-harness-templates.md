@@ -235,7 +235,14 @@ are materialized by the entrypoint before harness launch into the harness's
 onto the Run at dispatch and delivered as the runspec `skills_dir` key).
 External `<card>/<skill>` skills (ADR-0016 addendum) ride the SAME runspec
 field with payload paths flattened to the basename dir — the container
-contract and every read-set below are untouched by the source. All
+contract and every read-set below are untouched by the source. Skill-source
+card sync is toggle-governed by `context_sourcing_strict` (PLAN_MEMORY /
+ADR-0016 addendum note): default true is today's fail-closed gate; false
+lets a run proceed on a last-good mirror or omit a never-synced card.
+There is **no harness-native memory directory** — consumer notebooks land
+at `/workspace/memory/<card>/` via the entrypoint, and when any are
+mounted the playbook prompt gains the factual mount sentence that names
+`.claims/` (PLAN_MEMORY D1). All
 three CLIs read the same `SKILL.md` format; the verified read-set per pinned
 or observed CLI:
 

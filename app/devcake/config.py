@@ -226,11 +226,6 @@ class RepoInstance(BaseModel):
     auto_merge: bool = False
     auto_resolve_merge_conflicts: bool = True
     merge_retry_window_minutes: int = Field(30, ge=0)
-    # ADR-0016 addendum: where `<skill>/SKILL.md` dirs live in this card's
-    # tree when Dev Types select `<card>/<skill>` skills ("" = repo root).
-    # Served from the ADR-0024 mirror read-side — never cloned into
-    # workspaces, never a new cache.
-    skills_subdir: str = ""
     # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
     # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);
@@ -263,15 +258,6 @@ class RepoInstance(BaseModel):
             raise ValueError(
                 f"invalid repository URL {v!r}: need a host and an "
                 f"owner/repo project path (e.g. https://<host>/owner/repo)")
-        return v
-
-    @field_validator("skills_subdir")
-    @classmethod
-    def _skills_subdir_relative(cls, v: str) -> str:
-        v = v.strip().strip("/")
-        if v and (".." in v.split("/") or v.startswith("/")):
-            raise ValueError(
-                f"skills_subdir {v!r}: relative path inside the repo, no ..")
         return v
 
     @property
@@ -321,6 +307,46 @@ class ContainerLimits(BaseModel):
     memory_mb: int = Field(4096, ge=0)
     cpus: float = Field(2.0, ge=0)
     pids: int = Field(0, ge=0)
+
+
+class SkillSource(BaseModel):
+    """A dedicated skills connection (founder ruling 2026-08-14,
+    superseding ADR-0016-addendum decision 1): a skills repository is
+    its own first-class connection over the forge machinery — never a
+    facet of a repo card. No PMO can select it, it has no PR surface,
+    and it is read-only by construction. Content is served from the
+    ADR-0024 mirror read-side exactly as before; Dev Types keep the
+    `<source>/<skill>` naming."""
+    name: str = Field(pattern=_INSTANCE_NAME_RE)
+    forge: str = "github"
+    url: str = ""
+    default_branch: str = ""
+    # optional path inside the repository holding the `<skill>/SKILL.md`
+    # dirs ("" = repo root)
+    subdir: str = ""
+
+    @field_validator("subdir")
+    @classmethod
+    def _subdir_relative(cls, v: str) -> str:
+        v = v.strip().strip("/")
+        if v and (".." in v.split("/") or v.startswith("/")):
+            raise ValueError(
+                f"subdir {v!r}: relative path inside the repo, no ..")
+        return v
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.url.strip())
+
+    @property
+    def token(self) -> str:
+        from . import secrets
+        return secrets.read_connection_secret("skill", self.name, "token")
+
+    @property
+    def token_ro(self) -> str:
+        from . import secrets
+        return secrets.read_connection_secret("skill", self.name, "token_ro")
 
 
 # The operator-editable half of the relations steward's instructions
@@ -852,6 +878,8 @@ class AppConfig(BaseModel):
     # PLAN_MEMORY: OFF enforces a person at the merge chokepoint for any
     # memory-bound card. ON is two-model consent, not a person.
     memory_auto_merge: bool = False
+    # Dedicated skills connections (2026-08-14 ruling) — never repo cards.
+    skill_sources: list[SkillSource] = Field(default_factory=list)
     # Cron module. The reserved memory-curator row is always present —
     # a PUT/bundle that omits it is healed by reconcile_reserved_crons
     # (and the field validator injects the seed if the list is empty).
@@ -958,6 +986,15 @@ class AppConfig(BaseModel):
     @model_validator(mode="after")
     def _pmo_repo_sets_valid(self):
         repo_names = {r.name for r in self.repos}
+        src_names = [x.name for x in self.skill_sources]
+        if len(set(src_names)) != len(src_names):
+            raise ValueError("skill_sources: duplicate names")
+        overlap = set(src_names) & repo_names
+        if overlap:
+            # the mirror cache keys both kinds by name — one namespace
+            raise ValueError(
+                f"skill_sources {sorted(overlap)} collide with repository "
+                f"card names — pick distinct names")
         for p in self.pmos:
             for field in ("repos", "reference_repos", "memory_repos"):
                 names = getattr(p, field)

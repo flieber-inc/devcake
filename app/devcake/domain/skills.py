@@ -87,10 +87,10 @@ class SkillService:
                  repo_cache=None, config=None):
         self.forge = internal_forge
         self.builtin_dir = builtin_dir if builtin_dir is not None else BUILTIN_DIR
-        # ADR-0016 addendum: `<card>/<skill>` names read the ADR-0024 mirror
-        # (RepoCache) — external skills, read-only, no second cache. config
-        # supplies the repo cards (skills_subdir); both None in tests that
-        # never touch external names.
+        # `<source>/<skill>` names read the ADR-0024 mirror (RepoCache) —
+        # external skills, read-only, no second cache. config supplies the
+        # dedicated skill_sources connections (2026-08-14 ruling — never
+        # repo cards); both None in tests that never touch external names.
         self.repo_cache = repo_cache
         self.config = config
         self._tree_at = 0.0                       # monotonic stamp
@@ -98,7 +98,9 @@ class SkillService:
         self._file_bytes: dict[str, bytes] = {}
 
     def _card(self, name: str):
-        for r in (self.config.repos if self.config is not None else []):
+        """The named skill SOURCE (dedicated connection — 2026-08-14
+        ruling; repo cards are never consulted for skills)."""
+        for r in (self.config.skill_sources if self.config is not None else []):
             if r.name == name:
                 return r
         return None
@@ -305,7 +307,7 @@ class SkillService:
                 if sha is None:
                     continue
                 tree = await self.repo_cache.read_skill_tree(
-                    card, inst.skills_subdir, sha)
+                    card, inst.subdir, sha)
                 for skill, rels in sorted(tree.items()):
                     # size gate BEFORE the read (audit 2026-08-13): the
                     # catalog renders every referenced card — an oversized
@@ -320,7 +322,7 @@ class SkillService:
                             builtin=False, origin=card))
                         continue
                     md = await self.repo_cache.read_skill_file(
-                        card, inst.skills_subdir, sha, skill, "SKILL.md")
+                        card, inst.subdir, sha, skill, "SKILL.md")
                     desc = str(parse_frontmatter(
                         (md or b"").decode("utf-8", errors="replace")
                     ).get("description", ""))
@@ -560,10 +562,10 @@ class SkillService:
             return [], 0, [f"skill {name!r}: mirror for {card!r} has no "
                            "readable head — skipped"]
         tree = await self.repo_cache.read_skill_tree(
-            card, inst.skills_subdir, sha)
+            card, inst.subdir, sha)
         files = tree.get(skill)
         if not files:
-            where = f"{card}:{inst.skills_subdir}" if inst.skills_subdir \
+            where = f"{card}:{inst.subdir}" if inst.subdir \
                 else card
             return [], 0, [f"skill {name!r}: no {skill}/SKILL.md under "
                            f"{where} — skipped"]
@@ -572,7 +574,7 @@ class SkillService:
 
         async def _read(path: str) -> bytes:
             data = await self.repo_cache.read_skill_file(
-                card, inst.skills_subdir, sha, skill, path[len(skill) + 1:])
+                card, inst.subdir, sha, skill, path[len(skill) + 1:])
             if data is None:
                 raise SkillStoreError(502, f"mirror read failed: {path}")
             return data

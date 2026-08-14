@@ -232,3 +232,29 @@ essentially work just like a forge adapter — and could just be one").
 - `docs/14-security.md` skill-store trust class
 - Implementation: `config.DevType`, `domain/orchestrator/dispatch.append_required_skills`,
   `domain/skills.SkillService`, admin `SkillModeChips` / Skills View
+
+## Addendum 2 — dedicated skill sources (2026-08-14, founder ruling)
+
+Supersedes addendum decisions 1 and (partially) 3. The 2026-08-13
+ruling collapsed skill sources onto repo cards ("they should
+essentially work just like a forge adapter — and could just be one");
+the founder reversed it a day later: **it is conceptually wrong to peg
+skills to repositories**. A skills repository is its own first-class
+connection.
+
+1. **Source = `AppConfig.skill_sources: list[SkillSource]`** — name,
+   forge, URL, branch, optional `subdir`; read tokens under the new
+   `skill:` secret scope (token_ro preferred; no reviewer token — a
+   source has no PR surface). `RepoInstance.skills_subdir` is DELETED.
+   Managed on the Skills page, never on Repositories.
+2. **Cache stays the ADR-0024 mirror read-side.** `RepoCache` gains a
+   second identity namespace: skill sources resolve by name from
+   config (one namespace with repo cards — collisions refused), are
+   always mirror-eligible, and sync with the forge DESCRIPTOR's
+   clone_user via an injected resolver (no live forge adapter is
+   built, no health probing, no PR capability — the pointless
+   adapter coupling addendum 1 created is gone).
+3. **Everything else stands**: `<source>/<skill>` naming, the
+   fail-closed gate union (`context_sourcing_strict` governs it),
+   basename flattening, `skill_repo_heads` provenance, read-only by
+   construction.

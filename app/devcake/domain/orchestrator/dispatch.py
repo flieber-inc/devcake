@@ -687,7 +687,7 @@ def append_required_skills(prompt: str, skills_required: list[str],
     # (flattened payload paths) — the instruction must name a dir that
     # exists in the container, with the origin as provenance
     lines = "\n".join(
-        f"- `{n.rsplit('/', 1)[-1]}` (from repo `{n.split('/', 1)[0]}`)"
+        f"- `{n.rsplit('/', 1)[-1]}` (from skill source `{n.split('/', 1)[0]}`)"
         if "/" in n else f"- `{n}`" for n in names)
     return (
         f"{prompt}\n\n### Required skills\n"

@@ -3,7 +3,7 @@
 > **Audience:** implementers.
 > **Depends on:** `02-domain-model.md` (AppConfig.repos), `03-mission-lifecycle.md` (branch/PR conventions).
 
-GitHub, GitLab, and Gitea adapters ship behind `ForgePort` (`app/devcake/ports/forge.py`). Config holds **0..N** repos (`repos:` list, mirroring `pmos:` — `10-persistence.md`); each mission resolves to **0 or 1** work repo (plus optional reference clones). Credential slots (write / read-only / reviewer) may all be configured so non-EXECUTE stages and cross-repo consultation stay least-privilege where the operator supplies RO tokens.
+GitHub, GitLab, and Gitea adapters ship behind `ForgePort` (`app/devcake/ports/forge.py`). Config holds **0..N** repos (`repos:` list, mirroring `pmos:` — `10-persistence.md`); each mission resolves to **0 or 1** work repo (plus optional read-only passengers: reference clones and memory notebooks — ADR-0035). Two further forge-backed connection classes exist beside repo cards: **memory notebooks** are ordinary repo cards bound via `memory_repos`, while **skill sources** (`AppConfig.skill_sources` — ADR-0016 addendum 2) are their OWN connection type (forge/url/branch/subdir + read tokens), never a `RepoInstance` and never selectable by a PMO. Credential slots (write / read-only / reviewer) may all be configured so non-EXECUTE stages and cross-repo consultation stay least-privilege where the operator supplies RO tokens.
 
 Terminology: this doc says "PR" throughout; on GitLab the same operations target Merge Requests.
 
@@ -102,7 +102,7 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 |---|---|---|
 | `id`, `display_name` | registry key + UI label | registry, admin SPA |
 | `pr_instructions` | PR/MR CLI instructions for the EXECUTE playbook — a template with placeholders `{key}` `{title}` `{default}` `{branch}` (`{branch}` fed by `mission_branch()`, `{default}` by the resolved repo's `default_branch`) | `prompts.execute_prompt(…, pr_instructions=…)` |
-| `clone_user` | credential-in-URL user for https clones (`x-access-token` / `oauth2`) | `DEVCAKE_CLONE_USER` in `spec_env` |
+| `clone_user` | credential-in-URL user for https clones (`x-access-token` / `oauth2`) | `DEVCAKE_CLONE_USER` in `spec_env`; also `RepoCache`'s injected `clone_user_of` resolver — mirror fetches of **skill sources** read the descriptor directly because a source has no live adapter (ADR-0016 addendum 2) |
 | `git_user_name`, `git_email` | the Dev's git identity | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` |
 | `cli_token_envs` | env vars the entrypoint mirrors the forge token into for the CLI (`GH_TOKEN` / `GITLAB_TOKEN` / `GITEA_SERVER_TOKEN`) | `DEVCAKE_FORGE_CLI_ENVS` (comma-joined) |
 | `secret_env_vars`, `token_patterns` | the secret shapes this forge's tokens take | `security.redact` (`14-security.md` §7) |
@@ -183,7 +183,7 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 
 ## 7a. Gitea specifics
 
-- Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos); isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped).
+- Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos, and operator repos incl. memory notebooks via `create_internal_repo` — refuses `activity-*` names, never swept by Clear); isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped).
 - Auth: Gitea personal/access tokens; machine users + scoped token pairs for per-mission isolation on the internal forge (ADR-0010; container isolation posture `14` §6 — Gitea admin password never enters the Dev env).
 - **Machine-user naming (measured, Gitea 1.27.1):** usernames are capped at 40 chars and reject **consecutive hyphens** — `_svc_user()` therefore rstrips hyphens off the truncated stem before appending the full-name hash. Provisioning also discriminates Gitea's overloaded **422**: `"already exists"` is tolerated (idempotent re-provision), anything else — notably `"invalid username"` — fails loud. Both were one bug: the ADR-0030 board's repo names truncated exactly onto a hyphen, the invalid user was silently never created, and every zero-repo board mission then gated on the collaborator PUT with `user does not exist` (founder report 2026-08-05).
 - Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True`, `pr_list_head_filter=False` (client-side head filter).

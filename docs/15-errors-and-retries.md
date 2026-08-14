@@ -30,8 +30,8 @@ prose.
 | `DEV_KILLED` | the kill-chokepoint **catch-all** (`_kill_inner`): any kill path that names no more specific state/class lands here, so a future kill site cannot produce an unclassified run | counted attempt |
 | `DEV_OPERATOR_STOP` | operator-initiated stop (admin UI stop run / stop all, clear-runs drain) — passed explicitly by those callers, never a default | counted attempt — a stopped attempt burns like a failed one; pause or re-label the mission if that is not what you want |
 | `DEV_AUTH` | exit 12 — harness credential failure per the §4 precedence contract (stream 401/403 and/or distinctive stderr markers; generic markers only when no in-band fault already explains the run) | circuit breaker (§4) — **not** a counted attempt |
-| `DEV_FORGE` | exit 13 without the structured `DEV_FORGE_AUTH` class (transient forge/clone/push failure, or auth-ish wording without the structured class) | counted only after per-step excusals are spent (§4a) — **not** a latched breaker |
-| `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push |
+| `DEV_FORGE` | exit 13 without the structured `DEV_FORGE_AUTH` class (transient forge/clone/push failure, or auth-ish wording without the structured class). Includes a **strict memory-notebook clone failure** in the provision step (ADR-0035: `context_sourcing_strict` on ⇒ the run must not start memoryless) | counted only after per-step excusals are spent (§4a) — **not** a latched breaker |
+| `DEV_FORGE_AUTH` | exit 13 carrying the Dev's **structured** `DEV_FORGE_AUTH` classification (auth wording in the detail alone is `DEV_FORGE`) | **per-repo** forge circuit breaker (`repo:{name}`); that repo's missions stop dispatching until the token can push. NOTE (ADR-0035): a strict memory mount's revoked credential classifies here too — a NOTEBOOK card's breaker then freezes dispatch for every mission that binds it, by design (fail closed beats silently memoryless). Distinct case: a memory/skill-source card that fails the MIRROR gate never reaches a container at all — it defers dispatch as an unschedulable gate reason (blocked-reasons row), no attempt, no class |
 | `DEV_HARNESS_FAULT` | exit 15: the harness reported a failure in-band, or produced no output at all, whatever its exit status (ADR-0018) | counted attempt — UNLESS correlated across ≥2 missions (§4a) |
 | `DEV_TURN_BUDGET` | exit 16: the harness stopped at its configured `--max-turns` cap — reachable for **`claude-code` and `grok-build`**, never for **codex** 0.147.0, which has no turn cap at all (`07-dev-runtime.md` §4, §2a below) | counted attempt; deterministic, so never correlated and never excused |
 | `DEV_BAD_OUTPUT` | exit 11: `result.json` missing/invalid **after the in-container continuation budget is spent, when the loop is enabled** (ADR-0022; `07-dev-runtime.md` §5a); app-side: structurally invalid payload behind a legal outcome (empty decomposition, bad `blocked_by`) | counted attempt — when many Devs share one backend, exit 11 can still land fleet-wide (model invents tools as prose — `08` §8; grok silent non-progress halt — §2b); §4a's brake keys on exit 15 by default, with `brake_on_bad_output` (ADR-0026, default off) widening it to cover exactly this cascade |
@@ -47,7 +47,7 @@ prose.
 | `PMO_TRANSIENT` | yes — **no in-adapter retry ladder.** Adapter raises `PMOTransient`; the poll cycle **skips that PMO instance's segment** and continues with the others; the next poll tick (`poll_interval_seconds`, default 30) re-attempts the sick instance | no | app (next poll tick) | `poll.cycle` outcome / logs; not latched into `poll_degraded` (that field is for permanent per-instance failures) |
 | `PMO_PERMANENT` | no | no | — | `poll_degraded` for that instance + SPA alert; other instances keep polling |
 | `PMO_GONE` | n/a — residual class only | no | — | *not implemented as a dedicated path* — do not expect a WARN+cancel special case |
-| `FORGE_TRANSIENT` | yes — **no exp-backoff matrix.** Poll re-probes forge health each cycle (latched breakers self-heal on a green probe; the re-probe sweep is bounded-parallel — `ForgeRuntime.refresh_all`, at most 8 in flight); finalization re-enters via ingress reclaim; adapters may short-sleep only where code has them (e.g. Gitea merge "try again later" 405 retries, GitHub 409 race retries — `06-forge-adapter.md` §5/§7a). Dev clone/push is single-shot (exit 13 on failure) | no | app (poll / finalize resume) | health / breaker surfaces if a probe becomes definitive |
+| `FORGE_TRANSIENT` | yes — **no exp-backoff matrix.** Poll re-probes forge health each cycle (latched breakers self-heal on a green probe; the re-probe sweep is bounded-parallel — `ForgeRuntime.refresh_all`, at most 8 in flight); finalization re-enters via ingress reclaim; adapters may short-sleep only where code has them (e.g. Gitea merge "try again later" 405 retries, GitHub 409 race retries — `06-forge-adapter.md` §5/§7a; the `.claims/` writer replays its checkout+commit+push cycle ONCE on a push race — ADR-0035). Dev clone/push is single-shot (exit 13 on failure) | no | app (poll / finalize resume) | health / breaker surfaces if a probe becomes definitive |
 | `FORGE_PERMANENT` | no | no | — | PMO comment + health strip (e.g. merge blocked, `06-forge-adapter.md` §5) |
 | `DEV_CRASH` | yes — by natural rescheduling (INV-3) | **yes** | scheduler (next cycle) | after cap: `DEVCAKE-FAILED` (§3) |
 | `DEV_MCP_SETUP` | yes — same (a transient install/network failure deserves retries; the deterministic missing-secret case never dispatches at all, `14` §8) | **yes** | scheduler | same |
@@ -350,3 +350,12 @@ keeps that deliberate without becoming sloppy:
   follow-up is to extend the gate to `images/`).
 - Test code is exempt (`tests/*` per-file ignore) — tests legitimately catch
   broadly.
+
+Two ADR-0035 lanes are sanctioned degrade-with-record instances of this
+policy, by contract: a **`.claims/` write failure** is audited
+(`claims_append_failed` / `claims_list_failed` / `claims_skip_nowrite`)
+and never fails the discovering run or withholds feed memorialization;
+a **scheduled-task fire failure** is recorded as `failed` in the
+`state/cron_outcomes.json` ledger — three consecutive automatic
+failures set `cron_degraded` (`/health` + SPA alert) and pause only the
+schedule; Run-now keeps working and one success re-arms.

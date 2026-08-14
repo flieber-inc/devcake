@@ -80,9 +80,15 @@ class RepoCache:
     for fake-runner tests."""
 
     def __init__(self, config, forges,
-                 root: Path | None = None, git=run_git):
+                 root: Path | None = None, git=run_git,
+                 clone_user_of=None):
         self.config = config       # shared identity — hot reload mutates in place
         self.forges = forges
+        # skill sources are NOT repo cards (2026-08-14 ruling): they have
+        # no live forge adapter, so the clone user comes from the forge
+        # DESCRIPTOR via this injected resolver (composition root wires
+        # the adapter registry; domain stays adapter-free)
+        self.clone_user_of = clone_user_of or (lambda forge_id: "")
         self.root = root if root is not None else Path(
             os.environ.get("DEVCAKE_MIRRORS_DIR", "/mirrors"))
         self.git = git
@@ -99,10 +105,21 @@ class RepoCache:
     def mirror_path(self, name: str) -> Path:
         return self.root / f"{name}.git"
 
+    def _skill_source(self, name: str):
+        for x in getattr(self.config, "skill_sources", None) or []:
+            if x.name == name:
+                return x
+        return None
+
     def eligible(self, name: str) -> bool:
-        """A configured repo card: registered in the runtime and NOT an
-        internal synthesized repo (token-scope isolation — module docstring)."""
-        return name in self.forges.instances and name not in self.forges.internal
+        """A configured repo card (registered in the runtime and NOT an
+        internal synthesized repo — token-scope isolation, module
+        docstring) — or a dedicated skill source (2026-08-14 ruling:
+        skill sources always ride the mirror; they are never cloned into
+        workspaces)."""
+        return ((name in self.forges.instances
+                 and name not in self.forges.internal)
+                or self._skill_source(name) is not None)
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict],
@@ -175,11 +192,15 @@ class RepoCache:
         forge = self.forges.get(name)
         now = datetime.now(timezone.utc)
         if inst is None or forge is None:
-            st = MirrorStatus(ok=False, attempted_at=now,
-                              detail="repo is no longer configured")
-            self.ledger[name] = st
-            return st
-        clone_user = forge.descriptor.clone_user
+            # second namespace: a dedicated skill source (no adapter)
+            inst, forge = self._skill_source(name), None
+            if inst is None or not inst.configured:
+                st = MirrorStatus(ok=False, attempted_at=now,
+                                  detail="repo is no longer configured")
+                self.ledger[name] = st
+                return st
+        clone_user = (forge.descriptor.clone_user if forge is not None
+                      else self.clone_user_of(inst.forge))
         expected_url = inst.url.replace("https://", f"https://{clone_user}@") \
             if clone_user else inst.url
         p = self.mirror_path(name)
@@ -259,10 +280,13 @@ class RepoCache:
         read token via askpass; None on any failure."""
         inst = self.forges.instance(name)
         forge = self.forges.get(name)
-        if inst is None or forge is None or not (inst.url or "").strip():
+        if inst is None or forge is None:
+            inst, forge = self._skill_source(name), None
+        if inst is None or not (inst.url or "").strip():
             return None
         url = inst.url.strip()
-        clone_user = getattr(forge.descriptor, "clone_user", "") or ""
+        clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
+                      if forge is not None else self.clone_user_of(inst.forge))
         if clone_user and "://" in url \
                 and "@" not in url.split("://", 1)[1].split("/", 1)[0]:
             url = url.replace("://", f"://{clone_user}@", 1)
@@ -296,7 +320,7 @@ class RepoCache:
         """The commit skill reads pin: refs/heads/<default_branch> in the
         bare mirror, falling back to the mirror's HEAD. None = unresolvable
         (mirror absent / branch missing) — the caller warns and skips."""
-        inst = self.forges.instance(name)
+        inst = self.forges.instance(name) or self._skill_source(name)
         p = self.mirror_path(name)
         refs = ([f"refs/heads/{inst.default_branch}"]
                 if inst is not None and inst.default_branch else []) + ["HEAD"]
@@ -357,8 +381,11 @@ class RepoCache:
         """ensure_fresh over every eligible card; results live in the ledger.
         Background task only (poll loop start) — NEVER awaited by boot; a
         dispatch needing repo X coalesces onto the in-flight sync."""
-        names = [r.name for r in self.config.repos
-                 if r.configured and self.eligible(r.name)]
+        names = ([r.name for r in self.config.repos
+                  if r.configured and self.eligible(r.name)]
+                 + [x.name for x in
+                    getattr(self.config, "skill_sources", None) or []
+                    if x.configured])
         if names:
             await self.ensure_fresh(names)
             log.info("mirror warm-up finished: %d ok / %d total",

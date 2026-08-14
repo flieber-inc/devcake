@@ -11,6 +11,10 @@ import MarkdownBody, {
   MarkdownSourcePre,
   MarkdownViewShell,
 } from "./MarkdownBody.jsx";
+import { SecretField, Select } from "./Field.jsx";
+import { newSkillSourceCard } from "../lib/cards.js";
+import { getRegistry, loadRegistry } from "../lib/registry.js";
+import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { fileToB64 } from "../lib/files.js";
 import { isMarkdownPath, stripYamlFrontmatter } from "../lib/markdown.js";
 
@@ -239,6 +243,114 @@ function ViewSkillDialog({ name, onClose }) {
   );
 }
 
+// Dedicated skills connections (2026-08-14 ruling): a skills repository
+// is its own connection — managed HERE, never on the Repositories page.
+function SkillSourcesCard() {
+  const { dr } = useSharedDraft();
+  const [registry, setRegistry] = useState(getRegistry());
+  useEffect(() => { loadRegistry().then(setRegistry); }, []);
+  const cfg = dr.draft.cfg;
+  const setField = dr.setField;
+  const sources = cfg.skill_sources || [];
+  const savedNames = new Set(
+    (dr.server.cfg.skill_sources || []).map((x) => x.name));
+  return (
+    <Section id="skills-sources" title="Skill sources"
+      description="Repositories that hold skills — connected here, separate from your code repositories."
+      help="A skill source is a git repository whose folders each hold one skill (a SKILL.md plus supporting files). Connect one here and every skill inside it appears in the catalog above as <source>/<skill>, ready to attach to worker profiles. Sources are read-only: DevCake fetches them through its mirror before every run and never writes to them. They are deliberately NOT repository cards — nothing here can become a work target.">
+      {sources.length === 0 && (
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          No skill sources yet — the catalog above lists the bundled
+          skill store only.
+        </p>
+      )}
+      {sources.map((src, idx) => (
+        <div key={idx}
+          className="space-y-3 rounded-card border border-neutral-200 p-4 dark:border-neutral-800">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-mono text-sm font-semibold">
+              {src.name || "(unnamed)"}
+            </span>
+            <Button kind="danger-ghost" icon={Trash2} size="sm"
+              aria-label={`Remove skill source ${src.name}`}
+              onClick={() => setField("cfg.skill_sources",
+                sources.filter((_, i) => i !== idx))}>
+              Remove
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Field label="Name"
+              help="Short identity for this source (lowercase letters/digits, up to 12). Skills from it are selected as '<name>/<skill>' on worker profiles.">
+              <Input value={src.name}
+                aria-label={`Skill source ${idx + 1} name`}
+                onChange={(e) => setField(`cfg.skill_sources.${idx}.name`,
+                  e.target.value)} />
+              {dr.errors[`cfg.skill_sources.${idx}.name`] && (
+                <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
+                  ✗ {dr.errors[`cfg.skill_sources.${idx}.name`]}
+                </span>
+              )}
+            </Field>
+            <Field label="Forge"
+              help="Which service hosts the repository — used only to shape the authenticated fetch.">
+              <Select value={src.forge || "github"}
+                aria-label={`Skill source ${idx + 1} forge`}
+                onChange={(e) => setField(`cfg.skill_sources.${idx}.forge`,
+                  e.target.value)}>
+                {(registry.forges || []).map((f) => (
+                  <option key={f.id} value={f.id}>{f.id}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Repository URL"
+              help="HTTPS URL of the skills repository, e.g. https://github.com/you/skills.git.">
+              <Input value={src.url || ""}
+                aria-label={`Skill source ${idx + 1} URL`}
+                onChange={(e) => setField(`cfg.skill_sources.${idx}.url`,
+                  e.target.value)} />
+            </Field>
+            <Field label="Branch" hint="Empty = the repository's default">
+              <Input value={src.default_branch || ""}
+                aria-label={`Skill source ${idx + 1} branch`}
+                onChange={(e) => setField(`cfg.skill_sources.${idx}.default_branch`,
+                  e.target.value)} />
+            </Field>
+            <Field label="Skills folder" hint="Empty = repository root"
+              help="Path inside the repository where the skill folders live, e.g. 'skills'.">
+              <Input value={src.subdir || ""} placeholder="e.g. skills"
+                aria-label={`Skill source ${idx + 1} folder`}
+                onChange={(e) => setField(`cfg.skill_sources.${idx}.subdir`,
+                  e.target.value)} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <SecretField label="Read token"
+              help="Token with read access to the repository (private sources). Stored securely — never echoed back."
+              refKey={`skill:${src.name}:token_ro`} paste
+              locked={!savedNames.has(src.name)} />
+            <SecretField label="Token (fallback)"
+              help="Used only when no read token is stored. A read-scoped token is all a skills source ever needs."
+              refKey={`skill:${src.name}:token`} paste
+              locked={!savedNames.has(src.name)} />
+          </div>
+          {!savedNames.has(src.name) && (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Save first — tokens can be pasted once the source exists.
+            </p>
+          )}
+        </div>
+      ))}
+      <button type="button"
+        onClick={() => setField("cfg.skill_sources",
+          [...sources, newSkillSourceCard("")])}
+        className="flex w-full items-center justify-center gap-2 rounded-card border-2 border-dashed border-neutral-300 py-2.5 text-sm font-medium text-neutral-600 transition hover:border-accent-400 hover:bg-accent-50/40 hover:text-accent-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-accent-700 dark:hover:bg-accent-950/30 dark:hover:text-accent-300">
+        <Plus size={15} aria-hidden="true" />
+        New skill source
+      </button>
+    </Section>
+  );
+}
+
 export default function SkillsSection({ setPageErr }) {
   const [confirm, setConfirm] = useState(null); // delete confirms
   // skill store catalog (v1): store-listed when Gitea is up, bundled
@@ -353,10 +465,10 @@ export default function SkillsSection({ setPageErr }) {
                             ? "bg-accent-50 text-accent-800 dark:bg-accent-950/70 dark:text-accent-200"
                             : "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300")}
                         title={s.source === "external"
-                          ? `Served read-only from repo card '${s.origin}' (its mirror syncs before every dispatch)`
+                          ? `Served read-only from skill source '${s.origin}' (its mirror syncs before every dispatch)`
                           : undefined}>
                         {s.source === "store" ? "store"
-                          : s.source === "external" ? `repo: ${s.origin}` : "bundled"}
+                          : s.source === "external" ? `source: ${s.origin}` : "bundled"}
                       </span>
                     </td>
                     <td className="py-2.5 text-right">
@@ -381,7 +493,7 @@ export default function SkillsSection({ setPageErr }) {
                             title={s.builtin
                               ? `${s.name} is a built-in skill — it re-seeds at boot. Deselect it on Dev Types instead of deleting.`
                               : s.source === "external"
-                                ? `${s.name} is read-only — served from repo '${s.origin}'. Deselect it on Dev Types or change the repo.`
+                                ? `${s.name} is read-only — served from skill source '${s.origin}'. Deselect it on Dev Types or edit it in that repository.`
                                 : `Delete skill ${s.name}`}
                             aria-label={s.builtin || s.source === "external"
                               ? `${s.name} cannot be deleted (${s.builtin ? "built-in" : "external"})`
@@ -422,6 +534,8 @@ export default function SkillsSection({ setPageErr }) {
           </div>
         )}
       </Section>
+
+      <SkillSourcesCard />
 
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}

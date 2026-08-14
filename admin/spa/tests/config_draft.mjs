@@ -85,7 +85,21 @@ check("scaffolds carry every server-model field (pmo: 11, repo: 8)", () => {
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
      "default_branch", "forge", "merge_retry_window_minutes", "name",
-     "skills_subdir", "url"]);
+     "url"]);
+});
+
+check("skill sources: name shape, dupes, repo-name collision", () => {
+  const src = { name: "shelf", forge: "github", url: "u",
+                default_branch: "", subdir: "" };
+  const d = snap([BOARD], {
+    repos: [{ name: "shelf" }],
+    skill_sources: [src, { ...src, name: "Bad!" }],
+  });
+  const errs = draftErrors(d);
+  assert.match(errs["cfg.skill_sources.0.name"] || "", /collides/);
+  assert.match(errs["cfg.skill_sources.1.name"] || "", /invalid/);
+  const d2 = snap([BOARD], { skill_sources: [src, { ...src }] });
+  assert.match(draftErrors(d2)["cfg.skill_sources.1.name"] || "", /duplicate/);
 });
 
 check("pmo card fields have real labels, not raw paths", () => {

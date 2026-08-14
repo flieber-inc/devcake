@@ -47,7 +47,7 @@ resolve — this amends `13-deployment.md`'s old "no volumes needed" note).
 2026-08-13 rider (ADR-0016 addendum): the mirror gained a second read-side
 consumer — external `<card>/<skill>` skills are served from the bare
 mirror via app-side git plumbing (`tree_head`/`read_skill_tree`/
-`read_skill_file`), and skill-source cards join the dispatch gate's
+`read_skill_file`), and skill sources (dedicated connections — ADR-0016 addendum 2) join the dispatch gate's
 needed-set; the mirror contract itself is unchanged.
 
 ### 2 — Sync is a fail-closed dispatch precondition

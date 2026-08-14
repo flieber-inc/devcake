@@ -739,18 +739,29 @@ def test_container_limits_defaults_bounds_and_round_trip():
     assert AppConfig.model_validate(cfg.model_dump()).container_limits == cl
 
 
-def test_repo_skills_subdir_round_trip_and_validation():
-    """ADR-0016 addendum: repo cards may serve `<card>/<skill>` skills from
-    a subdir; relative-only, `..` refused, additive with a safe default."""
-    from devcake.config import RepoInstance
-    r = RepoInstance(name="main", url="https://github.com/o/r",
-                     skills_subdir="skills/")
-    assert r.skills_subdir == "skills"          # normalized, no slashes
-    assert RepoInstance(name="main", url="https://github.com/o/r"
-                        ).skills_subdir == ""
+def test_skill_sources_round_trip_validation_and_name_disjointness():
+    """2026-08-14 ruling (supersedes ADR-0016-addendum decision 1): skills
+    connect through dedicated skill_sources, never repo cards. Relative
+    subdir only, `..` refused; names share the mirror namespace with repo
+    cards so collisions are refused; repo cards have NO skills facet."""
+    from devcake.config import RepoInstance, SkillSource
+    src = SkillSource(name="shelf", url="https://github.com/o/skills",
+                      subdir="skills/")
+    assert src.subdir == "skills"               # normalized, no slashes
     with pytest.raises(Exception):
-        RepoInstance(name="main", url="https://github.com/o/r",
-                     skills_subdir="../escape")
-    cfg = AppConfig(pmos=[], repos=[r])
-    assert AppConfig.model_validate(cfg.model_dump()).repos[0] \
-        .skills_subdir == "skills"
+        SkillSource(name="shelf", url="https://github.com/o/skills",
+                    subdir="../escape")
+    cfg = AppConfig(pmos=[], repos=[], skill_sources=[src])
+    assert AppConfig.model_validate(cfg.model_dump()) \
+        .skill_sources[0].subdir == "skills"
+    # one mirror namespace: a source may not shadow a repo card
+    with pytest.raises(Exception, match="collide"):
+        AppConfig(pmos=[], skill_sources=[SkillSource(
+            name="main", url="https://github.com/o/skills")],
+            repos=[RepoInstance(name="main", url="https://github.com/o/r")])
+    with pytest.raises(Exception, match="duplicate"):
+        AppConfig(pmos=[], repos=[], skill_sources=[src, src])
+    # the old facet is gone from repo cards
+    assert not hasattr(
+        RepoInstance(name="main", url="https://github.com/o/r"),
+        "skills_subdir")

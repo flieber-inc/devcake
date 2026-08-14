@@ -209,7 +209,14 @@ def build_services() -> Services:
     forge_runtime = ForgeRuntime()
     # ADR-0024: the ONE deployment-wide source mirror (repos are
     # deployment-global, so the mirror is too — same shared-runtime idiom)
-    repo_cache = RepoCache(config, forge_runtime)
+    from ..adapters.registry import forges as forge_registry
+
+    def _clone_user_of(forge_id: str) -> str:
+        desc = forge_registry().get(forge_id)
+        return (getattr(desc, "clone_user", "") or "") if desc else ""
+
+    repo_cache = RepoCache(config, forge_runtime,
+                           clone_user_of=_clone_user_of)
     # the bundled internal fallback forge (M11): provisioner is admin-
     # credentialed (GITEA_ADMIN_*); None disables the zero-repo un-gating
     # when Gitea is absent

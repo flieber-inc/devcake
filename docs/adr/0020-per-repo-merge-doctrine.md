@@ -10,6 +10,12 @@
   really a property of the forge repo (tokens, branch protection, CI weight),
   not of the PMO board.
 
+> **Amended by ADR-0035 (2026-08-14):** at the same chokepoint, a merge
+> target that is memory-bound anywhere (any `memory_repos` listing, or
+> the sole work repo of a Curator board) additionally requires the
+> global `memory_auto_merge` (default OFF — a person merges every
+> note). Card-level `auto_merge` alone is no longer sufficient there.
+
 ## Decision
 
 ### 1 — Three fields move onto `RepoInstance` as one package

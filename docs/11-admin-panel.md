@@ -95,7 +95,7 @@ All writes go through the app (single validation point, `10-persistence.md` §4)
 | `needs_human` | pmo_id → advisory string, rebuilt each cycle from the `DEVCAKE-NEEDS-HUMAN` label (clears the moment the human removes the label). Same instance-qualified keys as `merge_handoffs` when `N>1` |
 | `dependency_cycles` | detected blocked-by loops (each names the mission keys in the loop) |
 | `blocked_reasons` | pmo_id → why the scheduler is currently holding a mission back (advisory mirror of the last gate map) |
-| `steward_degraded` | `null`, or the error string when the last 3 steward runs all died (periodic service backs off; Run now still works). Surfaced on the **Traffic** config card, **not** as an Overview SPA alert |
+| `steward_degraded` | `null`, or the error string when the last 3 steward runs all died (periodic service backs off; Run now still works). Surfaced on the **Scheduled Tasks** Relations Steward panel, **not** as an Overview SPA alert |
 | `security_warnings` | dismissable credential-posture list from `security.security_warnings` (`14` §8) — e.g. `gui-secrets-basic-auth`, `forge-write-token:{repo}`, `repo-read-only:{repo}` |
 | `prompt_template_warnings` | active templates that no longer resolve (fallback-to-default in effect) |
 

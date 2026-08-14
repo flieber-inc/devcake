@@ -173,7 +173,12 @@ repositories, as configured repo cards** — the founder's ruling collapsed an
 earlier dedicated-machinery design onto existing pipes ("they should
 essentially work just like a forge adapter — and could just be one").
 
-1. **Source = a `RepoInstance` card.** A Dev Type selects an external skill
+1. **Source = a `RepoInstance` card.**
+   > **Superseded by Addendum 2 (below, 2026-08-14):** sources are
+   > dedicated `skill_sources` connections; `RepoInstance.skills_subdir`
+   > is deleted and repo cards have no skills facet.
+
+   A Dev Type selects an external skill
    as `<card>/<skill>` (one slash; prefix in card shape — `SKILL_NAME_RE`
    stays slash-free, so the store/builtin and external namespaces are
    STRUCTURALLY disjoint: no precedence rules exist anywhere). The card's

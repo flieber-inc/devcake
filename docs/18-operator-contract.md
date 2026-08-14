@@ -38,6 +38,7 @@ proving a fresh machine works is the
 | **Re-run the fresh-`/data` drill** | Each release you adopt; quarterly otherwise | [operator drill](tutorials/operator-drill.md) — the standing stranger-operability proof |
 | **Treat Clear run history as a maintenance window** | When you use it | Dispatch (poll, hello, OAuth, steward) is paused for the entire wipe, including OpenObserve stream deletes: Clear-runs holds the poll + dispatch locks, soft-drains and Dagu-stops live Devs, then wipes. `ok: false` with `undrained` means a container could not be stopped — inspect Dagu before re-running work because the app has no `docker.sock`. The store wipe generation prevents an in-flight finalizer from resurrecting deleted records ([`10`](10-persistence.md), [`11`](11-admin-panel.md), [`13`](13-deployment.md) §8) |
 | **Do NOT treat a throttled Dev Type as a breaker** | When `/health` shows `dev_backend_degraded` | There is no credential to fix — DevCake has throttled that Dev Type to one probe run and resumes automatically once runs succeed. Check your model provider ([15] §4a) |
+| **Tend team memory** | When `/health` shows `memory_curator_no_board` / `claims_queue_capped`; whenever a Curator PR waits | The notebooks are YOUR repositories (they survive Clear; only a full stack wipe takes them): their READMEs are the filing policy, and with `memory_auto_merge` off (default) every note becomes official only through your merge. A capped queue means leads are being refused — run the Memory Curator (Configuration → Scheduled Tasks) or raise the cap ([`11`](11-admin-panel.md), ADR-0035) |
 | **Rebuild in lockstep on upgrade** | Every time `app/`, `admin/`, or `images/` change | `docker compose stop dagu` then `./up.sh --bake` so the live DAG bind cannot see a new `dev-run.yaml` without `DEVCAKE_WS_HOST` ([`13`](13-deployment.md) §8, `AGENTS.md`) |
 
 ## 4. Secret rotation (the procedure, in one place)
@@ -47,7 +48,9 @@ Rotation is four different motions depending on the secret:
 1. **PMO tokens** — mint the new token at the provider, paste it into the
    **PMO** page's secret field (`#/pmo`), **Save**, then run the named
    connection test. **Forge tokens** — same motion on **Repositories**
-   (`#/repos`). The write path hot-reloads adapters ([`11`](11-admin-panel.md)).
+   (`#/repos`). **Skill-source read tokens** — same motion on the
+   **Skill sources** card (Configuration → Skills). The write path
+   hot-reloads adapters ([`11`](11-admin-panel.md)).
 2. **Model / harness credentials** — upload via the Dev Type card under
    Configuration (OAuth wizard, credential upload, or `scripts/grok_login.sh`).
    The write clears any `DEV_AUTH` breaker for Dev Types using that credential
@@ -89,6 +92,14 @@ The app warns; **you** gate (`14` §8):
 - **Dev Type staffing for REVIEW** — optional performance choice (different
   skills / identifying prompt than EXECUTE). Not a security control; the
   security-relevant second identity is the **reviewer token**.
+- **Note truth** — the app delivers leads and gates merges; it never judges
+  whether a note is correct. A wrong note guides every later run until you
+  revert it (git keeps every merge attributable). `memory_auto_merge` ON is
+  two models in a row — a consent you give, never a default (ADR-0035).
+- **Skill source trust** — an external skill source is third-party supply
+  chain that tracks its branch: the app pins and records the commit per run
+  and caps payload sizes, but never reviews content. Point sources only at
+  repositories you trust like collaborators ([`14`](14-security.md) §2).
 
 ## 6. Ownership map
 

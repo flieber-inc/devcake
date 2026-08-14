@@ -51,6 +51,10 @@ app/devcake/
                    #     manager, schedule, dispatch, finalize, transitions,
                    #     review, decomposition, sweeps, feed, markers, steward
     steward_service.py  # Relations Steward cadence (ADR-0007; ISSUES #36 first cut)
+    cron_service.py     # Scheduled Tasks: one-verb ticket creator + reserved
+                        #   Memory Curator fan-out (ADR-0035); fires ride the poll loop
+    claims.py           # the .claims/ conveyor — leads copied onto memory
+                        #   notebooks at harvest (ADR-0035); app-blind to notes
     runs.py        #   ingress, kill, hello dispatch; holds RunBootstrap + RunFinalizer
     oauth.py       #   harness OAuth flows (launches via RunBootstrap)
     watchdog.py    #   timeout/zombie detection + workspace sweep cadence
@@ -65,7 +69,8 @@ app/devcake/
     blocker_locator.py #  deployment-wide blocked_by resolution (ADR-0009)
     backend_health.py  #  model-backend brake predicates (ADR-0018/0026)
     failure_taxonomy.py #  THE DEV_* failure table — consumers derive from it (ADR-0027)
-    skills.py      #   skill store reads + prompt assembly (ADR-0016)
+    skills.py      #   skill store reads + prompt assembly (ADR-0016; external
+                   #   `<source>/<skill>` resolves `skill_sources` — addendum 2)
     costing.py     #   app-side cost estimation vs the rate card (ADR-0021)
     asset_fetch.py #   PMO attachment/zip fetching for activity repos (ADR-0014/0017)
     ids.py         #   id generation
@@ -86,7 +91,8 @@ app/devcake/
     gitea_issues/  #   PMOPort impl — forge-issue family (05 §9; not ForgePort)
     github/ gitlab/ gitea/  # ForgePort impls + Gitea provisioner (06, ADR-0010)
     dagu/          #   ExecutorPort impl
-    files/         #   StatePort impl (+ runlog.py, owner_store.py) (10)
+    files/         #   StatePort impl (+ runlog.py, owner_store.py,
+                   #   cron_store.py — the scheduled-task fire ledger) (10)
     redis/         #   MessagingPort impl — ingress + replies (09)
   api/             # FastAPI (11, ADR-0015/0028): services.py = the
                    #   composition root (Services graph + build_services(),
@@ -97,7 +103,7 @@ app/devcake/
                    #   mission_actions.py, clear.py, config_service.py,
                    #   profiles_service.py, settings_transfer.py,
                    #   devtypes_service.py, connections_service.py,
-                   #   internal_repos_service.py, runs_service.py,
+                   #   internal_repos_service.py, runs_service.py, cron_service.py,
                    #   auth.py (basic-auth + intent-header middleware —
                    #   attached in main.py; load-bearing, tested via
                    #   tests/test_api_surface.py)

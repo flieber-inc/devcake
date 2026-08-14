@@ -59,7 +59,7 @@ For aggregates, the Consoles page (OpenObserve) carries every run as a trace wit
 warning** comment: every third review rejection it posts the mission's
 cumulative recorded cost — that's your cue to intervene or SKIP.
 
-## The two big switches
+## The three big switches
 
 - **`adoption_mode`** (the PMO page, under Adapters) — `opt_in` (default: only `DEVCAKE`-labeled items) vs
   `opt_out` (**the entire team**, existing backlog included; DevCake will start
@@ -73,6 +73,13 @@ cumulative recorded cost — that's your cue to intervene or SKIP.
   **reviewer token** (app-only formal approval), and eyes open. REVIEW always
   runs as a pipeline stage; which Dev Type staffs it is a performance choice
   (skills / identifying prompt), not a security control.
+- **`memory_auto_merge`** (Configuration → Limits, Memory card) — off
+  (default): every note a Memory Curator proposes for a team-memory
+  notebook becomes official only through **your** merge. On means two
+  models in a row — a Curator wrote it and a Reviewer approved it; not a
+  person, not the reviewer token. Same shape as `auto_merge`, same rule:
+  flip it deliberately, and remember a wrong note guides every later run
+  until you revert it (git keeps each merge attributable — ADR-0035).
 
 ## Config profiles — save and switch whole setups
 
@@ -91,8 +98,9 @@ Honesty rules worth knowing: profiles are snapshots, not live links — later
 edits never update a profile (the row shows "settings changed since" when
 you've drifted from the last-applied one); applying an old profile restores
 its **old** secret values, and the preview warns when a live secret is newer
-than the snapshot; run history, the skill store, internal repos, and `.env`
-are never touched by a profile. Profile snapshots live on `/data` and hold
+than the snapshot; run history, the skill store, internal repos (memory notebooks included), and `.env`
+are never touched by a profile — but note that skill-source and other
+connection secrets ARE in the snapshot (they restore with it). Profile snapshots live on `/data` and hold
 secret values — they are part of why backups are a password export.
 
 **Moving a setup to another install:** the same section's **Export…** writes

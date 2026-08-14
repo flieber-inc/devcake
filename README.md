@@ -79,9 +79,10 @@ What you own as the operator — once at setup, and recurring — fits on one pa
 |---|---|
 | One or more **PMO instances** (teams) | Polls, managed labels, feed posts, adoption modes |
 | Zero or more **external repos** | Clone, branch, PR; zero uses the bundled Gitea; **RO** + **reviewer** tokens recommended (write always for work repos) |
-| **Work** vs **reference** repos per PMO | Routing targets vs read-only consultation clones |
+| **Work** vs **reference** vs **memory** repos per PMO | Routing targets vs read-only consultation clones vs team-memory notebooks (curated notes, mounted read-only into every run — ADR-0035) |
 | **Dev Types**, assignments, prompts | ONBOARD → PLAN → EXECUTE → REVIEW (plus optional steward) |
-| **Skills** per Dev Type (skill store) | Curated Claude Code skills seeded into an editable Gitea repo, installed into agent sessions |
+| **Skills** per Dev Type (skill store + skill sources) | Curated skills seeded into an editable Gitea repo, plus your own external **skill sources** — dedicated read-only connections serving `<source>/<skill>` — installed into agent sessions |
+| **Scheduled Tasks** | Built-in maintenance on a timer — the Relations Steward (proposes ticket orderings) and the Memory Curator (reviews raw leads into notebook notes via PRs) — plus your own recurring ticket-creating tasks |
 | Auto-merge, intake pause, limits | Operator knobs — defaults favor a human merge |
 
 ### Three ways to use it
@@ -174,7 +175,7 @@ PMO (Linear / Gitea Issues) ──poll / labels──► app (orchestrator)
 
 Self-hosted, single operator, loopback by default. Stack passwords live in
 `.env`; **operator secrets** (PMO keys, forge tokens, model credentials) are
-entered through the admin UI's Configuration, Repositories and PMO pages and stored
+entered through the admin UI's Configuration (incl. Skills → Skill sources), Repositories and PMO pages and stored
 on the app volume — never echoed back. Be clear-eyed about what "GUI secret
 store" means: values rest as **plaintext files (mode 0600) on the `/data`
 volume** — there is no vault and no at-rest encryption (a key would have to

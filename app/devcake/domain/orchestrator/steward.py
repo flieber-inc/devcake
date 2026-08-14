@@ -138,7 +138,8 @@ async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission],
     return await _launch_steward(
         mgr, dev_type, duty="",
         prompt_text=steward_prompt(
-            dispatch._identifying_prompt(mgr, dev_type), eligible),
+            dispatch._identifying_prompt(mgr, dev_type), eligible,
+            template=mgr.config.steward.playbook_template),
         context_stale=context_stale, context_omit=context_omit)
 
 

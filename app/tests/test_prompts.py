@@ -206,3 +206,26 @@ def test_steward_prompt_embeds_missions():
     assert "blocked by: T-1" in p                 # existing blockers shown as keys
     assert "x" * 300 in p and "x" * 301 not in p  # description head capped
     assert "stewarded" in p
+
+
+def test_steward_prompt_operator_template_and_code_owned_contract():
+    """2026-08-14: the relations instruction half is operator-editable
+    (config.Steward.playbook_template); the result contract is appended
+    by code so no edit can break the machine half. Braces in operator
+    text must survive (replace, not str.format)."""
+    from devcake.prompts import STEWARD_RESULT_CONTRACT, steward_prompt
+    m = Mission(instance="linear", pmo_id="p1", pmo_kind="issue",
+                key="T-1", title="t", description="d", status="backlog",
+                updated_at=datetime.now(timezone.utc))
+    custom = 'Only map {"json": true} style pairs.\n{mission_table}'
+    p = steward_prompt("ID", [m], template=custom)
+    assert 'Only map {"json": true} style pairs.' in p
+    assert "T-1" in p                                  # table substituted
+    assert "Required output" in p                      # contract appended
+    assert STEWARD_RESULT_CONTRACT.strip() in p
+    # a template that forgot the placeholder still receives the table
+    p2 = steward_prompt("ID", [m], template="Be gentle.")
+    assert "T-1" in p2 and "Be gentle." in p2
+    # empty template falls back to the shipped default
+    p3 = steward_prompt("ID", [m], template="  ")
+    assert "RELATIONS STEWARD" in p3

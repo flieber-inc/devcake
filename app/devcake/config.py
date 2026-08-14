@@ -323,6 +323,39 @@ class ContainerLimits(BaseModel):
     pids: int = Field(0, ge=0)
 
 
+# The operator-editable half of the relations steward's instructions
+# (founder ask 2026-08-14, reversing the 2026-07-14 "STEWARD stays
+# un-templated" ruling — the SAME parallelism as the Memory Curator's
+# ticket text). `{mission_table}` is substituted with the live mission
+# list; the required result.json contract stays CODE-OWNED and is
+# appended by prompts.steward_prompt so an edit cannot break the
+# machine half of the run.
+STEWARD_RELATIONS_TEMPLATE = (
+    "## Your current mission type: RELATIONS STEWARD\n"
+    "\n"
+    "Below is every open mission DevCake manages in this team. Your ONLY "
+    "job is to\n"
+    "identify ordering dependencies that are not yet mapped: pairs where "
+    "one mission\n"
+    "clearly consumes another's output and therefore must not start "
+    "before it\n"
+    "finishes (implementation after design/documentation, migration "
+    "after schema\n"
+    "change, consumer after API). Do not modify any code — the "
+    "repository clone is\n"
+    "context only.\n"
+    "\n"
+    "Be conservative: when unsure, propose nothing. Each mission lists "
+    "its existing\n"
+    "blockers — only propose edges that are missing. Never invent "
+    "mission keys.\n"
+    "\n"
+    "### The missions (key · status · existing blockers · title + "
+    "description head)\n"
+    "{mission_table}"
+)
+
+
 class Steward(BaseModel):
     """The out-of-the-loop Dev class (STEWARD — renamed from MAPPER,
     founder decision 2026-08-06): board-tending runs outside any mission's
@@ -334,6 +367,9 @@ class Steward(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(60, ge=1)
     dev_type: str | None = "steward"
+    # operator-owned instruction text; `{mission_table}` marks where the
+    # live mission list lands (appended automatically when omitted)
+    playbook_template: str = STEWARD_RELATIONS_TEMPLATE
 
 
 class CronJob(BaseModel):

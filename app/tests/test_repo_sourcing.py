@@ -285,3 +285,28 @@ def test_memory_runspec_entry_carries_strict_flag_from_snapshot():
     out = dispatch._memory_repos_for(mgr, run)
     assert out[0]["strict"] is True and out[0]["token"] == "ro"
     assert "strict" not in out[1]        # open mode: entry stays non-fatal
+
+
+def test_memory_mount_snapshot_resolves_internal_commit_via_remote_head():
+    """N1: a mirror-ineligible notebook (bundled Gitea) has no tree_head —
+    provenance falls back to a forge ls-remote instead of a blank commit."""
+    import asyncio
+    from devcake.domain.orchestrator import dispatch
+
+    async def tree_head(c):
+        return None
+
+    async def remote_head(c):
+        return "deadbeefcafe0123"
+
+    mgr = SimpleNamespace(
+        instance=SimpleNamespace(memory_repos=["nb"]),
+        config=SimpleNamespace(context_sourcing_strict=True),
+        repo_cache=SimpleNamespace(tree_head=tree_head,
+                                   remote_head=remote_head))
+    dt = SimpleNamespace(memory_repos=[])
+    out = asyncio.new_event_loop().run_until_complete(
+        dispatch._memory_mount_snapshot(mgr, dt, "webapp",
+                                        stale=set(), omit=set()))
+    assert out[0]["commit"] == "deadbeefcafe0123"
+    assert out[0]["binding"] == "board" and out[0]["strict"] is True

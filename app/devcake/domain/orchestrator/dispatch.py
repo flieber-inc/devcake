@@ -650,6 +650,13 @@ async def _memory_mount_snapshot(mgr, dev_type, repo_ref: str, *,
         else:
             binding = "domain"
         sha = await mgr.repo_cache.tree_head(card) or ""
+        if not sha:
+            # mirror-ineligible card (bundled Gitea): no mirror to read —
+            # ask the forge directly so §3.6 provenance isn't blank in the
+            # pilot's default deployment (review N1)
+            remote_head = getattr(mgr.repo_cache, "remote_head", None)
+            if callable(remote_head):
+                sha = (await remote_head(card)) or ""
         out.append({
             "card": card,
             "binding": binding,

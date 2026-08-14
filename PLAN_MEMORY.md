@@ -289,6 +289,16 @@ inside the harness.
   family (same honesty as a missing workspace). Never as
   `DEV_BAD_OUTPUT`. Never increment a Dev-type attempt that
   looks like a dumb agent.
+- **Amended 2026-08-14 (review R1):** the mirror gate only sees
+  mirror-eligible cards, so this rule has two halves. Dispatch
+  resolves every mount — a dangling binding or an
+  uncredentialed internal-forge card defers via the existing
+  blocked-reasons path. Each runspec memory entry snapshots a
+  `strict` flag at dispatch; the **provision step** makes a
+  strict mount's clone failure fatal through the existing
+  exit-13 forge family (`clone_failed`), the same class and
+  counting as the primary clone. Instance `memory_repos` names
+  are existence-checked at validation like `repos`.
 - Skill-source card in the needed-set fails the same way
   (today's fail-closed, now toggle-governed).
 
@@ -412,8 +422,11 @@ never sit in the root or in a high-visibility folder.
 
 - `.claims/<id>.json` — one file per claim. Schema
   `devcake-claims/v1`. `<id>` is the deterministic hash of
-  `(source_pmo_id, step, index)` — safe path segment, dedup =
-  file exists, re-harvest is idempotent.
+  `(source_instance, source_pmo_id, step, index)` — safe path
+  segment, dedup = file exists, re-harvest is idempotent
+  (amended 2026-08-14, review N6: the instance joins the hash so
+  two boards on different forges with colliding numeric pmo ids
+  cannot dedup each other's claims on a shared notebook).
 - `.claims/README.md` — app-written **create-if-missing**
   only. Carries the leads-not-truths framing verbatim. The
   app does not rewrite it after it exists. The Curator does
@@ -460,11 +473,18 @@ notebook.
 Use the app's forge credentials, **never** a mission Dev
 token.
 
-- Internal / bundled Gitea: Contents-API multi-file commit
-  (skill-store / activity-repo pattern). Touch **only**
-  paths under `.claims/`.
-- External card: the card's **write** token (`token`). If
-  the card is `reference_only`, skip that notebook, audit
+- **Amended 2026-08-14 (review R5, replaces the Contents-API
+  instruction):** ONE forge-neutral writer for every registered
+  forge — shallow clone + commit + push with the card's
+  **write** token via askpass (never a mission Dev token, never
+  `GITEA_ADMIN_*`). Touch **only** paths under `.claims/`.
+  Accepted costs, named: two checkouts per notebook per harvest
+  (one listing+README snapshot, one commit); a push race
+  (another commit landing inside the window) is retried ONCE by
+  replaying the whole cycle onto the fresh head —
+  creates/deletes are idempotent — and a second failure is
+  audited, never silent.
+- If the card is `reference_only`, skip that notebook, audit
   loudly, do not fail the discovering run.
 
 Algorithm (`claims.append_from_harvest`):
@@ -495,11 +515,13 @@ discovering run, **do not** withhold feed memorialization.
 
 ### 5.4 Clear
 
-When Clear wipes a board:
+Clear is the all-boards operator wipe, so (amended 2026-08-14,
+review N7):
 
-- For every notebook the app can write, delete
-  `.claims/*.json` whose `source_instance` /
-  `source_pmo_id` is that board.
+- For every notebook the app can write, delete **every**
+  `.claims/*.json` — all origin boards are being wiped, and
+  orphan claims from boards deleted before the Clear have no
+  owner left to match on.
 - Leave `.claims/README.md`.
 - **Do not** touch any path outside `.claims/`.
 - Confirm copy adds: claims copied from this board's
@@ -521,9 +543,14 @@ list includes this listing.
 
 ### 6.1 Placement
 
-New Config section `#/config/cron`, listed in
-`ConfigPage.jsx` after `limits` (or after `profiles` — pick one
-and do not hide it under Traffic). One section per view
+New Config section — **named "Scheduled Tasks"**
+(`#/config/scheduled-tasks`; founder ruling 2026-08-14: never
+"Cron" in the UI; the config field stays `crons` and the API
+stays `/api/v1/cron`). It consolidates the Relations Steward
+controls (from Traffic control, which dissolves into Limits)
+and segregates **DevCake tasks** (Steward + Memory Curator,
+built-in, never deletable) from **Custom tasks** (operator
+rows) as two cards. One section per view
 (DESIGN.md). `useSharedDraft()` for the list. `SettingRow` for
 scalars. Table for the rows, styled like the Runs table.
 
@@ -571,11 +598,16 @@ Do not set status to `in_progress`. Leave it `backlog` so
 `derive()` can see the stage label (rows 2–4). ONBOARD-entry
 tickets have no stage label (row 1).
 
-Degradation: if the last 3 fires for this row produced no
-ticket and no successful skip-reason (paused / in-flight /
-empty-queue), mark `cron_degraded[id]` on `/health` and stop
-automatic fires. Run now still works. A successful fire
-clears it. Store-derived, restart-safe, like Steward.
+Degradation: if the last 3 automatic fires for this row
+produced no ticket and no successful skip-reason (paused /
+in-flight / empty-queue), mark `cron_degraded[id]` on `/health`
+and stop automatic fires. Run now still works; a successful
+fire clears it. **Amended 2026-08-14 (review R4):** cron fires
+create tickets, not runs, so "like Steward" needs its own
+ledger — `state/cron_outcomes.json` (atomic writes) records one
+outcome per automatic fire window plus `last_fire_at`; the
+schedule is elapsed-time off that stamp (restart-safe, one
+attempt per window), replacing the minute-multiple watermark.
 
 ### 6.3 Reserved row `memory-curator`
 
@@ -624,7 +656,10 @@ root: `api/services.build_services()`. `main.py` stays wiring
 
 - `GET /api/v1/cron` — list (from live config)
 - `POST /api/v1/cron/{id}/run` — 422 unknown / reserved-ok;
-  409 in-flight; 200 `{created: [{pmo, key}]}`
+  409 in-flight (generic rows); 200 `{created: [{pmo, key}]}`.
+  The reserved row's fan-out returns 200 with an empty
+  `created` when every board is busy/paused/absent — the SPA
+  message explains it (amended 2026-08-14, review N4).
 
 No new attributes bound onto `MissionManager` after class
 body (ADR-0015 / structure guards).
@@ -712,7 +747,7 @@ or an existing instant POST.
 | Repos page | Derived chips: work / reference / skills-source / memory board-bound ×N / memory domain-bound ×N. Memory-used cards sort first in memory pickers. Delete warns with usages. Queue depth number if known. |
 | Run view | Memory mounts: card, binding badge, commit, stale marker. Not file contents. |
 | Create notebook | §8 dialog. |
-| Config → Cron | §6.1. |
+| Config → Scheduled Tasks | §6.1 (DevCake tasks / Custom tasks split). |
 | Config (limits or a SettingRow near traffic) | `context_sourcing_strict` — copy must say what **off** means (runs proceed on cached content). |
 | Config | `memory_auto_merge` + OFF→ON modal (§4.1). |
 | Health | `cron_degraded`, `memory_curator_no_board`, `claims_queue_capped`. Not `steward_degraded` (that stays on the Steward card). |

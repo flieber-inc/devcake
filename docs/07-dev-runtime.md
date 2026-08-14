@@ -27,6 +27,10 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
                          #   /workspace/memory/<card>/ (card name, not URL slug).
                          #   Sibling of repo/ and activity/ — never
                          #   repo/memory/. Read-only by token + prompt.
+                         #   A `strict` entry's clone failure is FATAL for
+                         #   provision (exit-13 forge family, like the
+                         #   primary clone); non-strict failures print a
+                         #   note and the run continues.
                          #   Curator runs do NOT remount their own notebook
                          #   here (it is the primary work clone).
   activity/

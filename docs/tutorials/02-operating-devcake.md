@@ -45,7 +45,7 @@ abandoned (decomposed away, or PR closed unmerged).
   failing step's attempt count — comment with the literal `DEVCAKE-RETRY` in
   the body (e.g. after fixing the cause) to grant a fresh budget. After
   `DEVCAKE-FAILED` lands, removing the label does the same. With the policy
-  set to *Any comment* (Limits & Traffic), every non-DevCake comment resets —
+  set to *Any comment* (Limits), every non-DevCake comment resets —
   fine on a board with no bot traffic, defeated by one chatty integration.
 - **Re-triage:** move an untouched-looking mission back to Backlog with no stage
   labels and it becomes ONBOARD material again.

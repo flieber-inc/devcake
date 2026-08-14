@@ -39,9 +39,12 @@ claims_depth: dict[str, int] = {}
 claims_queue_capped: set[str] = set()
 
 
-def claim_id(source_pmo_id: str, step: int, index: int) -> str:
-    """Deterministic safe path segment of (source_pmo_id, step, index)."""
-    raw = f"{source_pmo_id}\0{step}\0{index}".encode()
+def claim_id(source_instance: str, source_pmo_id: str, step: int,
+             index: int) -> str:
+    """Deterministic safe path segment. The instance joins the hash so two
+    boards on different forges with colliding pmo ids (numeric issue
+    numbers) can never dedup each other's claims on a shared notebook."""
+    raw = f"{source_instance}\0{source_pmo_id}\0{step}\0{index}".encode()
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
@@ -53,7 +56,7 @@ def claim_record(run: Run, entry: dict, index: int, *,
     about = [a for a in about if isinstance(a, str) and a.strip()]
     return {
         "schema": SCHEMA,
-        "id": claim_id(run.mission_pmo_id, run.seq, index),
+        "id": claim_id(run.pmo_ref, run.mission_pmo_id, run.seq, index),
         "source_instance": run.pmo_ref,
         "source_key": run.mission_key,
         "source_pmo_id": run.mission_pmo_id,
@@ -133,21 +136,21 @@ async def _append_one_notebook(notebooks, cfg, run, entries, card, *,
         if audit:
             audit(run.mission_pmo_id, "claims_skip_nowrite", card)
         return 0
-    existing = await notebooks.list_json_names(card)
-    if existing is None:
+    snap = await notebooks.snapshot(card)
+    if snap is None:
         log.warning("claims: cannot list %s — skip", card)
         if audit:
             audit(run.mission_pmo_id, "claims_list_failed", card)
         return 0
-    have = {n[:-5] if n.endswith(".json") else n for n in _json_names(existing)}
+    have = {n[:-5] if n.endswith(".json") else n
+            for n in _json_names(snap.get("json_names"))}
     depth = len(have)
     claims_depth[card] = depth
     creates: dict[str, str] = {}
-    has_readme = await notebooks.has_readme(card)
-    if has_readme is False:
+    if snap.get("has_readme") is False:
         creates[README_PATH] = CLAIMS_README
     for i, entry in enumerate(entries):
-        cid = claim_id(run.mission_pmo_id, run.seq, i)
+        cid = claim_id(run.pmo_ref, run.mission_pmo_id, run.seq, i)
         if not _SAFE_ID.match(cid) or cid in have:
             continue
         if cap and depth + len([p for p in creates if p.endswith(".json")]) >= cap:
@@ -171,6 +174,33 @@ async def _append_one_notebook(notebooks, cfg, run, entries, card, *,
     if cap and claims_depth[card] < cap:
         claims_queue_capped.discard(card)
     return n
+
+
+async def prune_all(notebooks: ClaimsNotebooks, cards: list[str], *,
+                    audit=None) -> dict[str, int]:
+    """Clear-all prune: delete every `.claims/*.json` on every writable
+    notebook (README stays). Clear wipes every board, and orphan claims
+    from boards deleted before the Clear have no owner left — pruning by
+    currently-configured source names would leak them forever."""
+    pruned: dict[str, int] = {}
+    for card in cards:
+        if not notebooks.can_write(card):
+            continue
+        try:
+            names = _json_names(await notebooks.list_json_names(card))
+            if not names:
+                continue
+            await notebooks.commit(
+                card, creates={},
+                deletes=[f"{CLAIMS_DIR}/{n}" for n in names],
+                message="devcake:claims:v1 prune source=clear-all")
+            claims_depth[card] = 0
+            pruned[card] = len(names)
+        except Exception:  # noqa: BLE001 — clear must not fail the wipe
+            log.exception("claims prune failed for %s", card)
+            if audit:
+                audit("clear", "claims_prune_failed", card)
+    return pruned
 
 
 async def prune_board(notebooks: ClaimsNotebooks, cards: list[str], *,

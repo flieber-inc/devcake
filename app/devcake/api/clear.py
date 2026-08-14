@@ -343,12 +343,11 @@ async def clear_all(
         try:
             from ..config import memory_bound_names
             from ..domain import claims as claims_mod
+            # clear-all wipes EVERY board, and orphan claims from boards
+            # deleted before the Clear have no owner left — prune every
+            # claim file, not just currently-configured source names
             cards = sorted(memory_bound_names(config))
-            for inst in config.pmos:
-                pruned = await claims_mod.prune_board(
-                    claims, cards, source_instance=inst.name)
-                if pruned:
-                    claims_pruned[inst.name] = pruned
+            claims_pruned = await claims_mod.prune_all(claims, cards)
         except Exception:  # noqa: BLE001 — wipe continues; claims prune is best-effort
             log.exception("claims prune during clear failed")
             claims_pruned = {"error": "claims prune failed"}

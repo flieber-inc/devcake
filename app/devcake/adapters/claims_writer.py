@@ -38,6 +38,9 @@ class NullClaims:
     async def list_json_names(self, card):
         return None
 
+    async def snapshot(self, card):
+        return None
+
     async def list_claim_meta(self, card):
         return None
 
@@ -54,9 +57,8 @@ class NullClaims:
 class ClaimsWriter:
     """One writer for every configured card that stores a write token."""
 
-    def __init__(self, config, repo_cache=None, git=run_git):
+    def __init__(self, config, git=run_git):
         self.config = config
-        self.repo_cache = repo_cache
         self.git = git
 
     def _inst(self, card):
@@ -172,6 +174,21 @@ class ClaimsWriter:
         finally:
             self._cleanup(dest)
 
+    async def snapshot(self, card: str) -> dict | None:
+        """Listing + README presence in ONE checkout (the append path used
+        to burn two)."""
+        inst, dest = await self._with_tree(card, write=False)
+        if dest is None:
+            return None
+        try:
+            claims = dest / ".claims"
+            names = (sorted(p.name for p in claims.glob("*.json")
+                            if p.is_file()) if claims.is_dir() else [])
+            return {"json_names": names,
+                    "has_readme": (claims / "README.md").is_file()}
+        finally:
+            self._cleanup(dest)
+
     async def list_claim_meta(self, card: str) -> list[dict] | None:
         inst, dest = await self._with_tree(card, write=False)
         if dest is None:
@@ -200,6 +217,20 @@ class ClaimsWriter:
         if not self.can_write(card):
             raise ValueError(f"cannot write claims on {card!r}")
         self._refuse_paths(list(creates) + list(deletes))
+        try:
+            await self._commit_once(card, creates=creates, deletes=deletes,
+                                    message=message)
+        except Exception:  # noqa: BLE001 — push race: replay once onto the fresh head
+            # creates and deletes are idempotent (same bytes / same paths),
+            # so a second checkout+apply+push is safe; a second failure
+            # propagates to the caller's audit.
+            log.warning("claims commit on %s failed — retrying once", card,
+                        exc_info=True)
+            await self._commit_once(card, creates=creates, deletes=deletes,
+                                    message=message)
+
+    async def _commit_once(self, card: str, *, creates: dict[str, str],
+                           deletes: list[str], message: str) -> None:
         inst, dest = await self._with_tree(card, write=True)
         if dest is None:
             raise RuntimeError(f"cannot checkout {card!r} to write claims")
@@ -227,9 +258,8 @@ class ClaimsWriter:
             self._cleanup(dest)
 
 
-def make_claims_writer(config, internal_forge=None, repo_cache=None
-                       ) -> ClaimsNotebooks:
+def make_claims_writer(config, internal_forge=None) -> ClaimsNotebooks:
     """Always a real writer. `internal_forge` is accepted for call-site
     compatibility and unused: operator notebooks already have a write
     token, same as external cards."""
-    return ClaimsWriter(config, repo_cache=repo_cache)
+    return ClaimsWriter(config)

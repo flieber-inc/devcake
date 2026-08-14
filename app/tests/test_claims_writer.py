@@ -162,3 +162,55 @@ def test_round_trip_create_list_prune_on_local_origin(tmp_path, tokens):
          "HEAD:.claims/abc123456789abcd.json"],
         capture_output=True, text=True, env=env)
     assert gone.returncode != 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="no git binary")
+def test_commit_retries_once_after_push_race(tmp_path, tokens):
+    """R5: a commit landing between our checkout and push rejects the
+    push — the writer replays the whole cycle once onto the fresh head
+    (creates/deletes are idempotent), so the batch is not lost."""
+    from devcake.adapters.claims_writer import ClaimsWriter
+    from devcake.adapters.git import run_git
+    work = tmp_path / "work"
+    work.mkdir()
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin",
+           "HOME": str(tmp_path), "GIT_TERMINAL_PROMPT": "0",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x"}
+    subprocess.run(["git", "init", "-b", "main"], cwd=work, check=True,
+                   capture_output=True, env=env)
+    (work / "README").write_text("nb\n")
+    subprocess.run(["git", "add", "README"], cwd=work, check=True,
+                   capture_output=True, env=env)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=work, check=True,
+                   capture_output=True, env=env)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "--bare", str(work), str(origin)],
+                   check=True, capture_output=True, env=env)
+
+    tokens[("nb", "token")] = "unused-for-local"
+    card = RepoInstance(name="nb", forge="github",
+                        url="file://localhost" + str(origin),
+                        default_branch="main")
+
+    pushes = {"n": 0}
+
+    class Fail:
+        returncode, stdout, stderr = 1, "", "rejected (fetch first)"
+
+    async def flaky_git(args, cwd=None, env=None):
+        if args and args[0] == "push":
+            pushes["n"] += 1
+            if pushes["n"] == 1:
+                return Fail()          # the race: another commit landed
+        return await run_git(args, cwd=cwd, env=env)
+
+    w = ClaimsWriter(_cfg(card), git=flaky_git)
+    run_coro(w.commit(
+        "nb", creates={".claims/aa11bb22cc33dd44.json": "{}\n"},
+        deletes=[], message="devcake:claims:v1 run=r1 n=1"))
+    assert pushes["n"] == 2
+    assert run_coro(w.list_json_names("nb")) == ["aa11bb22cc33dd44.json"]
+    snap = run_coro(w.snapshot("nb"))
+    assert snap == {"json_names": ["aa11bb22cc33dd44.json"],
+                    "has_readme": False}

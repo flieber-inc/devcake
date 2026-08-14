@@ -54,6 +54,13 @@ class FakeNotebooks:
             return None
         return ".claims/README.md" in self.files.get(card, {})
 
+    async def snapshot(self, card):
+        names = await self.list_json_names(card)
+        if names is None:
+            return None
+        return {"json_names": names,
+                "has_readme": ".claims/README.md" in self.files.get(card, {})}
+
     async def commit(self, card, *, creates, deletes, message):
         if self.fail_commit:
             raise RuntimeError("forge down")
@@ -82,11 +89,13 @@ def _run(**kw):
 
 
 def test_claim_id_is_deterministic_and_path_safe():
-    a = claims.claim_id("pmo-1", 2, 0)
-    b = claims.claim_id("pmo-1", 2, 0)
-    c = claims.claim_id("pmo-1", 2, 1)
+    a = claims.claim_id("eng", "pmo-1", 2, 0)
+    b = claims.claim_id("eng", "pmo-1", 2, 0)
+    c = claims.claim_id("eng", "pmo-1", 2, 1)
     assert a == b and a != c
     assert claims._SAFE_ID.match(a)
+    # N6: two boards with colliding pmo ids never dedup each other
+    assert claims.claim_id("cs", "pmo-1", 2, 0) != a
 
 
 def test_append_creates_readme_once_and_one_file_per_entry():
@@ -135,7 +144,7 @@ def test_append_skips_own_repo_ref_and_empty_snapshot():
 
 
 def test_cap_refuses_new_does_not_evict():
-    existing_id = claims.claim_id("old", 1, 0)
+    existing_id = claims.claim_id("old", "old", 1, 0)
     nb = FakeNotebooks(
         writable={"nb"},
         files={"nb": {f".claims/{existing_id}.json": json.dumps({
@@ -162,8 +171,8 @@ def test_write_failure_does_not_raise():
 
 
 def test_prune_deletes_matching_source_leaves_readme_and_other_boards():
-    id_a = claims.claim_id("pmo-1", 2, 0)
-    id_b = claims.claim_id("other", 1, 0)
+    id_a = claims.claim_id("eng", "pmo-1", 2, 0)
+    id_b = claims.claim_id("cs", "other", 1, 0)
     nb = FakeNotebooks(
         writable={"nb"},
         files={"nb": {
@@ -185,7 +194,29 @@ def test_prune_deletes_matching_source_leaves_readme_and_other_boards():
 
 def test_two_file_creates_do_not_share_a_path():
     """Drain-delete vs concurrent create cannot conflict: distinct files."""
-    id0 = claims.claim_id("pmo-1", 2, 0)
-    id1 = claims.claim_id("pmo-1", 2, 1)
+    id0 = claims.claim_id("eng", "pmo-1", 2, 0)
+    id1 = claims.claim_id("eng", "pmo-1", 2, 1)
     assert id0 != id1
     assert f".claims/{id0}.json" != f".claims/{id1}.json"
+
+
+def test_prune_all_removes_orphans_and_keeps_readme():
+    """N7: clear-all prunes EVERY claim file — a claim from a board that
+    was deleted from config before the Clear must not leak forever."""
+    id_a = claims.claim_id("eng", "pmo-1", 2, 0)
+    id_orphan = claims.claim_id("gone", "pmo-9", 1, 0)
+    nb = FakeNotebooks(
+        writable={"nb"},
+        files={"nb": {
+            ".claims/README.md": claims.CLAIMS_README,
+            f".claims/{id_a}.json": json.dumps({
+                "id": id_a, "source_instance": "eng",
+                "source_pmo_id": "pmo-1"}),
+            f".claims/{id_orphan}.json": json.dumps({
+                "id": id_orphan, "source_instance": "gone",
+                "source_pmo_id": "pmo-9"}),
+        }})
+    got = run_coro(claims.prune_all(nb, ["nb"]))
+    assert got == {"nb": 2}
+    assert list(nb.files["nb"]) == [".claims/README.md"]
+    assert claims.claims_depth["nb"] == 0

@@ -15,6 +15,12 @@ class ClaimsNotebooks(Protocol):
         the notebook cannot be listed (missing card, no credentials)."""
         ...
 
+    async def snapshot(self, card: str) -> dict | None:
+        """`{json_names: [...], has_readme: bool}` in ONE checkout — the
+        append path's listing + README presence probe. None if the
+        notebook cannot be read."""
+        ...
+
     async def list_claim_meta(self, card: str) -> list[dict] | None:
         """`{id, source_instance, source_pmo_id}` for each claim file.
         Never includes finding/evidence/scope. None if unlistable."""

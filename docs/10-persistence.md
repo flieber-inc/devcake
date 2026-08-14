@@ -18,7 +18,9 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
     devtype_prompt_templates/{dev}/{name}.yaml  # per-Dev-Type identifying-prompt templates
     profiles/{name}.yaml        # config profiles: section A of a settings bundle + metadata (ADR-0013)
   secrets/
-    connections/{scope}-{instance}.json  # GUI-stored PMO/repo secret VALUES (ADR-0011); 0600
+    connections/{scope}-{instance}.json  # GUI-stored secret VALUES (ADR-0011); 0600. Scopes:
+                                         # pmo (api_key) · repo (token/token_ro/reviewer_token)
+                                         # · skill (token/token_ro — ADR-0016 addendum 2 sources)
                                          #   pmo-board.json is APP-MINTED (ADR-0030: the default
                                          #   board's PAT) and self-healing — re-minted at boot/reload
                                          #   when revoked or lost; never operator-entered
@@ -31,6 +33,10 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
   state/
     runs/{run_id}.json          # Run records (02-domain-model.md §7), one file per run
     runs/quarantine/            # unreadable/model-invalid/pre-v2 records, moved aside at boot (§5)
+    cron_outcomes.json          # scheduled-task fire ledger (ADR-0035): last 3 automatic
+                                # outcomes + last_fire_at per job — degradation + the
+                                # elapsed-interval schedule survive restarts; advisory
+                                # (INV-1): wiping it re-arms automatic fires, nothing else
     runlogs/{run_id}.log        # condensed Dev stdout (run.log relay; SSE for admin terminal)
     events.jsonl                # append-only audit log: every PMO write + settings changes (profile ops, exports)
     mission_owner.json          # multi-PMO claim map (which instance owns which pmo_id)
@@ -82,6 +88,11 @@ pmos:                                # 0..N instances; name is what Run records
                                      # name a listed repo; [] = per-mission internal repos
   reference_repos: []                # read-only consultation clones for EVERY stage
                                      # (disjoint from repos; never work targets)
+  memory_repos: []                   # board-bound memory notebooks (ADR-0035): RO-mounted at
+                                     # /workspace/memory/<card>/ on every stage. I1: pairwise
+                                     # disjoint with repos/reference_repos; I2: a memory-bound
+                                     # card is never one work repo among others — a Curator
+                                     # board lists it as its ONLY repo
   assignments: {}                    # per-instance Mission-Type override rows (ADR-0019):
                                      # a present key replaces the GLOBAL assignments row below
                                      # WHOLESALE (dev_type + extra_cli_args together — args are
@@ -101,6 +112,13 @@ repos:                               # 0..N (empty = every mission routes to the
                                      # token VALUES (token/token_ro/reviewer_token) are GUI-stored:
                                      # /data/secrets/connections/repo-main.json
                                      # internal (zero-repo) synthesized instances always auto_merge=true
+
+skill_sources: []                    # dedicated skills connections (ADR-0016 addendum 2) —
+                                     # NEVER repo cards. Each: {name, forge, url,
+                                     # default_branch, subdir}; names share the mirror
+                                     # namespace with repos (collisions refused). Read-token
+                                     # VALUES are GUI-stored: /data/secrets/connections/
+                                     # skill-{name}.json (token_ro preferred, token fallback)
 
 assignments:                         # every Mission Type must be assigned to exactly one Dev Type.
   ONBOARD:                           #   extra_cli_args are appended verbatim to the harness invocation —
@@ -137,10 +155,28 @@ attach_merged_changeset_to_pmo: false  # true = also zip PR files to PMO for con
 intake_paused: false                 # master switch: no NEW dispatches on any PMO while true (11 §2)
 # each pmos[] entry may also carry intake_paused: true  # per-instance freeze under the master
 max_decomposition_depth: 2           # 0 = unlimited; ADR-0012 / 03 §1.3
+context_sourcing_strict: true        # ADR-0035: skill sources + memory notebooks fail closed —
+                                     # a run whose context cannot be fetched does not start.
+                                     # false = last-good mirror (stale-marked) or omit-and-run
+memory_auto_merge: false             # ADR-0035: false = a person merges every note into a
+                                     # notebook; true = two-model consent (Curator + Reviewer)
+budgets:                             # ADR-0033 D7 counting budgets (0 = unlimited)
+  freshness_rereviews: 5
+  discoveries_per_run: 3
+  claims_queue_max: 50               # ADR-0035: max .claims/*.json per notebook; at cap new
+                                     # leads are refused, never evicted
+crons: []                            # Scheduled Tasks (ADR-0035): [{id, name, enabled,
+                                     # interval_minutes, pmo, entry_stage,
+                                     # description_template, reserved}]. The reserved
+                                     # memory-curator row is ALWAYS present (re-injected on
+                                     # PUT/bundle apply); it never picks a product PMO
 steward:                    # ADR-0007: manual-only by default; periodic service is opt-in
   enabled: false
   interval_minutes: 60
   dev_type: steward
+  # playbook_template: |             # operator-editable relations instructions (ADR-0035);
+  #   ...                            # {mission_table} is replaced with the live mission list;
+                                     # the result contract stays code-owned. Default = shipped text
 active_prompt_templates: {}          # per-Mission-Type template name; missing ⇒ "default"
 active_devtype_prompts: {}           # per-Dev-Type identifying-prompt name; missing ⇒ "Development"
 dismissed_alerts: []                 # admin-UI state: dismissed advisory alerts ("id:signature")
@@ -166,7 +202,7 @@ Direct file edits are tolerated but take effect on the next app start, when `loa
 
 | Deleted | Consequence |
 |---|---|
-| `/data/state` | Run history, attempt counters, and loop-warning dedupe reset. Mission state is untouched (it lives in the PMO); reconciliation (`04-orchestrator.md` §6) rebuilds the in-flight picture from the Dagu API and Redis. Legal at any time. |
+| `/data/state` | Run history, attempt counters, loop-warning dedupe, AND the scheduled-task fire ledger reset — every enabled cron row fires on the next poll and `cron_degraded` clears (`cron_outcomes.json`, ADR-0035). Mission state is untouched (it lives in the PMO); reconciliation (`04-orchestrator.md` §6) rebuilds the in-flight picture from the Dagu API and Redis. Legal at any time. |
 | `/data/secrets` | Dev Types whose harness credential files / harness secret VALUES lived here fail auth (exit 12 → circuit breaker) until re-uploaded or re-entered. GUI-stored connection secrets and profile secret snapshots are gone — re-enter via the Configuration page or re-import a bundle. |
 | `/data/config` | The app blocks startup pending reconfiguration (admin panel first-run flow). |
 | `/data/config/profiles` + `/data/secrets/profiles` | Saved profile snapshots are gone; **live settings are untouched** (profiles are fire-and-forget snapshots, ADR-0013). |

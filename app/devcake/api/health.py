@@ -153,9 +153,8 @@ def unused_repo_names(config, dev_types=None) -> list[str]:
         selected.update(pmo.memory_repos or [])
     for dt in (dev_types or {}).values():
         selected.update(getattr(dt, "memory_repos", None) or [])
-        selected.update(n.split("/", 1)[0]
-                        for n in (getattr(dt, "skills", None) or [])
-                        if "/" in n)
+    # `<source>/<skill>` prefixes name dedicated skill_sources now
+    # (2026-08-14 ruling), never repo cards — no skills branch here
     return sorted(r.name for r in config.repos if r.name not in selected)
 
 

@@ -36,6 +36,9 @@ log = logging.getLogger("devcake.secrets")
 CONNECTION_FIELDS: dict[str, set[str]] = {
     "pmo": {"api_key"},
     "repo": {"token", "token_ro", "reviewer_token"},
+    # dedicated skills connections (2026-08-14): read tokens only — a
+    # skills source has no PR surface and is read-only by construction
+    "skill": {"token", "token_ro"},
 }
 
 

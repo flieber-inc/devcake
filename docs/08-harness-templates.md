@@ -233,7 +233,7 @@ Skill-store skills (`02-domain-model.md` `DevType.skills` / `skills_required`)
 are materialized by the entrypoint before harness launch into the harness's
 **registry-declared skills directory** (`harness.py` `skills_dir`, snapshotted
 onto the Run at dispatch and delivered as the runspec `skills_dir` key).
-External `<card>/<skill>` skills (ADR-0016 addendum) ride the SAME runspec
+External `<source>/<skill>` skills (ADR-0016 addendum 2 — dedicated skill sources) ride the SAME runspec
 field with payload paths flattened to the basename dir — the container
 contract and every read-set below are untouched by the source. Skill-source
 card sync is toggle-governed by `context_sourcing_strict` (PLAN_MEMORY /

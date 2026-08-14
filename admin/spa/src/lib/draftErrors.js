@@ -97,6 +97,21 @@ export function draftErrors(draft) {
           `PMO "${p.name}": ${mt} override is assigned to "${a.dev_type}", which no longer exists`;
     }
   });
+  // skill sources (2026-08-14): name shape + uniqueness + one mirror
+  // namespace with repo cards — mirrors config.py _pmo_repo_sets_valid
+  const seenSrc = new Set();
+  (draft.cfg.skill_sources || []).forEach((x, i) => {
+    if (!INSTANCE_NAME_RE.test(x.name || ""))
+      errs[`cfg.skill_sources.${i}.name`] =
+        `skill source name ${x.name ? `"${x.name}"` : "(empty)"} is invalid — ${INSTANCE_NAME_RULE}`;
+    else if (seenSrc.has(x.name))
+      errs[`cfg.skill_sources.${i}.name`] =
+        `duplicate skill source name "${x.name}"`;
+    else if (repoNames.has(x.name))
+      errs[`cfg.skill_sources.${i}.name`] =
+        `skill source "${x.name}" collides with a repository card name`;
+    seenSrc.add(x.name);
+  });
   // scheduled tasks (cfg.crons) — mirrors the server validators (config.py
   // CronJob + _crons_valid): a bad row blocks Save inline, not as a 422.
   // The reserved memory-curator row is exempt from the target check (the

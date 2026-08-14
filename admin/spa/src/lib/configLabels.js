@@ -150,7 +150,7 @@ const ASSIGNMENT_FIELDS = {
 
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
-  "PMO", "Repository", "Dev Types", "Mission Types",
+  "PMO", "Repository", "Skills", "Dev Types", "Mission Types",
   "Prompts", "Limits", "Scheduled Tasks", "Cost", "Other",
 ];
 
@@ -185,7 +185,6 @@ export function metaFor(path) {
         label: "Auto-resolve merge conflicts", format: onOff,
       },
       merge_retry_window_minutes: { label: "Merge retry window (min)" },
-      skills_subdir: { label: "Skills subdir" },
     };
     const f = FIELDS[m[2]] || { label: m[2] };
     return {
@@ -221,6 +220,24 @@ export function metaFor(path) {
     return { group: "PMO", label: `Memory notebooks (instance #${+m[1] + 1})`,
              multiline: false,
              format: (v) => ((v || []).length ? (v || []).join(", ") : "(none)") };
+  }
+  m = path.match(/^cfg\.skill_sources$/);
+  if (m) {
+    return { group: "Skills", label: "Skill sources",
+             multiline: false, format: instanceNames };
+  }
+  m = path.match(/^cfg\.skill_sources\.(\d+)\.([^.]+)$/);
+  if (m) {
+    const FIELDS = {
+      name: { label: "Name" },
+      forge: { label: "Forge" },
+      url: { label: "Repository URL" },
+      default_branch: { label: "Branch" },
+      subdir: { label: "Skills folder" },
+    };
+    const f = FIELDS[m[2]] || { label: m[2] };
+    return { group: "Skills", multiline: false, format: orEmpty, ...f,
+             label: `Skill source #${+m[1] + 1} · ${f.label}` };
   }
   m = path.match(/^cfg\.crons$/);
   if (m) {

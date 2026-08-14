@@ -676,11 +676,11 @@ class _FakeMirror:
 
 
 def _ext_svc(tmp_path, *, subdir="", head="abc123"):
-    from devcake.config import AppConfig, RepoInstance
+    from devcake.config import AppConfig, SkillSource
     from devcake.domain.skills import SkillService
-    card = RepoInstance(name="myrepo", url="https://gh.example/o/skills",
-                        skills_subdir=subdir)
-    cfg = AppConfig(pmos=[], repos=[card])
+    src = SkillSource(name="myrepo", url="https://gh.example/o/skills",
+                      subdir=subdir)
+    cfg = AppConfig(pmos=[], repos=[], skill_sources=[src])
     mirror = _FakeMirror(head=head)
     return SkillService(builtin_dir=_builtin_tree(tmp_path),
                         repo_cache=mirror, config=cfg), mirror
@@ -733,7 +733,7 @@ def test_payload_external_caps_apply_before_reading(tmp_path):
     assert ("myrepo", "tdd", "huge.bin") not in mirror.reads
 
 
-def test_payload_external_respects_skills_subdir(tmp_path):
+def test_payload_external_respects_source_subdir(tmp_path):
     svc, mirror = _ext_svc(tmp_path, subdir="skills")
     mirror.trees[("myrepo", "skills")] = {"tdd": {"SKILL.md": 5}}
     mirror.files[("myrepo", "tdd", "SKILL.md")] = b"x"

@@ -678,6 +678,10 @@ the v0.2 trailer list).
   batteries; live GitLab MRs are field-reported (Field evidence above),
   but the two-forges-in-one-instance demo and the token-spending golden
   paths remain **⏳**.
+- **Dedicated skill sources (2026-08-14)**: external skills moved off
+  repo cards onto their own `skill_sources` connections (ADR-0016
+  addendum 2) — the `skills_subdir` facet is gone; the Skills page
+  manages sources; read tokens ride the new `skill:` secret scope. **⏳**
 - **Memory + Cron (PLAN_MEMORY)**: schema, sourcing, claims conveyor,
   merge guard, CronService, and admin surfaces are in the tree. **Not
   called shipped** until the throwaway-box A/B has receipts

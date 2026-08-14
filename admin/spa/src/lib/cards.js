@@ -28,5 +28,13 @@ export const newRepoCard = (name) => ({
   auto_merge: false,
   auto_resolve_merge_conflicts: true,
   merge_retry_window_minutes: 30,
-  skills_subdir: "",
+});
+
+// dedicated skills connection (2026-08-14 ruling — never a repo card)
+export const newSkillSourceCard = (name) => ({
+  name,
+  forge: "github",
+  url: "",
+  default_branch: "",
+  subdir: "",
 });

@@ -523,10 +523,6 @@ export default function ReposPage({ onHealthChange }) {
                   help="HTTPS URL of the repository, e.g. https://github.com/you/repo.git. Devs clone it; the app opens and merges PRs on it. Empty = repo stays idle.">
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
-                <Field label="Skills subdir" hint="Optional → serve skills from this repo"
-                  help={"Where <skill>/SKILL.md directories live in this repo's tree (empty = repo root). Dev Types then select skills as '" + repo.name + "/<skill>' — served read-only from the repo's mirror, which syncs before every dispatch (private repos work via this card's tokens)."}>
-                  <Input value={repo.skills_subdir ?? ""} placeholder="e.g. skills"
-                  onChange={(e) => setField(`cfg.repos.${idx}.skills_subdir`, e.target.value)} /></Field>
                 <SecretField label="Access token"
                   help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored securely — never echoed, never in .env."
                   refKey={`repo:${repo.name}:token`} paste

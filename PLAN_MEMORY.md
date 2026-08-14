@@ -1,5 +1,11 @@
 # Memory + Cron — implementation plan (draft 09)
 
+> **Decision record: `docs/adr/0035`** — this file is the byte-frozen
+> build contract behind it (agreed 2026-08-14; kept verbatim at the repo
+> root for its ~40 in-code `PLAN_MEMORY §n` citations). Post-build
+> amendments are marked inline. It retires into the pilot write-up once
+> the §14–§15 receipts land in docs/16.
+
 **Status:** AGREED by Felix, Grok, and Fable (countersign + F1′–F4
 folded 2026-08-14). This is the build contract. If this file and
 `consensus/MEMO.md` disagree on intent, fix this file. If they

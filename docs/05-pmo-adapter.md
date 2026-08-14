@@ -12,7 +12,7 @@ A PMO system qualifies for a DevCake adapter iff it satisfies all four capabilit
 - **(a) Missions as the unit of work.** The system's work items map straightforwardly onto Missions (`02-domain-model.md`): a stable vendor id, title/description, a status that normalizes onto backlog/in-progress/done/canceled, and a priority.
 - **(b) Labels (or an equivalent) assign Mission Steps.** The DEVCAKE-* stage machinery needs an idempotently-creatable, atomically-swappable tag concept readable back on every item (`§5`).
 - **(c) Traffic control via blocked-by relations.** Native "X blocks Y" dependencies, listable per item — the scheduler gate and Relations Steward ride on them (`adr/0007`).
-- **(d) A reliable activity feed.** Ordered comments + file attachments with **markdown fidelity** for backticked markers (`devcake:v1`, decomposition manifests, merge-retry markers): the feed is DevCake's persistent memory, so a PMO that rewrites comment bytes (ADF/rich-text — Jira) needs an explicit fidelity strategy before an adapter is attempted (ISSUES #35). Abandonment must be expressible (`cancel_mission` — a canceled/archived terminal state).
+- **(d) A reliable activity feed.** Ordered comments + file attachments with **markdown fidelity** for backticked markers (`devcake:v1`, decomposition manifests, merge-retry markers): the feed is DevCake's persistent record of each mission (long-lived cross-mission memory is the separate notebook system, ADR-0035), so a PMO that rewrites comment bytes (ADF/rich-text — Jira) needs an explicit fidelity strategy before an adapter is attempted (ISSUES #35). Abandonment must be expressible (`cancel_mission` — a canceled/archived terminal state).
 
 ## 1. Port interface (normative signatures)
 
@@ -52,7 +52,10 @@ class PMOPort(Protocol):
     async def create_mission(self, team_ref: str, title: str, description: str,
                              priority: str, label_names: set[str],
                              parent_ref: Optional[str] = None) -> tuple[str, str]: ...
-        # returns (key, pmo_id) — the id wires relation edges
+        # returns (key, pmo_id) — the id wires relation edges. Callers:
+        # decomposition (ADR-0012), the mission composer (ADR-0030), and
+        # scheduled-task fires (ADR-0035 — `[cron:<id>] …` tickets carrying
+        # the `devcake:cron:v1 job=<id>` marker)
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
         # native "blocker blocks blocked" relation (adr/0007); duplicate-tolerant
     async def append_description(self, ref: MissionRef, text: str) -> None: ...

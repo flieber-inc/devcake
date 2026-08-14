@@ -28,18 +28,20 @@ def clone_extra_repos(extras, repo_dir, runner=None):
                            runner=runner)
 
 
-def clone_memory_repos(mounts, memory_dir, runner=None):
+def clone_memory_repos(mounts, memory_dir, runner=None, failures=None):
     """Consumer memory clones (PLAN_MEMORY §3.1). Dest:
-    ``memory_dir / <card>`` — card name, not the URL slug. Failures are
-    non-fatal here; the dispatch gate already classified them."""
+    ``memory_dir / <card>`` — card name, not the URL slug. A failure is
+    appended to `failures` (name/detail/mirror/entry) so the entrypoint
+    can make a `strict` mount's failure fatal (§3.5); without the list
+    the behavior stays non-fatal like extras."""
     memory_dir.mkdir(parents=True, exist_ok=True)
     return _clone_siblings(mounts, dest_parent=memory_dir, dest_by="card",
                            label="memory notebook", rel_prefix="memory",
-                           runner=runner)
+                           runner=runner, failures=failures)
 
 
 def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
-                    runner=None):
+                    runner=None, failures=None):
     """Shared mirror/askpass/LFS clone for extra and memory siblings."""
     import re as _re
 
@@ -66,6 +68,10 @@ def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
         if r.returncode != 0:
             notes.append(f"{label} {x.get('name', dest_name)}: clone failed "
                          f"({(r.stderr or '')[-200:]})")
+            if failures is not None:
+                failures.append({"name": x.get("name", dest_name),
+                                 "detail": (r.stderr or "")[-2000:],
+                                 "mirror": bool(mirror), "entry": x})
             continue
         src = "mirror" if mirror else "forge"
         if mirror and clone_url:

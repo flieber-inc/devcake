@@ -357,10 +357,29 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
     # playbook's repo_options section names them; failures are non-fatal
     for note in clone_extra_repos(spec.get("extra_repos") or [], repo_dir):
         print(note)
+    memory_failures: list[dict] = []
     for note in clone_memory_repos(spec.get("memory_repos") or [],
-                                   WORKSPACE / "memory"):
+                                   WORKSPACE / "memory",
+                                   failures=memory_failures):
         print(note)
+    # PLAN_MEMORY §3.5: a strict memory mount that failed to clone is a
+    # provision failure (the same exit-13 forge family as the primary
+    # clone) — the run must not start memoryless while its prompt claims
+    # the mount. Non-strict entries stay a printed note.
+    f = strict_memory_failure(memory_failures)
+    if f is not None:
+        clone_failed(f"memory notebook {f['name']} clone failed: {f['detail']}",
+                     mirror_clone_error_class(f["detail"]) if f["mirror"]
+                     else clone_error_class(f["detail"]),
+                     "strict memory mount failed")
     return workdir
+
+
+def strict_memory_failure(memory_failures: list) -> dict | None:
+    """First failed memory clone whose runspec entry was stamped strict at
+    dispatch (PLAN_MEMORY §3.5) — fatal for the provision step."""
+    return next((f for f in memory_failures
+                 if (f.get("entry") or {}).get("strict")), None)
 
 
 def provision_main() -> None:

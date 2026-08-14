@@ -62,6 +62,30 @@ def inherited_curator_extras(cfg, instance, work_repo: str) -> list[str]:
     return out
 
 
+def unresolvable_memory_cards(cfg, memory_cards, *,
+                              mirror_eligible) -> dict[str, str]:
+    """Memory mounts the runspec could not deliver (PLAN_MEMORY §3.5).
+
+    The mirror gate only ever sees mirror-eligible names, so a dangling
+    binding (card deleted, list hand-edited) or an internal-forge card
+    with no clone credential would silently produce a memoryless run
+    whose prompt still claims the mount. Resolve them HERE, at dispatch:
+    strict ⇒ defer, open ⇒ omit — never a silent drop."""
+    bad: dict[str, str] = {}
+    for name in memory_cards:
+        inst = next((r for r in cfg.repos if r.name == name), None)
+        if inst is None:
+            bad[name] = "names no configured repo card"
+            continue
+        if mirror_eligible(name):
+            continue                     # freshness/credentials: mirror gate
+        if not (inst.url or "").strip():
+            bad[name] = "card has no URL"
+        elif not (inst.token_ro or inst.token):
+            bad[name] = "card has no read credential for the memory mount"
+    return bad
+
+
 def classify_context_failures(why: dict[str, str], *, context_cards: set[str],
                               strict: bool, has_mirror) -> tuple[
         dict[str, str], set[str], set[str]]:

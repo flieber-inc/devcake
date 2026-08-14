@@ -422,3 +422,14 @@ def test_create_notebook_refuses_activity_prefix():
                                      create_operator_repo=boom)))
     assert ei.value.status_code == 422
     assert "activity-" in ei.value.detail
+
+
+def test_instance_memory_repos_must_name_configured_cards():
+    """R1: a dangling board-bound notebook is refused at validation —
+    the same existence rule as repos / reference_repos."""
+    with pytest.raises(Exception, match="ghost"):
+        AppConfig(
+            repos=[RepoInstance(name="webapp",
+                                url="https://github.com/acme/webapp")],
+            pmos=[PMOInstance(name="eng", team_key="T",
+                              memory_repos=["ghost"])])

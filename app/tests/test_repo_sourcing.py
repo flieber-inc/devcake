@@ -244,3 +244,44 @@ def test_skill_source_cards_is_gate_only_never_sourcing(tmp_path, monkeypatch):
     assert "beta" in names
     assert "skillrepo" not in names
     assert "alpha" not in names          # primary is not an extra
+
+
+def test_unresolvable_memory_cards_dangling_and_internal_credentials(
+        monkeypatch):
+    """PLAN_MEMORY §3.5 second half: the mirror gate never sees dangling
+    bindings or internal-forge notebooks — resolve them at dispatch."""
+    from devcake.config import AppConfig, RepoInstance
+    from devcake.domain.repo_sourcing import unresolvable_memory_cards
+    monkeypatch.setattr(
+        "devcake.secrets.read_connection_secret",
+        lambda scope, name, field:
+            "ro-tok" if (name, field) == ("nb", "token_ro") else "")
+    cfg = AppConfig(repos=[
+        RepoInstance(name="ext", url="https://github.com/acme/ext"),
+        RepoInstance(name="nb", url="http://gitea:3000/devcake-repos/nb"),
+        RepoInstance(name="bare", url="http://gitea:3000/devcake-repos/bare"),
+    ])
+    bad = unresolvable_memory_cards(
+        cfg, {"gone", "ext", "nb", "bare"},
+        mirror_eligible=lambda n: n == "ext")
+    assert "gone" in bad          # dangling binding (card deleted/hand-edit)
+    assert "ext" not in bad       # mirror-eligible: the gate owns it
+    assert "nb" not in bad        # internal card with a read token
+    assert "bare" in bad          # internal card, no clone credential
+
+
+def test_memory_runspec_entry_carries_strict_flag_from_snapshot():
+    """§3.5: the failure class is decided at dispatch and snapshotted —
+    the runspec entry tells provision whether a clone failure is fatal."""
+    from devcake.domain.orchestrator import dispatch
+    inst_x = SimpleNamespace(url="http://g/x.git", token_ro="ro", token="rw")
+    forge_x = SimpleNamespace(descriptor=SimpleNamespace(clone_user="svc"))
+    mgr = SimpleNamespace(forges=SimpleNamespace(
+        instance=lambda n: inst_x, get=lambda n: forge_x))
+    run = SimpleNamespace(
+        memory_mounts=[{"card": "nb", "strict": True, "stale_cache": False},
+                       {"card": "nb2", "stale_cache": False}],
+        mirror_repos=["other"], run_id="r1")
+    out = dispatch._memory_repos_for(mgr, run)
+    assert out[0]["strict"] is True and out[0]["token"] == "ro"
+    assert "strict" not in out[1]        # open mode: entry stays non-fatal

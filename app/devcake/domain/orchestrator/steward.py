@@ -30,7 +30,9 @@ tracer = trace.get_tracer("devcake")
 async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
                           prompt_text: str,
                           blocker_work: list[dict] | None = None,
-                          batches: list[dict] | None = None) -> Run | None:
+                          batches: list[dict] | None = None,
+                          context_stale=frozenset(),
+                          context_omit=frozenset()) -> Run | None:
     """The ONE steward launch body, shared by both flavors (chokepoint
     ruling): repo/forge resolution, seq, span, spec env, skills, launch.
     `duty` stamps Run.steward_duty ("" = relations); `blocker_work` carries
@@ -86,15 +88,17 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
             # F12 snapshot rule: which extras serve via mirror is decided at
             # dispatch, when the gate proved them fresh (StewardService
             # widened ensure_fresh to the family set before calling us)
-            mirror_repos=sorted(set(mgr.repo_cache.needed_for(
+            mirror_repos=sorted((set(mgr.repo_cache.needed_for(
                 work_repo=repo_name, mission_type="STEWARD",
                 instance=mgr.instance,
                 blocker_entries=blocker_work or [],
                 dev_type=dev_type, config=mgr.config))
-                | skill_source_cards(dev_type.skills)),
+                | skill_source_cards(dev_type.skills))
+                - set(context_omit)),
         )
         run.memory_mounts = await dispatch._memory_mount_snapshot(
-            mgr, dev_type, repo_name, stale=set(), omit=set())
+            mgr, dev_type, repo_name, stale=set(context_stale),
+            omit=set(context_omit))
         run.spec_skills = await dispatch._skill_payload(mgr, dev_type)
         run.spec_skills_dir = HARNESSES[dev_type.harness_template].skills_dir or ""
         run.skill_repo_heads = await dispatch._skill_repo_heads(mgr, dev_type)
@@ -117,7 +121,9 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
         return run
 
 
-async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> Run:
+async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission],
+                           context_stale=frozenset(),
+                           context_omit=frozenset()) -> Run:
     """Dispatch the RELATIONS steward: a Dev whose only job is proposing
     missing blocked-by edges. No PMO writes at dispatch (no status, no
     labels) — finalize_steward validates and applies whatever it proposes."""
@@ -132,11 +138,14 @@ async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission]) -> R
     return await _launch_steward(
         mgr, dev_type, duty="",
         prompt_text=steward_prompt(
-            dispatch._identifying_prompt(mgr, dev_type), eligible))
+            dispatch._identifying_prompt(mgr, dev_type), eligible),
+        context_stale=context_stale, context_omit=context_omit)
 
 
 async def dispatch_steward_discovery(mgr, dev_type: DevType, family,
-                                     pending: dict) -> Run | None:
+                                     pending: dict,
+                                     context_stale=frozenset(),
+                                     context_omit=frozenset()) -> Run | None:
     """Dispatch the DISCOVERY steward (ADR-0033): curated family package,
     the family's work repos as read-only extras, propose-only routes.
     `pending` maps source pmo_id → [(step, n)] un-routed batches; batches
@@ -160,7 +169,8 @@ async def dispatch_steward_discovery(mgr, dev_type: DevType, family,
         blocker_work=family_work_repos(mgr, family, runs,
                                        exclude=frozenset({primary})),
         batches=[{"pmo_id": pid, "key": by_id[pid].key, "step": step}
-                 for pid, step in included])
+                 for pid, step in included],
+        context_stale=context_stale, context_omit=context_omit)
 
 
 def build_discovery_package(mgr, family, pending: dict,

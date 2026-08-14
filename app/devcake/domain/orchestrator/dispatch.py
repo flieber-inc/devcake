@@ -416,7 +416,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     # deliberately NOT in sourced_repo_names: skills feed the payload, they
     # are never cloned into /workspace.
     from ..repo_sourcing import (classify_context_failures, memory_mount_names,
-                                 skill_source_cards)
+                                 skill_source_cards, unresolvable_memory_cards)
     needed = mgr.repo_cache.needed_for(
         work_repo=repo_name, mission_type=mtype.value,
         instance=mgr.instance, blocker_entries=blocker_entries,
@@ -424,11 +424,11 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     skill_cards = skill_source_cards(dev_type.skills)
     needed = sorted(set(needed) | skill_cards)
     ok, why = await mgr.repo_cache.ensure_fresh(needed)
+    memory_cards = set(memory_mount_names(
+        instance=mgr.instance, dev_type=dev_type, repo_ref=repo_name))
     stale_cards: set[str] = set()
     omit_cards: set[str] = set()
     if not ok:
-        memory_cards = set(memory_mount_names(
-            instance=mgr.instance, dev_type=dev_type, repo_ref=repo_name))
         defer, stale_cards, omit_cards = classify_context_failures(
             why, context_cards=memory_cards | skill_cards,
             strict=mgr.config.context_sourcing_strict,
@@ -442,13 +442,29 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             log.warning("dispatch of %s deferred — %s", live.key,
                         mgr.blocked_reasons[live.pmo_id])
             return None
-        needed = [n for n in needed if n not in omit_cards]
-        if stale_cards:
-            log.warning("dispatch of %s proceeding on stale cache for %s",
-                        live.key, ", ".join(sorted(stale_cards)))
-        if omit_cards:
-            log.warning("dispatch of %s omitting never-synced context %s",
-                        live.key, ", ".join(sorted(omit_cards)))
+    # PLAN_MEMORY §3.5, second half: the mirror gate only sees
+    # mirror-eligible names — dangling bindings and uncredentialed
+    # internal-forge notebooks must resolve here or the run would start
+    # memoryless while its prompt claims the mount.
+    bad_memory = unresolvable_memory_cards(
+        mgr.config, memory_cards - omit_cards,
+        mirror_eligible=mgr.repo_cache.eligible)
+    if bad_memory:
+        if mgr.config.context_sourcing_strict:
+            mgr.blocked_reasons[live.pmo_id] = (
+                "memory mounts unavailable — dispatch deferred: "
+                + "; ".join(f"{n}: {r}" for n, r in sorted(bad_memory.items())))
+            log.warning("dispatch of %s deferred — %s", live.key,
+                        mgr.blocked_reasons[live.pmo_id])
+            return None
+        omit_cards |= set(bad_memory)
+    needed = [n for n in needed if n not in omit_cards]
+    if stale_cards:
+        log.warning("dispatch of %s proceeding on stale cache for %s",
+                    live.key, ", ".join(sorted(stale_cards)))
+    if omit_cards:
+        log.warning("dispatch of %s omitting unavailable context %s",
+                    live.key, ", ".join(sorted(omit_cards)))
 
     # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
     # repo records what this Dev actually receives. NEVER gates dispatch.
@@ -639,6 +655,10 @@ async def _memory_mount_snapshot(mgr, dev_type, repo_ref: str, *,
             "binding": binding,
             "commit": sha,
             "stale_cache": card in stale,
+            # snapshot the failure class at dispatch (PLAN_MEMORY §3.5):
+            # the provision step makes a strict mount's clone failure fatal,
+            # and a mid-flight toggle must not change a live run's contract
+            "strict": bool(mgr.config.context_sourcing_strict),
             "path": f"/workspace/memory/{card}",
         })
     return out
@@ -877,15 +897,30 @@ def _memory_repos_for(mgr, run: Run) -> list[dict]:
         inst_x = mgr.forges.instance(name)
         forge_x = mgr.forges.get(name)
         if inst_x is None or forge_x is None:
+            # unreachable in the normal flow — dispatch resolved every
+            # snapshot card (§3.5); only a mid-flight card deletion lands
+            # here, and the snapshot doctrine says serve what remains
+            log.warning("memory mount %r vanished after dispatch — "
+                        "omitted from the runspec of %s", name, run.run_id)
             continue
         entry: dict = {"name": name, "url": inst_x.url,
                        "clone_user": forge_x.descriptor.clone_user}
+        if mount.get("strict"):
+            entry["strict"] = True
         if _mirrored(mgr, run, name):
             entry["mirror_path"] = str(mgr.repo_cache.mirror_path(name))
         else:
             token = inst_x.token_ro or inst_x.token
             if not token:
                 continue
+            if not inst_x.token_ro:
+                # PLAN_MEMORY §4 promises read-only tokens on memory
+                # mounts; the write token is used TRANSIENTLY for the
+                # provision clone only (askpass env, never persisted in
+                # the clone) — store a token_ro to close even that window
+                log.warning("memory mount %r has no token_ro — provision "
+                            "clone will use the write token transiently",
+                            name)
             entry["token"] = token
         if mount.get("stale_cache"):
             entry["stale_cache"] = True

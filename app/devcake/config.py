@@ -923,7 +923,7 @@ class AppConfig(BaseModel):
     def _pmo_repo_sets_valid(self):
         repo_names = {r.name for r in self.repos}
         for p in self.pmos:
-            for field in ("repos", "reference_repos"):
+            for field in ("repos", "reference_repos", "memory_repos"):
                 names = getattr(p, field)
                 if len(set(names)) != len(names):
                     raise ValueError(f"pmos[{p.name}].{field}: duplicate entries")

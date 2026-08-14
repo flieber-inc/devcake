@@ -24,9 +24,13 @@ await withPage(async (page) => {
   await page.waitForSelector("#pmo");
   check("#/config/pmo redirects to the PMO page", page.url().endsWith("#/pmo"));
   await gotoFresh(page, "#/config/traffic");
-  await page.waitForSelector("#traffic");
-  check("#/config/traffic redirects to the merged Limits & Traffic view",
+  await page.waitForSelector("#limits");
+  check("#/config/traffic redirects to the Limits view",
     page.url().endsWith("#/config/limits"));
+  await gotoFresh(page, "#/config/cron");
+  await page.waitForSelector("#scheduled-tasks");
+  check("#/config/cron redirects to Scheduled Tasks",
+    page.url().endsWith("#/config/scheduled-tasks"));
   await gotoFresh(page, "#/config/assignments");
   await page.waitForSelector("#mission-types");
   check("#/config/assignments redirects to Mission Types",
@@ -46,10 +50,12 @@ await withPage(async (page) => {
     await page.locator("#skills").count() === 0);
   await gotoFresh(page, "#/config/limits");
   await page.waitForSelector("#limits");
-  check("Limits & Traffic view renders both merged sections",
+  check("Limits view stands alone — Traffic is gone, Steward moved",
     await page.locator("#limits").count() === 1 &&
-    await page.locator("#traffic").count() === 1 &&
+    await page.locator("#traffic").count() === 0 &&
     await page.locator("#dev-types").count() === 0);
+  check("Decomposition depth lives on the Limits card now",
+    (await page.locator('select[aria-label="Decomposition depth limit"]').count()) === 1);
   // 2026-08 reviewer round: the one 11-row scroll became four story-grouped
   // cards; the knob-shaped non-knob ("Service auto-restart" / "managed in
   // compose") is gone; the mirror help no longer scolds about the off switch
@@ -221,14 +227,14 @@ await withPage(async (page) => {
   const chip = page.locator('a[href="#/config/skills"]:visible', { hasText: "Skills" }).first();
   check("mobile chip row shows the active section",
     ((await chip.getAttribute("class")) || "").includes("border-accent"));
-  check("mobile chip row has no PMO or Traffic chips",
+  check("mobile chip row has no PMO, Traffic, or Cron chips",
     (await page.locator('a[href="#/config/pmo"]:visible').count()) === 0 &&
-    (await page.locator('a[href="#/config/traffic"]:visible').count()) === 0);
+    (await page.locator('a[href="#/config/traffic"]:visible').count()) === 0 &&
+    (await page.locator('a[href="#/config/cron"]:visible').count()) === 0);
   await page.locator('a[href="#/config/limits"]:visible', { hasText: "Limits" }).first().click();
   await page.waitForSelector("#limits");
-  check("mobile chip switches to the merged view",
+  check("mobile chip switches to the Limits view",
     await page.locator("#limits").count() === 1 &&
-    await page.locator("#traffic").count() === 1 &&
     await page.locator("#skills").count() === 0);
 
   // AdapterTabs: the sidebar's Adapters sub-entries are expanded-drawer-only,

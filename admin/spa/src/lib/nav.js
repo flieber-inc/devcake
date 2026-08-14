@@ -7,7 +7,7 @@ export const CONFIG_SECTIONS = [
   { id: "mission-types", label: "Mission Types" },
   { id: "skills", label: "Skills" },
   { id: "prompts", label: "Prompts" },
-  { id: "limits", label: "Limits & Traffic" },
-  { id: "cron", label: "Cron" },
+  { id: "limits", label: "Limits" },
+  { id: "scheduled-tasks", label: "Scheduled Tasks" },
   { id: "profiles", label: "Profiles & Export" },
 ];

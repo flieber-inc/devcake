@@ -11,6 +11,14 @@ export const AUTO_MERGE_COPY =
   "This toggle gates the app only — Devs still hold write forge tokens; " +
   "branch protection is what stops an agent from merging.";
 
+export const MEMORY_AUTO_MERGE_COPY =
+  "Recommended: keep this off so a person merges every note. " +
+  "With this on, a note the Curator wrote becomes official once " +
+  "another Dev (a Reviewer) approves it. That is two models in a " +
+  "row. It is not a person. It is not the reviewer token. A wrong " +
+  "note can guide every later run until you revert it. Everything " +
+  "stays in git: every merge names its run and can be reverted.";
+
 export const ADOPTION_COPY =
   "DevCake will adopt EVERY non-completed Issue and Project in this team — " +
   "including the entire existing backlog — and start working through them by " +
@@ -44,59 +52,70 @@ const EXACT = {
   "cfg.attach_merged_changeset_to_pmo": {
     group: "Repository", label: "Also attach merged change set to PMO", format: onOff,
   },
-  "cfg.steward.dev_type": { group: "Limits & Traffic", label: "Steward Dev Type", format: orEmpty },
-  "cfg.steward.interval_minutes": { group: "Limits & Traffic", label: "Steward interval (minutes)" },
-  "cfg.steward.enabled": { group: "Limits & Traffic", label: "Steward periodic service", format: onOff },
+  "cfg.steward.dev_type": { group: "Scheduled Tasks", label: "Relations Steward · Dev Type", format: orEmpty },
+  "cfg.steward.interval_minutes": { group: "Scheduled Tasks", label: "Relations Steward · Interval (minutes)" },
+  "cfg.steward.enabled": { group: "Scheduled Tasks", label: "Relations Steward · Periodic service", format: onOff },
+  "cfg.context_sourcing_strict": {
+    group: "Limits", label: "Context sourcing strict", format: onOff,
+  },
+  "cfg.memory_auto_merge": {
+    group: "Limits", label: "Memory auto-merge", format: onOff,
+    warning: (o, n) => (n === true ? MEMORY_AUTO_MERGE_COPY : null),
+  },
+  "cfg.budgets.claims_queue_max": {
+    group: "Limits", label: "Claims queue max",
+    format: (v) => (v === 0 ? "unlimited" : String(v)),
+  },
   "cfg.max_decomposition_depth": {
-    group: "Limits & Traffic", label: "Decomposition depth",
+    group: "Limits", label: "Decomposition depth",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.budgets.freshness_rereviews": {
-    group: "Limits & Traffic", label: "Freshness re-review budget",
+    group: "Limits", label: "Freshness re-review budget",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.budgets.discoveries_per_run": {
-    group: "Limits & Traffic", label: "Discoveries per run",
+    group: "Limits", label: "Discoveries per run",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.container_limits.memory_mb": {
-    group: "Limits & Traffic", label: "Container memory (MB)",
+    group: "Limits", label: "Container memory (MB)",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.container_limits.cpus": {
-    group: "Limits & Traffic", label: "Container CPUs",
+    group: "Limits", label: "Container CPUs",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
   "cfg.container_limits.pids": {
-    group: "Limits & Traffic", label: "Container PIDs",
+    group: "Limits", label: "Container PIDs",
     format: (v) => (v === 0 ? "unlimited" : String(v)),
   },
-  "cfg.concurrency.global_max": { group: "Limits & Traffic", label: "Global max Devs" },
-  "cfg.dev_timeout_minutes": { group: "Limits & Traffic", label: "Dev run timeout (min)" },
-  "cfg.review_loop_warning_every": { group: "Limits & Traffic", label: "Loop warning every N rejections" },
+  "cfg.concurrency.global_max": { group: "Limits", label: "Global max Devs" },
+  "cfg.dev_timeout_minutes": { group: "Limits", label: "Dev run timeout (min)" },
+  "cfg.review_loop_warning_every": { group: "Limits", label: "Loop warning every N rejections" },
   "cfg.recover_misplaced_result": {
-    group: "Limits & Traffic", label: "Accept misplaced result files", format: onOff,
+    group: "Limits", label: "Accept misplaced result files", format: onOff,
   },
-  "cfg.continuation_policy": { group: "Limits & Traffic", label: "Continuation policy" },
+  "cfg.continuation_policy": { group: "Limits", label: "Continuation policy" },
   "cfg.attempt_reset": {
-    group: "Limits & Traffic", label: "Attempt reset policy",
+    group: "Limits", label: "Attempt reset policy",
     format: (v) => ({ "label-ops": "strict (DEVCAKE-RETRY / labels)",
                       "any-comment": "any comment",
                       unlimited: "unlimited (never give up)" }[v] || String(v)),
   },
   "cfg.brake_on_bad_output": {
-    group: "Limits & Traffic", label: "Brake on missing results (exit 11)",
+    group: "Limits", label: "Brake on missing results (exit 11)",
     format: onOff,
   },
   "cfg.repo_mirror.sync_max_age_seconds": {
-    group: "Limits & Traffic", label: "Mirror sync max age (s)",
+    group: "Limits", label: "Mirror sync max age (s)",
     format: (v) => (v === 0 ? "every dispatch" : String(v)),
   },
   "cfg.repo_mirror.lfs": {
-    group: "Limits & Traffic", label: "Mirror LFS content", format: onOff,
+    group: "Limits", label: "Mirror LFS content", format: onOff,
   },
   "cfg.max_continuations": {
-    group: "Limits & Traffic", label: "Max continuations per run",
+    group: "Limits", label: "Max continuations per run",
     format: (v) => (v === 0 ? "off" : String(v)),
   },
   "cfg.cost_inputs.override_native": {
@@ -117,6 +136,7 @@ const DEV_TYPE_FIELDS = {
   skills: { label: "Skills (available)", format: lines, multiline: true },
   skills_required: { label: "Skills (required)", format: lines, multiline: true },
   secret_env: { label: "Secret env vars", format: lines, multiline: true },
+  memory_repos: { label: "Memory (domain-bound)", format: lines, multiline: true },
 };
 
 const ASSIGNMENT_FIELDS = {
@@ -127,7 +147,7 @@ const ASSIGNMENT_FIELDS = {
 // Section display order for grouping rows in the dialog.
 export const GROUP_ORDER = [
   "PMO", "Repository", "Dev Types", "Mission Types",
-  "Prompts", "Limits & Traffic", "Cost", "Other",
+  "Prompts", "Limits", "Scheduled Tasks", "Cost", "Other",
 ];
 
 // the instance LISTS diff atomically when a card is added/removed — show the
@@ -191,6 +211,36 @@ export function metaFor(path) {
     return { group: "PMO", label: `Repositories (instance #${+m[1] + 1})`,
              multiline: false,
              format: (v) => ((v || []).length ? (v || []).join(" › ") : "(none — internal forge)") };
+  }
+  m = path.match(/^cfg\.pmos\.(\d+)\.memory_repos$/);
+  if (m) {
+    return { group: "PMO", label: `Memory notebooks (instance #${+m[1] + 1})`,
+             multiline: false,
+             format: (v) => ((v || []).length ? (v || []).join(", ") : "(none)") };
+  }
+  m = path.match(/^cfg\.crons$/);
+  if (m) {
+    return { group: "Scheduled Tasks", label: "Scheduled tasks",
+             multiline: false,
+             format: (v) => ((v || []).length
+               ? (v || []).map((r) => r.id).join(", ") : "(none)") };
+  }
+  m = path.match(/^cfg\.crons\.(\d+)\.([^.]+)$/);
+  if (m) {
+    const FIELDS = {
+      id: { label: "Task id" },
+      name: { label: "Name" },
+      enabled: { label: "Periodic service", format: onOff },
+      interval_minutes: { label: "Interval (minutes)" },
+      pmo: { label: "Target board", format: orEmpty },
+      entry_stage: { label: "Entry stage" },
+      description_template: { label: "Ticket text", format: orEmpty,
+                              multiline: true },
+      reserved: { label: "Reserved", format: onOff },
+    };
+    const f = FIELDS[m[2]] || { label: m[2] };
+    return { group: "Scheduled Tasks", multiline: false, format: orEmpty,
+             ...f, label: `Task #${+m[1] + 1} · ${f.label}` };
   }
   m = path.match(/^cfg\.pmos\.(\d+)\.reference_repos$/);
   if (m) {

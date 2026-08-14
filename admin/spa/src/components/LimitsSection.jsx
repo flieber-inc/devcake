@@ -4,6 +4,7 @@ import { Input, Select } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Toggle from "./Toggle.jsx";
 import { ConfirmDialog } from "./Modal.jsx";
+import { MEMORY_AUTO_MERGE_COPY } from "../lib/configLabels.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 const CONTINUATION_POLICIES = ["auto", "resume-only", "fresh-only", "off"];
@@ -25,13 +26,6 @@ const ATTEMPT_RESET_DESC = {
 // fields, same route (#/config/limits); the informational "Service
 // auto-restart" row is gone (it was a knob-shaped non-knob — the restart
 // policy is compose's, documented in docs/13).
-const MEMORY_AUTO_MERGE_ON_COPY =
-  "Recommended: keep this off so a person merges every note. " +
-  "With this on, a note the Curator wrote becomes official once " +
-  "another Dev (a Reviewer) approves it. That is two models in a " +
-  "row. It is not a person. It is not the reviewer token. A wrong " +
-  "note can guide every later run until you revert it. Everything " +
-  "stays in git: every merge names its run and can be reverted.";
 
 export default function LimitsSection() {
   const { dr } = useSharedDraft();
@@ -57,6 +51,25 @@ export default function LimitsSection() {
             <Input type="number" className="w-24" value={cfg.dev_timeout_minutes}
               aria-label="Dev run timeout (minutes)"
               onChange={(e) => setField("cfg.dev_timeout_minutes", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Decomposition depth"
+            desc="How many generations of Mission breakdown ONBOARD may create."
+            help="Each ONBOARD pass may split a high-complexity Mission into sub-missions. At 1, a Mission created by a breakdown is never broken down again. At 2 (default), it may be broken down once more — a Project's missions can each split again. Unlimited removes the ceiling entirely and leaves the choice to the ONBOARD Dev on every pass: a runaway Dev could keep splitting work indefinitely.">
+            <Select className="w-40" value={String(cfg.max_decomposition_depth)}
+              aria-label="Decomposition depth limit"
+              onChange={(e) => setField("cfg.max_decomposition_depth", Number(e.target.value))}>
+              {![0, 1, 2].includes(cfg.max_decomposition_depth) && (
+                // an API/YAML-set depth outside the offered values must
+                // round-trip — a controlled select with no matching option
+                // would misrender it and the next save would clobber it
+                <option value={String(cfg.max_decomposition_depth)}>
+                  {cfg.max_decomposition_depth} levels (set via API)
+                </option>
+              )}
+              <option value="1">1 level</option>
+              <option value="2">2 levels</option>
+              <option value="0">Unlimited</option>
+            </Select>
           </SettingRow>
         </div>
       </Section>
@@ -274,7 +287,7 @@ export default function LimitsSection() {
             desc={cfg.memory_auto_merge
               ? "ON — two models in a row can make a note official."
               : "OFF — a person merges every note (recommended)."}
-            help={MEMORY_AUTO_MERGE_ON_COPY}>
+            help={MEMORY_AUTO_MERGE_COPY}>
             <Toggle on={!!cfg.memory_auto_merge}
               label="Memory auto-merge"
               onClick={() => {
@@ -289,7 +302,7 @@ export default function LimitsSection() {
       </Section>
       <ConfirmDialog open={mergeOnConfirm}
         title="Turn memory auto-merge on?"
-        body={MEMORY_AUTO_MERGE_ON_COPY}
+        body={MEMORY_AUTO_MERGE_COPY}
         confirmLabel="Turn on — two models, not a person"
         confirmKind="primary"
         onCancel={() => setMergeOnConfirm(false)}

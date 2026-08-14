@@ -6,8 +6,7 @@ import LimitsSection from "../components/LimitsSection.jsx";
 import ProfilesSection from "../components/ProfilesSection.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SkillsSection from "../components/SkillsSection.jsx";
-import TrafficSection from "../components/TrafficSection.jsx";
-import CronSection from "../components/CronSection.jsx";
+import ScheduledTasksSection from "../components/ScheduledTasksSection.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 
@@ -63,13 +62,8 @@ export default function ConfigPage({ section, onHealthChange }) {
         <PromptsSection cfg={dr.draft.cfg} setField={dr.setField}
           devTypeNames={Object.keys(dr.draft.devTypes || {})} />
       )}
-      {section === "limits" && (
-        <>
-          <LimitsSection />
-          <TrafficSection />
-        </>
-      )}
-      {section === "cron" && <CronSection />}
+      {section === "limits" && <LimitsSection />}
+      {section === "scheduled-tasks" && <ScheduledTasksSection />}
       {section === "profiles" && <ProfilesSection />}
     </div>
   );

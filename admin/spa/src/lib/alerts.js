@@ -86,8 +86,8 @@ export default function deriveAlerts(health) {
       id: `cron-degraded:${id}`,
       severity: "warning",
       dismissable: true,
-      title: `Cron ${id} is degraded`,
-      body: "The last three automatic fires produced no ticket and no successful skip. Automatic fires are paused. Run now still works.",
+      title: `Scheduled task ${id} is degraded`,
+      body: "The last 3 automatic fires failed. Automatic fires are paused; Run now still works, and a successful fire resumes the schedule.",
     });
   }
   for (const card of health.memory_curator_no_board || []) {

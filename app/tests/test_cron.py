@@ -137,6 +137,75 @@ def test_memory_curator_skips_empty_automatic_run_now_does_not():
     assert cron_marker(MEMORY_CURATOR_CRON_ID) in body
 
 
+class FakeClaims:
+    """ClaimsNotebooks fake for the depth path — listing only."""
+
+    def __init__(self, names):
+        self.names = names
+        self.listed: list[str] = []
+
+    async def list_json_names(self, card):
+        self.listed.append(card)
+        return self.names
+
+    def can_write(self, card):
+        return True
+
+
+def test_automatic_skip_confirms_depth_by_listing_not_stale_cache():
+    """R2: a drained notebook leaves a stale >0 cache; the automatic fire
+    must list `.claims/` and skip, not burn a Curator run every interval."""
+    from devcake.domain import claims as claims_mod
+    product = PMOInstance(name="eng", team_key="A", repos=["webapp"],
+                          memory_repos=["nb"])
+    curator = PMOInstance(name="cur", team_key="B", repos=["nb"])
+    pmo = FakePMO()
+    cfg = _cfg(product, curator)
+    claims = FakeClaims([])            # the drain emptied the queue
+    claims_mod.claims_depth["nb"] = 5  # stale — cache never saw the drain
+    try:
+        svc = CronService(cfg, {
+            "eng": _mgr("eng", FakePMO(), product),
+            "cur": _mgr("cur", pmo, curator),
+        }, claims=claims)
+        assert run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=True)) == []
+        assert pmo.created == [] and claims.listed == ["nb"]
+        # the reverse staleness: cache says 0, listing finds work → fire
+        claims.names = ["aa11bb22cc33dd44.json"]
+        assert claims_mod.claims_depth["nb"] == 0  # refreshed by the skip
+        got = run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=True))
+        assert got and pmo.created
+        # listing failure falls back to the cache, not a crash
+        claims.names = None
+        run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=True))
+    finally:
+        claims_mod.claims_depth.pop("nb", None)
+
+
+def test_dev_type_bound_notebook_is_curated_and_warned():
+    """R3: set M includes Dev Type memory_repos — a domain-bound-only
+    notebook gets Curator tickets, and a no-board warning when unstaffed."""
+    from devcake.domain import claims as claims_mod
+    product = PMOInstance(name="eng", team_key="A", repos=["webapp"])
+    curator = PMOInstance(name="cur", team_key="B", repos=["nb"])
+    pmo = FakePMO()
+    cfg = _cfg(product, curator)
+    dts = {"coder": SimpleNamespace(memory_repos=["nb"])}
+    claims_mod.claims_depth.pop("nb", None)
+    svc = CronService(cfg, {
+        "eng": _mgr("eng", FakePMO(), product),
+        "cur": _mgr("cur", pmo, curator),
+    }, dev_types=dts)
+    got = run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=False))
+    assert got[0]["pmo"] == "cur" and pmo.created
+    # unstaffed: no Curator board for the domain-bound card → warning
+    cfg2 = _cfg(product)
+    svc2 = CronService(cfg2, {"eng": _mgr("eng", FakePMO(), product)},
+                       dev_types=dts)
+    run_coro(svc2.fire(MEMORY_CURATOR_CRON_ID, automatic=False))
+    assert "nb" in svc2.no_board
+
+
 def test_memory_curator_no_board_is_a_standing_warning():
     product = PMOInstance(name="eng", team_key="A", repos=["webapp"],
                           memory_repos=["nb"])

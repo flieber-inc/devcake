@@ -228,7 +228,8 @@ def build_services() -> Services:
         skill_service=SkillService(internal_forge, repo_cache=repo_cache,
                                    config=config),
         claims=make_claims_writer(config, internal_forge, repo_cache))
-    s.cron = CronService(config, s.managers, claims=s.claims)
+    s.cron = CronService(config, s.managers, claims=s.claims,
+                         dev_types=s.dev_types)
 
     # The poll machinery (ownership claims, cycle driver, missions cache,
     # loop) lives in api/poll.py — constructed ONCE with live references and

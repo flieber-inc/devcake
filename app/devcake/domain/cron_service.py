@@ -54,10 +54,13 @@ class CronService:
     from recent fire outcomes — restart-safe like Steward."""
 
     def __init__(self, config: AppConfig, managers: dict[str, MissionManager],
-                 claims=None):
+                 claims=None, dev_types=None):
         self.config = config
         self.managers = managers
         self.claims = claims
+        # live Dev Type map — set M must include domain-bound notebooks
+        # (PLAN_MEMORY §6.3: "same set as I2"), not just instance lists
+        self.dev_types = dev_types if dev_types is not None else {}
         self._locks: dict[str, asyncio.Lock] = {}
         # job_id → last N automatic outcomes ('created'/'skipped'/'failed')
         self._outcomes: dict[str, list[str]] = {}
@@ -140,7 +143,7 @@ class CronService:
 
     async def _fire_memory_curator(self, row: CronJob, *,
                                    automatic: bool) -> list[dict]:
-        M = memory_bound_names(self.config)
+        M = memory_bound_names(self.config, self.dev_types)
         created: list[dict] = []
         self.no_board = {m for m in self.no_board if m in M}
         for m in sorted(M):
@@ -173,10 +176,12 @@ class CronService:
         return created
 
     async def _claims_depth(self, card: str) -> int:
-        if card in claims_mod.claims_depth:
-            return claims_mod.claims_depth[card]
+        """Skip-if-empty must be confirmed by listing (PLAN_MEMORY §6.3) —
+        the cache alone goes stale the moment a drain PR merges, and a
+        trusted stale >0 would fire an empty Curator ticket every interval.
+        refresh_depth falls back to the cache when the listing fails."""
         if self.claims is None:
-            return 0
+            return claims_mod.claims_depth.get(card, 0)
         return await claims_mod.refresh_depth(self.claims, card)
 
     async def _in_flight(self, mgr, job_id: str) -> bool:

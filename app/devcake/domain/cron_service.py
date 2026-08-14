@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from ..config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
@@ -48,25 +48,48 @@ class CronUnconfigured(Exception):
     """Unknown id, or a reserved row aimed at a product PMO."""
 
 
+class _MemoryCronLedger:
+    """In-memory fallback with the CronStore interface — test/default
+    wiring only; production injects adapters.files.CronStore so the
+    outcome ledger survives restarts (PLAN_MEMORY §6.2)."""
+
+    def __init__(self):
+        self._state: dict[str, dict] = {}
+
+    def record(self, job_id: str, outcome: str, *,
+               fired_at: str | None = None) -> None:
+        row = self._state.setdefault(job_id, {})
+        row["outcomes"] = (list(row.get("outcomes") or []) + [outcome])[-3:]
+        if fired_at:
+            row["last_fire_at"] = fired_at
+
+    def outcomes(self, job_id: str) -> list[str]:
+        return list(self._state.get(job_id, {}).get("outcomes") or [])
+
+    def last_fire_at(self, job_id: str):
+        raw = self._state.get(job_id, {}).get("last_fire_at")
+        if not raw:
+            return None
+        return datetime.fromisoformat(raw)
+
+
 class CronService:
     """Single-process cadence + Run-now. One lock per job id (and, for
-    memory-curator, per target board as well). Degradation is store-derived
-    from recent fire outcomes — restart-safe like Steward."""
+    memory-curator, per target board as well). Degradation and the fire
+    schedule are derived from the injected outcome ledger — restart-safe
+    when wired with the file-backed CronStore (services.py)."""
 
     def __init__(self, config: AppConfig, managers: dict[str, MissionManager],
-                 claims=None, dev_types=None):
+                 claims=None, dev_types=None, store=None):
         self.config = config
         self.managers = managers
         self.claims = claims
         # live Dev Type map — set M must include domain-bound notebooks
         # (PLAN_MEMORY §6.3: "same set as I2"), not just instance lists
         self.dev_types = dev_types if dev_types is not None else {}
+        self.store = store if store is not None else _MemoryCronLedger()
         self._locks: dict[str, asyncio.Lock] = {}
-        # job_id → last N automatic outcomes ('created'/'skipped'/'failed')
-        self._outcomes: dict[str, list[str]] = {}
-        self.degraded: set[str] = set()
         self.no_board: set[str] = set()  # memory_curator_no_board:<m>
-        self._last_auto_minute: dict[str, int] = {}
 
     def _lock(self, key: str) -> asyncio.Lock:
         lock = self._locks.get(key)
@@ -78,51 +101,57 @@ class CronService:
     def job(self, job_id: str) -> CronJob | None:
         return next((c for c in self.config.crons if c.id == job_id), None)
 
-    def _record(self, job_id: str, outcome: str) -> None:
-        hist = self._outcomes.setdefault(job_id, [])
-        hist.append(outcome)
-        if len(hist) > 3:
-            del hist[:-3]
-        if (len(hist) == 3
-                and all(o == "failed" for o in hist)):
-            self.degraded.add(job_id)
-        elif outcome == "created" or outcome == "skipped":
-            self.degraded.discard(job_id)
+    @property
+    def degraded(self) -> set[str]:
+        """Jobs whose last 3 automatic fires all failed (no ticket AND no
+        successful skip-reason). Ledger-derived — restart-safe; a Run-now
+        that creates a ticket records 'created' and clears it."""
+        out: set[str] = set()
+        for row in self.config.crons:
+            outs = self.store.outcomes(row.id)
+            if len(outs) == 3 and all(o == "failed" for o in outs):
+                out.add(row.id)
+        return out
 
     async def maybe_fire(self) -> None:
-        """Interval path — one pass per poll cycle."""
+        """Interval path — one pass per poll cycle. Elapsed-time
+        semantics off the ledger's last_fire_at: one attempt per interval
+        window, restart-safe, and a stalled poll cycle can't skip a whole
+        window (the old minute-multiple watermark could)."""
         now = datetime.now(timezone.utc)
+        degraded = self.degraded
         for row in list(self.config.crons):
-            if not row.enabled:
+            if not row.enabled or row.id in degraded:
                 continue
-            if row.id in self.degraded:
-                continue
-            # interval: fire when minute-of-epoch is a multiple, once
-            # per window (watermark). Poll cadence is ~30s so a 60-min
-            # job fires about once an hour.
-            minute = int(now.timestamp()) // 60
+            last = self.store.last_fire_at(row.id)
             interval = max(row.interval_minutes, 1)
-            if minute % interval != 0:
+            if last is not None and now - last < timedelta(minutes=interval):
                 continue
-            if self._last_auto_minute.get(row.id) == minute:
-                continue
+            stamp = now.isoformat()
             try:
-                await self.fire(row.id, automatic=True)
-                self._last_auto_minute[row.id] = minute
+                created = await self.fire(row.id, automatic=True)
+                self.store.record(row.id, "created" if created else "skipped",
+                                  fired_at=stamp)
             except (CronBusy, CronUnconfigured):
-                self._record(row.id, "skipped")
+                self.store.record(row.id, "skipped", fired_at=stamp)
             except Exception:  # noqa: BLE001 — one row must not kill the cycle
                 log.exception("cron %s automatic fire failed", row.id)
-                self._record(row.id, "failed")
+                self.store.record(row.id, "failed", fired_at=stamp)
 
     async def fire(self, job_id: str, *, automatic: bool) -> list[dict]:
-        """Create tickets. `automatic=False` is Run now (F4: no empty skip)."""
+        """Create tickets. `automatic=False` is Run now (F4: no empty skip).
+        Automatic outcomes are recorded by maybe_fire (one per window); a
+        manual fire records only its success, which clears degradation."""
         row = self.job(job_id)
         if row is None:
             raise CronUnconfigured(f"unknown cron {job_id!r}")
         if job_id == MEMORY_CURATOR_CRON_ID:
-            return await self._fire_memory_curator(row, automatic=automatic)
-        return await self._fire_generic(row)
+            created = await self._fire_memory_curator(row, automatic=automatic)
+        else:
+            created = await self._fire_generic(row)
+        if not automatic and created:
+            self.store.record(row.id, "created")
+        return created
 
     async def _fire_generic(self, row: CronJob) -> list[dict]:
         if not row.pmo:
@@ -132,19 +161,17 @@ class CronService:
             raise CronUnconfigured(f"cron {row.id}: no live manager for "
                                    f"pmo {row.pmo!r}")
         if intake_blocks_dispatch(self.config, mgr.instance):
-            self._record(row.id, "skipped")
             return []
         async with self._lock(row.id):
             if await self._in_flight(mgr, row.id):
                 raise CronBusy(f"cron {row.id} already in flight on {row.pmo}")
-            created = await self._create_ticket(mgr, row)
-            self._record(row.id, "created")
-            return [created]
+            return [await self._create_ticket(mgr, row)]
 
     async def _fire_memory_curator(self, row: CronJob, *,
                                    automatic: bool) -> list[dict]:
         M = memory_bound_names(self.config, self.dev_types)
         created: list[dict] = []
+        errors = 0
         self.no_board = {m for m in self.no_board if m in M}
         for m in sorted(M):
             boards = [p for p in self.config.pmos if list(p.repos) == [m]]
@@ -156,23 +183,27 @@ class CronService:
             if automatic:
                 depth = await self._claims_depth(m)
                 if depth == 0:
-                    self._record(row.id, "skipped")
                     continue
             for inst in boards:
                 mgr = self.managers.get(inst.name)
                 if mgr is None:
                     continue
                 if intake_blocks_dispatch(self.config, inst):
-                    self._record(row.id, "skipped")
                     continue
                 lock_key = f"{row.id}:{inst.name}"
                 async with self._lock(lock_key):
                     if await self._in_flight(mgr, row.id):
-                        self._record(row.id, "skipped")
                         continue
-                    created.append(await self._create_ticket(
-                        mgr, row, force_stage="EXECUTE"))
-                    self._record(row.id, "created")
+                    try:
+                        created.append(await self._create_ticket(
+                            mgr, row, force_stage="EXECUTE"))
+                    except Exception:  # noqa: BLE001 — one board must not stop the fan-out
+                        log.exception("memory-curator ticket failed on %s",
+                                      inst.name)
+                        errors += 1
+        if errors and not created:
+            raise RuntimeError(
+                f"memory-curator fire failed on {errors} board(s)")
         return created
 
     async def _claims_depth(self, card: str) -> int:

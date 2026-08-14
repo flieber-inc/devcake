@@ -215,6 +215,76 @@ def test_memory_curator_no_board_is_a_standing_warning():
     assert "nb" in svc.no_board
 
 
+class BoomPMO(FakePMO):
+    """create_mission fails until `healthy` is flipped — forge-outage fake."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.healthy = False
+
+    async def create_mission(self, *a, **k):
+        self.calls += 1
+        if not self.healthy:
+            raise RuntimeError("forge down")
+        return await super().create_mission(*a, **k)
+
+
+def _nightly_cfg(inst):
+    return _cfg(inst, crons=[
+        memory_curator_seed(),
+        CronJob(id="nightly", name="N", entry_stage="EXECUTE",
+                description_template="x", pmo="eng", enabled=True,
+                interval_minutes=1),
+    ])
+
+
+def test_degradation_is_ledger_derived_restart_safe_and_cleared_by_run_now(
+        tmp_path):
+    """R4: 3 failed automatic fires degrade; the state survives a service
+    rebuild (file ledger); a successful Run now clears it."""
+    from devcake.adapters.files.cron_store import CronStore
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = BoomPMO()
+    cfg = _nightly_cfg(inst)
+    store = CronStore(tmp_path / "cron.json")
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)}, store=store)
+    for _ in range(3):
+        run_coro(svc.maybe_fire())
+        # age the window out so each pass is a fresh attempt
+        store._state["nightly"].pop("last_fire_at", None)
+    assert pmo.calls == 3 and "nightly" in svc.degraded
+    run_coro(svc.maybe_fire())          # degraded rows stop firing
+    assert pmo.calls == 3
+    svc2 = CronService(cfg, {"eng": _mgr("eng", pmo, inst)},
+                       store=CronStore(tmp_path / "cron.json"))
+    assert "nightly" in svc2.degraded   # rehydrated from disk
+    pmo.healthy = True
+    got = run_coro(svc2.fire("nightly", automatic=False))
+    assert got and svc2.degraded == set()
+
+
+def test_elapsed_interval_gates_automatic_fires(tmp_path):
+    """R4: schedule = elapsed time since the persisted last_fire_at —
+    fresh row fires immediately, then not again inside the window."""
+    from datetime import timedelta
+    from devcake.adapters.files.cron_store import CronStore
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _nightly_cfg(inst)
+    store = CronStore(tmp_path / "cron.json")
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)}, store=store)
+    run_coro(svc.maybe_fire())
+    assert len(pmo.created) == 1        # no stamp yet → due now
+    run_coro(svc.maybe_fire())
+    assert len(pmo.created) == 1        # inside the window → skip
+    old = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    store._state["nightly"]["last_fire_at"] = old
+    pmo.missions.clear()                # let single-flight pass
+    run_coro(svc.maybe_fire())
+    assert len(pmo.created) == 2        # window elapsed → fires again
+
+
 def test_unknown_id_raises():
     cfg = _cfg(PMOInstance(name="eng", team_key="T"))
     svc = CronService(cfg, {})

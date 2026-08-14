@@ -33,7 +33,7 @@ from typing import Any, Optional
 
 from ..adapters.claims_writer import make_claims_writer
 from ..adapters.dagu import DaguExecutor
-from ..adapters.files import RunLogStore, RunStore
+from ..adapters.files import CronStore, RunLogStore, RunStore
 from ..adapters.redis import Messaging
 from ..adapters.registry import make_forge, make_internal_forge, make_pmo
 from .. import security
@@ -229,7 +229,7 @@ def build_services() -> Services:
                                    config=config),
         claims=make_claims_writer(config, internal_forge, repo_cache))
     s.cron = CronService(config, s.managers, claims=s.claims,
-                         dev_types=s.dev_types)
+                         dev_types=s.dev_types, store=CronStore())
 
     # The poll machinery (ownership claims, cycle driver, missions cache,
     # loop) lives in api/poll.py — constructed ONCE with live references and

@@ -84,15 +84,12 @@ class StewardService:
         if time.monotonic() - self._last_at < rm.interval_minutes * 60:
             self._last_periodic_outcome = None
             return
-        from .repo_sourcing import skill_source_cards
-        skill_cards = sorted(skill_source_cards(dt.skills))
         # a periodic run is DUE — resolve it, then trace the outcome only on
         # TRANSITIONS: a steward stuck degraded/waiting for hours would
         # otherwise emit an identical (ERROR) span every poll tick
         outcome, error = None, None
         degraded = self.degraded()
-        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh(
-            [repo] + skill_cards)   # skill-source cards join (ADR-0016)
+        mirror_ok, mirror_why = await self._context_gate(dt, repo)
         if not mirror_ok:
             # ADR-0024 fail-closed precondition — same semantics as mission
             # dispatch: skip this cycle, retry next; NEVER raises into the
@@ -196,10 +193,8 @@ class StewardService:
             # an unconfigured/internal skill card must gate LOUDLY
             # (fail-closed ruling), unlike family work repos which are
             # legitimate internal clone extras (audit B2: keep BOTH halves).
-            from .repo_sourcing import skill_source_cards
-            mirror_ok, mirror_why = await mgr.repo_cache.ensure_fresh(
-                [repo] + fam_repos
-                + sorted(skill_source_cards(dt.skills)))  # ADR-0016 union
+            mirror_ok, mirror_why = await self._context_gate(
+                dt, repo, extra=fam_repos)
             if not mirror_ok:
                 outcome = "mirror_stale"          # fail-closed, retry later
                 error = f"family mirrors not fresh: {mirror_why}"
@@ -229,6 +224,44 @@ class StewardService:
                 if error:
                     span.set_status(Status(StatusCode.ERROR, error[:200]))
         self._last_discovery_outcome = outcome
+
+    async def _context_gate(self, dt, repo: str, extra=()) -> tuple[bool, dict]:
+        """Mirror gate + PLAN_MEMORY §3.5: skill-source and memory cards
+        are toggle-governed; work/family extras stay fail-closed."""
+        from .repo_sourcing import (classify_context_failures, memory_mount_names,
+                                    skill_source_cards)
+        skill_cards = skill_source_cards(dt.skills)
+        memory_cards = set(memory_mount_names(
+            instance=self.mgr.instance, dev_type=dt, repo_ref=repo))
+        needed_for = getattr(self.mgr.repo_cache, "needed_for", None)
+        if callable(needed_for):
+            needed = list(needed_for(
+                work_repo=repo, mission_type="STEWARD",
+                instance=self.mgr.instance, blocker_entries=None,
+                dev_type=dt, config=self.config))
+            needed = sorted(set(needed) | skill_cards | set(extra or ()))
+        else:
+            # test fakes that only implement ensure_fresh (ADR-0033 gate tests)
+            needed = [repo] + list(extra or ()) + sorted(skill_cards | memory_cards)
+        ok, why = await self.mgr.repo_cache.ensure_fresh(needed)
+        if ok:
+            return True, {}
+        def _has_mirror(n):
+            mp = getattr(self.mgr.repo_cache, "mirror_path", None)
+            if not callable(mp):
+                return False
+            p = mp(n)
+            return bool(getattr(p, "is_dir", lambda: False)())
+        defer, stale, omit = classify_context_failures(
+            why, context_cards=memory_cards | skill_cards,
+            strict=self.config.context_sourcing_strict,
+            has_mirror=_has_mirror)
+        if defer:
+            return False, defer
+        if stale or omit:
+            log.warning("steward context gate: stale=%s omit=%s",
+                        sorted(stale), sorted(omit))
+        return True, {}
 
     def kick_discovery(self) -> None:
         """Event trigger (harvest enqueued from the ingress task context):
@@ -268,9 +301,7 @@ class StewardService:
         if repo in self.mgr.forges.breakers:
             raise StewardUnconfigured(
                 f"repo '{repo}' is not writable; fix its token first")
-        from .repo_sourcing import skill_source_cards
-        mirror_ok, mirror_why = await self.mgr.repo_cache.ensure_fresh(
-            [repo] + sorted(skill_source_cards(dt.skills)))  # ADR-0016 union
+        mirror_ok, mirror_why = await self._context_gate(dt, repo)
         if not mirror_ok:
             raise StewardUnconfigured(
                 f"repository mirror for '{repo}' is not fresh: "

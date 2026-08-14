@@ -21,6 +21,14 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
                          #   or RO-token https). Read-only BY TOKEN + prompt
                          #   contract, not by filesystem mode; extra-clone
                          #   failures are non-fatal (noted, run proceeds).
+  memory/
+    {card}/              # ZERO OR MORE consumer memory notebooks (PLAN_MEMORY):
+                         #   cloned by provision from `memory_repos` to
+                         #   /workspace/memory/<card>/ (card name, not URL slug).
+                         #   Sibling of repo/ and activity/ — never
+                         #   repo/memory/. Read-only by token + prompt.
+                         #   Curator runs do NOT remount their own notebook
+                         #   here (it is the primary work clone).
   activity/
     MISSION.md           # the brief: key/title/meta/labels, FULL description, mission
                          #   attachments (ADR-0014 — every playbook points here)

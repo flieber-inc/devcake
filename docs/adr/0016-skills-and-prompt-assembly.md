@@ -202,6 +202,12 @@ essentially work just like a forge adapter — and could just be one").
    read failure after a passed gate warns and drops the skill, never
    refuses the run. Zero-skills is intact (no external names ⇒ the union
    is empty ⇒ byte-identical behavior).
+
+   **Addendum (PLAN_MEMORY / D12):** the skill-source fail-closed gate is
+   now the true side of `AppConfig.context_sourcing_strict` (default
+   true). When that knob is false, a last-good mirror is used
+   (`stale_cache`) and a never-synced skill card is omitted; the run
+   continues. Payload reads after a passed gate stay additive.
 4. **Payload flattening keeps the container contract untouched.** An
    external skill `myrepo/tdd` ships payload paths under the BASENAME dir
    (`tdd/…`), so `install_skills` and every harness's discovery rule work

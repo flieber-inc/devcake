@@ -6,7 +6,9 @@ import InstantZone from "./InstantZone.jsx";
 import Button from "./Button.jsx";
 import { Modal } from "./Modal.jsx";
 import SkillModeChips from "./SkillModeChips.jsx";
+import RepoChips from "./RepoChips.jsx";
 import DevTypeAvatar, { useCredsReady } from "./DevTypeAvatar.jsx";
+import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 // Dev Type editor modal, split out of DevTypesSection (2026-08-02, with the
 // roster-table conversion — the section was the SPA's largest component).
@@ -52,6 +54,8 @@ function UploadButton({ devType, secretFile, onDone }) {
 export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, onCredChange, skillsCatalog, catalogErr, editCount, onClose }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
+  const { dr } = useSharedDraft();
+  const repoCards = dr.draft.cfg.repos || [];
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
   const pending = d.harness_template !== serverDt.harness_template;   // unsaved switch
   const ready = useCredsReady(d, serverDt, h);
@@ -124,6 +128,12 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             set("skills", skills);
             set("skills_required", skills_required);
           }} />
+        <RepoChips label="Memory (domain-bound)"
+          help="Notebooks this Dev Type consults under /workspace/memory/<card>/ on every stage, including Steward. Combined with the board's Memory list. The work repo is never remounted here."
+          all={repoCards} selected={d.memory_repos || []}
+          excluded={[]}
+          excludedNote=""
+          onChange={(next) => set("memory_repos", next)} />
         <details>
           <summary className="cursor-pointer select-none rounded text-sm font-medium text-neutral-600 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-300 dark:hover:text-neutral-100">
             Advanced

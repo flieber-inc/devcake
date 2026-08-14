@@ -7,6 +7,7 @@ import ProfilesSection from "../components/ProfilesSection.jsx";
 import PromptsSection from "../components/PromptsSection.jsx";
 import SkillsSection from "../components/SkillsSection.jsx";
 import TrafficSection from "../components/TrafficSection.jsx";
+import CronSection from "../components/CronSection.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 import { CONFIG_SECTIONS } from "../lib/nav.js";
 
@@ -68,6 +69,7 @@ export default function ConfigPage({ section, onHealthChange }) {
           <TrafficSection />
         </>
       )}
+      {section === "cron" && <CronSection />}
       {section === "profiles" && <ProfilesSection />}
     </div>
   );

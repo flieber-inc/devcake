@@ -30,13 +30,13 @@ _TOKEN_SUMS = ("input_tokens", "output_tokens", "cache_read_tokens",
 _LIST_FIELDS = {"run_id", "mission_key", "mission_type", "dev_type", "seq",
                 "state", "created_at", "started_at", "ended_at", "error",
                 "error_class", "attempt_counted", "verdict",
-                "continuations_used"}
+                "continuations_used", "memory_mounts"}
 
 _DETAIL_FIELDS = _LIST_FIELDS | {
     "schema_version", "mission_pmo_id", "pmo_kind", "pmo_ref", "repo_ref",
     "attempt_of_step", "stage_label_at_dispatch", "last_heartbeat",
     "timeout_seconds", "finalized_steps", "artifact_bytes",
-    "feed_watermark"}
+    "feed_watermark", "memory_mounts"}
 
 
 def _pr_url_of(run: Run):
@@ -292,7 +292,7 @@ _CSV_COLUMNS = ("run_id", "pmo_ref", "mission_key", "mission_type", "dev_type",
 
 def _csv_cell(v):
     """Spreadsheet-faithful cell. Strings leading with any CWE-1236 lead-in
-    (=/+/-/@, plus TAB/CR/space which Excel and Sheets strip before
+    (=/+/-/@, plus TAB/CR/LF/space which Excel and Sheets strip before
     evaluating what follows) get a `'` prefix — error text and model ids are
     attacker-influenced, and csv quoting alone does not stop a formula cell.
     The isinstance(str) guard keeps negative numbers numeric."""
@@ -300,7 +300,7 @@ def _csv_cell(v):
         return ""
     if isinstance(v, datetime):
         return v.isoformat()
-    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r", " "):
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r", "\n", " "):
         return "'" + v
     return v
 

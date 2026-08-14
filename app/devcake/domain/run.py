@@ -88,6 +88,11 @@ class Run(BaseModel):
     # produced the skills a run consumed (docs/14 trust-class shift); not
     # exposed on the runs API.
     skill_repo_heads: dict[str, str] = Field(default_factory=dict)
+    # PLAN_MEMORY §3.6 — consumer memory mounts snapshotted at dispatch.
+    # [{card, binding, commit, stale_cache, path}]. Empty on legacy /
+    # Curator runs (no consumer mounts). A notebook added mid-flight
+    # must not appear.
+    memory_mounts: list[dict] = Field(default_factory=list)
     # ADR-0031 — the run's reading receipt: {entry_id, ts(iso)} of the newest
     # feed entry in the ACTIVITY.md mirror this run received. Captured only
     # from a SUCCESSFUL snapshot push (a failed push serves the previous,

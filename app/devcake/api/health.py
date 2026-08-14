@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 
 from .. import security
 from ..adapters.dagu import DAGU_URL
+from ..domain.claims import claims_depth, claims_queue_capped
 from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..prompts import templates as prompt_templates
 from ..telemetry import OO_URL
@@ -142,16 +143,19 @@ async def _oo_ingest_check() -> dict:
     return result
 
 
-def unused_repo_names(config) -> list[str]:
-    """Configured repo adapters selected by NO PMO instance (neither work nor
-    reference). Dead weight with a latency price: every entry is rebuilt on
-    each config/secret reload and probed on each full forge sweep — 292 of
-    them turned the 2026-08-01 boot into a ~95s outage. Unconfigured (empty
-    url) entries count too: clutter either way."""
+def unused_repo_names(config, dev_types=None) -> list[str]:
+    """Configured repo adapters selected by NO PMO instance (neither work,
+    reference, nor memory) and by no Dev Type memory/skill-source binding."""
     selected: set[str] = set()
     for pmo in config.pmos:
         selected.update(pmo.repos)
         selected.update(pmo.reference_repos)
+        selected.update(pmo.memory_repos or [])
+    for dt in (dev_types or {}).values():
+        selected.update(getattr(dt, "memory_repos", None) or [])
+        selected.update(n.split("/", 1)[0]
+                        for n in (getattr(dt, "skills", None) or [])
+                        if "/" in n)
     return sorted(r.name for r in config.repos if r.name not in selected)
 
 
@@ -159,7 +163,8 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
                                forge_runtime, shared_breakers, store,
                                internal_forge, poll_rt,
                                backend_degraded: dict | None = None,
-                               repo_cache=None, workspaces=None) -> dict:
+                               repo_cache=None, workspaces=None,
+                               cron=None) -> dict:
     """The /api/v1/health body (docs/11 §0). All deps explicit — unit-testable
     with fakes; the route in main.py is a one-line forward."""
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -265,6 +270,11 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         "steward_degraded": " · ".join(
             f"[{name}] {msg}" if prefixed else str(msg)
             for name, mp in stewards.items() if (msg := mp.degraded())) or None,
+        "cron_degraded": sorted(cron.degraded) if cron is not None else [],
+        "memory_curator_no_board": (
+            sorted(cron.no_board) if cron is not None else []),
+        "claims_queue_capped": sorted(claims_queue_capped),
+        "claims_depth": dict(claims_depth),
         # active templates that no longer resolve (fallback-to-default in
         # effect) — the SPA derives a dismissable alert per entry (v0.1.1)
         "prompt_template_warnings": (
@@ -274,7 +284,7 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         # adapters no PMO selects — SPA derives a dismissable hygiene alert
         # and Repositories → ⋯ offers bulk removal (2026-08-01 incident)
         "unused_repos": {
-            "count": len(names := unused_repo_names(config)),
+            "count": len(names := unused_repo_names(config, dev_types)),
             "names": names,
             "configured": len(config.repos),
         },

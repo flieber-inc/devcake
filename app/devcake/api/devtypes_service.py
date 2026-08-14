@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
                       delete_dev_type, save_config, save_dev_type,
-                      validate_assignment_map)
+                      validate_assignment_map, validate_memory_bindings)
 from ..harness import HARNESSES, dev_type_status
 from ..prompts import templates as prompt_templates
 
@@ -107,11 +107,17 @@ async def list_dev_types(*, dev_types):
     return [dev_type_status(d) for d in dev_types.values()]
 
 
-async def upsert_dev_type(body: dict, name: str | None = None, *, dev_types):
+async def upsert_dev_type(body: dict, name: str | None = None, *,
+                          dev_types, config=None):
     try:
         dt = DevType.model_validate(body if name is None else {**body, "name": name})
     except Exception as e:  # noqa: BLE001 — validation contract: whatever model_validate raises on a bad body surfaces as 422, never a 500
         raise HTTPException(422, str(e))
+    if config is not None:
+        try:
+            validate_memory_bindings(config, dev_types={**dev_types, dt.name: dt})
+        except ValueError as e:
+            raise HTTPException(422, str(e))
     dev_types[dt.name] = dt
     save_dev_type(dt)
     prompt_templates.seed_devtype_prompts({dt.name: dt})

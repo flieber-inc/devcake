@@ -674,6 +674,31 @@ def test_clone_extra_repos_per_repo_token_and_nonfatal():
     assert any("gamma: clone failed" in n for n in notes)
 
 
+def test_clone_memory_repos_uses_card_name_not_url_slug(tmp_path):
+    """PLAN_MEMORY §3.1: dest is /workspace/memory/<card>/, sibling of
+    repo/ and activity/ — never repo/memory/ and never the forge slug."""
+    calls = []
+
+    class R:
+        def __init__(self, rc=0, stderr=""):
+            self.returncode, self.stderr = rc, stderr
+
+    def runner(cmd, capture_output, text, env):
+        calls.append(cmd)
+        return R(0)
+
+    dest = tmp_path / "memory"
+    notes = ep.clone_memory_repos(
+        [{"name": "nb", "url": "https://github.com/acme/notebook.git",
+          "clone_user": "x-access-token", "mirror_path": "/mirrors/nb.git"}],
+        dest, runner=runner)
+    assert dest.is_dir()
+    clone_cmd = calls[0]
+    assert clone_cmd[-1] == str(dest / "nb")
+    assert "notebook" not in clone_cmd[-1]
+    assert any("memory/nb" in n for n in notes)
+
+
 # ── skill install (runspec skills → the harness's registry skills_dir) ───────
 
 def _b64(data: bytes) -> str:

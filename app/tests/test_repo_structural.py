@@ -186,7 +186,11 @@ def test_exit_handler_reclaims_workspace_ownership():
     w = h["with"]
     # ONLY the per-run workspace — never the base, never the mirrors
     assert w["volumes"] == ["$DEVCAKE_WS_HOST/${params.RUN_ID}:/workspace"]
+    # User must ride the SDK container.User field — a sibling `user:` /
+    # `User:` on `with:` is the same silent-drop class as docker.run's
+    # documented `env:` key (2.13.0 decode).
     assert w["container"]["User"] == "0"
+    assert "user" not in w and "User" not in w
     ep = " ".join(w["container"]["Entrypoint"])
     assert "chown -R -h 1000:1000 /workspace" in ep and "|| true" in ep
     assert w["host"] == {"NetworkMode": "none"}

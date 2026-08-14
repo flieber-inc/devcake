@@ -76,7 +76,8 @@ export function draftErrors(draft) {
   const repoNames = new Set((draft.cfg.repos || []).map((r) => r.name));
   (draft.cfg.pmos || []).forEach((p, i) => {
     for (const [field, label] of
-         [["repos", "work repo"], ["reference_repos", "reference repo"]]) {
+         [["repos", "work repo"], ["reference_repos", "reference repo"],
+          ["memory_repos", "memory notebook"]]) {
       const missing = (p[field] || []).filter((n) => !repoNames.has(n));
       if (missing.length)
         errs[`cfg.pmos.${i}.${field}`] =

@@ -122,6 +122,7 @@ from devcake_dev.workspace.activity import (  # noqa: E402
 from devcake_dev.workspace.clone import (  # noqa: E402
     clone_error_class,
     clone_extra_repos,
+    clone_memory_repos,
     mirror_clone_error_class,
     set_origin_cmd,
 )
@@ -286,6 +287,7 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
     the provision phase; every failure exit is a pre-harness exit 13/20."""
     (WORKSPACE / "out").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / "activity").mkdir(parents=True, exist_ok=True)
+    (WORKSPACE / "memory").mkdir(parents=True, exist_ok=True)
     (WORKSPACE / ".devcake").mkdir(parents=True, exist_ok=True)
 
     repo_url = env["DEVCAKE_REPO_URL"]
@@ -354,6 +356,9 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
     # multi-repo ONBOARD triage (item 2): sibling read-only clones — the
     # playbook's repo_options section names them; failures are non-fatal
     for note in clone_extra_repos(spec.get("extra_repos") or [], repo_dir):
+        print(note)
+    for note in clone_memory_repos(spec.get("memory_repos") or [],
+                                   WORKSPACE / "memory"):
         print(note)
     return workdir
 

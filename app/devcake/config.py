@@ -26,6 +26,24 @@ CONFIG_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "config" / "co
 # compound ambiguous; ≤12 protects the 64-char Dagu run-id budget.
 _INSTANCE_NAME_RE = r"^[a-z][a-z0-9]{0,11}$"
 
+# Cron job ids (and any other non-instance slug): lowercase alnum +
+# hyphen/underscore, no slash. Wider than instance names so reserved
+# `memory-curator` fits; still a conservative path-safe token.
+_CRON_ID_RE = r"^[a-z][a-z0-9_-]{0,31}$"
+
+MEMORY_CURATOR_CRON_ID = "memory-curator"
+
+MEMORY_CURATOR_TEMPLATE = (
+    "Drain .claims/ in the work repository. Each *.json file is one\n"
+    "unvalidated lead (finding / evidence / scope) with origin ids.\n"
+    "Promote a lead to a note only when the notebook's own README\n"
+    "filing rules and the evidence support it; otherwise discard.\n"
+    "Every change is a pull request. Delete drained files from\n"
+    ".claims/ in the same PR. Do not invent a layout. Do not write\n"
+    "notes under .claims/. Do not edit .claims/README.md. Do not\n"
+    "open a PR against any inherited extra clone."
+)
+
 # ADR-0030: the app-managed default-board PMO instance (auto-provisioned
 # gitea_issues board on the bundled Gitea). Reserved in _pmos_valid; the name
 # prefixes branches and run ids like any instance name (ADR-0009).
@@ -58,6 +76,22 @@ RESERVED_SECRET_ENV = frozenset({
 RESERVED_SECRET_ENV_PREFIXES = ("DEVCAKE_", "OTEL_", "GIT_")
 
 
+def _dedupe_card_names(v: list[str], *, field: str) -> list[str]:
+    """Card-granular repo-card names: instance-name shape, no slashes,
+    deduped with order preserved (PLAN_MEMORY I5)."""
+    out: list[str] = []
+    for raw in v or []:
+        name = (raw or "").strip()
+        if (not name or name == ".." or "/" in name or "\\" in name
+                or not re.fullmatch(_INSTANCE_NAME_RE, name)):
+            raise ValueError(
+                f"{field} {raw!r}: must be a repo-card name "
+                f"(lowercase alnum, ≤12 chars, no slashes)")
+        if name not in out:
+            out.append(name)
+    return out
+
+
 class Assignment(BaseModel):
     dev_type: str = ""
     extra_cli_args: str = ""
@@ -86,6 +120,10 @@ class PMOInstance(BaseModel):
     # routing set above by validation. Multiple supported, order = listing
     # order in the workspace note.
     reference_repos: list[str] = Field(default_factory=list)
+    # Memory notebooks bound to this board (PLAN_MEMORY). Card names, same
+    # shape as repos / reference_repos. Pairwise disjoint from those two
+    # (I1). Never a work repo except on a Curator board (I2).
+    memory_repos: list[str] = Field(default_factory=list)
     # Per-instance intake pause (under the global `AppConfig.intake_paused`
     # master switch). While true, this instance dispatches no NEW runs;
     # in-flight finalization and sweeps continue. Default open so a multi-PMO
@@ -111,6 +149,11 @@ class PMOInstance(BaseModel):
     # bundled provisioner is present; operator-tunable fields (repos,
     # reference_repos, assignments, intake_paused) stay operator-owned.
     managed: bool = False
+
+    @field_validator("memory_repos")
+    @classmethod
+    def _memory_repos_valid(cls, v):
+        return _dedupe_card_names(v, field="memory_repos")
 
     @field_validator("assignments")
     @classmethod
@@ -293,6 +336,48 @@ class Steward(BaseModel):
     dev_type: str | None = "steward"
 
 
+class CronJob(BaseModel):
+    """One create-a-labeled-ticket job (PLAN_MEMORY §6). The reserved
+    `memory-curator` row is seeded on every AppConfig and re-injected by
+    reconcile_reserved_crons; it never picks a product PMO."""
+    id: str = Field(pattern=_CRON_ID_RE)
+    name: str
+    enabled: bool = False
+    interval_minutes: int = Field(60, ge=1)
+    pmo: str | None = None
+    entry_stage: Literal["ONBOARD", "PLAN", "EXECUTE", "REVIEW"]
+    description_template: str
+    reserved: bool = False
+
+    @model_validator(mode="after")
+    def _canonicalize_reserved(self):
+        if self.id == MEMORY_CURATOR_CRON_ID:
+            self.reserved = True
+            self.pmo = None
+            self.entry_stage = "EXECUTE"
+        else:
+            self.reserved = False
+            if not (self.pmo or "").strip():
+                raise ValueError(
+                    f"crons[{self.id}]: non-reserved job requires pmo")
+        return self
+
+
+def memory_curator_seed() -> CronJob:
+    """Fresh reserved Memory Curator row (operator may later edit
+    enabled / interval / template)."""
+    return CronJob(
+        id=MEMORY_CURATOR_CRON_ID,
+        name="Memory Curator",
+        enabled=False,
+        interval_minutes=60,
+        pmo=None,
+        entry_stage="EXECUTE",
+        description_template=MEMORY_CURATOR_TEMPLATE,
+        reserved=True,
+    )
+
+
 class Budgets(BaseModel):
     """Operator-owned counting budgets (ADR-0033 Decision 7 AS AMENDED,
     founder rulings 2026-08-13): discoveries are a proxy for memory-building
@@ -310,6 +395,9 @@ class Budgets(BaseModel):
     freshness_rereviews: int = Field(5, ge=0)
     # max discovery entries harvested from one run's result.json
     discoveries_per_run: int = Field(3, ge=0)
+    # max .claims/*.json files per notebook (PLAN_MEMORY §5.3). 0 = unlimited.
+    # At cap the conveyor refuses the new id (does not evict).
+    claims_queue_max: int = Field(50, ge=0)
 
 
 def migrate_steward_names(data: dict) -> dict:
@@ -446,6 +534,9 @@ class DevType(BaseModel):
     # at runspec time, so mcp_setup_commands can reference e.g. $DD_API_KEY
     # without a secret value ever touching config.yaml.
     secret_env: list[str] = Field(default_factory=list)
+    # Memory notebooks bound to this Dev Type (domain-bound, PLAN_MEMORY).
+    # Card names; deduped, order preserved. Empty default.
+    memory_repos: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
 
@@ -467,6 +558,11 @@ class DevType(BaseModel):
             if name not in out:
                 out.append(name)
         return out
+
+    @field_validator("memory_repos")
+    @classmethod
+    def _memory_repos_valid(cls, v):
+        return _dedupe_card_names(v, field="memory_repos")
 
     @field_validator("skills")
     @classmethod
@@ -715,6 +811,15 @@ class AppConfig(BaseModel):
     # the fission backstop by explicit operator choice (docs/03 §1.3)
     max_decomposition_depth: int = Field(2, ge=0)
     steward: Steward = Field(default_factory=Steward)
+    # PLAN_MEMORY: skill-source + memory-mount fail-closed (default ON).
+    context_sourcing_strict: bool = True
+    # PLAN_MEMORY: OFF enforces a person at the merge chokepoint for any
+    # memory-bound card. ON is two-model consent, not a person.
+    memory_auto_merge: bool = False
+    # Cron module. The reserved memory-curator row is always present —
+    # a PUT/bundle that omits it is healed by reconcile_reserved_crons
+    # (and the field validator injects the seed if the list is empty).
+    crons: list[CronJob] = Field(default_factory=lambda: [memory_curator_seed()])
     # counting budgets (ADR-0033 D7 as amended) — see the Budgets docstring
     budgets: Budgets = Field(default_factory=Budgets)
     # per-Dev-container cgroup limits (2026-08-13) — see ContainerLimits
@@ -803,6 +908,17 @@ class AppConfig(BaseModel):
                              "(trailing '/' and '.git' are ignored)")
         return v
 
+    @field_validator("crons")
+    @classmethod
+    def _crons_valid(cls, v):
+        rows = list(v or [])
+        ids = [c.id for c in rows]
+        if len(set(ids)) != len(ids):
+            raise ValueError("crons: duplicate job ids")
+        if not any(c.id == MEMORY_CURATOR_CRON_ID for c in rows):
+            rows.append(memory_curator_seed())
+        return rows
+
     @model_validator(mode="after")
     def _pmo_repo_sets_valid(self):
         repo_names = {r.name for r in self.repos}
@@ -822,6 +938,13 @@ class AppConfig(BaseModel):
                     f"pmos[{p.name}]: {sorted(overlap)} cannot be both a "
                     f"work repo and a reference repo — reference repos are "
                     f"read-only context, never routing targets")
+        validate_memory_bindings(self)
+        pmo_names = {p.name for p in self.pmos}
+        for job in self.crons:
+            if not job.reserved and job.pmo not in pmo_names:
+                raise ValueError(
+                    f"crons[{job.id}].pmo {job.pmo!r} names no configured "
+                    f"instance (have: {sorted(pmo_names)})")
         return self
 
 
@@ -882,6 +1005,128 @@ def deep_merge(base: dict, patch: dict) -> dict:
         else:
             merged[k] = v
     return merged
+
+
+def _iter_dev_types(dev_types) -> list:
+    if not dev_types:
+        return []
+    if isinstance(dev_types, dict):
+        return list(dev_types.values())
+    return list(dev_types)
+
+
+def memory_bound_names(cfg: "AppConfig", dev_types=None) -> set[str]:
+    """Set M: every card named in any instance or Dev Type memory_repos."""
+    names: set[str] = set()
+    for p in cfg.pmos:
+        names.update(p.memory_repos or [])
+    for dt in _iter_dev_types(dev_types):
+        names.update(getattr(dt, "memory_repos", None) or [])
+    return names
+
+
+def is_memory_bound(cfg: "AppConfig", name: str, dev_types=None) -> bool:
+    """True when `name` is a memory notebook anywhere (PLAN_MEMORY §4.1).
+
+    A card listed in any instance or Dev Type `memory_repos` is bound.
+    A lone product work-repo is not — `repos == [webapp]` without a
+    memory listing is just a one-repo board.
+    """
+    return name in memory_bound_names(cfg, dev_types)
+
+
+def auto_merge_permitted(cfg: "AppConfig", inst, repo_name: str,
+                         dev_types=None) -> bool:
+    """Merge chokepoint (PLAN_MEMORY §4.1): card `auto_merge` AND, for a
+    memory-bound target, `memory_auto_merge`. OFF leaves the mission in
+    the human-await / DEVCAKE-MERGE state. App commits under `.claims/`
+    do not go through this gate."""
+    if not getattr(inst, "auto_merge", False):
+        return False
+    if is_memory_bound(cfg, repo_name, dev_types) and not cfg.memory_auto_merge:
+        return False
+    return True
+
+
+def validate_memory_bindings(cfg: "AppConfig", dev_types=None) -> None:
+    """I1 + I2 (PLAN_MEMORY §2.5). Called from AppConfig validation
+    (instance-side) and from validate_config_semantics / Dev Type PUT
+    with the live Dev Type map so domain-bound names join set M."""
+    for p in cfg.pmos:
+        repos, refs, mems = (set(p.repos), set(p.reference_repos),
+                             set(p.memory_repos))
+        overlap_wr = repos & refs
+        if overlap_wr:
+            raise ValueError(
+                f"pmos[{p.name}]: {sorted(overlap_wr)} cannot be both a "
+                f"work repo and a reference repo — reference repos are "
+                f"read-only context, never routing targets")
+        overlap_wm = repos & mems
+        if overlap_wm:
+            raise ValueError(
+                f"pmos[{p.name}]: {sorted(overlap_wm)} cannot be both a "
+                f"work repo and a memory notebook")
+        overlap_rm = refs & mems
+        if overlap_rm:
+            raise ValueError(
+                f"pmos[{p.name}]: {sorted(overlap_rm)} cannot be both a "
+                f"reference repo and a memory notebook")
+        if len(p.memory_repos) != len(set(p.memory_repos)):
+            raise ValueError(f"pmos[{p.name}].memory_repos: duplicate entries")
+    M = memory_bound_names(cfg, dev_types)
+    for p in cfg.pmos:
+        for m in sorted(M):
+            if m in p.repos and list(p.repos) != [m]:
+                raise ValueError(
+                    f"pmos[{p.name}]: {m!r} is memory-bound and cannot be "
+                    f"a work repo among others — a Curator board lists "
+                    f"only that notebook (repos == [{m!r}])")
+
+
+def reconcile_reserved_crons(current: list[dict],
+                             incoming: list[dict]) -> list[dict]:
+    """Keep the reserved memory-curator row across wholesale list replaces
+    (config PUT, bundle apply) — same shape as reconcile_managed_pmos.
+
+    - omitted reserved row is re-injected from live (or the seed);
+    - identity fields (id/reserved/pmo/entry_stage) are canonical;
+    - operator tunables (name/enabled/interval/template) come from the
+      incoming row when present, else the live row;
+    - a stray `reserved: true` on any other row is stripped.
+    """
+    live_by_id = {c["id"]: c for c in (current or [])
+                  if isinstance(c, dict) and c.get("id")}
+    live = live_by_id.get(MEMORY_CURATOR_CRON_ID)
+    if live is None:
+        live = memory_curator_seed().model_dump()
+    out: list[dict] = []
+    seen = False
+    for raw in (incoming or []):
+        if not isinstance(raw, dict):
+            out.append(raw)
+            continue
+        row = dict(raw)
+        if row.get("id") == MEMORY_CURATOR_CRON_ID:
+            row["id"] = MEMORY_CURATOR_CRON_ID
+            row["reserved"] = True
+            row["pmo"] = None
+            row["entry_stage"] = "EXECUTE"
+            for field in ("name", "enabled", "interval_minutes",
+                          "description_template"):
+                if field not in row:
+                    row[field] = live.get(field)
+            seen = True
+        elif row.get("reserved"):
+            log.warning("crons[%r]: stripping stray reserved flag — only "
+                        "%r may be reserved", row.get("id"),
+                        MEMORY_CURATOR_CRON_ID)
+            row["reserved"] = False
+        out.append(row)
+    if not seen:
+        log.info("re-injecting reserved cron %r omitted by the incoming "
+                 "list", MEMORY_CURATOR_CRON_ID)
+        out.append(dict(live))
+    return out
 
 
 def reconcile_managed_pmos(current: list[dict], incoming: list[dict], *,

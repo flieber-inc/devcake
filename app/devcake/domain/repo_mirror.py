@@ -105,7 +105,8 @@ class RepoCache:
         return name in self.forges.instances and name not in self.forges.internal
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
-                   blocker_entries: list[dict]) -> list[str]:
+                   blocker_entries: list[dict],
+                   dev_type=None, config=None) -> list[str]:
         """The mirror-eligible repo set one run must have fresh (docs/07 §5a).
         Sourcing comes from THE shared rule (repo_sourcing.sourced_repo_names,
         ADR-0034) — the gate and the runspec structurally cannot disagree
@@ -114,7 +115,8 @@ class RepoCache:
         from .repo_sourcing import sourced_repo_names
         return [name for name in sourced_repo_names(
                     work_repo=work_repo, mission_type=mission_type,
-                    instance=instance, blocker_entries=blocker_entries)
+                    instance=instance, blocker_entries=blocker_entries,
+                    dev_type=dev_type, config=config)
                 if self.eligible(name)]
 
     # ── the gate primitive ───────────────────────────────────────────────────

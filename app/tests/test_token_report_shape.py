@@ -178,6 +178,8 @@ RUN_BLOB_COLUMNS = {
     # ADR-0016 addendum — {card: sha} supply-chain provenance for external
     # `<card>/<skill>` skills consumed by this run; deliberate widening
     "skill_repo_heads",
+    # PLAN_MEMORY §3.6 — consumer memory mount provenance snapshot
+    "memory_mounts",
 }
 
 _SCALAR_TYPES = (str, int, float, bool)

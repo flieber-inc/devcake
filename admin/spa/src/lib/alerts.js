@@ -81,6 +81,34 @@ export default function deriveAlerts(health) {
   // adapters no PMO selects (2026-08-01 incident): each one is rebuilt on
   // every config/secret reload and probed on every full forge sweep — pure
   // latency cost. Count in the title so a changed count resurfaces the alert.
+  for (const id of health.cron_degraded || []) {
+    alerts.push({
+      id: `cron-degraded:${id}`,
+      severity: "warning",
+      dismissable: true,
+      title: `Cron ${id} is degraded`,
+      body: "The last three automatic fires produced no ticket and no successful skip. Automatic fires are paused. Run now still works.",
+    });
+  }
+  for (const card of health.memory_curator_no_board || []) {
+    alerts.push({
+      id: `memory-curator-no-board:${card}`,
+      severity: "warning",
+      dismissable: true,
+      title: `Memory Curator has no board for ${card}`,
+      body: "Create a PMO instance whose only work repository is that notebook.",
+    });
+  }
+  for (const card of health.claims_queue_capped || []) {
+    alerts.push({
+      id: `claims-queue-capped:${card}`,
+      severity: "warning",
+      dismissable: true,
+      title: `Claims queue capped on ${card}`,
+      body: "New leads are being refused. Drain .claims/ — the app will not evict old files to make room.",
+    });
+  }
+
   const unused = health.unused_repos;
   if (unused && unused.count > 0) {
     const shown = unused.names.slice(0, 8).join(", ");

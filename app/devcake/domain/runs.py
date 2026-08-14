@@ -88,6 +88,7 @@ def provision_runspec_reply(run: "Run", secret: dict) -> dict:
     return {"env": env,
             "credential_files": [],
             "extra_repos": secret.get("extra_repos") or [],
+            "memory_repos": secret.get("memory_repos") or [],
             "skills": [],
             "skills_dir": "",
             "mcp_setup_commands": [],
@@ -271,6 +272,7 @@ class RunManager:
                  # multi-repo ONBOARD triage (item 2): read-only sibling
                  # clones, each with its own read token
                  "extra_repos": secret.get("extra_repos") or [],
+                 "memory_repos": secret.get("memory_repos") or [],
                  # skill store: non-secret, snapshotted on the Run at
                  # dispatch — the entrypoint writes them under
                  # $HOME/<skills_dir> (harness registry; "" → its default)

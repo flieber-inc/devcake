@@ -16,13 +16,85 @@ from __future__ import annotations
 
 # stages whose runs receive reference repos + done-blockers' work repos
 STAGES_WITH_EXTRAS = ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")
+# consumer memory mounts apply on every mission stage including STEWARD
+STAGES_WITH_MEMORY = STAGES_WITH_EXTRAS + ("STEWARD",)
+
+
+def memory_mount_names(*, instance, dev_type, repo_ref: str) -> list[str]:
+    """Consumer memory clones (PLAN_MEMORY §3.2): instance list then Dev
+    Type list, deduped, minus the run's primary work repo (F2)."""
+    wanted = list(getattr(instance, "memory_repos", None) or [])
+    wanted += list(getattr(dev_type, "memory_repos", None) or [])
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in wanted:
+        if name and name != repo_ref and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def inherited_curator_extras(cfg, instance, work_repo: str) -> list[str]:
+    """Curator inherit (PLAN_MEMORY §7): when the work repo is memory-bound,
+    pull consumer boards' repos ∪ reference_repos (plus this instance's
+    own reference_repos). Never other notebooks. Never `m` itself."""
+    from ..config import is_memory_bound
+    if not work_repo or not is_memory_bound(cfg, work_repo):
+        return []
+    card_names = {r.name for r in cfg.repos}
+    this_name = getattr(instance, "name", None)
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(names) -> None:
+        for n in names or []:
+            if n and n != work_repo and n in card_names and n not in seen:
+                seen.add(n)
+                out.append(n)
+
+    for other in cfg.pmos:
+        if getattr(other, "name", None) == this_name:
+            continue
+        if work_repo in (other.memory_repos or []):
+            _add(other.repos)
+            _add(other.reference_repos)
+    _add(getattr(instance, "reference_repos", None))
+    return out
+
+
+def classify_context_failures(why: dict[str, str], *, context_cards: set[str],
+                              strict: bool, has_mirror) -> tuple[
+        dict[str, str], set[str], set[str]]:
+    """Split a failed ensure_fresh map (PLAN_MEMORY §3.5).
+
+    Work / reference / blocker failures always defer. Memory and
+    skill-source cards are toggle-governed: strict ⇒ defer (provisioning
+    family, no attempt); open ⇒ last-good mirror is stale_cache, never-
+    synced is omit-and-continue.
+    """
+    defer: dict[str, str] = {}
+    stale: set[str] = set()
+    omit: set[str] = set()
+    for name, reason in why.items():
+        if name not in context_cards:
+            defer[name] = reason
+            continue
+        if strict:
+            defer[name] = reason
+        elif has_mirror(name):
+            stale.add(name)
+        else:
+            omit.add(name)
+    return defer, stale, omit
 
 
 def sourced_repo_names(*, work_repo: str, mission_type: str, instance,
-                       blocker_entries: list[dict] | None) -> list[str]:
+                       blocker_entries: list[dict] | None,
+                       dev_type=None, config=None) -> list[str]:
     """Ordered, deduped repo names this run draws from (docs/07 §5a):
     primary first, then (ONBOARD only) the instance's routing set, then
-    reference repos, then blocker work repos. May include ineligible or
+    reference repos, then blocker work repos, then consumer memory
+    mounts, then Curator inherit extras. May include ineligible or
     uncredentialed names — filtering is the caller's job, sourcing is not."""
     wanted: list[str] = [work_repo]
     if mission_type == "ONBOARD":
@@ -35,8 +107,13 @@ def sourced_repo_names(*, work_repo: str, mission_type: str, instance,
         # blocker-entry-shaped extras (RO clones for evidence anchoring).
         # Deliberately WITHOUT reference_repos — family WORK repos only;
         # the relations flavor passes no entries, so it still sources
-        # exactly [work_repo].
+        # exactly [work_repo] (+ memory, below).
         wanted += [bw.get("repo_ref") or "" for bw in blocker_entries or []]
+    if mission_type in STAGES_WITH_MEMORY:
+        wanted += memory_mount_names(
+            instance=instance, dev_type=dev_type, repo_ref=work_repo)
+        if config is not None:
+            wanted += inherited_curator_extras(config, instance, work_repo)
     out: list[str] = []
     seen: set[str] = set()
     for name in wanted:

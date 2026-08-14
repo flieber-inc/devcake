@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { Section } from "./Card.jsx";
 import { Input, Select } from "./Field.jsx";
 import SettingRow from "./SettingRow.jsx";
 import Toggle from "./Toggle.jsx";
+import { ConfirmDialog } from "./Modal.jsx";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
 
 const CONTINUATION_POLICIES = ["auto", "resume-only", "fresh-only", "off"];
@@ -24,10 +25,19 @@ const ATTEMPT_RESET_DESC = {
 // fields, same route (#/config/limits); the informational "Service
 // auto-restart" row is gone (it was a knob-shaped non-knob — the restart
 // policy is compose's, documented in docs/13).
+const MEMORY_AUTO_MERGE_ON_COPY =
+  "Recommended: keep this off so a person merges every note. " +
+  "With this on, a note the Curator wrote becomes official once " +
+  "another Dev (a Reviewer) approves it. That is two models in a " +
+  "row. It is not a person. It is not the reviewer token. A wrong " +
+  "note can guide every later run until you revert it. Everything " +
+  "stays in git: every merge names its run and can be reverted.";
+
 export default function LimitsSection() {
   const { dr } = useSharedDraft();
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
+  const [mergeOnConfirm, setMergeOnConfirm] = useState(false);
 
   return (
     <>
@@ -115,6 +125,16 @@ export default function LimitsSection() {
               value={cfg.budgets?.discoveries_per_run ?? 3}
               aria-label="Discoveries per run"
               onChange={(e) => setField("cfg.budgets.discoveries_per_run", Number(e.target.value))} />
+          </SettingRow>
+          <SettingRow label="Claims queue max"
+            desc={Number(cfg.budgets?.claims_queue_max) === 0
+              ? "0 — unlimited: every harvested lead is copied into .claims/."
+              : `At most ${cfg.budgets?.claims_queue_max} .claims/*.json files per notebook; new leads are refused, never evicted.`}
+            help="The app copies each harvested discovery onto every memory notebook the run mounted. This caps how many unvalidated leads sit in .claims/ on one notebook. At the cap the new file is refused and health shows claims_queue_capped — old claims are never deleted to make room.">
+            <Input type="number" className="w-24" min={0}
+              value={cfg.budgets?.claims_queue_max ?? 50}
+              aria-label="Claims queue max"
+              onChange={(e) => setField("cfg.budgets.claims_queue_max", Number(e.target.value))} />
           </SettingRow>
         </div>
       </Section>
@@ -236,6 +256,47 @@ export default function LimitsSection() {
           </SettingRow>
         </div>
       </Section>
+
+      <Section id="limits-memory" title="Memory"
+        description="How notebooks mount and how notes become official.">
+        <div className="divide-y divide-neutral-100 dark:divide-neutral-800">
+          <SettingRow label="Context sourcing strict"
+            desc={cfg.context_sourcing_strict !== false
+              ? "ON — a missing or stale memory or skill-source card blocks the run (provisioning failure, not a dumb-agent failure)."
+              : "OFF — runs proceed on cached content. A last-good mirror is used and marked stale; a never-synced card is omitted and the run continues."}
+            help="Covers skill-source cards and memory notebooks. Work, reference, and blocker extras stay on their existing rules. Off means a consumer run can proceed without the latest notes.">
+            <Toggle on={cfg.context_sourcing_strict !== false}
+              label="Context sourcing strict"
+              onClick={() => setField("cfg.context_sourcing_strict",
+                cfg.context_sourcing_strict === false)} />
+          </SettingRow>
+          <SettingRow label="Memory auto-merge"
+            desc={cfg.memory_auto_merge
+              ? "ON — two models in a row can make a note official."
+              : "OFF — a person merges every note (recommended)."}
+            help={MEMORY_AUTO_MERGE_ON_COPY}>
+            <Toggle on={!!cfg.memory_auto_merge}
+              label="Memory auto-merge"
+              onClick={() => {
+                if (cfg.memory_auto_merge) {
+                  setField("cfg.memory_auto_merge", false);
+                } else {
+                  setMergeOnConfirm(true);
+                }
+              }} />
+          </SettingRow>
+        </div>
+      </Section>
+      <ConfirmDialog open={mergeOnConfirm}
+        title="Turn memory auto-merge on?"
+        body={MEMORY_AUTO_MERGE_ON_COPY}
+        confirmLabel="Turn on — two models, not a person"
+        confirmKind="primary"
+        onCancel={() => setMergeOnConfirm(false)}
+        onConfirm={() => {
+          setField("cfg.memory_auto_merge", true);
+          setMergeOnConfirm(false);
+        }} />
     </>
   );
 }

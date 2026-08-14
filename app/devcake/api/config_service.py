@@ -15,7 +15,8 @@ from fastapi import HTTPException
 
 from .. import secrets as secrets_store
 from ..config import (AppConfig, apply_auto_merge_rearm, deep_merge,
-                      reconcile_managed_pmos, reject_stale_patch, save_config)
+                      reconcile_managed_pmos, reconcile_reserved_crons,
+                      reject_stale_patch, save_config)
 from ..prompts import templates as prompt_templates
 from ..settings_bundle import (BundleError, dry_run_adapters,
                                validate_config_semantics)
@@ -86,6 +87,9 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
                 current.get("pmos") or [], body["pmos"],
                 internal_forge_present=bool(
                     os.environ.get("GITEA_ADMIN_PASSWORD")))}
+        if isinstance(body.get("crons"), list):
+            body = {**body, "crons": reconcile_reserved_crons(
+                current.get("crons") or [], body["crons"])}
         merged = AppConfig.model_validate(deep_merge(current, body))
     except Exception as e:  # noqa: BLE001 — validation contract: whatever the merge/model raises on a bad patch surfaces as 422, never a 500
         raise HTTPException(422, str(e))
@@ -96,7 +100,8 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         validate_config_semantics(
             merged, set(dev_types),
             template_exists=lambda mt, name:
-                not prompt_templates.resolve_playbook(mt, name)[1])
+                not prompt_templates.resolve_playbook(mt, name)[1],
+            dev_types=dev_types)
         dry_run_adapters(merged)
     except BundleError as e:
         raise HTTPException(e.status, str(e))

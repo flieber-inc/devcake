@@ -73,6 +73,15 @@ export default function RunTerminal({ run, onClose }) {
             live ? "bg-blue-900 text-blue-200" : "bg-neutral-800 text-neutral-400"}`}>
             {live ? "live" : run.state}
           </span>
+          {(run.memory_mounts || []).length > 0 && (
+            <span className="max-w-[22rem] truncate font-mono text-[10px] text-neutral-400"
+              title={(run.memory_mounts || []).map((m) =>
+                `${m.card} (${m.binding}${m.stale_cache ? ", stale" : ""}) @ ${(m.commit || "").slice(0, 8)}`
+              ).join(" · ")}>
+              memory: {(run.memory_mounts || []).map((m) =>
+                `${m.card}${m.stale_cache ? "*" : ""}`).join(", ")}
+            </span>
+          )}
           {note && !live && (
             <span title={note}
               className="max-w-[18rem] truncate rounded bg-amber-950 px-1.5 py-0.5 text-xs text-amber-300">

@@ -144,7 +144,8 @@ async def lifespan(app: FastAPI):
         validate_config_semantics(
             s.config, set(s.dev_types),
             template_exists=lambda mt, name:
-                not prompt_templates.resolve_playbook(mt, name)[1])
+                not prompt_templates.resolve_playbook(mt, name)[1],
+            dev_types=s.dev_types)
     except BundleError as e:
         raise RuntimeError(
             f"config.yaml failed cross-store validation: {e} — repair "
@@ -274,7 +275,7 @@ async def health():
         shared_breakers=s.shared_breakers, store=s.store,
         internal_forge=s.internal_forge, poll_rt=s.poll_rt,
         backend_degraded=s.shared_backend_degraded, repo_cache=s.repo_cache,
-        workspaces=s.workspaces)
+        workspaces=s.workspaces, cron=s.cron)
 
 
 @app.get("/api/v1/health/live")
@@ -490,7 +491,8 @@ async def clear_runs():
         async with s.poll_rt.lock, s.manager.bootstrap.dispatch_lock:
             result = await clear_all(s.store, s.executor, s.messaging, s.runlog,
                                      internal_forge=s.internal_forge,
-                                     run_manager=s.manager)
+                                     run_manager=s.manager,
+                                     claims=s.claims, config=s.config)
         s.poll_rt.missions_cache.clear()
         for mgr in s.managers.values():
             mgr._grace.clear()
@@ -656,8 +658,8 @@ async def list_dev_types():
 @app.post("/api/v1/dev-types")
 @app.put("/api/v1/dev-types/{name}")
 async def upsert_dev_type(body: dict, name: str | None = None):
-    return await devtypes_service.upsert_dev_type(body, name,
-                                                  dev_types=svc().dev_types)
+    return await devtypes_service.upsert_dev_type(
+        body, name, dev_types=svc().dev_types, config=svc().config)
 
 
 @app.post("/api/v1/dev-types/{name}/rename")
@@ -827,6 +829,18 @@ async def delete_internal_repo(name: str):
     return await internal_repos_service.delete_internal_repo(
         name, internal_forge=s.internal_forge, store=s.store,
         forge_runtime=s.forge_runtime)
+
+
+@app.get("/api/v1/cron")
+async def list_crons():
+    from . import cron_service as cron_api
+    return await cron_api.list_crons(config=svc().config)
+
+
+@app.post("/api/v1/cron/{job_id}/run")
+async def run_cron(job_id: str):
+    from . import cron_service as cron_api
+    return await cron_api.run_cron(job_id, cron=svc().cron)
 
 
 @app.post("/api/v1/steward/run")

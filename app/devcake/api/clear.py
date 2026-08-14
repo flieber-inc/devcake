@@ -293,6 +293,8 @@ async def clear_all(
     runlog: RunLogStore | None = None,
     internal_forge=None,
     run_manager=None,
+    claims=None,
+    config=None,
 ) -> dict[str, Any]:
     """Full operator wipe. Best-effort per subsystem; partial failures are
     reported. Order is load-bearing: stop-and-DRAIN first, wipe after — the
@@ -336,6 +338,20 @@ async def clear_all(
         log.exception("redis clear failed")
         redis_info = {"error": str(e)[:300]}
     activity = await clear_activity_repos(internal_forge)
+    claims_pruned: dict[str, Any] = {}
+    if claims is not None and config is not None:
+        try:
+            from ..config import memory_bound_names
+            from ..domain import claims as claims_mod
+            cards = sorted(memory_bound_names(config))
+            for inst in config.pmos:
+                pruned = await claims_mod.prune_board(
+                    claims, cards, source_instance=inst.name)
+                if pruned:
+                    claims_pruned[inst.name] = pruned
+        except Exception:  # noqa: BLE001 — wipe continues; claims prune is best-effort
+            log.exception("claims prune during clear failed")
+            claims_pruned = {"error": "claims prune failed"}
     log.warning(
         "operator clear-runs: local_runs=%s dagu_deleted=%s oo=%s "
         "activity_repos=%s",
@@ -354,7 +370,9 @@ async def clear_all(
         "openobserve": oo,
         "redis": redis_info,
         "activity_repos": activity,
+        "claims_pruned": claims_pruned,
         "preserved": ["config", "secrets", "pmo", "operator repos",
                       "skill-store", "work repos (devcake-internal)",
+                      "notebooks (notes stay; board claims pruned)",
                       "repo mirrors"],
     }

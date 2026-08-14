@@ -347,8 +347,8 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 <RepoChips label="Repositories"
                   help="The ORDERED set of repos this instance's missions may target — only repos with a stored Access token qualify (work needs push). Click to toggle; the first selected is the default for missions without a `devcake-repo:` marker; markers must name a listed repo. Empty = every mission gets its own internal-forge repo."
                   all={cfg.repos} selected={inst.repos || []}
-                  excluded={inst.reference_repos || []}
-                  excludedNote="reference repo"
+                  excluded={[...(inst.reference_repos || []), ...(inst.memory_repos || [])]}
+                  excludedNote="reference or memory notebook"
                   unavailable={cfg.repos.map((r) => r.name).filter((n) => !repoHasToken[n])}
                   unavailableNote="no Access token stored — usable only as a reference repo"
                   firstBadge=" · default"
@@ -361,12 +361,23 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                 <RepoChips label="Reference repos"
                   help="Read-only consultation material (docs sources, style guides) cloned into EVERY stage's workspace alongside the mission's repository. Never a work target — markers naming one gate. Multiple supported."
                   all={cfg.repos} selected={inst.reference_repos || []}
-                  excluded={inst.repos || []}
-                  excludedNote="work repo"
+                  excluded={[...(inst.repos || []), ...(inst.memory_repos || [])]}
+                  excludedNote="work repo or memory notebook"
                   onChange={(next) => setField(`cfg.pmos.${idx}.reference_repos`, next)} />
                 {dr.errors[`cfg.pmos.${idx}.reference_repos`] && (
                   <p className="text-xs text-red-600 dark:text-red-400">
                     ✗ {dr.errors[`cfg.pmos.${idx}.reference_repos`]}
+                  </p>
+                )}
+                <RepoChips label="Memory (board-bound)"
+                  help="Notebooks this board's runs consult under /workspace/memory/<card>/. Never a work repo on this board — a Curator board lists the notebook as its only work repo instead."
+                  all={cfg.repos} selected={inst.memory_repos || []}
+                  excluded={[...(inst.repos || []), ...(inst.reference_repos || [])]}
+                  excludedNote="work or reference repo"
+                  onChange={(next) => setField(`cfg.pmos.${idx}.memory_repos`, next)} />
+                {dr.errors[`cfg.pmos.${idx}.memory_repos`] && (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    ✗ {dr.errors[`cfg.pmos.${idx}.memory_repos`]}
                   </p>
                 )}
                 <SettingRow label="Discovery routing"

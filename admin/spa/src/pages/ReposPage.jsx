@@ -82,6 +82,33 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
   );
 }
 
+function RepoUsageChips({ name, cfg, devTypes, depth }) {
+  const work = (cfg.pmos || []).filter((p) => (p.repos || []).includes(name)).length;
+  const ref = (cfg.pmos || []).filter((p) => (p.reference_repos || []).includes(name)).length;
+  const memB = (cfg.pmos || []).filter((p) => (p.memory_repos || []).includes(name)).length;
+  const memD = Object.values(devTypes || {}).filter((d) => (d.memory_repos || []).includes(name)).length;
+  const skills = Object.values(devTypes || {}).some((d) =>
+    (d.skills || []).some((s) => s.startsWith(`${name}/`)));
+  const chips = [];
+  if (work) chips.push(`work ×${work}`);
+  if (ref) chips.push(`reference ×${ref}`);
+  if (skills) chips.push("skills-source");
+  if (memB) chips.push(`memory board-bound ×${memB}`);
+  if (memD) chips.push(`memory domain-bound ×${memD}`);
+  if (typeof depth === "number") chips.push(`queue ${depth}`);
+  if (!chips.length) return null;
+  return (
+    <span className="flex flex-wrap gap-1">
+      {chips.map((c) => (
+        <span key={c}
+          className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+          {c}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 // "gitea (internal)" is a UI variant, not a forge id — both map to
 // forge:"gitea"; internal is recognized by the bundled instance's clone
 // origin in the URL. Selecting internal offers Create repository.
@@ -95,6 +122,10 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const create = async () => {
+    if (name.startsWith("activity-")) {
+      setErr("Name must not start with activity- (those repos are swept on Clear).");
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -118,6 +149,12 @@ function CreateInternalRepoModal({ initialName, onClose, onCreated }) {
         fully wired. If the repo already exists in that org it is adopted
         instead: fresh tokens are minted and stored (the recovery path after
         removing a card, which deletes its stored tokens).
+      </p>
+      <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
+        This repository is yours. Clear will not delete it. A full
+        stack wipe will, unless you use the Gitea backup. After
+        Clear, claims copied from the wiped board are removed from
+        this notebook; notes stay.
       </p>
       <div className="space-y-3">
         <Field label="Repository name"
@@ -158,7 +195,7 @@ function RoOnlyNote({ name, presence }) {
 }
 
 export default function ReposPage({ onHealthChange }) {
-  const { dr, loadErr, reload, repoNewNamesState } = useSharedDraft();
+  const { dr, loadErr, reload, repoNewNamesState, healthInfo } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const [confirm, setConfirm] = useState(null);
@@ -266,12 +303,19 @@ export default function ReposPage({ onHealthChange }) {
     (cfg.pmos || []).forEach((p) => {
       (p.repos || []).forEach((n) => selected.add(n));
       (p.reference_repos || []).forEach((n) => selected.add(n));
+      (p.memory_repos || []).forEach((n) => selected.add(n));
+    });
+    Object.values(dr.draft.devTypes || {}).forEach((dt) => {
+      (dt.memory_repos || []).forEach((n) => selected.add(n));
+      (dt.skills || []).forEach((s) => {
+        if (s.includes("/")) selected.add(s.split("/")[0]);
+      });
     });
     const names = cfg.repos.map((r) => r.name).filter((n) => !selected.has(n));
     if (names.length === 0) {
       setConfirm({
         title: "No unused repositories",
-        body: "Every configured repository is selected as a work or reference repo on at least one PMO.",
+        body: "Every configured repository is selected as a work, reference, memory, or skill-source repo.",
         confirmLabel: "OK",
         action: () => setConfirm(null),
       });
@@ -281,7 +325,7 @@ export default function ReposPage({ onHealthChange }) {
     const more = names.length > 8 ? ` and ${names.length - 8} more` : "";
     setConfirm({
       title: `Remove ${names.length} unused repositor${names.length > 1 ? "ies" : "y"}?`,
-      body: `${shown}${more} — selected as work or reference on no PMO. `
+      body: `${shown}${more} — selected as work, reference, memory, or skill-source on no board or Dev Type. `
         + "Removing them and saving permanently deletes their stored tokens "
         + "(write / read-only / reviewer); a run still in flight on one fails "
         + "cleanly. Nothing changes until you Save.",
@@ -380,6 +424,9 @@ export default function ReposPage({ onHealthChange }) {
                     ▾
                   </button>
                   <span className="font-mono text-sm font-semibold">{repo.name || "(unnamed)"}</span>
+                  <RepoUsageChips name={repo.name} cfg={cfg}
+                    devTypes={dr.draft.devTypes}
+                    depth={(healthInfo?.claims_depth || {})[repo.name]} />
                 </span>
                 {cfg.repos.length > 0 && (
                   <Button kind="danger-ghost" onClick={() => {
@@ -395,11 +442,20 @@ export default function ReposPage({ onHealthChange }) {
                         if ((p.reference_repos || []).includes(repo.name))
                           setField(`cfg.pmos.${pi}.reference_repos`,
                             p.reference_repos.filter((n) => n !== repo.name));
+                        if ((p.memory_repos || []).includes(repo.name))
+                          setField(`cfg.pmos.${pi}.memory_repos`,
+                            p.memory_repos.filter((n) => n !== repo.name));
+                      });
+                      Object.entries(dr.draft.devTypes || {}).forEach(([nm, dt]) => {
+                        if ((dt.memory_repos || []).includes(repo.name))
+                          setField(`devTypes.${nm}.memory_repos`,
+                            dt.memory_repos.filter((n) => n !== repo.name));
                       });
                     };
                     const refPmos = cfg.pmos
                       .filter((p) => (p.repos || []).includes(repo.name)
-                                  || (p.reference_repos || []).includes(repo.name))
+                                  || (p.reference_repos || []).includes(repo.name)
+                                  || (p.memory_repos || []).includes(repo.name))
                       .map((p) => p.name);
                     if (savedRepoNames.has(repo.name)) {
                       setConfirm({

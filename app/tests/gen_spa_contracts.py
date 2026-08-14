@@ -37,6 +37,7 @@ _ADOPTION = ("opt_in", "opt_out")
 # SPA scaffold fields (cards.js) — the convergence contract is scaffold ==
 # refetched server row, so the defaults come from the pydantic models.
 _PMO_CARD_FIELDS = ("team_key", "api_base", "repos", "reference_repos",
+                    "memory_repos",
                     "intake_paused", "discovery_routing", "assignments",
                     "managed")
 _REPO_CARD_FIELDS = ("forge", "api_base", "default_branch", "auto_merge",

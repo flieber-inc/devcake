@@ -138,7 +138,9 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                 # redelivery: only claim formal approval if it succeeded
                 formal = steps.REVIEW_FORMAL_APPROVE_OK in run.finalized_steps
 
-        if inst.auto_merge and pr:
+        from ...config import auto_merge_permitted
+        if auto_merge_permitted(mgr.config, inst, run.repo_ref,
+                                mgr.dev_types) and pr:
             if steps.REVIEW_DONE not in run.finalized_steps \
                     and steps.REVIEW_MERGE_FAILED not in run.finalized_steps \
                     and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \
@@ -246,7 +248,9 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
                                     steps.REVIEW_MERGE_FAILED)
                             mgr.runs.store.save(run)
                         await _fail_path()
-        elif inst.auto_merge and inst.merge_retry_window_minutes > 0 \
+        elif auto_merge_permitted(mgr.config, inst, run.repo_ref,
+                                  mgr.dev_types) \
+                and inst.merge_retry_window_minutes > 0 \
                 and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \
                 and steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
             # AUD-006: auto_merge is ON but the PR wasn't visible at finalize

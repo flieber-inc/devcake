@@ -8,5 +8,6 @@ export const CONFIG_SECTIONS = [
   { id: "skills", label: "Skills" },
   { id: "prompts", label: "Prompts" },
   { id: "limits", label: "Limits & Traffic" },
+  { id: "cron", label: "Cron" },
   { id: "profiles", label: "Profiles & Export" },
 ];

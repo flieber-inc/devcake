@@ -78,7 +78,8 @@ def _is_harness_get_with_default(node: ast.Call) -> bool:
 
 
 def test_images_common_has_no_harness_identity_branch():
-    """docs/16 H1: parse/fault/dump/render/argv branch only inside dialects."""
+    """Bans `if harness ==` and `.get(harness, default)` under images/common.
+    Does not prove the capture rig or every membership test is gone."""
     assert COMMON is not None, (
         "images/common missing — bind it at /srv/images/common")
     offenders = []

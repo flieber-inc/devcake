@@ -755,7 +755,9 @@ out-of-repo plugin harnesses (app↔image remain lockstep — docs/13).
 **Exit criteria:**
 - [x] All three existing templates are pure dialect modules; `dev_entrypoint`
       has no `if harness ==` for parse/fault/dump/render/argv.
-- [x] Capture rig imports dialects only; no duplicated argv construction.
+- [ ] Capture rig imports dialects only; no duplicated argv construction
+      (argv goes through `harness_argv`; dump/last_message still branch, and
+      unknown `--harness` still falls through to the Claude dump).
 - [x] Planted unknown harness id fails closed (unit test).
 - [x] Full harness capture suite green; `bake images` + entrypoint import smoke.
 

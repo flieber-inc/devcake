@@ -6,16 +6,16 @@ argv production uses.
 """
 from __future__ import annotations
 
-from .dialect import ResumeSpec, WORKSPACE, get_dialect
+from .dialect import ResumeSpec, WORKSPACE, dialects, get_dialect
 
-# The continuation loop's resume gate: a harness earns its entry ONLY through
-# a committed `<harness>_resume_nudge` capture pair. Still a separate table
-# from DIALECTS — a dialect may exist before its resume pair is captured.
-RESUME_SPECS: dict[str, ResumeSpec] = {
-    "grok-build": ResumeSpec(usage_cumulative=False),
-    "claude-code": ResumeSpec(usage_cumulative=False),
-    "codex": ResumeSpec(usage_cumulative=True),
-}
+
+def resume_specs() -> dict[str, ResumeSpec]:
+    """Capture-verified resume facts, derived from each dialect's resume_spec."""
+    return {d.id: d.resume_spec for d in dialects().values()
+            if d.resume_spec is not None}
+
+
+RESUME_SPECS: dict[str, ResumeSpec] = resume_specs()
 
 
 def forge_dialect(env: dict) -> tuple:
@@ -59,13 +59,10 @@ def harness_resume_argv(harness: str, session_id: str, prompt: str, *,
     in RESUME_SPECS; the capture rig calls it directly to TEST a candidate —
     same builder both times, so a fixture cannot drift from the invocation
     production would use. No plan_mode parameter: plan runs never continue.
-    Unknown ids return None (same fail-closed contract as harness_argv, which
-    raises): an unverified resume flag on the wrong CLI is not a Claude argv."""
+    Unknown ids raise (same contract as harness_argv / get_dialect). None
+    means a known dialect has no resume candidate."""
     extra = list(extra)
-    try:
-        return get_dialect(harness).resume_argv(
-            session_id, prompt, model=model, extra=extra, out_dir=out_dir)
-    except ValueError:
-        return None
+    return get_dialect(harness).resume_argv(
+        session_id, prompt, model=model, extra=extra, out_dir=out_dir)
 
 

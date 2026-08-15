@@ -753,11 +753,11 @@ aborts with a clear error — **no Claude fallback**.
 out-of-repo plugin harnesses (app↔image remain lockstep — docs/13).
 
 **Exit criteria:**
-- [ ] All three existing templates are pure dialect modules; `dev_entrypoint`
+- [x] All three existing templates are pure dialect modules; `dev_entrypoint`
       has no `if harness ==` for parse/fault/dump/render/argv.
-- [ ] Capture rig imports dialects only; no duplicated argv construction.
-- [ ] Planted unknown harness id fails closed (unit test).
-- [ ] Full harness capture suite green; `bake images` + entrypoint import smoke.
+- [x] Capture rig imports dialects only; no duplicated argv construction.
+- [x] Planted unknown harness id fails closed (unit test).
+- [x] Full harness capture suite green; `bake images` + entrypoint import smoke.
 
 **Demo:** delete the Claude fall-through; suite still green; intentional
 unknown-id run dies loudly.
@@ -767,16 +767,16 @@ unknown-id run dies loudly.
 **Goal:** config schema cannot drift from `HARNESSES` keys.
 **Implements:** `app/devcake/harness.py` + `config.py` `DevType.harness_template`.
 
-Today: `Literal["claude-code", "grok-build", "codex"]` is hand-maintained
-beside the registry dict. Prefer validation against `HARNESSES` (frozen id set
-or pydantic constraint) so a new template is one registration, not two.
+Shipped: `DevType.harness_template` validates against `HARNESSES` keys
+(no parallel Literal). A new template is one registry entry + dialect +
+Bake target; config accepts the id automatically.
 
 **Exit criteria:**
-- [ ] Adding a registry key alone is what config accepts (or a single shared
+- [x] Adding a registry key alone is what config accepts (or a single shared
       id tuple imported by both).
-- [ ] Structure/unit test: every `HARNESSES` key is a valid `DevType.harness_template`
+- [x] Structure/unit test: every `HARNESSES` key is a valid `DevType.harness_template`
       and every accepted template has a dialect (H1) and a Bake image name.
-- [ ] SPA still loads ids from `GET /harnesses` (no hard-coded combobox list).
+- [x] SPA still loads ids from `GET /harnesses` (no hard-coded combobox list).
 
 #### H3 — Credential registry extensions (only where declarative)
 

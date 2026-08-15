@@ -3,10 +3,8 @@ continuation loop, plus the stream → evidence helpers it shares with the
 exit-11 forensics.
 
 Dev-side domain like fault.py: no Redis, no subprocess, no filesystem — the
-entrypoint façade composes, this module decides. A separate module because
-its helpers need BOTH tokens.py (grok_end_event) and fault.py
-(claude_result_event) — landing them in either would cycle the import
-between those two (tokens already imports from fault).
+entrypoint façade composes, this module decides. Session identity and
+terminal evidence dispatch through HarnessDialect (docs/16 H1).
 
 Turn-budget interplay, accepted and deliberate: every relaunch resets the
 CLI's own --max-turns counter, so a run's effective turn budget is
@@ -16,11 +14,9 @@ lines keep the multiplication operator-visible.
 from __future__ import annotations
 
 import dataclasses
-import json
 
-from devcake_dev.domain.fault import _dict, _one_line, claude_result_event
-from devcake_dev.harness.tokens import (grok_end_event, token_report_v1,
-                                        unavailable_report)
+from devcake_dev.domain.fault import _dict, _one_line
+from devcake_dev.harness.tokens import token_report_v1, unavailable_report
 
 POLICY_AUTO = "auto"
 POLICY_RESUME_ONLY = "resume-only"
@@ -272,50 +268,17 @@ def merged_transcript_dump(segments, labels) -> str:
         f"## Continuation segment — {lab}\n\n{seg}" for seg, lab in present)
 
 
-def _grok_error_event(out: str):
-    """Last {"type":"error"} event, or None. An error event outranks nothing:
-    on the exit-11 paths it cannot occur (an error event is a fault, exit 15),
-    but this helper must stay honest for any stream it is handed."""
-    found = None
-    for line in out.splitlines():
-        try:
-            ev = json.loads(line)
-        except Exception:  # noqa: BLE001 — one unparseable line never costs the evidence
-            continue
-        if isinstance(ev, dict) and ev.get("type") == "error":
-            found = ev
-    return found
-
-
 def session_identity(harness: str, out: str) -> str:
     """The harness's session handle for a resume relaunch, or "".
 
     grok: the LAST `sessionId` on any stream event (the `end` event carries
     it; `error` events never do — docs/08 §1). claude: `session_id` on the
-    result event. codex: the `thread_id` of `thread.started`. An unknown
-    harness falls through to the claude arm, mirroring harness_fault."""
+    result event. codex: the `thread_id` of `thread.started`. Unknown ids
+    raise (docs/16 H1) — never the Claude arm."""
+    from .dialect import get_dialect
+    dialect = get_dialect(harness)
     try:
-        if harness == "grok-build":
-            sid = ""
-            for line in out.splitlines():
-                try:
-                    ev = json.loads(line)
-                except Exception:  # noqa: BLE001 — one bad line never costs the handle
-                    continue
-                if isinstance(ev, dict) and ev.get("sessionId"):
-                    sid = str(ev["sessionId"])
-            return sid
-        if harness == "codex":
-            for line in out.splitlines():
-                try:
-                    ev = json.loads(line)
-                except Exception:  # noqa: BLE001 — as above
-                    continue
-                if (isinstance(ev, dict) and ev.get("type") == "thread.started"
-                        and ev.get("thread_id")):
-                    return str(ev["thread_id"])
-            return ""
-        return str(_dict(claude_result_event(out)).get("session_id") or "")
+        return dialect.session_identity(out)
     except Exception:  # noqa: BLE001 — no handle ⇒ fresh-mode degradation, never a crash
         return ""
 
@@ -329,41 +292,10 @@ def terminal_evidence(harness: str, out: str):
     cleanly but early" (grok stopReason EndTurn, the narrate-and-stop shape)
     from a truncated stream; this names which one happened. Guarded like
     every stream parser — model-adjacent bytes must never abort the artifact
-    path. An unknown harness falls through to the claude arm, mirroring
-    main()'s renderer dispatch and harness_fault."""
+    path. Unknown ids raise (docs/16 H1)."""
+    from .dialect import get_dialect
+    dialect = get_dialect(harness)
     try:
-        if harness == "grok-build":
-            ev = grok_end_event(out)
-            if ev is not None:
-                return {"event": "end",
-                        "stop_reason": str(ev.get("stopReason") or ""),
-                        "num_turns": ev.get("num_turns"),
-                        "session_id": str(ev.get("sessionId") or "")}
-            err = _grok_error_event(out)
-            if err is not None:
-                return {"event": "error",
-                        "message": _one_line(str(err.get("message") or ""), 120)}
-            return None
-        if harness == "codex":
-            completed = None
-            for line in out.splitlines():
-                try:
-                    ev = json.loads(line)
-                except Exception:  # noqa: BLE001 — as above
-                    continue
-                if isinstance(ev, dict) and ev.get("type") == "turn.completed":
-                    completed = ev
-            if completed is None:
-                return None
-            return {"event": "turn.completed",
-                    "output_tokens": _dict(completed.get("usage")).get("output_tokens")}
-        ev = claude_result_event(out)
-        if ev is None:
-            return None
-        return {"event": "result",
-                "subtype": str(ev.get("subtype") or ""),
-                "terminal_reason": str(ev.get("terminal_reason") or ""),
-                "num_turns": ev.get("num_turns"),
-                "is_error": bool(ev.get("is_error"))}
+        return dialect.terminal_evidence(out)
     except Exception:  # noqa: BLE001 — evidence is advisory; the fail() path outranks it
         return None

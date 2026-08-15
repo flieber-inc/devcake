@@ -95,8 +95,10 @@ def test_session_identity_never_raises_on_hostile_shapes():
         J({"type": "end", "sessionId": {"nested": True}}),
         J({"type": "thread.started", "thread_id": ["a"]}),
         "not json", J([1, 2])])
-    for harness in ("grok-build", "codex", "claude-code", "unknown"):
+    for harness in ("grok-build", "codex", "claude-code"):
         assert isinstance(ep.session_identity(harness, hostile), str)
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.session_identity("unknown", hostile)
 
 
 # ── harness_resume_argv — the per-harness resume dialects ────────────────────

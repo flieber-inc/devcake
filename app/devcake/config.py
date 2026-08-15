@@ -576,12 +576,13 @@ class DevType(BaseModel):
     Deliberately slim: the Docker image, credential requirements, and OAuth
     flow all DERIVE from harness_template via harness.HARNESSES — the admin
     panel's harness combobox is authoritative. Unknown YAML keys are ignored
-    on load and dropped on the next save (pydantic's default)."""
+    on load and dropped on the next save (pydantic's default). Allowed
+    template ids are HARNESSES keys (docs/16 H2), not a parallel Literal."""
     # no ":" — dev-type breakers share /health's circuit_breakers map with
     # per-repo `repo:<name>` entries (M10); a colon would let a dev type
     # collide with (and mask) a repo breaker
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-    harness_template: Literal["claude-code", "grok-build", "codex"]
+    harness_template: str
     identifying_prompt: str = ""
     mcp_setup_commands: list[str] = Field(default_factory=list)
     # Skill-store skills installed to the harness's registry-declared skills
@@ -620,6 +621,15 @@ class DevType(BaseModel):
             if name not in out:
                 out.append(name)
         return out
+
+    @field_validator("harness_template")
+    @classmethod
+    def _known_harness_template(cls, v: str) -> str:
+        from .harness import HARNESSES
+        if v not in HARNESSES:
+            raise ValueError(
+                f"unknown harness_template {v!r}; known: {sorted(HARNESSES)}")
+        return v
 
     @field_validator("memory_repos")
     @classmethod

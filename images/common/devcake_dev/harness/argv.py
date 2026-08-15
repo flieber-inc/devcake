@@ -1,37 +1,22 @@
-"""Harness argv construction (docs/08 §1)."""
+"""Harness argv construction (docs/08 §1).
+
+Identity lives on HarnessDialect (docs/16 H1). This module is the stable
+import path for the capture rig and the entrypoint: one function, same
+argv production uses.
+"""
 from __future__ import annotations
 
-import dataclasses
-import pathlib
-
-WORKSPACE = pathlib.Path("/workspace")
-
-
-@dataclasses.dataclass(frozen=True)
-class ResumeSpec:
-    """Capture-verified resume facts for one harness (ADR-0022 Phase 0).
-
-    usage_cumulative: the resumed terminal event reports usage over the WHOLE
-    session, so summing per-invocation reports would double-count — the token
-    merge goes last-wins within a resume chain instead."""
-    usage_cumulative: bool
-
+from .dialect import ResumeSpec, WORKSPACE, get_dialect
 
 # The continuation loop's resume gate: a harness earns its entry ONLY through
-# a committed `<harness>_resume_nudge` capture pair (fixtures README rules) —
-# absence means fresh-only under `auto`, stop under `resume-only`. The
-# candidate argv in harness_resume_argv exists INDEPENDENTLY of this dict so
-# the capture rig can exercise a composition before it is verified — the rig
-# is the only road into this table. usage_cumulative is a PER-HARNESS fact,
-# measured, not assumed: codex reports session-cumulative usage on a resumed
-# turn.completed, grok and claude report per-invocation (the capture pairs).
+# a committed `<harness>_resume_nudge` capture pair. Still a separate table
+# from DIALECTS — a dialect may exist before its resume pair is captured.
 RESUME_SPECS: dict[str, ResumeSpec] = {
-    "grok-build": ResumeSpec(usage_cumulative=False),    # grok_resume_nudge_*
-    "claude-code": ResumeSpec(usage_cumulative=False),   # claude_resume_nudge_*
-    "codex": ResumeSpec(usage_cumulative=True),          # codex_resume_nudge_*
+    "grok-build": ResumeSpec(usage_cumulative=False),
+    "claude-code": ResumeSpec(usage_cumulative=False),
+    "codex": ResumeSpec(usage_cumulative=True),
 }
 
-KNOWN_HARNESSES = frozenset(RESUME_SPECS)
 
 def forge_dialect(env: dict) -> tuple:
     """(clone_user, git_name, git_email, cli_token_envs) for the clone
@@ -58,27 +43,8 @@ def harness_argv(harness: str, prompt: str, *, plan_mode: bool = False,
     points it at a throwaway directory.
     """
     extra = list(extra)
-    out = pathlib.Path(out_dir) if out_dir is not None else WORKSPACE / "out"
-    if harness not in KNOWN_HARNESSES:
-        raise ValueError(f"unknown harness {harness!r} — refusing Claude fall-through")
-    if harness == "grok-build":
-        mode = ["--permission-mode", "plan"] if plan_mode else ["--always-approve"]
-        pin = ["--model", model] if model else []
-        return ["grok", "-p", prompt, "--output-format", "streaming-json",
-                *mode, *pin, *extra]
-    if harness == "codex":
-        mode = (["--sandbox", "read-only"] if plan_mode
-                else ["--dangerously-bypass-approvals-and-sandbox"])
-        pin = ["-m", model] if model else []
-        return ["codex", "exec", prompt, "--json",
-                "-o", str(out / "last_message.txt"),
-                "--skip-git-repo-check", *mode, *pin, *extra]
-    mode = (["--permission-mode", "plan"] if plan_mode
-            else ["--dangerously-skip-permissions"])
-    pin = ["--model", model] if model else []
-    # --verbose is REQUIRED with -p + stream-json (the CLI errors out without it)
-    return ["claude", "-p", prompt, "--output-format", "stream-json",
-            "--verbose", *mode, *pin, *extra]
+    return get_dialect(harness).argv(
+        prompt, plan_mode=plan_mode, model=model, extra=extra, out_dir=out_dir)
 
 
 def harness_resume_argv(harness: str, session_id: str, prompt: str, *,
@@ -93,24 +59,13 @@ def harness_resume_argv(harness: str, session_id: str, prompt: str, *,
     in RESUME_SPECS; the capture rig calls it directly to TEST a candidate —
     same builder both times, so a fixture cannot drift from the invocation
     production would use. No plan_mode parameter: plan runs never continue.
-    There is deliberately no default-harness fallback (unlike harness_argv):
-    an unverified resume flag on the wrong CLI is a crash, not a default."""
+    Unknown ids return None (same fail-closed contract as harness_argv, which
+    raises): an unverified resume flag on the wrong CLI is not a Claude argv."""
     extra = list(extra)
-    out = pathlib.Path(out_dir) if out_dir is not None else WORKSPACE / "out"
-    pin_dashed = ["--model", model] if model else []
-    if harness == "grok-build":
-        return ["grok", "-p", prompt, "-r", session_id,
-                "--output-format", "streaming-json", "--always-approve",
-                *pin_dashed, *extra]
-    if harness == "codex":
-        pin = ["-m", model] if model else []
-        return ["codex", "exec", "resume", session_id, prompt, "--json",
-                "-o", str(out / "last_message.txt"), "--skip-git-repo-check",
-                "--dangerously-bypass-approvals-and-sandbox", *pin, *extra]
-    if harness == "claude-code":
-        return ["claude", "-p", prompt, "--resume", session_id,
-                "--output-format", "stream-json", "--verbose",
-                "--dangerously-skip-permissions", *pin_dashed, *extra]
-    return None
+    try:
+        return get_dialect(harness).resume_argv(
+            session_id, prompt, model=model, extra=extra, out_dir=out_dir)
+    except ValueError:
+        return None
 
 

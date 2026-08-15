@@ -364,18 +364,11 @@ def grok_run_fault(out: str, harness_exit: int, *, dump: str = "",
 
 def harness_fault(harness: str, out: str, harness_exit: int, *, dump: str = "",
                   last_message: str = "", prompt: str = ""):
-    """Did the harness actually work? Fault dict or None. An unknown harness
-    name falls through to the claude predicate, mirroring main()'s renderer
-    dispatch."""
-    if harness == "codex":
-        return codex_run_fault(out, harness_exit, last_message=last_message)
-    if harness == "grok-build":
-        # `dump` is the `grok export` transcript for this harness — forwarding
-        # it is what keeps a silent-but-productive run from reading as empty,
-        # and `prompt` is what separates the run's own output from the echo of
-        # that prompt the export opens with (grok_export_activity).
-        return grok_run_fault(out, harness_exit, dump=dump, prompt=prompt)
-    return claude_run_fault(out, harness_exit, dump=dump)
+    """Did the harness actually work? Fault dict or None. Unknown ids raise
+    (docs/16 H1) — never the Claude predicate."""
+    from ..harness.dialect import get_dialect
+    return get_dialect(harness).fault(
+        out, harness_exit, dump=dump, last_message=last_message, prompt=prompt)
 
 
 # HTTP status from CLI transport wording (not model prose). Precision over
@@ -406,17 +399,10 @@ def harness_error_messages(out: str) -> list:
 
 
 def harness_api_error_status(harness: str, out: str):
-    """HTTP status the harness reported (int), or None. Feeds auth precedence."""
-    patterns = HARNESS_STATUS_PATTERNS.get(harness)
-    if patterns is None:  # claude-code has api_error_status on the result event
-        status = _dict(claude_result_event(out)).get("api_error_status")
-        return status if isinstance(status, int) else None
-    for message in harness_error_messages(out):
-        for rx in patterns:
-            hit = rx.search(message)
-            if hit:
-                return int(hit.group(1))
-    return None
+    """HTTP status the harness reported (int), or None. Feeds auth precedence.
+    Unknown ids raise (docs/16 H1)."""
+    from ..harness.dialect import get_dialect
+    return get_dialect(harness).api_error_status(out)
 
 
 def classify_nonzero_exit(err_text: str, fault, api_error_status=None) -> tuple:

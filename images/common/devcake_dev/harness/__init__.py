@@ -1,1 +1,1 @@
-"""Harness dialect: render, dumps, argv."""
+"""Harness dialect: argv, render, parse, fault, session identity."""

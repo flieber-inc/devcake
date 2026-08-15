@@ -3,7 +3,9 @@ requirements, and OAuth flow derive from harness_template (docs/08 §2, §4)."""
 
 import asyncio
 from datetime import datetime, timezone
-from typing import get_args
+
+import pytest
+from pydantic import ValidationError
 
 from devcake.config import PMOInstance, AppConfig, DevType
 from fakes import FakeForgeRuntime
@@ -18,9 +20,12 @@ def run_coro(c):
     return asyncio.new_event_loop().run_until_complete(c)
 
 
-def test_registry_covers_every_harness_literal():
-    literals = get_args(DevType.model_fields["harness_template"].annotation)
-    assert set(HARNESSES) == set(literals)
+def test_dev_type_accepts_exactly_the_registry_ids():
+    """docs/16 H2: HARNESSES is the allowed set — not a parallel Literal."""
+    for name in HARNESSES:
+        DevType(name="t", harness_template=name)
+    with pytest.raises(ValidationError, match="unknown harness_template"):
+        DevType(name="t", harness_template="not-a-harness")
 
 
 def test_dev_type_status_credentials_ready(monkeypatch, tmp_path):

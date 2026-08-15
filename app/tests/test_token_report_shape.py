@@ -75,6 +75,12 @@ def _report_for(name: str):
     if name.startswith("opencode_"):
         return tokens.opencode_token_report(out) or tokens.unavailable_report(
             model="opencode")
+    if name.startswith("qwen_"):
+        from devcake_dev.harness.tokens import qwen_result_event
+        ev = qwen_result_event(out)
+        return (tokens.qwen_token_report(ev)
+                if ev is not None
+                else tokens.unavailable_report(model="qwen-code"))
     if name.startswith("grok"):
         parsed = tokens.grok_stream_parse(out)
         terminal = tokens.grok_end_event(out) if parsed is not None else None

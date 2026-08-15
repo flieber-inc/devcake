@@ -212,7 +212,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "harness_streams"
 
 # Sidecar harness when present; filename prefix for the four pre-rig claude streams.
 HARNESS_BY_PREFIX = {"claude": "claude-code", "codex": "codex",
-                     "grok": "grok-build", "pi": "pi", "opencode": "opencode"}
+                     "grok": "grok-build", "pi": "pi", "opencode": "opencode",
+                     "qwen": "qwen-code"}
 
 # The events that decide a run's fate — every ADR-0018 fault arm fires on one of
 # these, so each must produce a visible line. codex `turn.failed` did not: every
@@ -222,7 +223,8 @@ TERMINAL_KINDS = {"claude-code": {"result"},
                   "codex": {"turn.completed", "turn.failed"},
                   "grok-build": {"end", "error", "max_turns_reached"},
                   "pi": {"agent_end", "error"},
-                  "opencode": {"step_finish", "error"}}
+                  "opencode": {"step_finish", "error"},
+                  "qwen-code": {"result", "error"}}
 
 # discovered from disk, so a capture added later cannot go unrendered
 CAPTURE_STREAMS = sorted(p.name[:-len(".jsonl")] for p in FIXTURES.glob("*.jsonl"))
@@ -266,6 +268,11 @@ def test_render_every_capture_without_raising(name):
         # argument parsing, so the CLI never ran and stdout is zero bytes
         # (test_harness_captures.test_grok_json_blob_never_ran_the_model)
         assert terminals == [] and not (FIXTURES / f"{name}.jsonl").read_text()
+        return
+    if name == "qwen_http_429":
+        # 0.21.12 retries 429 until SIGKILL; stdout is only system/init +
+        # stream_event — no result. The no-terminal predicate is the verdict.
+        assert terminals == []
         return
     assert terminals, f"{name}: no terminal event in the capture"
     for kind, text in terminals:

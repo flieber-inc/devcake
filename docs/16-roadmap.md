@@ -23,7 +23,7 @@
 > **Where we are (2026-08-04):** layers 1–2 closed through tag **v0.2**;
 > release tags through **v0.2.5 "Hummingbird"** on `main`. The product loop
 > (poll → dispatch → harness → finalize → forge/PMO) is operational with three
-> harness templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`), multi-PMO /
+> harness templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`, `qwen-code`), multi-PMO /
 > multi-repo / internal Gitea, skills (ADR-0016), settings profiles/export
 > (ADR-0013), fault classification + backend brake (ADR-0018/0026), mandatory
 > source mirrors + provisioned workspaces (ADR-0024/0025), in-container
@@ -845,10 +845,12 @@ same change set as the first new dialect) so the slice is repeatable:
 
 - Each new CLI is: characterize headless contract → capture matrix → dialect
   module → registry + Bake → docs/08 tables → operator smoke.
-- **CLI candidates under consideration** (not commitments, not prioritized):
-  qwen-code and other agentic terminal CLIs. A candidate that is
-  Claude-stream-adjacent may share helpers *after* captures prove it — never
-  by silent alias. Multi-provider / settings.json auth is an H3 consumer.
+- **Shipped on this track:** `pi`, `opencode`, `qwen-code` (each a dialect +
+  Bake target + capture matrix; resume stays off until a capture pair).
+- **CLI candidates still under consideration** (not commitments): other
+  agentic terminal CLIs. A candidate that is Claude-stream-adjacent may
+  share helpers *after* captures prove it — never by silent alias.
+  Multi-provider / settings.json auth is an H3 consumer.
 - **Not a new harness:** pointing an existing template at a new model or a
   local OpenAI-compatible backend (`DevType.model`, secret_env, `08` §8).
 

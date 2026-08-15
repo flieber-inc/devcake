@@ -115,6 +115,18 @@ HARNESSES: dict[str, Harness] = {
         skills_dir=".agents/skills",
         experimental=True,
     ),
+    "qwen-code": Harness(
+        image=f"devcake/dev-qwen-code:{_TAG}",
+        # Multi-provider (docs/08): OpenAI-compatible, DashScope, Coding Plan,
+        # or Anthropic. Any one stored key is enough.
+        credential_env=["OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                        "DASHSCOPE_API_KEY", "BAILIAN_CODING_PLAN_API_KEY"],
+        credential_files=[CredentialFile(secret_file="qwen-settings.json",
+                                         path_hint="~/.qwen/settings.json")],
+        # Personal skills: ~/.qwen/skills (project .qwen/skills is unused —
+        # never write into the clone).
+        skills_dir=".qwen/skills",
+    ),
 }
 
 

@@ -83,6 +83,8 @@ def harness_dump(harness: str, name: str, out: str) -> str:
         return ep.pi_text_dump(out)
     if harness == "opencode":
         return ep.opencode_text_dump(out)
+    if harness == "qwen-code":
+        return ep.qwen_text_dump(out)
     return ep.claude_text_dump(out)
 
 
@@ -296,6 +298,22 @@ CAPTURES = [
     ("opencode_http_429", TERMINAL),
     ("opencode_http_500", TERMINAL),
     ("opencode_truncated", TERMINAL),
+
+    # ── qwen-code 0.21.12 (`qwen -p --output-format stream-json --yolo`) ──
+    # Stream is Claude-shaped (system/init, assistant, result). HTTP and
+    # empty completions are wrapped as assistant `[API Error: …]` with
+    # subtype=success / is_error=false / exit 0 — so the predicate must
+    # read that CLI wrapper, not is_error. 429 retries until SIGKILL and
+    # never emits a result event.
+    ("qwen_healthy", NO_FAULT),
+    ("qwen_refusal", NO_FAULT),
+    ("qwen_tool_only", NO_FAULT),        # tool_use then CLI "no visible progress"
+    ("qwen_empty", EMPTY),              # `[API Error: … empty response text.]`
+    ("qwen_whitespace", EMPTY),         # whitespace + same empty wrapper
+    ("qwen_http_401", AUTH),            # `[API Error: 401 …]`
+    ("qwen_http_429", (ep.FAULT_NO_TERMINAL_EVENT, 15, "DEV_HARNESS_FAULT")),
+    ("qwen_http_500", TERMINAL),        # `[API Error: 500 …]`
+    ("qwen_truncated", TERMINAL),       # `[API Error: terminated (UND_ERR_SOCKET)]`
 ]
 
 

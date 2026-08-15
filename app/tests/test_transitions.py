@@ -36,6 +36,7 @@ class FakePMO:
         from fakes import fake_pmo_capabilities
         return fake_pmo_capabilities(
             relations_supported=getattr(self, "relations_supported", True),
+            attachments_supported=getattr(self, "attachments_supported", True),
         )
 
     def __init__(self, mission):
@@ -1299,6 +1300,40 @@ def test_feed_externalizes_over_2048(tmp_path):
     run_coro(mgr._feed("p1", "issue", "y" * 2048))
     assert len(fake.uploads) == 1
     assert "y" * 2048 in fake.comments[-1]
+
+
+def test_feed_pointer_when_attachments_unsupported(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    run_coro(mgr._feed("p1", "issue", "x" * 70_000))
+    assert fake.uploads == []
+    posted = fake.comments[-1]
+    assert len(posted) < 2048
+    assert "activity repo" in posted.lower()
+    assert posted.endswith("`devcake:v1`")
+
+
+def test_post_attachment_comment_pointer_when_attachments_unsupported(tmp_path):
+    from devcake.domain.orchestrator.feed import post_attachment_comment
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    dump = "transcript " + ("x" * 70_000)
+
+    def comment_of(url):
+        if url:
+            return f"see [{url}]", True
+        return dump, False
+
+    run_coro(post_attachment_comment(
+        mgr, "p1", "issue", filename="transcript.md",
+        content=dump, comment_of=comment_of))
+    assert fake.uploads == []
+    posted = fake.comments[-1]
+    assert len(posted) < 2048
+    assert "activity repo" in posted.lower()
+    assert posted.endswith("`devcake:v1`")
 
 
 def test_finalize_upload_failure_posts_quoted_inline(tmp_path):

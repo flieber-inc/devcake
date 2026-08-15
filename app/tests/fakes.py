@@ -184,7 +184,8 @@ def make_mission_manager(
     return mgr
 
 
-def fake_pmo_capabilities(*, global_ids=True, relations_supported=True):
+def fake_pmo_capabilities(*, global_ids=True, relations_supported=True,
+                          attachments_supported=True):
     """Shared capability row for the test fakes. Default is Linear-shaped
     (global ids ON, so peer-resolution tests exercise the allowed path);
     colliding-id scenarios pass global_ids=False — the capability replaced
@@ -194,6 +195,7 @@ def fake_pmo_capabilities(*, global_ids=True, relations_supported=True):
         projects_supported=True, project_labels_supported=True,
         attachment_max_bytes=50 * 1024 * 1024,
         native_label_swap_atomic=True, relations_supported=relations_supported,
+        attachments_supported=attachments_supported,
         global_ids=global_ids)
 
 

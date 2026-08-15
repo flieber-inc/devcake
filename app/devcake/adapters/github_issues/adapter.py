@@ -95,16 +95,20 @@ class GitHubIssuesAdapter:
                 method, url, params=params, json=json, headers=self._headers())
         except httpx.HTTPError as e:
             raise PMOTransient(f"github_issues network: {e}") from e
-        if resp.status_code == 422 and "already been taken" in (resp.text or ""):
+        if (resp.status_code == 422
+                and "/dependencies/" in path
+                and "already been taken" in (resp.text or "").lower()):
             return {"_duplicate": True}
-        if resp.status_code in (429, 500, 502, 503, 504):
+        body = resp.text or ""
+        if resp.status_code in (429, 500, 502, 503, 504) or (
+                resp.status_code == 403 and "rate limit" in body.lower()):
             raise PMOTransient(
                 f"github_issues {method} {path} → {resp.status_code}: "
-                f"{resp.text[:200]}")
+                f"{body[:200]}")
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"github_issues {method} {path} → {resp.status_code}: "
-                f"{resp.text[:300]}")
+                f"{body[:300]}")
         if not resp.content:
             return None
         return resp.json()

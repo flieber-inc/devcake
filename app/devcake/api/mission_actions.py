@@ -279,6 +279,11 @@ async def create_mission(
 
     files: list[tuple[str, bytes]] = []
     raw_atts = attachments or []
+    if raw_atts and not getattr(
+            mgr.pmo.capabilities(), "attachments_supported", True):
+        raise HTTPException(
+            status_code=422,
+            detail="this PMO does not support issue file attachments")
     if len(raw_atts) > MAX_CREATE_ATTACHMENTS:
         raise HTTPException(
             status_code=422,

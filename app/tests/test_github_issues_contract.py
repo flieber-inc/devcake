@@ -230,6 +230,24 @@ def test_429_is_pmo_transient():
         run(pmo.get(MissionRef("1", "issue")))
 
 
+def test_403_rate_limit_is_pmo_transient():
+    pmo = GitHubIssuesAdapter(
+        "https://api.github.com", "tok", "o/r",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(403, text="API rate limit exceeded")))
+    with pytest.raises(PMOTransient):
+        run(pmo.get(MissionRef("1", "issue")))
+
+
+def test_403_permission_is_permanent():
+    pmo = GitHubIssuesAdapter(
+        "https://api.github.com", "tok", "o/r",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(403, text="Resource not accessible")))
+    with pytest.raises(RuntimeError, match="403"):
+        run(pmo.get(MissionRef("1", "issue")))
+
+
 def test_project_ref_raises():
     with pytest.raises(RuntimeError, match="projects"):
         run(make_pmo().get(MissionRef("1", "project")))

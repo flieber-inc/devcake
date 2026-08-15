@@ -45,6 +45,20 @@ const FALLBACK = {
       attachments_supported: true,
       relations_supported: false,
     },
+    {
+      id: "github_issues",
+      display_name: "GitHub Issues",
+      needs_api_base: true,
+      team_key_label: "Issues repo",
+      team_key_help:
+        "owner/repo of the dedicated issues board (e.g. myorg/missions). Empty = idle.",
+      api_base_help:
+        "GitHub API origin. github.com: leave empty or https://api.github.com. GitHub Enterprise: https://ghe.example.com/api/v3",
+      operator_note:
+        "GitHub's public API cannot attach files to issues. Transcripts live in the activity repo; the ticket comment is a short pointer.",
+      attachments_supported: false,
+      relations_supported: true,
+    },
   ],
   forges: [
     { id: "github", display_name: "GitHub" },

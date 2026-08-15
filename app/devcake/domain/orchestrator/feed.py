@@ -20,7 +20,7 @@ tracer = trace.get_tracer("devcake")
 
 
 def _attachments_supported(mgr) -> bool:
-    """Port capability — GitHub Issues has no official upload (option B)."""
+    """Official file-upload API. Missing/broken caps must not drop the feed."""
     try:
         return bool(mgr.pmo.capabilities().attachments_supported)
     except Exception:  # noqa: BLE001 — missing/broken caps must not drop feed
@@ -81,6 +81,10 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         # grace-cycle skip the pre-refactor code did not.
         mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
         return
+    if not _attachments_supported(mgr) and len(markdown) > FEED_INLINE_MAX:
+        markdown = (
+            "Full text is in the activity repo — this PMO cannot attach files."
+        )
     if externalize and len(markdown) > FEED_INLINE_MAX \
             and _attachments_supported(mgr):
         try:

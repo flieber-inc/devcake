@@ -580,7 +580,8 @@ def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
     for f in plan_flags:
         assert f in argv
     for f in ("--dangerously-skip-permissions", "--always-approve",
-              "--dangerously-bypass-approvals-and-sandbox", "--auto"):
+              "--dangerously-bypass-approvals-and-sandbox", "--auto",
+              "--yolo"):
         assert f not in argv, f"{harness}: plan mode must not grant writes"
 
 

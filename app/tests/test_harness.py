@@ -131,7 +131,9 @@ def test_qwen_code_registry_contract():
     h = HARNESSES["qwen-code"]
     assert h.image.startswith("devcake/dev-qwen-code:")
     assert "OPENAI_API_KEY" in h.credential_env
-    assert "DASHSCOPE_API_KEY" in h.credential_env
+    assert "ANTHROPIC_API_KEY" in h.credential_env
+    assert "DASHSCOPE_API_KEY" not in h.credential_env
+    assert "BAILIAN_CODING_PLAN_API_KEY" not in h.credential_env
     assert h.oauth is None
     assert any(cf.secret_file == "qwen-settings.json" and
                cf.path_hint == "~/.qwen/settings.json"

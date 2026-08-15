@@ -132,7 +132,7 @@ qwen -p "$PROMPT" --output-format stream-json --yolo
 ```
 - **Pinned** `@qwen-code/qwen-code@0.21.12`. Gemini-CLI fork: `-p` is headless; `--output-format stream-json` emits JSONL (`system/session_start`, `assistant`, terminal `{type: result}` with `result` / `usage` / `session_id` — [headless docs](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/)). `--yolo` auto-approves tools (the Dev is the sandbox). `--verbose` is **not** required (unlike Claude).
 - PLAN uses `--approval-mode plan` (native read-leaning mode; `--yolo` is omitted so it cannot override). Resume (`--resume` / `--continue`) is **not** in `RESUME_SPECS` until a capture pair lands.
-- Multi-provider: any of `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `DASHSCOPE_API_KEY` / `BAILIAN_CODING_PLAN_API_KEY`, or uploaded `~/.qwen/settings.json`. OpenAI-compatible backends take `OPENAI_BASE_URL` + `OPENAI_MODEL` (or `--model` / `DevType.model`). Point captures at the stub via `OPENAI_BASE_URL`.
+- Multi-provider: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is enough for `credentials_ready`. DashScope / Coding Plan also need `OPENAI_BASE_URL` (or an uploaded `qwen-settings.json` with `selectedType`) — put those keys in `secret_env`, not as the sole stored credential. Point captures at the stub via `OPENAI_BASE_URL`.
 - Token report: last `result.usage` → TokenReport v1 `source=session_json`. Capture-verified at 0.21.12: `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `total_tokens` (plus `duration_ms`).
 - Skills: `~/.qwen/skills` (also project `.qwen/skills` — unused here; never write into the clone).
 - `--max-session-turns` exits **53**; `--max-wall-time` / `--max-tool-calls` exit **55**. Both map to `DEV_TURN_BUDGET`.
@@ -189,7 +189,7 @@ Credential requirements are **registry-driven** (`HARNESSES` in `app/devcake/har
 | `codex` | `CODEX_API_KEY` | Device-code OAuth → secret file **`codex-auth.json`** → `~/.codex/auth.json` in-container. |
 | `pi` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`pi-auth.json`** → `~/.pi/agent/auth.json`. No headless device-code (`/login` is interactive). |
 | `opencode` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`opencode-auth.json`** → `~/.local/share/opencode/auth.json`. `/connect` is interactive. |
-| `qwen-code` | `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` **or** `DASHSCOPE_API_KEY` **or** `BAILIAN_CODING_PLAN_API_KEY` (any one) | Optional uploaded **`qwen-settings.json`** → `~/.qwen/settings.json`. `/auth` is interactive. |
+| `qwen-code` | `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` | Optional uploaded **`qwen-settings.json`** → `~/.qwen/settings.json`. DashScope / Coding Plan need `OPENAI_BASE_URL` or `selectedType` in that file. `/auth` is interactive. |
 
 Uploaded credential files (when the harness registry declares them) live at `/data/secrets/{dev_type}/{secret_file}` (0600); their content is delivered to the Dev in the run spec (`runspec.get`, `09-messaging.md` §3) and the entrypoint writes it to the harness-expected path (0600). Auth failure at harness launch ⇒ exit 12 ⇒ the per-Dev-Type circuit breaker (`15-errors-and-retries.md`, `DEV_AUTH`).
 

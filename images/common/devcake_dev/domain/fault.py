@@ -443,8 +443,9 @@ def qwen_run_fault(out: str, harness_exit: int, *, dump: str = ""):
 
     Terminal is the last `{type: result}` (headless docs). Turn cap is
     `--max-session-turns` (CLI exit 53) / `--max-wall-time`/`--max-tool-calls`
-    (exit 55). HTTP errors typically set `is_error` on the result. Empty:
-    a success result with no text, no tools, and an empty dump.
+    (exit 55). 0.21.12 HTTP faults arrive as `[API Error: …]` in the
+    result text (`is_error` stays false). Empty: a success result with no
+    text, no tools, and an empty dump.
     """
     from ..harness.tokens import qwen_result_event
 

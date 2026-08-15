@@ -73,3 +73,5 @@ jobs:
             pi.tags=${{ steps.meta.outputs.prefix }}/dev-pi:latest
             opencode.tags=${{ steps.meta.outputs.prefix }}/dev-opencode:${{ steps.meta.outputs.sha }}
             opencode.tags=${{ steps.meta.outputs.prefix }}/dev-opencode:latest
+            qwen-code.tags=${{ steps.meta.outputs.prefix }}/dev-qwen-code:${{ steps.meta.outputs.sha }}
+            qwen-code.tags=${{ steps.meta.outputs.prefix }}/dev-qwen-code:latest

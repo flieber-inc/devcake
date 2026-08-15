@@ -338,8 +338,18 @@ ARG QWEN_CODE_VERSION
 RUN HOME=/root npm install -g "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
     && HOME=/root npm cache clean --force
 
+# Vendor usage-stats default on; auto-update against a root-owned global
+# install is wasted I/O. Bake the off switches — do not rely on the
+# operator's uploaded credential file.
+USER root
+RUN mkdir -p /home/dev/.qwen \
+ && printf '%s\n' \
+      '{"privacy":{"usageStatisticsEnabled":false},"general":{"enableAutoUpdate":false}}' \
+      > /home/dev/.qwen/settings.json \
+ && chown -R 1000:1000 /home/dev/.qwen
 USER dev
 # --yolo + no sandbox prints a one-line stderr warning; the Dev is the
 # sandbox. Suppress so Dagu logs stay signal, not the same banner every run.
 ENV DEVCAKE_HARNESS=qwen-code \
-    QWEN_CODE_SUPPRESS_YOLO_WARNING=1
+    QWEN_CODE_SUPPRESS_YOLO_WARNING=1 \
+    QWEN_TELEMETRY_ENABLED=0

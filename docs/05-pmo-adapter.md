@@ -1,6 +1,6 @@
 # 05 — PMO Adapter: `PMOPort`, Linear, and Gitea Issues
 
-> **Audience:** implementers of PMO adapters (Linear, Gitea Issues; later GitHub/GitLab Issues).
+> **Audience:** implementers of PMO adapters (Linear, Gitea Issues, GitLab Issues; later GitHub Issues).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
 The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`) and **Gitea Issues** (`adapters/gitea_issues/` — a pure `PMOPort`, **not** `ForgePort`). The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
@@ -312,3 +312,18 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 ### 9.6 Path to GitHub / GitLab Issues
 
 Same forge-issue profile (issue-only, label stages, open→backlog, markdown comments, dependency/links). New package per vendor; do **not** grow a shared Issues Port until a second forge-issue adapter exists. Live gate: same `scripts/contract_tests_pmo.py` once the system is registered.
+
+### 9.7 GitLab Issues (`gitlab_issues`)
+
+In-tree as of 2026-08-15. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
+
+| Need | Measured |
+|---|---|
+| Status | `opened`→backlog; `closed`→done; cancel footer in description → canceled |
+| Labels | PUT issue `labels=A,B` replaces the set |
+| Feed | issue notes; `` `devcake:v1` `` byte-exact |
+| Attachments | POST `/projects/:id/uploads`; download `GET /api/v4/projects/:id/uploads/:secret/:filename` (web `/uploads/…` path is **403** with a PAT) |
+| Relations | `blocks` / `is_blocked_by` is **Premium**. Free gitlab.com → 403 license. `capabilities.relations_supported=False`; `create_relation` raises (does not no-op). Row 14 of the contract battery skips. |
+
+`pmo_id` is the issue **iid**. `global_ids=False`. Separate PMO PAT from any GitLab *forge* repo-card token. The admin PMO card and New Mission dialog show `operator_note` from the registry when this system is selected.
+

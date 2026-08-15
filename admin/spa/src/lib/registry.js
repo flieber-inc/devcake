@@ -14,6 +14,9 @@ const FALLBACK = {
       team_key_help:
         "The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.",
       api_base_help: "",
+      operator_note: "",
+      attachments_supported: true,
+      relations_supported: true,
     },
     {
       id: "gitea_issues",
@@ -24,6 +27,9 @@ const FALLBACK = {
         "owner/repo of the dedicated issues board (e.g. devcake-pmo/missions). Empty = idle.",
       api_base_help:
         "Gitea origin from the app container. Bundled: http://gitea:3000. External: https://gitea.example.com",
+      operator_note: "",
+      attachments_supported: true,
+      relations_supported: true,
     },
   ],
   forges: [

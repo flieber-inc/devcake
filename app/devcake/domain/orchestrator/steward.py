@@ -312,6 +312,11 @@ async def apply_steward_edges(mgr, edges: list) -> tuple[int, int]:
             log.info("steward edge %s blocks %s rejected: %s",
                      blocker_key, blocked_key, reason)
             continue
+        if not mgr._relations_supported():
+            rejected += 1
+            mgr._audit(blocked.pmo_id, "relation_skipped",
+                       f"{blocker_key}→{blocked_key}")
+            continue
         await mgr.pmo.create_relation(blocker.pmo_id, blocked.pmo_id)
         graph.setdefault(blocked.pmo_id, set()).add(blocker.pmo_id)
         mgr._audit(blocked.pmo_id, "relation_created",

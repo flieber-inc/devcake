@@ -176,6 +176,13 @@ class MissionManager:
         except Exception:  # noqa: BLE001 — capability probe degrades to the conservative 25 MiB default cap; the zip builder still bounds the payload
             return 25 * 1024 * 1024
 
+    def _relations_supported(self) -> bool:
+        """Port flag — False means skip create_relation (do not abort)."""
+        try:
+            return bool(self.pmo.capabilities().relations_supported)
+        except Exception:  # noqa: BLE001 — missing caps must not drop Linear/Gitea edges
+            return True
+
     def _run_is_ours(self, r) -> bool:
         """Instance-scope a run record (schema v3). Vendor pmo_ids are UUIDs for
         Linear, so the mission_pmo_id filters are already collision-free — this

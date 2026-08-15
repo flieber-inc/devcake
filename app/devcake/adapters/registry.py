@@ -89,10 +89,11 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         attachments_supported=True,
         relations_supported=False,
         operator_note=(
-            "Blocked-by issue links need GitLab Premium. On Free, DevCake "
-            "cannot write decomposition traffic-control edges on this board "
-            "— child missions will not block each other. File attachments "
-            "work. This is a GitLab license limit, not a DevCake setting."
+            "Blocked-by issue links need GitLab Premium (or self-hosted EE). "
+            "DevCake probes the live token — Free boards will not write "
+            "decomposition traffic-control edges, and child missions will "
+            "not block each other. File attachments work. This is a GitLab "
+            "license limit, not a DevCake setting."
         ),
     ),
 }

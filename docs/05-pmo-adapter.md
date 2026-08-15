@@ -3,7 +3,7 @@
 > **Audience:** implementers of PMO adapters (Linear, Gitea Issues, GitLab Issues; later GitHub Issues).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
-The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`) and **Gitea Issues** (`adapters/gitea_issues/` — a pure `PMOPort`, **not** `ForgePort`). The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
+The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`), **Gitea Issues** (`adapters/gitea_issues/`), and **GitLab Issues** (`adapters/gitlab_issues/`) — all pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
 ## 0. The PMO capability contract (normative — any candidate system)
 

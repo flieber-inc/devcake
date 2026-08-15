@@ -58,6 +58,9 @@ class Router:
         }
         self.notes: dict[int, list] = {1: [], 2: []}
         self.uploads: dict[str, bytes] = {}
+        self.links: dict[int, list] = {}
+        self.links_status: dict[int, int] = {}
+        self.note_sort: str | None = None
         self.next_label = 10
         self.next_note = 1
         self.calls: list[str] = []
@@ -142,6 +145,7 @@ class Router:
                     iss["labels"] = [x for x in body["labels"].split(",") if x]
                 return httpx.Response(200, json=iss)
             if rest == "/notes" and method == "GET":
+                self.note_sort = req.url.params.get("sort")
                 return httpx.Response(200, json=self.notes.get(iid, []))
             if rest == "/notes" and method == "POST":
                 c = {
@@ -155,11 +159,21 @@ class Router:
                 self.notes.setdefault(iid, []).append(c)
                 return httpx.Response(201, json=c)
             if rest == "/links" and method == "GET":
-                return httpx.Response(200, json=[])
+                status = self.links_status.get(iid, 200)
+                if status != 200:
+                    return httpx.Response(
+                        status,
+                        json={"message":
+                              "Blocked issues not available for current license"})
+                return httpx.Response(200, json=self.links.get(iid, []))
             if rest == "/links" and method == "POST":
+                status = self.links_status.get(iid, 403)
+                if status == 409:
+                    return httpx.Response(
+                        409, json={"message": "already assigned"})
                 return httpx.Response(
-                    403, json={"message":
-                               "Blocked issues not available for current license"})
+                    status, json={"message":
+                                  "Blocked issues not available for current license"})
 
         return httpx.Response(404, json={"message": f"unhandled {method} {path}"})
 
@@ -228,12 +242,49 @@ def test_health_probe_is_read_only():
     assert not any(c.startswith(("POST", "PUT", "PATCH")) for c in r.calls)
 
 
-def test_capabilities_issue_only_no_relations_on_free_tier():
+def test_capabilities_fail_closed_until_links_probe():
     caps = make_pmo().capabilities()
     assert caps.projects_supported is False
     assert caps.relations_supported is False
     assert caps.global_ids is False
     assert caps.native_label_swap_atomic is True
+
+
+def test_relations_probe_403_stays_false_and_is_read_only():
+    r = Router()
+    r.links_status[1] = 403
+    pmo = make_pmo(r)
+    h = run(pmo.health_probe("o/r"))
+    assert h.ok
+    assert pmo.capabilities().relations_supported is False
+    assert "relations=off" in (h.detail or "")
+    assert not any(c.startswith(("POST", "PUT", "PATCH")) for c in r.calls)
+    m = run(pmo.get(MissionRef("1", "issue")))
+    assert m.blocked_by == []
+
+
+def test_relations_probe_200_sets_true_and_fills_blocked_by():
+    r = Router()
+    r.links[1] = [{
+        "link_type": "is_blocked_by",
+        "issue": {"iid": 2},
+    }]
+    pmo = make_pmo(r)
+    h = run(pmo.health_probe("o/r"))
+    assert h.ok
+    assert pmo.capabilities().relations_supported is True
+    assert "relations=on" in (h.detail or "")
+    m = run(pmo.get(MissionRef("1", "issue")))
+    assert m.blocked_by == ["2"]
+
+
+def test_create_relation_iid_409_license_403_still_raises():
+    r = Router()
+    r.issues[409] = _issue(409)
+    r.links_status[409] = 403
+    pmo = make_pmo(r)
+    with pytest.raises(RuntimeError, match="403"):
+        run(pmo.create_relation("1", "409"))
 
 
 def test_project_ref_get_raises():
@@ -272,3 +323,39 @@ def test_create_relation_surfaces_license_error():
     pmo = make_pmo()
     with pytest.raises(RuntimeError, match="403"):
         run(pmo.create_relation("1", "2"))
+
+
+def test_download_asset_refuses_on_host_path_escape():
+    pmo = make_pmo()
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset(
+            "https://gitlab.com/api/v4/projects/o%2Fr/uploads/aa/../user"))
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset("https://gitlab.com/api/v4/user"))
+
+
+def test_get_activity_requests_newest_notes_first():
+    r = Router()
+    pmo = make_pmo(r)
+    run(pmo.get_activity(MissionRef("1", "issue")))
+    assert r.note_sort == "desc"
+
+
+def test_get_activity_full_collects_description_and_api_upload_urls():
+    r = Router()
+    r.issues[1]["description"] = "brief [spec](/uploads/deadbeef/spec.md)"
+    r.notes[1] = [{
+        "id": 9,
+        "body": ("also "
+                 "[plan.md](https://gitlab.com/api/v4/projects/o%2Fr/"
+                 "uploads/abc123/plan.md)"),
+        "created_at": "2026-08-15T12:00:00Z",
+        "author": {"username": "bot"},
+        "system": False,
+    }]
+    pmo = make_pmo(r)
+    act = run(pmo.get_activity(MissionRef("1", "issue"), full=True))
+    names = {a.name for a in act.mission_attachments}
+    assert "spec" in names
+    note_names = {a.name for e in act.entries for a in e.attachments}
+    assert "plan.md" in note_names

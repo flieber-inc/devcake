@@ -282,6 +282,23 @@ def test_pmo_probe_is_cached_between_health_calls(tmp_path, monkeypatch):
     assert len(calls) == 2, "reset_health_caches must force a reprobe"
 
 
+def test_pmo_health_exposes_probe_detail_and_capability_flags(tmp_path, monkeypatch):
+    from fakes import fake_pmo_capabilities
+
+    async def probe(team):
+        return SimpleNamespace(ok=True, detail="relations=off (token)")
+
+    cfg, managers = _pmo_world(probe, tmp_path, monkeypatch)
+    managers["linear"].pmo.capabilities = lambda: fake_pmo_capabilities(
+        relations_supported=False)
+    payload = _pmo_payload(cfg, managers, monkeypatch)
+    inst = payload["pmo_instances"]["linear"]
+    assert inst["ok"] is True
+    assert inst["detail"] == "relations=off (token)"
+    assert inst["relations_supported"] is False
+    assert inst["attachments_supported"] is True
+
+
 def test_one_hanging_pmo_cannot_stall_health(tmp_path, monkeypatch):
     """Per-probe 5 s timeout + concurrent gather: a sick PMO reports
     ok:False; /health returns without waiting out a 30 s client timeout."""

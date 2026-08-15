@@ -187,20 +187,41 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
         cached = _pmo_probe_cache.get(key)
         now = time.monotonic()
         if cached is not None and now - cached["ts"] < _PMO_PROBE_TTL:
-            ok = cached["ok"]
+            row = cached
         else:
             mgr = managers.get(inst.name)
+            detail = ""
+            rel = att = None
             try:
                 async with asyncio.timeout(_PMO_PROBE_TIMEOUT):
-                    ok = bool(mgr) and (
-                        await mgr.pmo.health_probe(inst.team_key)).ok
+                    h = (await mgr.pmo.health_probe(inst.team_key)
+                         ) if mgr else None
+                    ok = bool(h and h.ok)
+                    detail = getattr(h, "detail", "") or "" if h else ""
+                    try:
+                        caps = mgr.pmo.capabilities() if mgr else None
+                        if caps is not None:
+                            rel = bool(caps.relations_supported)
+                            att = bool(getattr(
+                                caps, "attachments_supported", True))
+                    except Exception:  # noqa: BLE001 — caps are advisory on /health
+                        pass
             except Exception:  # noqa: BLE001 — probe contract: any failure (incl. the 5s timeout) → ok:False; /health must never 500
                 ok = False
-            _pmo_probe_cache[key] = {"ts": now, "ok": ok}
-        return inst.name, {
-            "ok": ok, "configured": True, "team": inst.team_key,
+            row = {"ts": now, "ok": ok, "detail": detail,
+                   "relations_supported": rel, "attachments_supported": att}
+            _pmo_probe_cache[key] = row
+        out = {
+            "ok": row["ok"], "configured": True, "team": inst.team_key,
             "intake_paused": bool(inst.intake_paused),
         }
+        if row.get("detail"):
+            out["detail"] = row["detail"]
+        if row.get("relations_supported") is not None:
+            out["relations_supported"] = row["relations_supported"]
+        if row.get("attachments_supported") is not None:
+            out["attachments_supported"] = row["attachments_supported"]
+        return inst.name, out
 
     pmo_instances: dict[str, dict] = dict(
         await asyncio.gather(*(_probe_one(i) for i in config.pmos)))

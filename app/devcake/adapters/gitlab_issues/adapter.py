@@ -22,6 +22,15 @@ from .mapping import (CANCEL_FOOTER, mission_key, normalize_priority,
 
 log = logging.getLogger("devcake.gitlab_issues")
 
+
+class GitLabHTTPError(RuntimeError):
+    """Permanent GitLab Issues HTTP failure carrying the status code."""
+
+    def __init__(self, method: str, path: str, status: int, body: str):
+        super().__init__(
+            f"gitlab_issues {method} {path} → {status}: {body[:300]}")
+        self.status_code = status
+
 _LABEL_COLOR = "#6e40c9"
 MAX_COMMENT_PAGES = 10
 MAX_COMMENT_PAGES_FULL = 100
@@ -65,6 +74,8 @@ class GitLabIssuesAdapter:
             except ValueError:
                 self._path = ""
         self._label_names: set[str] = set()  # upper names known on the project
+        self._relations_probed = False
+        self._relations_supported = False
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
@@ -107,9 +118,8 @@ class GitLabIssuesAdapter:
                 f"gitlab_issues {method} {path} → {resp.status_code}: "
                 f"{resp.text[:200]}")
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"gitlab_issues {method} {path} → {resp.status_code}: "
-                f"{resp.text[:300]}")
+            raise GitLabHTTPError(
+                method, path, resp.status_code, resp.text or "")
         if not expect_json or not resp.content:
             return resp.content if not expect_json else None
         return resp.json()
@@ -126,6 +136,8 @@ class GitLabIssuesAdapter:
             self._team_ref = ref
             self._path = parse_team_ref(ref)
             self._label_names.clear()
+            self._relations_probed = False
+            self._relations_supported = False
 
     def _label_set(self, issue: dict) -> set[str]:
         raw = issue.get("labels") or []
@@ -162,13 +174,27 @@ class GitLabIssuesAdapter:
             instance=self._instance,
         )
 
+    async def _ensure_relations_probed(self) -> None:
+        """Read-only: GET links on iid 1. 403 = license-off; 200/404 = on."""
+        if self._relations_probed:
+            return
+        supported = False
+        try:
+            await self._req("GET", self._proj("/issues/1/links"))
+            supported = True
+        except GitLabHTTPError as e:
+            supported = e.status_code == 404
+        except (RuntimeError, PMOTransient):
+            supported = False
+        self._relations_supported = supported
+        self._relations_probed = True
+
     async def _blocked_by_ids(self, iid: int) -> list[str]:
-        # Free gitlab.com 403s blocks/is_blocked_by (license). Empty, never fake.
         try:
             links = await self._req(
                 "GET", self._proj(f"/issues/{iid}/links"))
-        except RuntimeError as e:
-            if "403" in str(e) or "404" in str(e):
+        except GitLabHTTPError as e:
+            if e.status_code in (403, 404):
                 return []
             raise
         if not isinstance(links, list):
@@ -194,6 +220,7 @@ class GitLabIssuesAdapter:
         return out
 
     async def _enrich_blocked_by(self, mission: Mission) -> Mission:
+        await self._ensure_relations_probed()
         if not self.capabilities().relations_supported:
             return mission
         blockers = await self._blocked_by_ids(int(mission.pmo_id))
@@ -244,7 +271,7 @@ class GitLabIssuesAdapter:
             lambda page: self._req(
                 "GET", self._proj(f"/issues/{ref.pmo_id}/notes"),
                 params={"page": page, "per_page": COMMENTS_PAGE,
-                        "sort": "asc"}),
+                        "sort": "desc"}),
             page_size=COMMENTS_PAGE, max_pages=max_pages,
             what="gitlab_issues get_activity", on_ceiling="flag")
         if truncated:
@@ -253,8 +280,20 @@ class GitLabIssuesAdapter:
         entries = [self._note_entry(n, full=full) for n in raw_notes
                    if not n.get("system")]
         entries.sort(key=lambda e: e.ts)
+        mission_atts: list[AttachmentRef] = []
+        if full:
+            seen: set[str] = set()
+            for att in self._attachments_from_body(mission.description):
+                if att.url not in seen:
+                    seen.add(att.url)
+                    mission_atts.append(att)
+            for e in entries:
+                for att in e.attachments:
+                    if att.url not in seen:
+                        seen.add(att.url)
+                        mission_atts.append(att)
         return Activity(mission=mission, entries=entries,
-                        mission_attachments=[], truncated=truncated)
+                        mission_attachments=mission_atts, truncated=truncated)
 
     def _note_entry(self, n: dict, *, full: bool) -> ActivityEntry:
         body = n.get("body") or ""
@@ -273,17 +312,26 @@ class GitLabIssuesAdapter:
         )
 
     def _attachments_from_body(self, body: str) -> list[AttachmentRef]:
-        # Markdown from POST /uploads: [name](/uploads/<secret>/<name>)
         import re
         found: list[AttachmentRef] = []
         seen: set[str] = set()
+
+        def _add(name: str, url: str) -> None:
+            if ".." in url or url in seen:
+                return
+            seen.add(url)
+            found.append(AttachmentRef(url=url, name=name, kind="file"))
+
         for name, secret, fname in re.findall(
                 r"\[([^\]]+)\]\(/uploads/([A-Fa-f0-9]+)/([^)]+)\)",
                 body or ""):
-            url = (f"{self._api}{self._proj(f'/uploads/{secret}/{fname}')}")
-            if url not in seen:
-                seen.add(url)
-                found.append(AttachmentRef(url=url, name=name, kind="file"))
+            if ".." in fname or "/" in fname:
+                continue
+            _add(name, f"{self._api}{self._proj(f'/uploads/{secret}/{fname}')}")
+        for name, url in re.findall(
+                r"\[([^\]]+)\]\((https?://[^)\s]+/api/v4/projects/[^)]+/uploads/[^)]+)\)",
+                body or ""):
+            _add(name, url)
         return found
 
     async def children_of(self, ref: MissionRef) -> list[Mission]:
@@ -354,8 +402,10 @@ class GitLabIssuesAdapter:
         return mission_key(self._path, iid), str(iid)
 
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None:
-        # Free gitlab.com: 403 license. Raise — do not no-op (decomposition
-        # would report success with no scheduler edges).
+        await self._ensure_relations_probed()
+        if not self._relations_supported:
+            raise RuntimeError(
+                "gitlab_issues: relations not available on this token")
         proj = await self._req("GET", self._proj(""))
         target_pid = proj.get("id")
         try:
@@ -364,9 +414,8 @@ class GitLabIssuesAdapter:
                 json={"target_project_id": target_pid,
                       "target_issue_iid": int(blocker_id),
                       "link_type": "is_blocked_by"})
-        except RuntimeError as e:
-            text = str(e)
-            if "already assigned" in text.lower() or "409" in text:
+        except GitLabHTTPError as e:
+            if e.status_code == 409:
                 return
             raise
 
@@ -445,6 +494,29 @@ class GitLabIssuesAdapter:
             log.warning("gitlab_issues upload note: %s", e)
         return api_url
 
+    def _finalize_upload_url(self, url: str) -> str:
+        """Pin credentialed GETs to this project's /uploads/ secret/fname."""
+        from urllib.parse import unquote
+        from ...domain.asset_fetch import (
+            AssetUrlError, assert_fetch_netloc, assert_path_prefix)
+        current = url.strip()
+        assert_fetch_netloc(current, self._api)
+        path = unquote(urlsplit(current).path or "")
+        if ".." in path.split("/"):
+            raise AssetUrlError("asset path must not contain ..")
+        prefix = f"/api/v4/projects/{project_path_encoded(self._path)}/uploads/"
+        # encoded and decoded project paths both start with /api/v4/projects/
+        if "/uploads/" not in path:
+            raise AssetUrlError(f"asset path {path!r} is not an upload")
+        assert_path_prefix(current, "/api/v4/projects/")
+        after = path.split("/uploads/", 1)[1]
+        segs = [s for s in after.split("/") if s]
+        if len(segs) != 2:
+            raise AssetUrlError(
+                f"upload path must be secret/filename, got {after!r}")
+        _ = prefix
+        return current
+
     async def download_asset(self, url: str) -> bytes:
         if not self._api:
             raise RuntimeError("gitlab_issues: api_base is empty")
@@ -456,17 +528,21 @@ class GitLabIssuesAdapter:
             urlsplit(self._api).hostname,
         ) if h}
         try:
-            assert_downloadable_asset_url(
-                url, allowed_hosts=allowed, allow_http=self._origin.startswith("http://"))
+            url = assert_downloadable_asset_url(
+                url, allowed_hosts=allowed,
+                allow_http=self._origin.startswith("http://"))
+            url = self._finalize_upload_url(url)
         except AssetUrlError as e:
             raise RuntimeError(f"gitlab_issues download refused: {e}") from e
         try:
             async with httpx.AsyncClient(
-                    timeout=60, transport=self._transport) as client:
+                    timeout=60, transport=self._transport,
+                    follow_redirects=False) as client:
                 resp = await fetch_following_safe_redirects(
                     client, url, allowed_hosts=allowed,
                     headers=self._headers(),
-                    allow_http=self._origin.startswith("http://"))
+                    allow_http=self._origin.startswith("http://"),
+                    pin=self._finalize_upload_url)
         except httpx.HTTPError as e:
             raise PMOTransient(f"gitlab_issues download network: {e}") from e
         except AssetUrlError as e:
@@ -493,25 +569,27 @@ class GitLabIssuesAdapter:
         try:
             await self._req("GET", self._proj(""))
             labels = await self._fetch_all_labels()
+            await self._ensure_relations_probed()
         except PMOTransient as e:
             return PMOHealth(ok=False, workspace=self._path, detail=str(e))
         except RuntimeError as e:
             return PMOHealth(ok=False, workspace=self._path, detail=str(e))
         present = {(lb.get("name") or "").upper() for lb in labels}
         managed = {n.upper() for n in ALL_LABELS}
+        rel = "on" if self._relations_supported else "off"
         return PMOHealth(
             ok=True, workspace=self._path,
             managed_labels_present=len(present & managed),
             managed_labels_expected=len(ALL_LABELS),
+            detail=f"relations={rel}",
         )
 
     def capabilities(self) -> PMOCapabilities:
-        # Free gitlab.com: blocked-by is Premium (spike 2026-08-15 403 license).
         return PMOCapabilities(
             projects_supported=False,
             project_labels_supported=False,
             attachment_max_bytes=10 * 1024 * 1024,
             native_label_swap_atomic=True,
-            relations_supported=False,
+            relations_supported=self._relations_supported,
             global_ids=False,
         )

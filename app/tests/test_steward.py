@@ -27,12 +27,17 @@ def m(pmo_id, key, status="backlog", blocked_by=()):
 
 
 class MapPMO:
-    def __init__(self, missions, activity=None):
+    def __init__(self, missions, activity=None, *, relations_supported=True):
         self.missions = missions
         self.activity = activity
         self.relations = []
         self.comments = []
         self.activity_calls = []
+        self._relations_supported = relations_supported
+
+    def capabilities(self):
+        from fakes import fake_pmo_capabilities
+        return fake_pmo_capabilities(relations_supported=self._relations_supported)
 
     async def list_all(self, team_ref):
         return self.missions
@@ -120,6 +125,16 @@ def test_apply_steward_edges_validates_everything(tmp_path):
     pmo_id, comment = pmo.comments[-1]
     assert pmo_id == "id" and "T-B" in comment
     assert comment.endswith("`devcake:v1`")        # notification is sentinel-signed
+
+
+def test_apply_steward_edges_skips_when_relations_unsupported(tmp_path):
+    pmo = MapPMO([m("ia", "T-A"), m("id", "T-D")], relations_supported=False)
+    mgr = make_mgr(tmp_path, pmo)
+    created, rejected = run_coro(steward.apply_steward_edges(mgr, [
+        {"blocker": "T-A", "blocked": "T-D"},
+    ]))
+    assert (created, rejected) == (0, 1)
+    assert pmo.relations == []
 
 
 def test_creates_cycle_transitive():

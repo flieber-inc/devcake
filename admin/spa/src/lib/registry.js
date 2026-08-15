@@ -31,6 +31,20 @@ const FALLBACK = {
       attachments_supported: true,
       relations_supported: true,
     },
+    {
+      id: "gitlab_issues",
+      display_name: "GitLab Issues",
+      needs_api_base: true,
+      team_key_label: "Issues repo",
+      team_key_help:
+        "path_with_namespace of the dedicated issues board (e.g. mygroup/missions). Empty = idle.",
+      api_base_help:
+        "GitLab origin from the app container. gitlab.com: https://gitlab.com. Self-hosted: https://gitlab.example.com",
+      operator_note:
+        "Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token.",
+      attachments_supported: true,
+      relations_supported: false,
+    },
   ],
   forges: [
     { id: "github", display_name: "GitHub" },

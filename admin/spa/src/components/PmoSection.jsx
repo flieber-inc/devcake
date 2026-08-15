@@ -322,6 +322,22 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     {sysMeta.operator_note}
                   </p>
                 ) : null}
+                {(() => {
+                  const live = (health.pmo_instances || {})[inst.name] || {};
+                  const bits = [];
+                  if (live.relations_supported === false) {
+                    bits.push("live: relations off — child missions will not block each other");
+                  }
+                  if (live.attachments_supported === false) {
+                    bits.push("live: no official file attachments — feed posts a pointer");
+                  }
+                  if (!bits.length) return null;
+                  return (
+                    <p className="sm:col-span-3 text-xs text-amber-800 dark:text-amber-300">
+                      {bits.join(". ")}.
+                    </p>
+                  );
+                })()}
                 <Field label={sysMeta.team_key_label || "Team key"}
                   help={sysMeta.team_key_help || ""}>
                   <Input value={inst.team_key} disabled={!!inst.managed}

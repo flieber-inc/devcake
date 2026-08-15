@@ -577,7 +577,7 @@ def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
     for f in plan_flags:
         assert f in argv
     for f in ("--dangerously-skip-permissions", "--always-approve",
-              "--dangerously-bypass-approvals-and-sandbox"):
+              "--dangerously-bypass-approvals-and-sandbox", "--auto"):
         assert f not in argv, f"{harness}: plan mode must not grant writes"
 
 
@@ -624,6 +624,15 @@ def test_sigterm_flushes_artifacts_once(monkeypatch):
     assert ei.value.code == 20
     assert sent and sent[0]["error_class"] == "DEV_CRASH"
     assert sent[0]["exit_code"] == 20
+
+
+def test_opencode_tool_calls_step_finish_is_not_terminal():
+    stream = json.dumps({
+        "type": "step_finish",
+        "part": {"reason": "tool-calls", "tokens": {"total": 1}},
+    })
+    fault = ep.opencode_run_fault(stream, 0)
+    assert fault and fault["reason"] == ep.FAULT_NO_TERMINAL_EVENT
 
 
 def test_pi_retry_then_healthy_is_not_a_fault():

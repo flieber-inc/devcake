@@ -370,11 +370,11 @@ class _OpenCode:
 
     def argv(self, prompt, *, plan_mode=False, model="", extra=(), out_dir=None):
         extra = list(extra)
-        # --auto: approve anything not explicitly denied (the Dev is the
-        # sandbox). --agent plan is the built-in read-leaning planner.
-        mode = ["--agent", "plan"] if plan_mode else []
+        # --auto auto-approves ask (including the plan agent's default
+        # edit/bash ask). EXECUTE only. PLAN is --agent plan without --auto.
+        mode = ["--agent", "plan"] if plan_mode else ["--auto"]
         pin = ["--model", model] if model else []
-        return ["opencode", "run", "--format", "json", "--auto", *mode, *pin,
+        return ["opencode", "run", "--format", "json", *mode, *pin,
                 prompt, *extra]
 
     def resume_argv(self, session_id, prompt, *, model="", extra=(), out_dir=None):

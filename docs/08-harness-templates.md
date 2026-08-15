@@ -120,7 +120,7 @@ pi --mode json --no-approve "$PROMPT"
 opencode run --format json --auto "$PROMPT"
 ```
 - **Pinned** `opencode-ai@1.18.18`. `--format json` emits JSONL (`text` / `tool_use` / `step_start` / `step_finish` / `error` — `opencode run` handler). `--auto` auto-approves anything not explicitly denied (the Dev is the sandbox).
-- PLAN uses `--agent plan` (built-in planner). Resume (`--session`) is **not** in `RESUME_SPECS` yet.
+- PLAN uses `--agent plan` **without** `--auto` (the plan agent's default `ask` on edit/bash must not auto-approve). Resume (`--session`) is **not** in `RESUME_SPECS` yet.
 - Multi-provider: any of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY`, or uploaded `~/.local/share/opencode/auth.json`. Pin a model as `provider/model` (`DevType.model`).
 - Token report: last `step_finish.part.tokens` + `part.cost` → TokenReport v1 `source=session_json`.
 - Skills: `~/.agents/skills` (also `.opencode/skills` and `~/.claude/skills`).
@@ -157,9 +157,9 @@ The PLAN playbook requires the harness's native planning capability where one ex
 | `grok-build` | `grok -p "$PROMPT" --permission-mode plan --output-format streaming-json` | **Verified (CLI v0.2.93):** `--permission-mode plan` is a first-class headless mode — same convention as Claude Code. Plan text = the concatenated `text` deltas; entrypoint writes it to `/workspace/out/PLAN.md`. |
 | `codex` | Plan-only prompt substitute (`codex exec` with a read-only sandbox: `--sandbox read-only`). | No documented headless plan artifact. |
 | `pi` | `--tools read,grep,find,ls` | No native plan mode (Pi philosophy). |
-| `opencode` | `--agent plan` | Built-in plan agent. |
+| `opencode` | `--agent plan` (no `--auto`) | Built-in plan agent; `--auto` would approve its default `ask` on edit/bash. |
 
-In all three cases the deliverable is the same: `/workspace/out/PLAN.md`, uploaded by the app to the activity feed (`03-mission-lifecycle.md` §3).
+In every case the deliverable is the same: `/workspace/out/PLAN.md`, uploaded by the app to the activity feed (`03-mission-lifecycle.md` §3).
 
 **The materialization contract (why this is harness-agnostic):** plan modes are read-only, so the agent cannot write `PLAN.md`/`result.json` itself. The playbook states "your final message IS the plan"; the shared entrypoint then writes the harness's returned final text to `PLAN.md` and synthesizes `result.json` (`outcome: planned`). The only per-harness requirement is *some* way to run headless + read-only + return final text — the flag lives in the template, the materialization is universal. Final text comes from the **documented stdout JSON** (never session-folder internals, which are undocumented and version-churned; session files are used only where data exists nowhere else, e.g. Grok token totals). A final text under 200 chars is treated as `DEV_BAD_OUTPUT` — an empty plan fails the attempt rather than advancing the mission. Verified end-to-end for `claude-code` (M4, DEV-18→PR#3); `grok-build`'s plan flag is CLI-verified but unexercised (re-verify before assigning PLAN to a grok Dev Type); `codex` uses the documented read-only-sandbox substitute.
 

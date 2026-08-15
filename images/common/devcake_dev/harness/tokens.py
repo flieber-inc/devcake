@@ -427,10 +427,14 @@ def opencode_session_id(out: str) -> str:
 
 
 def opencode_step_finish(out: str):
-    """Last `{type: step_finish}` event, or None."""
+    """Last `{type: step_finish}` with `reason=stop`, or None."""
     found = None
     for ev in _oc_events(out):
-        if ev.get("type") == "step_finish":
+        if ev.get("type") != "step_finish":
+            continue
+        part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+        reason = part.get("reason") or ev.get("reason")
+        if reason == "stop":
             found = ev
     return found
 

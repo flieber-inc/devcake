@@ -845,8 +845,10 @@ same change set as the first new dialect) so the slice is repeatable:
 
 - Each new CLI is: characterize headless contract → capture matrix → dialect
   module → registry + Bake → docs/08 tables → operator smoke.
-- **Shipped on this track:** `pi`, `opencode`, `qwen-code` (each a dialect +
-  Bake target + capture matrix; resume stays off until a capture pair).
+- **Experimental on this track (not launch-supported):** `pi`, `opencode`,
+  `qwen-code` (each a dialect + Bake target + capture matrix; resume stays
+  off until a capture pair). Launch-supported harnesses remain
+  `claude-code`, `grok-build`, `codex`.
 - **CLI candidates still under consideration** (not commitments): other
   agentic terminal CLIs. A candidate that is Claude-stream-adjacent may
   share helpers *after* captures prove it — never by silent alias.

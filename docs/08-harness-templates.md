@@ -21,9 +21,14 @@ Changing a Dev Type's model does not add a template.
 | `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-opus-5` (ADR-0033 D10) |
 | `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
-| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | *(none seeded)* |
-| `opencode` | OpenCode (`opencode`, `opencode-ai` 1.18.18) | CLI default (multi-provider) | *(none seeded)* |
-| `qwen-code` | Qwen Code (`qwen`, `@qwen-code/qwen-code` 0.21.12) | CLI default (multi-provider) | *(none seeded)* |
+| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | *(none seeded)* — **experimental** |
+| `opencode` | OpenCode (`opencode`, `opencode-ai` 1.18.18) | CLI default (multi-provider) | *(none seeded)* — **experimental** |
+| `qwen-code` | Qwen Code (`qwen`, `@qwen-code/qwen-code` 0.21.12) | CLI default (multi-provider) | *(none seeded)* — **experimental** |
+
+**Launch-supported** templates are `claude-code`, `grok-build`, and `codex`.
+`pi`, `opencode`, and `qwen-code` are **experimental**: they ship in-tree so
+they can be configured and dispatched, but they have not passed a live
+operator battery. Expect dialect, stream, and credential-shape churn.
 
 `Harness.experimental` is a registry flag (`GET /api/v1/harnesses`, the
 admin picker). Launch-supported templates leave it false. A later dialect
@@ -104,7 +109,7 @@ codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
 - Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` — those four keys and **no others**, so a total must be summed, never read. Present even when the turn produced nothing. On `codex exec resume` these are **cumulative — now measured, not just documented** (`codex_resume_nudge_*` captures: the resumed `turn.completed` reports both invocations' tokens; re-measured at the 0.147.0 recapture — openai/codex#35621's restored-usage replay skip does NOT change the final `turn.completed` aggregation), which is why `RESUME_SPECS["codex"].usage_cumulative` makes the ADR-0022 token merge last-wins within a codex resume chain instead of summing. Headless resume composes as `codex exec resume <thread_id> "$NUDGE" --json -o …`; the resumed stream keeps the same `thread_id` and replays no history. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
 
-### `pi`
+### `pi` (experimental)
 ```bash
 pi --mode json --no-approve "$PROMPT"
 ```
@@ -116,7 +121,7 @@ pi --mode json --no-approve "$PROMPT"
 - Token report: last `usage` on `message_update` / `message_end` (`input` / `output` / `cacheRead` / `cacheWrite` / `totalTokens`) → TokenReport v1 `source=session_json`. Capture-verified at 0.84.2.
 - Skills: `~/.agents/skills` (also reads `~/.pi/agent/skills`).
 
-### `opencode`
+### `opencode` (experimental)
 ```bash
 opencode run --format json --auto "$PROMPT"
 ```
@@ -126,7 +131,7 @@ opencode run --format json --auto "$PROMPT"
 - Token report: last `step_finish.part.tokens` + `part.cost` → TokenReport v1 `source=session_json`.
 - Skills: `~/.agents/skills` (also `.opencode/skills` and `~/.claude/skills`).
 
-### `qwen-code`
+### `qwen-code` (experimental)
 ```bash
 qwen -p "$PROMPT" --output-format stream-json --yolo
 ```

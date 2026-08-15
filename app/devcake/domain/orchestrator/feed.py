@@ -19,6 +19,14 @@ log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
 
 
+def _attachments_supported(mgr) -> bool:
+    """Port capability — GitHub Issues has no official upload (option B)."""
+    try:
+        return bool(mgr.pmo.capabilities().attachments_supported)
+    except Exception:  # noqa: BLE001 — missing/broken caps must not drop feed
+        return True
+
+
 def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
     # Belt-and-braces: detail should be names/counts only, but exception
     # fragments (e.g. activity_repo_push_failed) can embed secret shapes —
@@ -73,7 +81,8 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         # grace-cycle skip the pre-refactor code did not.
         mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
         return
-    if externalize and len(markdown) > FEED_INLINE_MAX:
+    if externalize and len(markdown) > FEED_INLINE_MAX \
+            and _attachments_supported(mgr):
         try:
             name = f"comment-{utcnow():%Y%m%dT%H%M%S}.md"
             url = await mgr.pmo.upload_attachment(pmo_id, name,
@@ -103,12 +112,13 @@ async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,
     pointer comment may keep the size second-chance (True). Callers redact
     `content`; the comment body still passes through _feed's redact."""
     url = None
-    try:
-        url = await mgr.pmo.upload_attachment(pmo_id, filename,
-                                              content.encode())
-    except Exception:  # noqa: BLE001 — fall back to the builder's inline form
-        log.exception("attachment upload failed for %s — inline fallback",
-                      filename)
+    if _attachments_supported(mgr):
+        try:
+            url = await mgr.pmo.upload_attachment(pmo_id, filename,
+                                                  content.encode())
+        except Exception:  # noqa: BLE001 — fall back to the builder's inline form
+            log.exception("attachment upload failed for %s — inline fallback",
+                          filename)
     body, externalize = comment_of(url)
     await mgr._feed(pmo_id, kind, body, externalize=externalize)
     return url

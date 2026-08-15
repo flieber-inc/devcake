@@ -69,6 +69,33 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
             "External: https://gitea.example.com"),
         supports_priority=False,   # forge-issue: priority always medium (§9.2)
     ),
+    "github_issues": PMOSystemInfo(
+        id="github_issues",
+        display_name="GitHub Issues",
+        secret_env_vars=["GITHUB_TOKEN", "GH_TOKEN"],
+        token_patterns=[r"\bghp_[A-Za-z0-9]{20,}\b",
+                        r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"],
+        secret_shape_prefixes=["ghp_", "github_pat_"],
+        needs_api_base=True,
+        team_key_label="Issues repo",
+        team_key_help=(
+            "owner/repo of the dedicated issues board this instance watches "
+            "(e.g. myorg/missions). Not a per-mission work repo. "
+            "Empty = instance stays idle."),
+        api_base_help=(
+            "GitHub API origin reachable from the app container. "
+            "github.com: leave empty or https://api.github.com. "
+            "GitHub Enterprise: https://ghe.example.com/api/v3"),
+        supports_priority=False,
+        attachments_supported=False,
+        relations_supported=True,
+        operator_note=(
+            "GitHub's public API cannot attach files to issues. Transcripts, "
+            "plans, and other deliverables still land in the mission's "
+            "activity repo; the ticket comment carries a short reference. "
+            "This is a GitHub limitation, not a DevCake setting."
+        ),
+    ),
     "gitlab_issues": PMOSystemInfo(
         id="gitlab_issues",
         display_name="GitLab Issues",
@@ -113,6 +140,13 @@ def make_pmo(inst) -> PMOPort:
         if inst.api_key:
             register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
         return GiteaIssuesAdapter(
+            inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
+    if inst.system == "github_issues":
+        from .github_issues import GitHubIssuesAdapter
+        from ..security import register_runtime_secret
+        if inst.api_key:
+            register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
+        return GitHubIssuesAdapter(
             inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
     if inst.system == "gitlab_issues":
         from .gitlab_issues import GitLabIssuesAdapter

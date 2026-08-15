@@ -1,6 +1,6 @@
 # 05 — PMO Adapter: `PMOPort`, Linear, and Gitea Issues
 
-> **Audience:** implementers of PMO adapters (Linear, Gitea Issues, GitLab Issues; later GitHub Issues).
+> **Audience:** implementers of PMO adapters (Linear, Gitea Issues; GitHub/GitLab Issues in the 2026-08-15 campaign).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
 The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`), **Gitea Issues** (`adapters/gitea_issues/`), and **GitLab Issues** (`adapters/gitlab_issues/`) — all pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
@@ -328,3 +328,16 @@ In-tree as of 2026-08-15. `team_key` is `path_with_namespace` (two or more segme
 
 `pmo_id` is the issue **iid**. `global_ids=False`. Separate PMO PAT from any GitLab *forge* repo-card token. The admin PMO card and New Mission dialog show `operator_note` from the registry when this system is selected.
 
+### 9.8 GitHub Issues (`github_issues`)
+
+In-tree as of 2026-08-15. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
+
+| Need | Measured |
+|---|---|
+| Status | `open`→backlog; `closed`→done; cancel footer in body → canceled |
+| Labels | PUT `/issues/{n}/labels` replaces the set |
+| Feed | issue comments; `` `devcake:v1` `` byte-exact |
+| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. Feed chokepoint posts inline; activity repo still holds transcripts/plans. |
+| Relations | Works on personal repos if `issue_id` is the global numeric id. Duplicate → 422 `already been taken`. |
+
+`pmo_id` is the issue **number**. `/issues` includes PRs — filtered. Separate PMO PAT from any GitHub *forge* repo-card token. Registry `operator_note` explains the attachment limit in the SPA.

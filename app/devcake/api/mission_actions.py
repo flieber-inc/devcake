@@ -336,6 +336,13 @@ async def create_mission(
 
     uploaded: list[tuple[str, str]] = []
     attachment_failures: list[dict] = []
+    if files and not getattr(mgr.pmo.capabilities(), "attachments_supported", True):
+        for name, _data in files:
+            attachment_failures.append({
+                "name": name,
+                "error": "this PMO does not support issue file attachments",
+            })
+        files = []
     for name, data in files:
         try:
             asset_url = await mgr.pmo.upload_attachment(pmo_id, name, data)

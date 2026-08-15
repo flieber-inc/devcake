@@ -57,7 +57,8 @@ its evidence status stated claim by claim, and what would change our mind — is
 
 ## Who this is for
 
-- Teams already running work on a **PMO board** (Linear and Gitea Issues in-tree)
+- Teams already running work on a **PMO board** (Linear and Gitea Issues
+  launch-supported; GitHub Issues and GitLab Issues are **experimental**)
 - A **single operator** who will **self-host on a dedicated machine** (Docker,
   Bake, your forge, your models) — not multi-tenant SaaS
 - People who want **receipts** (transcripts, costs, traces) more than a chat copilot

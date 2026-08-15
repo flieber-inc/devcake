@@ -876,14 +876,14 @@ long-lived incomplete dialect API.
 
 ### Candidates — launch roster (2026-08-15)
 
-**Status: committed campaign, not yet shipped.** Founder decisions from the
-2026-08-15 roster review. H1–H2 move from “optional platformization” (above)
-to a prerequisite of the three new CLIs. Each increment is **not done** until
-its live battery has been run on the operator stack (hermetic pytest is
-necessary and not sufficient). Host CLIs characterize only; production truth
-is the baked image / in-container adapter.
+**Status: committed campaign, not yet shipped. In-tree support for the
+new PMOs and harnesses is experimental** until each increment's live
+battery has been run on the operator stack (hermetic pytest is necessary
+and not sufficient). Launch-supported remains Linear + Gitea Issues and
+`claude-code` / `grok-build` / `codex`. Host CLIs characterize only;
+production truth is the baked image / in-container adapter.
 
-**Build (this campaign)**
+**Build (this campaign) — experimental until the gate passes**
 
 | Kind | Names | Registry id | Gate |
 |---|---|---|---|

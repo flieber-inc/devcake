@@ -3,7 +3,7 @@
 > **Audience:** implementers of PMO adapters (Linear, Gitea Issues, GitLab Issues, GitHub Issues).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
-The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear**, **Gitea Issues**, **GitLab Issues**, and **GitHub Issues** — all pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
+The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** and **Gitea Issues** (launch-supported); **GitLab Issues** and **GitHub Issues** (**experimental** — in-tree, not launch-supported). All are pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
 ## 0. The PMO capability contract (normative — any candidate system)
 
@@ -314,9 +314,9 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 
 Same forge-issue profile (issue-only, label stages, open→backlog, markdown comments, dependency/links). New package per vendor; do **not** grow a shared Issues Port until a second forge-issue adapter exists. Live gate: same `scripts/contract_tests_pmo.py` once the system is registered.
 
-### 9.7 GitLab Issues (`gitlab_issues`)
+### 9.7 GitLab Issues (`gitlab_issues`) — experimental
 
-In-tree as of 2026-08-15. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
+**Experimental** (in-tree, not launch-supported) as of 2026-08-15. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
 
 | Need | Measured |
 |---|---|

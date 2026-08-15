@@ -6,7 +6,7 @@
 # DevCake Dev harness images — multi-target Dockerfile.
 # Shared `base` stage is built once (BuildKit) and reused by every harness.
 #
-# Targets: base | hello | claude-code | codex | grok-build | pi
+# Targets: base | hello | claude-code | codex | grok-build | pi | opencode
 #
 #   docker buildx bake images
 #
@@ -23,6 +23,7 @@ ARG NODE_IMAGE=node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc
 ARG CLAUDE_CODE_VERSION=2.1.229
 ARG CODEX_VERSION=0.147.0
 ARG PI_VERSION=0.84.2
+ARG OPENCODE_VERSION=1.18.18
 # Toolchain floor (ADR-0023): playwright pinned to the SPA suite's family
 # (admin/spa/package.json playwright-core) so the whole repo speaks one
 # browser stack; python doc/spreadsheet libs pinned like the entrypoint deps.
@@ -309,3 +310,18 @@ USER dev
 ENV DEVCAKE_HARNESS=pi \
     PI_SKIP_VERSION_CHECK=1 \
     PI_TELEMETRY=0
+
+# ── opencode (anomalyco / SST) ──────────────────────────────────────────────
+FROM base AS opencode
+
+LABEL org.opencontainers.image.title="devcake-dev-opencode"
+
+ARG OPENCODE_VERSION
+
+# Node lives in base; HOME=/root for the same .npmrc reason as claude.
+RUN HOME=/root npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+    && HOME=/root npm cache clean --force
+
+USER dev
+ENV DEVCAKE_HARNESS=opencode \
+    OPENCODE_DISABLE_AUTOUPDATE=1

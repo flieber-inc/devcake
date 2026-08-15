@@ -68,7 +68,7 @@ def load_entrypoint():
 
 
 CLI_BY_HARNESS = {"claude-code": "claude", "codex": "codex",
-                  "grok-build": "grok", "pi": "pi"}
+                  "grok-build": "grok", "pi": "pi", "opencode": "opencode"}
 
 
 def cli_version(harness: str) -> str:
@@ -253,6 +253,8 @@ def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
         dump = grok_export(session_id, workdir)
     elif args.harness == "pi":
         dump = ep.pi_text_dump(stdout)
+    elif args.harness == "opencode":
+        dump = ep.opencode_text_dump(stdout)
     else:
         dump = ep.claude_text_dump(stdout)
 

@@ -81,6 +81,8 @@ def harness_dump(harness: str, name: str, out: str) -> str:
         return companion(name, "dump.txt")
     if harness == "pi":
         return ep.pi_text_dump(out)
+    if harness == "opencode":
+        return ep.opencode_text_dump(out)
     return ep.claude_text_dump(out)
 
 
@@ -98,18 +100,21 @@ def capture_prompt(meta: dict) -> str:
     argv = meta["argv"]
     if argv[1:3] == ["exec", "resume"]:
         return argv[4]
-    if argv and argv[0] == "pi":
-        # positional prompt after flags (`pi --mode json --no-approve [pin] P`)
+    if argv and argv[0] in ("pi", "opencode"):
+        # positional prompt after flags
         skip_next = False
         for a in argv[1:]:
             if skip_next:
                 skip_next = False
                 continue
             if a in ("--mode", "--model", "--provider", "--api-key", "--tools",
-                     "--thinking", "--session"):
+                     "--thinking", "--session", "--format", "--agent",
+                     "--variant", "-m", "-s"):
                 skip_next = True
                 continue
             if a.startswith("-"):
+                continue
+            if a == "run":
                 continue
             return a
         return ""
@@ -279,6 +284,18 @@ CAPTURES = [
     ("pi_http_429", TERMINAL),
     ("pi_http_500", TERMINAL),
     ("pi_truncated", TERMINAL),          # errorMessage "terminated" after stub hang-up
+
+    # ── opencode 1.18.18 (`opencode run --format json --auto`) ────────────
+    # HTTP errors exit 1 and carry APIError.data.statusCode. 401 latches 12.
+    ("opencode_healthy", NO_FAULT),
+    ("opencode_refusal", NO_FAULT),
+    ("opencode_tool_only", NO_FAULT),
+    ("opencode_empty", EMPTY),
+    ("opencode_whitespace", EMPTY),
+    ("opencode_http_401", AUTH),
+    ("opencode_http_429", TERMINAL),
+    ("opencode_http_500", TERMINAL),
+    ("opencode_truncated", TERMINAL),
 ]
 
 

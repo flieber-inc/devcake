@@ -104,6 +104,16 @@ HARNESSES: dict[str, Harness] = {
         skills_dir=".agents/skills",
         experimental=True,
     ),
+    "opencode": Harness(
+        image=f"devcake/dev-opencode:{_TAG}",
+        # Multi-provider (models.dev): any one stored key is enough.
+        credential_env=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY"],
+        credential_files=[CredentialFile(secret_file="opencode-auth.json",
+                                         path_hint="~/.local/share/opencode/auth.json")],
+        # Also reads ~/.claude/skills and ~/.config/opencode/skills;
+        # .agents is the shared Agent Skills dir.
+        skills_dir=".agents/skills",
+    ),
 }
 
 

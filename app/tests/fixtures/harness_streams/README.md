@@ -113,6 +113,15 @@ follows that echo (see `grok_export_activity`).
 Pi exits 0 on HTTP failures: the stream still carries `agent_end` with
 `stopReason: error`. 429 retries three times (`willRetry`) then settles.
 
+### opencode 1.18.18
+
+| Name | Scenario | CLI exit | Asserted class |
+|---|---|---|---|
+| `opencode_healthy` / `refusal` / `tool_only` | success shapes | 0 | no fault |
+| `opencode_empty` / `whitespace` | 200 with no/whitespace text | 0 | exit 15 empty |
+| `opencode_http_401` | 401 (`APIError.data.statusCode`) | 1 | exit 12 auth |
+| `opencode_http_429` / `_500` / `truncated` | hard errors / hang-up | 1 | exit 15 terminal |
+
 ## Known gaps (not reclassified as exit 15)
 
 Some real-world failures still land as exit 11 `DEV_BAD_OUTPUT` (missing

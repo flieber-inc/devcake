@@ -45,11 +45,11 @@ group "default" {
 }
 
 group "images" {
-  targets = ["hello", "claude-code", "codex", "grok-build", "pi"]
+  targets = ["hello", "claude-code", "codex", "grok-build", "pi", "opencode"]
 }
 
 group "all" {
-  targets = ["app", "admin", "hello", "claude-code", "codex", "grok-build", "pi"]
+  targets = ["app", "admin", "hello", "claude-code", "codex", "grok-build", "pi", "opencode"]
 }
 
 # Control plane + CI test image (no harnesses — faster PR loops).
@@ -125,4 +125,10 @@ target "pi" {
   inherits = ["dev-common"]
   target   = "pi"
   tags     = ["devcake/dev-pi:${image_tag()}"]
+}
+
+target "opencode" {
+  inherits = ["dev-common"]
+  target   = "opencode"
+  tags     = ["devcake/dev-opencode:${image_tag()}"]
 }

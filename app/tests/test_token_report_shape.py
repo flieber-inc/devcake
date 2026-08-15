@@ -72,6 +72,9 @@ def _report_for(name: str):
     if name.startswith("pi_"):
         return tokens.pi_token_report(out) or tokens.unavailable_report(
             model="pi")
+    if name.startswith("opencode_"):
+        return tokens.opencode_token_report(out) or tokens.unavailable_report(
+            model="opencode")
     if name.startswith("grok"):
         parsed = tokens.grok_stream_parse(out)
         terminal = tokens.grok_end_event(out) if parsed is not None else None

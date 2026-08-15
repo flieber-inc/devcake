@@ -334,6 +334,53 @@ def pi_run_fault(out: str, harness_exit: int, *, dump: str = ""):
     return None
 
 
+def opencode_run_fault(out: str, harness_exit: int, *, dump: str = ""):
+    """OpenCode `run --format json`: fault dict or None.
+
+    Terminal is `step_finish` (reason stop) or a top-level `error` event.
+    Tool activity is `tool_use`. Empty: a finished step with no text and
+    no tools.
+    """
+    from ..harness.tokens import _oc_events, opencode_step_finish
+
+    texts = tools = 0
+    error_msg = None
+    for ev in _oc_events(out):
+        kind = str(ev.get("type") or "")
+        if kind == "text":
+            part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+            if str(part.get("text") or "").strip():
+                texts += 1
+        elif kind == "tool_use":
+            tools += 1
+        elif kind == "error":
+            err = ev.get("error")
+            if isinstance(err, dict):
+                data = err.get("data") if isinstance(err.get("data"), dict) else {}
+                error_msg = str(data.get("message") or err.get("name")
+                                or err)[:120]
+            else:
+                error_msg = str(err or ev.get("message") or "error")[:120]
+    finished = opencode_step_finish(out)
+    tail = (f"(harness_exit={harness_exit} texts={texts} tools={tools} "
+            f"stdout={len(out)}B transcript={len(dump or '')}B)")
+    if finished is None:
+        if error_msg:
+            return _fault(FAULT_TERMINAL_ERROR,
+                          f"opencode reported an error and never finished a "
+                          f"step: {error_msg}", tail)
+        return _fault(FAULT_NO_TERMINAL_EVENT,
+                      "opencode stream ended without a step_finish event", tail)
+    if error_msg:
+        return _fault(FAULT_TERMINAL_ERROR,
+                      f"opencode reported a terminal error: {error_msg}", tail)
+    if texts == 0 and tools == 0 and not (dump or "").strip():
+        return _fault(FAULT_EMPTY_COMPLETION,
+                      "opencode produced nothing at all — no assistant text "
+                      "and no tool calls", tail)
+    return None
+
+
 _MARKDOWN_HEADING = _re.compile(r"^#{1,6}\s")
 
 
@@ -450,6 +497,9 @@ HARNESS_STATUS_PATTERNS = {
     "pi": (_re.compile(r"\bstatus(?: code)?[:\s]+(\d{3})\b"),
            _re.compile(r"\bHTTP[ /]?(\d{3})\b"),
            _re.compile(r"\b(\d{3})\s+Unauthorized\b")),
+    "opencode": (_re.compile(r"\bstatus(?: code)?[:\s]+(\d{3})\b"),
+                 _re.compile(r"\bHTTP[ /]?(\d{3})\b"),
+                 _re.compile(r"\b(\d{3})\s+Unauthorized\b")),
 }
 
 

@@ -212,7 +212,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "harness_streams"
 
 # Sidecar harness when present; filename prefix for the four pre-rig claude streams.
 HARNESS_BY_PREFIX = {"claude": "claude-code", "codex": "codex",
-                     "grok": "grok-build", "pi": "pi"}
+                     "grok": "grok-build", "pi": "pi", "opencode": "opencode"}
 
 # The events that decide a run's fate — every ADR-0018 fault arm fires on one of
 # these, so each must produce a visible line. codex `turn.failed` did not: every
@@ -221,7 +221,8 @@ HARNESS_BY_PREFIX = {"claude": "claude-code", "codex": "codex",
 TERMINAL_KINDS = {"claude-code": {"result"},
                   "codex": {"turn.completed", "turn.failed"},
                   "grok-build": {"end", "error", "max_turns_reached"},
-                  "pi": {"agent_end", "error"}}
+                  "pi": {"agent_end", "error"},
+                  "opencode": {"step_finish", "error"}}
 
 # discovered from disk, so a capture added later cannot go unrendered
 CAPTURE_STREAMS = sorted(p.name[:-len(".jsonl")] for p in FIXTURES.glob("*.jsonl"))

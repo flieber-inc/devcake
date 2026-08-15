@@ -328,9 +328,9 @@ Same forge-issue profile (issue-only, label stages, open→backlog, markdown com
 
 `pmo_id` is the issue **iid**. `global_ids=False`. Separate PMO PAT from any GitLab *forge* repo-card token. The admin PMO card and New Mission dialog show `operator_note` from the registry when this system is selected.
 
-### 9.8 GitHub Issues (`github_issues`)
+### 9.8 GitHub Issues (`github_issues`) — experimental
 
-In-tree as of 2026-08-15. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
+**Experimental** (in-tree, not launch-supported) as of 2026-08-15. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
 
 | Need | Measured |
 |---|---|

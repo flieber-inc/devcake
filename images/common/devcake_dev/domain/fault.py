@@ -276,6 +276,61 @@ def codex_run_fault(out: str, harness_exit: int, *, last_message: str = ""):
     return None
 
 
+def pi_run_fault(out: str, harness_exit: int, *, dump: str = ""):
+    """Pi `--mode json`: fault dict or None.
+
+    Terminal is `agent_end` (json.md). Tool activity is `tool_execution_*`
+    or an assistant `toolCall` block — a tool result `isError` (e.g. ENOENT
+    on a stub path) is NOT a harness fault. API/transport failures arrive as
+    assistant `stopReason: error` plus `errorMessage` ("401: …") and still
+    emit `agent_end` (Pi exits 0). Empty: ended cleanly with no assistant
+    text and no tools.
+    """
+    from ..harness.tokens import _pi_events, _pi_message_text, pi_agent_end
+
+    texts = tools = 0
+    error_msg = None
+    for ev in _pi_events(out):
+        kind = str(ev.get("type") or "")
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+        if kind == "message_end" and msg.get("role") == "assistant":
+            if _pi_message_text(msg).strip():
+                texts += 1
+            for block in msg.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "toolCall":
+                    tools += 1
+            if msg.get("stopReason") == "error":
+                error_msg = str(msg.get("errorMessage") or "stopReason=error")[:120]
+        elif kind.startswith("tool_execution_"):
+            tools += 1
+        elif kind == "error":
+            error_msg = str(ev.get("message") or ev.get("error") or "")[:120] \
+                or error_msg
+        elif kind == "agent_end":
+            for amsg in ev.get("messages") or []:
+                if _dict(amsg).get("stopReason") == "error":
+                    error_msg = str(amsg.get("errorMessage")
+                                    or error_msg or "stopReason=error")[:120]
+    ended = pi_agent_end(out)
+    tail = (f"(harness_exit={harness_exit} texts={texts} tools={tools} "
+            f"stdout={len(out)}B transcript={len(dump or '')}B)")
+    if ended is None:
+        if error_msg:
+            return _fault(FAULT_TERMINAL_ERROR,
+                          f"pi reported an error and never ended: {error_msg}",
+                          tail)
+        return _fault(FAULT_NO_TERMINAL_EVENT,
+                      "pi stream ended without an agent_end event", tail)
+    if error_msg:
+        return _fault(FAULT_TERMINAL_ERROR,
+                      f"pi reported a terminal error: {error_msg}", tail)
+    if texts == 0 and tools == 0 and not (dump or "").strip():
+        return _fault(FAULT_EMPTY_COMPLETION,
+                      "pi produced nothing at all — no assistant text and no "
+                      "tool calls", tail)
+    return None
+
+
 _MARKDOWN_HEADING = _re.compile(r"^#{1,6}\s")
 
 
@@ -378,6 +433,9 @@ HARNESS_STATUS_PATTERNS = {
               _re.compile(r"last status: (\d{3})")),
     "grok-build": (_re.compile(r"Unauthorized \((\d{3})\)"),
                    _re.compile(r"\(status (\d{3})")),
+    "pi": (_re.compile(r"\bstatus(?: code)?[:\s]+(\d{3})\b"),
+           _re.compile(r"\bHTTP[ /]?(\d{3})\b"),
+           _re.compile(r"\b(\d{3})\s+Unauthorized\b")),
 }
 
 

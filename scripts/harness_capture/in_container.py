@@ -67,7 +67,8 @@ def load_entrypoint():
     sys.exit(f"no dev_entrypoint.py at any of {ENTRYPOINT_CANDIDATES}")
 
 
-CLI_BY_HARNESS = {"claude-code": "claude", "codex": "codex", "grok-build": "grok"}
+CLI_BY_HARNESS = {"claude-code": "claude", "codex": "codex",
+                  "grok-build": "grok", "pi": "pi"}
 
 
 def cli_version(harness: str) -> str:
@@ -250,6 +251,8 @@ def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
         dump = ep.codex_text_dump(stdout)
     elif args.harness == "grok-build":
         dump = grok_export(session_id, workdir)
+    elif args.harness == "pi":
+        dump = ep.pi_text_dump(stdout)
     else:
         dump = ep.claude_text_dump(stdout)
 

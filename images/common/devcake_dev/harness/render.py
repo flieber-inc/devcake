@@ -236,6 +236,43 @@ class GrokCoalescer:
         return tail or None
 
 
+def render_pi(raw: str):
+    """Pi `--mode json` events → condensed lines (docs/08 §1a)."""
+    try:
+        ev = json.loads(raw)
+    except Exception:  # noqa: BLE001 — non-JSON is printed as-is
+        s = raw.strip()
+        return s[:LINE_LIMIT] if s else None
+    if not isinstance(ev, dict):
+        return None
+    kind = ev.get("type")
+    if kind == "session":
+        return f"[pi] session {str(ev.get('id') or '')[:8]}"
+    if kind == "tool_execution_start":
+        args = json.dumps(ev.get("args") or {})[:160]
+        return f"→ {ev.get('toolName', '?')} {args}"
+    if kind == "tool_execution_end" and ev.get("isError"):
+        return f"[pi] tool error: {_one_line(str(ev.get('result') or ''), 160)}"
+    if kind == "message_update":
+        asst = ev.get("assistantMessageEvent") or {}
+        if asst.get("type") == "text_delta" and asst.get("delta"):
+            text = str(asst["delta"]).strip()
+            return text[:200] or None
+        return None
+    if kind == "message_end":
+        from .tokens import _pi_message_text
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+        if msg.get("role") != "assistant":
+            return None
+        text = _pi_message_text(msg).strip()
+        return text[:200] or None
+    if kind == "agent_end":
+        return "[pi] done"
+    if kind == "error":
+        return f"[pi] error: {_one_line(str(ev.get('message') or ev.get('error') or ''), 200)}"
+    return None
+
+
 def render_stderr(raw: str):
     s = raw.strip()
     return f"! {s[:LINE_LIMIT]}" if s else None

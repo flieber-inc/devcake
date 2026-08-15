@@ -546,6 +546,8 @@ def test_classify_nonzero_exit(err, fault, status, expected):
     ("codex", ["codex", "exec"],
      ["--json", "-o", "--skip-git-repo-check",
       "--dangerously-bypass-approvals-and-sandbox"]),
+    ("pi", ["pi"],
+     ["--mode", "json", "--no-approve"]),
 ])
 def test_argv_matches_the_documented_invocation(harness, head, doc_flags):
     argv = ep.harness_argv(harness, "PROMPT")
@@ -565,6 +567,7 @@ def test_argv_verbose_is_mandatory_for_claude():
     ("claude-code", ["--permission-mode", "plan"]),
     ("grok-build", ["--permission-mode", "plan"]),
     ("codex", ["--sandbox", "read-only"]),          # codex's read-only substitute
+    ("pi", ["--tools", "read,grep,find,ls"]),       # no native plan mode
 ])
 def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
     argv = ep.harness_argv(harness, "P", plan_mode=True)
@@ -576,7 +579,8 @@ def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
 
 
 @pytest.mark.parametrize("harness,pin", [
-    ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m")])
+    ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m"),
+    ("pi", "--model")])
 def test_argv_model_pin_is_omitted_when_empty(harness, pin):
     """An empty DEVCAKE_MODEL means "harness default" — passing an empty pin
     would make every CLI reject the invocation."""

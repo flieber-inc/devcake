@@ -282,3 +282,123 @@ def codex_text_dump(out: str) -> str:
                 blocks.append(text.strip("\n"))
     return "\n\n".join(blocks)
 
+
+def _pi_events(out: str):
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one bad line never costs the parse
+            continue
+        if isinstance(ev, dict):
+            yield ev
+
+
+def _pi_message_text(message) -> str:
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in ("text", "output_text") and block.get("text"):
+            parts.append(str(block["text"]))
+    return "".join(parts)
+
+
+def pi_session_event(out: str):
+    """First `{type: session}` header (docs/08), or None."""
+    for ev in _pi_events(out):
+        if ev.get("type") == "session":
+            return ev
+    return None
+
+
+def pi_agent_end(out: str):
+    """Last `{type: agent_end}` event, or None."""
+    found = None
+    for ev in _pi_events(out):
+        if ev.get("type") == "agent_end":
+            found = ev
+    return found
+
+
+def pi_token_report(out: str):
+    """TokenReport v1 from the last message_update/message_end usage object.
+
+    Pi usage keys (docs + custom-provider guide): input, output, cacheRead,
+    cacheWrite, totalTokens. Cost if present is native. source=session_json.
+    """
+    usage, model, cost, turns = None, None, None, 0
+    for ev in _pi_events(out):
+        kind = ev.get("type")
+        if kind == "turn_end":
+            turns += 1
+        blob = ev.get("usage")
+        if not isinstance(blob, dict):
+            blob = _dict(_dict(ev.get("message")).get("usage")) or None
+        if not isinstance(blob, dict) or not blob:
+            continue
+        usage = blob
+        msg = _dict(ev.get("message"))
+        model = (msg.get("model") or ev.get("model") or model)
+        cost = blob.get("cost") if isinstance(blob.get("cost"), (int, float)) else cost
+    if usage is None:
+        return None
+    return token_report_v1(
+        model=model or "pi",
+        source="session_json",
+        input_tokens=usage.get("input") if usage.get("input") is not None
+        else usage.get("input_tokens"),
+        output_tokens=usage.get("output") if usage.get("output") is not None
+        else usage.get("output_tokens"),
+        cache_read_tokens=usage.get("cacheRead") if usage.get("cacheRead") is not None
+        else usage.get("cache_read"),
+        cache_write_tokens=usage.get("cacheWrite") if usage.get("cacheWrite") is not None
+        else usage.get("cache_write"),
+        total_tokens=usage.get("totalTokens") if usage.get("totalTokens") is not None
+        else usage.get("total_tokens"),
+        reasoning_tokens=usage.get("reasoning") if usage.get("reasoning") is not None
+        else usage.get("reasoning_tokens"),
+        cost_usd_native=cost,
+        num_turns=turns or None,
+        raw=usage)
+
+
+def pi_text_dump(out: str) -> str:
+    """ADR-0014 D1: every assistant-visible text, in order, untruncated.
+
+    Prefer authoritative `message_end` (json.md); fall back to assembling
+    `message_update` text deltas when a stream truncated before message_end.
+    """
+    blocks = []
+    deltas = []
+    saw_end = False
+    for ev in _pi_events(out):
+        kind = ev.get("type")
+        if kind == "message_end":
+            msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+            if msg.get("role") == "assistant":
+                text = _pi_message_text(msg)
+                if text.strip():
+                    blocks.append(text.strip("\n"))
+                saw_end = True
+                deltas = []
+        elif kind == "message_update" and not saw_end:
+            ev_asst = ev.get("assistantMessageEvent") or {}
+            if ev_asst.get("type") == "text_delta" and ev_asst.get("delta"):
+                deltas.append(str(ev_asst["delta"]))
+        elif kind == "agent_end":
+            for msg in ev.get("messages") or []:
+                if _dict(msg).get("role") == "assistant":
+                    text = _pi_message_text(msg)
+                    if text.strip() and text.strip("\n") not in blocks:
+                        blocks.append(text.strip("\n"))
+    if not blocks and deltas:
+        joined = "".join(deltas).strip("\n")
+        if joined.strip():
+            blocks.append(joined)
+    return "\n\n".join(blocks)
+

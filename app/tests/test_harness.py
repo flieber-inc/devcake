@@ -132,6 +132,7 @@ def test_registry_skills_dirs():
     assert HARNESSES["claude-code"].skills_dir == ".claude/skills"
     assert HARNESSES["grok-build"].skills_dir == ".agents/skills"
     assert HARNESSES["codex"].skills_dir == ".agents/skills"
+    assert HARNESSES["pi"].skills_dir == ".agents/skills"
     for name, h in HARNESSES.items():
         if h.skills_dir is None:
             continue

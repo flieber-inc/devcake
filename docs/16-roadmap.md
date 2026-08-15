@@ -887,7 +887,7 @@ is the baked image / in-container adapter.
 
 | Kind | Names | Registry id | Gate |
 |---|---|---|---|
-| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | live `contract_tests_pmo.py` (rows 12 + 13 required unless a documented capability skip) |
+| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
 | Platform | `HarnessDialect` + registry-as-id-source | — | existing three capture batteries + **Grok Build live ONBOARD** |
 | Harness | Pi, OpenCode, Qwen Code | `pi-coding-agent`, `opencode`, `qwen-code` | H4 capture matrix from the **baked** image + hello + ONBOARD + INV-5 report |
 
@@ -933,15 +933,17 @@ OAuth / `skills_dir` only.
 - Prime Agent — 2026-08-05, built on Pi, self-modifying Continual Harness
   fights isolated receipted runs.
 
-**GitHub Issues attachment risk (stop-and-measure).** There is no official
-public REST/GraphQL “upload file to an issue” API. The web UI uses
-undocumented `uploads.github.com/user-attachments`. That path is **not**
-admissible without an explicit founder ruling. Spike official APIs first;
-then pick: **(A)** do not ship GitHub Issues until an official upload exists
-(GitLab still ships); **(B)** `attachments_supported=False` on
-`PMOCapabilities` + activity-repo remains the durable store (port + docs/05
-§0 (d) honesty change); **(C)** unofficial upload with allowlist — default
-**refuse C**.
+**GitHub Issues attachments — ruling (2026-08-15), not an open choice.**
+There is no official public REST/GraphQL “upload file to an issue” API. The
+web UI uses undocumented `uploads.github.com/user-attachments`. **C
+(unofficial upload) is refused.** **A** (wait for an official API) is the
+rejected alternative. **B** is the accepted residual:
+`attachments_supported=False`; the feed chokepoint posts a size-safe pointer
++ token report on the issue; the full dump lives in the Clear-swept activity
+repo. That repo is **not** the durable PMO record (INV-5 / ADR-0014 / docs/14
+still name the PMO as SoT). The operator must see the residual
+(`operator_note` + live health flags). Unofficial `uploads.github.com`
+remains refused.
 
 **Spike evidence (2026-08-15, personal `fidecastro` on github.com +
 gitlab.com — official APIs only).** Throwaway GitHub repo
@@ -953,14 +955,14 @@ gitlab.com — official APIs only).** Throwaway GitHub repo
 | Replace-all labels | PUT `/issues/{n}/labels` works | PUT issue `labels=A,B` works |
 | Marker `` `devcake:v1` `` | comment body **byte-exact** | note body **byte-exact** |
 | Attachments | GET `/issues/{n}/assets` and `/attachments` **404**; comment octet-stream **400**. No official upload. | POST `/projects/:id/uploads` **201** (`url`, `full_path`, `markdown`). Web path + PAT → **403 HTML**. Download **is** `GET /api/v4/projects/:id/uploads/:secret/:filename` → **200** `application/octet-stream`. |
-| Blocked-by | Works on a **personal** repo if `issue_id` is the global numeric `id` (not the number). Number → 404. Duplicate → 422 `already been taken` (treat as success). | `is_blocked_by` / `blocks` → **403** `Blocked issues not available for current license` (free gitlab.com). `relates_to` works — **not** blocked-by. `relations_supported=False` on this account until Premium. |
+| Blocked-by | Works on a **personal** repo if `issue_id` is the global numeric `id` (not the number). Number → 404. Duplicate → 422 `already been taken` (treat as success). | `is_blocked_by` / `blocks` → **403** on free gitlab.com (`Blocked issues not available for current license`). `relates_to` works — **not** blocked-by. **Do not hardcode `relations_supported=False`.** The adapter probes the live token (read-only links GET); domain skips `create_relation` when the flag is false; the operator sees on/off. |
 | PR-as-issue | `/issues` includes PRs (`pull_request` key) — filter | Issues API does not list MRs |
 | `pmo_id` | issue **number** for URLs/keys; dependency POST needs global **id** (adapter-internal lookup) | issue **iid** for paths; still `global_ids=False` (iid collides across projects) |
 
-GitLab row 13 is admissible. GitLab row 14 is license-gated. **GitHub
-attachments: founder picked B** (2026-08-15) — `attachments_supported=False`,
-activity-repo durable store, registry `operator_note` in the SPA. Unofficial
-`uploads.github.com` remains refused.
+GitLab row 13 is admissible. GitLab row 14 runs only when the live probe
+sets `relations_supported=True` (Premium / self-hosted EE); Free tokens
+stay False and the operator is told child missions will not block each
+other. GitHub attachments are **B** (see the ruling above).
 
 #### Origin intake (Cursor Origin)
 

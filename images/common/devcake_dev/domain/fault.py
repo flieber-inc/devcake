@@ -289,7 +289,9 @@ def pi_run_fault(out: str, harness_exit: int, *, dump: str = ""):
     from ..harness.tokens import _pi_events, _pi_message_text, pi_agent_end
 
     texts = tools = 0
-    error_msg = None
+    orphan_error = None
+    last_end_error = None
+    saw_end = False
     for ev in _pi_events(out):
         kind = str(ev.get("type") or "")
         msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
@@ -299,31 +301,32 @@ def pi_run_fault(out: str, harness_exit: int, *, dump: str = ""):
             for block in msg.get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "toolCall":
                     tools += 1
-            if msg.get("stopReason") == "error":
-                error_msg = str(msg.get("errorMessage") or "stopReason=error")[:120]
         elif kind.startswith("tool_execution_"):
             tools += 1
         elif kind == "error":
-            error_msg = str(ev.get("message") or ev.get("error") or "")[:120] \
-                or error_msg
+            orphan_error = str(ev.get("message") or ev.get("error") or "")[:120] \
+                or orphan_error
         elif kind == "agent_end":
+            saw_end = True
+            last_end_error = None
             for amsg in ev.get("messages") or []:
                 if _dict(amsg).get("stopReason") == "error":
-                    error_msg = str(amsg.get("errorMessage")
-                                    or error_msg or "stopReason=error")[:120]
+                    last_end_error = str(amsg.get("errorMessage")
+                                         or "stopReason=error")[:120]
     ended = pi_agent_end(out)
     tail = (f"(harness_exit={harness_exit} texts={texts} tools={tools} "
             f"stdout={len(out)}B transcript={len(dump or '')}B)")
     if ended is None:
-        if error_msg:
+        err = last_end_error or orphan_error
+        if err:
             return _fault(FAULT_TERMINAL_ERROR,
-                          f"pi reported an error and never ended: {error_msg}",
+                          f"pi reported an error and never ended: {err}",
                           tail)
         return _fault(FAULT_NO_TERMINAL_EVENT,
                       "pi stream ended without an agent_end event", tail)
-    if error_msg:
+    if last_end_error:
         return _fault(FAULT_TERMINAL_ERROR,
-                      f"pi reported a terminal error: {error_msg}", tail)
+                      f"pi reported a terminal error: {last_end_error}", tail)
     if texts == 0 and tools == 0 and not (dump or "").strip():
         return _fault(FAULT_EMPTY_COMPLETION,
                       "pi produced nothing at all — no assistant text and no "

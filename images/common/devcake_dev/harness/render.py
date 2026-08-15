@@ -267,6 +267,11 @@ def render_pi(raw: str):
         text = _pi_message_text(msg).strip()
         return text[:200] or None
     if kind == "agent_end":
+        for amsg in reversed(ev.get("messages") or []):
+            if not isinstance(amsg, dict):
+                continue
+            if amsg.get("stopReason") == "error":
+                return f"[pi] error: {_one_line(str(amsg.get('errorMessage') or 'error'), 200)}"
         return "[pi] done"
     if kind == "error":
         return f"[pi] error: {_one_line(str(ev.get('message') or ev.get('error') or ''), 200)}"

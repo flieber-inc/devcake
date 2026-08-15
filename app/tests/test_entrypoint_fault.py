@@ -621,3 +621,25 @@ def test_sigterm_flushes_artifacts_once(monkeypatch):
     assert ei.value.code == 20
     assert sent and sent[0]["error_class"] == "DEV_CRASH"
     assert sent[0]["exit_code"] == 20
+
+
+def test_pi_retry_then_healthy_is_not_a_fault():
+    """A recovered in-process retry must not latch the earlier stopReason=error."""
+    stream = "\n".join([
+        json.dumps({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "stopReason": "error", "errorMessage": "429: stub"}}),
+        json.dumps({"type": "agent_end", "messages": [
+            {"role": "assistant", "content": [], "stopReason": "error",
+             "errorMessage": "429: stub"}], "willRetry": True}),
+        json.dumps({"type": "auto_retry_end", "success": True}),
+        json.dumps({"type": "message_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ACKNOWLEDGED"}],
+            "stopReason": "stop"}}),
+        json.dumps({"type": "agent_end", "messages": [
+            {"role": "assistant",
+             "content": [{"type": "text", "text": "ACKNOWLEDGED"}],
+             "stopReason": "stop"}], "willRetry": False}),
+    ])
+    assert ep.pi_run_fault(stream, 0) is None

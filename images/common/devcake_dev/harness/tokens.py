@@ -344,7 +344,11 @@ def pi_token_report(out: str):
         usage = blob
         msg = _dict(ev.get("message"))
         model = (msg.get("model") or ev.get("model") or model)
-        cost = blob.get("cost") if isinstance(blob.get("cost"), (int, float)) else cost
+        raw_cost = blob.get("cost")
+        if isinstance(raw_cost, (int, float)):
+            cost = raw_cost
+        elif isinstance(raw_cost, dict) and isinstance(raw_cost.get("total"), (int, float)):
+            cost = raw_cost["total"]
     if usage is None:
         return None
     return token_report_v1(

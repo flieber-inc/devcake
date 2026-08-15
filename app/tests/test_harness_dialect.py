@@ -67,6 +67,17 @@ def test_every_registry_id_is_a_bake_images_target():
         assert h.image.startswith(f"devcake/dev-{name}:"), h.image
 
 
+def test_every_all_target_has_ghcr_publish_remap():
+    """group all + push:true must remap every harness onto ghcr.io, not Hub."""
+    publish = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "docker-publish.yml"
+    if not publish.exists():
+        publish = Path("/srv/.github/workflows/docker-publish.yml")
+    assert publish.exists(), "docker-publish.yml missing"
+    text = publish.read_text()
+    for name in HARNESSES:
+        assert f"{name}.tags=" in text, name
+
+
 def _is_harness_eq_string(node: ast.Compare) -> bool:
     if not (isinstance(node.left, ast.Name) and node.left.id == "harness"):
         return False

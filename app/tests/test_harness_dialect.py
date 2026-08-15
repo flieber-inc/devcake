@@ -32,6 +32,12 @@ _BAKE_CANDIDATES = [
 ]
 BAKE = next((p for p in _BAKE_CANDIDATES if p.exists()), None)
 
+_PUBLISH_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / ".github" / "workflows" / "docker-publish.yml",
+    Path("/srv/docker-publish.yml"),
+]
+PUBLISH = next((p for p in _PUBLISH_CANDIDATES if p.exists()), None)
+
 
 def _dialects():
     assert COMMON is not None, (
@@ -69,11 +75,9 @@ def test_every_registry_id_is_a_bake_images_target():
 
 def test_every_all_target_has_ghcr_publish_remap():
     """group all + push:true must remap every harness onto ghcr.io, not Hub."""
-    publish = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "docker-publish.yml"
-    if not publish.exists():
-        publish = Path("/srv/.github/workflows/docker-publish.yml")
-    assert publish.exists(), "docker-publish.yml missing"
-    text = publish.read_text()
+    assert PUBLISH is not None, (
+        "docker-publish.yml missing — bind it at /srv/docker-publish.yml")
+    text = PUBLISH.read_text()
     for name in HARNESSES:
         assert f"{name}.tags=" in text, name
 

@@ -178,6 +178,8 @@ RUN_SCALAR_COLUMNS = {
     "last_heartbeat", "timeout_seconds", "traceparent", "auth_digest",
     "artifact_bytes", "error", "error_class", "attempt_counted", "verdict",
     "continuations_used", "store_gen",
+    # #165 — provision stamps harness --version; dispatch snapshots mission.url
+    "harness_version", "mission_url",
 }
 RUN_BLOB_COLUMNS = {
     "blocker_work", "mirror_repos", "spec_skills", "spec_env",

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, MutableMapping, Optional
 
 from ..harness import HARNESSES, resolve_image
+from ..staffing import app_digest, require_staffed
 from .ids import make_run_id
 from .run import Run, utcnow
 
@@ -22,12 +23,14 @@ log = logging.getLogger("devcake.oauth")
 
 class OAuthManager:
     def __init__(self, runs, messaging, dev_types,
-                 breakers: MutableMapping[str, str] | None = None):
+                 breakers: MutableMapping[str, str] | None = None,
+                 receipt_store=None):
         self.runs = runs
         self.messaging = messaging
         self.dev_types = dev_types
         # optional shared breaker map (MissionManager.breakers); cleared on success
         self.breakers = breakers
+        self.receipt_store = receipt_store
         self.sessions: dict[str, dict[str, Any]] = {}  # run_id → status
 
     async def start(self, dev_type_name: str) -> dict:
@@ -58,6 +61,8 @@ class OAuthManager:
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
                             "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
+        require_staffed(dev_type, digest=app_digest(),
+                        store=self.receipt_store)
         await self.runs.bootstrap.launch(run, image=resolve_image(dev_type))
         # snapshot everything on_result needs: a dev type deleted or re-harnessed
         # mid-login must not misroute (or KeyError) the credential

@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 
 from .. import security
 from ..adapters.dagu import DAGU_URL
+from ..staffing import app_digest, receipt_summary
 from ..domain.claims import claims_depth, claims_queue_capped
 from ..domain.forge_runtime import PROBE_CONCURRENCY
 from ..prompts import templates as prompt_templates
@@ -23,6 +24,11 @@ from ..telemetry import OO_URL
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+
+
+def _harness_pins(dev_types, receipt_store) -> dict:
+    return receipt_summary(
+        dev_types or {}, digest=app_digest(), store=receipt_store)
 
 
 async def _check_redis() -> bool:
@@ -163,7 +169,8 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
                                internal_forge, poll_rt,
                                backend_degraded: dict | None = None,
                                repo_cache=None, workspaces=None,
-                               cron=None) -> dict:
+                               cron=None,
+                               receipt_store=None) -> dict:
     """The /api/v1/health body (docs/11 §0). All deps explicit — unit-testable
     with fakes; the route in main.py is a one-line forward."""
     redis_ok, dagu_ok, oo_ok = await asyncio.gather(
@@ -326,4 +333,5 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
             "leaked": workspaces.leaked_count(store) if workspaces else 0,
             "disk": workspaces.disk_stats() if workspaces else None,
         },
+        "harness_pins": _harness_pins(dev_types, receipt_store),
     }

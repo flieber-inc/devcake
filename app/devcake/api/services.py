@@ -111,6 +111,7 @@ class Services:
                 mgr.skills = self.skill_service
                 mgr.blocker_locator = self.blocker_locator
                 mgr.repo_cache = self.repo_cache
+                mgr.receipt_store = self.receipt_store
             else:
                 self.managers[name] = MissionManager(
                     self.config, self.dev_types, p, self.forge_runtime,
@@ -120,7 +121,8 @@ class Services:
                     skills=self.skill_service,
                     backend_degraded=self.shared_backend_degraded,
                     blocker_locator=self.blocker_locator,
-                    repo_cache=self.repo_cache)
+                    repo_cache=self.repo_cache,
+                    receipt_store=self.receipt_store)
                 self.stewards[name] = StewardService(
                     self.config, self.dev_types, self.managers[name])
                 # ADR-0033: harvest's event trigger for the discovery lane —
@@ -260,16 +262,17 @@ def build_services() -> Services:
     s.blocker_locator = BlockerLocator(
         s.managers, lambda bid: poll_rt.mission_owner.get(bid))
 
+    from ..adapters.files.receipts import FileReceiptStore
+    s.receipt_store = FileReceiptStore()
     s.forge_runtime.rebuild(config.repos, make_forge)
     s.build_managers()
     s.finalizer = FinalizerRouter(s.managers, store, messaging)
     manager.set_finalizer(s.finalizer)  # RunFinalizer seam: routes on run.pmo_ref
     s.oauth_mgr = OAuthManager(manager, messaging, dev_types,
-                               breakers=s.shared_breakers)
+                               breakers=s.shared_breakers,
+                               receipt_store=s.receipt_store)
     manager.oauth_mgr = s.oauth_mgr
     manager.runlog = runlog
-    from ..adapters.files.receipts import FileReceiptStore
-    s.receipt_store = FileReceiptStore()
     from ..keep_set import publish_keep_set
     publish_keep_set(dev_types)
     return s

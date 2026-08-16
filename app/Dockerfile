@@ -41,10 +41,16 @@ LABEL org.opencontainers.image.title="devcake-app" \
       org.opencontainers.image.description="DevCake orchestrator API" \
       org.opencontainers.image.source="https://github.com/fidecastro/devcake"
 
+# Receipt identity (PLAN_CLI_PINS). Default is an obviously invalid
+# sentinel so bare `bake app` / group ci is distinguishable from
+# "no receipt for this version." The bake wrapper overwrites this.
+ARG DEVCAKE_APP_DIGEST=DEVCAKE_APP_DIGEST_UNSET
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH" \
-    DEVCAKE_DATA_DIR=/data
+    DEVCAKE_DATA_DIR=/data \
+    DEVCAKE_APP_DIGEST=${DEVCAKE_APP_DIGEST}
 
 # git + git-lfs: the repo source mirror (ADR-0024) — the app's ONLY
 # subprocess consumer (adapters/git.py). /mirrors pre-created app-owned so

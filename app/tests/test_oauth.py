@@ -44,7 +44,9 @@ def make_mgr(tmp_path, monkeypatch):
         "second-grok": DevType(name="second-grok", harness_template="grok-build"),
         "senior-dev": DevType(name="senior-dev", harness_template="claude-code"),
     }
-    return OAuthManager(runs, messaging, dev_types, breakers=breakers)
+    from fakes import OkReceiptStore
+    return OAuthManager(runs, messaging, dev_types, breakers=breakers,
+                        receipt_store=OkReceiptStore())
 
 
 def test_start_rejects_unknown_and_flowless(tmp_path, monkeypatch):

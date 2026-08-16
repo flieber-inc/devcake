@@ -298,7 +298,7 @@ docker buildx bake all
 docker compose up -d          # compose reads DEVCAKE_TAG for app/admin
 ```
 
-Harness image tags follow **`DEVCAKE_TAG`** (same as app/admin — default `latest`): `HARNESSES[…].image` in `app/devcake/harness.py` is `devcake/dev-*:${DEVCAKE_TAG}`. Dispatch, steward, and OAuth go through **`resolve_image(dev_type)`** — empty pin is that house string. Hello stays `HELLO_IMAGE`. Digest pinning at dispatch is **not** implemented; re-bake lockstep with app upgrades and keep `DEVCAKE_TAG` exported for `compose up` so dispatch matches what you baked.
+Harness image tags follow **`DEVCAKE_TAG`** (same as app/admin — default `latest`): `HARNESSES[…].image` in `app/devcake/harness.py` is `devcake/dev-*:${DEVCAKE_TAG}`. Dispatch, steward, and OAuth go through **`resolve_image(dev_type)`** — empty pin is that house string — and **`require_staffed`**: a launch-supported template refuses unless `/data/harness_receipts` has an `ok` receipt whose digest equals the app's `DEVCAKE_APP_DIGEST` ARG. Hello stays `HELLO_IMAGE` and is not gated. Bare `bake app` leaves the sentinel `DEVCAKE_APP_DIGEST_UNSET`; the wrapper computes `scripts/app_digest.py` and passes it to the app target and the probe. Keep `DEVCAKE_TAG` exported for `compose up` so dispatch matches what you baked.
 
 Which Dev image a run uses is `resolve_image(dev_type)` (`08-harness-templates.md` §2); `docker_image` is no longer stored config. Since any harness is selectable from the admin panel at any time, **all three `devcake/dev-*` images must be baked locally**.
 

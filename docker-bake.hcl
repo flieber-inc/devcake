@@ -24,6 +24,10 @@ variable "DEVCAKE_TAG" {
   default = ""
 }
 
+variable "DEVCAKE_APP_DIGEST" {
+  default = "DEVCAKE_APP_DIGEST_UNSET"
+}
+
 # Local export/import path for BuildKit cache (override if needed).
 variable "BAKE_CACHE_DIR" {
   default = ".buildx-cache"
@@ -74,6 +78,9 @@ target "app" {
   dockerfile = "Dockerfile"
   target     = "runtime"
   tags       = ["devcake/app:${image_tag()}"]
+  args = {
+    DEVCAKE_APP_DIGEST = DEVCAKE_APP_DIGEST
+  }
 }
 
 target "app-test" {
@@ -82,6 +89,9 @@ target "app-test" {
   dockerfile = "Dockerfile"
   target     = "test"
   tags       = ["devcake/app-test:${image_tag()}"]
+  args = {
+    DEVCAKE_APP_DIGEST = DEVCAKE_APP_DIGEST
+  }
 }
 
 target "admin" {

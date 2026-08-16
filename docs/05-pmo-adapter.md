@@ -11,8 +11,8 @@ A PMO system qualifies for a DevCake adapter iff it satisfies all four capabilit
 
 - **(a) Missions as the unit of work.** The system's work items map straightforwardly onto Missions (`02-domain-model.md`): a stable vendor id, title/description, a status that normalizes onto backlog/in-progress/done/canceled, and a priority.
 - **(b) Labels (or an equivalent) assign Mission Steps.** The DEVCAKE-* stage machinery needs an idempotently-creatable, atomically-swappable tag concept readable back on every item (`§5`).
-- **(c) Traffic control via blocked-by relations.** Native "X blocks Y" dependencies, listable per item — the scheduler gate and Relations Steward ride on them (`adr/0007`).
-- **(d) A reliable activity feed.** Ordered comments + file attachments with **markdown fidelity** for backticked markers (`devcake:v1`, decomposition manifests, merge-retry markers): the feed is DevCake's persistent record of each mission (long-lived cross-mission memory is the separate notebook system, ADR-0035), so a PMO that rewrites comment bytes (ADF/rich-text — Jira) needs an explicit fidelity strategy before an adapter is attempted (ISSUES #35). Abandonment must be expressible (`cancel_mission` — a canceled/archived terminal state).
+- **(c) Traffic control via blocked-by relations.** Native "X blocks Y" dependencies, listable per item — the scheduler gate and Relations Steward ride on them (`adr/0007`). When the live token cannot list or write blocked-by (GitLab Free), the adapter **probes** that fact (read-only) and sets `relations_supported=False`; domain skips `create_relation`; the operator sees the residual. Do not hardcode the flag, and do not invent `relates_to` as blocked-by.
+- **(d) A reliable activity feed.** Ordered comments with **markdown fidelity** for backticked markers (`devcake:v1`, decomposition manifests, merge-retry markers): the feed is DevCake's persistent record of each mission (long-lived cross-mission memory is the separate notebook system, ADR-0035). Official **file attachments** are required unless `attachments_supported` is false — then the feed chokepoint posts a size-safe pointer (never a raw dump that the vendor will 422) and the operator sees the residual. A PMO that rewrites comment bytes (ADF/rich-text — Jira) needs an explicit fidelity strategy **on the port** before an adapter is attempted (ISSUES #35). Do not start a Jira adapter that greps ADF for markers. Abandonment must be expressible (`cancel_mission` — a canceled/archived terminal state).
 
 ## 1. Port interface (normative signatures)
 
@@ -98,7 +98,8 @@ class PMOCapabilities(BaseModel):
     project_labels_supported: bool    # Linear: True (project labels since 2025-06)
     attachment_max_bytes: int
     native_label_swap_atomic: bool    # Linear: True via issueUpdate(labelIds)
-    relations_supported: bool = False # Linear: True (issue relations; issue-only)
+    relations_supported: bool = False # probed from the live token; False until a read-only links GET succeeds
+    attachments_supported: bool = True  # official file-upload API; false skips upload + contract rows 8/13
 ```
 
 `/health` and `POST /api/v1/connections/pmo/{name}/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.

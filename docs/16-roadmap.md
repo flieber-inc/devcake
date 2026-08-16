@@ -700,9 +700,11 @@ the v0.2 trailer list).
 
 ### Candidates — harness platformization (H1–H5)
 
-**Status: design candidate, not a committed “next” milestone.** Work here only
-if/when we choose to add more coding CLIs or to reduce the cost of doing so.
-It may be skipped, partial, or reordered relative to other product work.
+**Status: H1 + H2 are committed** as the prerequisite of the
+[2026-08-15 launch roster](#candidates--launch-roster-2026-08-15) (Pi,
+OpenCode, Qwen Code). H3–H5 stay optional (H3 only when a real CLI needs
+multi-env / settings-file auth). The H1–H5 design below is unchanged; the
+roster is what picked the track up.
 
 **Why it exists on the roadmap.** The control plane already has a deep harness
 registry (`app/devcake/harness.py`: image, credentials, OAuth, `skills_dir`,
@@ -848,7 +850,8 @@ same change set as the first new dialect) so the slice is repeatable:
 - **Experimental on this track (not launch-supported):** `pi`, `opencode`,
   `qwen-code` (each a dialect + Bake target + capture matrix; resume stays
   off until a capture pair). Launch-supported harnesses remain
-  `claude-code`, `grok-build`, `codex`.
+  `claude-code`, `grok-build`, `codex`. Cursor Agent is deferred (trigger
+  in the roster note).
 - **CLI candidates still under consideration** (not commitments): other
   agentic terminal CLIs. A candidate that is Claude-stream-adjacent may
   share helpers *after* captures prove it — never by silent alias.
@@ -868,6 +871,131 @@ train if small); H4 codifies what ADR-0018 already started; H5 is cheap; H3
 when the first multi-auth CLI is actually implemented. A first new template may
 pay for H1–H2 in-tree rather than as pure refactor — prefer that over a
 long-lived incomplete dialect API.
+
+---
+
+### Candidates — launch roster (2026-08-15)
+
+**Status: committed campaign, not yet shipped.** Founder decisions from the
+2026-08-15 roster review. H1–H2 move from “optional platformization” (above)
+to a prerequisite of the three new CLIs. Each increment is **not done** until
+its live battery has been run on the operator stack (hermetic pytest is
+necessary and not sufficient). Host CLIs characterize only; production truth
+is the baked image / in-container adapter.
+
+**Build (this campaign)**
+
+| Kind | Names | Registry id | Gate |
+|---|---|---|---|
+| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
+| Platform | `HarnessDialect` + registry-as-id-source | — | existing three capture batteries + **Grok Build live ONBOARD** |
+| Harness | Pi, OpenCode, Qwen Code | `pi`, `opencode`, `qwen-code` | H4 capture matrix from the **baked** image + hello + ONBOARD + INV-5 report |
+
+Copy the `gitea_issues` profile (docs/05 §9): issue-only, `open→backlog`,
+`DEVCAKE-*` labels, `team_key=owner/repo`, `global_ids=False`. Separate
+packages — do **not** add issue methods to `ForgePort`. Do **not** extract a
+shared Issues port until the second forge-issue adapter exists (§9.6).
+
+H1 lives in `images/common/devcake_dev/harness/` (Dev hexagon). Do not add
+`ports/harness.py` on the app. `app/devcake/harness.py` stays image / creds /
+OAuth / `skills_dir` only.
+
+**Anticipate (no registry entry, no adapter)**
+
+- **Cursor Origin** (`cursor-origin`, never `origin`) — waitlist-only as of
+  2026-08. Intake against `ForgePort` (docs/06): standard git clone/push; PR
+  findable by head branch; squash merge; formal approve as a second identity;
+  mergeable tri-state; **HTTP** API for the app (MCP is Dev-side only);
+  official CLI; token prefixes; `server_side_conflict_resolution` (Origin
+  demoed agent-side conflict/CI repair — if present, do not trust
+  `mergeable()==False` as our conflict). First experiment when a preview
+  exists: GitHub adapter + `api_base` if they speak a GitHub-shaped API.
+  Standalone PRs only in v1; stacks are a later design. See
+  [Origin intake](#origin-intake-cursor-origin).
+- **Jira Cloud** (`jira`) — ISSUES #35 first. See
+  [feed fidelity](#issues-35--feed-fidelity-port-note). No adapter until a
+  live md↔ADF (or sidecar) measurement exists. Cloud only; Data Center is a
+  second product. Jira Project ≠ Linear Project (first adapter issue-only).
+
+**Deferred (named, with trigger)**
+
+- **Cursor Agent** (`cursor-agent`) — characterized (`agent -p --force
+  --output-format stream-json`, `CURSOR_API_KEY`, `--plan`). Deferred because
+  Grok Build already covers the SpaceX/xAI path and the Anysphere acquisition
+  may fold the CLI. Trigger: the CLI is still a distinct headless product
+  after the close, *or* a launch buyer needs `agent -p`.
+
+**Scratched (do not resurrect without new evidence)**
+
+- Monday.com — fails docs/05 §0 (b)/(c)/(d) (board-schema columns, same-board
+  dependency column, poor backtick fidelity).
+- Goose — general agent, not a coding-CLI peer of Grok Build.
+- Prime Agent — 2026-08-05, built on Pi, self-modifying Continual Harness
+  fights isolated receipted runs.
+
+**GitHub Issues attachments — ruling (2026-08-15), not an open choice.**
+There is no official public REST/GraphQL “upload file to an issue” API. The
+web UI uses undocumented `uploads.github.com/user-attachments`. **C
+(unofficial upload) is refused.** **A** (wait for an official API) is the
+rejected alternative. **B** is the accepted residual:
+`attachments_supported=False`; the feed chokepoint posts a size-safe pointer
++ token report on the issue; the full dump lives in the Clear-swept activity
+repo. That repo is **not** the durable PMO record (INV-5 / ADR-0014 / docs/14
+still name the PMO as SoT). The operator must see the residual
+(`operator_note` + live health flags). Unofficial `uploads.github.com`
+remains refused.
+
+**Spike evidence (2026-08-15, personal `fidecastro` on github.com +
+gitlab.com — official APIs only).** Throwaway GitHub repo
+`devcake-pmo-contract-gh-20260815-035138` (issues closed; `gh` token lacks
+`delete_repo`) and two GitLab projects (deleted).
+
+| Need | GitHub (measured) | GitLab (measured) |
+|---|---|---|
+| Replace-all labels | PUT `/issues/{n}/labels` works | PUT issue `labels=A,B` works |
+| Marker `` `devcake:v1` `` | comment body **byte-exact** | note body **byte-exact** |
+| Attachments | GET `/issues/{n}/assets` and `/attachments` **404**; comment octet-stream **400**. No official upload. | POST `/projects/:id/uploads` **201** (`url`, `full_path`, `markdown`). Web path + PAT → **403 HTML**. Download **is** `GET /api/v4/projects/:id/uploads/:secret/:filename` → **200** `application/octet-stream`. |
+| Blocked-by | Works on a **personal** repo if `issue_id` is the global numeric `id` (not the number). Number → 404. Duplicate → 422 `already been taken` (treat as success). | `is_blocked_by` / `blocks` → **403** on free gitlab.com (`Blocked issues not available for current license`). `relates_to` works — **not** blocked-by. **Do not hardcode `relations_supported=False`.** The adapter probes the live token (read-only links GET); domain skips `create_relation` when the flag is false; the operator sees on/off. |
+| PR-as-issue | `/issues` includes PRs (`pull_request` key) — filter | Issues API does not list MRs |
+| `pmo_id` | issue **number** for URLs/keys; dependency POST needs global **id** (adapter-internal lookup) | issue **iid** for paths; still `global_ids=False` (iid collides across projects) |
+
+GitLab row 13 is admissible. GitLab row 14 runs only when the live probe
+sets `relations_supported=True` (Premium / self-hosted EE); Free tokens
+stay False and the operator is told child missions will not block each
+other. GitHub attachments are **B** (see the ruling above).
+
+#### Origin intake (Cursor Origin)
+
+Reserved id `cursor-origin`. **Do not** add to `_forge_classes()` until every
+row below has a measured answer.
+
+| `ForgePort` need | What to measure on a preview |
+|---|---|
+| `get_pr_by_branch` | PR/MR (or equivalent) findable by head `devcake/{INSTANCE}-{key}` |
+| `merge` | squash (or documented equivalent) + observed-merged |
+| `approve` | second-identity review; `self_approval_blocked`? |
+| `mergeable` | tri-state vs boolean; does an agent rewrite the branch first? |
+| `default_branch_protection` | readable? which token scope? |
+| HTTP vs MCP | app-side `ForgePort` **must** be HTTP; MCP-only = no adapter |
+| CLI | official binary for EXECUTE `pr_instructions`; do not bake Graphite `gt` until they say so |
+| Tokens | prefixes for redaction / SPA paste guard |
+| Stacks / merge queue | v1 treats Origin as standalone PRs; stacking decomposition is a later design |
+
+#### ISSUES #35 — feed fidelity (port note)
+
+Docs/05 §0 (d) and docs/00 already say markdown-fidelity markers are a **port**
+requirement, not adapter folklore. When a Jira (or other ADF/rich-text)
+adapter is actually started, declare a strategy on `PMOCapabilities` — do
+**not** implement the field in this campaign:
+
+| Strategy | Where machine markers live | Use when |
+|---|---|---|
+| `raw` | Comment body, byte-stable | Linear, Gitea/GitHub/GitLab Issues |
+| `transcoded` | Comment body after a **measured** md↔vendor round-trip | Only if every `` `devcake:…` `` marker survives live |
+| `sidecar` | Vendor entity property / small attachment is source of truth; human comment is pretty text | Default for Jira |
+
+Domain never grows `if system == "jira"`. Poll/derivation reads markers from
+the strategy the adapter declares. Sidecar is the honest Jira default.
 
 ---
 
@@ -901,9 +1029,11 @@ long-lived incomplete dialect API.
 - **Webhook ingestion** — PMO `watch()` / webhook `ChangeEvent` seam replacing
   polling (+ tunnel guide). Multi-PMO multiplies poll cost; strong candidate
   among deferred items, independent of any harness-platform work.
-- **Additional PMO adapters** (GitHub Issues, GitLab Issues, Monday, …) +
-  **markdown-fidelity adapter refactor** (ISSUES #35). Copy the
-  `gitea_issues` profile (pure `PMOPort`).
+- **Additional PMO adapters** beyond the launch-roster pair (GitHub Issues
+  + GitLab Issues are the 2026-08-15 campaign, above). Height / Shortcut /
+  Plane remain Linear-class candidates. Jira Cloud waits on ISSUES #35.
+  Monday.com is **scratched**. Copy the `gitea_issues` profile (pure
+  `PMOPort`) for any future forge-issue sibling.
 - **N repos per mission** — cross-repo atomicity (one PR per repo, set-
   approval, merge ordering); still capped at 0-or-1 work repo per mission.
 - **Per-run scoped forge tokens** and the rest of `14` §7 — companion to

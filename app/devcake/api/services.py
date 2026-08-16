@@ -87,6 +87,7 @@ class Services:
     blocker_locator: Optional[BlockerLocator] = None
     finalizer: Optional[FinalizerRouter] = None
     oauth_mgr: Optional[OAuthManager] = None
+    receipt_store: Any = None
     cron: Any = None
     claims: Any = None
 
@@ -267,4 +268,8 @@ def build_services() -> Services:
                                breakers=s.shared_breakers)
     manager.oauth_mgr = s.oauth_mgr
     manager.runlog = runlog
+    from ..adapters.files.receipts import FileReceiptStore
+    s.receipt_store = FileReceiptStore()
+    from ..keep_set import publish_keep_set
+    publish_keep_set(dev_types)
     return s

@@ -20,6 +20,7 @@ from .core import (
     house_from_dockerfile,
     reconcile,
     run_bake,
+    touch_status,
     write_status,
 )
 from .run import tee_run
@@ -175,14 +176,11 @@ def beating_run(work: Path):
     """subprocess.run-shaped: heartbeat while waiting, tee output, keep a tail."""
 
     def stamp() -> None:
-        current = {}
-        path = work / STATUS
-        if path.is_file():
-            try:
-                current = json.loads(path.read_text())
-            except (OSError, json.JSONDecodeError):
-                current = {}
-        publish_status(work, current or {"state": "baking", "jobs": []})
+        body = touch_status(work / STATUS)
+        try:
+            compose_write(STATUS, json.dumps(body, indent=2) + "\n")
+        except RuntimeError:
+            pass
 
     def run(argv, **kw):
         return tee_run(

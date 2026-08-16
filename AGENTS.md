@@ -96,6 +96,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 
 ### Quick anti-patterns (reject these)
 
+- Leftover ≠ decided. If a locked decision is unimplemented, implement it or refuse the PR. Do not comment the gap.
 - Implementing a feature then “adding tests later”
 - Typing domain code against concrete `DaguExecutor` / `Messaging` / `RunStore` instead of ports
 - Duplicating the ACL → digest → save → start spine outside `RunBootstrap`

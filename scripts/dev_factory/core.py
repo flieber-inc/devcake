@@ -161,21 +161,19 @@ def plan_prune(
 ) -> tuple[str, ...]:
     """Local `devcake/dev-*` images that no pin, running container, or hello needs.
 
-    Names that are not `devcake/dev-*` are ignored as candidates (never
-    deleted). Keep/running names that *are* `devcake/dev-*` are validated.
+    Only well-formed `devcake/dev-name:tag` refs are keep or delete
+    candidates. `nginx`, dangling `<none>` tags, and bare ids are ignored.
     """
     keep: set[str] = set()
     for ref in (*keep_images, *running_images):
-        if not str(ref).startswith(_IMAGE_PREFIX):
-            continue
-        keep.add(_require_dev_image(ref))
+        if _IMAGE_REF.fullmatch(str(ref)):
+            keep.add(ref)
     gone: list[str] = []
     for ref in local_images:
-        if not str(ref).startswith(_IMAGE_PREFIX):
+        if not _IMAGE_REF.fullmatch(str(ref)):
             continue
-        name = _require_dev_image(ref)
-        if name not in keep:
-            gone.append(name)
+        if ref not in keep:
+            gone.append(ref)
     return tuple(sorted(set(gone)))
 
 

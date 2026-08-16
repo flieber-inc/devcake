@@ -13,7 +13,8 @@ from ...security import redact
 from ..model import Mission, MissionRef, STAGE_LABELS
 from ..run import utcnow
 from . import markers
-from .markers import COMMENT_SENTINEL, FEED_INLINE_MAX, SENTINEL_RE
+from .markers import (COMMENT_SENTINEL, DELIVERABLE_MARKER, FEED_INLINE_MAX,
+                      REPLY_MARKER, SENTINEL_RE, STEP_MARKER)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -25,6 +26,48 @@ def _attachments_supported(mgr) -> bool:
         return bool(mgr.pmo.capabilities().attachments_supported)
     except Exception:  # noqa: BLE001 — missing/broken caps must not drop feed
         return True
+
+
+def _comment_max_chars(mgr) -> int | None:
+    """Vendor issue-comment cap, or None when the adapter does not declare one."""
+    try:
+        n = mgr.pmo.capabilities().comment_max_chars
+    except Exception:  # noqa: BLE001 — missing caps must not drop the feed
+        return None
+    return int(n) if n else None
+
+
+def _fit_vendor_comment(markdown: str, limit: int) -> str:
+    """Keep the body (plus the sentinel _feed appends) under `limit`.
+
+    Marker-bearing unquoted lines stay; the rest is truncated. A pointer
+    sentence without those lines is how GitHub PLAN used to freeze seq at 1.
+    """
+    text = markdown.rstrip()
+    room = limit - len("\n\n") - len(COMMENT_SENTINEL)
+    if room < 64:
+        room = 64
+    if len(text) <= room:
+        return text
+    notice = (
+        f"\n\n… truncated — this PMO cannot attach files and the vendor "
+        f"comment limit is {limit} characters."
+    )
+    keep = []
+    for line in unquoted(text).splitlines():
+        if (REPLY_MARKER in line or DELIVERABLE_MARKER in line
+                or STEP_MARKER.search(line)):
+            keep.append(line)
+    header = "\n".join(keep)
+    reserved = len(header) + (2 if header else 0) + len(notice)
+    if reserved >= room:
+        body = header or text[: max(0, room - len(notice))]
+        return (body + notice)[:room]
+    fill = room - reserved
+    prefix = text[:fill]
+    if header:
+        return f"{header}\n\n{prefix}{notice}"
+    return f"{prefix}{notice}"
 
 
 def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
@@ -65,7 +108,10 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     sentinel. Bodies over FEED_INLINE_MAX are uploaded as .md attachments
     and replaced by a short referencing comment (docs/05 §4) unless the
     caller opts out (externalize=False — the ADR-0014 finalize post, whose
-    long text already lives in its own attachment); the sentinel
+    long text already lives in its own attachment). When the vendor
+    declares `comment_max_chars` the posted body (plus sentinel) is fitted
+    under that cap, keeping marker lines — never a raw dump the vendor
+    will 422. The sentinel
     goes on the comment, never inside the attachment, so provenance
     classification keeps working. Upload failures fall back to posting
     inline — an upload outage must never lose feed content. Projects have
@@ -95,6 +141,9 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
                         + f"… — full text attached: [{name}]({url})")
         except Exception:
             log.exception("feed attachment upload failed — posting inline")
+    cap = _comment_max_chars(mgr)
+    if cap is not None:
+        markdown = _fit_vendor_comment(markdown, cap)
     await mgr.pmo.post_feed(
         MissionRef(pmo_id, "issue"),
         markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)

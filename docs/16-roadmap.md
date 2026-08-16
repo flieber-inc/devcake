@@ -938,12 +938,10 @@ There is no official public REST/GraphQL “upload file to an issue” API. The
 web UI uses undocumented `uploads.github.com/user-attachments`. **C
 (unofficial upload) is refused.** **A** (wait for an official API) is the
 rejected alternative. **B** is the accepted residual:
-`attachments_supported=False`; the feed chokepoint posts a size-safe pointer
-+ token report on the issue; the full dump lives in the Clear-swept activity
-repo. That repo is **not** the durable PMO record (INV-5 / ADR-0014 / docs/14
-still name the PMO as SoT). The operator must see the residual
-(`operator_note` + live health flags). Unofficial `uploads.github.com`
-remains refused.
+`attachments_supported=False`; `comment_max_chars=65536`; the feed chokepoint
+keeps marker-bearing lines and truncates to that cap (never a raw dump the
+vendor will 422). The operator must see the residual (`operator_note` + live
+health flags). Unofficial `uploads.github.com` remains refused.
 
 **Spike evidence (2026-08-15, personal `fidecastro` on github.com +
 gitlab.com — official APIs only).** Throwaway GitHub repo
@@ -955,7 +953,7 @@ gitlab.com — official APIs only).** Throwaway GitHub repo
 | Replace-all labels | PUT `/issues/{n}/labels` works | PUT issue `labels=A,B` works |
 | Marker `` `devcake:v1` `` | comment body **byte-exact** | note body **byte-exact** |
 | Attachments | GET `/issues/{n}/assets` and `/attachments` **404**; comment octet-stream **400**. No official upload. | POST `/projects/:id/uploads` **201** (`url`, `full_path`, `markdown`). Web path + PAT → **403 HTML**. Download **is** `GET /api/v4/projects/:id/uploads/:secret/:filename` → **200** `application/octet-stream`. |
-| Blocked-by | Works on a **personal** repo if `issue_id` is the global numeric `id` (not the number). Number → 404. Duplicate → 422 `already been taken` (treat as success). | `is_blocked_by` / `blocks` → **403** on free gitlab.com (`Blocked issues not available for current license`). `relates_to` works — **not** blocked-by. **Do not hardcode `relations_supported=False`.** The adapter probes the live token (read-only links GET); domain skips `create_relation` when the flag is false; the operator sees on/off. |
+| Blocked-by | Works on a **personal** repo if `issue_id` is the global numeric `id` (not the number). Number → 404. Duplicate → 422 `already been taken` (treat as success). | `is_blocked_by` / `blocks` → **403** on free gitlab.com (`Blocked issues not available for current license`). `relates_to` works — **not** blocked-by. **Do not start `relations_supported=False`.** Unprobed means the domain gate will attempt `create_relation`; a 403 no-ops and latches the flag off. Health reports `unprobed` / `on` / `off`. |
 | PR-as-issue | `/issues` includes PRs (`pull_request` key) — filter | Issues API does not list MRs |
 | `pmo_id` | issue **number** for URLs/keys; dependency POST needs global **id** (adapter-internal lookup) | issue **iid** for paths; still `global_ids=False` (iid collides across projects) |
 

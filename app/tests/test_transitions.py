@@ -37,6 +37,7 @@ class FakePMO:
         return fake_pmo_capabilities(
             relations_supported=getattr(self, "relations_supported", True),
             attachments_supported=getattr(self, "attachments_supported", True),
+            comment_max_chars=getattr(self, "comment_max_chars", None),
         )
 
     def __init__(self, mission):
@@ -58,6 +59,10 @@ class FakePMO:
 
     async def post_feed(self, ref, markdown):
         self._check_ref(ref)
+        limit = getattr(self, "comment_max_chars", None)
+        if limit is not None and len(markdown) > limit:
+            raise RuntimeError(
+                f"body is too long (maximum is {limit} characters)")
         if ref.kind == "project":
             self.project_updates = getattr(self, "project_updates", [])
             self.project_updates.append((ref.pmo_id, markdown))
@@ -1358,6 +1363,43 @@ def test_planned_without_attachments_posts_plan_inline(tmp_path):
                for c in fake.comments)
     assert "DEVCAKE-EXECUTE" in m.labels
     assert "DEVCAKE-PLAN" not in m.labels
+
+
+GITHUB_COMMENT_MAX = 65536
+
+
+def test_huge_transcript_fits_github_limit_and_keeps_step_marker(tmp_path):
+    """GitHub rejects bodies over 65536. Finalize only catches ValueError,
+    so an oversized post wedges every run in finalizing."""
+    from devcake.domain.model import Activity, ActivityEntry
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    fake.comment_max_chars = GITHUB_COMMENT_MAX
+    run = _saved_run(store)
+    run_coro(mgr.finalize(run, _finalize_payload(
+        transcript_md="x" * 140_800, last_message_md="Done.")))
+    assert run.state != "finalizing"
+    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
+    assert len(comment) <= GITHUB_COMMENT_MAX
+    entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
+                          kind="comment", body=comment)
+    assert dispatch._derive_seq(
+        Activity(mission=m, entries=[entry])) == 2
+
+
+def test_huge_plan_fits_github_limit(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    fake.comment_max_chars = GITHUB_COMMENT_MAX
+    plan = "# the plan\n\n" + ("do the thing\n" * 8_000)
+    assert len(plan) > GITHUB_COMMENT_MAX
+    run_coro(transitions.transition(
+        mgr, _run("PLAN", "DEVCAKE-PLAN"), {"outcome": "planned"}, plan))
+    posted = next(c for c in fake.comments if "the plan" in c)
+    assert len(posted) <= GITHUB_COMMENT_MAX
+    assert "DEVCAKE-EXECUTE" in m.labels
 
 
 def test_finalize_upload_failure_posts_quoted_inline(tmp_path):

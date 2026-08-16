@@ -207,6 +207,7 @@ def test_upload_attachment_refuses():
 def test_capabilities_option_b():
     caps = make_pmo().capabilities()
     assert caps.attachments_supported is False
+    assert caps.comment_max_chars == 65536
     assert caps.relations_supported is True
     assert caps.projects_supported is False
     assert caps.global_ids is False

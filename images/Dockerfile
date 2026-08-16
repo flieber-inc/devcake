@@ -339,13 +339,14 @@ RUN HOME=/root npm install -g "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
     && HOME=/root npm cache clean --force
 
 # Vendor usage-stats default on; auto-update against a root-owned global
-# install is wasted I/O. Bake the off switches — do not rely on the
-# operator's uploaded credential file.
+# install is wasted I/O. The system file outranks an operator-uploaded
+# ~/.qwen/settings.json (no env override for auto-update). Bake both.
 USER root
-RUN mkdir -p /home/dev/.qwen \
+RUN mkdir -p /home/dev/.qwen /etc/qwen-code \
  && printf '%s\n' \
       '{"privacy":{"usageStatisticsEnabled":false},"general":{"enableAutoUpdate":false}}' \
       > /home/dev/.qwen/settings.json \
+ && cp /home/dev/.qwen/settings.json /etc/qwen-code/settings.json \
  && chown -R 1000:1000 /home/dev/.qwen
 USER dev
 # --yolo + no sandbox prints a one-line stderr warning; the Dev is the

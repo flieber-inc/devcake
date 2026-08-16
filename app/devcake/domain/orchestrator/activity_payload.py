@@ -18,9 +18,123 @@ from pathlib import Path
 
 from ..model import MissionRef
 from .feed import is_devcake_comment, unquoted
-from .markers import discovery_in_keys
+from .markers import (COMMENT_SENTINEL, PART_LINE, PLAN_FILE, STEP_MARKER,
+                      discovery_in_keys)
 
 log = logging.getLogger("devcake.missions")
+
+
+def _part_coords(body: str) -> tuple[int, int] | None:
+    for line in unquoted(body).splitlines():
+        hit = PART_LINE.match(line)
+        if hit:
+            return int(hit.group(1)), int(hit.group(2))
+    return None
+
+
+def _strip_part_and_sentinel(body: str) -> str:
+    text = body or ""
+    if COMMENT_SENTINEL in text:
+        text = text[: text.rfind(COMMENT_SENTINEL)].rstrip()
+    lines = text.splitlines()
+    drop: set[int] = set()
+    for i, line in enumerate(lines):
+        if PART_LINE.match(line):
+            drop.add(i)
+            if i + 1 < len(lines) and lines[i + 1] == "":
+                drop.add(i + 1)
+            break
+    return "\n".join(ln for i, ln in enumerate(lines) if i not in drop)
+
+
+def _join_part_payloads(chunks: list[str]) -> str:
+    if not chunks:
+        return ""
+    out = chunks[0]
+    for nxt in chunks[1:]:
+        if out and nxt and out[-1].isalnum() and nxt[0].isalnum():
+            out += nxt
+        elif out.endswith("\n") or not nxt:
+            out += nxt
+        else:
+            out += "\n" + nxt
+    return out
+
+
+def _step_filename(reconstructed: str) -> str | None:
+    scan = unquoted(reconstructed)
+    hit = STEP_MARKER.search(scan)
+    if hit:
+        return f"{hit.group(1)}_{hit.group(2)}.md"
+    hit = PLAN_FILE.search(scan)
+    if hit:
+        return hit.group(1)
+    return None
+
+
+def _substance(filename: str, reconstructed: str) -> str:
+    """What the Dev reads in N_TYPE.md / PLAN_N.md (Linear attachment bytes)."""
+    if filename.startswith("PLAN_"):
+        parts = reconstructed.split("\n\n", 1)
+        return parts[1] if len(parts) > 1 else reconstructed
+    lines = reconstructed.splitlines()
+    i = 0
+    while i < len(lines) and not (lines[i].startswith(">") or lines[i] == ">"):
+        i += 1
+    if i >= len(lines):
+        return reconstructed
+    dump: list[str] = []
+    for line in lines[i:]:
+        if line.startswith("> "):
+            dump.append(line[2:])
+        elif line == ">":
+            dump.append("")
+        else:
+            dump.append(line)
+    text = "\n".join(dump)
+    if text.startswith("---\n\n"):
+        text = text[5:]
+    return text
+
+
+def coalesced_step_files(entries) -> list[tuple[str, str, object]]:
+    """(filename, content, first_entry) from paginated or single inline steps."""
+    out: list[tuple[str, str, object]] = []
+    i = 0
+    n = len(entries)
+    while i < n:
+        e = entries[i]
+        body = e.body or ""
+        if not is_devcake_comment(body):
+            i += 1
+            continue
+        coords = _part_coords(body)
+        if coords and coords[0] == 1 and coords[1] >= 2:
+            total = coords[1]
+            group = [e]
+            j = i + 1
+            while len(group) < total and j < n:
+                nxt = entries[j]
+                if not is_devcake_comment(nxt.body or ""):
+                    break
+                if _part_coords(nxt.body or "") != (len(group) + 1, total):
+                    break
+                group.append(nxt)
+                j += 1
+            if len(group) == total:
+                reconstructed = _join_part_payloads(
+                    [_strip_part_and_sentinel(g.body or "") for g in group])
+                name = _step_filename(reconstructed)
+                if name:
+                    out.append((name, _substance(name, reconstructed), e))
+                i = j
+                continue
+        name = _step_filename(_strip_part_and_sentinel(body))
+        if name and coords is None:
+            reconstructed = _strip_part_and_sentinel(body)
+            out.append((name, _substance(name, reconstructed), e))
+        i += 1
+    return out
 
 
 def _tree_conflict(cand: str, used: set[str]) -> bool:
@@ -255,6 +369,11 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     m = act.mission
     attachments = []
     used: set[str] = {"ACTIVITY.md", "MISSION.md"}   # docs/07 §2 dedupe seed
+    # GitHub pages long posts; Linear/Gitea ship N_TYPE.md as attachments.
+    # Rebuild those sibling files from Part i of n (or a single inline post)
+    # so /workspace/activity/ looks the same to the Dev.
+    step_files = coalesced_step_files(act.entries)
+    step_by_first = {id(first): fname for fname, _content, first in step_files}
 
     # Documents FIRST (before mission/feed attachments): their docs/… paths
     # then live in `used`, so a later flat attachment literally named `docs`
@@ -359,6 +478,9 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         lines.append(body)                # full body — the mirror never trims
         for att in e.attachments:
             lines.append(await _materialize(att))
+        fname = step_by_first.get(id(e))
+        if fname and not any((att.name or "") == fname for att in e.attachments):
+            lines.append(f"[attachment: {fname}]")
         lines.append("")
     # ADR-0031 — the newest entry this mirror includes, the consumer run's
     # reading receipt. Entries arrive ascending from both adapters; a fresh
@@ -366,6 +488,14 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     # builder also serves the Redis activity.get fallback, where an escape
     # would cost the Dev its activity.result). Wire-safe extra key: the
     # entrypoint and the snapshot builder read known keys via .get.
+    for fname, content, _first in step_files:
+        if fname in used:
+            continue
+        fname = _unique_name(fname, used)
+        attachments.append({
+            "filename": fname,
+            "content_b64": base64.b64encode(content.encode()).decode(),
+        })
     last = act.entries[-1] if act.entries else None
     watermark = ({"entry_id": last.entry_id or "", "ts": last.ts.isoformat()}
                  if last is not None else {})

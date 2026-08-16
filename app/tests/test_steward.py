@@ -3,6 +3,7 @@ proposed edge (unknown/self/terminal/duplicate/cycle are dropped) — plus the
 StewardService cadence/degradation and the comment-provenance sentinel
 classification the steward's output relies on."""
 import asyncio
+import base64
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -321,6 +322,84 @@ def test_derive_seq_ignores_quoted_markers():
                                  body="> see `7_EXECUTE.md` for details")]
     assert dispatch._derive_seq(
         Activity(mission=mission, entries=quoted_only)) == 1
+
+
+def _paginated_entries(markdown: str, *, limit: int = 400) -> list[ActivityEntry]:
+    from devcake.domain.orchestrator.feed import _split_vendor_comments
+    from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
+    parts = _split_vendor_comments(markdown, limit)
+    assert len(parts) >= 2, "fixture must actually paginate"
+    return [
+        ActivityEntry(ts=NOW, author="cake", kind="comment",
+                      body=p + "\n\n" + COMMENT_SENTINEL)
+        for p in parts
+    ]
+
+
+def _att_text(payload, name) -> str:
+    row = next(a for a in payload["attachments"] if a["filename"] == name)
+    return base64.b64decode(row["content_b64"]).decode()
+
+
+def test_activity_payload_coalesces_paginated_transcript_into_step_file(tmp_path):
+    """GitHub pages a transcript; the Dev folder must still have 2_EXECUTE.md
+    the way Linear/Gitea do via the attachment."""
+    from devcake.domain.orchestrator.feed import blockquote
+    dump = "hello from the run\n" + ("step-body-line\n" * 80)
+    comment = (
+        "🧾 DevCake transcript `2_EXECUTE.md` (run `R`)\n\n"
+        + blockquote("---\n\n" + dump)
+    )
+    entries = _paginated_entries(comment, limit=350)
+    mission = m("i1", "T-1")
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert names == ["2_EXECUTE.md"]
+    assert dump.rstrip("\n") in _att_text(payload, "2_EXECUTE.md")
+    assert "Part 1 of" in payload["activity_md"]   # feed mirror stays faithful
+
+
+def test_activity_payload_coalesces_paginated_plan_into_plan_file(tmp_path):
+    plan = "# the plan\n\n" + ("do the thing\n" * 60)
+    comment = "📋 DevCake plan for this mission (`PLAN_1.md`):\n\n" + plan
+    entries = _paginated_entries(comment, limit=350)
+    mission = m("i1", "T-1")
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    assert "PLAN_1.md" in [a["filename"] for a in payload["attachments"]]
+    got = _att_text(payload, "PLAN_1.md")
+    assert "# the plan" in got
+    assert got.count("do the thing") == 60
+
+
+def test_activity_payload_does_not_overwrite_existing_step_attachment(tmp_path):
+    """Linear/Gitea already shipped 2_EXECUTE.md as a real attachment."""
+    from devcake.domain.orchestrator.feed import blockquote
+    from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
+    dump = "inline dump that must lose to the attachment"
+    comment = (
+        "🧾 DevCake transcript `2_EXECUTE.md` (run `R`)\n\n"
+        + blockquote("---\n\n" + dump) + "\n\n" + COMMENT_SENTINEL
+    )
+    url = "https://uploads.linear.app/2_EXECUTE.md"
+    entries = [
+        ActivityEntry(ts=NOW, author="cake", kind="comment", body=comment,
+                      attachments=[AttachmentRef(
+                          url=url, name="2_EXECUTE.md")]),
+    ]
+    mission = m("i1", "T-1")
+    pmo = MapPMO([], activity=Activity(mission=mission, entries=entries))
+    async def _dl(u):
+        return b"attachment-bytes"
+    pmo.download_asset = _dl
+    mgr = make_mgr(tmp_path, pmo)
+    payload = run_coro(mgr.activity_payload("i1"))
+    names = [a["filename"] for a in payload["attachments"]]
+    assert names == ["2_EXECUTE.md"]
+    assert _att_text(payload, "2_EXECUTE.md") == "attachment-bytes"
 
 
 def test_activity_payload_inlines_long_bodies_verbatim(tmp_path):

@@ -99,7 +99,7 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
                 body = (f"📋 DevCake plan for this mission: "
                         f"[{plan_name}]({url})")
             else:
-                body = ("📋 DevCake plan for this mission:\n\n"
+                body = (f"📋 DevCake plan for this mission (`{plan_name}`):\n\n"
                         + (redact(plan_md or "") or f"(see {plan_name})"))
             await mgr._feed(pmo_id, run.pmo_kind, body)
 

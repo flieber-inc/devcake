@@ -275,7 +275,8 @@ async def health():
         shared_breakers=s.shared_breakers, store=s.store,
         internal_forge=s.internal_forge, poll_rt=s.poll_rt,
         backend_degraded=s.shared_backend_degraded, repo_cache=s.repo_cache,
-        workspaces=s.workspaces, cron=s.cron)
+        workspaces=s.workspaces, cron=s.cron,
+        receipt_store=s.receipt_store)
 
 
 @app.get("/api/v1/health/live")

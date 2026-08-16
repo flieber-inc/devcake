@@ -52,7 +52,8 @@ class MissionManager:
                  instance=None, breakers: dict[str, str] | None = None,
                  internal_forge=None, skills=None,
                  backend_degraded: dict[str, str] | None = None,
-                 blocker_locator=None, repo_cache=None):
+                 blocker_locator=None, repo_cache=None,
+                 receipt_store=None):
         self.config = config
         self.dev_types = dev_types
         # per-config-generation once-latch (audit F3): the poll cycle
@@ -83,6 +84,7 @@ class MissionManager:
         # window only; an unset locator fails loud at the first gate, never
         # silently degrades to single-instance resolution.
         self.blocker_locator = blocker_locator
+        self.receipt_store = receipt_store
         # ADR-0024: the ONE deployment-wide repo mirror (like `forges`).
         # None only in tests — make_mission_manager injects a NullRepoCache;
         # main injects the real one on every manager.

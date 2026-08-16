@@ -47,6 +47,42 @@ def _payload(fr, monkeypatch, repo_cache=None, workspaces=None):
         repo_cache=repo_cache, workspaces=workspaces))
 
 
+def test_health_payload_carries_harness_pins(monkeypatch):
+    fr = _forge_runtime(last_full_probe_at=datetime.now(timezone.utc))
+    got = _payload(fr, monkeypatch)
+    pins = got["harness_pins"]
+    assert "digest" in pins
+    assert "sentinel" in pins
+    assert "templates" in pins
+
+
+def test_health_exposes_digest_and_receipt_summary(monkeypatch):
+    from devcake.config import DevType
+    from devcake.house_pins import SENTINEL_DIGEST
+    from devcake.staffing import receipt_summary
+
+    class Store:
+        def get(self, **kw):
+            if kw["template"] == "grok-build":
+                return {"ok": True, "digest": "sha256:abc"}
+            return None
+
+    dts = {
+        "implementer": DevType(name="implementer", harness_template="grok-build"),
+        "judgment": DevType(name="judgment", harness_template="claude-code"),
+    }
+    summary = receipt_summary(dts, digest="sha256:abc", store=Store())
+    assert summary["digest"] == "sha256:abc"
+    assert summary["sentinel"] is False
+    assert summary["templates"]["grok-build"]["ok"] is True
+    assert summary["templates"]["claude-code"]["ok"] is False
+    assert "no receipt" in summary["templates"]["claude-code"]["reason"]
+
+    sent = receipt_summary(dts, digest=SENTINEL_DIGEST, store=Store())
+    assert sent["sentinel"] is True
+    assert "bake wrapper" in sent["templates"]["grok-build"]["reason"]
+
+
 def test_merged_advisories_qualify_keys_when_n_gt_1(monkeypatch):
     """Dual-PMO colliding pmo_ids (gitea issue numbers) must not clobber
     each other in merge_handoffs / needs_human. Keys follow the same

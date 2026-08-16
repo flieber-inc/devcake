@@ -14,6 +14,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ...harness import HARNESSES, missing_referenced_secret_env, resolve_image
+from ...staffing import HarnessNotStaffed, app_digest, require_staffed
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType, assignment_for
@@ -564,8 +565,14 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         run.stage_label_at_dispatch = stage_of(live)
         run.mission_pmo_id = mission.pmo_id
         try:
+            require_staffed(dev_type, digest=app_digest(),
+                            store=getattr(mgr, "receipt_store", None))
             await mgr.runs.bootstrap.launch(
                 run, image=resolve_image(dev_type))
+        except HarnessNotStaffed as e:
+            mgr.blocked_reasons[live.pmo_id] = str(e)
+            log.warning("dispatch of %s refused — %s", live.key, e)
+            return None
         except WorkspaceUnavailable as e:
             # AUD-001/002: the workspace base is unusable — gate exactly like
             # the mirror precondition above (no attempt burned; the run was

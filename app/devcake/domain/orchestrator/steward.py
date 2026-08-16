@@ -9,6 +9,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
 
 from ...harness import HARNESSES, resolve_image
+from ...staffing import HarnessNotStaffed, app_digest, require_staffed
 from ...security import redact_value
 from ...config import DevType
 from .. import costing
@@ -107,8 +108,14 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
                 prompt_text, dev_type.skills_required, run.spec_skills),
             run.memory_mounts)
         try:
+            require_staffed(dev_type, digest=app_digest(),
+                            store=getattr(mgr, "receipt_store", None))
             await mgr.runs.bootstrap.launch(
                 run, image=resolve_image(dev_type))
+        except HarnessNotStaffed as e:
+            log.warning("steward dispatch for %s skipped — not staffed: %s",
+                        mgr.instance_name, e)
+            return None
         except WorkspaceUnavailable as e:
             # AUD-001: STEWARD is periodic and shares the poll segment — a bad
             # workspace base must skip this run cleanly, never raise into the

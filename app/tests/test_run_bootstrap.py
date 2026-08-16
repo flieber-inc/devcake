@@ -272,9 +272,10 @@ def test_oauth_start_uses_bootstrap_spine(tmp_path, monkeypatch):
     store = InMemoryStore()
     executor = FakeExecutor(store)
     runs = RunManager(store, FakeMessaging(), executor)
+    from fakes import OkReceiptStore
     mgr = OAuthManager(runs, FakeMessaging(), {
         "main-dev": DevType(name="main-dev", harness_template="grok-build"),
-    })
+    }, receipt_store=OkReceiptStore())
     result = run_coro(mgr._start_inner("main-dev"))
     run_id = result["run_id"]
 

@@ -8,7 +8,13 @@ TEMPLATE="${1:?template}"
 VERSION="${2:?cli_version}"
 IMAGE="${3:-devcake/dev-${TEMPLATE}:latest}"
 OUT="${4:-${DEVCAKE_RECEIPTS_DIR:-/tmp/harness_receipts}}"
-DIGEST="${5:-${DEVCAKE_APP_DIGEST:-DEVCAKE_APP_DIGEST_UNSET}}"
+if [[ -n "${5:-}" ]]; then
+  DIGEST="$5"
+elif [[ -n "${DEVCAKE_APP_DIGEST:-}" && "${DEVCAKE_APP_DIGEST}" != "DEVCAKE_APP_DIGEST_UNSET" ]]; then
+  DIGEST="$DEVCAKE_APP_DIGEST"
+else
+  DIGEST="$(python3 scripts/app_digest.py)"
+fi
 
 mkdir -p "$OUT"
 # Image user is uid 1000; receipts must be writable by that user.

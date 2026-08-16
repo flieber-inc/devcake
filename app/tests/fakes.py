@@ -119,6 +119,14 @@ class FakeInternalForge:
         self.deleted.append(repo_name)
 
 
+class OkReceiptStore:
+    """Test double: every lookup is an ok receipt. Production uses FileReceiptStore."""
+
+    def get(self, *, digest, template, cli_version):
+        return {"digest": digest, "template": template,
+                "cli_version": cli_version, "ok": True, "rows": []}
+
+
 def make_mission_manager(
     tmp_path: Path | None = None,
     *,
@@ -169,7 +177,7 @@ def make_mission_manager(
     mgr = MissionManager(
         cfg, dts, pmo, fr, runs, msg,
         instance=inst, breakers=breakers, internal_forge=internal_forge,
-        skills=skills,
+        skills=skills, receipt_store=OkReceiptStore(),
     )
     # Locator is a required gate/dispatch dependency in production
     # (build_managers sets ONE shared instance); single-manager tests get a

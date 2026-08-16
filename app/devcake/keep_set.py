@@ -1,7 +1,7 @@
 """App-published keep-set for the host bake verb.
 
-Host scripts read this file — never Dev Type YAML. Slice 1 is the
-template list only; concrete pins land in Slice 3.
+Host scripts read this file — never Dev Type YAML. Concrete pins are
+the baking set; the host factory validates them independently.
 """
 
 from __future__ import annotations

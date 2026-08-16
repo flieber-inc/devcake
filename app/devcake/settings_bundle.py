@@ -146,9 +146,10 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
     The apply/rollback path sets it True so the pre-apply snapshot is
     BYTE-EXACT — a rollback must restore secrets stored for an instance the
     incoming bundle was about to add (re-audit #3)."""
-    # /data/harness_receipts/ is host-local probe output (PLAN_CLI_PINS) —
-    # never a bundle section. Importing someone else's receipts would lie
-    # about this tree's digest.
+    # /data/harness_receipts/, harness_bake_status.json and
+    # harness_baker.jsonl are host-local factory output — never a bundle
+    # section. Importing someone else's receipts would lie about this
+    # tree's digest.
     bundle: dict = {
         "kind": BUNDLE_KIND,
         "bundle_schema_version": BUNDLE_SCHEMA_VERSION,

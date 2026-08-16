@@ -152,9 +152,10 @@ qwen -p "$PROMPT" --output-format stream-json --yolo
 rework): which image a Dev runs, which credential env vars pass through, which
 secret files are delivered, and whether an OAuth device flow exists all derive
 from `harness_template` via `HARNESSES`. Launch sites call
-`resolve_image(dev_type)` (empty pin = house `devcake/dev-*:${DEVCAKE_TAG}`);
+`resolve_image(dev_type)` (empty pin = house `devcake/dev-*:${DEVCAKE_TAG}`;
+explicit pin = `devcake/dev-*:${DEVCAKE_TAG}-${cli_version}`);
 hello stays `HELLO_IMAGE`. `DevType.cli_version` empty = house ARG;
-a stored semver is the pin staffing looks up. Dev Types store no image or credential
+a stored semver is the pin the host baker compiles and staffing looks up. Dev Types store no image or credential
 config; the admin panel's harness combobox therefore controls what actually
 runs. Dispatch also sends `DEVCAKE_HARNESS` in the run spec, which overrides
 the image-baked `ENV` (kept as a fallback). House CLI pin versions and
@@ -172,7 +173,7 @@ Each template is a target in the multi-stage `images/Dockerfile` (shared `base` 
 | `opencode` | `opencode` | Node 22 + `opencode-ai@1.18.18`, git, shared entrypoint |
 | `qwen-code` | `qwen-code` | Node 22 + `@qwen-code/qwen-code@0.21.12`, git, shared entrypoint |
 
-Images are built only by Bake (`docker-bake.hcl` — `docker buildx bake images` or `bake all`; `13-deployment.md` §6) and referenced by **tag** (`devcake/dev-*:latest`) in the run spec. Digest pinning is not implemented; rebuild Dev images lockstep with app upgrades (Dagu's `pull_policy: missing` keeps stale local tags otherwise). Compose never builds them.
+Images are built only by Bake (`docker-bake.hcl`; `13-deployment.md` §6) and referenced by **tag**. The host baker (`./up.sh`) compiles the keep-set; `./up.sh --bake` is control plane + hello, and `bake images` / `bake all` still exist for CI and full upgrades. Digest pinning is not implemented; rebuild Dev images lockstep with app upgrades (Dagu's `pull_policy: missing` keeps stale local tags otherwise). Compose never builds them. The app never talks to Docker.
 
 ## 3. Plan-mode mapping (the "/plan function")
 

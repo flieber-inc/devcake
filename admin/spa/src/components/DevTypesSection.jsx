@@ -86,6 +86,8 @@ function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRena
   const d = draftDt;
   const h = harnesses[d.harness_template] || {};
   const ready = useCredsReady(d, serverDt, h);
+  const { healthInfo } = useSharedDraft();
+  const pinState = ((healthInfo?.harness_pins?.dev_types || {})[name] || {}).state;
   return (
     <tr onClick={() => onEdit(name)}
       title={`Edit dev type ${name}`}
@@ -104,6 +106,9 @@ function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRena
       </td>
       <td className="py-2 pr-4 font-mono text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
         {d.cli_version || h.house_cli_version || "house"}
+        {pinState === "baking" && (
+          <span className="ml-1.5 font-sans text-amber-600 dark:text-amber-400">baking</span>
+        )}
       </td>
       <td className="py-2 pr-4 text-right text-xs tabular-nums">{d.max_concurrency}</td>
       <td className="py-2 pr-4 text-right text-xs tabular-nums">{(d.skills || []).length}</td>

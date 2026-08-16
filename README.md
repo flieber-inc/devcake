@@ -205,8 +205,9 @@ cp .env.example .env
 # DEVCAKE_ALLOW_INSECURE=1 (local sandbox only). Operator secrets
 # (PMO / forge / model) go in the admin Config UI after up — not in .env.
 
-./up.sh --bake            # discovers DOCKER_GID, bakes all images, compose up -d
+./up.sh --bake            # DOCKER_GID + control plane + hello + host baker
 # Later restarts (images already baked):  ./up.sh
+# Configure Dev Types in the admin UI — the host baker compiles those pins.
 
 open http://localhost:8080   # basic auth → Config / the Adapters pages → secrets + connection tests
 # Optional OO dashboard/alerts: python3 scripts/provision_oo.py

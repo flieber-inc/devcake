@@ -16,9 +16,20 @@ else
   DIGEST="$(python3 scripts/app_digest.py)"
 fi
 
-mkdir -p "$OUT"
-# Image user is uid 1000; receipts must be writable by that user.
-chmod a+rwx "$OUT" 2>/dev/null || true
+# Prefer the named /data volume (same one the app reads) when the host
+# baker is watching compose. Otherwise bind a host directory.
+if [[ -n "${DEVCAKE_RECEIPTS_VOLUME:-}" ]]; then
+  RECEIPTS_MOUNT="${DEVCAKE_RECEIPTS_VOLUME}:/data"
+  docker run --rm --user 0:0 -v "${RECEIPTS_MOUNT}" \
+    alpine mkdir -p /data/harness_receipts
+  docker run --rm --user 0:0 -v "${RECEIPTS_MOUNT}" \
+    alpine chmod a+rwx /data/harness_receipts
+else
+  mkdir -p "$OUT"
+  # Image user is uid 1000; receipts must be writable by that user.
+  chmod a+rwx "$OUT" 2>/dev/null || true
+  RECEIPTS_MOUNT="${OUT}:/data/harness_receipts"
+fi
 
 docker run --rm \
   --user 1000:1000 \
@@ -28,7 +39,7 @@ docker run --rm \
   -e REDIS_PASSWORD=probe \
   -e PYTHONPATH=/opt/devcake-scripts \
   -v "$(pwd)/scripts:/opt/devcake-scripts:ro" \
-  -v "${OUT}:/data/harness_receipts" \
+  -v "${RECEIPTS_MOUNT}" \
   --entrypoint python \
   "${IMAGE}" \
   -m harness_probe.probe \
@@ -36,4 +47,4 @@ docker run --rm \
   --cli-version "${VERSION}" \
   --digest "${DIGEST}" \
   --out /data/harness_receipts
-echo "probe receipt: ${OUT}/${TEMPLATE}@${VERSION}.json"
+echo "probe receipt: ${TEMPLATE}@${VERSION}.json"

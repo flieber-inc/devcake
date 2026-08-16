@@ -68,8 +68,8 @@ def _first_unpassed_required(rec: Mapping[str, Any]) -> str | None:
 
 
 def receipt_summary(dev_types: Mapping[str, Any], *, digest: str,
-                    store) -> dict:
-    """Per-template staffing view for /health (and Slice 3 copy)."""
+                    store, bake_status: Mapping[str, Any] | None = None) -> dict:
+    """Per-template staffing view for /health (and the editor copy)."""
     templates = sorted({dt.harness_template for dt in dev_types.values()})
     rows = {}
     for template in templates:
@@ -79,12 +79,13 @@ def receipt_summary(dev_types: Mapping[str, Any], *, digest: str,
             (effective_cli_version(dt) for dt in dev_types.values()
              if dt.harness_template == template),
             HOUSE_PINS.get(template, ""))
-        rows[template] = _pin_entry(template, version, digest, store)
+        rows[template] = _pin_entry(
+            template, version, digest, store, bake_status)
     per_dt = {}
     for name, dt in sorted(dev_types.items()):
         template = dt.harness_template
         version = effective_cli_version(dt)
-        entry = _pin_entry(template, version, digest, store)
+        entry = _pin_entry(template, version, digest, store, bake_status)
         entry["template"] = template
         entry["house"] = not bool((getattr(dt, "cli_version", "") or "").strip())
         per_dt[name] = entry
@@ -96,35 +97,62 @@ def receipt_summary(dev_types: Mapping[str, Any], *, digest: str,
     }
 
 
-def bake_command(template: str, version: str) -> str:
-    return f"bash scripts/harness_probe/host_probe.sh {template} {version}"
+def _job_state(template: str, version: str,
+               bake_status: Mapping[str, Any] | None) -> str | None:
+    if not bake_status:
+        return None
+    for job in bake_status.get("jobs") or []:
+        if not isinstance(job, Mapping):
+            continue
+        if job.get("template") == template and job.get("cli_version") == version:
+            state = job.get("state")
+            return str(state) if state else None
+    return None
 
 
-def _pin_entry(template: str, version: str, digest: str, store) -> dict:
+def _pin_entry(template: str, version: str, digest: str, store,
+               bake_status: Mapping[str, Any] | None = None) -> dict:
     entry: dict[str, Any] = {
         "cli_version": version,
         "gated": template in LAUNCH_SUPPORTED,
-        "command": bake_command(template, version),
     }
     if template not in LAUNCH_SUPPORTED:
         entry["ok"] = None
+        entry["state"] = "experimental"
         entry["reason"] = "experimental — house pin only"
         return entry
     if digest == SENTINEL_DIGEST:
         entry["ok"] = False
+        entry["state"] = "error"
         entry["reason"] = "this app was built without the bake wrapper"
         return entry
     rec = None if store is None else store.get(
         digest=digest, template=template, cli_version=version)
+    job_state = _job_state(template, version, bake_status)
     if rec is None:
         entry["ok"] = False
-        entry["reason"] = f"no receipt for {template} {version}"
+        if job_state in ("baking", "pending"):
+            entry["state"] = "baking"
+            entry["reason"] = f"{template} {version} is baking on the host"
+        elif job_state == "error" or (bake_status or {}).get("state") == "error":
+            entry["state"] = "error"
+            entry["reason"] = (bake_status or {}).get("detail") or (
+                f"{template} {version} bake failed")
+        else:
+            entry["state"] = "waiting"
+            entry["reason"] = f"no receipt for {template} {version}"
         return entry
     entry["ok"] = rec.get("ok") is True
-    if not entry["ok"]:
-        row = _first_unpassed_required(rec)
-        entry["row"] = row
-        entry["reason"] = (
-            f"{template} {version} receipt is not ok"
-            + (f" ({row})" if row else ""))
+    if entry["ok"]:
+        entry["state"] = "ready"
+        return entry
+    row = _first_unpassed_required(rec)
+    entry["row"] = row
+    entry["reason"] = (
+        f"{template} {version} receipt is not ok"
+        + (f" ({row})" if row else ""))
+    if job_state in ("baking", "pending"):
+        entry["state"] = "baking"
+    else:
+        entry["state"] = "error"
     return entry

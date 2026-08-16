@@ -71,10 +71,14 @@ def test_serialize_never_carries_harness_receipts(monkeypatch, tmp_path):
     cfg, dts = _world(config_mod, secrets, tpl)
     (tmp_path / "harness_receipts").mkdir()
     (tmp_path / "harness_receipts" / "grok-build@0.2.112.json").write_text("{}")
+    (tmp_path / "harness_bake_status.json").write_text('{"state":"baking"}')
+    (tmp_path / "harness_baker.jsonl").write_text('{"event":"tick"}\n')
     bundle = sb.serialize_current(cfg, dts, include_secrets=True)
     blob = str(bundle)
     assert "harness_receipts" not in bundle
     assert "harness_receipts" not in blob
+    assert "harness_bake_status" not in blob
+    assert "baking" not in blob
     assert "grok-build@0.2.112" not in blob
 
 

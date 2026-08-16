@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Bring up the DevCake stack with host-discovered DOCKER_GID.
 #
-#   ./up.sh                 # upsert DOCKER_GID → docker compose up -d
-#   ./up.sh --bake          # bake all first, then up
+#   ./up.sh                 # upsert DOCKER_GID → compose up -d → host baker
+#   ./up.sh --bake          # bake control plane + hello, then up + baker
 #   ./up.sh --bake app admin
 #   ./up.sh -- dagu app     # pass service names to compose up
 #   ./up.sh --dry-run       # print discovered GID + planned actions
@@ -146,13 +146,15 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "── would upsert DEVCAKE_WS_HOST=${WS_HOST} in .env (+ mkdir -p, chmod 700)"
   if [[ "$DO_BAKE" -eq 1 ]]; then
     echo "── would: docker compose stop dagu (deploy window — ADR-0025 R9)"
+    echo "── would: compute DEVCAKE_APP_DIGEST from scripts/app_digest.py"
     if [[ ${#BAKE_TARGETS[@]} -eq 0 ]]; then
-      echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake all"
+      echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake app admin hello"
     else
       echo "── would: DEVCAKE_TAG=${TAG} docker buildx bake ${BAKE_TARGETS[*]}"
     fi
   fi
   echo "── would: docker compose up -d ${COMPOSE_ARGS[*]:-}"
+  echo "── would: start host baker (.factory/watch.pid) — not a compose service"
   exit 0
 fi
 
@@ -199,9 +201,15 @@ if [[ "$DO_BAKE" -eq 1 ]]; then
     trap '_restore_dagu' ERR
     trap '_restore_dagu; trap - INT TERM; kill -INT $$' INT TERM
   fi
+  DIGEST="$(python3 scripts/app_digest.py)"
+  export DEVCAKE_APP_DIGEST="$DIGEST"
+  echo "── DEVCAKE_APP_DIGEST=${DIGEST}"
   if [[ ${#BAKE_TARGETS[@]} -eq 0 ]]; then
-    echo "── docker buildx bake all"
-    docker buildx bake all
+    # Harnesses come from the host baker after types exist (keep-set).
+    # Virgin host = control plane + hello only. `./up.sh --bake all` still
+    # compiles the full matrix when an operator asks for it.
+    echo "── docker buildx bake app admin hello"
+    docker buildx bake app admin hello
   else
     echo "── docker buildx bake ${BAKE_TARGETS[*]}"
     docker buildx bake "${BAKE_TARGETS[@]}"
@@ -260,6 +268,39 @@ else
   echo "── WARNING: app did not report live within ~60s. The stack is up," >&2
   echo "   but the app may be wedged — check: docker compose logs --tail=50 app" >&2
 fi
+
+# Host baker: same machine and socket as today's bake — not a compose
+# service, not a new socket-holder. It reads the app-published keep-set
+# and compiles + probes when pins change.
+_FACTORY_DIR="$(pwd)/.factory"
+mkdir -p "$_FACTORY_DIR"
+if [[ -f "$_FACTORY_DIR/watch.pid" ]]; then
+  _old="$(cat "$_FACTORY_DIR/watch.pid" 2>/dev/null || true)"
+  if [[ -n "$_old" ]] && kill -0 "$_old" 2>/dev/null; then
+    echo "── restarting host baker (was pid ${_old})"
+    kill "$_old" 2>/dev/null || true
+    sleep 0.3
+  fi
+fi
+# Ingest creds so the baker can ship a dying word to OO if the app is
+# already gone (the app's push_oo_log chokepoint cannot run then).
+# Read only those keys — do not source the whole .env into this shell.
+if [[ -f .env ]]; then
+  while IFS= read -r line; do
+    case "$line" in
+      OO_INGEST_EMAIL=*|OO_INGEST_PASSWORD=*|OO_ORG=*) export "${line?}" ;;
+    esac
+  done < <(grep -E '^(OO_INGEST_EMAIL|OO_INGEST_PASSWORD|OO_ORG)=' .env || true)
+fi
+nohup env PYTHONUNBUFFERED=1 PYTHONPATH="$(pwd)/scripts" DEVCAKE_TAG="$TAG" \
+  OO_INGEST_EMAIL="${OO_INGEST_EMAIL:-}" \
+  OO_INGEST_PASSWORD="${OO_INGEST_PASSWORD:-}" \
+  OO_ORG="${OO_ORG:-default}" \
+  DEVCAKE_OO_URL="http://127.0.0.1:5080" \
+  python3 -m dev_factory \
+  >>"$_FACTORY_DIR/watch.log" 2>&1 &
+echo $! >"$_FACTORY_DIR/watch.pid"
+echo "── host baker watching keep-set (pid $! → .factory/watch.log)"
 
 echo "── stack starting (admin: http://localhost:8080)"
 echo "   bootstrap passwords still come from .env; operator secrets via Config."

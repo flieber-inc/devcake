@@ -10,7 +10,7 @@ import { makeReqSeq } from "./reqSeq.js";
 // level so the provider outlives page switches.
 const Ctx = createContext(null);
 
-export function ConfigDraftProvider({ children }) {
+export function ConfigDraftProvider({ children, health }) {
   const dr = useConfigDraft();
   const [harnesses, setHarnesses] = useState({});
   const [healthInfo, setHealthInfo] = useState(null);
@@ -42,8 +42,11 @@ export function ConfigDraftProvider({ children }) {
   };
   useEffect(() => { reload().catch((e) => setLoadErr(String(e))); }, []);
 
+  // App's 10s /health poll carries bake_status; prefer it so the editor
+  // can say baking → ready without a Save/reload.
+  const liveHealth = (health && health.harness_pins) ? health : healthInfo;
   return (
-    <Ctx.Provider value={{ dr, reload, harnesses, healthInfo, loadErr,
+    <Ctx.Provider value={{ dr, reload, harnesses, healthInfo: liveHealth, loadErr,
                            pmoNewNamesState, repoNewNamesState }}>
       {children}
     </Ctx.Provider>

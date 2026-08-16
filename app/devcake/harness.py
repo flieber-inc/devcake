@@ -132,13 +132,18 @@ HARNESSES: dict[str, Harness] = {
 
 
 def resolve_image(dev_type) -> str:
-    """Harness image for a run. Empty pin = house image at DEVCAKE_TAG.
+    """Harness image for a run.
 
-    The three launch sites (dispatch, steward, OAuth) call this. Hello
-    stays HELLO_IMAGE. Receipts do not change the string in this slice
-    (fail-open). No cli_version field yet.
+    Empty pin = house image at DEVCAKE_TAG (`devcake/dev-{t}:{tag}`).
+    Explicit pin = the same tag plus the CLI version so two pins on one
+    template cannot collide (`devcake/dev-{t}:{tag}-{cli_version}`).
+    Hello stays HELLO_IMAGE. The three launch sites call this.
     """
-    return HARNESSES[dev_type.harness_template].image
+    template = dev_type.harness_template
+    pin = (getattr(dev_type, "cli_version", "") or "").strip()
+    if not pin:
+        return HARNESSES[template].image
+    return f"devcake/dev-{template}:{_TAG}-{pin}"
 
 
 def missing_referenced_secret_env(dt) -> list[str]:

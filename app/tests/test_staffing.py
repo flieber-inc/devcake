@@ -158,3 +158,30 @@ def test_experimental_template_is_not_gated():
     from devcake.staffing import SENTINEL_DIGEST, require_staffed
 
     require_staffed(_dt("pi"), digest=SENTINEL_DIGEST, store=_Store(None))
+
+
+def test_pin_summary_has_no_host_command():
+    """The host baker watches the keep-set. SPA must not assign terminal homework."""
+    from devcake.staffing import receipt_summary
+
+    summary = receipt_summary(
+        {"implementer": _dt()}, digest="sha256:abc", store=_Store(None))
+    entry = summary["dev_types"]["implementer"]
+    assert "command" not in entry
+    assert entry["ok"] is False
+    assert entry["state"] == "waiting"
+
+
+def test_pin_summary_baking_state_comes_from_the_host_status():
+    from devcake.staffing import receipt_summary
+
+    bake_status = {
+        "state": "baking",
+        "jobs": [{"template": "grok-build", "cli_version": "0.2.112",
+                  "state": "baking"}],
+    }
+    summary = receipt_summary(
+        {"implementer": _dt()}, digest="sha256:abc", store=_Store(None),
+        bake_status=bake_status)
+    assert summary["dev_types"]["implementer"]["state"] == "baking"
+    assert summary["dev_types"]["implementer"]["ok"] is False

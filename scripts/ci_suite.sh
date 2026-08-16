@@ -69,6 +69,7 @@ docker run --rm \
   -v "$(pwd)/images/Dockerfile:/srv/images.Dockerfile:ro" \
   -v "$(pwd)/docs:/srv/docs:ro" \
   -v "$(pwd)/scripts:/srv/repo-scripts:ro" \
+  -v "$(pwd)/up.sh:/srv/up.sh:ro" \
   -w /srv \
   "devcake/app-test:${DEVCAKE_TAG:-latest}" \
   python -m pytest tests/ -q -o cache_dir=/tmp/pytest-cache

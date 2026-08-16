@@ -44,7 +44,7 @@ stores them under `/data/secrets/` (ADR-0011).
 > ⚠️ Don't put inline comments after values in `.env`.
 
 ```bash
-./up.sh --bake            # DOCKER_GID + bake all + compose up -d
+./up.sh --bake            # DOCKER_GID + control plane + hello + host baker
 # Day-to-day (images already baked):  ./up.sh
 ```
 

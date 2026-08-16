@@ -46,6 +46,18 @@ def test_resolve_image_empty_pin_is_todays_house_image():
     assert resolve_image(dt) == "devcake/dev-codex:latest"
 
 
+def test_resolve_image_explicit_pin_is_tag_plus_version():
+    """Two pins on one template must not share :TAG — that would collide."""
+    from devcake.harness import resolve_image
+
+    dt = DevType(name="implementer", harness_template="grok-build",
+                 cli_version="1.0.4")
+    assert resolve_image(dt) == "devcake/dev-grok-build:latest-1.0.4"
+    dt = DevType(name="judgment", harness_template="claude-code",
+                 cli_version="2.1.250")
+    assert resolve_image(dt) == "devcake/dev-claude-code:latest-2.1.250"
+
+
 def test_receipt_store_reads_row_level_receipt(tmp_path):
     from devcake.adapters.files.receipts import FileReceiptStore
 

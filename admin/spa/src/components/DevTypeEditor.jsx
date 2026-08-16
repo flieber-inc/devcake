@@ -64,8 +64,6 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
   const housePin = h.house_cli_version || "";
   const pin = d.cli_version || "";
   const pinStatus = (healthInfo?.harness_pins?.dev_types || {})[name];
-  const bakeCmd = pinStatus?.command
-    || `bash scripts/harness_probe/host_probe.sh ${d.harness_template} ${pin || housePin}`;
   const [pinMsg, setPinMsg] = useState("");
   const [pinBusy, setPinBusy] = useState(false);
   const useLatest = async () => {
@@ -134,7 +132,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               onChange={(e) => set("model", e.target.value)} />
           </Field>
           <Field label="CLI version" hint={housePin ? `Empty = house ${housePin}` : "Empty = house pin"}
-            help="Which coding-harness binary this Dev Type runs (not the model, not the DevCake image tag). Empty uses the house pin baked into the image. Save does not bake — after you set a number, run the host command shown below.">
+            help="Which coding-harness binary this Dev Type runs (not the model, not the DevCake image tag). Empty uses the house pin. After you Save a new number, the host baker compiles it — missions wait until that image is ready.">
             <Input value={pin}
               disabled={!canPin}
               placeholder={housePin ? `house ${housePin}` : "house pin"}
@@ -156,11 +154,19 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             )}
           </InstantZone>
         )}
-        {canPin && pinStatus && pinStatus.ok === false && (
+        {canPin && pinStatus && pinStatus.ok === false && pinStatus.state === "baking" && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
-            This pin is not staffed yet — run{" "}
-            <span className="font-mono">{bakeCmd}</span> on the host.
-            Save does not bake.
+            This pin is baking on the host.
+          </p>
+        )}
+        {canPin && pinStatus && pinStatus.ok === false && pinStatus.state === "waiting" && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Waiting for the host baker to compile this pin.
+          </p>
+        )}
+        {canPin && pinStatus && pinStatus.ok === false && pinStatus.state === "error" && (
+          <p className="text-xs text-red-600 dark:text-red-400">
+            {pinStatus.reason || "This pin failed to bake."}
           </p>
         )}
         {h.experimental && (

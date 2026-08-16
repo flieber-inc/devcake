@@ -10,10 +10,14 @@ import json
 import os
 import re
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
+
+_STATUS_LOCK = threading.Lock()
 
 # Bake-images targets minus hello. Must stay equal to HARNESSES keys
 # (ratchet in test_harness_cli_pins / factory tests).
@@ -196,6 +200,25 @@ def load_receipts(receipts_dir: Path | str) -> dict[tuple[str, str], dict]:
 def write_status(path: Path | str, payload: Mapping) -> dict:
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    with _STATUS_LOCK:
+        return _write_status_unlocked(dest, dict(payload))
+
+
+def touch_status(path: Path | str) -> dict:
+    """Refresh the heartbeat without dropping jobs or state."""
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with _STATUS_LOCK:
+        try:
+            body = json.loads(dest.read_text())
+            if not isinstance(body, dict):
+                body = {}
+        except (OSError, json.JSONDecodeError):
+            body = {"state": "baking", "jobs": []}
+        return _write_status_unlocked(dest, body)
+
+
+def _write_status_unlocked(dest: Path, payload: Mapping) -> dict:
     body = dict(payload)
     body.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
     from .liveness import stamp_heartbeat
@@ -224,11 +247,7 @@ def reconcile(
     tag: str,
     house: Mapping[str, str],
 ) -> dict:
-    """One watch tick. Baker is injected — this module does not call Docker.
-
-    Jobs run one after another. PLAN_CLI_PINS §1.18 said do not serialize
-    unless measured; this is a known deviation, not the settled answer.
-    """
+    """One watch tick. Baker is injected — this module does not call Docker."""
     try:
         keep_set = load_keep_set(keep_set_path)
     except InvalidKeepSet as exc:
@@ -259,7 +278,7 @@ def reconcile(
             "template": j.template,
             "cli_version": j.cli_version,
             "image": image_ref(j.template, j.cli_version, tag=tag, house=house),
-            "state": "pending",
+            "state": "baking",
         }
         for j in jobs
     ]
@@ -269,26 +288,40 @@ def reconcile(
         "jobs": listed,
         "detail": "",
     })
-    for i, job in enumerate(jobs):
-        listed[i]["state"] = "baking"
-        write_status(status_path, {
-            "state": "baking",
-            "digest": digest,
-            "jobs": listed,
-            "detail": "",
-        })
+
+    def run_one(i: int, job: BakeJob) -> None:
+        err: BaseException | None = None
         try:
             baker(job)
         except Exception as exc:  # noqa: BLE001 — baker is the host verb; any failure is an operator-visible error
-            listed[i]["state"] = "error"
-            listed[i]["detail"] = str(exc)
-            return write_status(status_path, {
-                "state": "error",
+            err = exc
+        dest = Path(status_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with _STATUS_LOCK:
+            if err is None:
+                listed[i]["state"] = "ok"
+            else:
+                listed[i]["state"] = "error"
+                listed[i]["detail"] = str(err)
+            _write_status_unlocked(dest, {
+                "state": "baking",
                 "digest": digest,
                 "jobs": listed,
-                "detail": str(exc),
+                "detail": "",
             })
-        listed[i]["state"] = "ok"
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futs = [pool.submit(run_one, i, job) for i, job in enumerate(jobs)]
+        for fut in as_completed(futs):
+            fut.result()
+    failed = [row for row in listed if row.get("state") == "error"]
+    if failed:
+        return write_status(status_path, {
+            "state": "error",
+            "digest": digest,
+            "jobs": listed,
+            "detail": str(failed[0].get("detail") or ""),
+        })
     return write_status(status_path, {
         "state": "ready",
         "digest": digest,

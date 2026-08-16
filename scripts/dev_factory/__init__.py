@@ -39,6 +39,7 @@ from .core import (
     plan_bakes,
     reconcile,
     run_bake,
+    touch_status,
     write_status,
 )
 
@@ -63,5 +64,6 @@ __all__ = [
     "reconcile",
     "run_bake",
     "tick_decision",
+    "touch_status",
     "write_status",
 ]

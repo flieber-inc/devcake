@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -277,6 +278,76 @@ def test_reconcile_bakes_missing_pins_then_is_ready(tmp_path):
     )
     assert baked == []
     assert again["state"] == "ready"
+
+
+def test_reconcile_bakes_missing_pins_together(tmp_path):
+    """Two missing pins must overlap. A barrier times out if they run in series."""
+    factory = _load_factory()
+    dest = tmp_path / "harness_keep_set.json"
+    dest.write_text(json.dumps({
+        "pins": [
+            {"template": "grok-build", "cli_version": "1.0.4"},
+            {"template": "claude-code", "cli_version": "2.1.229"},
+        ],
+    }))
+    house = {"grok-build": "0.2.112", "claude-code": "2.1.229"}
+    ran = []
+    gate = threading.Barrier(2, timeout=2)
+
+    def baker(job):
+        ran.append(job.cli_version)
+        gate.wait()
+
+    out = factory.reconcile(
+        keep_set_path=dest,
+        receipts_dir=tmp_path / "receipts",
+        status_path=tmp_path / "harness_bake_status.json",
+        digest="sha256:abc",
+        baker=baker,
+        tag="latest",
+        house=house,
+    )
+    assert sorted(ran) == ["1.0.4", "2.1.229"]
+    assert out["state"] == "ready"
+    assert {j["cli_version"]: j["state"] for j in out["jobs"]} == {
+        "1.0.4": "ok", "2.1.229": "ok",
+    }
+
+
+def test_reconcile_finishes_every_job_when_one_fails(tmp_path):
+    factory = _load_factory()
+    dest = tmp_path / "harness_keep_set.json"
+    dest.write_text(json.dumps({
+        "pins": [
+            {"template": "grok-build", "cli_version": "1.0.4"},
+            {"template": "claude-code", "cli_version": "2.1.229"},
+        ],
+    }))
+    house = {"grok-build": "0.2.112", "claude-code": "2.1.229"}
+    ran = []
+    gate = threading.Barrier(2, timeout=2)
+
+    def baker(job):
+        ran.append(job.cli_version)
+        gate.wait()
+        if job.cli_version == "1.0.4":
+            raise RuntimeError("layer failed")
+
+    out = factory.reconcile(
+        keep_set_path=dest,
+        receipts_dir=tmp_path / "receipts",
+        status_path=tmp_path / "harness_bake_status.json",
+        digest="sha256:abc",
+        baker=baker,
+        tag="latest",
+        house=house,
+    )
+    assert sorted(ran) == ["1.0.4", "2.1.229"]
+    assert out["state"] == "error"
+    assert "layer failed" in out["detail"]
+    assert {j["cli_version"]: j["state"] for j in out["jobs"]} == {
+        "1.0.4": "error", "2.1.229": "ok",
+    }
 
 
 def test_arg_names_match_the_app_house_pins():

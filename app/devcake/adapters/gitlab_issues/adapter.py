@@ -373,13 +373,14 @@ class GitLabIssuesAdapter:
         cur = await self._req("GET", self._proj(f"/issues/{ref.pmo_id}"))
         current = self._label_set(cur)
         next_names = (current - remove) | add
-        missing = [n for n in next_names if n.upper() not in self._label_names
-                   and n.upper() not in {x.upper() for x in next_names}]
+        missing = [n for n in next_names if n.upper() not in self._label_names]
+        if missing:
+            raise RuntimeError(
+                f"label {missing[0]} missing — ensure_labels not run?")
         # GitLab PUT replaces the full label set by *name*.
         await self._req(
             "PUT", self._proj(f"/issues/{ref.pmo_id}"),
             json={"labels": ",".join(sorted(next_names))})
-        _ = missing
 
     async def create_mission(
         self, team_ref: str, title: str, description: str,
@@ -456,7 +457,7 @@ class GitLabIssuesAdapter:
 
     async def upload_attachment(self, pmo_id: str, filename: str,
                                 data: bytes) -> str:
-        _ = pmo_id  # GitLab uploads are project-scoped; we reference from a note
+        _ = pmo_id  # GitLab uploads are project-scoped, not issue-scoped
         if not self._api:
             raise PMOTransient("gitlab_issues: api_base is empty")
         url = f"{self._api}{self._proj('/uploads')}"
@@ -482,8 +483,6 @@ class GitLabIssuesAdapter:
             raise RuntimeError(
                 f"gitlab_issues upload: unexpected url {secret_url!r}")
         secret, fname = parts[1], parts[2]
-        # Do not post a follow-up note here — that bypasses the feed
-        # chokepoint and lands unsigned, which freshness treats as human.
         return f"{self._api}{self._proj(f'/uploads/{secret}/{fname}')}"
 
     def _finalize_upload_url(self, url: str) -> str:

@@ -337,7 +337,7 @@ Same forge-issue profile (issue-only, label stages, open→backlog, markdown com
 | Status | `open`→backlog; `closed`→done; cancel footer in body → canceled |
 | Labels | PUT `/issues/{n}/labels` replaces the set |
 | Feed | issue comments; `` `devcake:v1` `` byte-exact. Oldest-first pages; `paginate_rest_newest` keeps the newest at the ceiling. |
-| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. `comment_max_chars=65536`. Feed chokepoint posts the full body as sequential `Part i of n` comments (each ≤ the cap, each sentinel-signed). startswith-markers stay the first line of part 1. |
+| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. `comment_max_chars=65536`. Feed chokepoint posts the full body as sequential `Part i of n` comments (each ≤ the cap, each sentinel-signed, at most `MAX_VENDOR_COMMENT_PARTS`). startswith-markers stay the first line of part 1. |
 | Relations | Works on personal repos if `issue_id` is the global numeric id. Duplicate → 422 `already been taken`. |
 
 `pmo_id` is the issue **number**. `/issues` includes PRs — filtered. Separate PMO PAT from any GitHub *forge* repo-card token. Registry `operator_note` explains the attachment limit in the SPA.

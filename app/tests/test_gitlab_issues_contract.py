@@ -223,6 +223,22 @@ def test_mixed_case_managed_label_normalizes_and_can_be_swapped():
     assert "DEVCAKE" in names
 
 
+def test_swap_labels_never_puts_a_set_with_unresolved_names(monkeypatch):
+    """The old guard was always empty (`n in next_names` twice) and discarded."""
+    r = Router()
+    r.issues[1] = _issue(1, labels=["GHOST"])
+    pmo = make_pmo(r)
+
+    async def ensure_noop(team_ref, names):
+        return None
+
+    monkeypatch.setattr(pmo, "ensure_labels", ensure_noop)
+    with pytest.raises(RuntimeError, match="label GHOST missing"):
+        run(pmo.swap_labels(MissionRef("1", "issue"), set(), set()))
+    assert not any(c.endswith("/issues/1") and c.startswith("PUT")
+                   for c in r.calls)
+
+
 def test_closed_with_cancel_footer_is_canceled():
     r = Router()
     r.issues[1] = _issue(1, state="closed",

@@ -270,15 +270,15 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 | `key` | `{owner}/{repo}#{number}` |
 | `pmo_kind` | always `issue` (`projects_supported=False`) |
 
-`cancel_mission` closes the issue and appends the cancel footer (idempotent). Closing an issue that still has **open blockers** 412s on Gitea 1.24 — the adapter **clears dependencies first** then closes (scheduler already consumed them).
+`cancel_mission` closes the issue and appends the cancel footer (idempotent). Opening or completing strips **only** that footer block (`adapters/forge_issue.strip_cancel_footer`) — never every markdown `---` in the body. Closing an issue that still has **open blockers** 412s on Gitea 1.24 — the adapter **clears dependencies first** then closes (scheduler already consumed them).
 
 **Cross-instance blockers are unsupported for Gitea Issues** (ADR-0009 amendment): `pmo_id` is a repo-scoped issue *number*, so ids collide across instances — the `BlockerLocator` hard-refuses peer resolution and peer run history for `gitea_issues` (never best-effort). Same-instance blocker semantics are unaffected.
 
 ### 9.3 Relations, labels, feed, attachments
 
 - **Relations:** `POST/GET/DELETE …/issues/{index}/dependencies` with `IssueMeta{owner,repo,index}`. `create_relation(blocker, blocked)` makes `blocked` depend on `blocker`. Duplicate create returns 500 “does already exist” → treated as success. `ensure_labels` enables `internal_tracker.enable_issue_dependencies` on the board (off by default on new repos).
-- **Labels:** repo labels; `PUT …/issues/{index}/labels` replaces the full set (`native_label_swap_atomic=True`). Managed set ensured uppercase.
-- **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified).
+- **Labels:** repo labels; `PUT …/issues/{index}/labels` replaces the full set (`native_label_swap_atomic=True`). Managed set ensured uppercase. Vendor-cased managed names (`Devcake-Plan`) are mapped onto `ALL_LABELS` by `canonicalize_labels` so `derive()`/`swap_labels` see them.
+- **Feed:** issue comments; markdown markers round-trip byte-for-byte (live-verified). Gitea pages oldest-first; `paginate_rest_newest` keeps the newest pages at the ceiling (same newest-first survival as Linear).
 - **Attachments:** multipart `POST …/issues/{index}/assets`. Gitea returns `browser_download_url` with **ROOT_URL** / `GITEA_UI_URL` (bundled: `localhost:3300`); the adapter rewrites **presentation hosts** (`api_base` host, `GITEA_UI_URL` host, loopback) onto `api_base` so the app container can download, pins path to `/attachments/` and origin netloc, and refuses off-allowlist redirects with the PMO token (docs/14 §11). Operator use of the Gitea UI and direct git remains unrestricted.
 
 ### 9.4 The default board (ADR-0030) — and manual setup for external Gitea
@@ -336,8 +336,8 @@ Same forge-issue profile (issue-only, label stages, open→backlog, markdown com
 |---|---|
 | Status | `open`→backlog; `closed`→done; cancel footer in body → canceled |
 | Labels | PUT `/issues/{n}/labels` replaces the set |
-| Feed | issue comments; `` `devcake:v1` `` byte-exact |
-| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. `comment_max_chars=65536`. Feed chokepoint posts the full body as sequential `Part i of n` comments (each ≤ the cap, each sentinel-signed). startswith-markers stay the first line of part 1. |
+| Feed | issue comments; `` `devcake:v1` `` byte-exact. Oldest-first pages; `paginate_rest_newest` keeps the newest at the ceiling. |
+| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. `comment_max_chars=65536`. Feed chokepoint posts the full body as sequential `Part i of n` comments (each ≤ the cap, each sentinel-signed, at most `MAX_VENDOR_COMMENT_PARTS`). startswith-markers stay the first line of part 1. |
 | Relations | Works on personal repos if `issue_id` is the global numeric id. Duplicate → 422 `already been taken`. |
 
 `pmo_id` is the issue **number**. `/issues` includes PRs — filtered. Separate PMO PAT from any GitHub *forge* repo-card token. Registry `operator_note` explains the attachment limit in the SPA.

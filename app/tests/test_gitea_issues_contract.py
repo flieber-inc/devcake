@@ -133,7 +133,14 @@ class Router:
                     iss["body"] = body["body"]
                 return httpx.Response(200, json=iss)
             if rest == "/comments" and method == "GET":
-                return httpx.Response(200, json=self.comments.get(num, []))
+                page = int(req.url.params.get("page", 1))
+                limit = int(req.url.params.get("limit", 50))
+                all_c = self.comments.get(num, [])
+                start = (page - 1) * limit
+                chunk = all_c[start:start + limit]
+                return httpx.Response(
+                    200, json=chunk,
+                    headers={"X-Total-Count": str(len(all_c))})
             if rest == "/comments" and method == "POST":
                 c = {
                     "id": self.next_comment,
@@ -238,6 +245,25 @@ def test_cancel_mission_idempotent():
     run(pmo.cancel_mission(MissionRef("1", "issue")))  # no raise
 
 
+def test_mixed_case_managed_label_normalizes_and_can_be_swapped():
+    r = Router()
+    r.labels["DEVCAKE-PLAN"] = {
+        "id": 2, "name": "Devcake-Plan", "color": "111"}
+    r.issues[1]["labels"] = [
+        r.labels["DEVCAKE"], r.labels["DEVCAKE-PLAN"]]
+    pmo = make_pmo(r)
+    m = run(pmo.get(MissionRef("1", "issue")))
+    assert "DEVCAKE-PLAN" in m.labels
+    assert "Devcake-Plan" not in m.labels
+    run(pmo.swap_labels(MissionRef("1", "issue"),
+                        {"DEVCAKE-PLAN"}, {"DEVCAKE-EXECUTE"}))
+    names = {lb["name"] for lb in r.issues[1]["labels"]}
+    assert "Devcake-Plan" not in names
+    assert "DEVCAKE-PLAN" not in names
+    assert "DEVCAKE-EXECUTE" in names
+    assert "DEVCAKE" in names
+
+
 def test_swap_labels_put_replace():
     r = Router()
     r.labels["DEVCAKE-PLAN"] = {"id": 2, "name": "DEVCAKE-PLAN", "color": "111"}
@@ -261,6 +287,21 @@ def test_create_relation_and_blocked_by():
     m2 = run(pmo.get(MissionRef("2", "issue")))
     assert m2.blocked_by == ["1"]
     run(pmo.create_relation("1", "2"))  # duplicate tolerant
+
+
+def test_get_activity_ceiling_keeps_newest_comments(monkeypatch):
+    from devcake.adapters.gitea_issues import adapter as gi
+    monkeypatch.setattr(gi, "MAX_COMMENT_PAGES", 2)
+    monkeypatch.setattr(gi, "COMMENTS_PAGE", 2)
+    r = Router()
+    r.comments[1] = [
+        {"id": i, "body": f"c{i}", "created_at": f"2026-07-20T12:00:{i:02d}Z",
+         "user": {"login": "bot"}, "assets": []}
+        for i in range(1, 8)
+    ]
+    act = run(make_pmo(r).get_activity(MissionRef("1", "issue")))
+    assert act.truncated is True
+    assert [e.body for e in act.entries] == ["c5", "c6", "c7"]
 
 
 def test_post_feed_and_activity_marker_body():

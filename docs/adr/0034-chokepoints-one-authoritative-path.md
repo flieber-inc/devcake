@@ -93,6 +93,9 @@ Corollaries, each load-bearing:
 | Dev bus chunking | `hello_dev.py` hand-copy (already drifted: `SHRINKABLE_FIELDS`) | shared import or field-by-field pinned mirror |
 | Layering rule (domain never imports adapters) | prose + review culture; 2 sanctioned seams undocumented/half-documented | import-ban ratchet with a 2-entry allowlist naming both seams |
 | Vendor-cap comment pagination | split in `feed.py`; join/coalesce reimplemented in `activity_payload` (`isalnum` glue) | `feed.split_vendor_comments` / `feed.join_vendor_comments` / `feed.coalesced_step_files`; `activity_payload` only calls; AST ratchet |
+| Forge-issue cancel footer | three `replace("---")` copies that deleted every horizontal rule | `adapters/forge_issue.apply_cancel_footer` / `strip_cancel_footer`; mapping modules re-export one `CANCEL_FOOTER` |
+| Managed-label case fold | `ensure_labels` matched upper, `swap_labels`/`Mission.labels` used stored case | `model.canonicalize_labels` next to `ALL_LABELS`; three forge-issue adapters call it |
+| Oldest-first comment ceiling | `paginate_rest` kept the oldest pages on GitHub/Gitea | `_toolkit.paginate_rest_newest` + `last_page_from_headers`; GitLab already sorts desc |
 
 Out of scope, deliberately: unifying the checkpoint-vs-sweep idempotency
 regimes (different failure economics, would change PMO read costs);

@@ -67,14 +67,41 @@ def load_entrypoint():
     sys.exit(f"no dev_entrypoint.py at any of {ENTRYPOINT_CANDIDATES}")
 
 
-CLI_BY_HARNESS = {"claude-code": "claude", "codex": "codex",
-                  "grok-build": "grok", "pi": "pi", "opencode": "opencode",
-                  "qwen-code": "qwen"}
+def _ensure_dialects() -> None:
+    for p in (
+        pathlib.Path("/srv/images/common"),
+        pathlib.Path(__file__).resolve().parents[2] / "images" / "common",
+        pathlib.Path("/"),
+    ):
+        if (p / "devcake_dev").is_dir() and str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+            return
+
+
+def cli_name(harness: str) -> str:
+    """argv[0] from the production dialect. Unknown ids raise."""
+    _ensure_dialects()
+    from devcake_dev.harness.dialect import get_dialect
+    return get_dialect(harness).argv(".")[0]
+
+
+def capture_dump(harness: str, stdout: str, *, workspace, model: str = "") -> str:
+    """Transcript dump via HarnessDialect.parse_run — no Claude else-arm."""
+    _ensure_dialects()
+    from devcake_dev.harness.dialect import get_dialect
+    return get_dialect(harness).parse_run(
+        stdout, workspace=pathlib.Path(workspace), model=model).dump
+
+
+def known_harnesses() -> list[str]:
+    _ensure_dialects()
+    from devcake_dev.harness.dialect import dialects
+    return sorted(dialects())
 
 
 def cli_version(harness: str) -> str:
     """The version of the CLI actually about to run, read from this container."""
-    exe = CLI_BY_HARNESS.get(harness, "claude")
+    exe = cli_name(harness)
     try:
         r = subprocess.run([exe, "--version"], capture_output=True, text=True,
                            timeout=60)
@@ -128,19 +155,6 @@ def make_workspace(root: pathlib.Path, prompt: str) -> pathlib.Path:
         subprocess.run(cmd, cwd=wd, env=env, capture_output=True, text=True,
                        timeout=60)
     return wd
-
-
-def grok_export(session_id: str, workdir: pathlib.Path) -> str:
-    """grok's `dump` is the session export — THE input to its activity test, and
-    the pivot question of this whole batch (does it echo the prompt?)."""
-    if not session_id:
-        return ""
-    try:
-        r = subprocess.run(["grok", "export", session_id], cwd=workdir,
-                           capture_output=True, text=True, timeout=120)
-        return r.stdout if r.returncode == 0 else ""
-    except Exception:                           # noqa: BLE001 — absence is data
-        return ""
 
 
 def grok_session_id(out: str) -> str:
@@ -248,18 +262,7 @@ def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
     session_id = (sid_fn(args.harness, stdout) if sid_fn
                   else grok_session_id(stdout)
                   if args.harness == "grok-build" else "")
-    if args.harness == "codex":
-        dump = ep.codex_text_dump(stdout)
-    elif args.harness == "grok-build":
-        dump = grok_export(session_id, workdir)
-    elif args.harness == "pi":
-        dump = ep.pi_text_dump(stdout)
-    elif args.harness == "opencode":
-        dump = ep.opencode_text_dump(stdout)
-    elif args.harness == "qwen-code":
-        dump = ep.qwen_text_dump(stdout)
-    else:
-        dump = ep.claude_text_dump(stdout)
+    dump = capture_dump(args.harness, stdout, workspace=workdir)
 
     # grade the CURRENT predicate — the whole point of the exercise
     fault = ep.harness_fault(args.harness, stdout, exit_code, dump=dump,
@@ -295,7 +298,7 @@ def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--harness", required=True,
-                    choices=sorted(CLI_BY_HARNESS) + ["other"])
+                    choices=known_harnesses())
     ap.add_argument("--name", required=True, help="capture basename")
     ap.add_argument("--prompt-file", required=True)
     ap.add_argument("--out", default="/out")

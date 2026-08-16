@@ -14,9 +14,11 @@ from typing import Any, Optional
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry,
-                             Mission, MissionRef, NormalizedStatus)
+                             Mission, MissionRef, NormalizedStatus,
+                             canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
-from .mapping import (CANCEL_FOOTER, mission_key, normalize_priority,
+from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
+from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
 
 log = logging.getLogger("devcake.github_issues")
@@ -86,6 +88,7 @@ class GitHubIssuesAdapter:
         *,
         params: dict | None = None,
         json: dict | list | None = None,
+        as_response: bool = False,
     ) -> Any:
         if not self._api:
             raise PMOTransient("github_issues: api_base is empty")
@@ -109,6 +112,8 @@ class GitHubIssuesAdapter:
             raise RuntimeError(
                 f"github_issues {method} {path} → {resp.status_code}: "
                 f"{body[:300]}")
+        if as_response:
+            return resp
         if not resp.content:
             return None
         return resp.json()
@@ -127,8 +132,8 @@ class GitHubIssuesAdapter:
             self._label_names.clear()
 
     def _label_set(self, issue: dict) -> set[str]:
-        return {(lb.get("name") or "") for lb in (issue.get("labels") or [])
-                if lb.get("name")}
+        return canonicalize_labels(
+            lb.get("name") or "" for lb in (issue.get("labels") or []))
 
     def _mission(self, issue: dict) -> Mission:
         number = int(issue["number"])
@@ -213,12 +218,20 @@ class GitHubIssuesAdapter:
                            full: bool = False) -> Activity:
         self._require_issue(ref)
         mission = await self.get(ref)
-        from .._toolkit import paginate_rest
+        from .._toolkit import last_page_from_headers, paginate_rest_newest
         max_pages = MAX_COMMENT_PAGES_FULL if full else MAX_COMMENT_PAGES
-        raw_comments, truncated = await paginate_rest(
-            lambda page: self._req(
+
+        async def _comments_page(page: int):
+            resp = await self._req(
                 "GET", self._repo_path(f"/issues/{ref.pmo_id}/comments"),
-                params={"page": page, "per_page": COMMENTS_PAGE}),
+                params={"page": page, "per_page": COMMENTS_PAGE},
+                as_response=True)
+            items = resp.json() if resp.content else []
+            last = last_page_from_headers(resp.headers, page_size=COMMENTS_PAGE)
+            return items or [], last
+
+        raw_comments, truncated = await paginate_rest_newest(
+            _comments_page,
             page_size=COMMENTS_PAGE, max_pages=max_pages,
             what="github_issues get_activity", on_ceiling="flag")
         if truncated:
@@ -260,11 +273,9 @@ class GitHubIssuesAdapter:
         cur = await self._req("GET", self._repo_path(f"/issues/{ref.pmo_id}"))
         body = cur.get("body") or ""
         if status == "canceled":
-            if CANCEL_FOOTER not in body:
-                body_patch["body"] = body.rstrip() + f"\n\n---\n{CANCEL_FOOTER}\n"
+            body_patch["body"] = apply_cancel_footer(body)
         elif CANCEL_FOOTER in body:
-            cleaned = body.replace(CANCEL_FOOTER, "").replace("\n\n---\n\n", "\n")
-            body_patch["body"] = cleaned
+            body_patch["body"] = strip_cancel_footer(body)
         await self._req(
             "PATCH", self._repo_path(f"/issues/{ref.pmo_id}"), json=body_patch)
 

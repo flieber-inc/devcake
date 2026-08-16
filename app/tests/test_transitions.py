@@ -1432,6 +1432,15 @@ def test_split_vendor_comments_labels_every_page_and_preserves_bytes():
     assert rejoined.count("beta line") == 4_000
 
 
+def test_split_vendor_comments_refuses_more_than_max_parts():
+    """Size is bounded by the vendor cap; count must be too (GitHub write limits)."""
+    from devcake.domain.orchestrator.feed import (
+        MAX_VENDOR_COMMENT_PARTS, split_vendor_comments)
+    body = "x" * (MAX_VENDOR_COMMENT_PARTS * 200)
+    with pytest.raises(ValueError, match="more than"):
+        split_vendor_comments(body, 200)
+
+
 def _comment_payload(comment: str) -> str:
     """Strip sentinel and the pagination line; keep the substance."""
     from devcake.domain.orchestrator.markers import COMMENT_SENTINEL

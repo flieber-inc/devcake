@@ -39,6 +39,9 @@ def _comment_max_chars(mgr) -> int | None:
 
 
 _PART_LABEL_BUDGET = len("Part 999 of 999") + 2  # label + blank line
+# GitHub secondary write limits (~80 content creations / minute). A 50 MB
+# dump at comment_max_chars=65536 is ~800 comments; refuse before we try.
+MAX_VENDOR_COMMENT_PARTS = 40
 
 
 def _part_label(i: int, n: int) -> str:
@@ -99,6 +102,10 @@ def split_vendor_comments(markdown: str, limit: int) -> list[str]:
         room = 64
     chunks = _chunk_text(text, room)
     n = len(chunks)
+    if n > MAX_VENDOR_COMMENT_PARTS:
+        raise ValueError(
+            f"paginated comment would post more than "
+            f"{MAX_VENDOR_COMMENT_PARTS} parts ({n}) — refusing")
     parts = [_attach_part_label(c, i, n) for i, c in enumerate(chunks, 1)]
     for part in parts:
         if len(part) + sentinel_over > limit:
@@ -272,8 +279,9 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     long text already lives in its own attachment). When the vendor
     declares `comment_max_chars` and the body will not fit, `_feed` posts
     the FULL text as sequential `Part i of n` comments (markers stay on
-    part 1; each page carries the sentinel). Never a truncated dump, never
-    a 422. The sentinel
+    part 1; each page carries the sentinel) up to MAX_VENDOR_COMMENT_PARTS.
+    Never a truncated dump, never a 422; over the part cap is ValueError.
+    The sentinel
     goes on the comment, never inside the attachment, so provenance
     classification keeps working. Upload failures fall back to posting
     inline — an upload outage must never lose feed content. Projects have

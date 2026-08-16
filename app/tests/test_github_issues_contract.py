@@ -120,7 +120,16 @@ class Router:
                     iss["body"] = body["body"]
                 return httpx.Response(200, json=iss)
             if rest == "/comments" and method == "GET":
-                return httpx.Response(200, json=self.comments.get(num, []))
+                page = int(req.url.params.get("page", 1))
+                per = int(req.url.params.get("per_page", 50))
+                all_c = self.comments.get(num, [])
+                start = (page - 1) * per
+                chunk = all_c[start:start + per]
+                last = max(1, (len(all_c) + per - 1) // per) if all_c else 1
+                headers = {
+                    "Link": f'<https://api.github.com/x?page={last}>; rel="last"',
+                }
+                return httpx.Response(200, json=chunk, headers=headers)
             if rest == "/comments" and method == "POST":
                 c = {"id": self.next_comment, "body": body.get("body") or "",
                      "created_at": "2026-08-15T12:00:00Z",
@@ -173,6 +182,18 @@ def test_list_filters_pull_requests():
     assert all(m.pmo_id != "9" for m in missions)
 
 
+def test_uncancel_keeps_human_horizontal_rules():
+    r = Router()
+    r.issues[1]["body"] = "Intro\n\n---\n\nSection"
+    pmo = make_pmo(r)
+    run(pmo.cancel_mission(MissionRef("1", "issue")))
+    run(pmo.set_status(MissionRef("1", "issue"), "done"))
+    body = r.issues[1]["body"]
+    assert CANCEL_FOOTER not in body
+    assert "---" in body
+    assert "Section" in body
+
+
 def test_cancel_mission_idempotent():
     r = Router()
     pmo = make_pmo(r)
@@ -180,6 +201,22 @@ def test_cancel_mission_idempotent():
     assert r.issues[1]["state"] == "closed"
     assert CANCEL_FOOTER in r.issues[1]["body"]
     run(pmo.cancel_mission(MissionRef("1", "issue")))
+
+
+def test_get_activity_ceiling_keeps_newest_comments(monkeypatch):
+    from devcake.adapters.github_issues import adapter as gh
+    monkeypatch.setattr(gh, "MAX_COMMENT_PAGES", 2)
+    monkeypatch.setattr(gh, "COMMENTS_PAGE", 2)
+    r = Router()
+    r.comments[1] = [
+        {"id": i, "body": f"c{i}", "created_at": f"2026-08-15T12:00:{i:02d}Z",
+         "user": {"login": "bot"}}
+        for i in range(1, 8)
+    ]
+    act = run(make_pmo(r).get_activity(MissionRef("1", "issue")))
+    assert act.truncated is True
+    bodies = [e.body for e in act.entries]
+    assert bodies == ["c5", "c6", "c7"]
 
 
 def test_post_feed_marker_round_trip():
@@ -252,3 +289,22 @@ def test_403_permission_is_permanent():
 def test_project_ref_raises():
     with pytest.raises(RuntimeError, match="projects"):
         run(make_pmo().get(MissionRef("1", "project")))
+
+
+def test_mixed_case_managed_label_normalizes_and_can_be_swapped():
+    """GitHub folds case. A human `Devcake-Plan` must not wedge the stage."""
+    r = Router()
+    r.labels["DEVCAKE-PLAN"] = {
+        "id": 2, "name": "Devcake-Plan", "color": "6e40c9"}
+    r.issues[1] = _issue(1, labels=["DEVCAKE", "Devcake-Plan"])
+    pmo = make_pmo(r)
+    m = run(pmo.get(MissionRef("1", "issue")))
+    assert "DEVCAKE-PLAN" in m.labels
+    assert "Devcake-Plan" not in m.labels
+    run(pmo.swap_labels(MissionRef("1", "issue"),
+                        {"DEVCAKE-PLAN"}, {"DEVCAKE-EXECUTE"}))
+    names = {lb["name"] for lb in r.issues[1]["labels"]}
+    assert "Devcake-Plan" not in names
+    assert "DEVCAKE-PLAN" not in names
+    assert "DEVCAKE-EXECUTE" in names
+    assert "DEVCAKE" in names

@@ -43,6 +43,9 @@ class Harness(BaseModel):
     # selector). Snapshotted onto the Run at dispatch (run.spec_skills_dir)
     # so dir, skill content, and image all come from the same registry read.
     skills_dir: str | None = None
+    # True = ships in-tree but has not passed a live operator battery.
+    # The admin picker surfaces this so experimental is not prose-only.
+    experimental: bool = False
 
 
 # Dispatch must use the same tag the operator baked (AGENTS.md pin workflow:
@@ -132,6 +135,7 @@ def dev_type_status(dt) -> dict:
             "credential_files": [cf.model_dump() for cf in h.credential_files],
             "oauth_available": h.oauth is not None,
             "skills_dir": h.skills_dir,
+            "experimental": h.experimental,
         },
         "secrets_present": present,
         # ✓/✗ per declared secret env var (DevType.secret_env) — presence

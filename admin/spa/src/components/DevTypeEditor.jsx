@@ -84,12 +84,16 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             hidden by the fold. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Harness template"
-            help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements under Advanced follow it automatically on Save.">
+            help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements under Advanced follow it automatically on Save. Experimental ids have not passed a live operator battery.">
             <Select
               value={d.harness_template}
               onChange={(e) => set("harness_template", e.target.value)}
             >
-              {Object.keys(harnesses).map((t) => <option key={t}>{t}</option>)}
+              {Object.keys(harnesses).map((t) => (
+                <option key={t} value={t}>
+                  {t}{harnesses[t]?.experimental ? " (experimental)" : ""}
+                </option>
+              ))}
             </Select>
           </Field>
           <Field label="Model" hint="Empty = harness default"
@@ -99,6 +103,13 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               onChange={(e) => set("model", e.target.value)} />
           </Field>
         </div>
+        {h.experimental && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Experimental — in-tree so it can be dispatched, but it has not
+            passed a live operator battery. Dialect, stream, and credential
+            shape may still churn.
+          </p>
+        )}
         {pending && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
             ⚠ Unsaved harness change: on Save this Dev Type runs {h.docker_image} and

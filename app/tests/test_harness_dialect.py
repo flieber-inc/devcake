@@ -4,6 +4,7 @@ AST + registry + Bake alignment — not a second hand-maintained id list.
 """
 
 import ast
+import os
 import re
 import sys
 from pathlib import Path
@@ -11,6 +12,13 @@ from pathlib import Path
 import pytest
 
 from devcake.harness import HARNESSES
+
+# dialects → render → bus reads these at import. Other entrypoint tests set
+# them as a side effect; this file must stand alone (per-file / sharded runs).
+os.environ.setdefault("DEVCAKE_RUN_ID", "test-harness-dialect")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6399/0")
+os.environ.setdefault("REDIS_USER", "test")
+os.environ.setdefault("REDIS_PASSWORD", "test")
 
 _COMMON_CANDIDATES = [
     Path(__file__).resolve().parents[2] / "images" / "common",

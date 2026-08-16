@@ -33,11 +33,21 @@ export default function NewDevTypeDialog({ harnesses, onClose, onCreated }) {
             onKeyDown={(e) => e.key === "Enter" && name.trim() && !busy && create()} />
         </Field>
         <Field label="Harness template"
-          help="Which coding agent this Dev runs. The Docker image and credential requirements follow it — both can be changed later.">
+          help="Which coding agent this Dev runs. The Docker image and credential requirements follow it — both can be changed later. Experimental ids have not passed a live operator battery.">
           <Select value={harness} onChange={(e) => setHarness(e.target.value)}>
-            {Object.keys(harnesses).map((t) => <option key={t}>{t}</option>)}
+            {Object.keys(harnesses).map((t) => (
+              <option key={t} value={t}>
+                {t}{harnesses[t]?.experimental ? " (experimental)" : ""}
+              </option>
+            ))}
           </Select>
         </Field>
+        {harnesses[harness]?.experimental && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Experimental — in-tree so it can be dispatched, but it has not
+            passed a live operator battery.
+          </p>
+        )}
         {err && <p className="text-sm text-red-600 dark:text-red-400">✗ {err}</p>}
         <div className="flex justify-end gap-2">
           <Button kind="ghost" disabled={busy} onClick={onClose}>Cancel</Button>

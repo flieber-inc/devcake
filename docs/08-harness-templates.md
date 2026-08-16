@@ -22,6 +22,11 @@ Changing a Dev Type's model does not add a template.
 | `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
 
+`Harness.experimental` is a registry flag (`GET /api/v1/harnesses`, the
+admin picker). Launch-supported templates leave it false. A later dialect
+that has not passed a live operator battery must set it true — prose in this
+document is not the blast-radius control.
+
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
 > **Version-currency doctrine (founder, 2026-08-04).** DevCake follows the

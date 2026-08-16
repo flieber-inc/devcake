@@ -28,6 +28,19 @@ def test_dev_type_accepts_exactly_the_registry_ids():
         DevType(name="t", harness_template="not-a-harness")
 
 
+def test_registry_and_admin_payload_carry_experimental():
+    """Picker blast-radius: experimental is a registry flag, not prose."""
+    from devcake.api.devtypes_service import list_harnesses
+    for name, h in HARNESSES.items():
+        assert h.experimental is False, name
+        st = dev_type_status(DevType(name="t", harness_template=name))
+        assert st["harness"]["experimental"] is False
+    payload = run_coro(list_harnesses())
+    assert set(payload) == set(HARNESSES)
+    for name, row in payload.items():
+        assert row["experimental"] is False, name
+
+
 def test_dev_type_status_credentials_ready(monkeypatch, tmp_path):
     """Overview 'Devs' card (v0.1.1 B3): readiness is server-computed —
     any ONE of the harness's env keys in the store, or any credential file

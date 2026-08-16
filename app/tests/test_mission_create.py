@@ -36,7 +36,10 @@ class CreatePMO:
         self._feed_raises = feed_raises
 
     def capabilities(self):
-        return SimpleNamespace(attachment_max_bytes=1024)   # tiny test cap
+        return SimpleNamespace(
+            attachment_max_bytes=getattr(self, "attachment_max_bytes", 1024),
+            attachments_supported=getattr(self, "attachments_supported", True),
+        )
 
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):
@@ -121,6 +124,18 @@ def test_attachment_name_and_b64_and_size_and_count_422():
         with pytest.raises(HTTPException) as e:
             _create(attachments=atts)
         assert e.value.status_code == 422, atts[0]["name"]
+
+
+def test_attachments_unsupported_422s_before_zero_byte_cap():
+    pmo = CreatePMO()
+    pmo.attachment_max_bytes = 0
+    pmo.attachments_supported = False
+    with pytest.raises(HTTPException) as e:
+        _create(managers={"board": _mgr(pmo)},
+                attachments=[{"name": "brief.md", "content_b64": _b64(b"hi")}])
+    assert e.value.status_code == 422
+    assert "does not support" in e.value.detail
+    assert pmo.created == []
 
 
 # ── the write-through ────────────────────────────────────────────────────────

@@ -385,7 +385,8 @@ def test_make_pmo_dispatches_from_registry():
     cfg = AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")])
     assert isinstance(make_pmo(cfg.pmos[0]), LinearAdapter)
     # both in-tree PMO systems (Linear + forge-issue Gitea Issues)
-    assert set(PMO_SYSTEMS) == {"linear", "gitea_issues", "gitlab_issues"}
+    assert set(PMO_SYSTEMS) == {
+        "linear", "gitea_issues", "gitlab_issues", "github_issues"}
     info = PMO_SYSTEMS["linear"]
     # api_key_env_default removed at v4 (secrets are GUI-stored, not env-named)
     assert info.secret_env_vars and info.token_patterns and info.secret_shape_prefixes
@@ -403,8 +404,27 @@ def test_make_pmo_dispatches_from_registry():
     assert isinstance(make_pmo(gl.pmos[0]), GitLabIssuesAdapter)
     assert PMO_SYSTEMS["gitlab_issues"].needs_api_base is True
     assert PMO_SYSTEMS["gitlab_issues"].supports_priority is False
+    from devcake.adapters.github_issues import GitHubIssuesAdapter
+    gh = AppConfig(pmos=[PMOInstance(
+        name="gh", system="github_issues", team_key="org/board")])
+    assert isinstance(make_pmo(gh.pmos[0]), GitHubIssuesAdapter)
+    assert PMO_SYSTEMS["github_issues"].attachments_supported is False
+    assert PMO_SYSTEMS["github_issues"].operator_note
     assert PMO_SYSTEMS["gitlab_issues"].relations_supported is False
     assert PMO_SYSTEMS["gitlab_issues"].operator_note
+
+
+def test_registry_payload_carries_operator_notes():
+    """SPA warning copy is registry-fed — no vendor ids in the frontend."""
+    import asyncio
+    from devcake.api.connections_service import connections_registry
+    payload = asyncio.new_event_loop().run_until_complete(connections_registry())
+    by_id = {s["id"]: s for s in payload["pmo_systems"]}
+    assert "cannot attach files" in by_id["github_issues"]["operator_note"]
+    assert by_id["github_issues"]["attachments_supported"] is False
+    assert "Premium" in by_id["gitlab_issues"]["operator_note"]
+    assert by_id["gitlab_issues"]["relations_supported"] is False
+    assert by_id["linear"]["operator_note"] == ""
 
 
 def test_stale_put_bodies_rejected_not_dropped():

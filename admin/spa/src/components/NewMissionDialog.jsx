@@ -50,7 +50,12 @@ export default function NewMissionDialog({ adoptionMode, onClose, onCreated }) {
   const inst = (pmos || []).find((p) => p.name === instance);
   const sysMeta = registry.pmo_systems.find((s) => s.id === inst?.system);
   const supportsPriority = sysMeta ? sysMeta.supports_priority !== false : true;
+  const attachmentsOk = sysMeta ? sysMeta.attachments_supported !== false : true;
   const showAdopt = adoptionMode === "opt_in";
+
+  useEffect(() => {
+    if (!attachmentsOk) setFiles([]);
+  }, [attachmentsOk]);
 
   const pickFiles = (list) => {
     const next = [...files, ...Array.from(list || [])].slice(0, MAX_ATTACHMENTS);
@@ -172,6 +177,7 @@ export default function NewMissionDialog({ adoptionMode, onClose, onCreated }) {
           </label>
         )}
         <div>
+          {attachmentsOk ? (
           <input
             ref={fileInput}
             id="new-mission-files"
@@ -180,12 +186,19 @@ export default function NewMissionDialog({ adoptionMode, onClose, onCreated }) {
             className="hidden"
             onChange={(e) => pickFiles(e.target.files)}
           />
+          ) : null}
+          {attachmentsOk ? (
           <label
             htmlFor="new-mission-files"
             className="cursor-pointer text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
           >
             Attach files…
           </label>
+          ) : (
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            This board cannot accept file attachments from DevCake.
+          </p>
+          )}
           {files.length > 0 && (
             <ul className="mt-1.5 space-y-1">
               {files.map((f, i) => (

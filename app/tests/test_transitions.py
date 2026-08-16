@@ -36,6 +36,7 @@ class FakePMO:
         from fakes import fake_pmo_capabilities
         return fake_pmo_capabilities(
             relations_supported=getattr(self, "relations_supported", True),
+            attachments_supported=getattr(self, "attachments_supported", True),
         )
 
     def __init__(self, mission):
@@ -1299,6 +1300,64 @@ def test_feed_externalizes_over_2048(tmp_path):
     run_coro(mgr._feed("p1", "issue", "y" * 2048))
     assert len(fake.uploads) == 1
     assert "y" * 2048 in fake.comments[-1]
+
+
+def test_feed_keeps_markers_when_attachments_unsupported(tmp_path):
+    """externalize=False comments must stay intact — the pointer sentence
+    used to wipe REPLY_MARKER / step markers and freeze seq at 1."""
+    from devcake.domain.orchestrator.markers import REPLY_MARKER
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    body = REPLY_MARKER + "\n" + "answer " + ("x" * 3000)
+    run_coro(mgr._feed("p1", "issue", body, externalize=False))
+    assert fake.uploads == []
+    posted = fake.comments[-1]
+    assert REPLY_MARKER in posted
+    assert "answer " in posted
+    assert posted.endswith("`devcake:v1`")
+
+
+def test_post_attachment_comment_keeps_step_marker_when_attachments_unsupported(
+        tmp_path):
+    from devcake.domain.orchestrator.feed import post_attachment_comment
+    from devcake.domain.model import Activity, ActivityEntry
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    dump = "see `3_EXECUTE.md`\n" + ("x" * 3000)
+
+    def comment_of(url):
+        assert url is None
+        return f"`3_EXECUTE.md`\n\n{dump}", False
+
+    run_coro(post_attachment_comment(
+        mgr, "p1", "issue", filename="transcript.md",
+        content=dump, comment_of=comment_of))
+    assert fake.uploads == []
+    posted = fake.comments[-1]
+    assert "`3_EXECUTE.md`" in posted
+    entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
+                          kind="comment", body=posted)
+    assert dispatch._derive_seq(
+        Activity(mission=m, entries=[entry])) == 4
+
+
+def test_planned_without_attachments_posts_plan_inline(tmp_path):
+    m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+
+    async def _boom(*a, **k):
+        raise RuntimeError("github_issues: attachments are not supported")
+    fake.upload_attachment = _boom
+    run_coro(transitions.transition(
+        mgr, _run("PLAN", "DEVCAKE-PLAN"),
+        {"outcome": "planned"}, "# the plan\n\ndo the thing"))
+    assert any("# the plan" in c and "do the thing" in c
+               for c in fake.comments)
+    assert "DEVCAKE-EXECUTE" in m.labels
+    assert "DEVCAKE-PLAN" not in m.labels
 
 
 def test_finalize_upload_failure_posts_quoted_inline(tmp_path):

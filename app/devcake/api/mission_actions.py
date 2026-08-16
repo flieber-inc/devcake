@@ -279,6 +279,11 @@ async def create_mission(
 
     files: list[tuple[str, bytes]] = []
     raw_atts = attachments or []
+    if raw_atts and not getattr(
+            mgr.pmo.capabilities(), "attachments_supported", True):
+        raise HTTPException(
+            status_code=422,
+            detail="this PMO does not support issue file attachments")
     if len(raw_atts) > MAX_CREATE_ATTACHMENTS:
         raise HTTPException(
             status_code=422,
@@ -336,6 +341,13 @@ async def create_mission(
 
     uploaded: list[tuple[str, str]] = []
     attachment_failures: list[dict] = []
+    if files and not getattr(mgr.pmo.capabilities(), "attachments_supported", True):
+        for name, _data in files:
+            attachment_failures.append({
+                "name": name,
+                "error": "this PMO does not support issue file attachments",
+            })
+        files = []
     for name, data in files:
         try:
             asset_url = await mgr.pmo.upload_attachment(pmo_id, name, data)

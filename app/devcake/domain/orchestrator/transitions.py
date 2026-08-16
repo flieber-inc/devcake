@@ -86,16 +86,22 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
         plan_url_box: list[str] = []
 
         async def _plan_upload():
+            if not feed._attachments_supported(mgr):
+                return
             url = await mgr.pmo.upload_attachment(
                 pmo_id, plan_name, redact(plan_md or "").encode())
             plan_url_box.clear()
             plan_url_box.append(url)
 
         async def _plan_feed():
-            url = plan_url_box[0] if plan_url_box else f"(see attachment {plan_name})"
-            await mgr._feed(
-                pmo_id, run.pmo_kind,
-                f"📋 DevCake plan for this mission: [{plan_name}]({url})")
+            if plan_url_box:
+                url = plan_url_box[0]
+                body = (f"📋 DevCake plan for this mission: "
+                        f"[{plan_name}]({url})")
+            else:
+                body = ("📋 DevCake plan for this mission:\n\n"
+                        + (redact(plan_md or "") or f"(see {plan_name})"))
+            await mgr._feed(pmo_id, run.pmo_kind, body)
 
         async def _plan_labels():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),

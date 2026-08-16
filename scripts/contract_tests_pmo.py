@@ -13,7 +13,7 @@ Runs INSIDE the app container:
 Instance selection (first match wins):
   1. ``DEVCAKE_CONTRACT_INSTANCE=<name>`` — configured PMO from config.yaml
   2. Direct harness:
-       DEVCAKE_CONTRACT_SYSTEM=gitea_issues|linear|gitlab_issues
+       DEVCAKE_CONTRACT_SYSTEM=gitea_issues|linear|gitlab_issues|github_issues
        DEVCAKE_CONTRACT_TEAM=…  DEVCAKE_CONTRACT_TOKEN=…
        DEVCAKE_CONTRACT_API_BASE=… (gitea_issues)
   3. **Default CI lane** — when ``GITEA_ADMIN_USER`` + ``GITEA_ADMIN_PASSWORD``
@@ -206,6 +206,11 @@ def make_429_probe(system: str, team: str):
         from devcake.adapters.gitlab_issues import GitLabIssuesAdapter
         return GitLabIssuesAdapter(
             "https://gitlab.com", "fake-token", team or "o/r",
+            instance="contract", transport=mock)
+    if system == "github_issues":
+        from devcake.adapters.github_issues import GitHubIssuesAdapter
+        return GitHubIssuesAdapter(
+            "https://api.github.com", "fake-token", team or "o/r",
             instance="contract", transport=mock)
     raise SystemExit(f"no 429 probe for system {system!r}")
 

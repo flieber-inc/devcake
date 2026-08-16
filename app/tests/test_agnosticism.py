@@ -156,7 +156,7 @@ def test_no_vendor_name_literals_in_domain():
     PMOCapabilities.global_ids) or to the adapter itself
     (InternalForgePort.mission_repo_binding)."""
     vendors = {"gitea", "github", "gitlab", "linear", "gitea_issues",
-               "gitlab_issues"}
+               "gitlab_issues", "github_issues"}
     offenders = []
     for path in _package_files():
         rel = path.relative_to(PKG_ROOT)

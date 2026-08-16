@@ -38,7 +38,10 @@ class PMOCapabilities(BaseModel):
     attachment_max_bytes: int
     native_label_swap_atomic: bool
     relations_supported: bool = False
-    # Official file-upload API; false skips upload and contract rows 8/13.
+    # Official file-upload API. False = GitHub Issues (no public issue
+    # attachment endpoint). Feed chokepoint posts inline and skips upload;
+    # contract row 13 records SKIP. Default True so Linear / Gitea / GitLab
+    # stay unchanged.
     attachments_supported: bool = True
     # pmo_ids are globally unique across the vendor environment (Linear
     # UUIDs) — only such systems may resolve blockers via PEER adapters or

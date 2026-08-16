@@ -81,10 +81,6 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         # grace-cycle skip the pre-refactor code did not.
         mgr._audit(pmo_id, "project_feed_suppressed", markdown[:120])
         return
-    if not _attachments_supported(mgr) and len(markdown) > FEED_INLINE_MAX:
-        markdown = (
-            "Full text is in the activity repo — this PMO cannot attach files."
-        )
     if externalize and len(markdown) > FEED_INLINE_MAX \
             and _attachments_supported(mgr):
         try:

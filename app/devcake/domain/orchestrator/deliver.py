@@ -78,6 +78,8 @@ async def _deliver_core(mgr, repo_ref, mission_key, pmo_id, pmo_kind, pr
     Best-effort: a failure NEVER un-Dones the mission."""
     if not _should_deliver_zip(mgr, repo_ref):
         return False
+    if not feed._attachments_supported(mgr):
+        return False
     try:
         forge = mgr.forges.get(repo_ref)
         if forge is None:

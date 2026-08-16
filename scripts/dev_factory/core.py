@@ -224,7 +224,11 @@ def reconcile(
     tag: str,
     house: Mapping[str, str],
 ) -> dict:
-    """One watch tick. Baker is injected — this module does not call Docker."""
+    """One watch tick. Baker is injected — this module does not call Docker.
+
+    Jobs run one after another. PLAN_CLI_PINS §1.18 said do not serialize
+    unless measured; this is a known deviation, not the settled answer.
+    """
     try:
         keep_set = load_keep_set(keep_set_path)
     except InvalidKeepSet as exc:

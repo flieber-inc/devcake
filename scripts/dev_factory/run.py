@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from typing import Callable
 
 
@@ -39,14 +40,20 @@ def tee_run(
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1,
     )
-    chunks: list[str] = []
+    # Bounded ring: last `tail` characters, not the whole BuildKit log.
+    ring: deque[str] = deque()
+    held = 0
 
     def _read() -> None:
+        nonlocal held
         stream = proc.stdout
         if stream is None:
             return
         for line in iter(stream.readline, ""):
-            chunks.append(line)
+            ring.append(line)
+            held += len(line)
+            while held > tail and ring:
+                held -= len(ring.popleft())
             try:
                 sink.write(line)
                 sink.flush()
@@ -60,6 +67,5 @@ def tee_run(
             stamp()
         sleep(interval)
     reader.join(timeout=5)
-    text = "".join(chunks)
-    return Completed(returncode=int(proc.returncode or 0), stdout=text[-tail:],
-                     stderr="")
+    return Completed(returncode=int(proc.returncode or 0),
+                     stdout="".join(ring), stderr="")

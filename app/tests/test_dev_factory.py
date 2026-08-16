@@ -395,17 +395,39 @@ def test_tee_run_keeps_a_tail_and_writes_through():
     assert "bake-failed-detail" in sink.getvalue()
 
 
-def test_skip_reconcile_only_when_ready_and_nothing_moved():
+def test_tee_run_bounds_memory_to_the_tail():
+    _load_factory()
+    from dev_factory.run import tee_run
+    sink = io.StringIO()
+    got = tee_run(
+        ["/bin/sh", "-c", "i=0; while [ $i -lt 400 ]; do echo xxxxxxxxxx; i=$((i+1)); done"],
+        stamp=lambda: None, sleep=lambda _s: None, interval=0,
+        sink=sink, tail=40)
+    assert len(got.stdout) <= 50
+    assert got.returncode == 0
+
+
+def test_skip_reconcile_only_when_idle_and_mtimes_are_known():
     _load_factory()
     from dev_factory.watch import skip_reconcile
     assert skip_reconcile(
         state="ready", trees=1.0, keep=2.0,
         last_trees=1.0, last_keep=2.0) is True
     assert skip_reconcile(
+        state="virgin", trees=1.0, keep=2.0,
+        last_trees=1.0, last_keep=2.0) is True
+    assert skip_reconcile(
         state="ready", trees=1.1, keep=2.0,
         last_trees=1.0, last_keep=2.0) is False
     assert skip_reconcile(
         state="baking", trees=1.0, keep=2.0,
+        last_trees=1.0, last_keep=2.0) is False
+    # a failed stat is unknown — never equal to a previous unknown
+    assert skip_reconcile(
+        state="ready", trees=1.0, keep=None,
+        last_trees=1.0, last_keep=None) is False
+    assert skip_reconcile(
+        state="ready", trees=1.0, keep=None,
         last_trees=1.0, last_keep=2.0) is False
 
 

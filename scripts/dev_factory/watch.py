@@ -207,25 +207,31 @@ def trees_mtime(root: Path) -> float:
     return latest
 
 
-def skip_reconcile(*, state: str | None, trees: float, keep: float,
+_IDLE = frozenset({"ready", "virgin"})
+
+
+def skip_reconcile(*, state: str | None, trees: float | None, keep: float | None,
                    last_trees: float | None, last_keep: float | None) -> bool:
-    return (state == "ready"
-            and last_trees is not None and last_keep is not None
-            and trees == last_trees and keep == last_keep)
+    """Unknown mtimes (None) force a full tick — never compare 0==0."""
+    if state not in _IDLE:
+        return False
+    if None in (trees, keep, last_trees, last_keep):
+        return False
+    return trees == last_trees and keep == last_keep
 
 
-def keep_set_mtime() -> float:
+def keep_set_mtime() -> float | None:
     try:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app",
              "stat", "-c", "%Y", f"/data/{KEEP_SET}"],
             cwd=REPO, text=True, timeout=15)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return 0.0
+        return None
     try:
-        return float(out.strip() or "0")
+        return float(out.strip())
     except ValueError:
-        return 0.0
+        return None
 
 
 def once(*, work: Path, tag: str, house: dict[str, str],
@@ -371,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
             last_state = status.get("state")
         last_trees = trees
         last_keep = keep_m
-        time.sleep(READY_INTERVAL if last_state == "ready" else INTERVAL)
+        time.sleep(READY_INTERVAL if last_state in _IDLE else INTERVAL)
 
 
 if __name__ == "__main__":

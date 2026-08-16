@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, MutableMapping, Optional
 
-from ..harness import HARNESSES
+from ..harness import HARNESSES, resolve_image
 from .ids import make_run_id
 from .run import Run, utcnow
 
@@ -58,7 +58,7 @@ class OAuthManager:
                   spec_env={"DEVCAKE_OAUTH_MODE": dev_type.harness_template,
                             "DEVCAKE_OAUTH_LOGIN_CMD": flow.login_cmd,
                             "DEVCAKE_OAUTH_AUTH_PATH": flow.auth_path})
-        await self.runs.bootstrap.launch(run, image=harness.image)
+        await self.runs.bootstrap.launch(run, image=resolve_image(dev_type))
         # snapshot everything on_result needs: a dev type deleted or re-harnessed
         # mid-login must not misroute (or KeyError) the credential
         self.sessions[run_id] = {"dev_type": dev_type.name,

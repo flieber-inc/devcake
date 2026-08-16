@@ -131,6 +131,16 @@ HARNESSES: dict[str, Harness] = {
 }
 
 
+def resolve_image(dev_type) -> str:
+    """Harness image for a run. Empty pin = house image at DEVCAKE_TAG.
+
+    The three launch sites (dispatch, steward, OAuth) call this. Hello
+    stays HELLO_IMAGE. Receipts do not change the string in this slice
+    (fail-open). No cli_version field yet.
+    """
+    return HARNESSES[dev_type.harness_template].image
+
+
 def missing_referenced_secret_env(dt) -> list[str]:
     """Declared secret_env names with NO stored value that ARE referenced
     ($VAR or ${VAR}) by an mcp_setup_command. Such a command would run with

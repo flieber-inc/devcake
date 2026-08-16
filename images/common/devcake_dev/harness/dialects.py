@@ -1,4 +1,4 @@
-"""The three in-tree dialects. Parsers stay in tokens/fault/render — this
+"""In-tree dialects. Parsers stay in tokens/fault/render — this
 module only binds identity to those functions (docs/16 H1)."""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import sys
 from . import dialect as _reg
 from .dialect import ResumeSpec, WORKSPACE
 from .render import (GrokCoalescer, render_claude, render_codex, render_opencode,
-                     render_pi)
+                     render_pi, render_qwen)
 from .tokens import (
     claude_text_dump, claude_token_report,
     codex_text_dump, codex_token_report,
@@ -19,12 +19,13 @@ from .tokens import (
     opencode_session_id, opencode_step_finish, opencode_text_dump,
     opencode_token_report,
     pi_agent_end, pi_session_event, pi_text_dump, pi_token_report,
+    qwen_result_event, qwen_text_dump, qwen_token_report,
     unavailable_report,
 )
 from ..domain.fault import (
     HARNESS_STATUS_PATTERNS, _dict, _one_line, claude_result_event,
     claude_run_fault, codex_run_fault, grok_run_fault,
-    opencode_run_fault, pi_run_fault,
+    opencode_run_fault, pi_run_fault, qwen_run_fault,
     harness_error_messages, http_status_from_message,
 )
 
@@ -445,9 +446,102 @@ class _OpenCode:
             return None
 
 
+class _Qwen:
+    id = "qwen-code"
+    resume_spec = None
+    dump_cumulative_on_resume = False
+
+    def argv(self, prompt, *, plan_mode=False, model="", extra=(), out_dir=None):
+        extra = list(extra)
+        # --yolo auto-approves tools (the Dev is the sandbox). Plan mode
+        # swaps it for --approval-mode plan so writes stay off.
+        mode = (["--approval-mode", "plan"] if plan_mode else ["--yolo"])
+        pin = ["--model", model] if model else []
+        return ["qwen", "-p", prompt, "--output-format", "stream-json",
+                *mode, *pin, *extra]
+
+    def resume_argv(self, session_id, prompt, *, model="", extra=(), out_dir=None):
+        return None
+
+    def renderer(self):
+        return render_qwen
+
+    def parse_run(self, out, *, workspace, model=""):
+        report = unavailable_report(model=self.id)
+        try:
+            ev = qwen_result_event(out)
+            if ev is not None:
+                report = qwen_token_report(ev) or report
+                result = ev.get("result") or ""
+            else:
+                result = ""
+        except Exception:  # noqa: BLE001 — a parse miss still posts the tail
+            result = out[-4000:]
+        try:
+            dump = qwen_text_dump(out)
+        except Exception:  # noqa: BLE001 — no dump ⇒ the no-dump fallback
+            dump = ""
+        if not result:
+            result = dump or out[-4000:]
+        return _reg.InvocationView(result_text=result, token_report=report,
+                                   dump=dump)
+
+    def fault(self, out, harness_exit, *, dump="", last_message="", prompt=""):
+        return qwen_run_fault(out, harness_exit, dump=dump)
+
+    def api_error_status(self, out):
+        from ..domain.fault import _qwen_api_error_bodies
+        ev = _dict(qwen_result_event(out))
+        status = ev.get("api_error_status")
+        if isinstance(status, int):
+            return status
+        blobs = list(_qwen_api_error_bodies(out, ev))
+        blobs.extend(harness_error_messages(out))
+        for message in blobs:
+            found = http_status_from_message(message)
+            if found is not None:
+                return found
+            for rx in HARNESS_STATUS_PATTERNS[self.id]:
+                hit = rx.search(message)
+                if hit:
+                    return int(hit.group(1))
+        return None
+
+    def session_identity(self, out):
+        try:
+            ev = qwen_result_event(out)
+            if ev and ev.get("session_id"):
+                return str(ev["session_id"])
+            for line in out.splitlines():
+                try:
+                    ev = json.loads(line)
+                except Exception:  # noqa: BLE001 — one bad line never costs the handle
+                    continue
+                if (isinstance(ev, dict) and ev.get("session_id")
+                        and ev.get("type") == "system"):
+                    return str(ev["session_id"])
+        except Exception:  # noqa: BLE001 — no handle ⇒ fresh-mode degradation
+            return ""
+        return ""
+
+    def terminal_evidence(self, out):
+        try:
+            ev = qwen_result_event(out)
+            if ev is None:
+                return None
+            return {"event": "result",
+                    "subtype": str(ev.get("subtype") or ""),
+                    "is_error": bool(ev.get("is_error")),
+                    "num_turns": ev.get("num_turns"),
+                    "session_id": str(ev.get("session_id") or "")}
+        except Exception:  # noqa: BLE001 — evidence is advisory
+            return None
+
+
 def load_all() -> None:
     _reg.register(_Claude())
     _reg.register(_Grok())
     _reg.register(_Codex())
     _reg.register(_Pi())
     _reg.register(_OpenCode())
+    _reg.register(_Qwen())

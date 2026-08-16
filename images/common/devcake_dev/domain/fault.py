@@ -380,6 +380,141 @@ def opencode_run_fault(out: str, harness_exit: int, *, dump: str = ""):
     return None
 
 
+_QWEN_API_ERROR = _re.compile(r"\[API Error:\s*(.*?)]", _re.DOTALL)
+
+
+def _qwen_api_error_bodies(out: str, ev=None) -> list[str]:
+    """CLI-synthesized `[API Error: …]` wrappers (not model prose).
+
+    Measured at 0.21.12: HTTP 401/500, empty completion, truncation, and
+    a tool-only hang-up all exit 0 with subtype=success / is_error=false
+    and put the real signal in this wrapper.
+    """
+    bodies = []
+
+    def _take(text):
+        if not isinstance(text, str) or "[API Error:" not in text:
+            return
+        for m in _QWEN_API_ERROR.finditer(text):
+            body = " ".join(m.group(1).split())
+            if body and body not in bodies:
+                bodies.append(body)
+
+    # Result/error only — assistant text is model-authored and can quote
+    # the wrapper (a mission about auth would otherwise pause the Dev Type).
+    evd = _dict(ev)
+    _take(evd.get("result"))
+    _take(evd.get("error"))
+    for line in out.splitlines():
+        try:
+            evl = json.loads(line)
+        except Exception:  # noqa: BLE001 — skip noise
+            continue
+        if not isinstance(evl, dict) or evl.get("type") != "result":
+            continue
+        _take(evl.get("result"))
+        _take(evl.get("error"))
+    return bodies
+
+
+def _qwen_activity(out: str) -> tuple:
+    """(non-blank assistant text blocks, tool_use blocks) on Qwen stream-json."""
+    texts = tools = 0
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one unparseable line must never decide a run
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant":
+            continue
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                tools += 1
+            elif block.get("type") == "text" and str(block.get("text") or "").strip():
+                texts += 1
+    return texts, tools
+
+
+def qwen_run_fault(out: str, harness_exit: int, *, dump: str = ""):
+    """Qwen Code stream-json: fault dict or None.
+
+    Terminal is the last `{type: result}` (headless docs). Turn cap is
+    `--max-session-turns` (CLI exit 53) / `--max-wall-time`/`--max-tool-calls`
+    (exit 55). 0.21.12 HTTP faults arrive as `[API Error: …]` in the
+    result text (`is_error` stays false). Empty: a success result with no
+    text, no tools, and an empty dump.
+    """
+    from ..harness.tokens import qwen_result_event
+
+    ev = qwen_result_event(out)
+    texts, tools = _qwen_activity(out)
+    tail = (f"(harness_exit={harness_exit} texts={texts} tools={tools} "
+            f"stdout={len(out)}B transcript={len(dump or '')}B)")
+    if ev is None:
+        if harness_exit in (53, 55):
+            return _fault(FAULT_TURN_BUDGET,
+                          f"qwen stopped at a configured run budget "
+                          f"(exit {harness_exit})", tail)
+        return _fault(FAULT_NO_TERMINAL_EVENT,
+                      "qwen stream ended without a result event", tail)
+
+    subtype = str(ev.get("subtype") or "")
+    terminal = str(ev.get("terminal_reason") or "")
+    if (harness_exit in (53, 55)
+            or terminal in ("max_turns", "max_session_turns")
+            or "max_turns" in subtype or "max-session-turns" in subtype
+            or "budget" in subtype):
+        return _fault(FAULT_TURN_BUDGET,
+                      f"qwen stopped at a configured run budget after "
+                      f"{ev.get('num_turns', '?')} turns", tail)
+
+    status = ev.get("api_error_status")
+    api_bodies = _qwen_api_error_bodies(out, ev)
+    api_http = None
+    for body in api_bodies:
+        api_http = http_status_from_message(body)
+        if api_http is not None:
+            break
+    if api_http is None and isinstance(status, int):
+        api_http = status
+
+    if (ev.get("is_error") or (isinstance(api_http, int) and api_http >= 400)
+            or subtype.startswith("error")):
+        shown = api_bodies[0] if api_bodies else (
+            str(ev.get("result") or terminal or subtype)[:120])
+        return _fault(FAULT_TERMINAL_ERROR,
+                      f"qwen reported a terminal error: {shown}", tail)
+
+    if api_bodies:
+        joined = " ".join(api_bodies).lower()
+        if "empty response text" in joined:
+            return _fault(FAULT_EMPTY_COMPLETION,
+                          "qwen reported an empty model completion", tail)
+        if "after a tool result" in joined and tools > 0:
+            pass
+        elif any(tok in joined for tok in (
+                "terminated", "socket", "econnreset", "und_err",
+                "other side closed")):
+            return _fault(FAULT_TERMINAL_ERROR,
+                          f"qwen reported a terminal error: {api_bodies[0]}",
+                          tail)
+        elif "after a tool result" not in joined:
+            return _fault(FAULT_TERMINAL_ERROR,
+                          f"qwen reported a terminal error: {api_bodies[0]}",
+                          tail)
+
+    if (not str(ev.get("result") or "").strip() and not (dump or "").strip()
+            and texts == 0 and tools == 0):
+        return _fault(FAULT_EMPTY_COMPLETION,
+                      "qwen produced nothing at all — no assistant text and "
+                      "no tool calls", tail)
+    return None
+
+
 _MARKDOWN_HEADING = _re.compile(r"^#{1,6}\s")
 
 
@@ -499,6 +634,9 @@ HARNESS_STATUS_PATTERNS = {
     "opencode": (_re.compile(r"\bstatus(?: code)?[:\s]+(\d{3})\b"),
                  _re.compile(r"\bHTTP[ /]?(\d{3})\b"),
                  _re.compile(r"\b(\d{3})\s+Unauthorized\b")),
+    "qwen-code": (_re.compile(r"\bstatus(?: code)?[:\s]+(\d{3})\b"),
+                  _re.compile(r"\bHTTP[ /]?(\d{3})\b"),
+                  _re.compile(r"\b(\d{3})\s+Unauthorized\b")),
 }
 
 

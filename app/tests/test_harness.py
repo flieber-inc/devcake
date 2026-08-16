@@ -125,6 +125,22 @@ def test_dev_type_status_derives_and_reports_secrets(tmp_path, monkeypatch):
     assert claude["harness"]["skills_dir"] == ".claude/skills"
 
 
+def test_qwen_code_registry_contract():
+    """docs/08: Qwen Code is multi-provider OpenAI-compatible; skills live
+    under ~/.qwen/skills; resume stays off until a capture pair lands."""
+    h = HARNESSES["qwen-code"]
+    assert h.image.startswith("devcake/dev-qwen-code:")
+    assert "OPENAI_API_KEY" in h.credential_env
+    assert "ANTHROPIC_API_KEY" in h.credential_env
+    assert "DASHSCOPE_API_KEY" not in h.credential_env
+    assert "BAILIAN_CODING_PLAN_API_KEY" not in h.credential_env
+    assert h.oauth is None
+    assert any(cf.secret_file == "qwen-settings.json" and
+               cf.path_hint == "~/.qwen/settings.json"
+               for cf in h.credential_files)
+    assert h.skills_dir == ".qwen/skills"
+
+
 def test_registry_skills_dirs():
     """The verified per-CLI read-set (this pin set): claude-code 2.1.210
     reads only ~/.claude/skills; grok 0.2.103 and codex 0.144.4 read
@@ -136,6 +152,7 @@ def test_registry_skills_dirs():
     assert HARNESSES["codex"].skills_dir == ".agents/skills"
     assert HARNESSES["pi"].skills_dir == ".agents/skills"
     assert HARNESSES["opencode"].skills_dir == ".agents/skills"
+    assert HARNESSES["qwen-code"].skills_dir == ".qwen/skills"
     for name, h in HARNESSES.items():
         if h.skills_dir is None:
             continue

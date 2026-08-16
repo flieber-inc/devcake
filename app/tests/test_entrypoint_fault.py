@@ -550,6 +550,8 @@ def test_classify_nonzero_exit(err, fault, status, expected):
      ["--mode", "json", "--no-approve"]),
     ("opencode", ["opencode", "run"],
      ["--format", "json", "--auto"]),
+    ("qwen-code", ["qwen", "-p"],
+     ["--output-format", "stream-json", "--yolo"]),
 ])
 def test_argv_matches_the_documented_invocation(harness, head, doc_flags):
     argv = ep.harness_argv(harness, "PROMPT")
@@ -571,19 +573,22 @@ def test_argv_verbose_is_mandatory_for_claude():
     ("codex", ["--sandbox", "read-only"]),          # codex's read-only substitute
     ("pi", ["--tools", "read,grep,find,ls"]),       # no native plan mode
     ("opencode", ["--agent", "plan"]),
+    ("qwen-code", ["--approval-mode", "plan"]),
 ])
 def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
     argv = ep.harness_argv(harness, "P", plan_mode=True)
     for f in plan_flags:
         assert f in argv
     for f in ("--dangerously-skip-permissions", "--always-approve",
-              "--dangerously-bypass-approvals-and-sandbox", "--auto"):
+              "--dangerously-bypass-approvals-and-sandbox", "--auto",
+              "--yolo"):
         assert f not in argv, f"{harness}: plan mode must not grant writes"
 
 
 @pytest.mark.parametrize("harness,pin", [
     ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m"),
-    ("pi", "--model"), ("opencode", "--model")])
+    ("pi", "--model"), ("opencode", "--model"),
+    ("qwen-code", "--model")])
 def test_argv_model_pin_is_omitted_when_empty(harness, pin):
     """An empty DEVCAKE_MODEL means "harness default" — passing an empty pin
     would make every CLI reject the invocation."""
@@ -689,6 +694,45 @@ def test_pi_retry_then_healthy_is_not_a_fault():
              "stopReason": "stop"}], "willRetry": False}),
     ])
     assert ep.pi_run_fault(stream, 0) is None
+
+
+def test_qwen_quoted_api_error_in_assistant_text_is_not_a_fault():
+    """Model prose that mentions [API Error: 401 …] must not trip DEV_AUTH."""
+    stream = "\n".join([
+        json.dumps({"type": "assistant", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text":
+                         'the log said "[API Error: 401 Incorrect API key provided]"'}]}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                    "result": "fixed the auth check", "num_turns": 1}),
+    ])
+    assert ep.qwen_run_fault(stream, 0) is None
+    assert ep.harness_api_error_status("qwen-code", stream) is None
+
+
+def test_qwen_result_api_error_wrapper_is_still_a_fault():
+    stream = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": "[API Error: 401 stub injected HTTP 401]", "num_turns": 1,
+    })
+    fault = ep.qwen_run_fault(stream, 0)
+    assert fault and fault["reason"] == ep.FAULT_TERMINAL_ERROR
+    assert ep.harness_api_error_status("qwen-code", stream) == 401
+
+
+def test_qwen_status_prefix_is_an_exact_three_digit_token():
+    def _qwen_err(msg):
+        return json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": f"[API Error: {msg}]", "num_turns": 1,
+        })
+
+    assert ep.harness_api_error_status(
+        "qwen-code", _qwen_err("40100ms deadline exceeded")) is None
+    assert ep.harness_api_error_status(
+        "qwen-code", _qwen_err("120s timeout waiting: HTTP 401 from upstream")) == 401
+    assert ep.harness_api_error_status(
+        "qwen-code", _qwen_err("401 Incorrect API key provided")) == 401
 
 
 def test_pi_status_prefix_is_an_exact_three_digit_token():

@@ -6,7 +6,7 @@
 # DevCake Dev harness images — multi-target Dockerfile.
 # Shared `base` stage is built once (BuildKit) and reused by every harness.
 #
-# Targets: base | hello | claude-code | codex | grok-build | pi | opencode
+# Targets: base | hello | claude-code | codex | grok-build | pi | opencode | qwen-code
 #
 #   docker buildx bake images
 #
@@ -24,6 +24,7 @@ ARG CLAUDE_CODE_VERSION=2.1.229
 ARG CODEX_VERSION=0.147.0
 ARG PI_VERSION=0.84.2
 ARG OPENCODE_VERSION=1.18.18
+ARG QWEN_CODE_VERSION=0.21.12
 # Toolchain floor (ADR-0023): playwright pinned to the SPA suite's family
 # (admin/spa/package.json playwright-core) so the whole repo speaks one
 # browser stack; python doc/spreadsheet libs pinned like the entrypoint deps.
@@ -325,3 +326,31 @@ RUN HOME=/root npm install -g "opencode-ai@${OPENCODE_VERSION}" \
 USER dev
 ENV DEVCAKE_HARNESS=opencode \
     OPENCODE_DISABLE_AUTOUPDATE=1
+
+# ── qwen-code (QwenLM / Gemini-CLI fork) ───────────────────────────────────
+FROM base AS qwen-code
+
+LABEL org.opencontainers.image.title="devcake-dev-qwen-code"
+
+ARG QWEN_CODE_VERSION
+
+# Node lives in base; HOME=/root for the same .npmrc reason as claude.
+RUN HOME=/root npm install -g "@qwen-code/qwen-code@${QWEN_CODE_VERSION}" \
+    && HOME=/root npm cache clean --force
+
+# Vendor usage-stats default on; auto-update against a root-owned global
+# install is wasted I/O. Bake the off switches — do not rely on the
+# operator's uploaded credential file.
+USER root
+RUN mkdir -p /home/dev/.qwen \
+ && printf '%s\n' \
+      '{"privacy":{"usageStatisticsEnabled":false},"general":{"enableAutoUpdate":false}}' \
+      > /home/dev/.qwen/settings.json \
+ && chown -R 1000:1000 /home/dev/.qwen
+USER dev
+# --yolo + no sandbox prints a one-line stderr warning; the Dev is the
+# sandbox. Suppress so Dagu logs stay signal, not the same banner every run.
+ENV DEVCAKE_HARNESS=qwen-code \
+    QWEN_CODE_SUPPRESS_YOLO_WARNING=1 \
+    QWEN_TELEMETRY_ENABLED=0 \
+    QWEN_USAGE_STATISTICS_ENABLED=false

@@ -159,7 +159,7 @@ docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
 | `docker-compose.yml` | Runtime only (networks, volumes, third-party images) |
 | `app/Dockerfile` | Multi-stage FastAPI app → tag `devcake/app:${TAG}` |
 | `admin/Dockerfile` | Multi-stage SPA + nginx → tag `devcake/admin:${TAG}` |
-| `images/Dockerfile` | Multi-target Dev harnesses (`base`, `hello`, `claude-code`, `codex`, `grok-build`) |
+| `images/Dockerfile` | Multi-target Dev harnesses (`base`, `hello`, `claude-code`, `codex`, `grok-build`, `pi`, `opencode`, `qwen-code`) |
 | `app/devcake/harness.py` | Runtime image names for Dagu dispatch (`devcake/dev-*:latest`) |
 
 ### Typical agent workflows

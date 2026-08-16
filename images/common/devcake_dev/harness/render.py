@@ -308,6 +308,38 @@ def render_opencode(raw: str):
     return None
 
 
+def render_qwen(raw: str):
+    """Qwen Code stream-json events → condensed lines."""
+    try:
+        ev = json.loads(raw)
+    except Exception:  # noqa: BLE001 — non-JSON is printed as-is
+        s = raw.strip()
+        return s[:LINE_LIMIT] if s else None
+    if not isinstance(ev, dict):
+        return None
+    kind = ev.get("type")
+    if kind == "system" and ev.get("subtype") in ("session_start", "init"):
+        return (f"[qwen] session {str(ev.get('session_id') or '')[:8]} · "
+                f"model={ev.get('model', '?')}")
+    if kind == "assistant":
+        parts = []
+        for block in _dict(ev.get("message")).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                parts.append(f"→ {block.get('name', '?')}")
+            elif block.get("type") == "text" and str(block.get("text") or "").strip():
+                parts.append(str(block["text"]).strip()[:200])
+        return " ".join(parts) or None
+    if kind == "result":
+        if ev.get("is_error") or str(ev.get("subtype") or "").startswith("error"):
+            return f"[qwen] error: {_one_line(str(ev.get('result') or ev.get('subtype') or ''), 200)}"
+        return "[qwen] done"
+    if kind == "error":
+        return f"[qwen] error: {_one_line(str(ev.get('message') or ev.get('error') or ''), 200)}"
+    return None
+
+
 def render_stderr(raw: str):
     s = raw.strip()
     return f"! {s[:LINE_LIMIT]}" if s else None

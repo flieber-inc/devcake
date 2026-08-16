@@ -496,3 +496,97 @@ def opencode_text_dump(out: str) -> str:
             blocks.append(text.strip("\n"))
     return "\n\n".join(blocks)
 
+
+def qwen_result_event(out: str):
+    """Last `{type: result}` event in Qwen stream-json, or None.
+
+    Headless docs: system/session_start, assistant, then one result. Same
+    event name as Claude; kept as its own reader so a Claude-only change
+    cannot silently retarget Qwen.
+    """
+    found = None
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one bad line never costs the parse
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "result":
+            found = ev
+    return found
+
+
+def _qwen_usage_int(usage: dict, *names):
+    for name in names:
+        val = usage.get(name)
+        if isinstance(val, (int, float)):
+            return val
+    return None
+
+
+def qwen_token_report(j) -> dict:
+    """TokenReport v1 from Qwen's terminal result event.
+
+    Usage keys are capture-gated: accept Claude-style (`input_tokens`),
+    OpenAI-style (`prompt_tokens`), and camelCase Gemini leftovers
+    (`inputTokens`). Unknown keys stay in `raw`. source=session_json.
+    """
+    j = _dict(j)
+    usage = _dict(j.get("usage"))
+    if not usage:
+        return unavailable_report(model=j.get("model") or "qwen-code")
+    model = (j.get("model")
+             or _dict(j.get("message")).get("model")
+             or "qwen-code")
+    return token_report_v1(
+        model=model,
+        source="session_json",
+        input_tokens=_qwen_usage_int(
+            usage, "input_tokens", "prompt_tokens", "input", "inputTokens"),
+        output_tokens=_qwen_usage_int(
+            usage, "output_tokens", "completion_tokens", "output",
+            "outputTokens"),
+        cache_read_tokens=_qwen_usage_int(
+            usage, "cache_read_input_tokens", "cached_tokens",
+            "cache_read", "cachedContentTokenCount"),
+        cache_write_tokens=_qwen_usage_int(
+            usage, "cache_creation_input_tokens", "cache_write",
+            "cacheWrite"),
+        total_tokens=_qwen_usage_int(
+            usage, "total_tokens", "totalTokens", "total"),
+        reasoning_tokens=_qwen_usage_int(
+            usage, "reasoning_tokens", "thoughtsTokenCount", "reasoning")
+            or _dict(usage.get("output_tokens_details")).get("thinking_tokens"),
+        cost_usd_native=(j.get("total_cost_usd")
+                         if isinstance(j.get("total_cost_usd"), (int, float))
+                         else usage.get("cost")),
+        num_turns=j.get("num_turns"),
+        duration_ms=j.get("duration_ms"),
+        raw=usage)
+
+
+def qwen_text_dump(out: str) -> str:
+    """ADR-0014 D1: every assistant-visible text block, in order, untruncated.
+
+    Same content path as Claude (assistant.message.content[].text) because
+    Qwen's stream-json is a Gemini-CLI/Claude-shaped event log. Subagent
+    chatter (`parent_tool_use_id`) is excluded.
+    """
+    blocks = []
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one bad line never costs the dump
+            continue
+        if not isinstance(ev, dict) or ev.get("type") != "assistant" \
+                or ev.get("parent_tool_use_id"):
+            continue
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                blocks.append(text.strip("\n"))
+    return "\n\n".join(blocks)
+

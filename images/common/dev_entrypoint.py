@@ -62,6 +62,7 @@ from devcake_dev.domain.fault import (  # noqa: E402
     grok_run_fault,
     opencode_run_fault,
     pi_run_fault,
+    qwen_run_fault,
     harness_api_error_status,
     harness_error_messages,
     harness_fault,
@@ -105,6 +106,7 @@ from devcake_dev.harness.render import (  # noqa: E402
     render_codex,
     render_opencode,
     render_pi,
+    render_qwen,
     render_stderr,
 )
 from devcake_dev.harness.tokens import (  # noqa: E402
@@ -119,6 +121,8 @@ from devcake_dev.harness.tokens import (  # noqa: E402
     opencode_text_dump,
     opencode_token_report,
     pi_text_dump,
+    qwen_text_dump,
+    qwen_token_report,
     pi_token_report,
     unavailable_report,
 )
@@ -187,11 +191,30 @@ def _fetch_spec(phase: str) -> dict:
     return spec
 
 
+def _deep_merge_json(base, overlay):
+    """Overlay wins on scalar/list conflicts; nested objects recurse."""
+    if not (isinstance(base, dict) and isinstance(overlay, dict)):
+        return overlay
+    out = dict(base)
+    for key, val in overlay.items():
+        out[key] = _deep_merge_json(out[key], val) if key in out else val
+    return out
+
+
 def _write_credential_files(spec: dict) -> None:
     for f in spec.get("credential_files", []):
         p = pathlib.Path(os.path.expanduser(f["path_hint"]))
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(f["content"])
+        text = f["content"]
+        if p.is_file():
+            try:
+                existing = json.loads(p.read_text())
+                incoming = json.loads(text)
+            except Exception:  # noqa: BLE001 — non-JSON stays a wholesale write
+                existing = incoming = None
+            if isinstance(existing, dict) and isinstance(incoming, dict):
+                text = json.dumps(_deep_merge_json(existing, incoming))
+        p.write_text(text)
         p.chmod(0o600)
 
 

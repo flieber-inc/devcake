@@ -122,6 +122,21 @@ Pi exits 0 on HTTP failures: the stream still carries `agent_end` with
 | `opencode_http_401` | 401 (`APIError.data.statusCode`) | 1 | exit 12 auth |
 | `opencode_http_429` / `_500` / `truncated` | hard errors / hang-up | 1 | exit 15 terminal |
 
+### qwen-code 0.21.12
+
+| Name | Scenario | CLI exit | Asserted class |
+|---|---|---|---|
+| `qwen_healthy` / `refusal` / `tool_only` | success shapes | 0 | no fault |
+| `qwen_empty` / `whitespace` | empty/whitespace wrapped as `[API Error: … empty response text.]` | 0 | exit 15 empty |
+| `qwen_http_401` | 401 (`[API Error: 401 …]`) | 0 | exit 12 auth |
+| `qwen_http_500` / `truncated` | 500 / hang-up, same wrapper | 0 | exit 15 terminal |
+| `qwen_http_429` | 429 retried until SIGKILL; no result event | -9 | exit 15 no_terminal |
+
+Qwen exits 0 on HTTP 401/500 and on empty completions: `result.subtype` stays
+`success` and `is_error` is false. The CLI's `[API Error: …]` assistant text
+is the fault signal. 429 never produces a result (retries until the capture
+timeout kills the process group).
+
 ## Known gaps (not reclassified as exit 15)
 
 Some real-world failures still land as exit 11 `DEV_BAD_OUTPUT` (missing

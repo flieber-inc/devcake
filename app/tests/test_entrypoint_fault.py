@@ -291,9 +291,13 @@ def test_grok_producing_nothing_at_all_is_a_fault():
     assert reason(ep.harness_fault("grok-build", out, 0)) == ep.FAULT_EMPTY_COMPLETION
 
 
-def test_unknown_harness_falls_back_to_the_claude_predicate():
+def test_unknown_harness_fault_fails_closed():
+    """docs/16 H1: a typo must not silently run the Claude predicate."""
     out = fx("claude_empty_completion.jsonl")
-    assert reason(ep.harness_fault("something-new", out, 0)) == ep.FAULT_EMPTY_COMPLETION
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.harness_fault("something-new", out, 0)
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.harness_api_error_status("something-new", out)
 
 
 # ── forensics ────────────────────────────────────────────────────────────────
@@ -370,8 +374,10 @@ def test_terminal_evidence_never_raises_on_hostile_shapes():
         J({"type": "turn.completed", "usage": "none"}),
         J({"type": "result", "subtype": 7, "usage": []}),
         "not json at all", J([1, 2, 3])])
-    for harness in ("grok-build", "codex", "claude-code", "unknown"):
+    for harness in ("grok-build", "codex", "claude-code"):
         ep.terminal_evidence(harness, hostile)  # must not raise
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.terminal_evidence("unknown", hostile)
 
 
 # ── misplaced result.json ────────────────────────────────────────────────────

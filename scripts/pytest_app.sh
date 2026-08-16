@@ -65,6 +65,7 @@ docker run --rm \
   "${ENV_ARGS[@]}" \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
   -v "$(pwd)/images/hello:/srv/images/hello:ro" \
+  -v "$(pwd)/docker-bake.hcl:/srv/docker-bake.hcl:ro" \
   -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \
   -v "$(pwd)/app/Dockerfile:/srv/app.Dockerfile:ro" \
   -v "$(pwd)/docs:/srv/docs:ro" \

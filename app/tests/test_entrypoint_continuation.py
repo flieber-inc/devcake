@@ -95,8 +95,10 @@ def test_session_identity_never_raises_on_hostile_shapes():
         J({"type": "end", "sessionId": {"nested": True}}),
         J({"type": "thread.started", "thread_id": ["a"]}),
         "not json", J([1, 2])])
-    for harness in ("grok-build", "codex", "claude-code", "unknown"):
+    for harness in ("grok-build", "codex", "claude-code"):
         assert isinstance(ep.session_identity(harness, hostile), str)
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.session_identity("unknown", hostile)
 
 
 # ── harness_resume_argv — the per-harness resume dialects ────────────────────
@@ -136,16 +138,17 @@ def test_resume_argv_extras_come_last_so_they_can_override():
         assert argv[-2:] == ["--zz", "1"]
 
 
-def test_resume_argv_unknown_harness_is_none_not_the_claude_fallback():
-    """Both builders fail closed on unknown ids — resume already returned
-    None; harness_argv now raises instead of falling through to Claude."""
-    assert ep.harness_resume_argv("other", "S", "P") is None
+def test_resume_argv_unknown_harness_raises():
+    with pytest.raises(ValueError, match="unknown harness"):
+        ep.harness_resume_argv("other", "S", "P")
 
 
 # ── RESUME_SPECS — capture-verified facts only ───────────────────────────────
 
 def test_resume_specs_cover_exactly_the_captured_harnesses():
     assert set(ep.RESUME_SPECS) == {"grok-build", "claude-code", "codex"}
+    for hid, spec in ep.RESUME_SPECS.items():
+        assert ep.get_dialect(hid).resume_spec == spec
 
 
 def test_codex_usage_is_cumulative_and_the_others_are_not():

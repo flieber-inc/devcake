@@ -72,6 +72,7 @@ from devcake_dev.harness.argv import (  # noqa: E402
     harness_argv,
     harness_resume_argv,
 )
+from devcake_dev.harness.dialect import get_dialect  # noqa: E402
 from devcake_dev.harness.continuation import (  # noqa: E402
     ContinuationConfig,
     ContinuationDecision,
@@ -519,6 +520,7 @@ def harness_main() -> None:
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
     model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
     try:
+        dialect = get_dialect(harness)
         cmd = harness_argv(harness, prompt, plan_mode=plan_mode, model=model,
                            extra=extra)
     except ValueError as e:
@@ -593,8 +595,7 @@ def harness_main() -> None:
         relay and its flusher deliberately live outside the loop."""
         out_lines: list[str] = []
         err_lines: list[str] = []
-        render = {"codex": render_codex,
-                  "grok-build": GrokCoalescer()}.get(harness, render_claude)
+        render = dialect.renderer()
         with tracer.start_as_current_span("harness.exec", context=dev_ctx) as hspan:
             hspan.set_attribute("devcake.continuation", attempt)
             proc = subprocess.Popen(argv_now, cwd=workdir, stdout=subprocess.PIPE,
@@ -641,81 +642,15 @@ def harness_main() -> None:
         span.set_attribute("devcake.outcome", "harness_exit_%d" % harness_exit)
 
         # ── token extraction + result text (docs/08 §5) ──────────────────────
-        token_report = unavailable_report(model=harness)
-        result_text, transcript_body = "", ""
-        codex_last = ""  # RAW `-o` content: result_text is overwritten with a
-        #                  stdout tail on any parse failure, so the fault
-        #                  predicate must not read it (fixtures README)
-        if harness == "codex":
-            try:
-                last = WORKSPACE / "out" / "last_message.txt"
-                codex_last = last.read_text() if last.exists() else ""
-                result_text = codex_last
-                token_report = codex_token_report(out) or token_report
-                if not result_text:
-                    result_text = out[-4000:]
-            except Exception:
-                result_text = out[-4000:]
-        elif harness == "grok-build":
-            sid, terminal = "", None  # `terminal`: the event carrying usage/turns
-            try:
-                parsed = grok_stream_parse(out)
-                if parsed is not None:
-                    result_text, sid = parsed
-                    terminal = grok_end_event(out)
-                else:  # EXTRA_ARGS overrode the format back to a plain json blob
-                    j = json.loads(out)
-                    result_text = j.get("text") or ""
-                    sid = j.get("sessionId") or ""
-                    terminal = j   # same {usage, num_turns, modelUsage} keys
-            except Exception:
-                result_text = out[-4000:]
-            # Token report — its own guard, because a failure here must cost only
-            # the report (INV-5 then posts "unavailable"), never the result text or
-            # the transcript. The `end` event is PREFERRED: at 0.2.112 it carries
-            # the full split inline, needing no session id and no filesystem read
-            # (docs/08 §5). `signals.json` stays as the fallback — its survival at
-            # this version is an uncommitted campaign note, so dropping it would be
-            # as much of a guess as relying on it.
-            try:
-                token_report = (grok_end_report(terminal)
-                                or grok_signals_report(sid) or token_report)
-            except Exception:  # noqa: BLE001 — the artifact path outranks its own token report
-                print("token extraction failed; reporting unavailable", file=sys.stderr)
-            try:
-                # no sessionId ⇒ nothing to export: an `error` event never carries
-                # one, and the export is the only grok dump source (docs/08 §6)
-                exp = (subprocess.run(["grok", "export", sid], capture_output=True,
-                                      text=True) if sid else None)
-                if exp is not None and exp.returncode == 0 and exp.stdout.strip():
-                    transcript_body = exp.stdout
-            except Exception:  # noqa: BLE001 — no export ⇒ no dump; the fault predicate handles an empty one
-                print("grok export failed; transcript falls back to the agent report",
-                      file=sys.stderr)
-        else:
-            try:
-                # stream-json: the final result event carries the exact fields of
-                # the old --output-format json blob (verified live); blob fallback
-                # covers an EXTRA_ARGS format override
-                j = claude_result_event(out) or json.loads(out)
-                token_report = claude_token_report(j)
-                result_text = j.get("result") or ""
-            except Exception:
-                result_text = out[-4000:]
-
-        # ADR-0014 D1: the full dump of assistant-visible text, per harness
-        # (grok: the `grok export` session already includes every message).
-        # Guarded like every other parse of `out` — a dump failure must never
-        # abort the artifact path (the no-dump fallback handles "").
-        try:
-            if harness == "codex":
-                inv_dump = codex_text_dump(out)
-            elif harness == "grok-build":
-                inv_dump = transcript_body
-            else:
-                inv_dump = claude_text_dump(out)
-        except Exception:
-            inv_dump = ""
+        # Identity lives on the dialect (docs/16 H1). last_message is the RAW
+        # `-o` file for codex: result_text is overwritten with a stdout tail
+        # on any parse failure, so the fault predicate must not read it
+        # (fixtures README).
+        view = dialect.parse_run(out, workspace=WORKSPACE, model=model)
+        token_report = view.token_report
+        result_text = view.result_text
+        inv_dump = view.dump
+        last_message = view.last_message
 
         # ── continuation aggregation (ADR-0022) ──────────────────────────────
         # Everything kept across invocations is SMALL (reports, sids, dump
@@ -725,8 +660,8 @@ def harness_main() -> None:
         inv_reports.append(token_report)
         inv_modes.append(mode)
         record_session(chains, session_identity(harness, out), mode)
-        if (harness == "grok-build" and mode == "resume" and dump_segments
-                and (inv_dump or "").strip()):
+        if (dialect.dump_cumulative_on_resume and mode == "resume"
+                and dump_segments and (inv_dump or "").strip()):
             # the resumed export is cumulative over the chain — supersede
             dump_segments[-1] = inv_dump
             dump_labels[-1] = f"continuation {cont.used} (resume)"
@@ -748,7 +683,7 @@ def harness_main() -> None:
         # own dump and prompt (the nudge, on relaunches — what separates the
         # export's echo from new work). Compute BEFORE `out` is released.
         fault = harness_fault(harness, out, harness_exit, dump=inv_dump,
-                              last_message=codex_last, prompt=inv_prompt)
+                              last_message=last_message, prompt=inv_prompt)
         # Every harness, not just claude: codex and grok expose no structured
         # status field, so without this a 401 on either lands on 15 (excusable,
         # correlation-eligible) instead of 12 (latch the breaker, tell the operator).

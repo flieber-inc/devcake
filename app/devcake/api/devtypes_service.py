@@ -99,7 +99,8 @@ async def list_harnesses():
                    "credential_env": h.credential_env,
                    "credential_files": [cf.model_dump() for cf in h.credential_files],
                    "oauth_available": h.oauth is not None,
-                   "skills_dir": h.skills_dir}
+                   "skills_dir": h.skills_dir,
+                   "experimental": h.experimental}
             for name, h in HARNESSES.items()}
 
 

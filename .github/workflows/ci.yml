@@ -103,6 +103,7 @@ jobs:
             -e REDIS_PASSWORD=ci-redis-pass \
             -v "${{ github.workspace }}/images/common:/srv/images/common:ro" \
             -v "${{ github.workspace }}/images/hello:/srv/images/hello:ro" \
+            -v "${{ github.workspace }}/docker-bake.hcl:/srv/docker-bake.hcl:ro" \
             -v "${{ github.workspace }}/dagu/dags:/srv/dagu-dags:ro" \
             -v "${{ github.workspace }}/app/Dockerfile:/srv/app.Dockerfile:ro" \
             -v "${{ github.workspace }}/docs:/srv/docs:ro" \

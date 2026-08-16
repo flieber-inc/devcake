@@ -12,14 +12,20 @@ these are the *inner* model harnesses that the DevCake meta-harness staffs
 image, credentials, invocation, artifact parsing, OAuth, and skills delivery.
 It does **not** own a fixed model. Exactly three templates exist as entries in
 the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2). Adding a
-fourth crosses the registry, config schema, image/Bake, entrypoint, tests, and
-this document (§8); changing a Dev Type's model does not add a template.
+fourth crosses the registry, Bake/image, a dialect module, captures, tests,
+and this document (§9); config accepts registry ids automatically (docs/16 H2).
+Changing a Dev Type's model does not add a template.
 
 | Template id | Harness CLI | Empty `DevType.model` resolves to | Seeded Dev Types |
 |---|---|---|---|
 | `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-opus-5` (ADR-0033 D10) |
 | `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
+
+`Harness.experimental` is a registry flag (`GET /api/v1/harnesses`, the
+admin picker). Launch-supported templates leave it false. A later dialect
+that has not passed a live operator battery must set it true — prose in this
+document is not the blast-radius control.
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
@@ -324,8 +330,9 @@ codex `-c` block verbatim — is `11-admin-panel.md` §3.
 
 ## 9. Adding or changing a template (checklist)
 
-1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow, optional `skills_dir` — the home-relative dir the CLI reads personal skills from; leave unset if unsupported) and the new value to `DevType.harness_template`'s Literal (`config.py`).
+1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow, optional `skills_dir` — the home-relative dir the CLI reads personal skills from; leave unset if unsupported). `DevType.harness_template` validates against that dict (no second Literal).
 2. Add a target to `images/Dockerfile` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and a matching target in `docker-bake.hcl` (group `images` / `all`).
-3. Add the invocation + renderer + token-extraction branches in `images/common/dev_entrypoint.py` (§1, §1a, §5).
-4. Run the M1 hello-world DAG with the new image, then the M3 ONBOARD end-to-end demo.
-5. Update the token-extraction section (§5) and this document.
+3. Add a `HarnessDialect` implementation in `images/common/devcake_dev/harness/dialects.py` (argv, render, parse, fault, session identity — docs/16 H1). Unknown ids fail closed; do not add `if harness ==` in the entrypoint.
+4. Capture the fixture matrix (`scripts/harness_capture/`) and add rows in `test_harness_captures.py`. Resume stays off until a committed `<id>_resume_nudge` pair lands in `RESUME_SPECS`.
+5. Run the M1 hello-world DAG with the new image, then an ONBOARD end-to-end on that harness.
+6. Update the token-extraction section (§5) and this document.

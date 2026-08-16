@@ -889,7 +889,7 @@ is the baked image / in-container adapter.
 |---|---|---|---|
 | PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
 | Platform | `HarnessDialect` + registry-as-id-source | — | existing three capture batteries + **Grok Build live ONBOARD** |
-| Harness | Pi, OpenCode, Qwen Code | `pi-coding-agent`, `opencode`, `qwen-code` | H4 capture matrix from the **baked** image + hello + ONBOARD + INV-5 report |
+| Harness | Pi, OpenCode, Qwen Code | `pi`, `opencode`, `qwen-code` | H4 capture matrix from the **baked** image + hello + ONBOARD + INV-5 report |
 
 Copy the `gitea_issues` profile (docs/05 §9): issue-only, `open→backlog`,
 `DEVCAKE-*` labels, `team_key=owner/repo`, `global_ids=False`. Separate

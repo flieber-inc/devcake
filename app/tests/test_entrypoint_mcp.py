@@ -5,6 +5,7 @@ already beating — a hung install would otherwise idle to the wall clock),
 and never block on stdin."""
 
 import importlib.util
+import json
 import os
 import time
 from pathlib import Path
@@ -68,3 +69,23 @@ def test_stdin_is_closed(tmp_path):
     """A command that reads stdin sees immediate EOF instead of waiting on
     an interactive answer forever."""
     assert ep.run_mcp_setup(["head -c1"], tmp_path, timeout=15) is None
+
+
+def test_credential_json_merges_over_baked_file(tmp_path, monkeypatch):
+    """Uploaded settings must not clobber baked privacy/auto-update keys."""
+    dest = tmp_path / "settings.json"
+    dest.write_text(
+        '{"privacy":{"usageStatisticsEnabled":false},'
+        '"general":{"enableAutoUpdate":false}}')
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ep._write_credential_files({
+        "credential_files": [{
+            "path_hint": str(dest),
+            "content": '{"selectedType":"openai","privacy":{"foo":1}}',
+        }],
+    })
+    data = json.loads(dest.read_text())
+    assert data["privacy"]["usageStatisticsEnabled"] is False
+    assert data["privacy"]["foo"] == 1
+    assert data["general"]["enableAutoUpdate"] is False
+    assert data["selectedType"] == "openai"

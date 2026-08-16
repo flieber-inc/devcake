@@ -126,6 +126,7 @@ HARNESSES: dict[str, Harness] = {
         # Personal skills: ~/.qwen/skills (project .qwen/skills is unused —
         # never write into the clone).
         skills_dir=".qwen/skills",
+        experimental=True,
     ),
 }
 

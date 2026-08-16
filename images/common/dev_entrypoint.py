@@ -191,11 +191,30 @@ def _fetch_spec(phase: str) -> dict:
     return spec
 
 
+def _deep_merge_json(base, overlay):
+    """Overlay wins on scalar/list conflicts; nested objects recurse."""
+    if not (isinstance(base, dict) and isinstance(overlay, dict)):
+        return overlay
+    out = dict(base)
+    for key, val in overlay.items():
+        out[key] = _deep_merge_json(out[key], val) if key in out else val
+    return out
+
+
 def _write_credential_files(spec: dict) -> None:
     for f in spec.get("credential_files", []):
         p = pathlib.Path(os.path.expanduser(f["path_hint"]))
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(f["content"])
+        text = f["content"]
+        if p.is_file():
+            try:
+                existing = json.loads(p.read_text())
+                incoming = json.loads(text)
+            except Exception:  # noqa: BLE001 — non-JSON stays a wholesale write
+                existing = incoming = None
+            if isinstance(existing, dict) and isinstance(incoming, dict):
+                text = json.dumps(_deep_merge_json(existing, incoming))
+        p.write_text(text)
         p.chmod(0o600)
 
 

@@ -498,9 +498,9 @@ class _Qwen:
         blobs = list(_qwen_api_error_bodies(out, ev))
         blobs.extend(harness_error_messages(out))
         for message in blobs:
-            head = message[:3]
-            if head.isdigit():
-                return int(head)
+            found = http_status_from_message(message)
+            if found is not None:
+                return found
             for rx in HARNESS_STATUS_PATTERNS[self.id]:
                 hit = rx.search(message)
                 if hit:

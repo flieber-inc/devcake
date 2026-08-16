@@ -400,19 +400,20 @@ def _qwen_api_error_bodies(out: str, ev=None) -> list[str]:
             if body and body not in bodies:
                 bodies.append(body)
 
-    _take(_dict(ev).get("result"))
-    _take(_dict(ev).get("error"))
+    # Result/error only — assistant text is model-authored and can quote
+    # the wrapper (a mission about auth would otherwise pause the Dev Type).
+    evd = _dict(ev)
+    _take(evd.get("result"))
+    _take(evd.get("error"))
     for line in out.splitlines():
         try:
             evl = json.loads(line)
         except Exception:  # noqa: BLE001 — skip noise
             continue
-        if not isinstance(evl, dict) or evl.get("type") != "assistant":
+        if not isinstance(evl, dict) or evl.get("type") != "result":
             continue
-        msg = evl.get("message") if isinstance(evl.get("message"), dict) else {}
-        for block in msg.get("content") or []:
-            if isinstance(block, dict) and block.get("type") == "text":
-                _take(block.get("text"))
+        _take(evl.get("result"))
+        _take(evl.get("error"))
     return bodies
 
 
@@ -475,9 +476,8 @@ def qwen_run_fault(out: str, harness_exit: int, *, dump: str = ""):
     api_bodies = _qwen_api_error_bodies(out, ev)
     api_http = None
     for body in api_bodies:
-        head = body[:3]
-        if head.isdigit():
-            api_http = int(head)
+        api_http = http_status_from_message(body)
+        if api_http is not None:
             break
     if api_http is None and isinstance(status, int):
         api_http = status

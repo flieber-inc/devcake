@@ -696,6 +696,45 @@ def test_pi_retry_then_healthy_is_not_a_fault():
     assert ep.pi_run_fault(stream, 0) is None
 
 
+def test_qwen_quoted_api_error_in_assistant_text_is_not_a_fault():
+    """Model prose that mentions [API Error: 401 …] must not trip DEV_AUTH."""
+    stream = "\n".join([
+        json.dumps({"type": "assistant", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text":
+                         'the log said "[API Error: 401 Incorrect API key provided]"'}]}}),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                    "result": "fixed the auth check", "num_turns": 1}),
+    ])
+    assert ep.qwen_run_fault(stream, 0) is None
+    assert ep.harness_api_error_status("qwen-code", stream) is None
+
+
+def test_qwen_result_api_error_wrapper_is_still_a_fault():
+    stream = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": "[API Error: 401 stub injected HTTP 401]", "num_turns": 1,
+    })
+    fault = ep.qwen_run_fault(stream, 0)
+    assert fault and fault["reason"] == ep.FAULT_TERMINAL_ERROR
+    assert ep.harness_api_error_status("qwen-code", stream) == 401
+
+
+def test_qwen_status_prefix_is_an_exact_three_digit_token():
+    def _qwen_err(msg):
+        return json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": f"[API Error: {msg}]", "num_turns": 1,
+        })
+
+    assert ep.harness_api_error_status(
+        "qwen-code", _qwen_err("40100ms deadline exceeded")) is None
+    assert ep.harness_api_error_status(
+        "qwen-code", _qwen_err("120s timeout waiting: HTTP 401 from upstream")) == 401
+    assert ep.harness_api_error_status(
+        "qwen-code", _qwen_err("401 Incorrect API key provided")) == 401
+
+
 def test_pi_status_prefix_is_an_exact_three_digit_token():
     """message[:3].isdigit() is not a status: a timeout must not be 401."""
     def _pi_err(msg):

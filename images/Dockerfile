@@ -352,4 +352,5 @@ USER dev
 # sandbox. Suppress so Dagu logs stay signal, not the same banner every run.
 ENV DEVCAKE_HARNESS=qwen-code \
     QWEN_CODE_SUPPRESS_YOLO_WARNING=1 \
-    QWEN_TELEMETRY_ENABLED=0
+    QWEN_TELEMETRY_ENABLED=0 \
+    QWEN_USAGE_STATISTICS_ENABLED=false

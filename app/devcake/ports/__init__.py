@@ -11,12 +11,14 @@ from .messaging import MessagingPort
 from .pmo import PMOPort
 from .receipts import ReceiptStore
 from .state import StatePort
+from .versions import HarnessVersionSource
 
 __all__ = [
     "ExecutorPort",
     "ForgePort",
     "MessagingPort",
     "PMOPort",
+    "HarnessVersionSource",
     "ReceiptStore",
     "RunFinalizer",
     "StatePort",

@@ -19,8 +19,20 @@ def publish_keep_set(dev_types: dict, *, root: Path | None = None) -> Path:
         os.environ.get("DEVCAKE_DATA_DIR", "/data"))
     base.mkdir(parents=True, exist_ok=True)
     path = base / KEEP_SET_NAME
+    from .house_pins import effective_cli_version
+
     templates = sorted({dt.harness_template for dt in dev_types.values()})
-    text = json.dumps({"templates": templates}, indent=2) + "\n"
+    seen: set[tuple[str, str]] = set()
+    pins: list[dict] = []
+    for dt in sorted(dev_types.values(),
+                     key=lambda d: (d.harness_template,
+                                    effective_cli_version(d))):
+        pair = (dt.harness_template, effective_cli_version(dt))
+        if pair in seen or not pair[1]:
+            continue
+        seen.add(pair)
+        pins.append({"template": pair[0], "cli_version": pair[1]})
+    text = json.dumps({"templates": templates, "pins": pins}, indent=2) + "\n"
     fd, tmp = tempfile.mkstemp(dir=base, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:

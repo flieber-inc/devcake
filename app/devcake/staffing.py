@@ -14,6 +14,7 @@ from .house_pins import (
     LAUNCH_SUPPORTED,
     SENTINEL_DIGEST,
     app_digest,
+    effective_cli_version,
 )
 
 
@@ -41,7 +42,7 @@ def require_staffed(dev_type, *, digest: str | None = None,
         raise HarnessNotStaffed(
             "this app was built without the bake wrapper",
             kind="sentinel")
-    version = HOUSE_PINS[template]
+    version = effective_cli_version(dev_type)
     rec = None if store is None else store.get(
         digest=digest, template=template, cli_version=version)
     if rec is None:
@@ -72,38 +73,58 @@ def receipt_summary(dev_types: Mapping[str, Any], *, digest: str,
     templates = sorted({dt.harness_template for dt in dev_types.values()})
     rows = {}
     for template in templates:
-        version = HOUSE_PINS.get(template, "")
-        entry: dict[str, Any] = {
-            "cli_version": version,
-            "gated": template in LAUNCH_SUPPORTED,
-        }
-        if template not in LAUNCH_SUPPORTED:
-            entry["ok"] = None
-            entry["reason"] = "experimental — house pin only"
-            rows[template] = entry
-            continue
-        if digest == SENTINEL_DIGEST:
-            entry["ok"] = False
-            entry["reason"] = "this app was built without the bake wrapper"
-            rows[template] = entry
-            continue
-        rec = None if store is None else store.get(
-            digest=digest, template=template, cli_version=version)
-        if rec is None:
-            entry["ok"] = False
-            entry["reason"] = f"no receipt for {template} {version}"
-            rows[template] = entry
-            continue
-        entry["ok"] = rec.get("ok") is True
-        if not entry["ok"]:
-            row = _first_unpassed_required(rec)
-            entry["row"] = row
-            entry["reason"] = (
-                f"{template} {version} receipt is not ok"
-                + (f" ({row})" if row else ""))
-        rows[template] = entry
+        # One row per template using the first Dev Type's effective pin
+        # (unique pins also appear under dev_types).
+        version = next(
+            (effective_cli_version(dt) for dt in dev_types.values()
+             if dt.harness_template == template),
+            HOUSE_PINS.get(template, ""))
+        rows[template] = _pin_entry(template, version, digest, store)
+    per_dt = {}
+    for name, dt in sorted(dev_types.items()):
+        template = dt.harness_template
+        version = effective_cli_version(dt)
+        entry = _pin_entry(template, version, digest, store)
+        entry["template"] = template
+        entry["house"] = not bool((getattr(dt, "cli_version", "") or "").strip())
+        per_dt[name] = entry
     return {
         "digest": digest,
         "sentinel": digest == SENTINEL_DIGEST,
         "templates": rows,
+        "dev_types": per_dt,
     }
+
+
+def bake_command(template: str, version: str) -> str:
+    return f"bash scripts/harness_probe/host_probe.sh {template} {version}"
+
+
+def _pin_entry(template: str, version: str, digest: str, store) -> dict:
+    entry: dict[str, Any] = {
+        "cli_version": version,
+        "gated": template in LAUNCH_SUPPORTED,
+        "command": bake_command(template, version),
+    }
+    if template not in LAUNCH_SUPPORTED:
+        entry["ok"] = None
+        entry["reason"] = "experimental — house pin only"
+        return entry
+    if digest == SENTINEL_DIGEST:
+        entry["ok"] = False
+        entry["reason"] = "this app was built without the bake wrapper"
+        return entry
+    rec = None if store is None else store.get(
+        digest=digest, template=template, cli_version=version)
+    if rec is None:
+        entry["ok"] = False
+        entry["reason"] = f"no receipt for {template} {version}"
+        return entry
+    entry["ok"] = rec.get("ok") is True
+    if not entry["ok"]:
+        row = _first_unpassed_required(rec)
+        entry["row"] = row
+        entry["reason"] = (
+            f"{template} {version} receipt is not ok"
+            + (f" ({row})" if row else ""))
+    return entry

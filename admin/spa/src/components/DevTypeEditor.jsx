@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { KeyRound, Upload } from "lucide-react";
-import { send } from "../api.js";
+import { get, send } from "../api.js";
 import { Field, Help, ListTextarea, SecretField, Input, Select } from "./Field.jsx";
 import InstantZone from "./InstantZone.jsx";
 import Button from "./Button.jsx";
@@ -54,12 +54,43 @@ function UploadButton({ devType, secretFile, onDone }) {
 export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setField, onOAuth, onCredChange, skillsCatalog, catalogErr, editCount, onClose }) {
   const d = draftDt;
   const set = (k, v) => setField(`devTypes.${name}.${k}`, v);
-  const { dr } = useSharedDraft();
+  const { dr, healthInfo } = useSharedDraft();
   const repoCards = dr.draft.cfg.repos || [];
   const h = harnesses[d.harness_template] || {};   // registry info for the DRAFTED harness
   const pending = d.harness_template !== serverDt.harness_template;   // unsaved switch
   const ready = useCredsReady(d, serverDt, h);
   const filePresent = (sf) => (serverDt.secrets_present || []).includes(sf);
+  const canPin = !!h.cli_pin_allowed;
+  const housePin = h.house_cli_version || "";
+  const pin = d.cli_version || "";
+  const pinStatus = (healthInfo?.harness_pins?.dev_types || {})[name];
+  const bakeCmd = pinStatus?.command
+    || `bash scripts/harness_probe/host_probe.sh ${d.harness_template} ${pin || housePin}`;
+  const [pinMsg, setPinMsg] = useState("");
+  const [pinBusy, setPinBusy] = useState(false);
+  const useLatest = async () => {
+    setPinBusy(true); setPinMsg("");
+    try {
+      const r = await send("POST", `/harnesses/${d.harness_template}/latest-cli`);
+      set("cli_version", r.cli_version);
+    } catch (e) {
+      setPinMsg(String(e.message || e).replace(/^\d+ /, ""));
+    } finally { setPinBusy(false); }
+  };
+  const checkNewer = async () => {
+    setPinBusy(true); setPinMsg("");
+    try {
+      const r = await get(`/harnesses/${d.harness_template}/latest-cli`);
+      const current = pin || housePin;
+      if (r.cli_version && r.cli_version !== current) {
+        setPinMsg(`${r.cli_version} released — not yet built`);
+      } else {
+        setPinMsg(`already on ${current || r.cli_version}`);
+      }
+    } catch (e) {
+      setPinMsg(String(e.message || e).replace(/^\d+ /, ""));
+    } finally { setPinBusy(false); }
+  };
   return (
     <Modal className="max-w-2xl" onClose={onClose}>
       <div className="mb-4 flex items-center gap-3">
@@ -102,7 +133,36 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               placeholder={h.default_model ? `harness default: ${h.default_model}` : "e.g. claude-fable-5"}
               onChange={(e) => set("model", e.target.value)} />
           </Field>
+          <Field label="CLI version" hint={housePin ? `Empty = house ${housePin}` : "Empty = house pin"}
+            help="Which coding-harness binary this Dev Type runs (not the model, not the DevCake image tag). Empty uses the house pin baked into the image. Save does not bake — after you set a number, run the host command shown below.">
+            <Input value={pin}
+              disabled={!canPin}
+              placeholder={housePin ? `house ${housePin}` : "house pin"}
+              onChange={(e) => set("cli_version", e.target.value)} />
+          </Field>
         </div>
+        {canPin && (
+          <InstantZone note="looks up the remote version now — Save still applies the pin">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button kind="ghost" size="sm" disabled={pinBusy} onClick={useLatest}>
+                {pinBusy ? "Looking up…" : "Use latest"}
+              </Button>
+              <Button kind="ghost" size="sm" disabled={pinBusy} onClick={checkNewer}>
+                Check for a newer version
+              </Button>
+            </div>
+            {pinMsg && (
+              <p className="text-xs text-neutral-600 dark:text-neutral-300">{pinMsg}</p>
+            )}
+          </InstantZone>
+        )}
+        {canPin && pinStatus && pinStatus.ok === false && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            This pin is not staffed yet — run{" "}
+            <span className="font-mono">{bakeCmd}</span> on the host.
+            Save does not bake.
+          </p>
+        )}
         {h.experimental && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
             Experimental — in-tree so it can be dispatched, but it has not

@@ -153,7 +153,8 @@ rework): which image a Dev runs, which credential env vars pass through, which
 secret files are delivered, and whether an OAuth device flow exists all derive
 from `harness_template` via `HARNESSES`. Launch sites call
 `resolve_image(dev_type)` (empty pin = house `devcake/dev-*:${DEVCAKE_TAG}`);
-hello stays `HELLO_IMAGE`. Dev Types store no image or credential
+hello stays `HELLO_IMAGE`. `DevType.cli_version` empty = house ARG;
+a stored semver is the pin staffing looks up. Dev Types store no image or credential
 config; the admin panel's harness combobox therefore controls what actually
 runs. Dispatch also sends `DEVCAKE_HARNESS` in the run spec, which overrides
 the image-baked `ENV` (kept as a fallback). House CLI pin versions and

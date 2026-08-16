@@ -24,6 +24,15 @@ HOUSE_PINS: dict[str, str] = {
 
 LAUNCH_SUPPORTED = frozenset({"claude-code", "codex", "grok-build"})
 
+PACKAGE_IDS: dict[str, str] = {
+    "claude-code": "@anthropic-ai/claude-code",
+    "codex": "@openai/codex",
+    "pi": "@earendil-works/pi-coding-agent",
+    "opencode": "opencode-ai",
+    "qwen-code": "@qwen-code/qwen-code",
+    "grok-build": "x.ai/cli",
+}
+
 DOCKERFILE_ARG: dict[str, str] = {
     "claude-code": "CLAUDE_CODE_VERSION",
     "codex": "CODEX_VERSION",
@@ -36,3 +45,11 @@ DOCKERFILE_ARG: dict[str, str] = {
 
 def app_digest() -> str:
     return os.environ.get("DEVCAKE_APP_DIGEST", SENTINEL_DIGEST)
+
+
+def effective_cli_version(dev_type) -> str:
+    """Stored pin, or the house Dockerfile ARG for that template."""
+    pin = (getattr(dev_type, "cli_version", "") or "").strip()
+    if pin:
+        return pin
+    return HOUSE_PINS.get(dev_type.harness_template, "")

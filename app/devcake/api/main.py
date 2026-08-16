@@ -654,6 +654,13 @@ async def list_harnesses():
     return await devtypes_service.list_harnesses()
 
 
+@app.get("/api/v1/harnesses/{template}/latest-cli")
+@app.post("/api/v1/harnesses/{template}/latest-cli")
+async def latest_cli(template: str):
+    return await devtypes_service.latest_cli_version(
+        template, source=svc().version_source)
+
+
 @app.get("/api/v1/dev-types")
 async def list_dev_types():
     return await devtypes_service.list_dev_types(dev_types=svc().dev_types)

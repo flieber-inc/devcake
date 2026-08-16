@@ -103,7 +103,9 @@ def test_publish_keep_set_is_the_template_list_not_yaml(tmp_path):
         root=tmp_path,
     )
     body = json.loads((tmp_path / "harness_keep_set.json").read_text())
-    assert body == {"templates": ["claude-code", "grok-build"]}
+    assert body["templates"] == ["claude-code", "grok-build"]
+    assert {"template": "grok-build", "cli_version": "0.2.112"} in body["pins"]
+    assert {"template": "claude-code", "cli_version": "2.1.229"} in body["pins"]
 
 
 def test_upsert_and_delete_publish_the_keep_set(tmp_path, monkeypatch):

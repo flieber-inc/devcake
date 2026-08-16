@@ -602,6 +602,9 @@ class DevType(BaseModel):
     memory_repos: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
+    # Coding-harness binary pin (not DEVCAKE_TAG, not model). Empty = house
+    # Dockerfile ARG. `latest` is a resolve-once gesture, never stored.
+    cli_version: str = ""
 
     @staticmethod
     def _dedupe_skill_names(v: list[str], *, field: str) -> list[str]:
@@ -645,6 +648,29 @@ class DevType(BaseModel):
     @classmethod
     def _skill_required_names_valid(cls, v):
         return cls._dedupe_skill_names(v, field="skills_required")
+
+    @field_validator("cli_version")
+    @classmethod
+    def _cli_version_is_empty_or_semver(cls, v: str) -> str:
+        pin = (v or "").strip()
+        if pin.lower() == "latest":
+            raise ValueError(
+                "cli_version cannot be 'latest' — resolve the remote "
+                "number first, then store that semver")
+        if pin and not re.fullmatch(
+                r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?", pin):
+            raise ValueError(
+                "cli_version must be empty (house pin) or a semver like 2.1.250")
+        return pin
+
+    @model_validator(mode="after")
+    def _experimental_house_pin_only(self):
+        from .harness import HARNESSES
+        h = HARNESSES.get(self.harness_template)
+        if h is not None and h.experimental and self.cli_version:
+            raise ValueError(
+                f"{self.harness_template} is experimental — house-pin only")
+        return self
 
     @model_validator(mode="after")
     def _skills_required_subset(self):

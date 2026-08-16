@@ -135,6 +135,7 @@ const DEV_TYPE_FIELDS = {
   harness_template: { label: "Harness template" },
   max_concurrency: { label: "Max concurrency" },
   model: { label: "Model", format: orEmpty },
+  cli_version: { label: "CLI version", format: orEmpty },
   identifying_prompt: { label: "Identifying prompt", format: orEmpty, multiline: true },
   mcp_setup_commands: { label: "MCP setup commands", format: lines, multiline: true },
   skills: { label: "Skills (available)", format: lines, multiline: true },

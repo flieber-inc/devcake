@@ -102,6 +102,9 @@ function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRena
       <td className="py-2 pr-4 text-xs text-neutral-500 dark:text-neutral-400">
         {d.model || "default model"}
       </td>
+      <td className="py-2 pr-4 font-mono text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+        {d.cli_version || h.house_cli_version || "house"}
+      </td>
       <td className="py-2 pr-4 text-right text-xs tabular-nums">{d.max_concurrency}</td>
       <td className="py-2 pr-4 text-right text-xs tabular-nums">{(d.skills || []).length}</td>
       <td className="py-2 pr-4 whitespace-nowrap text-xs">
@@ -202,6 +205,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
                 <th className="py-1.5 pr-4">dev type</th>
                 <th className="pr-4">harness</th>
                 <th className="pr-4">model</th>
+                <th className="pr-4">CLI</th>
                 <th className="pr-4 text-right">max conc</th>
                 <th className="pr-4 text-right">skills</th>
                 <th className="pr-4">status</th>
@@ -220,7 +224,7 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
                   onDelete={onDelete} />
               ))}
               <tr className="border-t border-neutral-100 dark:border-neutral-800">
-                <td colSpan={7} className="py-2">
+                <td colSpan={8} className="py-2">
                   <button type="button" onClick={() => setAddDev(true)}
                     className="flex w-full items-center justify-center gap-2 rounded-card border-2 border-dashed border-neutral-300 py-2.5 text-sm font-medium text-neutral-600 transition hover:border-accent-400 hover:bg-accent-50/40 hover:text-accent-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-accent-700 dark:hover:bg-accent-950/20 dark:hover:text-accent-200">
                     <Plus size={16} aria-hidden />

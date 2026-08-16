@@ -16,6 +16,7 @@ from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
                       delete_dev_type, save_config, save_dev_type,
                       validate_assignment_map, validate_memory_bindings)
 from ..harness import HARNESSES, dev_type_status
+from ..house_pins import HOUSE_PINS, LAUNCH_SUPPORTED
 from ..keep_set import publish_keep_set
 from ..prompts import templates as prompt_templates
 
@@ -101,12 +102,23 @@ async def list_harnesses():
                    "credential_files": [cf.model_dump() for cf in h.credential_files],
                    "oauth_available": h.oauth is not None,
                    "skills_dir": h.skills_dir,
-                   "experimental": h.experimental}
+                   "experimental": h.experimental,
+                   "house_cli_version": HOUSE_PINS.get(name, ""),
+                   "cli_pin_allowed": name in LAUNCH_SUPPORTED and not h.experimental}
             for name, h in HARNESSES.items()}
 
 
 async def list_dev_types(*, dev_types):
     return [dev_type_status(d) for d in dev_types.values()]
+
+
+async def latest_cli_version(template: str, *, source):
+    """Resolve-once remote latest. Does not persist. Experimental → 422."""
+    from ..versions import resolve_latest
+    try:
+        return {"cli_version": resolve_latest(template, source=source)}
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 async def upsert_dev_type(body: dict, name: str | None = None, *,

@@ -44,8 +44,8 @@ class PMOCapabilities(BaseModel):
     # stay unchanged.
     attachments_supported: bool = True
     # Vendor issue-comment character cap. None = no extra cap (attachments
-    # handle long bodies). GitHub Issues is 65536; the feed chokepoint must
-    # never post a raw dump the vendor will 422.
+    # handle long bodies). GitHub Issues is 65536; the feed chokepoint
+    # paginates the FULL body as `Part i of n` comments under that cap.
     comment_max_chars: int | None = None
     # pmo_ids are globally unique across the vendor environment (Linear
     # UUIDs) — only such systems may resolve blockers via PEER adapters or

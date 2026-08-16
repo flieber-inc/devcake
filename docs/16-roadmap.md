@@ -939,8 +939,8 @@ web UI uses undocumented `uploads.github.com/user-attachments`. **C
 (unofficial upload) is refused.** **A** (wait for an official API) is the
 rejected alternative. **B** is the accepted residual:
 `attachments_supported=False`; `comment_max_chars=65536`; the feed chokepoint
-keeps marker-bearing lines and truncates to that cap (never a raw dump the
-vendor will 422). The operator must see the residual (`operator_note` + live
+posts the full body as sequential `Part i of n` comments (never a truncated
+dump, never a 422). The operator must see the residual (`operator_note` + live
 health flags). Unofficial `uploads.github.com` remains refused.
 
 **Spike evidence (2026-08-15, personal `fidecastro` on github.com +

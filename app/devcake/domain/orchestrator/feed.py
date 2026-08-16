@@ -14,7 +14,7 @@ from ..model import Mission, MissionRef, STAGE_LABELS
 from ..run import utcnow
 from . import markers
 from .markers import (COMMENT_SENTINEL, DELIVERABLE_MARKER, FEED_INLINE_MAX,
-                      REPLY_MARKER, SENTINEL_RE, STEP_MARKER)
+                      REPLY_MARKER, SENTINEL_RE)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -37,37 +37,69 @@ def _comment_max_chars(mgr) -> int | None:
     return int(n) if n else None
 
 
-def _fit_vendor_comment(markdown: str, limit: int) -> str:
-    """Keep the body (plus the sentinel _feed appends) under `limit`.
+_PART_LABEL_BUDGET = len("Part 999 of 999") + 2  # label + blank line
 
-    Marker-bearing unquoted lines stay; the rest is truncated. A pointer
-    sentence without those lines is how GitHub PLAN used to freeze seq at 1.
+
+def _part_label(i: int, n: int) -> str:
+    return f"Part {i} of {n}"
+
+
+def _chunk_text(text: str, room: int) -> list[str]:
+    """Split `text` into pieces of at most `room` characters.
+
+    Prefers a newline cut so we do not bisect a marker line when one fits.
+    """
+    if room < 1:
+        raise ValueError("vendor comment room must be positive")
+    out: list[str] = []
+    rest = text
+    while rest:
+        if len(rest) <= room:
+            out.append(rest)
+            break
+        cut = rest.rfind("\n", 0, room)
+        if cut < room // 4:
+            cut = room
+        out.append(rest[:cut])
+        rest = rest[cut:]
+        if rest.startswith("\n"):
+            rest = rest[1:]
+    return out
+
+
+def _attach_part_label(chunk: str, i: int, n: int) -> str:
+    """`Part i of n` near the top. startswith-markers stay the first line."""
+    label = _part_label(i, n)
+    raw = chunk
+    for marker in (REPLY_MARKER, DELIVERABLE_MARKER):
+        if raw.startswith(marker):
+            rest = raw[len(marker):].lstrip("\n")
+            return f"{marker}\n\n{label}\n\n{rest}".rstrip()
+    return f"{label}\n\n{raw}".rstrip()
+
+
+def _split_vendor_comments(markdown: str, limit: int) -> list[str]:
+    """Full body as one or more comments, each fitting under `limit`.
+
+    Single-comment posts are unlabeled. A split is labeled `Part i of n`
+    on every page. The sentinel `_feed` appends is reserved in `limit`.
     """
     text = markdown.rstrip()
-    room = limit - len("\n\n") - len(COMMENT_SENTINEL)
+    sentinel_over = len("\n\n") + len(COMMENT_SENTINEL)
+    if len(text) + sentinel_over <= limit:
+        return [text]
+    room = limit - sentinel_over - _PART_LABEL_BUDGET
     if room < 64:
         room = 64
-    if len(text) <= room:
-        return text
-    notice = (
-        f"\n\n… truncated — this PMO cannot attach files and the vendor "
-        f"comment limit is {limit} characters."
-    )
-    keep = []
-    for line in unquoted(text).splitlines():
-        if (REPLY_MARKER in line or DELIVERABLE_MARKER in line
-                or STEP_MARKER.search(line)):
-            keep.append(line)
-    header = "\n".join(keep)
-    reserved = len(header) + (2 if header else 0) + len(notice)
-    if reserved >= room:
-        body = header or text[: max(0, room - len(notice))]
-        return (body + notice)[:room]
-    fill = room - reserved
-    prefix = text[:fill]
-    if header:
-        return f"{header}\n\n{prefix}{notice}"
-    return f"{prefix}{notice}"
+    chunks = _chunk_text(text, room)
+    n = len(chunks)
+    parts = [_attach_part_label(c, i, n) for i, c in enumerate(chunks, 1)]
+    for part in parts:
+        if len(part) + sentinel_over > limit:
+            raise ValueError(
+                f"paginated comment still exceeds vendor cap "
+                f"({len(part) + sentinel_over} > {limit})")
+    return parts
 
 
 def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
@@ -109,9 +141,10 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
     and replaced by a short referencing comment (docs/05 §4) unless the
     caller opts out (externalize=False — the ADR-0014 finalize post, whose
     long text already lives in its own attachment). When the vendor
-    declares `comment_max_chars` the posted body (plus sentinel) is fitted
-    under that cap, keeping marker lines — never a raw dump the vendor
-    will 422. The sentinel
+    declares `comment_max_chars` and the body will not fit, `_feed` posts
+    the FULL text as sequential `Part i of n` comments (markers stay on
+    part 1; each page carries the sentinel). Never a truncated dump, never
+    a 422. The sentinel
     goes on the comment, never inside the attachment, so provenance
     classification keeps working. Upload failures fall back to posting
     inline — an upload outage must never lose feed content. Projects have
@@ -142,11 +175,12 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         except Exception:
             log.exception("feed attachment upload failed — posting inline")
     cap = _comment_max_chars(mgr)
-    if cap is not None:
-        markdown = _fit_vendor_comment(markdown, cap)
-    await mgr.pmo.post_feed(
-        MissionRef(pmo_id, "issue"),
-        markdown.rstrip() + "\n\n" + COMMENT_SENTINEL)
+    parts = (_split_vendor_comments(markdown, cap) if cap is not None
+             else [markdown.rstrip()])
+    for part in parts:
+        await mgr.pmo.post_feed(
+            MissionRef(pmo_id, "issue"),
+            part.rstrip() + "\n\n" + COMMENT_SENTINEL)
 
 
 async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,

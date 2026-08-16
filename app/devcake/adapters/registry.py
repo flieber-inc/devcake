@@ -30,6 +30,12 @@ class PMOSystemInfo(BaseModel):
     # issue systems normalize everything to medium — the SPA hides the
     # Priority field instead of offering a control that silently does nothing)
     supports_priority: bool = True
+    # Shown in the admin PMO card (and New Mission) when this system is
+    # selected. Empty = no note. Copy lives here so the SPA stays
+    # system-agnostic (docs/05 §1a).
+    operator_note: str = ""
+    attachments_supported: bool = True
+    relations_supported: bool = True
 
 
 PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
@@ -63,6 +69,33 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
             "External: https://gitea.example.com"),
         supports_priority=False,   # forge-issue: priority always medium (§9.2)
     ),
+    "gitlab_issues": PMOSystemInfo(
+        id="gitlab_issues",
+        display_name="GitLab Issues",
+        secret_env_vars=["GITLAB_TOKEN", "GITLAB_PAT"],
+        token_patterns=[r"\bglpat-[A-Za-z0-9_\-]{20,}\b"],
+        secret_shape_prefixes=["glpat-"],
+        needs_api_base=True,
+        team_key_label="Issues repo",
+        team_key_help=(
+            "path_with_namespace of the dedicated issues board "
+            "(e.g. mygroup/missions). Not a per-mission work repo. "
+            "Empty = instance stays idle."),
+        api_base_help=(
+            "GitLab origin reachable from the app container. "
+            "gitlab.com: https://gitlab.com. Self-hosted: "
+            "https://gitlab.example.com"),
+        supports_priority=False,
+        attachments_supported=True,
+        relations_supported=False,
+        operator_note=(
+            "Blocked-by issue links need GitLab Premium (or self-hosted EE). "
+            "DevCake probes the live token — Free boards will not write "
+            "decomposition traffic-control edges, and child missions will "
+            "not block each other. File attachments work. This is a GitLab "
+            "license limit, not a DevCake setting."
+        ),
+    ),
 }
 
 
@@ -80,6 +113,13 @@ def make_pmo(inst) -> PMOPort:
         if inst.api_key:
             register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
         return GiteaIssuesAdapter(
+            inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
+    if inst.system == "gitlab_issues":
+        from .gitlab_issues import GitLabIssuesAdapter
+        from ..security import register_runtime_secret
+        if inst.api_key:
+            register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
+        return GitLabIssuesAdapter(
             inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
     raise AssertionError("unreachable")  # registry and constructors in sync
 

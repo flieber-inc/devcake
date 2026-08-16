@@ -192,6 +192,10 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
             if blocker_id:
                 rel_key = steps.DECOMP_REL(j, i)
                 async def _rel(blocker_id=blocker_id, child_id=child_id, j=j):
+                    if not mgr._relations_supported():
+                        mgr._audit(child_id, "relation_skipped",
+                                   f"blocked by part {j} ({blocker_id})")
+                        return
                     await mgr.pmo.create_relation(blocker_id, child_id)
                     mgr._audit(child_id, "relation_created",
                                 f"blocked by part {j} ({blocker_id})")
@@ -221,6 +225,10 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
         child_id_set = set(child_ids.values())
 
         async def _inherit(blocker_id: str, blocked_id: str) -> None:
+            if not mgr._relations_supported():
+                mgr._audit(blocked_id, "relation_skipped",
+                           f"{blocker_id} blocks {blocked_id}")
+                return
             try:
                 await mgr.pmo.create_relation(blocker_id, blocked_id)
             except Exception:

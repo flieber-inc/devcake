@@ -290,6 +290,9 @@ async def connections_registry():
                 "team_key_help": s.team_key_help,
                 "api_base_help": s.api_base_help,
                 "supports_priority": s.supports_priority,
+                "operator_note": s.operator_note,
+                "attachments_supported": s.attachments_supported,
+                "relations_supported": s.relations_supported,
             }
             for s in PMO_SYSTEMS.values()
         ],

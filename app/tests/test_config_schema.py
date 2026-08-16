@@ -385,7 +385,7 @@ def test_make_pmo_dispatches_from_registry():
     cfg = AppConfig(pmos=[PMOInstance(name="linear", team_key="DEV")])
     assert isinstance(make_pmo(cfg.pmos[0]), LinearAdapter)
     # both in-tree PMO systems (Linear + forge-issue Gitea Issues)
-    assert set(PMO_SYSTEMS) == {"linear", "gitea_issues"}
+    assert set(PMO_SYSTEMS) == {"linear", "gitea_issues", "gitlab_issues"}
     info = PMO_SYSTEMS["linear"]
     # api_key_env_default removed at v4 (secrets are GUI-stored, not env-named)
     assert info.secret_env_vars and info.token_patterns and info.secret_shape_prefixes
@@ -396,6 +396,15 @@ def test_make_pmo_dispatches_from_registry():
         name="gitea", system="gitea_issues", team_key="org/board",
         api_base="http://gitea:3000")])
     assert isinstance(make_pmo(gi.pmos[0]), GiteaIssuesAdapter)
+    from devcake.adapters.gitlab_issues import GitLabIssuesAdapter
+    gl = AppConfig(pmos=[PMOInstance(
+        name="gl", system="gitlab_issues", team_key="org/board",
+        api_base="https://gitlab.com")])
+    assert isinstance(make_pmo(gl.pmos[0]), GitLabIssuesAdapter)
+    assert PMO_SYSTEMS["gitlab_issues"].needs_api_base is True
+    assert PMO_SYSTEMS["gitlab_issues"].supports_priority is False
+    assert PMO_SYSTEMS["gitlab_issues"].relations_supported is False
+    assert PMO_SYSTEMS["gitlab_issues"].operator_note
 
 
 def test_stale_put_bodies_rejected_not_dropped():

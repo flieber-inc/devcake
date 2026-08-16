@@ -209,7 +209,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
           }
           const sysMeta = (registry.pmo_systems || []).find((s) => s.id === inst.system)
             || { needs_api_base: false, team_key_label: "Team key",
-                 team_key_help: "", api_base_help: "" };
+                 team_key_help: "", api_base_help: "", operator_note: "" };
           const saved = savedPmoNames.has(inst.name);
           const nameBad = !!dr.errors[`cfg.pmos.${idx}.name`];
           const healthPaused = !!(health.pmo_instances || {})[inst.name]?.intake_paused;
@@ -317,6 +317,27 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     ))}
                   </select>
                 </Field>
+                {sysMeta.operator_note ? (
+                  <p className="sm:col-span-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                    {sysMeta.operator_note}
+                  </p>
+                ) : null}
+                {(() => {
+                  const live = (health.pmo_instances || {})[inst.name] || {};
+                  const bits = [];
+                  if (live.relations_supported === false) {
+                    bits.push("live: relations off — child missions will not block each other");
+                  }
+                  if (live.attachments_supported === false) {
+                    bits.push("live: no official file attachments — feed posts a pointer");
+                  }
+                  if (!bits.length) return null;
+                  return (
+                    <p className="sm:col-span-3 text-xs text-amber-800 dark:text-amber-300">
+                      {bits.join(". ")}.
+                    </p>
+                  );
+                })()}
                 <Field label={sysMeta.team_key_label || "Team key"}
                   help={sysMeta.team_key_help || ""}>
                   <Input value={inst.team_key} disabled={!!inst.managed}

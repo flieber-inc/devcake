@@ -14,6 +14,9 @@ const FALLBACK = {
       team_key_help:
         "The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.",
       api_base_help: "",
+      operator_note: "",
+      attachments_supported: true,
+      relations_supported: true,
     },
     {
       id: "gitea_issues",
@@ -24,6 +27,23 @@ const FALLBACK = {
         "owner/repo of the dedicated issues board (e.g. devcake-pmo/missions). Empty = idle.",
       api_base_help:
         "Gitea origin from the app container. Bundled: http://gitea:3000. External: https://gitea.example.com",
+      operator_note: "",
+      attachments_supported: true,
+      relations_supported: true,
+    },
+    {
+      id: "gitlab_issues",
+      display_name: "GitLab Issues",
+      needs_api_base: true,
+      team_key_label: "Issues repo",
+      team_key_help:
+        "path_with_namespace of the dedicated issues board (e.g. mygroup/missions). Empty = idle.",
+      api_base_help:
+        "GitLab origin from the app container. gitlab.com: https://gitlab.com. Self-hosted: https://gitlab.example.com",
+      operator_note:
+        "Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token.",
+      attachments_supported: true,
+      relations_supported: false,
     },
   ],
   forges: [

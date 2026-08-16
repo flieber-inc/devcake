@@ -34,7 +34,9 @@ class FakePMO:
 
     def capabilities(self):
         from fakes import fake_pmo_capabilities
-        return fake_pmo_capabilities()   # global_ids=True — peer path enabled
+        return fake_pmo_capabilities(
+            relations_supported=getattr(self, "relations_supported", True),
+        )
 
     def __init__(self, mission):
         self.mission = mission
@@ -696,6 +698,20 @@ def test_decomposition_wires_blocked_by_edges(tmp_path):
                              None))
     assert [t for t, _ in fake.created] == ["docs", "code", "polish"]
     assert fake.relations == [("id-1", "id-2"), ("id-1", "id-3"), ("id-2", "id-3")]
+    assert fake.statuses == ["canceled"]
+
+
+def test_decomposition_skips_relations_when_capability_off(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.relations_supported = False
+    drafts = [{"title": "docs", "priority": "high"},
+              {"title": "code", "priority": "high", "blocked_by": [1]}]
+    run_coro(transitions.transition(mgr, _run("ONBOARD", None),
+                             {"outcome": "decomposed", "decomposition": drafts},
+                             None))
+    assert [t for t, _ in fake.created] == ["docs", "code"]
+    assert fake.relations == []
     assert fake.statuses == ["canceled"]
 
 

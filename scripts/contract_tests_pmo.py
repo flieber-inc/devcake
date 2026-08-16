@@ -13,7 +13,7 @@ Runs INSIDE the app container:
 Instance selection (first match wins):
   1. ``DEVCAKE_CONTRACT_INSTANCE=<name>`` — configured PMO from config.yaml
   2. Direct harness:
-       DEVCAKE_CONTRACT_SYSTEM=gitea_issues|linear
+       DEVCAKE_CONTRACT_SYSTEM=gitea_issues|linear|gitlab_issues
        DEVCAKE_CONTRACT_TEAM=…  DEVCAKE_CONTRACT_TOKEN=…
        DEVCAKE_CONTRACT_API_BASE=… (gitea_issues)
   3. **Default CI lane** — when ``GITEA_ADMIN_USER`` + ``GITEA_ADMIN_PASSWORD``
@@ -36,14 +36,19 @@ from devcake.config import load_config
 from devcake.domain.model import ALL_LABELS, MissionRef
 from devcake.ports.pmo import PMOTransient
 
-PASS, FAIL = "PASS", "FAIL"
+PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 results: list[tuple[str, str, str]] = []
 
 GITEA_URL = os.environ.get("DEVCAKE_CONTRACT_GITEA_URL", "http://gitea:3000")
 
 
-def check(num: str, name: str, ok: bool, note: str = "") -> None:
-    results.append((num, name, PASS if ok else FAIL + (" — " + note if note else "")))
+def check(num: str, name: str, ok: bool, note: str = "", *,
+          skipped: bool = False) -> None:
+    if skipped:
+        results.append((num, name, SKIP + (" — " + note if note else "")))
+        return
+    suffix = (" — " + note) if note else ""
+    results.append((num, name, (PASS if ok else FAIL) + ("" if ok else suffix)))
 
 
 async def make_temp_issue(pmo, team: str, title: str,
@@ -197,6 +202,11 @@ def make_429_probe(system: str, team: str):
         return GiteaIssuesAdapter(
             GITEA_URL, "fake-token", team or "o/r",
             instance="contract", transport=mock)
+    if system == "gitlab_issues":
+        from devcake.adapters.gitlab_issues import GitLabIssuesAdapter
+        return GitLabIssuesAdapter(
+            "https://gitlab.com", "fake-token", team or "o/r",
+            instance="contract", transport=mock)
     raise SystemExit(f"no 429 probe for system {system!r}")
 
 
@@ -290,7 +300,7 @@ async def _run_battery(pmo, system: str, team: str) -> int:
         ref = MissionRef(tid, "issue")
         await pmo.post_feed(ref, "first comment")
         await asyncio.sleep(1.2)
-        if forge_issue:
+        if forge_issue and caps.attachments_supported:
             # Real upload → named markdown link (ROOT_URL may differ from api_base;
             # extraction rewrites host for downloads; body still carries a URL).
             asset_url = await pmo.upload_attachment(
@@ -305,7 +315,9 @@ async def _run_battery(pmo, system: str, team: str) -> int:
         bodies = [e.body.split(",")[0] for e in act.entries
                   if e.body.startswith("first") or e.body.startswith("second")]
         atts = [a.url for e in act.entries for a in e.attachments]
-        ok8 = (bodies == ["first comment", "second"] and len(atts) >= 1)
+        need_atts = (not forge_issue) or caps.attachments_supported
+        ok8 = (bodies == ["first comment", "second"]
+               and (len(atts) >= 1 if need_atts else True))
         note8 = f"{bodies} atts={len(atts)}"
     except Exception as e:
         ok8, note8 = False, str(e)[:160]
@@ -368,7 +380,6 @@ async def _run_battery(pmo, system: str, team: str) -> int:
         check("10", "capabilities truthful (issue-only forge-issue)",
               (not caps.projects_supported
                and not caps.project_labels_supported
-               and caps.relations_supported
                and caps.native_label_swap_atomic
                and all(m.pmo_kind == "issue" for m in all_missions)),
               f"projects={caps.projects_supported} "
@@ -420,52 +431,62 @@ async def _run_battery(pmo, system: str, team: str) -> int:
     check("12", "post_feed marker fidelity (docs/05 §0d)", ok12, note12)
 
     # ── 13 attachment upload/download ─────────────────────────────────────
-    aid = await make_temp_issue(pmo, team, "[CONTRACT] attachment round-trip",
-                                {"DEVCAKE"})
-    ok13, note13 = True, ""
-    try:
-        payload = b"contract-battery attachment \xf0\x9f\x8d\xb0 bytes"
-        url = await pmo.upload_attachment(aid, "contract.md", payload)
-        got = await pmo.download_asset(url)
-        ok13 = got == payload
-        note13 = "" if ok13 else f"{len(got)} bytes back, {len(payload)} sent"
-    except Exception as e:
-        ok13, note13 = False, str(e)[:160]
-    finally:
-        await cleanup_issue(pmo, aid)
-    check("13", "attachment upload/download round-trip", ok13, note13)
-
-    # ── 14 relations (capability c) — always for systems that claim support
-    if caps.relations_supported:
-        blocker = await make_temp_issue(
-            pmo, team, "[CONTRACT] blocker", {"DEVCAKE"})
-        blocked = await make_temp_issue(
-            pmo, team, "[CONTRACT] blocked", {"DEVCAKE"})
-        ok14, note14 = True, ""
+    if not getattr(caps, "attachments_supported", True):
+        check("13", "attachment upload/download round-trip",
+              True, "attachments_supported=False", skipped=True)
+    else:
+        aid = await make_temp_issue(pmo, team, "[CONTRACT] attachment round-trip",
+                                    {"DEVCAKE"})
+        ok13, note13 = True, ""
         try:
-            await pmo.create_relation(blocker, blocked)
-            await pmo.create_relation(blocker, blocked)  # duplicate-tolerant
+            payload = b"contract-battery attachment \xf0\x9f\x8d\xb0 bytes"
+            url = await pmo.upload_attachment(aid, "contract.md", payload)
+            got = await pmo.download_asset(url)
+            ok13 = got == payload
+            note13 = "" if ok13 else f"{len(got)} bytes back, {len(payload)} sent"
+        except Exception as e:
+            ok13, note13 = False, str(e)[:160]
+        finally:
+            await cleanup_issue(pmo, aid)
+        check("13", "attachment upload/download round-trip", ok13, note13)
+
+    # ── 14 relations — always attempt; SKIP if the adapter cannot write
+    blocker = await make_temp_issue(
+        pmo, team, "[CONTRACT] blocker", {"DEVCAKE"})
+    blocked = await make_temp_issue(
+        pmo, team, "[CONTRACT] blocked", {"DEVCAKE"})
+    ok14, note14, skip14 = True, "", False
+    try:
+        await pmo.create_relation(blocker, blocked)
+        await pmo.create_relation(blocker, blocked)  # duplicate-tolerant
+        if not pmo.capabilities().relations_supported:
+            skip14, note14 = True, "adapter cannot write blocking links"
+        else:
             m = await pmo.get(MissionRef(blocked, "issue"))
             ok14 = blocker in m.blocked_by
             note14 = f"blocked_by={m.blocked_by}"
-        except Exception as e:
-            ok14, note14 = False, str(e)[:160]
-        finally:
-            await cleanup_issue(pmo, blocked)
-            await cleanup_issue(pmo, blocker)
-        check("14", "create_relation + blocked_by (duplicate-tolerant)",
-              ok14, note14)
+    except Exception as e:
+        ok14, note14 = False, str(e)[:160]
+    finally:
+        await cleanup_issue(pmo, blocked)
+        await cleanup_issue(pmo, blocker)
+    check("14", "create_relation + blocked_by (duplicate-tolerant)",
+          ok14, note14, skipped=skip14)
 
     # ── 15 project full-mode activity mirror (project-fidelity fix) ──────
     # Gated on projects_supported AND a discoverable project (the port
     # cannot create projects — the seed fixture provides one on the Linear
     # sandbox lane; skip cleanly otherwise). Posts a sentinel-free update
     # via post_feed and asserts full mode mirrors it byte-for-byte.
-    if caps.projects_supported:
+    if not caps.projects_supported:
+        check("15", "project full-mode mirrors the native feed",
+              True, "projects_supported=False", skipped=True)
+    else:
         proj15 = next((m for m in await pmo.list_all(team)
                        if m.pmo_kind == "project"), None)
         if proj15 is None:
-            print("  test 15  (skipped — no project in the team snapshot)")
+            check("15", "project full-mode mirrors the native feed",
+                  True, "no project in the team snapshot", skipped=True)
         else:
             ok15, note15 = True, ""
             try:
@@ -485,11 +506,14 @@ async def _run_battery(pmo, system: str, team: str) -> int:
                   ok15, note15)
 
     width = max(len(n) for _, n, _ in results)
-    failures = 0
+    failures = skips = 0
     for num, name, res in results:
         print(f"  test {num:>2}  {name:<{width}}  {res}")
-        failures += res != PASS
-    print(f"\n{len(results) - failures}/{len(results)} passed")
+        failures += res.startswith(FAIL)
+        skips += res.startswith(SKIP)
+    passed = len(results) - failures - skips
+    extra = f" ({skips} skipped)" if skips else ""
+    print(f"\n{passed}/{len(results)} passed{extra}")
     return 1 if failures else 0
 
 

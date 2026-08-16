@@ -1,9 +1,9 @@
 # 05 — PMO Adapter: `PMOPort`, Linear, and Gitea Issues
 
-> **Audience:** implementers of PMO adapters (Linear, Gitea Issues; later GitHub/GitLab Issues).
+> **Audience:** implementers of PMO adapters (Linear, Gitea Issues, GitLab Issues; later GitHub Issues).
 > **Depends on:** `02-domain-model.md` (Mission, MissionRef, labels), `00-overview.md` (INV-1, INV-4).
 
-The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`) and **Gitea Issues** (`adapters/gitea_issues/` — a pure `PMOPort`, **not** `ForgePort`). The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
+The domain core never sees vendor types. It programs against `PMOPort` (`app/devcake/ports/pmo.py`), a Python `Protocol` over the normalized DTOs of `02-domain-model.md`. In-tree adapters: **Linear** (`adapters/linear/`), **Gitea Issues** (`adapters/gitea_issues/`), and **GitLab Issues** (`adapters/gitlab_issues/`) — all pure `PMOPort`, **not** `ForgePort`. The port + registry (§1a) + contract-test batteries (§7) are **the template for every future PMO System**: adding one = an adapter package under `app/devcake/adapters/{system}/` implementing the full port + one `PMO_SYSTEMS` entry (plus its constructor branch in `make_pmo`).
 
 ## 0. The PMO capability contract (normative — any candidate system)
 
@@ -11,7 +11,7 @@ A PMO system qualifies for a DevCake adapter iff it satisfies all four capabilit
 
 - **(a) Missions as the unit of work.** The system's work items map straightforwardly onto Missions (`02-domain-model.md`): a stable vendor id, title/description, a status that normalizes onto backlog/in-progress/done/canceled, and a priority.
 - **(b) Labels (or an equivalent) assign Mission Steps.** The DEVCAKE-* stage machinery needs an idempotently-creatable, atomically-swappable tag concept readable back on every item (`§5`).
-- **(c) Traffic control via blocked-by relations.** Native "X blocks Y" dependencies, listable per item — the scheduler gate and Relations Steward ride on them (`adr/0007`). When the live token cannot list or write blocked-by (GitLab Free), the adapter **probes** that fact (read-only) and sets `relations_supported=False`; domain skips `create_relation`; the operator sees the residual. Do not hardcode the flag, and do not invent `relates_to` as blocked-by.
+- **(c) Traffic control via blocked-by relations.** Native "X blocks Y" dependencies, listable per item — the scheduler gate and Relations Steward ride on them (`adr/0007`). Listing blocked-by is always attempted (GitLab Free can list `relates_to`; blocking types simply do not appear). Writing a blocking type that the token cannot create (GitLab Free 403) is a no-op that latches `relations_supported=False` — it must not escape finalize. Do not invent `relates_to` as blocked-by.
 - **(d) A reliable activity feed.** Ordered comments with **markdown fidelity** for backticked markers (`devcake:v1`, decomposition manifests, merge-retry markers): the feed is DevCake's persistent record of each mission (long-lived cross-mission memory is the separate notebook system, ADR-0035). Official **file attachments** are required unless `attachments_supported` is false — then the feed chokepoint posts a size-safe pointer (never a raw dump that the vendor will 422) and the operator sees the residual. A PMO that rewrites comment bytes (ADF/rich-text — Jira) needs an explicit fidelity strategy **on the port** before an adapter is attempted (ISSUES #35). Do not start a Jira adapter that greps ADF for markers. Abandonment must be expressible (`cancel_mission` — a canceled/archived terminal state).
 
 ## 1. Port interface (normative signatures)
@@ -98,7 +98,8 @@ class PMOCapabilities(BaseModel):
     project_labels_supported: bool    # Linear: True (project labels since 2025-06)
     attachment_max_bytes: int
     native_label_swap_atomic: bool    # Linear: True via issueUpdate(labelIds)
-    relations_supported: bool = False # probed from the live token; False until a read-only links GET succeeds
+    relations_supported: bool = False # write support latched on create_relation; False until a blocking-link POST succeeds
+    attachments_supported: bool = True  # official file-upload API
     attachments_supported: bool = True  # official file-upload API; false skips upload + contract rows 8/13
 ```
 
@@ -312,3 +313,18 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 ### 9.6 Path to GitHub / GitLab Issues
 
 Same forge-issue profile (issue-only, label stages, open→backlog, markdown comments, dependency/links). New package per vendor; do **not** grow a shared Issues Port until a second forge-issue adapter exists. Live gate: same `scripts/contract_tests_pmo.py` once the system is registered.
+
+### 9.7 GitLab Issues (`gitlab_issues`)
+
+In-tree as of 2026-08-15. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
+
+| Need | Measured |
+|---|---|
+| Status | `opened`→backlog; `closed`→done; cancel footer in description → canceled |
+| Labels | PUT issue `labels=A,B` replaces the set |
+| Feed | issue notes; `` `devcake:v1` `` byte-exact |
+| Attachments | POST `/projects/:id/uploads`; download `GET /api/v4/projects/:id/uploads/:secret/:filename` (web `/uploads/…` path is **403** with a PAT) |
+| Relations | `blocks` / `is_blocked_by` is **Premium**. Listing links is Free (top-level `iid` + `link_type`). Free gitlab.com → 403 on create: `create_relation` no-ops and latches `relations_supported=False` (must not escape finalize). Row 14 of the contract battery records SKIP, not a vanished pass. |
+
+`pmo_id` is the issue **iid**. `global_ids=False`. Separate PMO PAT from any GitLab *forge* repo-card token. The admin PMO card and New Mission dialog show `operator_note` from the registry when this system is selected.
+

@@ -79,7 +79,8 @@ def test_toolkit_imports_no_vendor_adapter():
 
     import devcake.adapters._toolkit as toolkit
     tree = ast.parse(Path(toolkit.__file__).read_text())
-    vendors = {"linear", "gitea", "gitea_issues", "github", "gitlab", "redis",
+    vendors = {"linear", "gitea", "gitea_issues", "github", "gitlab",
+               "gitlab_issues", "redis",
                "dagu", "files"}
     offenders = []
     for node in ast.walk(tree):

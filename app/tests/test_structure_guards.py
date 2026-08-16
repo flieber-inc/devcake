@@ -385,6 +385,33 @@ def test_domain_never_imports_adapters():
         "sanctioned seams live in the allowlist): " + "; ".join(offenders))
 
 
+def test_activity_payload_does_not_reimplement_feed_pagination():
+    """ADR-0034: splitting and joining vendor-capped comments is one
+    process. feed.py owns both directions; activity_payload only calls."""
+    path = DOMAIN / "orchestrator" / "activity_payload.py"
+    tree = ast.parse(path.read_text())
+    banned = {
+        "_join_part_payloads", "_strip_part_and_sentinel", "_part_coords",
+        "_substance", "_step_filename", "coalesced_step_files",
+        "join_vendor_comments", "split_vendor_comments",
+    }
+    defined = {n.name for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    leaked = sorted(defined & banned)
+    imported_from_feed = False
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if (node.module or "").endswith("feed") or node.module == ".feed":
+            if any(a.name == "coalesced_step_files" for a in node.names):
+                imported_from_feed = True
+    assert not leaked, (
+        "activity_payload reimplemented feed pagination "
+        f"({', '.join(leaked)}) — call feed.coalesced_step_files")
+    assert imported_from_feed, (
+        "activity_payload must import coalesced_step_files from feed.py")
+
+
 # ADR-0033, founder ruling 2026-08-13 (2a): DEVCAKE-DISCOVERY is a pure
 # sweep gate. model.py is allowlisted only for the *constant definition*
 # (ALL_LABELS / ensure_labels). derive() lives in that file — a scheduling

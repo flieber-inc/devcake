@@ -1370,21 +1370,56 @@ GITHUB_COMMENT_MAX = 65536
 _PART_LINE = re.compile(r"^Part (\d+) of (\d+)$")
 
 
+def test_join_vendor_comments_is_the_inverse_of_split():
+    """ADR-0034: one function splits, one joins, round-trip is exact."""
+    from devcake.domain.orchestrator.feed import (
+        join_vendor_comments, split_vendor_comments)
+    from devcake.domain.orchestrator.markers import COMMENT_SENTINEL, REPLY_MARKER
+    cases = [
+        "short enough",
+        "alpha line\n" * 4_000 + "beta line\n" * 4_000,
+        "x" * 140_800,
+        REPLY_MARKER + "\n\n" + ("answer line\n" * 20_000),
+        "📋 DevCake plan for this mission (`PLAN_1.md`):\n\n"
+        + "# the plan\n\n" + ("do the thing\n" * 8_000),
+        "🧾 DevCake transcript `2_EXECUTE.md` (run `R`)\n\n"
+        + "> ---\n>\n> " + ("x" * 80_000),
+    ]
+    for raw in cases:
+        body = raw.rstrip()
+        pages = split_vendor_comments(body, 8_000)
+        sealed = [p + "\n\n" + COMMENT_SENTINEL for p in pages]
+        assert join_vendor_comments(sealed) == body, repr(body[:80])
+
+
+def test_feed_pages_round_trip_through_join(tmp_path):
+    """_feed must seal pages so join recovers the body — no per-page rstrip."""
+    from devcake.domain.orchestrator.feed import join_vendor_comments
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    fake.comment_max_chars = 8_000
+    body = ("alpha line\n" * 4_000 + "beta line\n" * 4_000).rstrip()
+    run_coro(mgr._feed("p1", "issue", body, externalize=False))
+    assert len(fake.comments) >= 2
+    assert join_vendor_comments(fake.comments) == body
+
+
 def test_split_vendor_comments_unlabeled_when_one_page():
-    from devcake.domain.orchestrator.feed import _split_vendor_comments
+    from devcake.domain.orchestrator.feed import split_vendor_comments
     from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
     body = "short enough"
-    parts = _split_vendor_comments(body, GITHUB_COMMENT_MAX)
+    parts = split_vendor_comments(body, GITHUB_COMMENT_MAX)
     assert parts == [body]
     assert "Part " not in parts[0]
     assert len(parts[0]) + 2 + len(COMMENT_SENTINEL) <= GITHUB_COMMENT_MAX
 
 
 def test_split_vendor_comments_labels_every_page_and_preserves_bytes():
-    from devcake.domain.orchestrator.feed import _split_vendor_comments
+    from devcake.domain.orchestrator.feed import split_vendor_comments
     from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
     payload = ("alpha line\n" * 4_000) + ("beta line\n" * 4_000)
-    parts = _split_vendor_comments(payload, 8_000)
+    parts = split_vendor_comments(payload, 8_000)
     assert len(parts) >= 2
     n = len(parts)
     for i, part in enumerate(parts, 1):

@@ -352,8 +352,9 @@ def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
     assert "docker buildx bake app admin hello" in text
     assert "python3 -m dev_factory" in text
     assert "PYTHONPATH=" in text
-    assert "nohup env" in text
-    # No new socket-holder service — baker is a host process.
+    assert "nohup python3 -m dev_factory" in text
+    nohup_line = next(l for l in text.splitlines() if "nohup python3" in l)
+    assert "OO_INGEST_PASSWORD" not in nohup_line
 
 
 def test_run_bake_skips_probe_for_experimental_and_writes_a_receipt(tmp_path):
@@ -381,6 +382,32 @@ def test_run_bake_skips_probe_for_experimental_and_writes_a_receipt(tmp_path):
     assert rec["gated"] is False
 
 
+def test_image_ref_is_one_rule_for_app_and_baker():
+    """Walk the same pins through house_pins.image_ref, factory.image_ref,
+    and resolve_image. Independent expected: the literals in CASES."""
+    factory = _load_factory()
+    from devcake.config import DevType
+    from devcake.harness import resolve_image
+    from devcake.house_pins import HOUSE_PINS, image_ref as app_ref
+
+    cases = (
+        ("grok-build", "", "latest", "devcake/dev-grok-build:latest"),
+        ("grok-build", "0.2.112", "latest", "devcake/dev-grok-build:latest"),
+        ("grok-build", "1.0.4", "latest", "devcake/dev-grok-build:latest-1.0.4"),
+        ("claude-code", "2.1.229", "abc123", "devcake/dev-claude-code:abc123"),
+        ("claude-code", "2.1.250", "abc123",
+         "devcake/dev-claude-code:abc123-2.1.250"),
+    )
+    for template, pin, tag, expected in cases:
+        assert app_ref(template, pin, tag=tag) == expected, (template, pin)
+        effective = pin or HOUSE_PINS[template]
+        assert factory.image_ref(
+            template, effective, tag=tag, house=HOUSE_PINS) == expected
+        if tag == "latest":
+            dt = DevType(name="n", harness_template=template, cli_version=pin)
+            assert resolve_image(dt) == expected, (template, pin)
+
+
 def test_classify_app_down_is_not_sentinel():
     """Unread digest used to keep the baker looping. Down must exit."""
     factory = _load_factory()
@@ -390,13 +417,26 @@ def test_classify_app_down_is_not_sentinel():
         healthy=True, digest="DEVCAKE_APP_DIGEST_UNSET") == "sentinel"
     assert factory.classify_app(healthy=True, digest=None) == "sentinel"
     assert factory.classify_app(healthy=True, digest="sha256:abc") == "ready"
+    assert factory.classify_app(
+        healthy=True, digest="sha256:abc", checkout="sha256:other") == "mismatch"
+    assert factory.classify_app(
+        healthy=True, digest="sha256:abc", checkout="sha256:abc") == "ready"
 
 
 def test_tick_decision_exits_when_the_app_is_down():
     factory = _load_factory()
     assert factory.tick_decision("down") == "exit"
     assert factory.tick_decision("sentinel") == "heartbeat"
+    assert factory.tick_decision("mismatch") == "heartbeat"
     assert factory.tick_decision("ready") == "reconcile"
+
+
+def test_unhealthy_needs_three_strikes():
+    factory = _load_factory()
+    assert factory.UNHEALTHY_NEED == 3
+    assert factory.unhealthy_verdict(1) is False
+    assert factory.unhealthy_verdict(2) is False
+    assert factory.unhealthy_verdict(3) is True
 
 
 def test_write_status_stamps_a_heartbeat(tmp_path):

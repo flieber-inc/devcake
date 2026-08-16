@@ -132,18 +132,15 @@ HARNESSES: dict[str, Harness] = {
 
 
 def resolve_image(dev_type) -> str:
-    """Harness image for a run.
+    """Harness image for a run. Delegates to house_pins.image_ref.
 
-    Empty pin = house image at DEVCAKE_TAG (`devcake/dev-{t}:{tag}`).
-    Explicit pin = the same tag plus the CLI version so two pins on one
-    template cannot collide (`devcake/dev-{t}:{tag}-{cli_version}`).
-    Hello stays HELLO_IMAGE. The three launch sites call this.
+    Empty pin and a stored house pin both name :TAG (keep-set only
+    records the effective version). A different stored pin is
+    :TAG-cli_version. Hello stays HELLO_IMAGE.
     """
-    template = dev_type.harness_template
-    pin = (getattr(dev_type, "cli_version", "") or "").strip()
-    if not pin:
-        return HARNESSES[template].image
-    return f"devcake/dev-{template}:{_TAG}-{pin}"
+    from .house_pins import effective_cli_version, image_ref
+    return image_ref(
+        dev_type.harness_template, effective_cli_version(dev_type), tag=_TAG)
 
 
 def missing_referenced_secret_env(dt) -> list[str]:

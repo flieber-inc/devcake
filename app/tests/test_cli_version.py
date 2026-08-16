@@ -103,6 +103,17 @@ def test_latest_gesture_returns_a_planted_semver():
     assert resolve_latest("claude-code", source=Planted()) == "2.1.250"
 
 
+def test_latest_gesture_rejects_a_non_semver():
+    from devcake.versions import resolve_latest
+
+    class Junk:
+        def latest(self, template: str) -> str:
+            return "not-a-version"
+
+    with pytest.raises(ValueError, match="semver"):
+        resolve_latest("claude-code", source=Junk())
+
+
 def test_latest_on_experimental_is_rejected():
     from devcake.versions import resolve_latest
 

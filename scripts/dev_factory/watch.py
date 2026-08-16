@@ -14,6 +14,11 @@ import sys
 import time
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[2]
+_APP = str(REPO / "app")
+if _APP not in sys.path:
+    sys.path.insert(0, _APP)
+
 from .core import (
     house_from_dockerfile,
     reconcile,
@@ -22,12 +27,12 @@ from .core import (
 )
 from .liveness import (
     SENTINEL,
+    UNHEALTHY_NEED,
     append_baker_event,
     classify_app,
     tick_decision,
+    unhealthy_verdict,
 )
-
-REPO = Path(__file__).resolve().parents[2]
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
 KEEP_SET = "harness_keep_set.json"
 STATUS = "harness_bake_status.json"
@@ -114,6 +119,12 @@ def probe_app_live() -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return proc.returncode == 0
+
+
+def _checkout_digest() -> str:
+    """Bytes of this checkout — the identity receipts must carry."""
+    import app_digest
+    return app_digest.compute(REPO)
 
 
 def running_app_digest() -> str | None:
@@ -261,38 +272,52 @@ def main(argv: list[str] | None = None) -> int:
     work.mkdir(parents=True, exist_ok=True)
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
+    down_streak = 0
     while True:
         healthy = probe_app_live()
-        digest = running_app_digest() if healthy else None
-        kind = classify_app(healthy=healthy, digest=digest)
+        if not healthy:
+            down_streak += 1
+            print(f"dev_factory: app /health/live failed "
+                  f"({down_streak}/{UNHEALTHY_NEED})", flush=True)
+            if unhealthy_verdict(down_streak):
+                rec = emit_event(work, {
+                    "event": "down",
+                    "detail": "app /health/live failed — baker exiting",
+                })
+                ship_dying_words(rec)
+                print("dev_factory: app is not healthy — exiting "
+                      "(restart with ./up.sh)", flush=True)
+                return 1
+            time.sleep(INTERVAL)
+            continue
+        down_streak = 0
+        checkout = _checkout_digest()
+        digest = running_app_digest()
+        kind = classify_app(
+            healthy=True, digest=digest, checkout=checkout)
         action = tick_decision(kind)
-        if action == "exit":
-            rec = emit_event(work, {
-                "event": "down",
-                "detail": "app /health/live failed — baker exiting",
-            })
-            ship_dying_words(rec)
-            print("dev_factory: app is not healthy — exiting "
-                  "(restart with ./up.sh)", flush=True)
-            return 1
         if action == "heartbeat":
+            if kind == "mismatch":
+                detail = (
+                    "the checkout has moved since the app was baked; "
+                    "run ./up.sh --bake")
+            else:
+                detail = "this app was built without the bake wrapper"
             publish_status(work, {
                 "state": "error",
-                "digest": digest or SENTINEL,
+                "digest": checkout or digest or SENTINEL,
                 "jobs": [],
-                "detail": "this app was built without the bake wrapper",
+                "detail": detail,
             })
-            emit_event(work, {"event": "sentinel",
-                              "detail": "app digest is the sentinel"})
-            print("dev_factory: app digest is sentinel — heartbeat only "
-                  "(rebuild app via ./up.sh --bake)", flush=True)
+            emit_event(work, {"event": kind, "detail": detail})
+            print(f"dev_factory: {detail}", flush=True)
             time.sleep(INTERVAL)
             continue
         volume = data_volume_name()
         try:
             status = once(
                 work=work, tag=tag, house=house,
-                digest=digest or "", volume=volume)
+                digest=checkout, volume=volume)
         except Exception as exc:  # noqa: BLE001 — one failed tick must not kill a healthy app
             print(f"dev_factory: tick failed: {exc}", flush=True)
             publish_status(work, {

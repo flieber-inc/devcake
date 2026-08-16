@@ -75,7 +75,19 @@ def test_both_steps_thread_the_container_limits_nested():
         assert "env" not in steps[sid]["with"]
 
 
-def test_run_id_precondition_fences_the_charset():
+def test_devcake_images_never_pull():
+    """Audit A7: pins name tags the operator typed. pull: missing would
+    reach Docker Hub for a never-baked :TAG-cli_version."""
+    doc = _dag()
+    steps = _steps()
+    handler = doc.get("handler_on") or doc.get("handlerOn")
+    withs = [
+        handler["exit"]["with"],
+        steps["provision"]["with"],
+        steps["run_dev"]["with"],
+    ]
+    for with_ in withs:
+        assert with_["pull"] == "never", with_
     doc = _dag()
     pres = {p.get("condition"): p.get("expected") for p in doc["preconditions"]}
     assert pres.get("${params.RUN_ID}") == "re:^[A-Za-z0-9_-]{6,64}$", \

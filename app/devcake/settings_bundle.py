@@ -904,6 +904,8 @@ def apply_bundle(bundle: dict, *, config: AppConfig,
             _prune_config_files(parsed, dev_types)
             dev_types.clear()               # shared by reference with managers
             dev_types.update(parsed["dev_types"])
+            from .keep_set import publish_keep_set
+            publish_keep_set(dev_types)
             prompt_templates.seed_devtype_prompts(dev_types)
             applied.append("config")
         if ops is not None:

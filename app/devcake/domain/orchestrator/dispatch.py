@@ -343,6 +343,13 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
                     mgr.blocked_reasons[mission.pmo_id])
         return None
     try:
+        require_staffed(dev_type, digest=app_digest(),
+                        store=getattr(mgr, "receipt_store", None))
+    except HarnessNotStaffed as e:
+        mgr.blocked_reasons[mission.pmo_id] = str(e)
+        log.warning("dispatch of %s refused — %s", mission.key, e)
+        return None
+    try:
         live = await mgr.pmo.get(mission.ref)                 # live re-read
     except Exception as e:  # noqa: BLE001 — any PMO failure gates this ONE mission (reason recorded + logged); escaping would abort the whole poll segment (audit A1)
         # a PMO failure here (transient or permanent) gates the ONE mission —
@@ -565,14 +572,8 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         run.stage_label_at_dispatch = stage_of(live)
         run.mission_pmo_id = mission.pmo_id
         try:
-            require_staffed(dev_type, digest=app_digest(),
-                            store=getattr(mgr, "receipt_store", None))
             await mgr.runs.bootstrap.launch(
                 run, image=resolve_image(dev_type))
-        except HarnessNotStaffed as e:
-            mgr.blocked_reasons[live.pmo_id] = str(e)
-            log.warning("dispatch of %s refused — %s", live.key, e)
-            return None
         except WorkspaceUnavailable as e:
             # AUD-001/002: the workspace base is unusable — gate exactly like
             # the mirror precondition above (no attempt burned; the run was

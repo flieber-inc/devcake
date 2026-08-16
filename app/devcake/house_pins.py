@@ -53,3 +53,16 @@ def effective_cli_version(dev_type) -> str:
     if pin:
         return pin
     return HOUSE_PINS.get(dev_type.harness_template, "")
+
+
+def image_ref(template: str, cli_version: str, *, tag: str | None = None) -> str:
+    """House pin (empty or the ARG default) → :TAG. Anything else → :TAG-ver.
+
+    Keep-set records effective versions, so the baker cannot tell a typed
+    house pin from an empty field. Both must name the same image.
+    """
+    tag = tag if tag is not None else os.environ.get("DEVCAKE_TAG", "latest")
+    pin = (cli_version or "").strip()
+    if not pin or pin == HOUSE_PINS.get(template, ""):
+        return f"devcake/dev-{template}:{tag}"
+    return f"devcake/dev-{template}:{tag}-{pin}"

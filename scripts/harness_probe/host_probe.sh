@@ -20,10 +20,8 @@ fi
 # baker is watching compose. Otherwise bind a host directory.
 if [[ -n "${DEVCAKE_RECEIPTS_VOLUME:-}" ]]; then
   RECEIPTS_MOUNT="${DEVCAKE_RECEIPTS_VOLUME}:/data"
-  docker run --rm --user 0:0 -v "${RECEIPTS_MOUNT}" \
-    alpine mkdir -p /data/harness_receipts
-  docker run --rm --user 0:0 -v "${RECEIPTS_MOUNT}" \
-    alpine chmod a+rwx /data/harness_receipts
+  # App already owns /data as uid 1000 — no Hub alpine, no root chmod.
+  docker compose exec -T app mkdir -p /data/harness_receipts
 else
   mkdir -p "$OUT"
   # Image user is uid 1000; receipts must be writable by that user.

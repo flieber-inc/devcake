@@ -7,6 +7,7 @@ before bootstrap.launch. Hello never does. Domain depends on ReceiptStore
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from .house_pins import (
@@ -18,7 +19,7 @@ from .house_pins import (
 )
 
 
-class HarnessNotStaffed(Exception):
+class HarnessNotStaffed(ValueError):
     """Pin is not staffable. `row` names the failing required row when known."""
 
     def __init__(self, message: str, *, row: str | None = None,
@@ -48,6 +49,9 @@ def require_staffed(dev_type, *, digest: str | None = None,
     if rec is None:
         raise HarnessNotStaffed(
             f"no receipt for {template} {version}", kind="missing")
+    if rec.get("gated") is False:
+        raise HarnessNotStaffed(
+            f"{template} {version} receipt is not gated", kind="fabricated")
     if rec.get("ok") is True:
         return
     row = _first_unpassed_required(rec)
@@ -121,38 +125,27 @@ def _pin_entry(template: str, version: str, digest: str, store,
         entry["state"] = "experimental"
         entry["reason"] = "experimental — house pin only"
         return entry
-    if digest == SENTINEL_DIGEST:
-        entry["ok"] = False
-        entry["state"] = "error"
-        entry["reason"] = "this app was built without the bake wrapper"
-        return entry
-    rec = None if store is None else store.get(
-        digest=digest, template=template, cli_version=version)
     job_state = _job_state(template, version, bake_status)
-    if rec is None:
+    fake = SimpleNamespace(harness_template=template, cli_version=version)
+    try:
+        require_staffed(fake, digest=digest, store=store)
+    except HarnessNotStaffed as exc:
         entry["ok"] = False
+        entry["reason"] = str(exc)
+        entry["row"] = exc.row
         if job_state in ("baking", "pending"):
             entry["state"] = "baking"
             entry["reason"] = f"{template} {version} is baking on the host"
         elif job_state == "error" or (bake_status or {}).get("state") == "error":
             entry["state"] = "error"
-            entry["reason"] = (bake_status or {}).get("detail") or (
-                f"{template} {version} bake failed")
-        else:
+            entry["reason"] = (bake_status or {}).get("detail") or str(exc)
+        elif exc.kind == "sentinel":
+            entry["state"] = "error"
+        elif exc.kind == "missing":
             entry["state"] = "waiting"
-            entry["reason"] = f"no receipt for {template} {version}"
+        else:
+            entry["state"] = "error"
         return entry
-    entry["ok"] = rec.get("ok") is True
-    if entry["ok"]:
-        entry["state"] = "ready"
-        return entry
-    row = _first_unpassed_required(rec)
-    entry["row"] = row
-    entry["reason"] = (
-        f"{template} {version} receipt is not ok"
-        + (f" ({row})" if row else ""))
-    if job_state in ("baking", "pending"):
-        entry["state"] = "baking"
-    else:
-        entry["state"] = "error"
+    entry["ok"] = True
+    entry["state"] = "ready"
     return entry

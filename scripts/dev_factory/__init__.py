@@ -7,9 +7,11 @@ pin before it will name an image.
 
 from .liveness import (
     SENTINEL,
+    UNHEALTHY_NEED,
     append_baker_event,
     classify_app,
     tick_decision,
+    unhealthy_verdict,
 )
 from .core import (
     ARG_NAMES,
@@ -43,8 +45,10 @@ __all__ = [
     "load_keep_set",
     "plan_bakes",
     "SENTINEL",
+    "UNHEALTHY_NEED",
     "append_baker_event",
     "classify_app",
+    "unhealthy_verdict",
     "reconcile",
     "run_bake",
     "tick_decision",

@@ -154,6 +154,24 @@ def test_hello_launch_path_does_not_import_staffing():
     assert "HELLO_IMAGE" in text
 
 
+def test_require_staffed_sits_next_to_the_secret_env_gate():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "devcake" / "domain"
+            / "orchestrator" / "dispatch.py").read_text()
+    staff = text.index("require_staffed(")
+    skill = text.index("_skill_payload")
+    secret = text.index("missing_referenced_secret_env")
+    assert secret < staff < skill
+
+
+def test_fabricated_ungated_receipt_is_refused():
+    from devcake.staffing import HarnessNotStaffed, require_staffed
+
+    rec = {"ok": True, "digest": "sha256:abc", "gated": False, "rows": []}
+    with pytest.raises(HarnessNotStaffed, match="not gated"):
+        require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
+
+
 def test_experimental_template_is_not_gated():
     from devcake.staffing import SENTINEL_DIGEST, require_staffed
 

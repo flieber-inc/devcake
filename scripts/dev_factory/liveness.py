@@ -13,22 +13,30 @@ from pathlib import Path
 from typing import Mapping
 
 SENTINEL = "DEVCAKE_APP_DIGEST_UNSET"
+UNHEALTHY_NEED = 3
 
 
-def classify_app(*, healthy: bool, digest: str | None) -> str:
+def classify_app(*, healthy: bool, digest: str | None,
+                 checkout: str | None = None) -> str:
     if not healthy:
         return "down"
     if not digest or digest == SENTINEL:
         return "sentinel"
+    if checkout is not None and checkout != digest:
+        return "mismatch"
     return "ready"
 
 
 def tick_decision(kind: str) -> str:
     if kind == "down":
         return "exit"
-    if kind == "sentinel":
+    if kind in ("sentinel", "mismatch"):
         return "heartbeat"
     return "reconcile"
+
+
+def unhealthy_verdict(streak: int) -> bool:
+    return streak >= UNHEALTHY_NEED
 
 
 def stamp_heartbeat(payload: Mapping, *, now: datetime | None = None,

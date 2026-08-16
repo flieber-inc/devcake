@@ -26,6 +26,12 @@ def test_launch_sites_call_resolve_image_not_harness_image():
         assert "resolve_image(" in text, path.name
         assert "image=HARNESSES[" not in text, path.name
         assert "image=harness.image" not in text, path.name
+        offenders = [
+            line.strip() for line in text.splitlines()
+            if ".image" in line
+            and "resolve_image" not in line
+            and not line.lstrip().startswith("#")]
+        assert not offenders, f"{path.name}: {offenders}"
 
 
 def test_hello_launch_stays_on_HELLO_IMAGE():
@@ -56,6 +62,19 @@ def test_resolve_image_explicit_pin_is_tag_plus_version():
     dt = DevType(name="judgment", harness_template="claude-code",
                  cli_version="2.1.250")
     assert resolve_image(dt) == "devcake/dev-claude-code:latest-2.1.250"
+
+
+def test_resolve_image_typed_house_pin_is_the_tag_only():
+    """Typing the house number must not invent :TAG-2.1.229 — keep-set
+    cannot tell that apart from an empty field."""
+    from devcake.harness import resolve_image
+
+    dt = DevType(name="judgment", harness_template="claude-code",
+                 cli_version="2.1.229")
+    assert resolve_image(dt) == "devcake/dev-claude-code:latest"
+    dt = DevType(name="implementer", harness_template="grok-build",
+                 cli_version="0.2.112")
+    assert resolve_image(dt) == "devcake/dev-grok-build:latest"
 
 
 def test_receipt_store_reads_row_level_receipt(tmp_path):

@@ -292,12 +292,12 @@ if [[ -f .env ]]; then
     esac
   done < <(grep -E '^(OO_INGEST_EMAIL|OO_INGEST_PASSWORD|OO_ORG)=' .env || true)
 fi
-nohup env PYTHONUNBUFFERED=1 PYTHONPATH="$(pwd)/scripts" DEVCAKE_TAG="$TAG" \
-  OO_INGEST_EMAIL="${OO_INGEST_EMAIL:-}" \
-  OO_INGEST_PASSWORD="${OO_INGEST_PASSWORD:-}" \
-  OO_ORG="${OO_ORG:-default}" \
-  DEVCAKE_OO_URL="http://127.0.0.1:5080" \
-  python3 -m dev_factory \
+export PYTHONUNBUFFERED=1
+export PYTHONPATH="$(pwd)/scripts:$(pwd)/app"
+export DEVCAKE_OO_URL="http://127.0.0.1:5080"
+# Inherit OO_INGEST_* from the exports above — do not put the password
+# on the process argv (readable via ps /proc).
+nohup python3 -m dev_factory \
   >>"$_FACTORY_DIR/watch.log" 2>&1 &
 echo $! >"$_FACTORY_DIR/watch.pid"
 echo "── host baker watching keep-set (pid $! → .factory/watch.log)"

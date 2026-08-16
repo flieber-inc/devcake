@@ -128,8 +128,12 @@ def test_loader_refuses_the_working_tree_entrypoint(tmp_path):
     assert mod.SENTINEL == "baked"
 
 
-def test_plan_mode_row_fails_when_the_binary_rejects_the_flag(tmp_path):
+def test_plan_mode_row_fails_when_the_binary_rejects_the_flag(tmp_path, monkeypatch):
     """Row 4 must exec the composed argv. argv() returning a list is not enough."""
+    monkeypatch.setenv("DEVCAKE_RUN_ID", "PROBE-1")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6399/0")
+    monkeypatch.setenv("REDIS_USER", "probe")
+    monkeypatch.setenv("REDIS_PASSWORD", "probe")
     _load_probe()
     from harness_probe.plan_mode import composed_plan_argv, run_flag_accept
     fake = tmp_path / "grok"
@@ -211,13 +215,25 @@ def test_claude_http_401_is_not_required_and_does_not_block_ok():
 
 
 def test_grok_matrix_expected_literals_match_captures_intended():
+    """The matrix maps CAPTURES intended verdicts. NO_FAULT → exit 11
+    (the entrypoint's no-fault classify). AUTH stays exit 12 DEV_AUTH."""
     _load_probe()
     from harness_probe.matrix import matrix_for
+    from test_harness_captures import AUTH, CAPTURES, NO_FAULT, TERMINAL
     rows = {s.name: s for s in matrix_for("grok-build")}
+    intended = {name: verdict for name, verdict in CAPTURES
+                if name.startswith("grok_")}
+    assert intended["grok_http_401"] is AUTH
+    assert rows["http_401"].expected == {
+        "exit": AUTH[1], "class": AUTH[2], "reason": "terminal_error"}
     assert rows["http_401"].expected == GROK_401
-    assert rows["healthy"].expected == {"exit": 11, "class": "", "reason": None}
+    assert intended["grok_healthy"] is NO_FAULT
+    assert rows["healthy"].expected == {
+        "exit": 11, "class": "", "reason": None}
+    assert intended["grok_empty"] is TERMINAL
     assert rows["empty"].expected == {
-        "exit": 15, "class": "DEV_HARNESS_FAULT", "reason": "terminal_error"}
+        "exit": TERMINAL[1], "class": TERMINAL[2],
+        "reason": "terminal_error"}
 
 
 def test_required_row_absent_is_not_ok():

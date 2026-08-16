@@ -398,6 +398,19 @@ def test_app_reachable_url_rewrites_root_url_host():
         "https://evil.example/steal") == "https://evil.example/steal"
 
 
+def test_operator_url_rewrites_api_origin_to_the_ui(monkeypatch):
+    """Mission.url is operator-clickable — gitea:3000 is not, localhost:3300 is."""
+    monkeypatch.setenv("GITEA_UI_URL", "http://localhost:3300")
+    pmo = GiteaIssuesAdapter("http://gitea:3000", "tok", "o/r")
+    assert pmo._operator_url(
+        "http://gitea:3000/devcake-pmo/missions/issues/7") == (
+        "http://localhost:3300/devcake-pmo/missions/issues/7")
+    assert pmo._operator_url(
+        "http://localhost:3300/o/r/issues/1") == (
+        "http://localhost:3300/o/r/issues/1")
+    assert pmo._operator_url("https://linear.app/x") == "https://linear.app/x"
+
+
 def test_app_reachable_url_rewrites_gitea_ui_url_host(monkeypatch):
     """GITEA_UI_URL presentation host (same signal as internal forge) rewrites."""
     monkeypatch.setenv("GITEA_UI_URL", "https://gitea.example.com")

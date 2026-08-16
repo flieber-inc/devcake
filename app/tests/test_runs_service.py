@@ -265,6 +265,59 @@ def test_group_by_mission_clusters_paginates_and_sorts_groups(tmp_path):
     assert page["total"] == 3
 
 
+def test_rows_surface_harness_version_model_and_mission_url(tmp_path):
+    """Runs-table telemetry: harness + version + the model that actually
+    ran + a PMO link. spec_env stays off the wire — only the two
+    non-secret keys are lifted."""
+    r = _run(1, tr=GROK_TR)
+    r.spec_env = {"DEVCAKE_HARNESS": "grok-build", "DEVCAKE_MODEL": "grok-4.5"}
+    r.harness_version = "0.2.112"
+    r.mission_url = "https://linear.app/acme/issue/A-1"
+    store = _store(tmp_path, [r])
+    row = list_runs_response(store, CostInputs(), limit=25, offset=0)["runs"][0]
+    assert row["harness"] == "grok-build"
+    assert row["harness_version"] == "0.2.112"
+    # token_report.model is what ran; the Dev-Type pin is only a fallback
+    assert row["model"] == "grok-4.5-build"
+    assert row["mission_url"] == "https://linear.app/acme/issue/A-1"
+    assert "spec_env" not in row
+    detail = run_detail(store.get(r.run_id), CostInputs())
+    assert detail["harness"] == "grok-build"
+    assert detail["harness_version"] == "0.2.112"
+    assert detail["mission_url"] == "https://linear.app/acme/issue/A-1"
+
+
+def test_model_falls_back_to_the_dispatch_pin_when_unreported(tmp_path):
+    r = _run(1, tr=None)
+    r.spec_env = {"DEVCAKE_HARNESS": "claude-code",
+                  "DEVCAKE_MODEL": "claude-fable-5"}
+    store = _store(tmp_path, [r])
+    row = list_runs_response(store, CostInputs(), limit=25, offset=0)["runs"][0]
+    assert row["harness"] == "claude-code"
+    assert row["model"] == "claude-fable-5"
+    assert row["harness_version"] is None
+    assert row["mission_url"] is None
+
+
+def test_mission_url_joins_live_cache_when_unstamped(tmp_path):
+    """Pre-field records have no mission_url; the last poll snapshot fills
+    the link for missions still on the board (instance-qualified)."""
+    r = _run(1)
+    r.pmo_ref = "linear"
+    r.mission_pmo_id = "p1"
+    store = _store(tmp_path, [r])
+    cache = [{"instance": "linear", "pmo_id": "p1", "key": "A-1",
+              "url": "https://linear.app/acme/issue/A-1"}]
+    row = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                             missions_cache=cache)["runs"][0]
+    assert row["mission_url"] == "https://linear.app/acme/issue/A-1"
+    other = [{"instance": "other", "pmo_id": "p1", "key": "A-1",
+              "url": "https://evil.example/x"}]
+    row2 = list_runs_response(store, CostInputs(), limit=25, offset=0,
+                              missions_cache=other)["runs"][0]
+    assert row2["mission_url"] is None
+
+
 def test_rows_and_detail_never_leak_prompts_results_or_notes(tmp_path):
     store = _store(tmp_path, [_run(1, tr=GROK_TR)])
     out = list_runs_response(store, CostInputs(), limit=25, offset=0)
@@ -295,6 +348,8 @@ def test_csv_exports_whole_filtered_set_with_header(tmp_path):
     resp = runs_csv_response(store, CostInputs())
     rows = _csv_rows(resp)
     assert rows[0][0] == "run_id" and "cost_usd_effective" in rows[0]
+    assert "harness" in rows[0] and "harness_version" in rows[0]
+    assert "mission_url" in rows[0]
     assert len(rows) == 40
     assert resp.media_type == "text/csv"
     assert resp.headers["content-disposition"].startswith(

@@ -541,7 +541,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
             lfs=mgr.config.repo_mirror.lfs)
         run = Run(
             run_id=run_id, mission_key=mission.key, mission_type=mtype.value,
-            pmo_kind=mission.pmo_kind,
+            pmo_kind=mission.pmo_kind, mission_url=mission.url or "",
             pmo_ref=mgr.instance_name, repo_ref=repo_name,
             dev_type=dev_type.name, seq=seq, attempt_of_step=attempt,
             timeout_seconds=mgr.config.dev_timeout_minutes * 60,

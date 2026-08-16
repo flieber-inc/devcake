@@ -72,6 +72,7 @@ from devcake_dev.domain.fault import (  # noqa: E402
 from devcake_dev.harness.argv import (  # noqa: E402
     RESUME_SPECS,
     ResumeSpec,
+    cli_version,
     harness_argv,
     harness_resume_argv,
 )
@@ -97,6 +98,7 @@ from devcake_dev.harness.render import (  # noqa: E402
     FLUSH_SECS,
     GrokCoalescer,
     LINE_LIMIT,
+    TEXT_LIMIT,
     LogRelay,
     MAX_RELAY_LINES,
     SILENCE_NOTICE_SECS,
@@ -428,7 +430,12 @@ def provision_main() -> None:
         # wrong directory (daemon autocreate / WS_HOST drift) — never
         # provision into it (R4)
         _fail_20(None, "workspace sentinel check failed", err)
-    send("run.started", {"container_hostname": os.uname().nodename})
+    started = {"container_hostname": os.uname().nodename}
+    hv = cli_version(env.get("DEVCAKE_HARNESS")
+                     or os.environ.get("DEVCAKE_HARNESS", ""))
+    if hv:
+        started["harness_version"] = hv
+    send("run.started", started)
     stop = _start_heartbeats()
     if env.get("DEVCAKE_OAUTH_MODE"):
         # nothing to provision — the login runs in the harness step

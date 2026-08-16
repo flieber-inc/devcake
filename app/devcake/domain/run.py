@@ -53,12 +53,19 @@ class Run(BaseModel):
     run_id: str
     mission_key: str
     mission_pmo_id: str = ""
+    # Operator-clickable PMO URL snapshotted at dispatch (mission.url).
+    # Empty on legacy / steward / hello records; the runs list may fill
+    # those from the live poll cache when the mission is still on the board.
+    mission_url: str = ""
     pmo_kind: str = "issue"
     # which configured instance served this run (AppConfig.pmos/repos entry id)
     pmo_ref: str = "main"
     repo_ref: str = "main"
     mission_type: str
     dev_type: str
+    # CLI version the provision container reported on run.started
+    # (e.g. "0.2.112"). Empty on legacy records / hello / report failure.
+    harness_version: str = ""
     seq: int
     attempt_of_step: int = 1
     # Done direct blockers' work repos (non-secret snapshot at dispatch):

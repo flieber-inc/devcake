@@ -390,6 +390,21 @@ def test_started_accepts_only_the_dispatched_transition():
     assert store.get(fin.run_id).state == "finalizing"     # NOT reverted
 
 
+def test_started_stamps_harness_version_once():
+    """Provision reports the CLI version on the one accepted run.started.
+    A replay must not overwrite it (same fence as started_at)."""
+    store = InMemoryStore()
+    mgr, _ = _mgr(store)
+    live = _run("R-1-1-EXECUTE-VER000")
+    store.save(live)
+    run_coro(mgr.handle(live.run_id, "run.started",
+                        {"harness_version": "claude-code 2.1.229"}))
+    assert store.get(live.run_id).harness_version == "claude-code 2.1.229"
+    run_coro(mgr.handle(live.run_id, "run.started",
+                        {"harness_version": "forged 9.9.9"}))
+    assert store.get(live.run_id).harness_version == "claude-code 2.1.229"
+
+
 def test_activity_get_does_not_clobber_a_finished_run():
     """F11 leftover: activity.get get()s, awaits activity_payload, then
     saved that stale object. A finalize that finished during the await

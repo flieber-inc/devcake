@@ -81,11 +81,25 @@ def test_claude_result_event_extraction():
     assert json.loads(blob)["result"] == "x"
 
 
+def test_render_clips_assistant_text_at_1000_chars():
+    """Live relay keeps a 1000-char snippet (runs get enormous); the
+    transcript dump stays untruncated. tail=1000 on the finished fetch is
+    a separate cap and is unchanged."""
+    assert ep.TEXT_LIMIT == 1000
+    long = "x" * 1500
+    ev = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": long}]}})
+    assert ep.render_claude(ev) == "x" * 1000
+    msg = json.dumps({"type": "item.completed", "item": {
+        "type": "agent_message", "text": long}})
+    assert ep.render_codex(msg) == "x" * 1000
+
+
 def test_claude_text_dump_collects_text_blocks_untruncated():
     # ADR-0014 D1: the full dump keeps every assistant-visible text block in
-    # order, UNTRUNCATED (the live relay's 200-char cap must not apply), and
+    # order, UNTRUNCATED (the live relay's 1000-char cap must not apply), and
     # excludes thinking + tool_use
-    long_text = ("deep analysis " * 40).strip()            # ≫ 200-char relay cap
+    long_text = ("deep analysis " * 80).strip()            # ≫ 1000-char relay cap
     second = json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": long_text}]}})
     subagent = json.dumps({"type": "assistant", "parent_tool_use_id": "tu_1",
@@ -189,8 +203,10 @@ def test_grok_coalescer_and_parse():
 
 
 def test_grok_coalescer_flushes_long_buffer():
-    co = ep.GrokCoalescer()
-    assert co(_grok("text", data="x" * 250)) == "x" * 250
+    held = ep.GrokCoalescer()
+    assert held(_grok("text", data="x" * 999)) is None
+    flush = ep.GrokCoalescer()
+    assert flush(_grok("text", data="x" * 1000)) == "x" * 1000
 
 
 def test_grok_coalescer_renders_the_terminal_error_and_the_turn_cap():
@@ -531,6 +547,29 @@ def test_send_artifacts_chunks_carry_id_and_digest(monkeypatch):
     assert len({p["chunk_id"] for _, p in sent}) == 1
     digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
     assert all(p["sha256"] == digest and p["of"] == len(sent) for _, p in sent)
+
+
+def test_cli_version_reads_the_first_line(monkeypatch):
+    from devcake_dev.harness import argv as hargv
+
+    class R:
+        stdout = "claude-code 2.1.229\nmore\n"
+        stderr = ""
+
+    monkeypatch.setattr(hargv.subprocess, "run", lambda *a, **k: R())
+    assert ep.cli_version("claude-code") == "claude-code 2.1.229"
+
+
+def test_cli_version_is_empty_on_unknown_or_failure(monkeypatch):
+    assert ep.cli_version("") == ""
+    assert ep.cli_version("no-such-harness") == ""
+    from devcake_dev.harness import argv as hargv
+
+    def boom(*a, **k):
+        raise hargv.subprocess.TimeoutExpired(cmd="x", timeout=1)
+
+    monkeypatch.setattr(hargv.subprocess, "run", boom)
+    assert ep.cli_version("claude-code") == ""
 
 
 def test_phase_of_returns_only_the_two_valid_phases():

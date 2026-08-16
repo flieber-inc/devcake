@@ -189,10 +189,12 @@ The locally persisted record of one Mission Step attempt, one JSON file per run 
 | `run_id` | `str` | Human-readable and unique: `{INSTANCE}-{key}-{seq}-{TYPE}-{6-char ULID suffix}`, e.g. `LINEAR-ENG-142-3-EXECUTE-9GX2TQ` (charset `[-A-Za-z0-9_]`, ≤ 64 chars — fits Dagu's `dagRunId` rules). The uppercased PMO-instance prefix (schema v3) keeps run ids — and therefore ACL users, container names, and reply streams — collision-free across instances. Also the Dagu run ID and the Dev container **name suffix** — one run is now **two** containers, `prov-<run_id>` then `dev-<run_id>` (ADR-0025), so a `docker ps` shows both — while Linear, the Dagu UI, traces, and Redis streams speak the bare run id. The charset is fenced twice more under ADR-0025: the DAG's `preconditions` guard and `WorkspaceStore`'s per-run dir validation both require `re:^[A-Za-z0-9_-]{6,64}$` before a container or a workspace dir is ever created. HELLO/OAUTH runs use the fixed pseudo-instance `sys`. |
 | `mission_key` | `str` | Denormalized for log/trace readability. |
 | `mission_pmo_id` | `str` | |
+| `mission_url` | `str` | Operator-clickable PMO URL snapshotted from `mission.url` at dispatch. Empty on legacy / steward / hello records; the runs list may fill those from the live poll cache when the mission is still on the board. |
 | `pmo_kind` | `str` (default `"issue"`) | The mission's kind at dispatch. |
 | `pmo_ref` / `repo_ref` | `str` (default `"main"`) | Which configured instance served this run — the `AppConfig.pmos`/`repos` entry **`name`** (§9). Default `"main"` marks pre-v3 legacy records (not a live instance name). |
 | `mission_type` | `str` | The type this run was dispatched as. |
 | `dev_type` | `str` | |
+| `harness_version` | `str` | First line of the harness CLI's `--version`, reported by the provision container on `run.started`. Empty on legacy / hello records or when the probe failed. |
 | `seq` | `int` | Step number for transcript naming (§8). |
 | `attempt_of_step` | `int` | 1-based attempt counter for this (mission, type) — seq-independent, since failed runs advance `seq` by posting transcripts. Resets at the newest of: last give-up watermark, any finished run for the mission, or the latest human feed comment (`15-errors-and-retries.md` §3). |
 | `stage_label_at_dispatch` | `str \| None` | Input to compare-and-transition (`04-orchestrator.md` §4). |

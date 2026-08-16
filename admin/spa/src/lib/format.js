@@ -31,6 +31,13 @@ export function tokens(n) {
   return `${(n / 1e6).toFixed(2)}M`;
 }
 
+/** Semver token from a CLI `--version` first line. Empty in → empty out. */
+export function shortHarnessVersion(v) {
+  if (!v) return "";
+  const m = String(v).match(/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?)/);
+  return m ? m[1] : String(v);
+}
+
 export function usd(v, digits = 2) {
   if (v === null || v === undefined) return "—";
   if (v > 0 && v < 0.01) return "<$0.01";

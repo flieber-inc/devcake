@@ -6,6 +6,8 @@ argv production uses.
 """
 from __future__ import annotations
 
+import subprocess
+
 from .dialect import ResumeSpec, WORKSPACE, dialects, get_dialect
 
 
@@ -27,6 +29,24 @@ def forge_dialect(env: dict) -> tuple:
     cli_envs = [e for e in env.get("DEVCAKE_FORGE_CLI_ENVS", "").split(",") if e]
     return (env["DEVCAKE_CLONE_USER"], env["DEVCAKE_GIT_NAME"],
             env["DEVCAKE_GIT_EMAIL"], cli_envs)
+
+
+def cli_version(harness: str, *, timeout: float = 5.0) -> str:
+    """First line of `<cli> --version` in this container. Empty on unknown
+    harness, missing binary, or timeout — never raises into provision."""
+    if not harness:
+        return ""
+    try:
+        exe = get_dialect(harness).argv(".")[0]
+    except ValueError:
+        return ""
+    try:
+        r = subprocess.run(
+            [exe, "--version"], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    line = (r.stdout or r.stderr).strip().splitlines()
+    return line[0][:120] if line else ""
 
 
 def harness_argv(harness: str, prompt: str, *, plan_mode: bool = False,

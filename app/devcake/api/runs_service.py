@@ -3,7 +3,9 @@ per ADR-0015 Decision 3: the main.py routes are thin forwards here.
 
 Row token/cost fields are an explicit SCALAR allowlist extracted from the
 persisted token_report — the dict itself (with `notes`), prompts, results,
-and credential material are never serialized (docs/11 §1). Estimates are
+and credential material are never serialized (docs/11 §1). Harness id is
+lifted from spec_env[`DEVCAKE_HARNESS`] (never the rest of spec_env);
+`harness_version` and `mission_url` are first-class Run fields. Estimates are
 recomputed at read time from the CURRENT config.cost_inputs so a Cost
 Inputs edit changes the Runs tab on its next poll; the finalize-time stamp
 (with its own rate_card_id vintage) remains the historical record in the
@@ -30,7 +32,8 @@ _TOKEN_SUMS = ("input_tokens", "output_tokens", "cache_read_tokens",
 _LIST_FIELDS = {"run_id", "mission_key", "mission_type", "dev_type", "seq",
                 "state", "created_at", "started_at", "ended_at", "error",
                 "error_class", "attempt_counted", "verdict",
-                "continuations_used", "memory_mounts"}
+                "continuations_used", "memory_mounts",
+                "harness_version", "mission_url"}
 
 _DETAIL_FIELDS = _LIST_FIELDS | {
     "schema_version", "mission_pmo_id", "pmo_kind", "pmo_ref", "repo_ref",
@@ -71,7 +74,7 @@ def _token_fields(run: Run, cost_inputs: CostInputs) -> dict:
     # informational provenance, never priced on top and deliberately NOT
     # coalesced into any other column (cache writes are input-side)
     out["reasoning_tokens"] = tr.get("reasoning_tokens")
-    out["model"] = tr.get("model")
+    out["model"] = tr.get("model") or (run.spec_env or {}).get("DEVCAKE_MODEL") or None
     # the API row key stays `cost_usd` (SPA contract); the stored v1 key
     # names its provenance (ADR-0029)
     out["cost_usd"] = tr.get("cost_usd_native")
@@ -168,10 +171,36 @@ def _order(items: list, value_of, descending: bool) -> list:
     return [x for _, x in ranked] + [x for v, x in valued if v is None]
 
 
-def _row(r: Run, cost_inputs: CostInputs) -> dict:
+def _blank(value: str | None) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _harness_of(run: Run) -> str | None:
+    """Dispatch snapshot — spec_env is never serialized, only this key."""
+    return _blank((run.spec_env or {}).get("DEVCAKE_HARNESS"))
+
+
+def _mission_url_of(run: Run, cache: list[dict] | None) -> str | None:
+    stamped = _blank(run.mission_url)
+    if stamped:
+        return stamped
+    if not cache or not run.mission_pmo_id:
+        return None
+    for row in cache:
+        if (row.get("instance") == run.pmo_ref
+                and row.get("pmo_id") == run.mission_pmo_id):
+            return _blank(row.get("url"))
+    return None
+
+
+def _row(r: Run, cost_inputs: CostInputs,
+         missions_cache: list[dict] | None = None) -> dict:
     row = r.model_dump(include=_LIST_FIELDS)
     row["pr_url"] = _pr_url_of(r)
     row.update(_token_fields(r, cost_inputs))
+    row["harness"] = _harness_of(r)
+    row["harness_version"] = _blank(r.harness_version)
+    row["mission_url"] = _mission_url_of(r, missions_cache)
     return row
 
 
@@ -219,7 +248,8 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
                        created_to: str | None = None,
                        sort: str | None = None,
                        direction: str | None = None,
-                       group_by: str | None = None) -> dict:
+                       group_by: str | None = None,
+                       missions_cache: list[dict] | None = None) -> dict:
     if group_by not in (None, "mission"):
         raise HTTPException(400, f"invalid group_by {group_by!r} — mission")
     runs, everything, descending = _filtered_runs(
@@ -240,7 +270,8 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
 
     if group_by is None:
         out["total"] = len(runs)
-        out["runs"] = [_row(r, cost_inputs) for r in runs[offset:offset + limit]]
+        out["runs"] = [_row(r, cost_inputs, missions_cache)
+                       for r in runs[offset:offset + limit]]
         return out
 
     # grouped mode: the pagination unit becomes the MISSION. Group key is
@@ -266,15 +297,20 @@ def list_runs_response(store, cost_inputs: CostInputs, *, limit: int = 25,
         members = sorted(g.pop("_members"),
                          key=lambda m: (m.seq, m.attempt_of_step, m.created_at))
         g.pop("_latest")
-        page.append({**g, "runs": [_row(m, cost_inputs) for m in members]})
+        page.append({**g, "runs": [_row(m, cost_inputs, missions_cache)
+                                   for m in members]})
     out["groups"] = page
     return out
 
 
-def run_detail(run: Run, cost_inputs: CostInputs) -> dict:
+def run_detail(run: Run, cost_inputs: CostInputs,
+               missions_cache: list[dict] | None = None) -> dict:
     body = run.model_dump(include=_DETAIL_FIELDS)
     body["pr_url"] = _pr_url_of(run)
     body.update(_token_fields(run, cost_inputs))
+    body["harness"] = _harness_of(run)
+    body["harness_version"] = _blank(run.harness_version)
+    body["mission_url"] = _mission_url_of(run, missions_cache)
     return body
 
 
@@ -282,12 +318,13 @@ def run_detail(run: Run, cost_inputs: CostInputs) -> dict:
 # grouped view (grouping is a view concern). Column order is the spreadsheet
 # contract; effective cost applies the same override_native rule the UI shows.
 _CSV_COLUMNS = ("run_id", "pmo_ref", "mission_key", "mission_type", "dev_type",
-                "seq", "state", "created_at", "started_at", "ended_at",
+                "harness", "harness_version", "seq", "state", "created_at",
+                "started_at", "ended_at",
                 "error", "error_class", "attempt_counted", "verdict",
                 "continuations_used", "input_tokens", "output_tokens",
                 "cache_read_tokens", "cache_write_tokens", "total_tokens",
                 "reasoning_tokens", "model", "cost_usd", "cost_usd_estimated",
-                "cost_usd_effective", "rate_card_id", "pr_url")
+                "cost_usd_effective", "rate_card_id", "pr_url", "mission_url")
 
 
 def _csv_cell(v):
@@ -311,7 +348,9 @@ def runs_csv_response(store, cost_inputs: CostInputs, *,
                       created_from: str | None = None,
                       created_to: str | None = None,
                       sort: str | None = None,
-                      direction: str | None = None) -> PlainTextResponse:
+                      direction: str | None = None,
+                      missions_cache: list[dict] | None = None
+                      ) -> PlainTextResponse:
     runs, _everything, _descending = _filtered_runs(
         store, cost_inputs, mission_key=mission_key, pmo_ref=pmo_ref,
         created_from=created_from, created_to=created_to, sort=sort,
@@ -320,7 +359,7 @@ def runs_csv_response(store, cost_inputs: CostInputs, *,
     writer = csv.writer(buf)
     writer.writerow(_CSV_COLUMNS)
     for r in runs:
-        row = _row(r, cost_inputs)
+        row = _row(r, cost_inputs, missions_cache)
         row["pmo_ref"] = r.pmo_ref
         row["cost_usd_effective"] = costing.effective_cost(
             row["cost_usd"], row["cost_usd_estimated"], cost_inputs)

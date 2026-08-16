@@ -16,18 +16,10 @@ else
   DIGEST="$(python3 scripts/app_digest.py)"
 fi
 
-# Prefer the named /data volume (same one the app reads) when the host
-# baker is watching compose. Otherwise bind a host directory.
-if [[ -n "${DEVCAKE_RECEIPTS_VOLUME:-}" ]]; then
-  RECEIPTS_MOUNT="${DEVCAKE_RECEIPTS_VOLUME}:/data"
-  # App already owns /data as uid 1000 — no Hub alpine, no root chmod.
-  docker compose exec -T app mkdir -p /data/harness_receipts
-else
-  mkdir -p "$OUT"
-  # Image user is uid 1000; receipts must be writable by that user.
-  chmod a+rwx "$OUT" 2>/dev/null || true
-  RECEIPTS_MOUNT="${OUT}:/data/harness_receipts"
-fi
+mkdir -p "$OUT"
+# Image user is uid 1000; receipts must be writable by that user.
+chmod a+rwx "$OUT" 2>/dev/null || true
+RECEIPTS_MOUNT="${OUT}:/data/harness_receipts"
 
 docker run --rm \
   --user 1000:1000 \

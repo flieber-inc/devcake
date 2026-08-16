@@ -88,6 +88,9 @@ def test_devcake_images_never_pull():
     ]
     for with_ in withs:
         assert with_["pull"] == "never", with_
+
+
+def test_run_id_precondition_fences_the_charset():
     doc = _dag()
     pres = {p.get("condition"): p.get("expected") for p in doc["preconditions"]}
     assert pres.get("${params.RUN_ID}") == "re:^[A-Za-z0-9_-]{6,64}$", \

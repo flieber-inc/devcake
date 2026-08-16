@@ -15,9 +15,6 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-_APP = str(REPO / "app")
-if _APP not in sys.path:
-    sys.path.insert(0, _APP)
 
 from .core import (
     house_from_dockerfile,
@@ -25,6 +22,7 @@ from .core import (
     run_bake,
     write_status,
 )
+from .run import tee_run
 from .liveness import (
     SENTINEL,
     UNHEALTHY_NEED,
@@ -34,31 +32,11 @@ from .liveness import (
     unhealthy_verdict,
 )
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
+READY_INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_READY_INTERVAL", "30"))
 KEEP_SET = "harness_keep_set.json"
 STATUS = "harness_bake_status.json"
 RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
-
-
-def data_volume_name() -> str | None:
-    """Named volume mounted at app:/data. Empty if the stack is not up."""
-    try:
-        cid = subprocess.check_output(
-            ["docker", "compose", "ps", "-q", "app"],
-            cwd=REPO, text=True, timeout=15).strip()
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
-    if not cid:
-        return None
-    try:
-        mounts = subprocess.check_output(
-            ["docker", "inspect", "-f",
-             "{{ range .Mounts }}{{ if eq .Destination \"/data\" }}"
-             "{{ .Name }}{{ end }}{{ end }}", cid],
-            text=True, timeout=15).strip()
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
-    return mounts or None
 
 
 def compose_read(rel: str) -> str | None:
@@ -194,29 +172,64 @@ def ship_dying_words(record: dict) -> None:
 
 
 def beating_run(work: Path):
-    """subprocess.run-shaped, but stamps a heartbeat while docker bake waits."""
+    """subprocess.run-shaped: heartbeat while waiting, tee output, keep a tail."""
+
+    def stamp() -> None:
+        current = {}
+        path = work / STATUS
+        if path.is_file():
+            try:
+                current = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                current = {}
+        publish_status(work, current or {"state": "baking", "jobs": []})
 
     def run(argv, **kw):
-        proc = subprocess.Popen(
+        return tee_run(
             argv, cwd=kw.get("cwd"), env=kw.get("env"),
-            stdout=kw.get("stdout"), stderr=kw.get("stderr"))
-        while proc.poll() is None:
-            current = {}
-            path = work / STATUS
-            if path.is_file():
-                try:
-                    current = json.loads(path.read_text())
-                except (OSError, json.JSONDecodeError):
-                    current = {}
-            publish_status(work, current or {"state": "baking", "jobs": []})
-            time.sleep(INTERVAL)
-        return type("R", (), {"returncode": proc.returncode})()
+            stamp=stamp, interval=INTERVAL)
 
     return run
 
 
+def trees_mtime(root: Path) -> float:
+    """Newest mtime under the digest trees. 0 if none exist."""
+    import app_digest
+    latest = 0.0
+    for rel in app_digest.TREES:
+        p = Path(root) / rel
+        if p.is_file():
+            latest = max(latest, p.stat().st_mtime)
+        elif p.is_dir():
+            for q in p.rglob("*"):
+                if q.is_file() and "__pycache__" not in q.parts:
+                    latest = max(latest, q.stat().st_mtime)
+    return latest
+
+
+def skip_reconcile(*, state: str | None, trees: float, keep: float,
+                   last_trees: float | None, last_keep: float | None) -> bool:
+    return (state == "ready"
+            and last_trees is not None and last_keep is not None
+            and trees == last_trees and keep == last_keep)
+
+
+def keep_set_mtime() -> float:
+    try:
+        out = subprocess.check_output(
+            ["docker", "compose", "exec", "-T", "app",
+             "stat", "-c", "%Y", f"/data/{KEEP_SET}"],
+            cwd=REPO, text=True, timeout=15)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return 0.0
+    try:
+        return float(out.strip() or "0")
+    except ValueError:
+        return 0.0
+
+
 def once(*, work: Path, tag: str, house: dict[str, str],
-         digest: str, volume: str | None) -> dict:
+         digest: str) -> dict:
     keep_path = work / KEEP_SET
     text = compose_read(KEEP_SET)
     if text is None:
@@ -236,14 +249,10 @@ def once(*, work: Path, tag: str, house: dict[str, str],
     def baker(job):
         run_bake(
             job, tag=tag, house=house, receipts_dir=receipts,
-            digest=digest, repo=REPO, run=beating_run(work),
-            receipts_volume=volume)
+            digest=digest, repo=REPO, run=beating_run(work))
         name = f"{job.template}@{job.cli_version}.json"
         local = receipts / name
-        remote = compose_read(f"{RECEIPTS}/{name}")
-        if remote is not None:
-            local.write_text(remote)
-        elif local.is_file():
+        if local.is_file():
             compose_write(f"{RECEIPTS}/{name}", local.read_text())
 
     status = reconcile(
@@ -273,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"dev_factory: watching keep-set every {INTERVAL:.0f}s "
           f"(tag={tag})", flush=True)
     down_streak = 0
+    last_state: str | None = None
+    last_trees: float | None = None
+    last_keep: float | None = None
+    cached_digest: str | None = None
+    cached_trees: float | None = None
     while True:
         healthy = probe_app_live()
         if not healthy:
@@ -291,7 +305,24 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(INTERVAL)
             continue
         down_streak = 0
-        checkout = _checkout_digest()
+        trees = trees_mtime(REPO)
+        keep_m = keep_set_mtime()
+        if skip_reconcile(state=last_state, trees=trees, keep=keep_m,
+                          last_trees=last_trees, last_keep=last_keep):
+            path = work / STATUS
+            current = {}
+            if path.is_file():
+                try:
+                    current = json.loads(path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    current = {}
+            publish_status(work, current or {"state": "ready", "jobs": []})
+            time.sleep(READY_INTERVAL)
+            continue
+        if cached_digest is None or cached_trees != trees:
+            cached_digest = _checkout_digest()
+            cached_trees = trees
+        checkout = cached_digest
         digest = running_app_digest()
         kind = classify_app(
             healthy=True, digest=digest, checkout=checkout)
@@ -311,13 +342,15 @@ def main(argv: list[str] | None = None) -> int:
             })
             emit_event(work, {"event": kind, "detail": detail})
             print(f"dev_factory: {detail}", flush=True)
+            last_state = "error"
+            last_trees = trees
+            last_keep = keep_m
             time.sleep(INTERVAL)
             continue
-        volume = data_volume_name()
         try:
             status = once(
                 work=work, tag=tag, house=house,
-                digest=checkout, volume=volume)
+                digest=checkout)
         except Exception as exc:  # noqa: BLE001 — one failed tick must not kill a healthy app
             print(f"dev_factory: tick failed: {exc}", flush=True)
             publish_status(work, {
@@ -325,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
                 "jobs": [], "detail": str(exc),
             })
             emit_event(work, {"event": "error", "detail": str(exc)})
+            last_state = "error"
         else:
             publish_status(work, status)
             emit_event(work, {
@@ -334,7 +368,10 @@ def main(argv: list[str] | None = None) -> int:
             })
             print(f"dev_factory: {status.get('state')} "
                   f"jobs={len(status.get('jobs') or [])}", flush=True)
-        time.sleep(INTERVAL)
+            last_state = status.get("state")
+        last_trees = trees
+        last_keep = keep_m
+        time.sleep(READY_INTERVAL if last_state == "ready" else INTERVAL)
 
 
 if __name__ == "__main__":

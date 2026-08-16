@@ -11,6 +11,7 @@ trust the app file.
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -299,6 +300,26 @@ def test_house_from_dockerfile_reads_arg_defaults():
     assert house["codex"] == "0.147.0"
 
 
+def test_run_bake_includes_child_stderr_in_the_error():
+    factory = _load_factory()
+
+    def run(argv, **kw):
+        return type("R", (), {
+            "returncode": 1, "stdout": "", "stderr": "layer failed xyz",
+        })()
+
+    with pytest.raises(RuntimeError, match="layer failed xyz"):
+        factory.run_bake(
+            factory.BakeJob("grok-build", "1.0.4"),
+            tag="latest",
+            house={"grok-build": "0.2.112"},
+            receipts_dir="/tmp/receipts",
+            digest="sha256:abc",
+            repo=Path("/repo"),
+            run=run,
+        )
+
+
 def test_run_bake_calls_bake_then_probe():
     factory = _load_factory()
     calls = []
@@ -355,6 +376,49 @@ def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
     assert "nohup python3 -m dev_factory" in text
     nohup_line = next(l for l in text.splitlines() if "nohup python3" in l)
     assert "OO_INGEST_PASSWORD" not in nohup_line
+    init = next((p / "dev_factory" / "__init__.py"
+                 for p in _FACTORY_CANDIDATES if p.is_dir()), None)
+    assert init is not None
+    body = init.read_text()
+    assert body.index("sys.path.insert") < body.index("from .core import")
+
+
+def test_tee_run_keeps_a_tail_and_writes_through():
+    factory = _load_factory()
+    from dev_factory.run import tee_run
+    sink = io.StringIO()
+    got = tee_run(
+        ["/bin/sh", "-c", "echo bake-failed-detail >&2; exit 7"],
+        stamp=lambda: None, sleep=lambda _s: None, interval=0, sink=sink)
+    assert got.returncode == 7
+    assert "bake-failed-detail" in got.stdout
+    assert "bake-failed-detail" in sink.getvalue()
+
+
+def test_skip_reconcile_only_when_ready_and_nothing_moved():
+    _load_factory()
+    from dev_factory.watch import skip_reconcile
+    assert skip_reconcile(
+        state="ready", trees=1.0, keep=2.0,
+        last_trees=1.0, last_keep=2.0) is True
+    assert skip_reconcile(
+        state="ready", trees=1.1, keep=2.0,
+        last_trees=1.0, last_keep=2.0) is False
+    assert skip_reconcile(
+        state="baking", trees=1.0, keep=2.0,
+        last_trees=1.0, last_keep=2.0) is False
+
+
+def test_host_probe_does_not_mount_the_data_volume():
+    candidates = [
+        Path(__file__).resolve().parents[2] / "scripts" / "harness_probe" / "host_probe.sh",
+        Path("/srv/repo-scripts/harness_probe/host_probe.sh"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None
+    text = path.read_text()
+    assert "DEVCAKE_RECEIPTS_VOLUME" not in text
+    assert "alpine" not in text
 
 
 def test_run_bake_skips_probe_for_experimental_and_writes_a_receipt(tmp_path):

@@ -5,6 +5,17 @@ the keep-set file (never Dev Type YAML) and independently validates every
 pin before it will name an image.
 """
 
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# core.py imports devcake.house_pins at load. This insert must run first —
+# watch.py is too late (python -m dev_factory imports the package body).
+_APP = str(Path(__file__).resolve().parents[2] / "app")
+if _APP not in sys.path:
+    sys.path.insert(0, _APP)
+
 from .liveness import (
     SENTINEL,
     UNHEALTHY_NEED,

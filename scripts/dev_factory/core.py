@@ -316,7 +316,6 @@ def run_bake(
     digest: str,
     repo: Path | str,
     run: Callable[..., object],
-    receipts_volume: str | None = None,
 ) -> None:
     """Compile the image, then write a receipt. `run` is subprocess.run-shaped."""
     root = Path(repo)
@@ -341,10 +340,7 @@ def run_bake(
         str(receipts_dir),
         digest,
     ]
-    env = None
-    if receipts_volume:
-        env = {**os.environ, "DEVCAKE_RECEIPTS_VOLUME": receipts_volume}
-    result = run(probe, cwd=str(root), check=False, env=env,
+    result = run(probe, cwd=str(root), check=False,
                  capture_output=True, text=True)
     code = getattr(result, "returncode", 1)
     if code != 0:

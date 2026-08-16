@@ -306,6 +306,16 @@ async def connections_registry():
     }
 
 
+def _with_error(payload: dict, *, detail: str = "") -> dict:
+    """SPA Test connection prints `error`. Probe DTOs use `detail`."""
+    if payload.get("ok"):
+        return payload
+    err = (payload.get("error") or payload.get("detail") or detail or "").strip()
+    if not err:
+        err = "connection probe failed — see app logs for details"
+    return {**payload, "error": err}
+
+
 def _probe_client_error(e: Exception) -> str:
     """Client-facing probe error: never echo raw vendor bodies (tokens/URLs).
 
@@ -336,11 +346,14 @@ async def test_pmo(name: str, *, config, managers):
     try:
         h = await mgr.pmo.health_probe(inst.team_key)
         missions = await mgr.pmo.list_all(inst.team_key)
-        return {"ok": h.ok, "instance": name,
-                "team": h.workspace or inst.team_key,
-                "labels": h.managed_labels_present,
-                "labels_expected": h.managed_labels_expected,
-                "missions_visible": len(missions)}
+        return _with_error({
+            "ok": h.ok, "instance": name,
+            "team": h.workspace or inst.team_key,
+            "labels": h.managed_labels_present,
+            "labels_expected": h.managed_labels_expected,
+            "missions_visible": len(missions),
+            "detail": h.detail,
+        })
     except Exception as e:  # noqa: BLE001 — connection-test contract: any probe failure → ok:False + error in the response, never a 500
         return {"ok": False, "error": _probe_client_error(e)}
 
@@ -365,7 +378,7 @@ async def test_forge(name: str, *, config, forge_runtime):
     try:
         health = await forge_runtime.refresh_health(name)
         if not health["ok"]:
-            return health
+            return _with_error(health)
         # reference-only: read access is the WHOLE contract — the PR-listing
         # and branch-protection probes need API scopes a read-only PAT may
         # lack, and DevCake never opens PRs here anyway

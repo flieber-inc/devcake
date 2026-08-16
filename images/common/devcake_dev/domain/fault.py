@@ -337,7 +337,9 @@ def pi_run_fault(out: str, harness_exit: int, *, dump: str = ""):
 def opencode_run_fault(out: str, harness_exit: int, *, dump: str = ""):
     """OpenCode `run --format json`: fault dict or None.
 
-    Terminal is `step_finish` (reason stop) or a top-level `error` event.
+    Terminal is `step_finish` (reason stop/length) or a top-level `error`
+    that is never followed by a finished step. A retryable error that
+    later finishes cleanly is healthy — same rule as Pi.
     Tool activity is `tool_use`. Empty: a finished step with no text and
     no tools.
     """
@@ -371,9 +373,6 @@ def opencode_run_fault(out: str, harness_exit: int, *, dump: str = ""):
                           f"step: {error_msg}", tail)
         return _fault(FAULT_NO_TERMINAL_EVENT,
                       "opencode stream ended without a step_finish event", tail)
-    if error_msg:
-        return _fault(FAULT_TERMINAL_ERROR,
-                      f"opencode reported a terminal error: {error_msg}", tail)
     if texts == 0 and tools == 0 and not (dump or "").strip():
         return _fault(FAULT_EMPTY_COMPLETION,
                       "opencode produced nothing at all — no assistant text "

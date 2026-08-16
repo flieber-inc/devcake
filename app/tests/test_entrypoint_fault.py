@@ -635,6 +635,40 @@ def test_opencode_tool_calls_step_finish_is_not_terminal():
     assert fault and fault["reason"] == ep.FAULT_NO_TERMINAL_EVENT
 
 
+def test_opencode_retry_then_healthy_is_not_a_fault():
+    """A recovered in-process retry must not latch an earlier error event."""
+    stream = "\n".join([
+        json.dumps({"type": "error", "error": {
+            "name": "APIError",
+            "data": {"message": "rate limited", "statusCode": 429,
+                     "isRetryable": True}}}),
+        json.dumps({"type": "text", "part": {"text": "ACKNOWLEDGED"}}),
+        json.dumps({"type": "step_finish", "part": {"reason": "stop"}}),
+    ])
+    assert ep.opencode_run_fault(stream, 0) is None
+
+
+def test_opencode_length_step_finish_is_terminal():
+    stream = "\n".join([
+        json.dumps({"type": "text", "part": {"text": "partial"}}),
+        json.dumps({"type": "step_finish", "part": {"reason": "length"}}),
+    ])
+    assert ep.opencode_run_fault(stream, 0) is None
+
+
+def test_opencode_status_prefix_is_an_exact_three_digit_token():
+    def _oc_err(msg):
+        return json.dumps({"type": "error", "error": {
+            "name": "APIError", "data": {"message": msg}}})
+
+    assert ep.harness_api_error_status(
+        "opencode", _oc_err("40100ms deadline exceeded")) is None
+    assert ep.harness_api_error_status(
+        "opencode", _oc_err("120s timeout waiting: HTTP 401 from upstream")) == 401
+    assert ep.harness_api_error_status(
+        "opencode", _oc_err("401 Incorrect API key provided")) == 401
+
+
 def test_pi_retry_then_healthy_is_not_a_fault():
     """A recovered in-process retry must not latch the earlier stopReason=error."""
     stream = "\n".join([

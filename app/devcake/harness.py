@@ -113,6 +113,7 @@ HARNESSES: dict[str, Harness] = {
         # Also reads ~/.claude/skills and ~/.config/opencode/skills;
         # .agents is the shared Agent Skills dir.
         skills_dir=".agents/skills",
+        experimental=True,
     ),
 }
 

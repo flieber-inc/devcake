@@ -417,9 +417,9 @@ class _OpenCode:
             elif err:
                 blobs.append(str(err))
         for message in blobs:
-            head = message[:3]
-            if head.isdigit():
-                return int(head)
+            status = http_status_from_message(message)
+            if status is not None:
+                return status
             for rx in HARNESS_STATUS_PATTERNS[self.id]:
                 hit = rx.search(message)
                 if hit:

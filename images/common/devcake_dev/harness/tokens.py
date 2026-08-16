@@ -426,15 +426,22 @@ def opencode_session_id(out: str) -> str:
     return sid
 
 
+_OC_TERMINAL_REASONS = frozenset({"stop", "length"})
+
+
 def opencode_step_finish(out: str):
-    """Last `{type: step_finish}` with `reason=stop`, or None."""
+    """Last `{type: step_finish}` with a terminal reason, or None.
+
+    `tool-calls` is mid-turn (the next model call is coming). `stop` is a
+    clean end; `length` is a finished step that hit an output cap.
+    """
     found = None
     for ev in _oc_events(out):
         if ev.get("type") != "step_finish":
             continue
         part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
         reason = part.get("reason") or ev.get("reason")
-        if reason == "stop":
+        if reason in _OC_TERMINAL_REASONS:
             found = ev
     return found
 

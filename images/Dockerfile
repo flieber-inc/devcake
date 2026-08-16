@@ -22,6 +22,7 @@ ARG NODE_IMAGE=node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc
 # Pinned harness CLIs (npm view @anthropic-ai/claude-code / @openai/codex).
 ARG CLAUDE_CODE_VERSION=2.1.229
 ARG CODEX_VERSION=0.147.0
+ARG GROK_VERSION=0.2.112
 ARG PI_VERSION=0.84.2
 ARG OPENCODE_VERSION=1.18.18
 ARG QWEN_CODE_VERSION=0.21.12
@@ -279,16 +280,18 @@ FROM base AS grok-build
 
 LABEL org.opencontainers.image.title="devcake-dev-grok-build"
 
+ARG GROK_VERSION
+
 USER dev
 # VENDORED official installer (2026-08 evaluation: `curl | bash` from a
 # moving URL was the one unpinned fetch in an otherwise digest-pinned tree —
 # and sha-pinning the URL would break every bake the moment x.ai updates it).
 # The checked-in copy is reviewed on bump like any other dependency:
 #   curl -fsSL https://x.ai/cli/install.sh -o images/vendor/grok-install.sh
-# then diff-review + commit. Installs the current stable channel CLI (the
-# installer supports an explicit version arg if pinning becomes desirable).
+# then diff-review + commit. Positional semver is the house pin (ARG above);
+# an ungated install.sh would float the binary on every bake.
 COPY --chown=dev:dev vendor/grok-install.sh /tmp/grok-install.sh
-RUN bash /tmp/grok-install.sh && rm /tmp/grok-install.sh
+RUN bash /tmp/grok-install.sh "${GROK_VERSION}" && rm /tmp/grok-install.sh
 
 # base's PATH already carries ~/.local/bin and ~/.npm-global/bin (ADR-0023)
 ENV PATH="/home/dev/.grok/bin:${PATH}" \

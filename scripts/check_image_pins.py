@@ -18,11 +18,9 @@ variable whose in-file default resolves to one.
 Bump procedure: docker buildx imagetools inspect <image:tag> → paste the
 manifest-list digest.
 
-KNOWN GAP, recorded not hidden: images/Dockerfile installs the Grok CLI via
-`curl https://x.ai/cli/install.sh | bash` — a floating remote script inside a
-digest-pinned image (x.ai ships no versioned artifact to pin as of 2026-07).
-This checker covers image refs only; the exception lives here so it is
-auditable.
+Harness CLI versions are a different pin (images/Dockerfile ARG defaults;
+Grok via `ARG GROK_VERSION` + installer argv). This checker covers image
+refs only.
 """
 
 import ast

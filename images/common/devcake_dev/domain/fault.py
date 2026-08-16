@@ -55,7 +55,7 @@ HARNESS_AUTH_MARKERS = tuple(_re.compile(r"\b" + p + r"\b") for p in (
 # CAPTURE RITUAL (2026-08-12 audit OPS-M4 — these markers are version-coupled
 # to CLI stderr wording; exit 12 vs the exit-10 burned-attempt cascade turns
 # on one phrase). Whenever a harness CLI pin is bumped (images/Dockerfile
-# CLAUDE_CODE_VERSION / CODEX_VERSION, or the unpinned grok floats), RE-RUN
+# CLAUDE_CODE_VERSION / CODEX_VERSION / GROK_VERSION), RE-RUN
 # the in-image capture so a wording change is caught as a fixture-verdict
 # mismatch, not discovered as a revoked-credential cascade in production:
 #   docker run --rm -v "$PWD:/srv" -w /srv devcake/dev-<harness>:<tag> \

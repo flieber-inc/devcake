@@ -3,6 +3,7 @@ INV-5 (transcript + token report always posted) — exercised against a FakePMO.
 Also the docs/03 §4.1 merge-failure branches (conflict rework, deferred retry)
 against a FakeForge, and the docs/05 §4 attachment policy."""
 import asyncio
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -1366,29 +1367,94 @@ def test_planned_without_attachments_posts_plan_inline(tmp_path):
 
 
 GITHUB_COMMENT_MAX = 65536
+_PART_LINE = re.compile(r"^Part (\d+) of (\d+)$")
 
 
-def test_huge_transcript_fits_github_limit_and_keeps_step_marker(tmp_path):
-    """GitHub rejects bodies over 65536. Finalize only catches ValueError,
-    so an oversized post wedges every run in finalizing."""
+def test_split_vendor_comments_unlabeled_when_one_page():
+    from devcake.domain.orchestrator.feed import _split_vendor_comments
+    from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
+    body = "short enough"
+    parts = _split_vendor_comments(body, GITHUB_COMMENT_MAX)
+    assert parts == [body]
+    assert "Part " not in parts[0]
+    assert len(parts[0]) + 2 + len(COMMENT_SENTINEL) <= GITHUB_COMMENT_MAX
+
+
+def test_split_vendor_comments_labels_every_page_and_preserves_bytes():
+    from devcake.domain.orchestrator.feed import _split_vendor_comments
+    from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
+    payload = ("alpha line\n" * 4_000) + ("beta line\n" * 4_000)
+    parts = _split_vendor_comments(payload, 8_000)
+    assert len(parts) >= 2
+    n = len(parts)
+    for i, part in enumerate(parts, 1):
+        assert f"Part {i} of {n}" in part.splitlines()
+        assert len(part) + 2 + len(COMMENT_SENTINEL) <= 8_000
+    rejoined = "\n".join(
+        "\n".join(ln for ln in p.splitlines() if not _PART_LINE.match(ln))
+        for p in parts)
+    assert rejoined.count("alpha line") == 4_000
+    assert rejoined.count("beta line") == 4_000
+
+
+def _comment_payload(comment: str) -> str:
+    """Strip sentinel and the pagination line; keep the substance."""
+    from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
+    text = comment
+    if COMMENT_SENTINEL in text:
+        text = text[: text.rfind(COMMENT_SENTINEL)].rstrip()
+    lines = text.splitlines()
+    # Part N of M is either line 0, or line 2 after a startswith marker.
+    drop = set()
+    for i, line in enumerate(lines):
+        if _PART_LINE.match(line):
+            drop.add(i)
+            if i + 1 < len(lines) and lines[i + 1] == "":
+                drop.add(i + 1)
+            break
+    return "\n".join(ln for i, ln in enumerate(lines) if i not in drop)
+
+
+def test_huge_transcript_posts_every_byte_across_labeled_parts(tmp_path):
+    """GitHub rejects bodies over 65536. The full dump must still land,
+    split into Part N of M comments — finalize must not sit in finalizing."""
     from devcake.domain.model import Activity, ActivityEntry
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, store = make_mgr(tmp_path, m)
     fake.attachments_supported = False
     fake.comment_max_chars = GITHUB_COMMENT_MAX
     run = _saved_run(store)
+    dump = "x" * 140_800
     run_coro(mgr.finalize(run, _finalize_payload(
-        transcript_md="x" * 140_800, last_message_md="Done.")))
+        transcript_md=dump, last_message_md="Done.")))
     assert run.state != "finalizing"
-    comment = next(c for c in fake.comments if "`1_ONBOARD.md`" in c)
-    assert len(comment) <= GITHUB_COMMENT_MAX
+    parts = [c for c in fake.comments if "`1_ONBOARD.md`" in c
+             or _PART_LINE.search(c)]
+    # the first part carries the step marker; later parts are continuations
+    marked = [c for c in fake.comments if "`1_ONBOARD.md`" in c]
+    assert marked, "step marker must ride part 1"
+    assert all(len(c) <= GITHUB_COMMENT_MAX for c in fake.comments)
+    labels = []
+    for c in fake.comments:
+        for line in c.splitlines():
+            hit = _PART_LINE.match(line)
+            if hit:
+                labels.append((int(hit.group(1)), int(hit.group(2))))
+    assert labels, "pagination must be labeled"
+    n = labels[0][1]
+    assert n >= 2
+    assert [i for i, total in labels] == list(range(1, n + 1))
+    assert all(total == n for _, total in labels)
+    joined = "".join(_comment_payload(c) for c in fake.comments)
+    assert dump in joined.replace("\n", "").replace("> ", "").replace(">", "")
+    assert "truncated" not in joined.lower()
     entry = ActivityEntry(ts=datetime.now(timezone.utc), author="cake",
-                          kind="comment", body=comment)
+                          kind="comment", body=marked[0])
     assert dispatch._derive_seq(
         Activity(mission=m, entries=[entry])) == 2
 
 
-def test_huge_plan_fits_github_limit(tmp_path):
+def test_huge_plan_posts_every_byte_across_labeled_parts(tmp_path):
     m = mission("in_progress", {"DEVCAKE", "DEVCAKE-PLAN"})
     mgr, fake, store = make_mgr(tmp_path, m)
     fake.attachments_supported = False
@@ -1397,9 +1463,37 @@ def test_huge_plan_fits_github_limit(tmp_path):
     assert len(plan) > GITHUB_COMMENT_MAX
     run_coro(transitions.transition(
         mgr, _run("PLAN", "DEVCAKE-PLAN"), {"outcome": "planned"}, plan))
-    posted = next(c for c in fake.comments if "the plan" in c)
-    assert len(posted) <= GITHUB_COMMENT_MAX
+    assert all(len(c) <= GITHUB_COMMENT_MAX for c in fake.comments)
+    labels = [_PART_LINE.match(line).groups()
+              for c in fake.comments for line in c.splitlines()
+              if _PART_LINE.match(line)]
+    assert labels
+    n = int(labels[0][1])
+    assert n >= 2
+    assert [int(i) for i, _ in labels] == list(range(1, n + 1))
+    joined = "\n".join(_comment_payload(c) for c in fake.comments)
+    assert "# the plan" in joined
+    assert joined.count("do the thing") == 8_000
     assert "DEVCAKE-EXECUTE" in m.labels
+
+
+def test_long_reply_keeps_marker_first_and_paginates(tmp_path):
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+    fake.comment_max_chars = GITHUB_COMMENT_MAX
+    body = REPLY_MARKER + "\n\n" + ("answer line\n" * 20_000)
+    run_coro(mgr._feed("p1", "issue", body, externalize=False))
+    assert fake.comments[0].startswith(REPLY_MARKER)
+    assert any(line == "Part 1 of 2" or line.startswith("Part 1 of ")
+               for line in fake.comments[0].splitlines())
+    rest = [c for c in fake.comments[1:]
+            if any(_PART_LINE.match(ln) for ln in c.splitlines())]
+    assert rest
+    assert rest[0].lstrip().startswith("Part ")
+    assert not rest[0].startswith(REPLY_MARKER)
+    joined = "\n".join(_comment_payload(c) for c in fake.comments)
+    assert joined.count("answer line") == 20_000
 
 
 def test_finalize_upload_failure_posts_quoted_inline(tmp_path):

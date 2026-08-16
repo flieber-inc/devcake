@@ -64,6 +64,20 @@ def _comparable(bundle: dict) -> dict:
 
 # ── round trip ───────────────────────────────────────────────────────────────
 
+def test_serialize_never_carries_harness_receipts(monkeypatch, tmp_path):
+    """Probe receipts live under /data/harness_receipts/ and stay off the
+    settings bundle — they are keyed to this app digest, not portable config."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    (tmp_path / "harness_receipts").mkdir()
+    (tmp_path / "harness_receipts" / "grok-build@0.2.112.json").write_text("{}")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    blob = str(bundle)
+    assert "harness_receipts" not in bundle
+    assert "harness_receipts" not in blob
+    assert "grok-build@0.2.112" not in blob
+
+
 def test_serialize_apply_roundtrip_onto_fresh_deployment(monkeypatch, tmp_path):
     sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path / "src")
     cfg, dts = _world(config_mod, secrets, tpl)

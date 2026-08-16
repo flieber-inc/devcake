@@ -2,8 +2,8 @@
 """Capture one real harness run from INSIDE a baked Dev image (ADR-0018 gate 1).
 
 Why in-image and not on the host: the host's CLI versions drift from the pins
-(codex host 0.144.6 vs image 0.144.4; grok is installed unpinned, so the image
-floats). A fixture captured at the wrong version silently stops describing what
+(codex host 0.144.6 vs image 0.144.4; grok house pin is ARG GROK_VERSION).
+A fixture captured at the wrong version silently stops describing what
 production runs.
 
 What it guarantees, and these are the properties that make a capture evidence

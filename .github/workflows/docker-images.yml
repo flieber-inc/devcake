@@ -58,24 +58,23 @@ jobs:
       - name: Smoke harness CLIs (pinned versions)
         # `sh -ec 'a && b'`: without -e (and with `;` separators) only the
         # LAST command's exit code propagated — a broken CLI or a USER
-        # regression to root sailed through green (audit A2). The claude/
-        # codex checks also assert the CLI actually reports the pinned
-        # version; grok installs via curl|bash (the recorded pin exception)
-        # so it only asserts the CLI runs.
+        # regression to root sailed through green (audit A2). Every harness
+        # check asserts the CLI reports the Dockerfile ARG pin.
         run: |
           set -euo pipefail
           CLAUDE_PIN=$(sed -n 's/^ARG CLAUDE_CODE_VERSION=//p' images/Dockerfile)
           CODEX_PIN=$(sed -n 's/^ARG CODEX_VERSION=//p' images/Dockerfile)
+          GROK_PIN=$(sed -n 's/^ARG GROK_VERSION=//p' images/Dockerfile)
           PI_PIN=$(sed -n 's/^ARG PI_VERSION=//p' images/Dockerfile)
           OPENCODE_PIN=$(sed -n 's/^ARG OPENCODE_VERSION=//p' images/Dockerfile)
           QWEN_PIN=$(sed -n 's/^ARG QWEN_CODE_VERSION=//p' images/Dockerfile)
-          test -n "$CLAUDE_PIN" && test -n "$CODEX_PIN" && test -n "$PI_PIN" && test -n "$OPENCODE_PIN" && test -n "$QWEN_PIN"
+          test -n "$CLAUDE_PIN" && test -n "$CODEX_PIN" && test -n "$GROK_PIN" && test -n "$PI_PIN" && test -n "$OPENCODE_PIN" && test -n "$QWEN_PIN"
           docker run --rm --entrypoint sh "devcake/dev-claude-code:${DEVCAKE_TAG}" -ec \
             "id | grep -q uid=1000 && claude --version | grep -F \"$CLAUDE_PIN\" && test -f /dev_entrypoint.py"
           docker run --rm --entrypoint sh "devcake/dev-codex:${DEVCAKE_TAG}" -ec \
             "id | grep -q uid=1000 && codex --version | grep -F \"$CODEX_PIN\" && test -f /dev_entrypoint.py"
           docker run --rm --entrypoint sh "devcake/dev-grok-build:${DEVCAKE_TAG}" -ec \
-            'id | grep -q uid=1000 && grok --version && test -f /dev_entrypoint.py'
+            "id | grep -q uid=1000 && grok --version | grep -F \"$GROK_PIN\" && test -f /dev_entrypoint.py"
           docker run --rm --entrypoint sh "devcake/dev-pi:${DEVCAKE_TAG}" -ec \
             "id | grep -q uid=1000 && pi --version | grep -F \"$PI_PIN\" && test -f /dev_entrypoint.py"
           docker run --rm --entrypoint sh "devcake/dev-opencode:${DEVCAKE_TAG}" -ec \
@@ -86,3 +85,33 @@ jobs:
           docker run --rm --entrypoint python "devcake/dev-hello:${DEVCAKE_TAG}" -c \
             'import redis; print("hello redis import ok")'
           echo "harness smoke OK"
+
+      - name: Drift probe (bake verb)
+        # Part of the bake verb (PLAN_CLI_PINS 0b): compile is not enough —
+        # a row-level receipt must be written for each launch-supported
+        # house pin. Claude 401 is matrix-not-required (no stub-driven capture).
+        run: |
+          set -euo pipefail
+          CLAUDE_PIN=$(sed -n 's/^ARG CLAUDE_CODE_VERSION=//p' images/Dockerfile)
+          CODEX_PIN=$(sed -n 's/^ARG CODEX_VERSION=//p' images/Dockerfile)
+          GROK_PIN=$(sed -n 's/^ARG GROK_VERSION=//p' images/Dockerfile)
+          mkdir -p /tmp/harness_receipts
+          bash scripts/harness_probe/host_probe.sh grok-build "$GROK_PIN" \
+            "devcake/dev-grok-build:${DEVCAKE_TAG}" /tmp/harness_receipts
+          bash scripts/harness_probe/host_probe.sh claude-code "$CLAUDE_PIN" \
+            "devcake/dev-claude-code:${DEVCAKE_TAG}" /tmp/harness_receipts
+          bash scripts/harness_probe/host_probe.sh codex "$CODEX_PIN" \
+            "devcake/dev-codex:${DEVCAKE_TAG}" /tmp/harness_receipts
+          python3 -c "
+          import json, pathlib, sys
+          ok = True
+          for name in (
+              f'grok-build@${GROK_PIN}.json',
+              f'claude-code@${CLAUDE_PIN}.json',
+              f'codex@${CODEX_PIN}.json',
+          ):
+              rec = json.loads(pathlib.Path('/tmp/harness_receipts', name).read_text())
+              print(name, 'ok=' + str(rec.get('ok')))
+              ok = ok and rec.get('ok')
+          sys.exit(0 if ok else 1)
+          "

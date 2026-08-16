@@ -55,6 +55,29 @@ def test_ok_false_names_the_failing_required_row():
         require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
 
 
+def test_ok_false_lists_every_required_row_that_did_not_pass():
+    from devcake.staffing import HarnessNotStaffed, require_staffed
+
+    rec = {
+        "ok": False,
+        "digest": "sha256:abc",
+        "rows": [
+            {"name": "healthy", "required": True, "status": "fail"},
+            {"name": "http_401", "required": True, "status": "pass"},
+            {"name": "resume", "required": True, "status": "error",
+             "detail": "first invocation exposed no session identity"},
+        ],
+    }
+    with pytest.raises(HarnessNotStaffed) as caught:
+        require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
+    msg = str(caught.value)
+    assert "healthy fail" in msg
+    assert "resume error" in msg
+    assert "first invocation exposed no session identity" in msg
+    assert "http_401" not in msg
+    assert caught.value.row == "healthy"
+
+
 def test_required_skip_and_error_are_not_ok():
     from devcake.staffing import HarnessNotStaffed, require_staffed
 

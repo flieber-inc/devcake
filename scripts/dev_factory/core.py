@@ -37,6 +37,7 @@ from devcake.house_pins import LAUNCH_SUPPORTED
 _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
 _TEMPLATE = re.compile(r"[a-z0-9-]+")
 _IMAGE_PREFIX = "devcake/dev-"
+_IMAGE_REF = re.compile(r"devcake/dev-[a-z0-9-]+:[A-Za-z0-9._-]+")
 
 # Bake ARG names — ratchet against app.house_pins.DOCKERFILE_ARG.
 ARG_NAMES: dict[str, str] = {
@@ -128,14 +129,87 @@ def plan_bakes(
     digest: str,
     receipts: Mapping[tuple[str, str], Mapping],
 ) -> tuple[BakeJob, ...]:
-    """Pins that do not already have an ok receipt for this app digest."""
+    """Pins that do not already have a receipt for this app digest.
+
+    A receipt is the bake verb's result — ok or not. Rebake only when the
+    tree id moved or the pin has never been baked.
+    """
     jobs: list[BakeJob] = []
     for pin in keep_set.pins:
         rec = receipts.get((pin.template, pin.cli_version))
-        if rec is not None and rec.get("ok") is True and rec.get("digest") == digest:
+        if rec is not None and rec.get("digest") == digest:
             continue
         jobs.append(BakeJob(template=pin.template, cli_version=pin.cli_version))
     return tuple(jobs)
+
+
+def receipt_path(receipts_dir: Path | str, job: BakeJob) -> Path:
+    return Path(receipts_dir) / f"{job.template}@{job.cli_version}.json"
+
+
+def _require_dev_image(ref: str) -> str:
+    if not _IMAGE_REF.fullmatch(ref):
+        raise InvalidKeepSet(f"refusing image name {ref!r}")
+    return ref
+
+
+def plan_prune(
+    *,
+    keep_images: tuple[str, ...] | list[str],
+    running_images: tuple[str, ...] | list[str],
+    local_images: tuple[str, ...] | list[str],
+) -> tuple[str, ...]:
+    """Local `devcake/dev-*` images that no pin, running container, or hello needs.
+
+    Names that are not `devcake/dev-*` are ignored as candidates (never
+    deleted). Keep/running names that *are* `devcake/dev-*` are validated.
+    """
+    keep: set[str] = set()
+    for ref in (*keep_images, *running_images):
+        if not str(ref).startswith(_IMAGE_PREFIX):
+            continue
+        keep.add(_require_dev_image(ref))
+    gone: list[str] = []
+    for ref in local_images:
+        if not str(ref).startswith(_IMAGE_PREFIX):
+            continue
+        name = _require_dev_image(ref)
+        if name not in keep:
+            gone.append(name)
+    return tuple(sorted(set(gone)))
+
+
+def run_prune(
+    refs: tuple[str, ...] | list[str],
+    *,
+    run: Callable[..., object],
+) -> None:
+    """docker rmi the planned refs. Empty list is a no-op."""
+    safe = [_require_dev_image(ref) for ref in refs]
+    if not safe:
+        return
+    result = run(["docker", "rmi", *safe], check=False, capture_output=True,
+                 text=True)
+    code = getattr(result, "returncode", 1)
+    if code != 0:
+        raise RuntimeError(f"docker rmi exited {code}" + _run_tail(result))
+
+
+def receipt_fail_detail(job: BakeJob, rec: Mapping) -> str:
+    """Operator copy from a not-ok receipt. Harness-agnostic: required
+    rows that did not pass, plus any row detail the probe already wrote."""
+    bits: list[str] = []
+    for row in rec.get("rows") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if not row.get("required") or row.get("status") == "pass":
+            continue
+        name = str(row.get("name") or "?")
+        status = str(row.get("status") or "fail")
+        extra = str(row.get("detail") or "").strip()
+        bits.append(f"{name} {status} ({extra})" if extra else f"{name} {status}")
+    body = "; ".join(bits) if bits else "receipt not ok"
+    return f"probe {job.template}@{job.cli_version} failed: {body}"
 
 
 def image_ref(
@@ -381,6 +455,14 @@ def run_bake(
                  capture_output=True, text=True)
     code = getattr(result, "returncode", 1)
     if code != 0:
+        dest = receipt_path(receipts_dir, job)
+        if dest.is_file():
+            try:
+                rec = json.loads(dest.read_text())
+            except (OSError, json.JSONDecodeError):
+                rec = None
+            if isinstance(rec, dict):
+                raise RuntimeError(receipt_fail_detail(job, rec))
         raise RuntimeError(
             f"probe {job.template}@{job.cli_version} exited {code}"
             + _run_tail(result))

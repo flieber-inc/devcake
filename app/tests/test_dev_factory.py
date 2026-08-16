@@ -95,7 +95,9 @@ def test_malformed_keep_set_is_refused(tmp_path):
         factory.load_keep_set(dest)
 
 
-def test_plan_bakes_skips_ok_receipt_for_this_digest():
+def test_plan_bakes_skips_any_receipt_for_this_digest():
+    """A receipt for this digest is done work — ok or not. Rebake only
+    when the tree id moved or there is no receipt."""
     factory = _load_factory()
     ks = factory.KeepSet(pins=(
         factory.Pin("grok-build", "0.2.112"),
@@ -113,11 +115,10 @@ def test_plan_bakes_skips_ok_receipt_for_this_digest():
     )
     assert [(j.template, j.cli_version) for j in jobs] == [
         ("grok-build", "1.0.4"),
-        ("claude-code", "2.1.229"),
     ]
 
 
-def test_plan_bakes_empty_when_every_pin_has_an_ok_receipt():
+def test_plan_bakes_empty_when_every_pin_has_a_receipt_for_this_digest():
     factory = _load_factory()
     ks = factory.KeepSet(pins=(factory.Pin("grok-build", "0.2.112"),))
     jobs = factory.plan_bakes(
@@ -126,6 +127,104 @@ def test_plan_bakes_empty_when_every_pin_has_an_ok_receipt():
         receipts={("grok-build", "0.2.112"): {"ok": True, "digest": "sha256:abc"}},
     )
     assert jobs == ()
+
+
+def test_receipt_fail_detail_names_required_rows_that_did_not_pass():
+    factory = _load_factory()
+    rec = {
+        "ok": False,
+        "rows": [
+            {"name": "healthy", "required": True, "status": "fail"},
+            {"name": "http_401", "required": True, "status": "pass"},
+            {"name": "empty", "required": True, "status": "fail"},
+            {"name": "plan_mode", "required": True, "status": "pass"},
+            {"name": "resume", "required": True, "status": "error",
+             "detail": "first invocation exposed no session identity"},
+        ],
+    }
+    job = factory.BakeJob("grok-build", "1.0.4")
+    text = factory.receipt_fail_detail(job, rec)
+    assert "healthy fail" in text
+    assert "empty fail" in text
+    assert "resume error" in text
+    assert "first invocation exposed no session identity" in text
+    assert "http_401" not in text
+    assert "plan_mode" not in text
+    assert '{"ok": false' not in text
+
+
+def test_run_bake_probe_failure_uses_receipt_rows_not_stdout_json(tmp_path):
+    factory = _load_factory()
+    receipts = tmp_path / "receipts"
+    receipts.mkdir()
+    rec = {
+        "ok": False,
+        "digest": "sha256:abc",
+        "rows": [
+            {"name": "healthy", "required": True, "status": "fail"},
+            {"name": "resume", "required": True, "status": "error",
+             "detail": "first invocation exposed no session identity"},
+        ],
+    }
+
+    def run(argv, **kw):
+        if argv and argv[0] == "docker":
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        dest = receipts / "grok-build@1.0.4.json"
+        dest.write_text(json.dumps(rec))
+        return type("R", (), {
+            "returncode": 1,
+            "stdout": '{"ok": false, "path": "/data/harness_receipts/grok-build@1.0.4.json"}\n',
+            "stderr": "",
+        })()
+
+    with pytest.raises(RuntimeError) as caught:
+        factory.run_bake(
+            factory.BakeJob("grok-build", "1.0.4"),
+            tag="latest",
+            house={"grok-build": "0.2.112"},
+            receipts_dir=receipts,
+            digest="sha256:abc",
+            repo=Path("/repo"),
+            run=run,
+        )
+    msg = str(caught.value)
+    assert "healthy fail" in msg
+    assert "resume error" in msg
+    assert '{"ok": false' not in msg
+    assert (receipts / "grok-build@1.0.4.json").is_file()
+
+
+def test_plan_prune_keeps_pins_running_and_hello_and_ignores_nginx():
+    factory = _load_factory()
+    gone = factory.plan_prune(
+        keep_images=("devcake/dev-grok-build:latest-1.0.4",
+                     "devcake/dev-hello:latest"),
+        running_images=("devcake/dev-claude-code:latest", "nginx"),
+        local_images=(
+            "devcake/dev-grok-build:latest-1.0.4",
+            "devcake/dev-hello:latest",
+            "devcake/dev-claude-code:latest",
+            "devcake/dev-qwen-code:latest",
+            "nginx",
+        ),
+    )
+    assert gone == ("devcake/dev-qwen-code:latest",)
+
+
+def test_run_prune_is_docker_rmi_of_the_planned_refs_only():
+    factory = _load_factory()
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(list(argv))
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    factory.run_prune(("devcake/dev-qwen-code:latest",), run=run)
+    assert calls == [["docker", "rmi", "devcake/dev-qwen-code:latest"]]
+    with pytest.raises(factory.InvalidKeepSet, match="nginx"):
+        factory.run_prune(("nginx",), run=run)
+    assert calls == [["docker", "rmi", "devcake/dev-qwen-code:latest"]]
 
 
 def test_image_ref_house_pin_is_the_tag_only():

@@ -141,8 +141,11 @@ function DevTypeRow({ name, draftDt, serverDt, harnesses, edited, onEdit, onRena
 }
 
 export default function DevTypesSection({ setPageErr, onHealthChange }) {
-  const { dr, reload, harnesses } = useSharedDraft();
+  const { dr, reload, harnesses, healthInfo } = useSharedDraft();
   const [confirm, setConfirm] = useState(null); // delete confirms
+  const [pruneOpen, setPruneOpen] = useState(false);
+  const [pruneBusy, setPruneBusy] = useState(false);
+  const [pruneMsg, setPruneMsg] = useState("");
   const [oauthFor, setOauthFor] = useState(null);
   const [editFor, setEditFor] = useState(null);
   const [addDev, setAddDev] = useState(false);
@@ -197,6 +200,9 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
             <ImmediateBadge text="create/delete apply immediately" />
             {/* creation lives on the table's dashed row — no header twin */}
             <MoreMenu label="More Dev Types actions" items={[
+              { label: "Prune unused Dev images",
+                desc: "Deletes local Dev images that no current pin, running Dev, or hello needs. The host baker does it — the app never talks to Docker.",
+                onClick: () => { setPruneMsg(""); setPruneOpen(true); } },
               { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
                 desc: CLEAR_SECRETS_ENTRY.desc,
                 onClick: () => setClearSecrets(true) },
@@ -258,6 +264,50 @@ export default function DevTypesSection({ setPageErr, onHealthChange }) {
       <ConfirmDialog open={!!confirm} {...(confirm || {})}
         onConfirm={() => confirm.action()}
         onCancel={() => setConfirm(null)} />
+      {pruneOpen && (
+        <Modal onClose={pruneBusy ? undefined : () => setPruneOpen(false)}>
+          <h4 className="mb-1 text-base font-semibold tracking-tight">
+            Prune unused Dev images?
+          </h4>
+          <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
+            The host baker will delete local <span className="font-mono text-xs">devcake/dev-*</span> images
+            that no current pin, running Dev, or hello needs. The app never talks to Docker.
+          </p>
+          {healthInfo?.bake_status?.baker_alive === false && (
+            <p className="mb-3 text-sm text-red-600 dark:text-red-400">
+              The host baker is not running. Restart with ./up.sh, then prune again.
+            </p>
+          )}
+          {pruneMsg && (
+            <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">{pruneMsg}</p>
+          )}
+          {healthInfo?.bake_status?.prune && (
+            <p className="mb-3 text-sm text-neutral-600 dark:text-neutral-300">
+              {healthInfo.bake_status.prune.detail
+                || ((healthInfo.bake_status.prune.removed || []).length
+                  ? `Removed ${(healthInfo.bake_status.prune.removed || []).length} image(s).`
+                  : "Nothing to prune.")}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button kind="ghost" disabled={pruneBusy} onClick={() => setPruneOpen(false)}>
+              Close
+            </Button>
+            <Button disabled={pruneBusy || healthInfo?.bake_status?.baker_alive === false}
+              onClick={async () => {
+                setPruneBusy(true); setPruneMsg("");
+                try {
+                  await send("POST", "/harness/prune");
+                  setPruneMsg("Asked the host baker to prune.");
+                } catch (e) {
+                  setPruneMsg(String(e.message || e));
+                } finally { setPruneBusy(false); }
+              }}>
+              {pruneBusy ? "Asking…" : "Prune unused images"}
+            </Button>
+          </div>
+        </Modal>
+      )}
       {oauthFor && <OAuthWizard devType={oauthFor}
         onClose={() => { setOauthFor(null); reload(); }} />}
       {addDev && <NewDevTypeDialog harnesses={harnesses}

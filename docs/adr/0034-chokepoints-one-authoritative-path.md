@@ -92,6 +92,7 @@ Corollaries, each load-bearing:
 | CI bring-up env derivation | `up.sh` and `ci_compose_for_dispatch.sh` derive independently | one sourced helper; CI script keeps only CI-specific concerns |
 | Dev bus chunking | `hello_dev.py` hand-copy (already drifted: `SHRINKABLE_FIELDS`) | shared import or field-by-field pinned mirror |
 | Layering rule (domain never imports adapters) | prose + review culture; 2 sanctioned seams undocumented/half-documented | import-ban ratchet with a 2-entry allowlist naming both seams |
+| Vendor-cap comment pagination | split in `feed.py`; join/coalesce reimplemented in `activity_payload` (`isalnum` glue) | `feed.split_vendor_comments` / `feed.join_vendor_comments` / `feed.coalesced_step_files`; `activity_payload` only calls; AST ratchet |
 
 Out of scope, deliberately: unifying the checkpoint-vs-sweep idempotency
 regimes (different failure economics, would change PMO read costs);

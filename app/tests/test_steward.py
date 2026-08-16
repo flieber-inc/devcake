@@ -325,9 +325,9 @@ def test_derive_seq_ignores_quoted_markers():
 
 
 def _paginated_entries(markdown: str, *, limit: int = 400) -> list[ActivityEntry]:
-    from devcake.domain.orchestrator.feed import _split_vendor_comments
+    from devcake.domain.orchestrator.feed import split_vendor_comments
     from devcake.domain.orchestrator.markers import COMMENT_SENTINEL
-    parts = _split_vendor_comments(markdown, limit)
+    parts = split_vendor_comments(markdown, limit)
     assert len(parts) >= 2, "fixture must actually paginate"
     return [
         ActivityEntry(ts=NOW, author="cake", kind="comment",

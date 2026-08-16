@@ -14,7 +14,8 @@ from ..model import Mission, MissionRef, STAGE_LABELS
 from ..run import utcnow
 from . import markers
 from .markers import (COMMENT_SENTINEL, DELIVERABLE_MARKER, FEED_INLINE_MAX,
-                      REPLY_MARKER, SENTINEL_RE)
+                      PART_LINE, PLAN_FILE, REPLY_MARKER, SENTINEL_RE,
+                      STEP_MARKER)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -47,7 +48,8 @@ def _part_label(i: int, n: int) -> str:
 def _chunk_text(text: str, room: int) -> list[str]:
     """Split `text` into pieces of at most `room` characters.
 
-    Prefers a newline cut so we do not bisect a marker line when one fits.
+    `"".join(chunks) == text`. A newline cut keeps the newline on the
+    left chunk so join is concatenation, not a guess.
     """
     if room < 1:
         raise ValueError("vendor comment room must be positive")
@@ -58,12 +60,12 @@ def _chunk_text(text: str, room: int) -> list[str]:
             out.append(rest)
             break
         cut = rest.rfind("\n", 0, room)
-        if cut < room // 4:
-            cut = room
-        out.append(rest[:cut])
-        rest = rest[cut:]
-        if rest.startswith("\n"):
-            rest = rest[1:]
+        if cut >= room // 4:
+            out.append(rest[: cut + 1])
+            rest = rest[cut + 1:]
+        else:
+            out.append(rest[:room])
+            rest = rest[room:]
     return out
 
 
@@ -73,12 +75,16 @@ def _attach_part_label(chunk: str, i: int, n: int) -> str:
     raw = chunk
     for marker in (REPLY_MARKER, DELIVERABLE_MARKER):
         if raw.startswith(marker):
-            rest = raw[len(marker):].lstrip("\n")
-            return f"{marker}\n\n{label}\n\n{rest}".rstrip()
-    return f"{label}\n\n{raw}".rstrip()
+            rest = raw[len(marker):]
+            if rest.startswith("\n"):
+                rest = rest[1:]
+            if rest.startswith("\n"):
+                rest = rest[1:]
+            return f"{marker}\n\n{label}\n\n{rest}"
+    return f"{label}\n\n{raw}"
 
 
-def _split_vendor_comments(markdown: str, limit: int) -> list[str]:
+def split_vendor_comments(markdown: str, limit: int) -> list[str]:
     """Full body as one or more comments, each fitting under `limit`.
 
     Single-comment posts are unlabeled. A split is labeled `Part i of n`
@@ -100,6 +106,129 @@ def _split_vendor_comments(markdown: str, limit: int) -> list[str]:
                 f"paginated comment still exceeds vendor cap "
                 f"({len(part) + sentinel_over} > {limit})")
     return parts
+
+
+def strip_vendor_page(body: str) -> str:
+    """Remove sentinel and one `Part i of n` label. Inverse of seal+label."""
+    text = body or ""
+    idx = text.rfind(COMMENT_SENTINEL)
+    if idx >= 0:
+        text = text[:idx]
+        if text.endswith("\n\n"):
+            text = text[:-2]
+        elif text.endswith("\n"):
+            text = text[:-1]
+    for marker in (REPLY_MARKER, DELIVERABLE_MARKER):
+        prefix = marker + "\n\n"
+        if not text.startswith(prefix):
+            continue
+        rest = text[len(prefix):]
+        first, sep, after = rest.partition("\n")
+        if PART_LINE.match(first):
+            if after.startswith("\n"):
+                after = after[1:]
+            return marker + "\n\n" + after
+        return text
+    first, sep, after = text.partition("\n")
+    if PART_LINE.match(first):
+        if after.startswith("\n"):
+            after = after[1:]
+        return after
+    return text
+
+
+def join_vendor_comments(bodies: list[str]) -> str:
+    """Inverse of split_vendor_comments + the `_feed` sentinel suffix."""
+    return "".join(strip_vendor_page(b) for b in bodies)
+
+
+def _part_coords(body: str) -> tuple[int, int] | None:
+    for line in unquoted(body).splitlines():
+        hit = PART_LINE.match(line)
+        if hit:
+            return int(hit.group(1)), int(hit.group(2))
+    return None
+
+
+def _step_filename(reconstructed: str) -> str | None:
+    scan = unquoted(reconstructed)
+    hit = STEP_MARKER.search(scan)
+    if hit:
+        return f"{hit.group(1)}_{hit.group(2)}.md"
+    hit = PLAN_FILE.search(scan)
+    if hit:
+        return hit.group(1)
+    return None
+
+
+def _substance(filename: str, reconstructed: str) -> str:
+    """Linear-shaped attachment bytes from a reconstructed feed comment."""
+    if filename.startswith("PLAN_"):
+        parts = reconstructed.split("\n\n", 1)
+        return parts[1] if len(parts) > 1 else reconstructed
+    lines = reconstructed.splitlines()
+    i = 0
+    while i < len(lines) and not (lines[i].startswith(">") or lines[i] == ">"):
+        i += 1
+    if i >= len(lines):
+        return reconstructed
+    dump: list[str] = []
+    for line in lines[i:]:
+        if line.startswith("> "):
+            dump.append(line[2:])
+        elif line == ">":
+            dump.append("")
+        else:
+            dump.append(line)
+    text = "\n".join(dump)
+    if text.startswith("---\n\n"):
+        text = text[5:]
+    return text
+
+
+def coalesced_step_files(entries) -> list[tuple[str, str, object]]:
+    """(filename, content, first_entry) from paginated or single inline steps.
+
+    The inverse of `_feed`'s vendor-cap split. activity_payload only calls
+    this — it must not re-parse Part labels.
+    """
+    out: list[tuple[str, str, object]] = []
+    i = 0
+    n = len(entries)
+    while i < n:
+        e = entries[i]
+        body = e.body or ""
+        if not is_devcake_comment(body):
+            i += 1
+            continue
+        page = strip_vendor_page(body)
+        coords = _part_coords(body)
+        if coords and coords[0] == 1 and coords[1] >= 2:
+            total = coords[1]
+            group = [e]
+            j = i + 1
+            while len(group) < total and j < n:
+                nxt = entries[j]
+                nb = nxt.body or ""
+                if not is_devcake_comment(nb):
+                    break
+                if _part_coords(nb) != (len(group) + 1, total):
+                    break
+                group.append(nxt)
+                j += 1
+            if len(group) == total:
+                reconstructed = join_vendor_comments(
+                    [g.body or "" for g in group])
+                name = _step_filename(reconstructed)
+                if name:
+                    out.append((name, _substance(name, reconstructed), e))
+                i = j
+                continue
+        name = _step_filename(page)
+        if name and coords is None:
+            out.append((name, _substance(name, page), e))
+        i += 1
+    return out
 
 
 def _audit(mgr, pmo_id: str, action: str, detail: str = "") -> None:
@@ -175,12 +304,13 @@ async def _feed(mgr, pmo_id: str, kind: str, markdown: str, *,
         except Exception:
             log.exception("feed attachment upload failed — posting inline")
     cap = _comment_max_chars(mgr)
-    parts = (_split_vendor_comments(markdown, cap) if cap is not None
+    parts = (split_vendor_comments(markdown, cap) if cap is not None
              else [markdown.rstrip()])
     for part in parts:
+        # Cut-newlines stay: join_vendor_comments is concatenation.
         await mgr.pmo.post_feed(
             MissionRef(pmo_id, "issue"),
-            part.rstrip() + "\n\n" + COMMENT_SENTINEL)
+            part + "\n\n" + COMMENT_SENTINEL)
 
 
 async def post_attachment_comment(mgr, pmo_id: str, kind: str, *,

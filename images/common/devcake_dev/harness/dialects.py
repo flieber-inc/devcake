@@ -21,7 +21,7 @@ from .tokens import (
 from ..domain.fault import (
     HARNESS_STATUS_PATTERNS, _dict, _one_line, claude_result_event,
     claude_run_fault, codex_run_fault, grok_run_fault, pi_run_fault,
-    harness_error_messages,
+    harness_error_messages, http_status_from_message,
 )
 
 
@@ -332,9 +332,9 @@ class _Pi:
                     blobs.append(str(amsg["errorMessage"]))
         blobs.extend(harness_error_messages(out))
         for message in blobs:
-            head = message[:3]
-            if head.isdigit():
-                return int(head)
+            status = http_status_from_message(message)
+            if status is not None:
+                return status
             for rx in HARNESS_STATUS_PATTERNS[self.id]:
                 hit = rx.search(message)
                 if hit:

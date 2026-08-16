@@ -102,6 +102,7 @@ HARNESSES: dict[str, Harness] = {
         # Reads ~/.pi/agent/skills AND ~/.agents/skills; .agents is the
         # Agent Skills standard the other templates already use.
         skills_dir=".agents/skills",
+        experimental=True,
     ),
 }
 

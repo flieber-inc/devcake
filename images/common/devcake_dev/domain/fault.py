@@ -431,6 +431,17 @@ def harness_fault(harness: str, out: str, harness_exit: int, *, dump: str = "",
 
 # HTTP status from CLI transport wording (not model prose). Precision over
 # recall: false 12 pauses a Dev Type; missed 401 falls through to 15.
+# Word-boundary 3-digit HTTP status. message[:3].isdigit() is not a
+# status: "40100ms deadline" is not 401; "120s timeout" is not 120.
+_HTTP_STATUS_TOKEN = _re.compile(r"\b([1-5]\d{2})\b")
+
+
+def http_status_from_message(message: str):
+    """First plausible HTTP status (100–599) at a word boundary, or None."""
+    hit = _HTTP_STATUS_TOKEN.search(message or "")
+    return int(hit.group(1)) if hit else None
+
+
 HARNESS_STATUS_PATTERNS = {
     "codex": (_re.compile(r"unexpected status (\d{3})"),
               _re.compile(r"last status: (\d{3})")),

@@ -643,3 +643,20 @@ def test_pi_retry_then_healthy_is_not_a_fault():
              "stopReason": "stop"}], "willRetry": False}),
     ])
     assert ep.pi_run_fault(stream, 0) is None
+
+
+def test_pi_status_prefix_is_an_exact_three_digit_token():
+    """message[:3].isdigit() is not a status: a timeout must not be 401."""
+    def _pi_err(msg):
+        return json.dumps({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "stopReason": "error", "errorMessage": msg}})
+
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("40100ms deadline exceeded")) is None
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("1234 things failed")) is None
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("120s timeout waiting: HTTP 401 from upstream")) == 401
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("401 Incorrect API key provided")) == 401

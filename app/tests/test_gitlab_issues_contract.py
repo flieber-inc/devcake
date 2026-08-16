@@ -167,13 +167,22 @@ class Router:
                               "Blocked issues not available for current license"})
                 return httpx.Response(200, json=self.links.get(iid, []))
             if rest == "/links" and method == "POST":
-                status = self.links_status.get(iid, 403)
+                status = self.links_status.get(iid, 201)
                 if status == 409:
                     return httpx.Response(
                         409, json={"message": "already assigned"})
-                return httpx.Response(
-                    status, json={"message":
-                                  "Blocked issues not available for current license"})
+                if status != 201:
+                    return httpx.Response(
+                        status,
+                        json={"message":
+                              "Blocked issues not available for current license"})
+                target = int(body.get("target_issue_iid") or 0)
+                self.links.setdefault(iid, []).append({
+                    "id": 84,
+                    "iid": target,
+                    "link_type": body.get("link_type") or "relates_to",
+                })
+                return httpx.Response(201, json={"link_type": body.get("link_type")})
 
         return httpx.Response(404, json={"message": f"unhandled {method} {path}"})
 
@@ -242,49 +251,62 @@ def test_health_probe_is_read_only():
     assert not any(c.startswith(("POST", "PUT", "PATCH")) for c in r.calls)
 
 
-def test_capabilities_fail_closed_until_links_probe():
+def test_capabilities_fail_closed_until_a_write():
     caps = make_pmo().capabilities()
     assert caps.projects_supported is False
     assert caps.relations_supported is False
+    assert caps.attachments_supported is True
     assert caps.global_ids is False
     assert caps.native_label_swap_atomic is True
 
 
-def test_relations_probe_403_stays_false_and_is_read_only():
+def test_health_probe_is_read_only_and_does_not_claim_write_support():
     r = Router()
-    r.links_status[1] = 403
+    r.links[1] = [{
+        "id": 84, "iid": 2, "project_id": 4,
+        "link_type": "is_blocked_by", "title": "blocker",
+    }]
     pmo = make_pmo(r)
     h = run(pmo.health_probe("o/r"))
     assert h.ok
     assert pmo.capabilities().relations_supported is False
     assert "relations=off" in (h.detail or "")
     assert not any(c.startswith(("POST", "PUT", "PATCH")) for c in r.calls)
-    m = run(pmo.get(MissionRef("1", "issue")))
-    assert m.blocked_by == []
 
 
-def test_relations_probe_200_sets_true_and_fills_blocked_by():
+def test_blocked_by_reads_gitlab_list_shape():
+    """GET /issues/:iid/links returns the related issue at top level."""
     r = Router()
     r.links[1] = [{
+        "id": 84,
+        "iid": 2,
+        "project_id": 4,
+        "title": "Issues with auth",
+        "state": "opened",
         "link_type": "is_blocked_by",
-        "issue": {"iid": 2},
     }]
     pmo = make_pmo(r)
-    h = run(pmo.health_probe("o/r"))
-    assert h.ok
-    assert pmo.capabilities().relations_supported is True
-    assert "relations=on" in (h.detail or "")
     m = run(pmo.get(MissionRef("1", "issue")))
     assert m.blocked_by == ["2"]
+    assert pmo.capabilities().relations_supported is False
 
 
-def test_create_relation_iid_409_license_403_still_raises():
+def test_create_relation_403_is_unsupported_not_a_wedge():
     r = Router()
     r.issues[409] = _issue(409)
     r.links_status[409] = 403
     pmo = make_pmo(r)
-    with pytest.raises(RuntimeError, match="403"):
-        run(pmo.create_relation("1", "409"))
+    run(pmo.create_relation("1", "409"))
+    assert pmo.capabilities().relations_supported is False
+
+
+def test_create_relation_success_latches_supported():
+    r = Router()
+    pmo = make_pmo(r)
+    run(pmo.create_relation("1", "2"))
+    assert pmo.capabilities().relations_supported is True
+    m = run(pmo.get(MissionRef("2", "issue")))
+    assert m.blocked_by == ["1"]
 
 
 def test_project_ref_get_raises():
@@ -311,6 +333,7 @@ def test_upload_and_download_round_trip():
     assert "/uploads/abc123/plan.md" in url
     blob = run(pmo.download_asset(url))
     assert blob == b"# plan"
+    assert r.notes[1] == []  # feed chokepoint posts the note, not upload
 
 
 def test_download_asset_refuses_evil_host():
@@ -319,10 +342,14 @@ def test_download_asset_refuses_evil_host():
         run(pmo.download_asset("https://evil.example/secret"))
 
 
-def test_create_relation_surfaces_license_error():
+def test_download_asset_refuses_foreign_project():
     pmo = make_pmo()
-    with pytest.raises(RuntimeError, match="403"):
-        run(pmo.create_relation("1", "2"))
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset(
+            "https://gitlab.com/api/v4/projects/other%2Frepo/uploads/abc123/x.md"))
+    with pytest.raises(RuntimeError, match="refused"):
+        run(pmo.download_asset(
+            "https://gitlab.com/api/v4/projects/99/uploads/abc123/x.md"))
 
 
 def test_download_asset_refuses_on_host_path_escape():

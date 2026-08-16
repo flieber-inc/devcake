@@ -174,20 +174,28 @@ class GitLabIssuesAdapter:
             instance=self._instance,
         )
 
-    async def _ensure_relations_probed(self) -> None:
-        """Read-only: GET links on iid 1. 403 = license-off; 200/404 = on."""
-        if self._relations_probed:
-            return
-        supported = False
+    def _link_other_iid(self, link: dict, iid: int):
+        """GitLab GET /issues/:iid/links puts the related issue at TOP level.
+
+        Nested `target_issue` / `source_issue` is the create/get-single
+        shape — accept it as a fallback, never require it.
+        """
+        other = link.get("iid")
+        if other is None:
+            nested = link.get("target_issue") or link.get("issue") or {}
+            other = nested.get("iid") if isinstance(nested, dict) else None
+        if other is None:
+            return None
         try:
-            await self._req("GET", self._proj("/issues/1/links"))
-            supported = True
-        except GitLabHTTPError as e:
-            supported = e.status_code == 404
-        except (RuntimeError, PMOTransient):
-            supported = False
-        self._relations_supported = supported
-        self._relations_probed = True
+            other_i = int(other)
+        except (TypeError, ValueError):
+            return None
+        if other_i == iid:
+            src = (link.get("source_issue") or {}).get("iid")
+            if src is not None and int(src) != iid:
+                return int(src)
+            return None
+        return other_i
 
     async def _blocked_by_ids(self, iid: int) -> list[str]:
         try:
@@ -202,27 +210,16 @@ class GitLabIssuesAdapter:
         out: list[str] = []
         for link in links:
             lt = (link.get("link_type") or "").lower()
-            if lt not in ("is_blocked_by", "blocks"):
+            if lt != "is_blocked_by":
                 continue
-            # is_blocked_by: the *other* issue blocks us.
-            # GitLab returns source + target; we asked from `iid`.
-            other = link.get("target_issue") or link.get("issue") or {}
-            other_iid = other.get("iid")
-            if other_iid is None:
-                continue
-            if lt == "is_blocked_by":
-                out.append(str(other_iid))
-            elif lt == "blocks" and int(other_iid) != iid:
-                # "blocks" from this issue means we block them — skip
-                src = (link.get("source_issue") or {}).get("iid")
-                if src is not None and int(src) != iid:
-                    out.append(str(src))
+            other = self._link_other_iid(link, iid)
+            if other is not None:
+                out.append(str(other))
         return out
 
     async def _enrich_blocked_by(self, mission: Mission) -> Mission:
-        await self._ensure_relations_probed()
-        if not self.capabilities().relations_supported:
-            return mission
+        # Listing links is Free; writing blocking types is Premium. Reads
+        # must not wait on a write probe (health_probe stays read-only).
         blockers = await self._blocked_by_ids(int(mission.pmo_id))
         return mission.model_copy(update={"blocked_by": blockers})
 
@@ -402,10 +399,8 @@ class GitLabIssuesAdapter:
         return mission_key(self._path, iid), str(iid)
 
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None:
-        await self._ensure_relations_probed()
-        if not self._relations_supported:
-            raise RuntimeError(
-                "gitlab_issues: relations not available on this token")
+        # Writing blocks/is_blocked_by is Premium. A 403 here is "unsupported",
+        # not a finalize-escaping error — Free boards must no-op.
         proj = await self._req("GET", self._proj(""))
         target_pid = proj.get("id")
         try:
@@ -416,8 +411,13 @@ class GitLabIssuesAdapter:
                       "link_type": "is_blocked_by"})
         except GitLabHTTPError as e:
             if e.status_code == 409:
+                self._relations_supported = True
+                return
+            if e.status_code == 403:
+                self._relations_supported = False
                 return
             raise
+        self._relations_supported = True
 
     async def _fetch_all_labels(self) -> list[dict]:
         from .._toolkit import paginate_rest
@@ -483,38 +483,34 @@ class GitLabIssuesAdapter:
             raise RuntimeError(
                 f"gitlab_issues upload: unexpected url {secret_url!r}")
         secret, fname = parts[1], parts[2]
-        api_url = f"{self._api}{self._proj(f'/uploads/{secret}/{fname}')}"
-        # Follow-up note so the file is visible on the issue
-        try:
-            md = payload.get("markdown") or f"[{filename}]({secret_url})"
-            await self._req(
-                "POST", self._proj(f"/issues/{pmo_id}/notes"),
-                json={"body": md})
-        except Exception as e:  # noqa: BLE001 — upload already succeeded
-            log.warning("gitlab_issues upload note: %s", e)
-        return api_url
+        # Do not post a follow-up note here — that bypasses the feed
+        # chokepoint and lands unsigned, which freshness treats as human.
+        return f"{self._api}{self._proj(f'/uploads/{secret}/{fname}')}"
 
     def _finalize_upload_url(self, url: str) -> str:
         """Pin credentialed GETs to this project's /uploads/ secret/fname."""
         from urllib.parse import unquote
         from ...domain.asset_fetch import (
-            AssetUrlError, assert_fetch_netloc, assert_path_prefix)
+            AssetUrlError, assert_fetch_netloc)
         current = url.strip()
         assert_fetch_netloc(current, self._api)
         path = unquote(urlsplit(current).path or "")
         if ".." in path.split("/"):
             raise AssetUrlError("asset path must not contain ..")
         prefix = f"/api/v4/projects/{project_path_encoded(self._path)}/uploads/"
-        # encoded and decoded project paths both start with /api/v4/projects/
         if "/uploads/" not in path:
             raise AssetUrlError(f"asset path {path!r} is not an upload")
-        assert_path_prefix(current, "/api/v4/projects/")
+        # Accept the encoded project path we emit, or the decoded form
+        # GitLab sometimes puts in markdown.
+        decoded_prefix = f"/api/v4/projects/{self._path}/uploads/"
+        if not (path.startswith(prefix) or path.startswith(decoded_prefix)):
+            raise AssetUrlError(
+                f"asset path {path!r} is not this project's upload")
         after = path.split("/uploads/", 1)[1]
         segs = [s for s in after.split("/") if s]
         if len(segs) != 2:
             raise AssetUrlError(
                 f"upload path must be secret/filename, got {after!r}")
-        _ = prefix
         return current
 
     async def download_asset(self, url: str) -> bytes:
@@ -569,7 +565,6 @@ class GitLabIssuesAdapter:
         try:
             await self._req("GET", self._proj(""))
             labels = await self._fetch_all_labels()
-            await self._ensure_relations_probed()
         except PMOTransient as e:
             return PMOHealth(ok=False, workspace=self._path, detail=str(e))
         except RuntimeError as e:
@@ -591,5 +586,6 @@ class GitLabIssuesAdapter:
             attachment_max_bytes=10 * 1024 * 1024,
             native_label_swap_atomic=True,
             relations_supported=self._relations_supported,
+            attachments_supported=True,
             global_ids=False,
         )

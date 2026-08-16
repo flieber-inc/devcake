@@ -431,7 +431,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                   <span className={`text-sm ${tr.ok ? "text-green-700 dark:text-green-400" : "text-red-600"}`}>
                     {tr.ok
                       ? `✓ team ${tr.team}: ${tr.labels}/${tr.labels_expected ?? 10} labels, ${tr.missions_visible} items visible`
-                      : `✗ ${tr.error}`}
+                      : `✗ ${tr.error || tr.detail || "connection test failed"}`}
                   </span>
                 )}
               </div>

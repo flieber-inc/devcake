@@ -550,7 +550,7 @@ export default function ReposPage({ onHealthChange }) {
                       ? tr.reference_only
                         ? `✓ ${tr.forge} reachable (read-only) — reference-only repo`
                         : `✓ ${tr.forge} reachable · reviewer token: ${tr.reviewer_token_configured ? "yes" : "no"}`
-                      : `✗ ${tr.error}`}
+                      : `✗ ${tr.error || tr.detail || "connection test failed"}`}
                   </span>
                 )}
               </div>

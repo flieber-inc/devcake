@@ -8,7 +8,7 @@ from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind
 
-from ...harness import HARNESSES
+from ...harness import HARNESSES, resolve_image
 from ...security import redact_value
 from ...config import DevType
 from .. import costing
@@ -108,7 +108,7 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
             run.memory_mounts)
         try:
             await mgr.runs.bootstrap.launch(
-                run, image=HARNESSES[dev_type.harness_template].image)
+                run, image=resolve_image(dev_type))
         except WorkspaceUnavailable as e:
             # AUD-001: STEWARD is periodic and shares the poll segment — a bad
             # workspace base must skip this run cleanly, never raise into the

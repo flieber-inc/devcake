@@ -13,7 +13,7 @@ from opentelemetry import trace
 from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
-from ...harness import HARNESSES, missing_referenced_secret_env
+from ...harness import HARNESSES, missing_referenced_secret_env, resolve_image
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
 from ...config import DevType, assignment_for
@@ -565,7 +565,7 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         run.mission_pmo_id = mission.pmo_id
         try:
             await mgr.runs.bootstrap.launch(
-                run, image=HARNESSES[dev_type.harness_template].image)
+                run, image=resolve_image(dev_type))
         except WorkspaceUnavailable as e:
             # AUD-001/002: the workspace base is unusable — gate exactly like
             # the mirror precondition above (no attempt burned; the run was

@@ -1,0 +1,34 @@
+"""App-published keep-set for the host bake verb.
+
+Host scripts read this file — never Dev Type YAML. Slice 1 is the
+template list only; concrete pins land in Slice 3.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
+KEEP_SET_NAME = "harness_keep_set.json"
+
+
+def publish_keep_set(dev_types: dict, *, root: Path | None = None) -> Path:
+    base = Path(root) if root is not None else Path(
+        os.environ.get("DEVCAKE_DATA_DIR", "/data"))
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / KEEP_SET_NAME
+    templates = sorted({dt.harness_template for dt in dev_types.values()})
+    text = json.dumps({"templates": templates}, indent=2) + "\n"
+    fd, tmp = tempfile.mkstemp(dir=base, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return path

@@ -16,6 +16,7 @@ from ..config import (Assignment, DEFAULT_ASSIGNMENTS, DevType,
                       delete_dev_type, save_config, save_dev_type,
                       validate_assignment_map, validate_memory_bindings)
 from ..harness import HARNESSES, dev_type_status
+from ..keep_set import publish_keep_set
 from ..prompts import templates as prompt_templates
 
 log = logging.getLogger("devcake")
@@ -122,6 +123,7 @@ async def upsert_dev_type(body: dict, name: str | None = None, *,
     dev_types[dt.name] = dt
     save_dev_type(dt)
     prompt_templates.seed_devtype_prompts({dt.name: dt})
+    publish_keep_set(dev_types)
     return dt.model_dump()
 
 
@@ -168,6 +170,7 @@ async def rename_dev_type(name: str, body: dict, *, config, dev_types,
         save_config(config)
     if name in shared_breakers:
         shared_breakers[new] = shared_breakers.pop(name)
+    publish_keep_set(dev_types)
     return {"renamed": True, "name": new}
 
 
@@ -203,6 +206,7 @@ async def remove_dev_type(name: str, *, config, dev_types):
     if name in config.active_devtype_prompts:
         config.active_devtype_prompts.pop(name, None)
         save_config(config)
+    publish_keep_set(dev_types)
     return {"deleted": name}
 
 

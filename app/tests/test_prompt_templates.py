@@ -202,6 +202,7 @@ def test_dispatch_uses_active_template_and_falls_back(monkeypatch, tmp_path):
     t.save_template("EXECUTE", "custom", "CUSTOM-MARKER {key}")
 
     m = mission(labels={"DEVCAKE", "DEVCAKE-EXECUTE"})
+    m.url = "https://linear.app/acme/issue/T-1"
     mgr, fake, _store = make_mgr(tmp_path, m, forge=_ForgeWithDescriptor())
     mgr.internal_forge = None
     mgr.instance = PMOInstance(name="linear", team_key="DEV", repos=["main"])
@@ -215,6 +216,7 @@ def test_dispatch_uses_active_template_and_falls_back(monkeypatch, tmp_path):
     dev = mgr.dev_types["senior-dev"]
     run_coro(mgr.dispatch(m, MissionType.EXECUTE, dev))
     assert launched and "CUSTOM-MARKER T-1" in launched[0].spec_prompt
+    assert launched[0].mission_url == "https://linear.app/acme/issue/T-1"
 
     # active template file vanishes → dispatch falls back to the default
     (tmp_path / "config" / "prompt_templates" / "EXECUTE" / "custom.yaml").unlink()

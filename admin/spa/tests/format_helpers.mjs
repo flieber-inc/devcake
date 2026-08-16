@@ -1,7 +1,7 @@
 // Pure-node checks for the Runs-page number formatters (no browser) —
 // literal expectations, never a re-derivation of the formatter's math.
 import assert from "node:assert/strict";
-import { tokens, usd, durationSeconds } from "../src/lib/format.js";
+import { tokens, usd, durationSeconds, shortHarnessVersion } from "../src/lib/format.js";
 
 let failed = 0;
 const check = (name, fn) => {
@@ -42,6 +42,16 @@ check("usd: two decimals by default, four on demand", () => {
 });
 check("usd: sub-cent spend never rounds to free", () =>
   assert.equal(usd(0.0042), "<$0.01"));
+
+check("shortHarnessVersion: pulls the semver token off a CLI --version line", () => {
+  assert.equal(shortHarnessVersion(""), "");
+  assert.equal(shortHarnessVersion(null), "");
+  assert.equal(shortHarnessVersion("2.1.229 (Claude Code)"), "2.1.229");
+  assert.equal(shortHarnessVersion("grok 1.0.4 (d846eb93d9)"), "1.0.4");
+  assert.equal(shortHarnessVersion("codex-cli 0.147.0"), "0.147.0");
+  assert.equal(shortHarnessVersion("0.84.2"), "0.84.2");
+  assert.equal(shortHarnessVersion("unknown"), "unknown");
+});
 
 check("durationSeconds: matches the duration() display grammar", () => {
   assert.equal(durationSeconds(null), "—");

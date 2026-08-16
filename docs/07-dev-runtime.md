@@ -197,7 +197,8 @@ PROVISION container (prov-<run_id>, DEVCAKE_PHASE=provision, /mirrors RO)
   │ 0a. verify `.devcake/created-by-app` names THIS run (else exit 20 +
   │      forensics — wrong bind dir: daemon autocreate or WS_HOST drift)
   │ 1. emit `run.started` on Redis  ──────────────►  app marks Run "running"
-  │      (the SOLE run.started sender; heartbeat sidecar starts here too)
+  │      (the SOLE run.started sender; payload may include harness_version
+  │       from `<cli> --version`; heartbeat sidecar starts here too)
   │ 2. clone the mission's activity-* repo into /workspace/activity (full history);
   │      fallback: `activity.get` (req/reply) → materialize MISSION.md + ACTIVITY.md + attachments
   │ 3. git clone → /workspace/repo — from the RO source mirror

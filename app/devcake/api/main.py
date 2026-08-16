@@ -306,7 +306,8 @@ async def list_runs(limit: int = 25, offset: int = 0,
                               offset=offset, mission_key=mission_key,
                               pmo_ref=pmo_ref, created_from=created_from,
                               created_to=created_to, sort=sort,
-                              direction=dir, group_by=group_by)
+                              direction=dir, group_by=group_by,
+                              missions_cache=s.poll_rt.missions_cache)
 
 
 @app.get("/api/v1/runs.csv")
@@ -320,16 +321,18 @@ async def export_runs_csv(mission_key: str | None = None,
     return runs_csv_response(s.store, s.config.cost_inputs,
                              mission_key=mission_key, pmo_ref=pmo_ref,
                              created_from=created_from, created_to=created_to,
-                             sort=sort, direction=dir)
+                             sort=sort, direction=dir,
+                             missions_cache=s.poll_rt.missions_cache)
 
 
 @app.get("/api/v1/runs/{run_id}")
 async def get_run(run_id: str):
     from .runs_service import run_detail
-    run = svc().store.get(run_id)
-    if run is None:
+    s = svc()
+    if (run := s.store.get(run_id)) is None:
         raise HTTPException(404)
-    return run_detail(run, svc().config.cost_inputs)
+    return run_detail(run, s.config.cost_inputs,
+                      missions_cache=s.poll_rt.missions_cache)
 
 
 TERMINAL_STATES = {"finished", "failed", "timed_out", "orphaned"}

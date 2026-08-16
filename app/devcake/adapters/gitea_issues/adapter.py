@@ -136,6 +136,30 @@ class GiteaIssuesAdapter:
             parts.path, parts.query, parts.fragment,
         ))
 
+    def _operator_url(self, url: str) -> str:
+        """Inverse of `_app_reachable_url`: docker-network origin → UI host.
+
+        Gitea `html_url` is built from ROOT_URL, which on a bundled stack is
+        the container name (`http://gitea:3000/...`). Operators click from
+        the browser, so mission.url must use GITEA_UI_URL.
+        """
+        if not url or not self._origin:
+            return url
+        ui = (os.environ.get("GITEA_UI_URL") or "http://localhost:3300").strip()
+        ui_parts = urlsplit(ui)
+        if not ui_parts.scheme or not ui_parts.netloc:
+            return url
+        parts = urlsplit(url)
+        origin_parts = urlsplit(self._origin)
+        if not parts.scheme or not parts.netloc:
+            return url
+        if parts.netloc.lower() != origin_parts.netloc.lower():
+            return url
+        return urlunsplit((
+            ui_parts.scheme, ui_parts.netloc,
+            parts.path, parts.query, parts.fragment,
+        ))
+
     def _asset_allowed_hosts(self) -> set[str]:
         """Hosts permitted on download_asset URLs (presentation set)."""
         return self._presentation_hosts()
@@ -239,7 +263,7 @@ class GiteaIssuesAdapter:
             priority=normalize_priority(),
             labels=labels,
             updated_at=updated_at,
-            url=issue.get("html_url") or "",
+            url=self._operator_url(issue.get("html_url") or ""),
             parent_ref=None,
             blocked_by=[],
             instance=self._instance,

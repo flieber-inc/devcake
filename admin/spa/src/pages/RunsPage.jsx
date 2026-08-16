@@ -13,7 +13,8 @@ import { ConfirmDialog } from "../components/Modal.jsx";
 import { Input, Select } from "../components/Field.jsx";
 import CostInputsModal from "../components/CostInputsModal.jsx";
 import usePoll from "../lib/usePoll.js";
-import { relTime, fullTime, duration, durationSeconds, tokens, usd } from "../lib/format.js";
+import { relTime, fullTime, duration, durationSeconds, tokens, usd, shortHarnessVersion } from "../lib/format.js";
+import { safeHref } from "../lib/markdown.js";
 
 const cfg = window.DEVCAKE || {};
 const PAGE = 25;
@@ -124,7 +125,7 @@ export default function RunsPage() {
   const sortableTh = (key, label, extra = "") => {
     const active = sortKey === key;
     return (
-      // whitespace-nowrap on th AND button: grouped mode's wide colSpan-4
+      // whitespace-nowrap on th AND button: grouped mode's wide colSpan
       // mission cells squeeze the numeric columns, and "cache r" / an
       // active "started ▼" otherwise wrap into stacked header lines
       <th className={`whitespace-nowrap pr-3 ${extra}`}
@@ -150,6 +151,66 @@ export default function RunsPage() {
 
   const hasRows = grouped ? (data.groups || []).length > 0
                           : (data.runs || []).length > 0;
+
+  const telCell = (value) => (
+    <span className="whitespace-nowrap font-mono text-xs text-neutral-600 dark:text-neutral-300"
+      title={value || undefined}>
+      {value || "—"}
+    </span>
+  );
+
+  const harnessCell = (r) => {
+    if (!r.harness && !r.harness_version) {
+      return <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>;
+    }
+    const ver = shortHarnessVersion(r.harness_version);
+    const title = [r.harness, r.harness_version].filter(Boolean).join(" · ");
+    return (
+      <span className="whitespace-nowrap font-mono text-xs text-neutral-600 dark:text-neutral-300"
+        title={title}>
+        {r.harness || "—"}
+        {ver ? (
+          <span className="text-neutral-500 dark:text-neutral-400"> {ver}</span>
+        ) : null}
+      </span>
+    );
+  };
+
+  const pmoHref = (url) => safeHref(url);
+
+  const missionKeyLink = (key, url, { bold = false } = {}) => {
+    const href = pmoHref(url);
+    const cls = bold
+      ? "inline-flex items-center gap-0.5 font-semibold text-accent-700 underline underline-offset-2 dark:text-accent-300"
+      : "inline-flex items-center gap-0.5 font-mono text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300";
+    return href ? (
+      <a href={href} target="_blank" rel="noopener"
+        title="Open in PMO" aria-label={`Open ${key} in PMO`}
+        className={cls}>
+        {key}
+        <ExternalLink size={10} aria-hidden />
+      </a>
+    ) : (
+      <span className={bold ? "font-semibold" : "font-mono text-xs"}>{key}</span>
+    );
+  };
+
+  const missionCell = (r) => {
+    if (!r.mission_key) {
+      return <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>;
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5"
+        onClick={(e) => { if (pmoHref(r.mission_url)) e.stopPropagation(); }}>
+        {missionKeyLink(r.mission_key, r.mission_url)}
+        {r.mission_type && (
+          <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+            {r.mission_type}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   // one renderer for both modes: flat rows and the runs inside a mission
   // group (grouped mode keeps pipeline order — seq — whatever the sort)
@@ -181,18 +242,9 @@ export default function RunsPage() {
           </span>
         )}
       </td>
-      <td className="pr-3">
-        {r.mission_key ? (
-          <span className="inline-flex items-center gap-1.5">
-            <span className="font-mono text-xs">{r.mission_key}</span>
-            {r.mission_type && (
-              <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                {r.mission_type}
-              </span>
-            )}
-          </span>
-        ) : <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>}
-      </td>
+      <td className="pr-3">{missionCell(r)}</td>
+      <td className="pr-3">{harnessCell(r)}</td>
+      <td className="pr-3">{telCell(r.model)}</td>
       <td className="pr-3"><StatusPill state={r.state} verdict={r.verdict} /></td>
       <td className="whitespace-nowrap pr-3 text-xs text-neutral-500 dark:text-neutral-400"
         title={fullTime(r.started_at)}>
@@ -425,11 +477,13 @@ export default function RunsPage() {
           </span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[64rem] text-left text-sm">
+          <table className="w-full min-w-[76rem] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr>
                 <th className="py-1.5 pr-3">run</th>
                 <th className="pr-3">mission</th>
+                <th className="whitespace-nowrap pr-3">harness</th>
+                <th className="whitespace-nowrap pr-3">model</th>
                 <th className="pr-3">state</th>
                 {sortableTh("started", "started")}
                 {sortableTh("duration", "duration")}
@@ -444,14 +498,14 @@ export default function RunsPage() {
             </thead>
             <tbody>
               {!hasRows && (
-                <tr><td colSpan={12} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
+                <tr><td colSpan={14} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
                   No runs{filter ? " match this filter" : " yet"}.
                 </td></tr>
               )}
               {data.totals && hasRows && (
                 <tr data-testid="runs-totals"
                   className="border-t border-neutral-200 bg-stone-50/70 text-xs font-medium dark:border-neutral-700 dark:bg-neutral-900/70">
-                  <td className="py-2 pr-3" colSpan={4}>
+                  <td className="py-2 pr-3" colSpan={6}>
                     filtered totals — {data.total_runs ?? data.total} run{(data.total_runs ?? data.total) === 1 ? "" : "s"}
                     {data.totals.total_tokens_effective != null && (
                       <span className="font-normal text-neutral-500 dark:text-neutral-400"
@@ -480,8 +534,10 @@ export default function RunsPage() {
                 <React.Fragment key={`${g.pmo_ref}:${g.mission_key}`}>
                   <tr data-testid="mission-group"
                     className="border-t border-neutral-200 bg-stone-50/40 text-xs dark:border-neutral-700 dark:bg-neutral-900/40">
-                    <td className="py-1.5 pr-3" colSpan={4}>
-                      <span className="font-semibold">{g.mission_key}</span>
+                    <td className="py-1.5 pr-3" colSpan={6}>
+                      {missionKeyLink(g.mission_key,
+                        (g.runs || []).find((r) => r.mission_url)?.mission_url,
+                        { bold: true })}
                       <span className="text-neutral-500 dark:text-neutral-400">
                         {" "}· {g.pmo_ref} · {g.run_count} run{g.run_count === 1 ? "" : "s"}
                         {g.subtotal.total_tokens_effective != null &&

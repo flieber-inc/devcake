@@ -8,7 +8,8 @@ import time
 from devcake_dev.adapters import bus as _bus
 from devcake_dev.domain.fault import _dict, _one_line
 
-LINE_LIMIT = 2000            # per condensed line
+LINE_LIMIT = 2000            # hard per-line cap at the relay (flood bound)
+TEXT_LIMIT = 1000            # visible snippet: assistant text, tool args, cmds
 BATCH_LINES = 50             # per run.log envelope (50×2000 ≈ 100KB « 512KB)
 FLUSH_SECS = 2.0
 MAX_RELAY_LINES = 20_000     # flood guard; Dagu's step log still has everything
@@ -128,9 +129,9 @@ def render_claude(raw: str):
         parts = []
         for block in (ev.get("message") or {}).get("content") or []:
             if block.get("type") == "text" and block.get("text", "").strip():
-                parts.append(block["text"].strip()[:200])
+                parts.append(block["text"].strip()[:TEXT_LIMIT])
             elif block.get("type") == "tool_use":
-                args = json.dumps(block.get("input") or {})[:160]
+                args = json.dumps(block.get("input") or {})[:TEXT_LIMIT]
                 parts.append(f"→ {block.get('name', '?')} {args}")
         return "\n".join(parts) or None
     if kind == "result":
@@ -154,17 +155,17 @@ def render_codex(raw: str):
         item = ev.get("item") or {}
         it = item.get("item_type") or item.get("type")
         if it == "command_execution":
-            return f"$ {str(item.get('command', ''))[:160]} → " \
+            return f"$ {str(item.get('command', ''))[:TEXT_LIMIT]} → " \
                    f"exit {item.get('exit_code', '?')}"
         if it == "agent_message":
-            return str(item.get("text", "")).strip()[:200] or None
+            return str(item.get("text", "")).strip()[:TEXT_LIMIT] or None
         return None  # reasoning etc.
     if kind == "turn.completed":
         u = ev.get("usage") or {}
         return f"[codex] turn done · in={u.get('input_tokens', '?')} " \
                f"out={u.get('output_tokens', '?')}"
     if kind == "error":
-        return f"[codex] error: {str(ev.get('message', ''))[:200]}"
+        return f"[codex] error: {str(ev.get('message', ''))[:TEXT_LIMIT]}"
     if kind == "turn.failed":
         # THE terminal event of every captured codex failure — `… → error →
         # turn.failed` (test_harness_captures: all eight failure rows) — so the
@@ -202,7 +203,7 @@ class GrokCoalescer:
             if "\n" in self.buf:
                 emit, self.buf = self.buf.rsplit("\n", 1)
                 return emit.strip() or None
-            if len(self.buf) >= 200:
+            if len(self.buf) >= TEXT_LIMIT:
                 emit, self.buf = self.buf, ""
                 return emit
             return None
@@ -249,7 +250,7 @@ def render_pi(raw: str):
     if kind == "session":
         return f"[pi] session {str(ev.get('id') or '')[:8]}"
     if kind == "tool_execution_start":
-        args = json.dumps(ev.get("args") or {})[:160]
+        args = json.dumps(ev.get("args") or {})[:TEXT_LIMIT]
         return f"→ {ev.get('toolName', '?')} {args}"
     if kind == "tool_execution_end" and ev.get("isError"):
         return f"[pi] tool error: {_one_line(str(ev.get('result') or ''), 160)}"
@@ -257,7 +258,7 @@ def render_pi(raw: str):
         asst = ev.get("assistantMessageEvent") or {}
         if asst.get("type") == "text_delta" and asst.get("delta"):
             text = str(asst["delta"]).strip()
-            return text[:200] or None
+            return text[:TEXT_LIMIT] or None
         return None
     if kind == "message_end":
         from .tokens import _pi_message_text
@@ -265,7 +266,7 @@ def render_pi(raw: str):
         if msg.get("role") != "assistant":
             return None
         text = _pi_message_text(msg).strip()
-        return text[:200] or None
+        return text[:TEXT_LIMIT] or None
     if kind == "agent_end":
         for amsg in reversed(ev.get("messages") or []):
             if not isinstance(amsg, dict):
@@ -290,7 +291,7 @@ def render_opencode(raw: str):
     kind = ev.get("type")
     if kind == "text":
         text = str(_dict(ev.get("part")).get("text") or "").strip()
-        return text[:200] or None
+        return text[:TEXT_LIMIT] or None
     if kind == "tool_use":
         part = _dict(ev.get("part"))
         name = part.get("tool") or _dict(part.get("state")).get("tool") or "?"
@@ -329,7 +330,7 @@ def render_qwen(raw: str):
             if block.get("type") == "tool_use":
                 parts.append(f"→ {block.get('name', '?')}")
             elif block.get("type") == "text" and str(block.get("text") or "").strip():
-                parts.append(str(block["text"]).strip()[:200])
+                parts.append(str(block["text"]).strip()[:TEXT_LIMIT])
         return " ".join(parts) or None
     if kind == "result":
         if ev.get("is_error") or str(ev.get("subtype") or "").startswith("error"):

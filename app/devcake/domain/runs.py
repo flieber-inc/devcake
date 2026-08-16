@@ -245,6 +245,9 @@ class RunManager:
             if run.state != "dispatched":
                 return
             run.state, run.started_at = "running", utcnow()
+            ver = (payload or {}).get("harness_version")
+            if isinstance(ver, str) and ver.strip():
+                run.harness_version = ver.strip()[:120]
             self.store.save(run)
         elif kind == "runspec.get":
             secret = (self._runspec_secret(run)

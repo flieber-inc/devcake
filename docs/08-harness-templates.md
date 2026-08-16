@@ -83,7 +83,7 @@ claude -p "$PROMPT" \
 
 ### Live output relay (§1a)
 
-The entrypoint pumps the harness's stdout line-by-line instead of buffering it (`dev_entrypoint.py`): each event is rendered to a **condensed one-liner** (tool name + truncated args, assistant text snippet, result summary — thinking/noise events skipped) which is (a) printed to the entrypoint's own stdout, where Dagu's container executor captures it **live into the step log** (Dagu UI), and (b) batched into `run.log {lines: […]}` envelopes over Redis (≤ 50 lines / ~2 s, 2000 chars/line, 20k-line flood cap) feeding the admin panel's run terminal (`11-admin-panel.md` §4). The raw lines are still accumulated in memory, so end-of-run parsing (result, tokens) is unchanged. Relaying is best-effort — a send failure drops the batch, never the run.
+The entrypoint pumps the harness's stdout line-by-line instead of buffering it (`dev_entrypoint.py`): each event is rendered to a **condensed one-liner** (tool name + args, assistant text, result summary — thinking/noise events skipped; visible snippets capped at 1000 chars so a long run stays readable) which is (a) printed to the entrypoint's own stdout, where Dagu's container executor captures it **live into the step log** (Dagu UI), and (b) batched into `run.log {lines: […]}` envelopes over Redis (≤ 50 lines / ~2 s, 2000 chars/line hard cap, 20k-line flood cap) feeding the admin panel's run terminal (`11-admin-panel.md` §4). The raw lines are still accumulated in memory, so end-of-run parsing (result, tokens) is unchanged. Relaying is best-effort — a send failure drops the batch, never the run.
 
 ### `grok-build`
 ```bash

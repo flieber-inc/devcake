@@ -18,8 +18,13 @@ REPO = Path(__file__).resolve().parents[2]
 
 from .core import (
     house_from_dockerfile,
+    image_ref,
+    load_keep_set,
+    plan_prune,
+    receipt_path,
     reconcile,
     run_bake,
+    run_prune,
     touch_status,
     write_status,
 )
@@ -38,6 +43,7 @@ KEEP_SET = "harness_keep_set.json"
 STATUS = "harness_bake_status.json"
 RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
+PRUNE_REQUEST = "harness_prune_request.json"
 
 
 def compose_read(rel: str) -> str | None:
@@ -74,6 +80,63 @@ def compose_write(rel: str, text: str) -> None:
         stdout=subprocess.DEVNULL)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot write {dest} (exit {proc.returncode})")
+
+
+def compose_rm(rel: str) -> None:
+    dest = f"/data/{rel}"
+    subprocess.run(
+        ["docker", "compose", "exec", "-T", "app", "rm", "-f", dest],
+        cwd=REPO, check=False, timeout=15)
+
+
+def docker_name_list(argv: list[str]) -> list[str]:
+    try:
+        out = subprocess.check_output(argv, text=True, timeout=20)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def apply_prune(*, work: Path, tag: str, house: dict[str, str],
+                status: dict) -> dict:
+    req = compose_read(PRUNE_REQUEST)
+    if req is None:
+        return status
+    keep_images: list[str] = [f"devcake/dev-hello:{tag}"]
+    try:
+        ks = load_keep_set(work / KEEP_SET)
+    except Exception:  # noqa: BLE001 — prune still runs hello-only if keep-set is junk
+        ks = None
+    if ks is not None:
+        for pin in ks.pins:
+            keep_images.append(image_ref(
+                pin.template, pin.cli_version, tag=tag, house=house))
+    try:
+        gone = plan_prune(
+            keep_images=keep_images,
+            running_images=docker_name_list(
+                ["docker", "ps", "-a", "--format", "{{.Image}}"]),
+            local_images=docker_name_list(
+                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"]),
+        )
+        run_prune(gone, run=subprocess.run)
+        status = {**status, "prune": {
+            "removed": list(gone),
+            "kept": len(keep_images),
+            "detail": "" if gone else "nothing to prune",
+        }}
+    except Exception as exc:  # noqa: BLE001 — prune failure is operator-visible, not a baker crash
+        status = {**status, "prune": {
+            "removed": [], "kept": 0, "detail": str(exc),
+        }}
+    try:
+        compose_rm(PRUNE_REQUEST)
+    except Exception:  # noqa: BLE001 — next tick will see a stale request; status already records the result
+        pass
+    local = work / PRUNE_REQUEST
+    if local.is_file():
+        local.unlink()
+    return status
 
 
 def compose_append(rel: str, text: str) -> None:
@@ -251,13 +314,15 @@ def once(*, work: Path, tag: str, house: dict[str, str],
             (receipts / name).write_text(body)
 
     def baker(job):
-        run_bake(
-            job, tag=tag, house=house, receipts_dir=receipts,
-            digest=digest, repo=REPO, run=beating_run(work))
-        name = f"{job.template}@{job.cli_version}.json"
-        local = receipts / name
-        if local.is_file():
-            compose_write(f"{RECEIPTS}/{name}", local.read_text())
+        try:
+            run_bake(
+                job, tag=tag, house=house, receipts_dir=receipts,
+                digest=digest, repo=REPO, run=beating_run(work))
+        finally:
+            # A receipt is the bake verb's result even when the gate failed.
+            local = receipt_path(receipts, job)
+            if local.is_file():
+                compose_write(f"{RECEIPTS}/{local.name}", local.read_text())
 
     status = reconcile(
         keep_set_path=keep_path,
@@ -268,6 +333,7 @@ def once(*, work: Path, tag: str, house: dict[str, str],
         tag=tag,
         house=house,
     )
+    status = apply_prune(work=work, tag=tag, house=house, status=status)
     try:
         compose_write(STATUS, json.dumps(status, indent=2) + "\n")
     except RuntimeError as exc:
@@ -311,8 +377,10 @@ def main(argv: list[str] | None = None) -> int:
         down_streak = 0
         trees = trees_mtime(REPO)
         keep_m = keep_set_mtime()
-        if skip_reconcile(state=last_state, trees=trees, keep=keep_m,
-                          last_trees=last_trees, last_keep=last_keep):
+        prune_pending = compose_read(PRUNE_REQUEST) is not None
+        if (not prune_pending and skip_reconcile(
+                state=last_state, trees=trees, keep=keep_m,
+                last_trees=last_trees, last_keep=last_keep)):
             path = work / STATUS
             current = {}
             if path.is_file():

@@ -55,10 +55,24 @@ def require_staffed(dev_type, *, digest: str | None = None,
     if rec.get("ok") is True:
         return
     row = _first_unpassed_required(rec)
-    named = f" ({row})" if row else ""
     raise HarnessNotStaffed(
-        f"{template} {version} receipt is not ok{named}",
+        f"{template} {version} receipt is not ok: {receipt_fail_reason(rec)}",
         row=row, kind="receipt")
+
+
+def receipt_fail_reason(rec: Mapping[str, Any]) -> str:
+    """Required rows that did not pass — same rule as the baker's detail."""
+    bits: list[str] = []
+    for row in rec.get("rows") or []:
+        if not isinstance(row, Mapping):
+            continue
+        if not row.get("required") or row.get("status") == "pass":
+            continue
+        name = str(row.get("name") or "?")
+        status = str(row.get("status") or "fail")
+        extra = str(row.get("detail") or "").strip()
+        bits.append(f"{name} {status} ({extra})" if extra else f"{name} {status}")
+    return "; ".join(bits) if bits else "receipt not ok"
 
 
 def _first_unpassed_required(rec: Mapping[str, Any]) -> str | None:

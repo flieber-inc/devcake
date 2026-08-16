@@ -42,6 +42,7 @@ from .auth import credentials_configured, enforce_control_plane_auth
 from . import (connections_service, devtypes_service, internal_repos_service,
                profiles_service, settings_transfer)
 from .config_service import apply_config_patch, set_pmo_intake
+from .. import bake_status as bake_status_mod
 from .health import build_health_payload
 from .services import Services, _log_task_death, build_services
 
@@ -778,6 +779,11 @@ async def test_forge(name: str):
     s = svc()
     return await connections_service.test_forge(name, config=s.config,
                                                 forge_runtime=s.forge_runtime)
+
+
+@app.post("/api/v1/harness/prune")
+async def request_harness_prune():
+    return bake_status_mod.request_prune()
 
 
 # ── internal-forge repos + skill store (M11, docs/16) — bodies in

@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 STATUS_NAME = "harness_bake_status.json"
 BAKER_LOG_NAME = "harness_baker.jsonl"
+PRUNE_REQUEST_NAME = "harness_prune_request.json"
 CURSOR_NAME = "state/baker_log.offset"
 HEARTBEAT_STALE_SECONDS = 30
 
@@ -131,3 +133,29 @@ def drain_baker_log(root: Path | None = None) -> list[dict[str, Any]]:
     cursor_path.parent.mkdir(parents=True, exist_ok=True)
     cursor_path.write_text(str(new_offset) + "\n")
     return records
+
+
+def write_prune_request(*, root: Path | None = None,
+                        now: datetime | None = None) -> Path:
+    """Ask the host baker to prune. No image names — the baker computes them."""
+    now = now or datetime.now(timezone.utc)
+    base = _data_root(root)
+    base.mkdir(parents=True, exist_ok=True)
+    dest = base / PRUNE_REQUEST_NAME
+    body = json.dumps({"requested_at": now.isoformat()}) + "\n"
+    fd, tmp = tempfile.mkstemp(dir=base, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return dest
+
+
+def request_prune(*, root: Path | None = None) -> dict[str, Any]:
+    write_prune_request(root=root)
+    return {"ok": True, "requested": True}

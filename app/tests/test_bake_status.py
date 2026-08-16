@@ -58,6 +58,21 @@ def test_drain_baker_log_returns_only_new_lines(tmp_path, monkeypatch):
     assert [r["event"] for r in third] == ["down"]
 
 
+def test_prune_request_writes_timestamp_and_no_image_names(tmp_path, monkeypatch):
+    from devcake import bake_status as bs
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    when = datetime(2026, 8, 16, 12, 0, 0, tzinfo=timezone.utc)
+    out = bs.request_prune(root=tmp_path)
+    assert out == {"ok": True, "requested": True}
+    dest = tmp_path / bs.PRUNE_REQUEST_NAME
+    body = dest.read_text()
+    assert "devcake/dev-" not in body
+    assert "nginx" not in body
+    rec = __import__("json").loads(body)
+    assert "requested_at" in rec
+
+
 def test_baker_transition_fires_on_edges_only():
     from devcake.bake_status import baker_transition
 

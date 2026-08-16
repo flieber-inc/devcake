@@ -14,7 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Paths whose change must invalidate receipts (harness images, probe, pins).
-_TREES = ("images", "scripts/harness_probe", "app/devcake/house_pins.py")
+TREES = ("images", "scripts/harness_probe", "app/devcake/house_pins.py")
+_TREES = TREES
 
 
 def compute(root: Path | None = None) -> str:

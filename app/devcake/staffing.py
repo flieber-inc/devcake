@@ -7,6 +7,7 @@ before bootstrap.launch. Hello never does. Domain depends on ReceiptStore
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 from .house_pins import (
@@ -14,10 +15,11 @@ from .house_pins import (
     LAUNCH_SUPPORTED,
     SENTINEL_DIGEST,
     app_digest,
+    effective_cli_version,
 )
 
 
-class HarnessNotStaffed(Exception):
+class HarnessNotStaffed(ValueError):
     """Pin is not staffable. `row` names the failing required row when known."""
 
     def __init__(self, message: str, *, row: str | None = None,
@@ -41,12 +43,15 @@ def require_staffed(dev_type, *, digest: str | None = None,
         raise HarnessNotStaffed(
             "this app was built without the bake wrapper",
             kind="sentinel")
-    version = HOUSE_PINS[template]
+    version = effective_cli_version(dev_type)
     rec = None if store is None else store.get(
         digest=digest, template=template, cli_version=version)
     if rec is None:
         raise HarnessNotStaffed(
             f"no receipt for {template} {version}", kind="missing")
+    if rec.get("gated") is False:
+        raise HarnessNotStaffed(
+            f"{template} {version} receipt is not gated", kind="fabricated")
     if rec.get("ok") is True:
         return
     row = _first_unpassed_required(rec)
@@ -67,43 +72,80 @@ def _first_unpassed_required(rec: Mapping[str, Any]) -> str | None:
 
 
 def receipt_summary(dev_types: Mapping[str, Any], *, digest: str,
-                    store) -> dict:
-    """Per-template staffing view for /health (and Slice 3 copy)."""
+                    store, bake_status: Mapping[str, Any] | None = None) -> dict:
+    """Per-template staffing view for /health (and the editor copy)."""
     templates = sorted({dt.harness_template for dt in dev_types.values()})
     rows = {}
     for template in templates:
-        version = HOUSE_PINS.get(template, "")
-        entry: dict[str, Any] = {
-            "cli_version": version,
-            "gated": template in LAUNCH_SUPPORTED,
-        }
-        if template not in LAUNCH_SUPPORTED:
-            entry["ok"] = None
-            entry["reason"] = "experimental — house pin only"
-            rows[template] = entry
-            continue
-        if digest == SENTINEL_DIGEST:
-            entry["ok"] = False
-            entry["reason"] = "this app was built without the bake wrapper"
-            rows[template] = entry
-            continue
-        rec = None if store is None else store.get(
-            digest=digest, template=template, cli_version=version)
-        if rec is None:
-            entry["ok"] = False
-            entry["reason"] = f"no receipt for {template} {version}"
-            rows[template] = entry
-            continue
-        entry["ok"] = rec.get("ok") is True
-        if not entry["ok"]:
-            row = _first_unpassed_required(rec)
-            entry["row"] = row
-            entry["reason"] = (
-                f"{template} {version} receipt is not ok"
-                + (f" ({row})" if row else ""))
-        rows[template] = entry
+        # One row per template using the first Dev Type's effective pin
+        # (unique pins also appear under dev_types).
+        version = next(
+            (effective_cli_version(dt) for dt in dev_types.values()
+             if dt.harness_template == template),
+            HOUSE_PINS.get(template, ""))
+        rows[template] = _pin_entry(
+            template, version, digest, store, bake_status)
+    per_dt = {}
+    for name, dt in sorted(dev_types.items()):
+        template = dt.harness_template
+        version = effective_cli_version(dt)
+        entry = _pin_entry(template, version, digest, store, bake_status)
+        entry["template"] = template
+        entry["house"] = not bool((getattr(dt, "cli_version", "") or "").strip())
+        per_dt[name] = entry
     return {
         "digest": digest,
         "sentinel": digest == SENTINEL_DIGEST,
         "templates": rows,
+        "dev_types": per_dt,
     }
+
+
+def _job_state(template: str, version: str,
+               bake_status: Mapping[str, Any] | None) -> str | None:
+    if not bake_status:
+        return None
+    for job in bake_status.get("jobs") or []:
+        if not isinstance(job, Mapping):
+            continue
+        if job.get("template") == template and job.get("cli_version") == version:
+            state = job.get("state")
+            return str(state) if state else None
+    return None
+
+
+def _pin_entry(template: str, version: str, digest: str, store,
+               bake_status: Mapping[str, Any] | None = None) -> dict:
+    entry: dict[str, Any] = {
+        "cli_version": version,
+        "gated": template in LAUNCH_SUPPORTED,
+    }
+    if template not in LAUNCH_SUPPORTED:
+        entry["ok"] = None
+        entry["state"] = "experimental"
+        entry["reason"] = "experimental — house pin only"
+        return entry
+    job_state = _job_state(template, version, bake_status)
+    fake = SimpleNamespace(harness_template=template, cli_version=version)
+    try:
+        require_staffed(fake, digest=digest, store=store)
+    except HarnessNotStaffed as exc:
+        entry["ok"] = False
+        entry["reason"] = str(exc)
+        entry["row"] = exc.row
+        if job_state in ("baking", "pending"):
+            entry["state"] = "baking"
+            entry["reason"] = f"{template} {version} is baking on the host"
+        elif job_state == "error" or (bake_status or {}).get("state") == "error":
+            entry["state"] = "error"
+            entry["reason"] = (bake_status or {}).get("detail") or str(exc)
+        elif exc.kind == "sentinel":
+            entry["state"] = "error"
+        elif exc.kind == "missing":
+            entry["state"] = "waiting"
+        else:
+            entry["state"] = "error"
+        return entry
+    entry["ok"] = True
+    entry["state"] = "ready"
+    return entry

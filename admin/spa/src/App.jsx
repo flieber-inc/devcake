@@ -161,7 +161,7 @@ export default function App() {
   const { page, section } = route;
 
   return (
-    <ConfigDraftProvider>
+    <ConfigDraftProvider health={health}>
     <div className="flex h-screen bg-surface text-neutral-900 dark:bg-surface-dark dark:text-neutral-100">
       <Sidebar
         page={page}

@@ -24,6 +24,15 @@ HOUSE_PINS: dict[str, str] = {
 
 LAUNCH_SUPPORTED = frozenset({"claude-code", "codex", "grok-build"})
 
+PACKAGE_IDS: dict[str, str] = {
+    "claude-code": "@anthropic-ai/claude-code",
+    "codex": "@openai/codex",
+    "pi": "@earendil-works/pi-coding-agent",
+    "opencode": "opencode-ai",
+    "qwen-code": "@qwen-code/qwen-code",
+    "grok-build": "x.ai/cli",
+}
+
 DOCKERFILE_ARG: dict[str, str] = {
     "claude-code": "CLAUDE_CODE_VERSION",
     "codex": "CODEX_VERSION",
@@ -36,3 +45,24 @@ DOCKERFILE_ARG: dict[str, str] = {
 
 def app_digest() -> str:
     return os.environ.get("DEVCAKE_APP_DIGEST", SENTINEL_DIGEST)
+
+
+def effective_cli_version(dev_type) -> str:
+    """Stored pin, or the house Dockerfile ARG for that template."""
+    pin = (getattr(dev_type, "cli_version", "") or "").strip()
+    if pin:
+        return pin
+    return HOUSE_PINS.get(dev_type.harness_template, "")
+
+
+def image_ref(template: str, cli_version: str, *, tag: str | None = None) -> str:
+    """House pin (empty or the ARG default) → :TAG. Anything else → :TAG-ver.
+
+    Keep-set records effective versions, so the baker cannot tell a typed
+    house pin from an empty field. Both must name the same image.
+    """
+    tag = tag if tag is not None else os.environ.get("DEVCAKE_TAG", "latest")
+    pin = (cli_version or "").strip()
+    if not pin or pin == HOUSE_PINS.get(template, ""):
+        return f"devcake/dev-{template}:{tag}"
+    return f"devcake/dev-{template}:{tag}-{pin}"

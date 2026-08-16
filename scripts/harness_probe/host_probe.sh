@@ -19,6 +19,7 @@ fi
 mkdir -p "$OUT"
 # Image user is uid 1000; receipts must be writable by that user.
 chmod a+rwx "$OUT" 2>/dev/null || true
+RECEIPTS_MOUNT="${OUT}:/data/harness_receipts"
 
 docker run --rm \
   --user 1000:1000 \
@@ -28,7 +29,7 @@ docker run --rm \
   -e REDIS_PASSWORD=probe \
   -e PYTHONPATH=/opt/devcake-scripts \
   -v "$(pwd)/scripts:/opt/devcake-scripts:ro" \
-  -v "${OUT}:/data/harness_receipts" \
+  -v "${RECEIPTS_MOUNT}" \
   --entrypoint python \
   "${IMAGE}" \
   -m harness_probe.probe \
@@ -36,4 +37,4 @@ docker run --rm \
   --cli-version "${VERSION}" \
   --digest "${DIGEST}" \
   --out /data/harness_receipts
-echo "probe receipt: ${OUT}/${TEMPLATE}@${VERSION}.json"
+echo "probe receipt: ${TEMPLATE}@${VERSION}.json"

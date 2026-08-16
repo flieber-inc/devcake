@@ -26,6 +26,12 @@ def test_launch_sites_call_resolve_image_not_harness_image():
         assert "resolve_image(" in text, path.name
         assert "image=HARNESSES[" not in text, path.name
         assert "image=harness.image" not in text, path.name
+        offenders = [
+            line.strip() for line in text.splitlines()
+            if ".image" in line
+            and "resolve_image" not in line
+            and not line.lstrip().startswith("#")]
+        assert not offenders, f"{path.name}: {offenders}"
 
 
 def test_hello_launch_stays_on_HELLO_IMAGE():
@@ -44,6 +50,31 @@ def test_resolve_image_empty_pin_is_todays_house_image():
     assert resolve_image(dt) == "devcake/dev-claude-code:latest"
     dt = DevType(name="coder", harness_template="codex")
     assert resolve_image(dt) == "devcake/dev-codex:latest"
+
+
+def test_resolve_image_explicit_pin_is_tag_plus_version():
+    """Two pins on one template must not share :TAG — that would collide."""
+    from devcake.harness import resolve_image
+
+    dt = DevType(name="implementer", harness_template="grok-build",
+                 cli_version="1.0.4")
+    assert resolve_image(dt) == "devcake/dev-grok-build:latest-1.0.4"
+    dt = DevType(name="judgment", harness_template="claude-code",
+                 cli_version="2.1.250")
+    assert resolve_image(dt) == "devcake/dev-claude-code:latest-2.1.250"
+
+
+def test_resolve_image_typed_house_pin_is_the_tag_only():
+    """Typing the house number must not invent :TAG-2.1.229 — keep-set
+    cannot tell that apart from an empty field."""
+    from devcake.harness import resolve_image
+
+    dt = DevType(name="judgment", harness_template="claude-code",
+                 cli_version="2.1.229")
+    assert resolve_image(dt) == "devcake/dev-claude-code:latest"
+    dt = DevType(name="implementer", harness_template="grok-build",
+                 cli_version="0.2.112")
+    assert resolve_image(dt) == "devcake/dev-grok-build:latest"
 
 
 def test_receipt_store_reads_row_level_receipt(tmp_path):
@@ -103,7 +134,9 @@ def test_publish_keep_set_is_the_template_list_not_yaml(tmp_path):
         root=tmp_path,
     )
     body = json.loads((tmp_path / "harness_keep_set.json").read_text())
-    assert body == {"templates": ["claude-code", "grok-build"]}
+    assert body["templates"] == ["claude-code", "grok-build"]
+    assert {"template": "grok-build", "cli_version": "0.2.112"} in body["pins"]
+    assert {"template": "claude-code", "cli_version": "2.1.229"} in body["pins"]
 
 
 def test_upsert_and_delete_publish_the_keep_set(tmp_path, monkeypatch):

@@ -1,7 +1,7 @@
 # DevCake runtime stack.
 #
 # Images are built ONLY via Bake (docker-bake.hcl) — compose never builds:
-#   ./up.sh --bake                  # discover DOCKER_GID + bake all + up
+#   ./up.sh --bake                  # discover DOCKER_GID + bake CP+hello + baker
 #   ./up.sh                         # day-to-day restart (re-discovers DOCKER_GID)
 #   docker buildx bake all          # first install / full upgrade (manual)
 #   docker buildx bake              # app + admin only

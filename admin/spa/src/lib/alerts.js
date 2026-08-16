@@ -270,6 +270,29 @@ export default function deriveAlerts(health) {
     });
   }
 
+  // Host baker is a process started by ./up.sh, not a container. If its
+  // heartbeat on /data is missing or stale, pins will not compile — same
+  // honesty class as a tripped breaker: critical, not dismissable.
+  const bake = health.bake_status || {};
+  if (bake.baker_alive === false) {
+    alerts.push({
+      id: "baker-dead",
+      severity: "critical",
+      title: "Host baker is not running",
+      body:
+        (bake.baker_detail ? `${bake.baker_detail}. ` : "") +
+        "Harness images will not compile. Restart the stack with ./up.sh — " +
+        "the baker is a host process started with the app, not a container.",
+    });
+  } else if (bake.state === "error" && bake.detail && bake.baker_alive) {
+    alerts.push({
+      id: "baker-error",
+      severity: "warning",
+      title: "Host baker failed a compile",
+      body: String(bake.detail),
+    });
+  }
+
   const breakers = Object.entries(health.circuit_breakers || {});
   if (breakers.length > 0) {
     // Per-ENTRY remediation. The old single trailing sentence was chosen by one

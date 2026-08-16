@@ -154,7 +154,52 @@ def test_hello_launch_path_does_not_import_staffing():
     assert "HELLO_IMAGE" in text
 
 
+def test_require_staffed_sits_next_to_the_secret_env_gate():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "devcake" / "domain"
+            / "orchestrator" / "dispatch.py").read_text()
+    staff = text.index("require_staffed(")
+    skill = text.index("_skill_payload")
+    secret = text.index("missing_referenced_secret_env")
+    assert secret < staff < skill
+
+
+def test_fabricated_ungated_receipt_is_refused():
+    from devcake.staffing import HarnessNotStaffed, require_staffed
+
+    rec = {"ok": True, "digest": "sha256:abc", "gated": False, "rows": []}
+    with pytest.raises(HarnessNotStaffed, match="not gated"):
+        require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
+
+
 def test_experimental_template_is_not_gated():
     from devcake.staffing import SENTINEL_DIGEST, require_staffed
 
     require_staffed(_dt("pi"), digest=SENTINEL_DIGEST, store=_Store(None))
+
+
+def test_pin_summary_has_no_host_command():
+    """The host baker watches the keep-set. SPA must not assign terminal homework."""
+    from devcake.staffing import receipt_summary
+
+    summary = receipt_summary(
+        {"implementer": _dt()}, digest="sha256:abc", store=_Store(None))
+    entry = summary["dev_types"]["implementer"]
+    assert "command" not in entry
+    assert entry["ok"] is False
+    assert entry["state"] == "waiting"
+
+
+def test_pin_summary_baking_state_comes_from_the_host_status():
+    from devcake.staffing import receipt_summary
+
+    bake_status = {
+        "state": "baking",
+        "jobs": [{"template": "grok-build", "cli_version": "0.2.112",
+                  "state": "baking"}],
+    }
+    summary = receipt_summary(
+        {"implementer": _dt()}, digest="sha256:abc", store=_Store(None),
+        bake_status=bake_status)
+    assert summary["dev_types"]["implementer"]["state"] == "baking"
+    assert summary["dev_types"]["implementer"]["ok"] is False

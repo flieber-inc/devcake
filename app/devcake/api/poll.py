@@ -100,6 +100,9 @@ class PollRuntime:
         self.cycle_counter: int = 0
         # poll-cycle snapshot served by /api/v1/missions (advisory — INV-1)
         self.missions_cache: list[dict] = []
+        # Host baker heartbeat (None = not observed yet). Transition spans
+        # fire from this, not from /health — health only reads.
+        self.baker_alive: bool | None = None
 
     def next_cycle_id(self) -> int:
         """Advance the shared cycle counter and return the new id."""
@@ -337,6 +340,37 @@ class PollRuntime:
                 # stamped even on cycle_error — a partial cycle IS a poll
                 # attempt; /health surfaces it as `last_poll_at` (docs/11 §0)
                 self.last_poll_at = datetime.now(timezone.utc)
+                try:
+                    await self._observe_baker()
+                except Exception:  # noqa: BLE001 — baker observe must not kill the poll cycle
+                    log.exception("baker observe failed")
+
+    async def _observe_baker(self) -> None:
+        """Ship baker jsonl via push_oo_log; span only on alive/dead edges.
+
+        The baker is a host process. This is the app-side chokepoint — same
+        stream shape as run_failures, same tracer as poll.cycle.
+        """
+        from ..bake_status import (
+            annotate_liveness, baker_transition, drain_baker_log,
+            read_bake_status,
+        )
+        from ..telemetry import push_oo_log
+
+        status = annotate_liveness(read_bake_status())
+        alive = bool(status.get("baker_alive"))
+        trans = baker_transition(self.baker_alive, alive)
+        if trans:
+            with tracer.start_as_current_span(f"baker.{trans}") as span:
+                if trans == "dead":
+                    span.set_status(Status(StatusCode.ERROR))
+                span.set_attribute(
+                    "devcake.baker.detail", status.get("baker_detail") or "")
+                span.set_attribute(
+                    "devcake.baker.state", status.get("state") or "")
+        self.baker_alive = alive
+        for rec in drain_baker_log():
+            await push_oo_log("baker", rec)
 
     async def loop(self) -> None:
         """Periodic poll driver. Shares `lock` and the cycle counter with

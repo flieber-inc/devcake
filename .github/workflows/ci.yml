@@ -110,6 +110,7 @@ jobs:
             -v "${{ github.workspace }}/images/Dockerfile:/srv/images.Dockerfile:ro" \
             -v "${{ github.workspace }}/docs:/srv/docs:ro" \
             -v "${{ github.workspace }}/scripts:/srv/repo-scripts:ro" \
+            -v "${{ github.workspace }}/up.sh:/srv/up.sh:ro" \
             -w /srv \
             "devcake/app-test:${DEVCAKE_TAG}" \
             python -m pytest tests/ -q --tb=short -o cache_dir=/tmp/pytest-cache

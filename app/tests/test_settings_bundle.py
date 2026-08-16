@@ -3,6 +3,7 @@ world semantics, rollback-by-reapply, scrubbed validation errors (a malformed
 secrets section must never echo a value), and the .env tripwire."""
 
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -71,10 +72,14 @@ def test_serialize_never_carries_harness_receipts(monkeypatch, tmp_path):
     cfg, dts = _world(config_mod, secrets, tpl)
     (tmp_path / "harness_receipts").mkdir()
     (tmp_path / "harness_receipts" / "grok-build@0.2.112.json").write_text("{}")
+    (tmp_path / "harness_bake_status.json").write_text('{"state":"baking"}')
+    (tmp_path / "harness_baker.jsonl").write_text('{"event":"tick"}\n')
     bundle = sb.serialize_current(cfg, dts, include_secrets=True)
     blob = str(bundle)
     assert "harness_receipts" not in bundle
     assert "harness_receipts" not in blob
+    assert "harness_bake_status" not in blob
+    assert "baking" not in blob
     assert "grok-build@0.2.112" not in blob
 
 
@@ -92,6 +97,8 @@ def test_serialize_apply_roundtrip_onto_fresh_deployment(monkeypatch, tmp_path):
     result = sb.apply_bundle(bundle, config=cfg2, dev_types=dts2,
                              reload=lambda: None)
     assert sorted(result["applied"]) == ["config", "secrets"]
+    keep = json.loads((dst / "harness_keep_set.json").read_text())
+    assert "pins" in keep
     again = sb.serialize_current(cfg2, dts2, include_secrets=True)
     assert _comparable(again) == _comparable(bundle)
     # the fresh world holds the values on disk, 0600

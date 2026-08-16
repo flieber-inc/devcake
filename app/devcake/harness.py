@@ -132,13 +132,15 @@ HARNESSES: dict[str, Harness] = {
 
 
 def resolve_image(dev_type) -> str:
-    """Harness image for a run. Empty pin = house image at DEVCAKE_TAG.
+    """Harness image for a run. Delegates to house_pins.image_ref.
 
-    The three launch sites (dispatch, steward, OAuth) call this. Hello
-    stays HELLO_IMAGE. Receipts do not change the string in this slice
-    (fail-open). No cli_version field yet.
+    Empty pin and a stored house pin both name :TAG (keep-set only
+    records the effective version). A different stored pin is
+    :TAG-cli_version. Hello stays HELLO_IMAGE.
     """
-    return HARNESSES[dev_type.harness_template].image
+    from .house_pins import effective_cli_version, image_ref
+    return image_ref(
+        dev_type.harness_template, effective_cli_version(dev_type), tag=_TAG)
 
 
 def missing_referenced_secret_env(dt) -> list[str]:

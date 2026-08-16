@@ -88,6 +88,7 @@ class Services:
     finalizer: Optional[FinalizerRouter] = None
     oauth_mgr: Optional[OAuthManager] = None
     receipt_store: Any = None
+    version_source: Any = None
     cron: Any = None
     claims: Any = None
 
@@ -263,7 +264,9 @@ def build_services() -> Services:
         s.managers, lambda bid: poll_rt.mission_owner.get(bid))
 
     from ..adapters.files.receipts import FileReceiptStore
+    from ..adapters.registry_versions import RegistryVersionSource
     s.receipt_store = FileReceiptStore()
+    s.version_source = RegistryVersionSource()
     s.forge_runtime.rebuild(config.repos, make_forge)
     s.build_managers()
     s.finalizer = FinalizerRouter(s.managers, store, messaging)

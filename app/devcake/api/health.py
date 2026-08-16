@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 
 from .. import security
 from ..adapters.dagu import DAGU_URL
+from ..bake_status import annotate_liveness, read_bake_status
 from ..staffing import app_digest, receipt_summary
 from ..domain.claims import claims_depth, claims_queue_capped
 from ..domain.forge_runtime import PROBE_CONCURRENCY
@@ -26,9 +27,10 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
 
 
-def _harness_pins(dev_types, receipt_store) -> dict:
+def _harness_pins(dev_types, receipt_store, bake_status) -> dict:
     return receipt_summary(
-        dev_types or {}, digest=app_digest(), store=receipt_store)
+        dev_types or {}, digest=app_digest(), store=receipt_store,
+        bake_status=bake_status)
 
 
 async def _check_redis() -> bool:
@@ -244,6 +246,7 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
                             else v)
         return out
 
+    bake = annotate_liveness(read_bake_status())
     return {
         "app": True,
         "redis": redis_ok,
@@ -333,5 +336,6 @@ async def build_health_payload(*, config, dev_types, managers, stewards,
             "leaked": workspaces.leaked_count(store) if workspaces else 0,
             "disk": workspaces.disk_stats() if workspaces else None,
         },
-        "harness_pins": _harness_pins(dev_types, receipt_store),
+        "harness_pins": _harness_pins(dev_types, receipt_store, bake),
+        "bake_status": bake,
     }

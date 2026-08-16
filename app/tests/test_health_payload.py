@@ -54,6 +54,26 @@ def test_health_payload_carries_harness_pins(monkeypatch):
     assert "digest" in pins
     assert "sentinel" in pins
     assert "templates" in pins
+    assert "bake_status" in got
+    assert got["bake_status"]["baker_alive"] is False
+
+
+def test_health_payload_reads_host_bake_status(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    (tmp_path / "harness_bake_status.json").write_text(json.dumps({
+        "state": "baking",
+        "jobs": [{"template": "grok-build", "cli_version": "1.0.4",
+                  "state": "baking"}],
+    }))
+    fr = _forge_runtime(last_full_probe_at=datetime.now(timezone.utc))
+    got = _payload(fr, monkeypatch)
+    assert got["bake_status"]["state"] == "baking"
+    assert got["bake_status"]["jobs"][0]["cli_version"] == "1.0.4"
+    # baking with no heartbeat is a crash mid-bake, not a live compile
+    assert got["bake_status"]["baker_alive"] is False
 
 
 def test_health_exposes_digest_and_receipt_summary(monkeypatch):

@@ -278,6 +278,36 @@ def render_pi(raw: str):
     return None
 
 
+def render_opencode(raw: str):
+    """OpenCode `run --format json` events → condensed lines."""
+    try:
+        ev = json.loads(raw)
+    except Exception:  # noqa: BLE001 — non-JSON is printed as-is
+        s = raw.strip()
+        return s[:LINE_LIMIT] if s else None
+    if not isinstance(ev, dict):
+        return None
+    kind = ev.get("type")
+    if kind == "text":
+        text = str(_dict(ev.get("part")).get("text") or "").strip()
+        return text[:200] or None
+    if kind == "tool_use":
+        part = _dict(ev.get("part"))
+        name = part.get("tool") or _dict(part.get("state")).get("tool") or "?"
+        return f"→ {name}"
+    if kind == "step_finish":
+        return "[opencode] step done"
+    if kind == "error":
+        err = ev.get("error")
+        if isinstance(err, dict):
+            data = err.get("data") if isinstance(err.get("data"), dict) else {}
+            msg = data.get("message") or err.get("name") or err
+        else:
+            msg = err or ev.get("message") or ""
+        return f"[opencode] error: {_one_line(str(msg), 200)}"
+    return None
+
+
 def render_stderr(raw: str):
     s = raw.strip()
     return f"! {s[:LINE_LIMIT]}" if s else None

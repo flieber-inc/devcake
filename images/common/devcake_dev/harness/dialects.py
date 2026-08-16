@@ -10,17 +10,21 @@ import sys
 
 from . import dialect as _reg
 from .dialect import ResumeSpec, WORKSPACE
-from .render import GrokCoalescer, render_claude, render_codex, render_pi
+from .render import (GrokCoalescer, render_claude, render_codex, render_opencode,
+                     render_pi)
 from .tokens import (
     claude_text_dump, claude_token_report,
     codex_text_dump, codex_token_report,
     grok_end_event, grok_end_report, grok_signals_report, grok_stream_parse,
+    opencode_session_id, opencode_step_finish, opencode_text_dump,
+    opencode_token_report,
     pi_agent_end, pi_session_event, pi_text_dump, pi_token_report,
     unavailable_report,
 )
 from ..domain.fault import (
     HARNESS_STATUS_PATTERNS, _dict, _one_line, claude_result_event,
-    claude_run_fault, codex_run_fault, grok_run_fault, pi_run_fault,
+    claude_run_fault, codex_run_fault, grok_run_fault,
+    opencode_run_fault, pi_run_fault,
     harness_error_messages, http_status_from_message,
 )
 
@@ -359,8 +363,91 @@ class _Pi:
             return None
 
 
+class _OpenCode:
+    id = "opencode"
+    resume_spec = None
+    dump_cumulative_on_resume = False
+
+    def argv(self, prompt, *, plan_mode=False, model="", extra=(), out_dir=None):
+        extra = list(extra)
+        # --auto auto-approves ask (including the plan agent's default
+        # edit/bash ask). EXECUTE only. PLAN is --agent plan without --auto.
+        mode = ["--agent", "plan"] if plan_mode else ["--auto"]
+        pin = ["--model", model] if model else []
+        return ["opencode", "run", "--format", "json", *mode, *pin,
+                prompt, *extra]
+
+    def resume_argv(self, session_id, prompt, *, model="", extra=(), out_dir=None):
+        return None
+
+    def renderer(self):
+        return render_opencode
+
+    def parse_run(self, out, *, workspace, model=""):
+        report = unavailable_report(model=self.id)
+        try:
+            report = opencode_token_report(out) or report
+        except Exception:  # noqa: BLE001 — the artifact path outranks its own token report
+            pass
+        try:
+            dump = opencode_text_dump(out)
+        except Exception:  # noqa: BLE001 — no dump ⇒ the no-dump fallback
+            dump = ""
+        result = dump
+        if not result:
+            result = out[-4000:]
+        return _reg.InvocationView(result_text=result, token_report=report,
+                                   dump=dump)
+
+    def fault(self, out, harness_exit, *, dump="", last_message="", prompt=""):
+        return opencode_run_fault(out, harness_exit, dump=dump)
+
+    def api_error_status(self, out):
+        from .tokens import _oc_events
+        blobs = list(harness_error_messages(out))
+        for ev in _oc_events(out):
+            if ev.get("type") != "error":
+                continue
+            err = ev.get("error")
+            if isinstance(err, dict):
+                data = err.get("data") if isinstance(err.get("data"), dict) else {}
+                if isinstance(data.get("statusCode"), int):
+                    return data["statusCode"]
+                blobs.append(str(data.get("message") or err.get("name") or err))
+            elif err:
+                blobs.append(str(err))
+        for message in blobs:
+            status = http_status_from_message(message)
+            if status is not None:
+                return status
+            for rx in HARNESS_STATUS_PATTERNS[self.id]:
+                hit = rx.search(message)
+                if hit:
+                    return int(hit.group(1))
+        return None
+
+    def session_identity(self, out):
+        try:
+            return opencode_session_id(out)
+        except Exception:  # noqa: BLE001 — no handle ⇒ fresh-mode degradation
+            return ""
+
+    def terminal_evidence(self, out):
+        try:
+            ev = opencode_step_finish(out)
+            if ev is None:
+                return None
+            part = _dict(ev.get("part"))
+            return {"event": "step_finish",
+                    "reason": str(part.get("reason") or ""),
+                    "cost": part.get("cost")}
+        except Exception:  # noqa: BLE001 — evidence is advisory
+            return None
+
+
 def load_all() -> None:
     _reg.register(_Claude())
     _reg.register(_Grok())
     _reg.register(_Codex())
     _reg.register(_Pi())
+    _reg.register(_OpenCode())

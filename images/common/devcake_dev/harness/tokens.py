@@ -406,3 +406,93 @@ def pi_text_dump(out: str) -> str:
             blocks.append(joined)
     return "\n\n".join(blocks)
 
+
+def _oc_events(out: str):
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001 — one bad line never costs the parse
+            continue
+        if isinstance(ev, dict):
+            yield ev
+
+
+def opencode_session_id(out: str) -> str:
+    """Last `sessionID` on any --format json event."""
+    sid = ""
+    for ev in _oc_events(out):
+        if ev.get("sessionID"):
+            sid = str(ev["sessionID"])
+    return sid
+
+
+_OC_TERMINAL_REASONS = frozenset({"stop", "length"})
+
+
+def opencode_step_finish(out: str):
+    """Last `{type: step_finish}` with a terminal reason, or None.
+
+    `tool-calls` is mid-turn (the next model call is coming). `stop` is a
+    clean end; `length` is a finished step that hit an output cap.
+    """
+    found = None
+    for ev in _oc_events(out):
+        if ev.get("type") != "step_finish":
+            continue
+        part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+        reason = part.get("reason") or ev.get("reason")
+        if reason in _OC_TERMINAL_REASONS:
+            found = ev
+    return found
+
+
+def opencode_token_report(out: str):
+    """TokenReport v1 from the last step_finish.part (tokens + cost)."""
+    usage, cost, model, turns = None, None, None, 0
+    for ev in _oc_events(out):
+        if ev.get("type") == "step_finish":
+            turns += 1
+            part = _dict(ev.get("part"))
+            tok = part.get("tokens")
+            if isinstance(tok, dict):
+                usage = tok
+            if isinstance(part.get("cost"), (int, float)):
+                cost = part["cost"]
+        info = _dict(_dict(ev.get("part")).get("info") or ev.get("info"))
+        if info.get("modelID"):
+            model = info["modelID"]
+    if usage is None:
+        return None
+    cache = usage.get("cache")
+    cache_read = cache.get("read") if isinstance(cache, dict) else usage.get("cacheRead")
+    cache_write = cache.get("write") if isinstance(cache, dict) else usage.get("cacheWrite")
+    return token_report_v1(
+        model=model or "opencode",
+        source="session_json",
+        input_tokens=usage.get("input") if usage.get("input") is not None
+        else usage.get("input_tokens"),
+        output_tokens=usage.get("output") if usage.get("output") is not None
+        else usage.get("output_tokens"),
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
+        reasoning_tokens=usage.get("reasoning") if usage.get("reasoning") is not None
+        else usage.get("reasoning_tokens"),
+        total_tokens=usage.get("total") if usage.get("total") is not None
+        else usage.get("totalTokens"),
+        cost_usd_native=cost,
+        num_turns=turns or None,
+        raw=usage)
+
+
+def opencode_text_dump(out: str) -> str:
+    """ADR-0014 D1: every completed `text` part, in order, untruncated."""
+    blocks = []
+    for ev in _oc_events(out):
+        if ev.get("type") != "text":
+            continue
+        part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            blocks.append(text.strip("\n"))
+    return "\n\n".join(blocks)
+

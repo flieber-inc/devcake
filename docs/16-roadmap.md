@@ -23,7 +23,7 @@
 > **Where we are (2026-08-04):** layers 1–2 closed through tag **v0.2**;
 > release tags through **v0.2.5 "Hummingbird"** on `main`. The product loop
 > (poll → dispatch → harness → finalize → forge/PMO) is operational with three
-> harness templates (`claude-code`, `grok-build`, `codex`, `pi`), multi-PMO /
+> harness templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`), multi-PMO /
 > multi-repo / internal Gitea, skills (ADR-0016), settings profiles/export
 > (ADR-0013), fault classification + backend brake (ADR-0018/0026), mandatory
 > source mirrors + provisioned workspaces (ADR-0024/0025), in-container

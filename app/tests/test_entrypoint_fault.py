@@ -548,6 +548,8 @@ def test_classify_nonzero_exit(err, fault, status, expected):
       "--dangerously-bypass-approvals-and-sandbox"]),
     ("pi", ["pi"],
      ["--mode", "json", "--no-approve"]),
+    ("opencode", ["opencode", "run"],
+     ["--format", "json", "--auto"]),
 ])
 def test_argv_matches_the_documented_invocation(harness, head, doc_flags):
     argv = ep.harness_argv(harness, "PROMPT")
@@ -568,19 +570,20 @@ def test_argv_verbose_is_mandatory_for_claude():
     ("grok-build", ["--permission-mode", "plan"]),
     ("codex", ["--sandbox", "read-only"]),          # codex's read-only substitute
     ("pi", ["--tools", "read,grep,find,ls"]),       # no native plan mode
+    ("opencode", ["--agent", "plan"]),
 ])
 def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
     argv = ep.harness_argv(harness, "P", plan_mode=True)
     for f in plan_flags:
         assert f in argv
     for f in ("--dangerously-skip-permissions", "--always-approve",
-              "--dangerously-bypass-approvals-and-sandbox"):
+              "--dangerously-bypass-approvals-and-sandbox", "--auto"):
         assert f not in argv, f"{harness}: plan mode must not grant writes"
 
 
 @pytest.mark.parametrize("harness,pin", [
     ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m"),
-    ("pi", "--model")])
+    ("pi", "--model"), ("opencode", "--model")])
 def test_argv_model_pin_is_omitted_when_empty(harness, pin):
     """An empty DEVCAKE_MODEL means "harness default" — passing an empty pin
     would make every CLI reject the invocation."""
@@ -621,6 +624,49 @@ def test_sigterm_flushes_artifacts_once(monkeypatch):
     assert ei.value.code == 20
     assert sent and sent[0]["error_class"] == "DEV_CRASH"
     assert sent[0]["exit_code"] == 20
+
+
+def test_opencode_tool_calls_step_finish_is_not_terminal():
+    stream = json.dumps({
+        "type": "step_finish",
+        "part": {"reason": "tool-calls", "tokens": {"total": 1}},
+    })
+    fault = ep.opencode_run_fault(stream, 0)
+    assert fault and fault["reason"] == ep.FAULT_NO_TERMINAL_EVENT
+
+
+def test_opencode_retry_then_healthy_is_not_a_fault():
+    """A recovered in-process retry must not latch an earlier error event."""
+    stream = "\n".join([
+        json.dumps({"type": "error", "error": {
+            "name": "APIError",
+            "data": {"message": "rate limited", "statusCode": 429,
+                     "isRetryable": True}}}),
+        json.dumps({"type": "text", "part": {"text": "ACKNOWLEDGED"}}),
+        json.dumps({"type": "step_finish", "part": {"reason": "stop"}}),
+    ])
+    assert ep.opencode_run_fault(stream, 0) is None
+
+
+def test_opencode_length_step_finish_is_terminal():
+    stream = "\n".join([
+        json.dumps({"type": "text", "part": {"text": "partial"}}),
+        json.dumps({"type": "step_finish", "part": {"reason": "length"}}),
+    ])
+    assert ep.opencode_run_fault(stream, 0) is None
+
+
+def test_opencode_status_prefix_is_an_exact_three_digit_token():
+    def _oc_err(msg):
+        return json.dumps({"type": "error", "error": {
+            "name": "APIError", "data": {"message": msg}}})
+
+    assert ep.harness_api_error_status(
+        "opencode", _oc_err("40100ms deadline exceeded")) is None
+    assert ep.harness_api_error_status(
+        "opencode", _oc_err("120s timeout waiting: HTTP 401 from upstream")) == 401
+    assert ep.harness_api_error_status(
+        "opencode", _oc_err("401 Incorrect API key provided")) == 401
 
 
 def test_pi_retry_then_healthy_is_not_a_fault():

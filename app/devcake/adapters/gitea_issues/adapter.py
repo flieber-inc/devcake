@@ -17,9 +17,11 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
-                             Mission, MissionRef, NormalizedStatus)
+                             Mission, MissionRef, NormalizedStatus,
+                             canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
-from .mapping import (CANCEL_FOOTER, mission_key, normalize_priority,
+from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
+from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
 
 log = logging.getLogger("devcake.gitea_issues")
@@ -168,6 +170,7 @@ class GiteaIssuesAdapter:
         content: bytes | None = None,
         headers: dict | None = None,
         expect_json: bool = True,
+        as_response: bool = False,
     ) -> Any:
         if not self._api:
             raise PMOTransient("gitea_issues: api_base is empty")
@@ -190,6 +193,8 @@ class GiteaIssuesAdapter:
             raise RuntimeError(
                 f"gitea_issues {method} {path} → {resp.status_code}: "
                 f"{resp.text[:300]}")
+        if as_response:
+            return resp
         if not expect_json or not resp.content:
             return resp.content if not expect_json else None
         return resp.json()
@@ -216,9 +221,8 @@ class GiteaIssuesAdapter:
     def _mission(self, issue: dict) -> Mission:
         number = int(issue["number"])
         body = issue.get("body") or ""
-        labels = { (lb.get("name") or "") for lb in (issue.get("labels") or [])
-                   if lb.get("name") }
-        labels = {n for n in labels if n}
+        labels = canonicalize_labels(
+            lb.get("name") or "" for lb in (issue.get("labels") or []))
         # blocked_by filled by callers that fetch dependencies
         updated = issue.get("updated_at") or issue.get("created_at") or ""
         try:
@@ -324,12 +328,20 @@ class GiteaIssuesAdapter:
         # and the old fabricated Mission answer made misroutes invisible.
         self._require_issue(ref)
         mission = await self.get(ref)
-        from .._toolkit import paginate_rest
+        from .._toolkit import last_page_from_headers, paginate_rest_newest
         max_pages = MAX_COMMENT_PAGES_FULL if full else MAX_COMMENT_PAGES
-        raw_comments, truncated = await paginate_rest(
-            lambda page: self._req(
+
+        async def _comments_page(page: int):
+            resp = await self._req(
                 "GET", self._repo_path(f"/issues/{ref.pmo_id}/comments"),
-                params={"page": page, "limit": COMMENTS_PAGE}),
+                params={"page": page, "limit": COMMENTS_PAGE},
+                as_response=True)
+            items = resp.json() if resp.content else []
+            last = last_page_from_headers(resp.headers, page_size=COMMENTS_PAGE)
+            return items or [], last
+
+        raw_comments, truncated = await paginate_rest_newest(
+            _comments_page,
             page_size=COMMENTS_PAGE, max_pages=max_pages,
             what="gitea_issues get_activity", on_ceiling="flag")
         if truncated:
@@ -422,16 +434,14 @@ class GiteaIssuesAdapter:
             cur = await self._req(
                 "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
             body = cur.get("body") or ""
-            if CANCEL_FOOTER not in body:
-                body_patch["body"] = body.rstrip() + f"\n\n---\n{CANCEL_FOOTER}\n"
+            body_patch["body"] = apply_cancel_footer(body)
         elif status in ("backlog", "in_progress", "done"):
             # opening or completing: strip cancel footer if present so done ≠ canceled
             cur = await self._req(
                 "GET", self._repo_path(f"/issues/{ref.pmo_id}"))
             body = cur.get("body") or ""
             if CANCEL_FOOTER in body:
-                cleaned = body.replace(CANCEL_FOOTER, "").replace("\n\n---\n\n", "\n")
-                body_patch["body"] = cleaned
+                body_patch["body"] = strip_cancel_footer(body)
         await self._req(
             "PATCH", self._repo_path(f"/issues/{ref.pmo_id}"),
             json=body_patch)
@@ -533,7 +543,7 @@ class GiteaIssuesAdapter:
                 f"gitea_issues: issue {pmo_id} has more than "
                 f"{MAX_LABEL_PAGES * LABELS_PAGE} labels — refusing a "
                 f"full-set rewrite from a truncated read"))
-        return {(lb.get("name") or "") for lb in labels}
+        return canonicalize_labels(lb.get("name") or "" for lb in labels)
 
     async def _fetch_all_labels(self) -> list[dict]:
         """Every label on the repo, paginated with a fail-loud ceiling.

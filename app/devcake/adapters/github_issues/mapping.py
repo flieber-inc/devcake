@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-CANCEL_FOOTER = "`devcake:canceled:v1`"
+from ..forge_issue import CANCEL_FOOTER
 
 NormalizedStatus = Literal["backlog", "in_progress", "done", "canceled"]
 Priority = Literal["urgent", "high", "medium", "low"]

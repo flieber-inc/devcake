@@ -16,6 +16,7 @@ import it.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Awaitable, Callable
 
 import httpx
@@ -93,4 +94,89 @@ async def paginate_rest(
                              f"entries — refusing a truncated read")
     if on_ceiling == "warn":
         log.warning("%s hit page ceiling (%s pages)", what, max_pages)
+    return items, True
+
+
+_LAST_PAGE_RE = re.compile(r'[?&]page=(\d+)[^>]*>\s*;\s*rel="last"', re.I)
+
+
+def last_page_from_headers(headers, *, page_size: int) -> int | None:
+    """GitHub/Gitea Link rel=last, or X-Total-Count / page_size."""
+    if headers is None:
+        return None
+    # httpx headers are case-insensitive; plain dicts in tests are not.
+    link = ""
+    total = None
+    if hasattr(headers, "get"):
+        link = headers.get("link") or headers.get("Link") or ""
+        total = headers.get("x-total-count") or headers.get("X-Total-Count")
+    hit = _LAST_PAGE_RE.search(link)
+    if hit:
+        return int(hit.group(1))
+    if total and page_size > 0:
+        try:
+            n = int(total)
+        except (TypeError, ValueError):
+            return None
+        if n <= 0:
+            return 1
+        return (n + page_size - 1) // page_size
+    return None
+
+
+def _rest_ceiling(what: str, max_pages: int, page_size: int,
+                  on_ceiling: str, ceiling_error: str | None) -> None:
+    if on_ceiling == "raise":
+        raise RuntimeError(
+            ceiling_error or f"{what}: more than {max_pages * page_size} "
+                             f"entries — refusing a truncated read")
+    if on_ceiling == "warn":
+        log.warning("%s hit page ceiling (%s pages)", what, max_pages)
+
+
+async def paginate_rest_newest(
+        fetch_page: Callable[[int], Awaitable[tuple[list, int | None]]],
+        *, page_size: int, max_pages: int, what: str,
+        on_ceiling: str = "warn",
+        ceiling_error: str | None = None) -> tuple[list, bool]:
+    """Oldest-first REST: keep the newest `max_pages` when the ceiling hits.
+
+    fetch_page(n) → (items, last_page or None). Returns items chronological.
+    last_page comes from last_page_from_headers. If the vendor never
+    discloses a last page and page 1 is full, we cannot find the tail —
+    walk forward (legacy) and still flag truncated at the ceiling.
+    """
+    first, last = await fetch_page(1)
+    if not first:
+        return [], False
+    if last is None and len(first) < page_size:
+        return list(first), False
+    if last is None:
+        items = list(first)
+        for page in range(2, max_pages + 1):
+            batch, hinted = await fetch_page(page)
+            if hinted is not None:
+                last = hinted
+                break
+            if not batch:
+                return items, False
+            items.extend(batch)
+            if len(batch) < page_size:
+                return items, False
+        else:
+            _rest_ceiling(what, max_pages, page_size, on_ceiling, ceiling_error)
+            return items, True
+    assert last is not None
+    if last <= max_pages:
+        items = []
+        for page in range(1, last + 1):
+            batch, _ = await fetch_page(page)
+            items.extend(batch)
+        return items, False
+    start = last - max_pages + 1
+    items = []
+    for page in range(start, last + 1):
+        batch, _ = await fetch_page(page)
+        items.extend(batch)
+    _rest_ceiling(what, max_pages, page_size, on_ceiling, ceiling_error)
     return items, True

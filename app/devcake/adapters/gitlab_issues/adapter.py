@@ -15,9 +15,11 @@ from urllib.parse import urlsplit
 import httpx
 
 from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
-                             Mission, MissionRef, NormalizedStatus)
+                             Mission, MissionRef, NormalizedStatus,
+                             canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
-from .mapping import (CANCEL_FOOTER, mission_key, normalize_priority,
+from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
+from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref, project_path_encoded)
 
 log = logging.getLogger("devcake.gitlab_issues")
@@ -141,13 +143,13 @@ class GitLabIssuesAdapter:
 
     def _label_set(self, issue: dict) -> set[str]:
         raw = issue.get("labels") or []
-        names: set[str] = set()
+        names: list[str] = []
         for lb in raw:
             if isinstance(lb, str):
-                names.add(lb)
+                names.append(lb)
             elif isinstance(lb, dict) and lb.get("name"):
-                names.add(lb["name"])
-        return {n for n in names if n}
+                names.append(lb["name"])
+        return canonicalize_labels(names)
 
     def _mission(self, issue: dict) -> Mission:
         iid = int(issue["iid"])
@@ -350,12 +352,9 @@ class GitLabIssuesAdapter:
         cur = await self._req("GET", self._proj(f"/issues/{ref.pmo_id}"))
         body = cur.get("description") or ""
         if status == "canceled":
-            if CANCEL_FOOTER not in body:
-                body_patch["description"] = (
-                    body.rstrip() + f"\n\n---\n{CANCEL_FOOTER}\n")
+            body_patch["description"] = apply_cancel_footer(body)
         elif CANCEL_FOOTER in body:
-            cleaned = body.replace(CANCEL_FOOTER, "").replace("\n\n---\n\n", "\n")
-            body_patch["description"] = cleaned
+            body_patch["description"] = strip_cancel_footer(body)
         await self._req(
             "PUT", self._proj(f"/issues/{ref.pmo_id}"), json=body_patch)
 

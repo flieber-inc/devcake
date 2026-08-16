@@ -1,6 +1,7 @@
 """PMO domain: normalized DTOs, the managed label set, and Mission Type
 derivation (docs/02). Pure logic — no I/O, no vendor types (docs/01 §3)."""
 
+from collections.abc import Iterable
 from datetime import datetime
 from enum import Enum
 from typing import Literal, NamedTuple, Optional
@@ -29,6 +30,22 @@ ALL_LABELS = {LABEL_OPTIN, LABEL_PLAN, LABEL_EXECUTE, LABEL_REVIEW, LABEL_MERGE,
               LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, LABEL_TRACKING,
               LABEL_NEEDS_HUMAN, LABEL_DISCOVERY}
 STAGE_LABELS = {LABEL_PLAN, LABEL_EXECUTE, LABEL_REVIEW}
+
+
+def canonicalize_labels(names: Iterable[str]) -> set[str]:
+    """Map vendor-cased names onto ALL_LABELS. Unmanaged names stay as stored.
+
+    GitHub/Gitea/GitLab fold case; a human `Devcake-Plan` is the same label
+    as `DEVCAKE-PLAN`. derive() and swap_labels are exact-string — adapters
+    must emit these spellings.
+    """
+    canon = {n.upper(): n for n in ALL_LABELS}
+    out: set[str] = set()
+    for raw in names:
+        if not raw:
+            continue
+        out.add(canon.get(raw.upper(), raw))
+    return out
 
 NormalizedStatus = Literal["backlog", "in_progress", "done", "canceled"]
 Priority = Literal["urgent", "high", "medium", "low"]

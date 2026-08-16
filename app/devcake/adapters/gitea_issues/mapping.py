@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import Literal
 
 # Durable cancel signal in the issue body (plan lock-in: do not expand
-# ALL_LABELS). cancel_mission appends this; normalize_status reads it.
-CANCEL_FOOTER = "`devcake:canceled:v1`"
+# ALL_LABELS). One constant — adapters/forge_issue.py.
+from ..forge_issue import CANCEL_FOOTER
 
 NormalizedStatus = Literal["backlog", "in_progress", "done", "canceled"]
 Priority = Literal["urgent", "high", "medium", "low"]

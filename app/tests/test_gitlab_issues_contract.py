@@ -205,6 +205,24 @@ def test_list_and_get_normalize_opened_to_backlog():
     assert m.instance == "gl"
 
 
+def test_mixed_case_managed_label_normalizes_and_can_be_swapped():
+    r = Router()
+    r.labels["DEVCAKE-PLAN"] = {
+        "id": 2, "name": "Devcake-Plan", "color": "#6e40c9"}
+    r.issues[1] = _issue(1, labels=["DEVCAKE", "Devcake-Plan"])
+    pmo = make_pmo(r)
+    m = run(pmo.get(MissionRef("1", "issue")))
+    assert "DEVCAKE-PLAN" in m.labels
+    assert "Devcake-Plan" not in m.labels
+    run(pmo.swap_labels(MissionRef("1", "issue"),
+                        {"DEVCAKE-PLAN"}, {"DEVCAKE-EXECUTE"}))
+    names = set(r.issues[1]["labels"])
+    assert "Devcake-Plan" not in names
+    assert "DEVCAKE-PLAN" not in names
+    assert "DEVCAKE-EXECUTE" in names
+    assert "DEVCAKE" in names
+
+
 def test_closed_with_cancel_footer_is_canceled():
     r = Router()
     r.issues[1] = _issue(1, state="closed",

@@ -32,6 +32,9 @@ LEGAL_OUTCOMES: dict[str, frozenset[str]] = {
 # DevCake comments and for blockquoted model text alike. Quoting is the ONE
 # quarantine convention; a new feed scan that reads raw bodies is a bug.
 STEP_MARKER = re.compile(r"`(\d+)_(ONBOARD|PLAN|EXECUTE|REVIEW)\.md`")
+PLAN_FILE = re.compile(r"`(PLAN_\d+\.md)`")
+# Producer: feed._part_label. Consumers must use this exact line.
+PART_LINE = re.compile(r"^Part (\d+) of (\d+)$")
 
 # Stage label each checkpointed swap leaves on the mission (None = stage label
 # removed). Consulted by the redelivery external-transition check in

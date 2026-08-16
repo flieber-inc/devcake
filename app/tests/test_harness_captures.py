@@ -79,6 +79,8 @@ def harness_dump(harness: str, name: str, out: str) -> str:
         return ep.codex_text_dump(out)
     if harness == "grok-build":
         return companion(name, "dump.txt")
+    if harness == "pi":
+        return ep.pi_text_dump(out)
     return ep.claude_text_dump(out)
 
 
@@ -94,7 +96,24 @@ def capture_prompt(meta: dict) -> str:
     produced.
     """
     argv = meta["argv"]
-    return argv[4] if argv[1:3] == ["exec", "resume"] else argv[2]
+    if argv[1:3] == ["exec", "resume"]:
+        return argv[4]
+    if argv and argv[0] == "pi":
+        # positional prompt after flags (`pi --mode json --no-approve [pin] P`)
+        skip_next = False
+        for a in argv[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if a in ("--mode", "--model", "--provider", "--api-key", "--tools",
+                     "--thinking", "--session"):
+                skip_next = True
+                continue
+            if a.startswith("-"):
+                continue
+            return a
+        return ""
+    return argv[2]
 
 
 def verdict(name: str) -> tuple:
@@ -119,8 +138,9 @@ def verdict(name: str) -> tuple:
         return (reason,) + ep.classify_nonzero_exit(
             companion(name, "stderr.txt")[-1500:], fault, api_status)
     if fault:                                   # main() rows 6/7 and the plan gate
-        return ((reason, 16, "DEV_TURN_BUDGET") if reason == ep.FAULT_TURN_BUDGET
-                else (reason, 15, "DEV_HARNESS_FAULT"))
+        # Pi (and any future CLI) can report 401 in-band and still exit 0 —
+        # same auth precedence as the nonzero path.
+        return (reason,) + ep.classify_nonzero_exit("", fault, api_status)
     return (None, None, None)
 
 
@@ -245,6 +265,20 @@ CAPTURES = [
     #     → usage_cumulative=True. Summing a resume chain would double-count.
     ("codex_resume_nudge", NO_FAULT),
     ("codex_resume_nudge_resume", NO_FAULT),
+
+    # ── pi 0.84.2 (`@earendil-works/pi-coding-agent`, --mode json) ──────────
+    # Pi exits 0 even on HTTP 401/429/500: the failure is `stopReason: error`
+    # + `errorMessage: "401: …"` on the assistant message, then `agent_end`.
+    # Auth still latches 12 via in-band status (same precedence as nonzero).
+    ("pi_healthy", NO_FAULT),
+    ("pi_refusal", NO_FAULT),
+    ("pi_tool_only", NO_FAULT),          # toolCall + tool_execution; ENOENT is not a harness fault
+    ("pi_empty", EMPTY),
+    ("pi_whitespace", EMPTY),
+    ("pi_http_401", AUTH),
+    ("pi_http_429", TERMINAL),
+    ("pi_http_500", TERMINAL),
+    ("pi_truncated", TERMINAL),          # errorMessage "terminated" after stub hang-up
 ]
 
 

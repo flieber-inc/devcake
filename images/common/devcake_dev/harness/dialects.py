@@ -10,17 +10,18 @@ import sys
 
 from . import dialect as _reg
 from .dialect import ResumeSpec, WORKSPACE
-from .render import GrokCoalescer, render_claude, render_codex
+from .render import GrokCoalescer, render_claude, render_codex, render_pi
 from .tokens import (
     claude_text_dump, claude_token_report,
     codex_text_dump, codex_token_report,
     grok_end_event, grok_end_report, grok_signals_report, grok_stream_parse,
+    pi_agent_end, pi_session_event, pi_text_dump, pi_token_report,
     unavailable_report,
 )
 from ..domain.fault import (
     HARNESS_STATUS_PATTERNS, _dict, _one_line, claude_result_event,
-    claude_run_fault, codex_run_fault, grok_run_fault,
-    harness_error_messages,
+    claude_run_fault, codex_run_fault, grok_run_fault, pi_run_fault,
+    harness_error_messages, http_status_from_message,
 )
 
 
@@ -280,7 +281,86 @@ class _Codex:
             return None
 
 
+class _Pi:
+    id = "pi"
+    resume_spec = None
+    dump_cumulative_on_resume = False
+
+    def argv(self, prompt, *, plan_mode=False, model="", extra=(), out_dir=None):
+        extra = list(extra)
+        # --no-approve: non-interactive modes skip the project-trust prompt
+        # and ignore untrusted project .pi (json.md / settings.md).
+        mode = ["--tools", "read,grep,find,ls"] if plan_mode else []
+        pin = ["--model", model] if model else []
+        return ["pi", "--mode", "json", "--no-approve", *mode, *pin,
+                prompt, *extra]
+
+    def resume_argv(self, session_id, prompt, *, model="", extra=(), out_dir=None):
+        return None
+
+    def renderer(self):
+        return render_pi
+
+    def parse_run(self, out, *, workspace, model=""):
+        report = unavailable_report(model=self.id)
+        try:
+            report = pi_token_report(out) or report
+        except Exception:  # noqa: BLE001 — the artifact path outranks its own token report
+            pass
+        try:
+            dump = pi_text_dump(out)
+        except Exception:  # noqa: BLE001 — no dump ⇒ the no-dump fallback
+            dump = ""
+        result = dump
+        if not result:
+            result = out[-4000:]
+        return _reg.InvocationView(result_text=result, token_report=report,
+                                   dump=dump)
+
+    def fault(self, out, harness_exit, *, dump="", last_message="", prompt=""):
+        return pi_run_fault(out, harness_exit, dump=dump)
+
+    def api_error_status(self, out):
+        from .tokens import _pi_events
+        blobs = []
+        for ev in _pi_events(out):
+            msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+            if msg.get("errorMessage"):
+                blobs.append(str(msg["errorMessage"]))
+            for amsg in ev.get("messages") or []:
+                if _dict(amsg).get("errorMessage"):
+                    blobs.append(str(amsg["errorMessage"]))
+        blobs.extend(harness_error_messages(out))
+        for message in blobs:
+            status = http_status_from_message(message)
+            if status is not None:
+                return status
+            for rx in HARNESS_STATUS_PATTERNS[self.id]:
+                hit = rx.search(message)
+                if hit:
+                    return int(hit.group(1))
+        return None
+
+    def session_identity(self, out):
+        try:
+            ev = pi_session_event(out)
+            return str((ev or {}).get("id") or "")
+        except Exception:  # noqa: BLE001 — no handle ⇒ fresh-mode degradation
+            return ""
+
+    def terminal_evidence(self, out):
+        try:
+            ev = pi_agent_end(out)
+            if ev is None:
+                return None
+            return {"event": "agent_end",
+                    "messages": len(ev.get("messages") or [])}
+        except Exception:  # noqa: BLE001 — evidence is advisory
+            return None
+
+
 def load_all() -> None:
     _reg.register(_Claude())
     _reg.register(_Grok())
     _reg.register(_Codex())
+    _reg.register(_Pi())

@@ -101,6 +101,18 @@ That item is **not** tool activity.
 `grok export` always echoes the prompt under `## User`; activity is whatever
 follows that echo (see `grok_export_activity`).
 
+### pi 0.84.2
+
+| Name | Scenario | CLI exit | Asserted class |
+|---|---|---|---|
+| `pi_healthy` / `refusal` / `tool_only` | success shapes | 0 | no fault |
+| `pi_empty` / `whitespace` | 200 with no/whitespace text | 0 | exit 15 empty |
+| `pi_http_401` | 401 (`errorMessage: "401: …"`) | 0 | exit 12 auth |
+| `pi_http_429` / `_500` / `truncated` | hard errors / hang-up | 0 | exit 15 terminal |
+
+Pi exits 0 on HTTP failures: the stream still carries `agent_end` with
+`stopReason: error`. 429 retries three times (`willRetry`) then settles.
+
 ## Known gaps (not reclassified as exit 15)
 
 Some real-world failures still land as exit 11 `DEV_BAD_OUTPUT` (missing

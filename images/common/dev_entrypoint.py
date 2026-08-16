@@ -60,6 +60,7 @@ from devcake_dev.domain.fault import (  # noqa: E402
     codex_run_fault,
     grok_export_activity,
     grok_run_fault,
+    pi_run_fault,
     harness_api_error_status,
     harness_error_messages,
     harness_fault,
@@ -101,6 +102,7 @@ from devcake_dev.harness.render import (  # noqa: E402
     _pump,
     render_claude,
     render_codex,
+    render_pi,
     render_stderr,
 )
 from devcake_dev.harness.tokens import (  # noqa: E402
@@ -112,6 +114,8 @@ from devcake_dev.harness.tokens import (  # noqa: E402
     grok_end_report,
     grok_signals_report,
     grok_stream_parse,
+    pi_text_dump,
+    pi_token_report,
     unavailable_report,
 )
 from devcake_dev.workspace.activity import (  # noqa: E402
@@ -753,8 +757,7 @@ def harness_main() -> None:
             # is synthesized from `result_text`, so a backend that returned junk
             # would otherwise be laundered into a "planned" outcome.
             if fault:
-                code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
-                cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
+                code, cls = classify_nonzero_exit("", fault, api_status)
                 fail(code, cls, fault["detail"],
                      f"plan mode: {fault['reason']}\n\n{fault['detail']}")
             if len((result_text or "").strip()) < 200:  # a real plan is never this short
@@ -790,8 +793,7 @@ def harness_main() -> None:
             # exactly like a first invocation's (ADR-0022: fault machinery
             # outranks the loop, even with budget left).
             if fault:
-                code = 16 if fault["reason"] == FAULT_TURN_BUDGET else 15
-                cls = "DEV_TURN_BUDGET" if code == 16 else "DEV_HARNESS_FAULT"
+                code, cls = classify_nonzero_exit("", fault, api_status)
                 fail(code, cls, f"{fault['detail']} | {note}" if note else fault["detail"],
                      f"{fault['reason']}: no usable result.json ({e})\n\n"
                      f"{note}\n\n{fault['detail']}" if note

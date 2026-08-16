@@ -10,9 +10,9 @@ A **harness template** describes how one CLI runs inside a Dev container —
 these are the *inner* model harnesses that the DevCake meta-harness staffs
 (`00-overview.md` §3):
 image, credentials, invocation, artifact parsing, OAuth, and skills delivery.
-It does **not** own a fixed model. Exactly three templates exist as entries in
-the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2). Adding a
-fourth crosses the registry, Bake/image, a dialect module, captures, tests,
+It does **not** own a fixed model. Four templates exist as entries in
+the harness registry (`app/devcake/harness.py`, `HARNESSES` — §2). Adding
+another crosses the registry, Bake/image, a dialect module, captures, tests,
 and this document (§9); config accepts registry ids automatically (docs/16 H2).
 Changing a Dev Type's model does not add a template.
 
@@ -21,6 +21,7 @@ Changing a Dev Type's model does not add a template.
 | `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-opus-5` (ADR-0033 D10) |
 | `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
+| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | *(none seeded)* |
 
 `Harness.experimental` is a registry flag (`GET /api/v1/harnesses`, the
 admin picker). Launch-supported templates leave it false. A later dialect
@@ -101,6 +102,18 @@ codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
 - Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` — those four keys and **no others**, so a total must be summed, never read. Present even when the turn produced nothing. On `codex exec resume` these are **cumulative — now measured, not just documented** (`codex_resume_nudge_*` captures: the resumed `turn.completed` reports both invocations' tokens; re-measured at the 0.147.0 recapture — openai/codex#35621's restored-usage replay skip does NOT change the final `turn.completed` aggregation), which is why `RESUME_SPECS["codex"].usage_cumulative` makes the ADR-0022 token merge last-wins within a codex resume chain instead of summing. Headless resume composes as `codex exec resume <thread_id> "$NUDGE" --json -o …`; the resumed stream keeps the same `thread_id` and replays no history. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
 
+### `pi`
+```bash
+pi --mode json --no-approve "$PROMPT"
+```
+- **Pinned** `@earendil-works/pi-coding-agent@0.84.2`. `--mode json` emits JSONL (`session` header, then `agent_start` / `turn_*` / `message_*` / `tool_execution_*` / `agent_end` — `packages/coding-agent/docs/json.md`). `--no-approve` skips the project-trust prompt and ignores untrusted project `.pi` (non-interactive default). Pi has **no permission popups** by design — the Dev container is the sandbox.
+- **No native plan mode** (philosophy: write plans to files or install an extension). PLAN uses `--tools read,grep,find,ls` as the read-only substitute (same deliverable: `PLAN.md`).
+- **No `--max-turns`**. Bound is DevCake's run timeout, like codex.
+- Resume is **not** in `RESUME_SPECS` yet — `--session <id>` exists but is unverified on our wire path.
+- Multi-provider: any of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY`, or uploaded `~/.pi/agent/auth.json`. Pin a model with `--model` (`DevType.model`).
+- Token report: last `usage` on `message_update` / `message_end` (`input` / `output` / `cacheRead` / `cacheWrite` / `totalTokens`) → TokenReport v1 `source=session_json`. Capture-verified at 0.84.2.
+- Skills: `~/.agents/skills` (also reads `~/.pi/agent/skills`).
+
 ## 2. Base images
 
 **The harness registry (`app/devcake/harness.py`) is authoritative** (2026-07-12
@@ -118,6 +131,7 @@ Each template is a target in the multi-stage `images/Dockerfile` (shared `base` 
 | `claude-code` | `claude-code` | Node 22 + `@anthropic-ai/claude-code`, git, shared entrypoint |
 | `grok-build` | `grok-build` | Grok Build via official installer, git, shared entrypoint |
 | `codex` | `codex` | Node 22 + Codex CLI, git, shared entrypoint |
+| `pi` | `pi` | Node 22 + `@earendil-works/pi-coding-agent@0.84.2`, git, shared entrypoint |
 
 Images are built only by Bake (`docker-bake.hcl` — `docker buildx bake images` or `bake all`; `13-deployment.md` §6) and referenced by **tag** (`devcake/dev-*:latest`) in the run spec. Digest pinning is not implemented; rebuild Dev images lockstep with app upgrades (Dagu's `pull_policy: missing` keeps stale local tags otherwise). Compose never builds them.
 
@@ -130,6 +144,7 @@ The PLAN playbook requires the harness's native planning capability where one ex
 | `claude-code` | `claude -p --permission-mode plan "$PROMPT" --output-format stream-json --verbose` | Read-only plan mode; the plan text is the `result` field of the final `result` event. Entrypoint writes it to `/workspace/out/PLAN.md`. |
 | `grok-build` | `grok -p "$PROMPT" --permission-mode plan --output-format streaming-json` | **Verified (CLI v0.2.93):** `--permission-mode plan` is a first-class headless mode — same convention as Claude Code. Plan text = the concatenated `text` deltas; entrypoint writes it to `/workspace/out/PLAN.md`. |
 | `codex` | Plan-only prompt substitute (`codex exec` with a read-only sandbox: `--sandbox read-only`). | No documented headless plan artifact. |
+| `pi` | `--tools read,grep,find,ls` | No native plan mode (Pi philosophy). |
 
 In all three cases the deliverable is the same: `/workspace/out/PLAN.md`, uploaded by the app to the activity feed (`03-mission-lifecycle.md` §3).
 
@@ -144,6 +159,7 @@ Credential requirements are **registry-driven** (`HARNESSES` in `app/devcake/har
 | `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` **or** `ANTHROPIC_API_KEY` (any one stored is enough) | **No** `credential_files` entry. Preferred: `claude setup-token` once → paste the OAuth token into the admin panel as `CLAUDE_CODE_OAUTH_TOKEN`. |
 | `grok-build` | `XAI_API_KEY` | Device-code OAuth → secret file **`grok-auth.json`** → `~/.grok/auth.json` in-container. |
 | `codex` | `CODEX_API_KEY` | Device-code OAuth → secret file **`codex-auth.json`** → `~/.codex/auth.json` in-container. |
+| `pi` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`pi-auth.json`** → `~/.pi/agent/auth.json`. No headless device-code (`/login` is interactive). |
 
 Uploaded credential files (when the harness registry declares them) live at `/data/secrets/{dev_type}/{secret_file}` (0600); their content is delivered to the Dev in the run spec (`runspec.get`, `09-messaging.md` §3) and the entrypoint writes it to the harness-expected path (0600). Auth failure at harness launch ⇒ exit 12 ⇒ the per-Dev-Type circuit breaker (`15-errors-and-retries.md`, `DEV_AUTH`).
 
@@ -162,6 +178,7 @@ is the `source` field, never key-presence folklore; silence is never acceptable
 1. **`session_json`** — the harness's own structured output, named for the shape it reads:
    - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown) → `cost_usd_native`. `usage.output_tokens_details.thinking_tokens` (**new at 2.1.229**, capture-verified) → `reasoning_tokens` — a subset of `output_tokens`, never priced on top; pre-2.1.229 streams read None, never a fabricated 0.
    - `codex`: the final `turn.completed` event's `usage` in the `--json` stream — mapping: `input_tokens→input`, `cached_input_tokens→cache_read`, `cache_write_input_tokens→cache_write` (**new at 0.146.0** — 0.144.4 had no write counter, so pre-bump streams read None, never a fabricated 0), `output_tokens→output`, `reasoning_output_tokens→reasoning_tokens`. Capture-verified at 0.147.0 (shape-identical since 0.146.0): those five keys, **no `total_tokens`**, present on every `turn.completed` including zero-output turns. No native cost field → `cost_usd_native` null.
+   - `pi`: last `usage` on `message_update` / `message_end` (`input` / `output` / `cacheRead` / `cacheWrite` / `totalTokens`). Native `cost` if present. Pin 0.84.2.
 2. **`end_event`** — `grok-build` **primary** at 0.2.112: the terminal `end` event's `usage` (`input_tokens` / `cache_read_input_tokens` / `output_tokens` / `total_tokens` / `reasoning_tokens`) plus `num_turns`, with `model` taken as the dominant key of `modelUsage` — whose inner keys are **camelCase** (`outputTokens`), unlike claude's `usage` (§1). Read from the stdout stream the entrypoint already parses: no session id, no filesystem access, and it works for a **failed** run, which carries a full `end` event where `signals.json` is absent. Still absent at 0.2.112: any cost field, so `cost_usd_native` is `None` — never `0`, which would read as "this run was free" in the feed report and aggregate as real spend on `devcake.cost.usd`. Standing caveat: grok is installed unpinned, so a rebuild can withdraw these fields again — whereupon extraction falls through to `signals` and then `unavailable`. Grok's **native** cost stays blank forever, but the full split feeds the app-side rate-card estimate (`adr/0021`) — the feed shows a labeled `cost (estimated, …)` line and spend aggregates on `devcake.cost.usd_estimated`, so grok is no longer a blind spot of cost visibility, only of *billed* cost.
 3. **`signals`** — `grok-build` **fallback** (implemented against verified v0.2.93 shapes; pre-v1 it masqueraded as `session_json`): `signals.json` in the session directory located via the headless output's `sessionId` (`~/.grok/sessions/{urlencoded-cwd}/{session_id}/`) — carries token **totals** only (`contextTokensUsed`/`totalTokens`, plus `modelsUsed`, turn counts), so `input`/`output` stay null and no honest price computation exists. Reached only when `end`-event extraction finds no `usage` — which at 0.2.112 means a run that did not end cleanly (§1).
 4. **`cumulative` / `mixed`** — merge provenance (ADR-0022 continuation chains): `cumulative` marks a resume chain whose harness reports cumulative counters (codex — the last report IS the chain total, summing would double-count); `mixed` marks a multi-chain merge whose inputs disagree on source.

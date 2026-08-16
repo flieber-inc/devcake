@@ -69,3 +69,5 @@ jobs:
             codex.tags=${{ steps.meta.outputs.prefix }}/dev-codex:latest
             grok-build.tags=${{ steps.meta.outputs.prefix }}/dev-grok-build:${{ steps.meta.outputs.sha }}
             grok-build.tags=${{ steps.meta.outputs.prefix }}/dev-grok-build:latest
+            pi.tags=${{ steps.meta.outputs.prefix }}/dev-pi:${{ steps.meta.outputs.sha }}
+            pi.tags=${{ steps.meta.outputs.prefix }}/dev-pi:latest

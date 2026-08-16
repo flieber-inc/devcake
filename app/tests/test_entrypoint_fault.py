@@ -546,6 +546,8 @@ def test_classify_nonzero_exit(err, fault, status, expected):
     ("codex", ["codex", "exec"],
      ["--json", "-o", "--skip-git-repo-check",
       "--dangerously-bypass-approvals-and-sandbox"]),
+    ("pi", ["pi"],
+     ["--mode", "json", "--no-approve"]),
 ])
 def test_argv_matches_the_documented_invocation(harness, head, doc_flags):
     argv = ep.harness_argv(harness, "PROMPT")
@@ -565,6 +567,7 @@ def test_argv_verbose_is_mandatory_for_claude():
     ("claude-code", ["--permission-mode", "plan"]),
     ("grok-build", ["--permission-mode", "plan"]),
     ("codex", ["--sandbox", "read-only"]),          # codex's read-only substitute
+    ("pi", ["--tools", "read,grep,find,ls"]),       # no native plan mode
 ])
 def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
     argv = ep.harness_argv(harness, "P", plan_mode=True)
@@ -576,7 +579,8 @@ def test_argv_plan_mode_is_read_only_per_harness(harness, plan_flags):
 
 
 @pytest.mark.parametrize("harness,pin", [
-    ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m")])
+    ("claude-code", "--model"), ("grok-build", "--model"), ("codex", "-m"),
+    ("pi", "--model")])
 def test_argv_model_pin_is_omitted_when_empty(harness, pin):
     """An empty DEVCAKE_MODEL means "harness default" — passing an empty pin
     would make every CLI reject the invocation."""
@@ -617,3 +621,42 @@ def test_sigterm_flushes_artifacts_once(monkeypatch):
     assert ei.value.code == 20
     assert sent and sent[0]["error_class"] == "DEV_CRASH"
     assert sent[0]["exit_code"] == 20
+
+
+def test_pi_retry_then_healthy_is_not_a_fault():
+    """A recovered in-process retry must not latch the earlier stopReason=error."""
+    stream = "\n".join([
+        json.dumps({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "stopReason": "error", "errorMessage": "429: stub"}}),
+        json.dumps({"type": "agent_end", "messages": [
+            {"role": "assistant", "content": [], "stopReason": "error",
+             "errorMessage": "429: stub"}], "willRetry": True}),
+        json.dumps({"type": "auto_retry_end", "success": True}),
+        json.dumps({"type": "message_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ACKNOWLEDGED"}],
+            "stopReason": "stop"}}),
+        json.dumps({"type": "agent_end", "messages": [
+            {"role": "assistant",
+             "content": [{"type": "text", "text": "ACKNOWLEDGED"}],
+             "stopReason": "stop"}], "willRetry": False}),
+    ])
+    assert ep.pi_run_fault(stream, 0) is None
+
+
+def test_pi_status_prefix_is_an_exact_three_digit_token():
+    """message[:3].isdigit() is not a status: a timeout must not be 401."""
+    def _pi_err(msg):
+        return json.dumps({"type": "message_end", "message": {
+            "role": "assistant", "content": [],
+            "stopReason": "error", "errorMessage": msg}})
+
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("40100ms deadline exceeded")) is None
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("1234 things failed")) is None
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("120s timeout waiting: HTTP 401 from upstream")) == 401
+    assert ep.harness_api_error_status(
+        "pi", _pi_err("401 Incorrect API key provided")) == 401

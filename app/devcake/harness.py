@@ -93,6 +93,17 @@ HARNESSES: dict[str, Harness] = {
         # strings); repo-level is unused here — never write into the clone
         skills_dir=".agents/skills",
     ),
+    "pi": Harness(
+        image=f"devcake/dev-pi:{_TAG}",
+        # Multi-provider CLI (docs/08): any one stored key is enough.
+        credential_env=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY"],
+        credential_files=[CredentialFile(secret_file="pi-auth.json",
+                                         path_hint="~/.pi/agent/auth.json")],
+        # Reads ~/.pi/agent/skills AND ~/.agents/skills; .agents is the
+        # Agent Skills standard the other templates already use.
+        skills_dir=".agents/skills",
+        experimental=True,
+    ),
 }
 
 

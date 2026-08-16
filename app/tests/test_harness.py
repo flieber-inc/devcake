@@ -31,14 +31,16 @@ def test_dev_type_accepts_exactly_the_registry_ids():
 def test_registry_and_admin_payload_carry_experimental():
     """Picker blast-radius: experimental is a registry flag, not prose."""
     from devcake.api.devtypes_service import list_harnesses
+    launch = {"claude-code", "grok-build", "codex"}
     for name, h in HARNESSES.items():
-        assert h.experimental is False, name
+        want = name not in launch
+        assert h.experimental is want, name
         st = dev_type_status(DevType(name="t", harness_template=name))
-        assert st["harness"]["experimental"] is False
+        assert st["harness"]["experimental"] is want
     payload = run_coro(list_harnesses())
     assert set(payload) == set(HARNESSES)
     for name, row in payload.items():
-        assert row["experimental"] is False, name
+        assert row["experimental"] is (name not in launch), name
 
 
 def test_dev_type_status_credentials_ready(monkeypatch, tmp_path):
@@ -132,6 +134,7 @@ def test_registry_skills_dirs():
     assert HARNESSES["claude-code"].skills_dir == ".claude/skills"
     assert HARNESSES["grok-build"].skills_dir == ".agents/skills"
     assert HARNESSES["codex"].skills_dir == ".agents/skills"
+    assert HARNESSES["pi"].skills_dir == ".agents/skills"
     for name, h in HARNESSES.items():
         if h.skills_dir is None:
             continue

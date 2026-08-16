@@ -6,7 +6,7 @@
 # DevCake Dev harness images — multi-target Dockerfile.
 # Shared `base` stage is built once (BuildKit) and reused by every harness.
 #
-# Targets: base | hello | claude-code | codex | grok-build
+# Targets: base | hello | claude-code | codex | grok-build | pi
 #
 #   docker buildx bake images
 #
@@ -22,6 +22,7 @@ ARG NODE_IMAGE=node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc
 # Pinned harness CLIs (npm view @anthropic-ai/claude-code / @openai/codex).
 ARG CLAUDE_CODE_VERSION=2.1.229
 ARG CODEX_VERSION=0.147.0
+ARG PI_VERSION=0.84.2
 # Toolchain floor (ADR-0023): playwright pinned to the SPA suite's family
 # (admin/spa/package.json playwright-core) so the whole repo speaks one
 # browser stack; python doc/spreadsheet libs pinned like the entrypoint deps.
@@ -290,3 +291,21 @@ RUN bash /tmp/grok-install.sh && rm /tmp/grok-install.sh
 # base's PATH already carries ~/.local/bin and ~/.npm-global/bin (ADR-0023)
 ENV PATH="/home/dev/.grok/bin:${PATH}" \
     DEVCAKE_HARNESS=grok-build
+
+# ── pi (Mario Zechner / Earendil coding agent) ──────────────────────────────
+FROM base AS pi
+
+LABEL org.opencontainers.image.title="devcake-dev-pi"
+
+ARG PI_VERSION
+
+# Node lives in base; HOME=/root for the same .npmrc reason as claude.
+# --ignore-scripts: pi's own install docs; it does not need lifecycle scripts.
+RUN HOME=/root npm install -g --ignore-scripts \
+        "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+    && HOME=/root npm cache clean --force
+
+USER dev
+ENV DEVCAKE_HARNESS=pi \
+    PI_SKIP_VERSION_CHECK=1 \
+    PI_TELEMETRY=0

@@ -74,8 +74,9 @@ class GitLabIssuesAdapter:
             except ValueError:
                 self._path = ""
         self._label_names: set[str] = set()  # upper names known on the project
-        self._relations_probed = False
-        self._relations_supported = False
+        # None = unprobed (capabilities True so the domain gate will try);
+        # True/False latched on create_relation.
+        self._relations_write: bool | None = None
 
     def _headers(self) -> dict[str, str]:
         if not self._token.strip():
@@ -136,8 +137,7 @@ class GitLabIssuesAdapter:
             self._team_ref = ref
             self._path = parse_team_ref(ref)
             self._label_names.clear()
-            self._relations_probed = False
-            self._relations_supported = False
+            self._relations_write = None
 
     def _label_set(self, issue: dict) -> set[str]:
         raw = issue.get("labels") or []
@@ -411,13 +411,13 @@ class GitLabIssuesAdapter:
                       "link_type": "is_blocked_by"})
         except GitLabHTTPError as e:
             if e.status_code == 409:
-                self._relations_supported = True
+                self._relations_write = True
                 return
             if e.status_code == 403:
-                self._relations_supported = False
+                self._relations_write = False
                 return
             raise
-        self._relations_supported = True
+        self._relations_write = True
 
     async def _fetch_all_labels(self) -> list[dict]:
         from .._toolkit import paginate_rest
@@ -571,7 +571,12 @@ class GitLabIssuesAdapter:
             return PMOHealth(ok=False, workspace=self._path, detail=str(e))
         present = {(lb.get("name") or "").upper() for lb in labels}
         managed = {n.upper() for n in ALL_LABELS}
-        rel = "on" if self._relations_supported else "off"
+        if self._relations_write is None:
+            rel = "unprobed"
+        elif self._relations_write:
+            rel = "on"
+        else:
+            rel = "off"
         return PMOHealth(
             ok=True, workspace=self._path,
             managed_labels_present=len(present & managed),
@@ -585,7 +590,8 @@ class GitLabIssuesAdapter:
             project_labels_supported=False,
             attachment_max_bytes=10 * 1024 * 1024,
             native_label_swap_atomic=True,
-            relations_supported=self._relations_supported,
+            # Unprobed means "try the write" — False only after a 403.
+            relations_supported=self._relations_write is not False,
             attachments_supported=True,
             global_ids=False,
         )

@@ -391,5 +391,6 @@ class GitHubIssuesAdapter:
             native_label_swap_atomic=True,
             relations_supported=True,
             attachments_supported=False,
+            comment_max_chars=65536,
             global_ids=False,
         )

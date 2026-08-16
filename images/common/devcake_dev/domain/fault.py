@@ -393,9 +393,14 @@ def _qwen_api_error_bodies(out: str, ev=None) -> list[str]:
     bodies = []
 
     def _take(text):
-        if not isinstance(text, str) or "[API Error:" not in text:
+        if not isinstance(text, str):
             return
-        for m in _QWEN_API_ERROR.finditer(text):
+        # Whole-field match: the CLI puts the wrapper in result/error by
+        # itself. A model answer that quotes "[API Error: 401 …]" is not
+        # a credential fault.
+        stripped = " ".join(text.split())
+        m = _QWEN_API_ERROR.fullmatch(stripped)
+        if m:
             body = " ".join(m.group(1).split())
             if body and body not in bodies:
                 bodies.append(body)

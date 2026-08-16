@@ -251,16 +251,16 @@ def test_health_probe_is_read_only():
     assert not any(c.startswith(("POST", "PUT", "PATCH")) for c in r.calls)
 
 
-def test_capabilities_fail_closed_until_a_write():
+def test_capabilities_try_writes_until_a_403():
     caps = make_pmo().capabilities()
     assert caps.projects_supported is False
-    assert caps.relations_supported is False
+    assert caps.relations_supported is True
     assert caps.attachments_supported is True
     assert caps.global_ids is False
     assert caps.native_label_swap_atomic is True
 
 
-def test_health_probe_is_read_only_and_does_not_claim_write_support():
+def test_health_probe_is_read_only_and_reports_unprobed():
     r = Router()
     r.links[1] = [{
         "id": 84, "iid": 2, "project_id": 4,
@@ -269,9 +269,19 @@ def test_health_probe_is_read_only_and_does_not_claim_write_support():
     pmo = make_pmo(r)
     h = run(pmo.health_probe("o/r"))
     assert h.ok
-    assert pmo.capabilities().relations_supported is False
-    assert "relations=off" in (h.detail or "")
+    assert pmo.capabilities().relations_supported is True
+    assert "relations=unprobed" in (h.detail or "")
     assert not any(c.startswith(("POST", "PUT", "PATCH")) for c in r.calls)
+
+
+def test_domain_gate_attempts_unprobed_gitlab_writes():
+    """The flag must not start False — every create_relation site sits
+    behind MissionManager._relations_supported()."""
+    from devcake.domain.orchestrator.manager import MissionManager
+    pmo = make_pmo()
+    mgr = MissionManager.__new__(MissionManager)
+    mgr.pmo = pmo
+    assert mgr._relations_supported() is True
 
 
 def test_blocked_by_reads_gitlab_list_shape():
@@ -288,7 +298,7 @@ def test_blocked_by_reads_gitlab_list_shape():
     pmo = make_pmo(r)
     m = run(pmo.get(MissionRef("1", "issue")))
     assert m.blocked_by == ["2"]
-    assert pmo.capabilities().relations_supported is False
+    assert pmo.capabilities().relations_supported is True
 
 
 def test_create_relation_403_is_unsupported_not_a_wedge():

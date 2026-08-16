@@ -710,6 +710,18 @@ def test_qwen_quoted_api_error_in_assistant_text_is_not_a_fault():
     assert ep.harness_api_error_status("qwen-code", stream) is None
 
 
+def test_qwen_quoted_api_error_in_result_text_is_not_a_fault():
+    """The result field is the model's final answer — a quote is not a wrapper."""
+    stream = json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": ('fixed the check that logged '
+                   '"[API Error: 401 Incorrect API key provided]"'),
+        "num_turns": 1,
+    })
+    assert ep.qwen_run_fault(stream, 0) is None
+    assert ep.harness_api_error_status("qwen-code", stream) is None
+
+
 def test_qwen_result_api_error_wrapper_is_still_a_fault():
     stream = json.dumps({
         "type": "result", "subtype": "success", "is_error": False,

@@ -177,9 +177,11 @@ class MissionManager:
             return 25 * 1024 * 1024
 
     def _relations_supported(self) -> bool:
-        """Port flag — False means skip create_relation (do not abort)."""
+        """Skip create_relation only after the adapter has proven it cannot
+        write. Unprobed / missing caps must attempt the write — GitLab
+        latches False on 403, and a False start would skip every site."""
         try:
-            return bool(self.pmo.capabilities().relations_supported)
+            return self.pmo.capabilities().relations_supported is not False
         except Exception:  # noqa: BLE001 — missing caps must not drop Linear/Gitea edges
             return True
 

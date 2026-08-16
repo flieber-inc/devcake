@@ -324,7 +324,7 @@ Same forge-issue profile (issue-only, label stages, open→backlog, markdown com
 | Labels | PUT issue `labels=A,B` replaces the set |
 | Feed | issue notes; `` `devcake:v1` `` byte-exact |
 | Attachments | POST `/projects/:id/uploads`; download `GET /api/v4/projects/:id/uploads/:secret/:filename` (web `/uploads/…` path is **403** with a PAT) |
-| Relations | `blocks` / `is_blocked_by` is **Premium**. Listing links is Free (top-level `iid` + `link_type`). Free gitlab.com → 403 on create: `create_relation` no-ops and latches `relations_supported=False` (must not escape finalize). Row 14 of the contract battery records SKIP, not a vanished pass. |
+| Relations | `blocks` / `is_blocked_by` is **Premium**. Listing links is Free (top-level `iid` + `link_type`). Unprobed starts as "try the write" so the domain gate actually calls `create_relation`. Free gitlab.com → 403: no-op and latch `relations_supported=False`. Health reports `unprobed` / `on` / `off`. Row 14 of the contract battery records SKIP, not a vanished pass. |
 
 `pmo_id` is the issue **iid**. `global_ids=False`. Separate PMO PAT from any GitLab *forge* repo-card token. The admin PMO card and New Mission dialog show `operator_note` from the registry when this system is selected.
 
@@ -337,7 +337,7 @@ Same forge-issue profile (issue-only, label stages, open→backlog, markdown com
 | Status | `open`→backlog; `closed`→done; cancel footer in body → canceled |
 | Labels | PUT `/issues/{n}/labels` replaces the set |
 | Feed | issue comments; `` `devcake:v1` `` byte-exact |
-| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. Feed chokepoint posts inline; activity repo still holds transcripts/plans. |
+| Attachments | **No official API.** `attachments_supported=False` (founder option B). `upload_attachment` raises. `comment_max_chars=65536`. Feed chokepoint keeps markers and truncates to that cap — never a raw dump the vendor will 422. |
 | Relations | Works on personal repos if `issue_id` is the global numeric id. Duplicate → 422 `already been taken`. |
 
 `pmo_id` is the issue **number**. `/issues` includes PRs — filtered. Separate PMO PAT from any GitHub *forge* repo-card token. Registry `operator_note` explains the attachment limit in the SPA.

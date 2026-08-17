@@ -21,19 +21,15 @@ Changing a Dev Type's model does not add a template.
 | `claude-code` | Claude Code (`claude`) | CLI default | `judgment` pins `claude-fable-5`; `steward` pins `claude-opus-5` (ADR-0033 D10) |
 | `grok-build` | Grok Build (`grok`) | Registry default `grok-4.5` | `implementer` leaves the model empty and receives that registry default |
 | `codex` | Codex CLI (`codex`) | CLI default | *(none seeded)* |
-| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | *(none seeded)* — **experimental** |
-| `opencode` | OpenCode (`opencode`, `opencode-ai` 1.18.18) | CLI default (multi-provider) | *(none seeded)* — **experimental** |
-| `qwen-code` | Qwen Code (`qwen`, `@qwen-code/qwen-code` 0.21.12) | CLI default (multi-provider) | *(none seeded)* — **experimental** |
+| `pi` | Pi (`pi`, `@earendil-works/pi-coding-agent` 0.84.2) | CLI default (multi-provider) | *(none seeded)* |
+| `opencode` | OpenCode (`opencode`, `opencode-ai` 1.18.18) | CLI default (multi-provider) | *(none seeded)* |
+| `qwen-code` | Qwen Code (`qwen`, `@qwen-code/qwen-code` 0.21.12) | CLI default (multi-provider) | *(none seeded)* |
 
-**Launch-supported** templates are `claude-code`, `grok-build`, and `codex`.
-`pi`, `opencode`, and `qwen-code` are **experimental**: they ship in-tree so
-they can be configured and dispatched, but they have not passed a live
-operator battery. Expect dialect, stream, and credential-shape churn.
-
-`Harness.experimental` is a registry flag (`GET /api/v1/harnesses`, the
-admin picker). Launch-supported templates leave it false. A later dialect
-that has not passed a live operator battery must set it true — prose in this
-document is not the blast-radius control.
+Every registry template is **launch-supported**. The bake verb is the same
+for all six: compile the image, run the hermetic probe matrix, write a
+receipt. Staffing is fail-closed on that receipt. `DevType.cli_version`
+accepts a stored semver on every template (empty = house ARG). Hello is
+not a harness template and is not gated.
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
@@ -64,9 +60,10 @@ Each template defines: base image, invocation pattern, plan-mode mapping, creden
 > ARG re-runs the capture rig, same as the other house pins. The bake verb
 > also runs the hermetic drift probe (`scripts/harness_probe/`) and writes a
 > row-level receipt. Grok PLAN is flag-verified but not exercised
-> end-to-end (§3). §8's local-backend recipes are operator guidance, not a
-> guarantee for every model. Treat each statement's own version and caveat
-> as its verification boundary.
+> end-to-end (§3). §8's **adaptor contract** (CLI + base URL → env, argv,
+> and files) is normative; the per-harness recipe table below it is measured
+> guidance at the versions it names, not a guarantee for every model. Treat
+> each statement's own version and caveat as its verification boundary.
 >
 > Scenario captures of CLI stream shapes: `app/tests/fixtures/harness_streams/`
 > (README: how they are taken).
@@ -112,7 +109,7 @@ codex exec "$PROMPT" --json -o /workspace/out/last_message.txt \
 - Token usage **verified live**: the final `turn.completed` event carries `usage = {input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}` — those four keys and **no others**, so a total must be summed, never read. Present even when the turn produced nothing. On `codex exec resume` these are **cumulative — now measured, not just documented** (`codex_resume_nudge_*` captures: the resumed `turn.completed` reports both invocations' tokens; re-measured at the 0.147.0 recapture — openai/codex#35621's restored-usage replay skip does NOT change the final `turn.completed` aggregation), which is why `RESUME_SPECS["codex"].usage_cumulative` makes the ADR-0022 token merge last-wins within a codex resume chain instead of summing. Headless resume composes as `codex exec resume <thread_id> "$NUDGE" --json -o …`; the resumed stream keeps the same `thread_id` and replays no history. No cost field in the stream → `cost_usd` is omitted (never guessed).
 - Secondary source **verified live**: rollout files at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl` contain `token_count` events with `total_token_usage` (incl. `total_tokens`) and `last_token_usage`; the `thread_id` from `thread.started` locates the file.
 
-### `pi` (experimental)
+### `pi`
 ```bash
 pi --mode json --no-approve "$PROMPT"
 ```
@@ -124,7 +121,7 @@ pi --mode json --no-approve "$PROMPT"
 - Token report: last `usage` on `message_update` / `message_end` (`input` / `output` / `cacheRead` / `cacheWrite` / `totalTokens`) → TokenReport v1 `source=session_json`. Capture-verified at 0.84.2.
 - Skills: `~/.agents/skills` (also reads `~/.pi/agent/skills`).
 
-### `opencode` (experimental)
+### `opencode`
 ```bash
 opencode run --format json --auto "$PROMPT"
 ```
@@ -134,13 +131,13 @@ opencode run --format json --auto "$PROMPT"
 - Token report: last `step_finish.part.tokens` + `part.cost` → TokenReport v1 `source=session_json`.
 - Skills: `~/.agents/skills` (also `.opencode/skills` and `~/.claude/skills`).
 
-### `qwen-code` (experimental)
+### `qwen-code`
 ```bash
 qwen -p "$PROMPT" --output-format stream-json --yolo
 ```
 - **Pinned** `@qwen-code/qwen-code@0.21.12`. Gemini-CLI fork: `-p` is headless; `--output-format stream-json` emits JSONL (`system/session_start`, `assistant`, terminal `{type: result}` with `result` / `usage` / `session_id` — [headless docs](https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/)). `--yolo` auto-approves tools (the Dev is the sandbox). `--verbose` is **not** required (unlike Claude).
 - PLAN uses `--approval-mode plan` (native read-leaning mode; `--yolo` is omitted so it cannot override). Resume (`--resume` / `--continue`) is **not** in `RESUME_SPECS` until a capture pair lands.
-- Multi-provider: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is enough for `credentials_ready`. DashScope / Coding Plan also need `OPENAI_BASE_URL` (or an uploaded `qwen-settings.json` with `selectedType`) — put those keys in `secret_env`, not as the sole stored credential. Point captures at the stub via `OPENAI_BASE_URL`.
+- Multi-provider: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` is enough for `credentials_ready`. DashScope / Coding Plan also need a backend URL (or an uploaded `qwen-settings.json` with `selectedType`) — put those keys in `secret_env`, not as the sole stored credential. Aim the stub / OpenRouter / vLLM via `aim()` (`~/.qwen/settings.json` `modelProviders`, §8) — leftover `OPENAI_BASE_URL` is a fault on 0.21.12.
 - Token report: last `result.usage` → TokenReport v1 `source=session_json`. Capture-verified at 0.21.12: `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `total_tokens` (plus `duration_ms`).
 - Skills: `~/.qwen/skills` (also project `.qwen/skills` — unused here; never write into the clone).
 - `--max-session-turns` exits **53**; `--max-wall-time` / `--max-tool-calls` exit **55**. Both map to `DEV_TURN_BUDGET`.
@@ -203,7 +200,7 @@ Credential requirements are **registry-driven** (`HARNESSES` in `app/devcake/har
 | `codex` | `CODEX_API_KEY` | Device-code OAuth → secret file **`codex-auth.json`** → `~/.codex/auth.json` in-container. |
 | `pi` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`pi-auth.json`** → `~/.pi/agent/auth.json`. No headless device-code (`/login` is interactive). |
 | `opencode` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`opencode-auth.json`** → `~/.local/share/opencode/auth.json`. `/connect` is interactive. |
-| `qwen-code` | `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` | Optional uploaded **`qwen-settings.json`** → `~/.qwen/settings.json`. DashScope / Coding Plan need `OPENAI_BASE_URL` or `selectedType` in that file. `/auth` is interactive. |
+| `qwen-code` | `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` | Optional uploaded **`qwen-settings.json`** → `~/.qwen/settings.json`. A non-default backend is `aim()` (`modelProviders` + `selectedType`, §8) — leftover `OPENAI_BASE_URL` is a fault. `/auth` is interactive. |
 
 Uploaded credential files (when the harness registry declares them) live at `/data/secrets/{dev_type}/{secret_file}` (0600); their content is delivered to the Dev in the run spec (`runspec.get`, `09-messaging.md` §3) and the entrypoint writes it to the harness-expected path (0600). Auth failure at harness launch ⇒ exit 12 ⇒ the per-Dev-Type circuit breaker (`15-errors-and-retries.md`, `DEV_AUTH`).
 
@@ -341,26 +338,49 @@ mission-step scripts (`app/devcake/skills/README.md`).
 
 ## 8. Running against local / OpenAI-compatible backends
 
-A template owns an invocation, not a model (§1), so any harness can be pointed at a
-local or OpenAI-compatible backend through its own base-URL and API-key environment
-variables; DevCake neither knows nor validates which backend a Dev Type reaches.
-What every template *does* assume is that the model **actually tool-calls** — outside
-PLAN a Dev produces its deliverable by writing files, so a model that answers in
-prose yields a run that exits 0 having done nothing.
+A template owns an invocation, not a model (§1). Pointing a Dev at OpenRouter,
+a local vLLM / llama.cpp box, or the hermetic probe stub is the same job.
 
-**The three templates are configured by different mechanisms**, which is the part
+**The adaptor’s job is: given this CLI and this base URL, produce the env,
+argv, and files that make the process talk to that URL.**
+
+That recipe lives next to `HarnessDialect` (docs/16 H1), not inside it. The
+dialect owns argv, render, parse, fault, and session identity. The adaptor
+owns aiming. The stub is a fake model backend (wire protocols only) — it
+must not import a dialect. `live.py` must not grow a per-template if-ladder
+that duplicates this seam. DevCake neither knows nor validates which backend
+a Dev Type reaches; the operator supplies the URL (or the probe supplies the
+stub). What every template *does* assume is that the model **actually
+tool-calls** — outside PLAN a Dev produces its deliverable by writing files,
+so a model that answers in prose yields a run that exits 0 having done nothing.
+
+The measured recipes below are how each CLI is aimed *today*. The
+operator-facing control is the Dev Type **Backend base URL** field plus
+the key they already paste (`11-admin-panel.md` §3). Empty URL = vendor
+default and **no files**. A non-empty URL is handed to `aim()` in the Dev
+entrypoint — env, extra argv, and HOME files — automatically. A later CLI
+version may move the same fact from an env var into `config.toml`; the
+adaptor writes whatever that version honors. Not a freeform editor of
+harness internals.
+
+**These are configured by different mechanisms**, which is the part
 that surprises operators. `codex` takes the whole backend definition as `-c`
-overrides in the per-Mission-Type extra CLI args. `claude-code` and `grok-build` take
-**no CLI args at all** and are steered entirely by environment variables, delivered
-through the Dev Type's `secret_env` names plus the GUI harness-secret store
-(`11-admin-panel.md` §3). The model comes from the Dev Type's `model` field in all
-three cases (`$DEVCAKE_MODEL`, §1).
+overrides in the per-Mission-Type extra CLI args. `claude-code` and
+`grok-build` (house `0.2.112`) take **no CLI args at all** and are steered
+entirely by environment variables, delivered through the Dev Type's
+`secret_env` names plus the GUI harness-secret store
+(`11-admin-panel.md` §3). `pi` and `opencode` take a HOME-side config file
+plus the key in env. The model comes from the Dev Type's `model` field
+in all cases (`$DEVCAKE_MODEL`, §1) — `opencode` pins it as `devcake/<id>`.
 
 | harness | how the backend is selected | base-URL shape | extra CLI args |
 |---|---|---|---|
 | `claude-code` | env `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` | **no `/v1` suffix** — `http://<host>:8000` | **none** |
-| `grok-build` | env `GROK_MODELS_BASE_URL` + `XAI_API_KEY` | **`/v1` suffix required** — `http://<host>:8000/v1` | **none** |
+| `grok-build` | house `0.2.112`: env `GROK_MODELS_BASE_URL` + `XAI_API_KEY`. **`1.0.4`:** `~/.grok/config.toml` `[model.<id>]` with `base_url` + `env_key = "XAI_API_KEY"` (env-only is not enough — measured 2026-08-16) | **`/v1` suffix required** — `http://<host>:8000/v1` | **none** |
 | `codex` | `-c` overrides (extra CLI args) + env `CODEX_API_KEY` | `/v1` suffix, inside `-c …base_url` | the whole `-c` block |
+| `pi` | `~/.pi/agent/models.json` provider `devcake` + env `OPENAI_API_KEY` | `/v1` suffix, inside `baseUrl` | `--provider devcake` |
+| `opencode` | `~/.config/opencode/opencode.json` custom provider `devcake` (`npm: @ai-sdk/openai-compatible`, `options.baseURL` + `apiKey: "$OPENAI_API_KEY"`) + env `OPENAI_API_KEY`. Leftover `OPENAI_BASE_URL` is a fault (measured 2026-08-16). | `/v1` suffix, inside `options.baseURL` | **none** — pin `DevType.model` as `devcake/<id>` |
+| `qwen-code` | `~/.qwen/settings.json` `security.auth.selectedType: openai` + `modelProviders.openai[]` (`id`, `envKey: OPENAI_API_KEY`, `baseUrl`) + env `OPENAI_API_KEY`. Leftover `OPENAI_BASE_URL` is a fault; providers without `selectedType` is also a fault (measured 2026-08-16). | `/v1` suffix, inside `baseUrl` | **none** |
 
 **The `/v1` asymmetry is load-bearing and easy to get wrong.** Each CLI documents its
 own half; observed at claude 2.1.210 (re-verified 2.1.229) and grok 0.2.112:
@@ -398,7 +418,7 @@ codex `-c` block verbatim — is `11-admin-panel.md` §3.
 
 1. Add a `HARNESSES` entry in `app/devcake/harness.py` (`image`, `credential_env`, `credential_files`, optional `oauth` flow, optional `skills_dir` — the home-relative dir the CLI reads personal skills from; leave unset if unsupported). `DevType.harness_template` validates against that dict (no second Literal).
 2. Add a target to `images/Dockerfile` (bake `ENV DEVCAKE_HARNESS=<id>` as fallback) and a matching target in `docker-bake.hcl` (group `images` / `all`).
-3. Add a `HarnessDialect` implementation in `images/common/devcake_dev/harness/dialects.py` (argv, render, parse, fault, session identity — docs/16 H1). Unknown ids fail closed; do not add `if harness ==` in the entrypoint.
+3. Add a `HarnessDialect` implementation in `images/common/devcake_dev/harness/dialects.py` (argv, render, parse, fault, session identity — docs/16 H1). Unknown ids fail closed; do not add `if harness ==` in the entrypoint. Add the matching **adaptor** (§8): given this CLI and a base URL, produce the env, argv, and files that make the process talk to that URL. The hermetic probe and an operator OpenRouter / vLLM Dev share that recipe.
 4. Capture the fixture matrix (`scripts/harness_capture/`) and add rows in `test_harness_captures.py`. Resume stays off until a committed `<id>_resume_nudge` pair lands in `RESUME_SPECS`.
 5. Run the M1 hello-world DAG with the new image, then an ONBOARD end-to-end on that harness.
 6. Update the token-extraction section (§5) and this document.

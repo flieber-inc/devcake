@@ -3,6 +3,11 @@
 The app registry (`devcake.harness.HARNESSES`) owns image, credentials,
 OAuth, and skills_dir. This module owns argv, render, parse, fault, and
 session identity. Unknown ids fail closed — never fall through to Claude.
+
+Aiming a CLI at a base URL (probe stub, OpenRouter, vLLM) is the
+**adaptor**, not this protocol: given this CLI and this base URL, produce
+the env, argv, and files that make the process talk to that URL
+(docs/08 §8).
 """
 
 from __future__ import annotations

@@ -30,8 +30,8 @@ Product voice and pitch variants: [`docs/17-positioning.md`](docs/17-positioning
 ## Why DevCake?
 
 The deepest AI-assisted work today happens in CLI harnesses — Claude Code,
-Grok Build, Codex (launch-supported; Pi, OpenCode, and Qwen Code are
-**experimental**) — with an expert invisibly orchestrating each session:
+Grok Build, Codex, Pi, OpenCode, and Qwen Code — with an expert invisibly
+orchestrating each session:
 curating context, sizing the task, sequencing the work, verifying the output.
 DevCake mechanizes that orchestration for board-shaped work. It is a
 **meta-harness** — a CLI agent orchestrator that staffs those harnesses rather

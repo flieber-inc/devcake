@@ -195,7 +195,8 @@ Card list + editor (the harness combobox is **authoritative**, `08-harness-templ
 - **Runtime & credentials block** (derived): registry image for the selected harness, readiness badge, per-requirement checklist — harness secret VALUES via `harness-secrets/{VAR}` (✓ from `secrets-check`), credential files via upload (`POST …/credentials` → `/data/secrets/{dev_type}/`). Flipping the combobox previews requirements; amber "unsaved harness change" until Save.
 - **Connect via OAuth…** — per **Dev Type** (`POST /oauth/dev-types/{name}/start`), shown when the saved harness has a device-code flow; the credential lands in that Dev Type's `/data/secrets/{name}/` dir (two Dev Types on one harness = two accounts).
 - **Clear secrets** (section ⋯ menu on **Dev Types**, **PMO**, and **Repositories**) — same multi-select picker over `GET /secrets/inventory`, then a **ConfirmDialog** (yes/no) whose body summarizes counts and holds **Turn off mission intake after this** (default **on** — uncheck to leave intake running). Confirm calls `POST /secrets/clear`. Full inventory on every page; **context reorders** groups (and connection rows) so page-relevant secrets float first (Dev Types → harness + OAuth files; PMO → `pmo` connections; Repos → `repo` connections). Master **Select all** / **Deselect all** at the top of the list. Dev credentials: in-flight containers keep injected values; connection secrets: app drops them immediately via adapter reload. Profile snapshots / internal-forge tokens are not listed. After clear: draft reload + SecretField remount; if intake was paused, the sidebar master switch updates immediately via health state.
-- **MCP servers**: free-text area, one CLI command per line (syntax hint per selected template, `08-harness-templates.md` §7), with the warning: *"These commands run inside the Dev container before the agent starts and are arbitrary code execution by design."* Execution semantics per `07-dev-runtime.md` §5 (failure or 300 s per-command timeout ⇒ run fails with `DEV_MCP_SETUP` + the command and stderr in the run error).
+- **Entrypoint script** (was “MCP servers”): free-text shell for the Dev container. **Default (override off):** lines are additive setup after aiming (MCP add, PATH), then the harness CLI starts. **Override on:** the default CLI is not started — this text is the whole process; you must launch an agent yourself and pass `$DEVCAKE_MODEL` / extras. Same trust class as before: arbitrary code execution by design (`07-dev-runtime.md` §5; failure ⇒ `DEV_MCP_SETUP`).
+- **Backend base URL**: empty = vendor default (no aim files). Non-empty = `aim()` writes env, extra argv, and HOME files for that CLI (`08` §8). Claude omits `/v1`; others include it. When a URL is set and a stored OAuth/credential file is still present, the editor warns — clear it if the Dev is dedicated to the aimed backend.
 - **Secret env vars**: free-text area, one NAME per line (UPPER_SNAKE_CASE; the draft validates shape and duplicates inline), plus one paste field per listed name (values via `harness-secrets/{VAR}`; the paste widget's ✓/✗ from `secrets-check`). `GET /api/v1/dev-types` additionally exposes `secret_env_present` per declared name — the headless provisioning check. Delivered into the run's env so MCP setup commands can reference `$VAR` without a value ever entering config (ADR-0011). Presence never affects `credentials_ready`, but a missing value **referenced** by an MCP setup command gates dispatch (`14-security.md` §8).
 - **Skills**: **tri-state chips** from the skill-store catalog (`SkillModeChips` — click-cycle: off → **Available** → **Required** → off). **Available** installs the skill (consult-optional; model description-match). **Required** installs it and soft-forces a “must consult” prompt append (`DevType.skills_required` ⊂ `skills` — instructional, not kernel-enforced). Enabled whenever the selected harness declares a `skills_dir` in the registry (all three current harnesses do — `08-harness-templates.md` §7a); a harness without one renders the chips disabled with a hint and dispatch skips with a warning. A selected-but-missing skill renders as the standard red ✕ stale chip and is skipped at dispatch with a warning. Skills are domain modules, not mission scripts (**ADR-0016**, `app/devcake/skills/README.md`).
 
@@ -217,27 +218,17 @@ Below the global matrix, **one override block per configured PMO instance** (ADR
 
 ### Pointing a Dev Type at a local / OpenAI-compatible backend
 
-Four click targets, and **which ones you use depends on the harness** — which
-mechanism each template reads is the template contract
-([`08-harness-templates.md`](08-harness-templates.md) §8):
+The Dev Type **Backend base URL** field is the control. Empty = the vendor
+default (Anthropic / xAI / OpenAI / …) and **no adaptor files**. A non-empty
+URL is handed to `aim()` in the Dev (`08` §8): env, extra argv, and HOME
+files for that CLI. Paste the key you already store on Runtime & credentials.
+Do not hand-edit `auth.json` / `config.toml` / extra CLI `-c` blocks for this.
 
 | where | what goes there |
 |---|---|
-| **Dev Types → model** | the backend's model id exactly as its `/v1/models` reports it (rides as `DEVCAKE_MODEL` → the harness's model flag) |
-| **Dev Types → Secret env vars** | the NAMES the CLI reads: `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (claude-code), `GROK_MODELS_BASE_URL` (grok-build) |
-| **Dev Types → Runtime & credentials** / secret-env paste fields | the VALUES (`PUT /harness-secrets/{VAR}`) — the registry keys `XAI_API_KEY` / `CODEX_API_KEY` have their own checklist rows |
-| **Assignments → extra CLI args** | **codex only**: the whole `-c model_provider=… -c model_providers.<id>.base_url=…` block, in **every** Mission Type row routed to that Dev Type |
-
-- **claude-code and grok-build need no extra CLI args at all** — leave the textbox empty; the backend is selected entirely by env vars.
-- **The base-URL shape differs**: `ANTHROPIC_BASE_URL` takes **no** `/v1` suffix; `GROK_MODELS_BASE_URL` **requires** it. Getting this backwards is the common failure.
-- A claude-code Dev Type configured this way shows **"no credentials configured"** on the Devs card — `credentials_ready` only checks the registry keys (§3, Dev Types). Advisory only; it gates nothing.
-**The codex block.** codex takes its whole backend definition as `-c` overrides,
-pasted into the extra-CLI-args textbox of **every** Mission Type routed to that Dev
-Type (the args are per Mission Type, not per Dev Type — §3):
-
-```
--c model_provider=vllm -c model_providers.vllm.name=vLLM -c model_providers.vllm.base_url=http://<host>:8000/v1 -c model_providers.vllm.env_key=CODEX_API_KEY -c model_providers.vllm.wire_api=responses -c model_context_window=<max_model_len> -c model_auto_compact_token_limit=<~80% of it>
-```
+| **Dev Types → Backend base URL** | origin the CLI should talk to. Claude: **no** `/v1` suffix. Everyone else: **include** `/v1`. |
+| **Dev Types → model** | the backend's model id exactly as its `/v1/models` reports it (`opencode`: `devcake/<id>`) |
+| **Dev Types → Runtime & credentials** | the VALUES (`PUT /harness-secrets/{VAR}`) — `XAI_API_KEY` / `CODEX_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `OPENAI_API_KEY` |
 
 **Clear a stale OAuth credential file.** If the Dev Type has a `grok-auth.json` or
 `codex-auth.json` from an earlier device-code login it is still delivered to the

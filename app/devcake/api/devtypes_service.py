@@ -104,7 +104,7 @@ async def list_harnesses():
                    "skills_dir": h.skills_dir,
                    "experimental": h.experimental,
                    "house_cli_version": HOUSE_PINS.get(name, ""),
-                   "cli_pin_allowed": name in LAUNCH_SUPPORTED and not h.experimental}
+                   "cli_pin_allowed": name in LAUNCH_SUPPORTED}
             for name, h in HARNESSES.items()}
 
 

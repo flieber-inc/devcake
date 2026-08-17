@@ -130,10 +130,12 @@ async def _launch_steward(mgr, dev_type: DevType, *, duty: str,
 
 async def dispatch_steward(mgr, dev_type: DevType, missions: list[Mission],
                            context_stale=frozenset(),
-                           context_omit=frozenset()) -> Run:
+                           context_omit=frozenset()) -> Run | None:
     """Dispatch the RELATIONS steward: a Dev whose only job is proposing
     missing blocked-by edges. No PMO writes at dispatch (no status, no
-    labels) — finalize_steward validates and applies whatever it proposes."""
+    labels) — finalize_steward validates and applies whatever it proposes.
+    Returns None when the shared launch chokepoint skips (unstaffed /
+    unusable workspace base) — same contract as discovery."""
     from ...prompts import STEWARD_MISSION_CAP, steward_prompt
     eligible = [m for m in missions
                 if m.pmo_kind == "issue" and m.status not in ("done", "canceled")
@@ -340,12 +342,13 @@ async def apply_steward_edges(mgr, edges: list) -> tuple[int, int]:
 async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]:
     """The Dev is advisory; the app is the gatekeeper (the
     apply_steward_edges precedent, ADR-0033 D5). Validate every route
-    against the LIVE board and feed-counted budgets, copy finding text from
-    the source run record — verbatim transport is structural, steward text
-    never lands beyond its one-line "because" — deliver one marked comment
-    per recipient, receipt a batch only when it was *dispositioned*
-    (delivered, or deliberately routed nowhere / a terminal reject), and
-    drop the sweep-gate label once a source has nothing pending.
+    against the LIVE board and delivery markers (posted − receipted
+    arithmetic), copy finding text from the source run record — verbatim
+    transport is structural, steward text never lands beyond its one-line
+    "because" — deliver one marked comment per recipient, receipt a batch
+    only when it was *dispositioned* (delivered, or deliberately routed
+    nowhere / a terminal reject), and drop the sweep-gate label once a
+    source has nothing pending.
     Transient holds (unreadable feed, failed post, routing toggle off)
     write no ``to=-`` — the sweep re-drives. A recipient past the
     full-read page ceiling is NOT transient (feeds only grow): terminal

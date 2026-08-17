@@ -37,8 +37,8 @@ def _svc_setup(tmp_path, *, src_feed_bodies=(), routing=True):
     svc = StewardService(AppConfig(), {"steward": dt}, mgr)
     calls = []
 
-    async def fake_dispatch(dt_, fam, pending):
-        calls.append((sorted(fam.by_id), dict(pending)))
+    async def fake_dispatch(dt_, fam, pending, **kw):
+        calls.append((sorted(fam.by_id), dict(pending), kw))
         return object()   # a dispatched run
     mgr.dispatch_steward_discovery = fake_dispatch
     return pmo, mgr, svc, calls, [src, other]
@@ -49,7 +49,7 @@ def test_dispatches_one_family_and_clears_served(tmp_path):
     mgr._discoveries_pending.add("src")
     run_coro(svc.maybe_dispatch_discovery(missions))
     assert len(calls) == 1
-    fam_ids, pending = calls[0]
+    fam_ids, pending, _kw = calls[0]
     assert "src" in fam_ids
     assert pending == {"src": [(2, 1)]}
     assert mgr._discoveries_pending == set()
@@ -164,7 +164,7 @@ def test_discovery_and_relations_share_one_lock(tmp_path):
     rel = []
     gate = asyncio.Event()
 
-    async def slow_disc(dt_, fam, pending):
+    async def slow_disc(dt_, fam, pending, **kw):
         calls.append("d")
         await gate.wait()
         return object()
@@ -188,6 +188,50 @@ def test_discovery_and_relations_share_one_lock(tmp_path):
 
     run_coro(both())
     assert "d" in calls
+
+
+def test_discovery_forwards_context_stale_and_omit(tmp_path):
+    """PLAN_MEMORY §3.5 / ADR-0033 gate honesty: the discovery lane shares
+    `_context_gate` with relations and Run-now. Stale/omit sets must ride
+    into dispatch so launch marks memory mounts and drops omitted cards —
+    computing them then discarding them left discovery mounts dishonest
+    relative to the gate that just ran."""
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    seen: list[dict] = []
+
+    async def fake_dispatch(dt_, fam, pending, **kw):
+        seen.append(kw)
+        calls.append(1)
+        return object()
+
+    async def gate(dt, repo, extra=()):
+        return True, {}, {"mem-notebook"}, {"skillcard"}
+
+    mgr.dispatch_steward_discovery = fake_dispatch
+    svc._context_gate = gate
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert calls == [1]
+    assert seen[0]["context_stale"] == {"mem-notebook"}
+    assert seen[0]["context_omit"] == {"skillcard"}
+
+
+def test_degraded_skips_discovery_and_retains_pending(tmp_path):
+    """Shared degradation (3 consecutive dead STEWARD runs) backs off the
+    discovery lane too — pending stays for the sweep/kick after a human
+    Run-now success clears the condition. Mirrors relations' degraded_skip."""
+    from devcake.domain.run import Run
+    pmo, mgr, svc, calls, missions = _svc_setup(tmp_path)
+    for i, st in enumerate(("failed", "timed_out", "orphaned"), start=1):
+        mgr.runs.store.save(Run(
+            run_id=f"TEAM-{i}-STEWARD-XXXXXX", mission_key="TEAM",
+            mission_type="STEWARD", dev_type="steward", seq=i, state=st,
+            error=f"dead-{i}"))
+    assert svc.degraded()
+    mgr._discoveries_pending.add("src")
+    run_coro(svc.maybe_dispatch_discovery(missions))
+    assert calls == []
+    assert mgr._discoveries_pending == {"src"}
 
 
 def test_harvest_notify_seam_is_best_effort(tmp_path):

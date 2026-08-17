@@ -5,7 +5,7 @@
 
 ## Decision
 
-**One mode.** Every operator-supplied secret — PMO API keys, forge tokens (write/read-only/reviewer), model/harness keys — is entered as a VALUE through the admin Config page and stored on the app volume. Env-var indirection is **deleted, not kept as a fallback**.
+**One mode.** Every operator-supplied secret — PMO API keys, forge tokens (write/read-only/reviewer), model/harness keys — is entered as a VALUE through the admin UI (Configuration for harness/model keys; **Repositories** and **PMO** for forge/PMO tokens) and stored on the app volume as **plaintext files mode 0600** (no vault, no at-rest encryption — product contract `docs/14-security.md` §4). Env-var indirection is **deleted, not kept as a fallback**.
 
 - Storage: `/data/secrets/connections/{scope}-{instance}.json` (scope ∈ pmo|repo) and `/data/secrets/harness/{VAR}.json`, written 0600 (`mkstemp` + `fsync` + `os.replace`). The two-level path means the existing redaction glob (`security._known_values`, `glob("*/*")`) auto-covers every value; each write also `register_runtime_secret`s it.
 - Config schema **v4**: the `*_env` fields are gone; `RepoInstance.token`/`token_ro`/`reviewer_token` and `PMOInstance.api_key` are read-through properties over the store. `pmos`/`repos` relax to 0..N so a truly empty first boot is a defined idle state (GUI-only setup).

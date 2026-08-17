@@ -3,6 +3,10 @@
 > **Audience:** implementers of both sides (app ingress consumer; shared Dev entrypoint).
 > **Depends on:** `07-dev-runtime.md` (lifecycle), `04-orchestrator.md` (finalization).
 > **Decision record:** `adr/0001-redis-streams-for-dev-callback.md`.
+> **Trust language:** per-run Redis ACLs isolate concurrent Devs on a
+> **dedicated host** — not multi-tenant SaaS isolation. Product contract:
+> [`14-security.md`](14-security.md) §0 · §6. Secret params and redaction:
+> `14` §4 · §7.
 
 Redis Streams mediate **all** Dev↔app traffic. Redis is a **transport buffer, never a source of truth**: a lost message is recoverable because artifacts also exist in Dagu run logs, and the Mission's label was never advanced (INV-3) — the step simply re-runs.
 

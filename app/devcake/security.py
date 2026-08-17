@@ -261,12 +261,13 @@ def security_warnings(config) -> list[dict]:
         "id": "gui-secrets-basic-auth", "severity": "info",
         "title": "GUI-stored secrets behind basic auth",
         "body": "Operator secrets (PMO/forge tokens, model keys) are stored "
-                "0600 on the app volume and the admin panel is protected only "
-                "by HTTP basic auth — which, since settings export exists "
-                "(ADR-0013), includes the ability to export stored secret "
-                "values. This is fine on localhost/a dedicated host; revisit "
-                "(OIDC/SSO, secret-manager) before exposing DevCake beyond "
-                "localhost (docs/14 §7).",
+                "as plaintext files mode 0600 on the app volume and the admin "
+                "panel is protected only by HTTP basic auth — which, since "
+                "settings export exists (ADR-0013), includes the ability to "
+                "export stored secret values. This is fine on localhost/a "
+                "dedicated host (docs/14 §0 · §4); revisit (OIDC/SSO, "
+                "secret-manager — docs/14 §11) before exposing DevCake beyond "
+                "localhost.",
     }]
     for repo in config.repos:
         if repo.configured and repo.token and not repo.token_ro:
@@ -279,8 +280,10 @@ def security_warnings(config) -> list[dict]:
                 "body": f"No read-only PAT is set for repo '{repo.name}', so "
                         "PLAN/REVIEW/STEWARD/ONBOARD Devs receive the same "
                         "write-capable forge token as EXECUTE. A prompt-injected "
-                        "non-EXECUTE Dev could push to the repo. Add a read-only "
-                        "token for this repo on the Config page (ISSUES #15).",
+                        "non-EXECUTE Dev could push — and, if the default branch "
+                        "is unprotected, may merge (docs/14 §2 zone C). Add a "
+                        "read-only token for this repo on the Repositories page "
+                        "(ISSUES #15).",
             })
     # read-only-only repositories (founder request 2026-07-15): valid — but
     # only as REFERENCE material. Warn when such a repo sits in a PMO's WORK

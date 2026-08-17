@@ -524,18 +524,18 @@ export default function ReposPage({ onHealthChange }) {
                   <Input value={repo.url}
                   onChange={(e) => setField(`cfg.repos.${idx}.url`, e.target.value)} /></Field>
                 <SecretField label="Access token"
-                  help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored securely — never echoed, never in .env."
+                  help="This repo's forge token (repo read/write + PR scopes). Optional — with only a read-only token the repo serves as reference material. Stored as plaintext mode 0600 on the app volume — never echoed, never in .env."
                   refKey={`repo:${repo.name}:token`} paste
                   absentNote="not set — repo is reference-only until an Access token is stored"
                   presence={presence[`repo:${repo.name}:token`] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Read-only token" hint="Optional → clone-only for PLAN/REVIEW/ONBOARD"
-                  help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push. Leave empty to give every stage the write token."
+                  help="Optional read-only token used by non-EXECUTE stages so a prompt-injected Dev can't push with a write-capable PAT. Leave empty to give every stage the write token (and, if the default branch is unprotected, merge capability)."
                   refKey={`repo:${repo.name}:token_ro`} paste optional
                   presence={presence[`repo:${repo.name}:token_ro`] || null}
                   locked={!nameLocked(repo.name, idx)} />
                 <SecretField label="Reviewer token" hint="Recommended 2nd account → formal PR approvals"
-                  help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not the same as staffing a different Dev Type for REVIEW."
+                  help="Recommended second account's token for formal forge approval under branch protection. The app (never a Dev) files the approval after the REVIEW stage judges the PR. Not a supply-chain control when you staff a different Dev Type for REVIEW — that is role focus only."
                   refKey={`repo:${repo.name}:reviewer_token`} paste optional
                   presence={presence[`repo:${repo.name}:reviewer_token`] || null}
                   locked={!nameLocked(repo.name, idx)} />

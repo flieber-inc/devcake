@@ -8,7 +8,8 @@
   concerns, post-ship: (1) the agent's context is polluted — under `/mirrors`
   it can see bare-pack duplicates of its own repo plus every other configured
   repo; (2) ambient visibility of all mirrors undermines the curated
-  reference-repo concept (`14` §5 named this the deliberate widening); (3)
+  reference-repo concept (`14` §6 named the ambient-mirror residual that this
+  ADR later deleted); (3)
   "the optimal state is for the mirror folder to disappear once its cloning
   happens." In-container unmount is impossible (uid 1000, no CAP_SYS_ADMIN),
   so the fix is structural: split each run into a **provision** step and a
@@ -214,7 +215,7 @@ namespace. New exposure named honestly (`14` §1): the workspace tree is a
 user-owned host directory holding repo content + activity transcripts +
 agent/tool output, persisting from dispatch until cleanup — `0700`,
 gitignored, excluded from the backup set (`13` §8), and bounded by workspace
-lifetime, not container lifetime (the parenthetical `14` §§4.7/6 now carry).
+lifetime, not container lifetime (`14` §4 item 7 / §6 now carry).
 run-id path safety: every producer routes through `make_run_id`
 (`[A-Za-z0-9_-]`, ≤64), and `WorkspaceStore` re-validates the charset and
 lexical containment in create/cleanup as defense-in-depth. Deploy-window
@@ -241,5 +242,5 @@ are reconcile-adopted.
   probes recorded above.
 - Supersedes: ADR-0024 §5 accepted "ambient mirror read" risk.
 - Operator: `07-dev-runtime.md` §§1, 3, 5, 7b; `09-dev-protocol.md` §4;
-  `13-deployment.md` §§1, 3-5, 8; `14-security.md` §§1, 4.7, 5-6;
+  `13-deployment.md` §§1, 3-5, 8; `14-security.md` §§1, 4 (item 7), 5–6;
   `15-errors-and-retries.md` §§1-2; `02-domain-model.md` §7; `00`, `01`, `12`.

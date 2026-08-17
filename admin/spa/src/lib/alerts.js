@@ -73,7 +73,9 @@ export default function deriveAlerts(health) {
         title: `Default branch of repo '${repoName}' is unprotected`,
         body:
           "A Dev's forge token could merge to it without review. Enable branch " +
-          "protection (require PRs + 1 approval); DevCake's own pipeline keeps working.",
+          "protection (require PRs + 1 approval; Dev account must not bypass). " +
+          "This is advisory — DevCake does not block dispatch on it. " +
+          "Auto-merge off only stops the app, not the Dev.",
       });
     }
   }

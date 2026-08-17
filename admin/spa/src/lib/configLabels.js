@@ -9,7 +9,8 @@ export const AUTO_MERGE_COPY =
   "DevCake reopens their merge window and merges them as they become ready " +
   "(other repos are unaffected). " +
   "This toggle gates the app only — Devs still hold write forge tokens; " +
-  "branch protection is what stops an agent from merging.";
+  "forge branch protection (operator-owned; not a DevCake hard gate) is what " +
+  "stops an agent from merging.";
 
 export const MEMORY_AUTO_MERGE_COPY =
   "Recommended: keep this off so a person merges every note. " +

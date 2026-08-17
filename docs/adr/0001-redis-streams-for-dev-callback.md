@@ -19,3 +19,9 @@ One channel: **Redis Streams** (`devcake:ingress` with a consumer group; per-run
 ## Consequences
 
 Devs can finish while the app is down and nothing is lost (streams are durable, AOF-persisted). At-least-once delivery requires idempotent consumption — provided by finalization's per-side-effect keys. Redis becomes a hard runtime dependency of Dev runs; acceptable, it is already in the stack.
+
+**Claim honesty (product security contract):** per-run ACLs and the write-only
+ingress selector are isolation against **concurrent Devs on one dedicated host**
+(`09-messaging.md` §1a, `14-security.md` §0 · §6). They are **not** multi-tenant
+SaaS sandboxing, and Redis params remaining visible in the authenticated Dagu UI
+is an accepted residual under that posture (`14` §4).

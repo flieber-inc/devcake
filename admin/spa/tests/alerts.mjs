@@ -46,6 +46,19 @@ check("circuit breaker stays critical red in the same list", () => {
   assert.ok(kinds.includes("breakers"));
 });
 
+// CAKE-30: forge_protection is advisory (docs/14 §8) — never a hard gate.
+check("unprotected default branch is a dismissable advisory, not a dispatch gate", () => {
+  const alerts = deriveAlerts({
+    forge_protection: { main: { protected: false } },
+  });
+  const hit = alerts.find((a) => a.id === "forge:main");
+  assert.ok(hit, "forge:main alert missing");
+  assert.equal(hit.dismissable, true);
+  assert.match(hit.title, /unprotected/i);
+  assert.match(hit.body, /does not block dispatch/i);
+  assert.match(hit.body, /branch protection/i);
+});
+
 if (failed) {
   console.error(`alerts.mjs: ${failed} check(s) failed`);
   process.exit(1);

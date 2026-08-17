@@ -361,7 +361,7 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                   </Field>
                 ) : (
                   <SecretField label="API key"
-                    help="This instance's PMO API key. Stored securely on the app volume — never echoed back, never in .env."
+                    help="This instance's PMO API key. Stored as plaintext mode 0600 on the app volume — never echoed back, never in .env."
                     refKey={`pmo:${inst.name}:api_key`} paste
                     locked={!pmoNameLocked(inst.name, idx)} />
                 )}

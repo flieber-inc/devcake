@@ -1031,6 +1031,35 @@ def test_project_decomposition_inherits_nothing(tmp_path):
     assert not any(blocked == "d1" for _, blocked in fake.relations)
 
 
+def test_checkpointed_child_resolve_ignores_forged_unlabeled_marker(tmp_path):
+    """Resume after decomp:child:N is checkpointed must not adopt a forged
+    mission that only carries a matching marker without DEVCAKE-CREATED —
+    same LABEL_CREATED trust as the initial existing-child scan. Without
+    the gate, a human-planted description could steal the resume wire."""
+    from devcake.domain.orchestrator import steps
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    # Plant a forged lookalike before any real child exists, and pretend
+    # the first part was already created (checkpoint present, no label).
+    forged = Mission(
+        instance="linear", pmo_id="forged-1", pmo_kind="issue", key="T-FAKE",
+        title="a", status="backlog", labels={"DEVCAKE"},  # no CREATED
+        description=(
+            "body\n\n`devcake:decomposition:v1 parent=p1 "
+            "manifest=00" + ("ab" * 31) + " part=1/1 depth=1`"),
+        updated_at=datetime.now(timezone.utc),
+    )
+    fake.all_missions.append(forged)
+    run = _run("ONBOARD", None)
+    run.finalized_steps.append(steps.DECOMP_CHILD(1))
+    with pytest.raises(ValueError, match="checkpointed but child missing"):
+        run_coro(decomposition.finalize_decomposition(
+            mgr, run,
+            {"outcome": "decomposed", "decomposition": [{"title": "a"}]}))
+    assert m.status != "canceled"
+    assert fake.relations == []
+
+
 def test_decomposition_replay_reuses_marker_parts(tmp_path):
     m = mission("in_progress", {"DEVCAKE"})
     mgr, fake, _store = make_mgr(tmp_path, m)

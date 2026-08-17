@@ -142,7 +142,12 @@ async def finalize_decomposition(mgr, run: Run, result: dict) -> None:
     async def _resolve_existing_child(part: int) -> tuple[str, str] | None:
         if part in existing:
             return existing[part], existing_keys[part]
+        # Same LABEL_CREATED trust as the initial existing-child scan: a
+        # forged marker without the app-managed label must not satisfy a
+        # decomp:child:N checkpoint on resume.
         for mission in await mgr.pmo.list_all(mgr.instance.team_key):
+            if LABEL_CREATED not in mission.labels:
+                continue
             marker = decomposition_marker(mission.description)
             if marker and marker.group(1) == pmo_id \
                     and int(marker.group(3)) == part:

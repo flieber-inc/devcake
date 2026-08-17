@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..model import LABEL_CREATED, Mission
+from ..model import Mission
 from ..repo_sourcing import blocker_read_credential
 from . import dispatch
-from .markers import decomposition_marker
+from .markers import decomposition_parent_ref
 
 
 @dataclass
@@ -32,23 +32,13 @@ class Family:
         return {m.key.upper(): m for m in self.members if m.key}
 
 
-def _parent_ref(m: Mission) -> str | None:
-    """The decomposition parent edge — trusted only under the app-managed
-    DEVCAKE-CREATED label (decomposition_depth precedent): a forged marker
-    in an untrusted description must never join a mission to an arbitrary
-    family (routing-universe poisoning)."""
-    if LABEL_CREATED not in m.labels:
-        return None
-    mk = decomposition_marker(m.description)
-    return mk.group(1) if mk else None
-
-
 def family_of(source: Mission, missions: list[Mission]) -> Family:
     """BFS over the undirected union of blocked_by and decomposition-parent
     edges, seeded at `source`. `missions` is one instance's snapshot;
     matching is by pmo_id (the marker's parent= carries the parent's
-    pmo_id; key accepted as a defensive alias). blocked_by edges are
-    PMO-native and trusted as-is."""
+    pmo_id; key accepted as a defensive alias). Parent trust is
+    markers.decomposition_parent_ref (LABEL_CREATED gate — same chokepoint
+    as the family gate). blocked_by edges are PMO-native and trusted as-is."""
     pool = [m for m in missions if m.pmo_id]
     by_id = {m.pmo_id: m for m in pool}
     by_key = {m.key.upper(): m for m in pool if m.key}
@@ -69,7 +59,7 @@ def family_of(source: Mission, missions: list[Mission]) -> Family:
             other = resolve(blocker)
             if other is not None:
                 join(m.pmo_id, other.pmo_id)
-        parent = resolve(_parent_ref(m))
+        parent = resolve(decomposition_parent_ref(m))
         if parent is not None:
             join(m.pmo_id, parent.pmo_id)
 

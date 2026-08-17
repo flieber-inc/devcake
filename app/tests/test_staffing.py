@@ -91,6 +91,17 @@ def test_required_skip_and_error_are_not_ok():
             require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
 
 
+def test_dead_baker_refuses_even_with_an_ok_receipt():
+    from devcake.staffing import HarnessNotStaffed, require_staffed
+
+    with pytest.raises(HarnessNotStaffed, match="cannot vouch") as exc:
+        require_staffed(
+            _dt(), digest="sha256:abc",
+            store=_Store({"ok": True, "digest": "sha256:abc"}),
+            baker_alive=False)
+    assert exc.value.kind == "baker"
+
+
 def test_ok_true_matching_digest_is_staffed():
     from devcake.staffing import require_staffed
 

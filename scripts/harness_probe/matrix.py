@@ -32,6 +32,15 @@ _CLAUDE_401_SKIP = (
     "no committed claude_http_401 capture; Claude CLI has never been "
     "stub-driven in a failure scenario"
 )
+_AUTH = {"exit": 12, "class": "DEV_AUTH", "reason": "terminal_error"}
+_EMPTY = {
+    "exit": 15, "class": "DEV_HARNESS_FAULT", "reason": "empty_completion",
+}
+# Resume is the same row name everywhere. Templates not yet in RESUME_SPECS
+# skip it visibly — they do not get a compile-only pass.
+_RESUME_UNVERIFIED = (
+    "no committed resume capture; dialect resume_argv is not in RESUME_SPECS"
+)
 
 _MATRIX: dict[str, tuple[RowSpec, ...]] = {
     "grok-build": (
@@ -45,24 +54,40 @@ _MATRIX: dict[str, tuple[RowSpec, ...]] = {
         RowSpec("healthy", required=True, expected=_NO_FAULT),
         RowSpec("http_401", required=False, expected=None,
                 skip_reason=_CLAUDE_401_SKIP),
-        RowSpec("empty", required=True, expected={
-            "exit": 15, "class": "DEV_HARNESS_FAULT",
-            "reason": "empty_completion",
-        }),
+        RowSpec("empty", required=True, expected=_EMPTY),
         RowSpec("plan_mode", required=True, expected=None, kind="flag_accept"),
         RowSpec("resume", required=True, expected=_NO_FAULT),
     ),
     "codex": (
         RowSpec("healthy", required=True, expected=_NO_FAULT),
-        RowSpec("http_401", required=True, expected={
-            "exit": 12, "class": "DEV_AUTH", "reason": "terminal_error",
-        }),
-        RowSpec("empty", required=True, expected={
-            "exit": 15, "class": "DEV_HARNESS_FAULT",
-            "reason": "empty_completion",
-        }),
+        RowSpec("http_401", required=True, expected=_AUTH),
+        RowSpec("empty", required=True, expected=_EMPTY),
         RowSpec("plan_mode", required=True, expected=None, kind="flag_accept"),
         RowSpec("resume", required=True, expected=_NO_FAULT),
+    ),
+    "pi": (
+        RowSpec("healthy", required=True, expected=_NO_FAULT),
+        RowSpec("http_401", required=True, expected=_AUTH),
+        RowSpec("empty", required=True, expected=_EMPTY),
+        RowSpec("plan_mode", required=True, expected=None, kind="flag_accept"),
+        RowSpec("resume", required=False, expected=None,
+                skip_reason=_RESUME_UNVERIFIED),
+    ),
+    "opencode": (
+        RowSpec("healthy", required=True, expected=_NO_FAULT),
+        RowSpec("http_401", required=True, expected=_AUTH),
+        RowSpec("empty", required=True, expected=_EMPTY),
+        RowSpec("plan_mode", required=True, expected=None, kind="flag_accept"),
+        RowSpec("resume", required=False, expected=None,
+                skip_reason=_RESUME_UNVERIFIED),
+    ),
+    "qwen-code": (
+        RowSpec("healthy", required=True, expected=_NO_FAULT),
+        RowSpec("http_401", required=True, expected=_AUTH),
+        RowSpec("empty", required=True, expected=_EMPTY),
+        RowSpec("plan_mode", required=True, expected=None, kind="flag_accept"),
+        RowSpec("resume", required=False, expected=None,
+                skip_reason=_RESUME_UNVERIFIED),
     ),
 }
 

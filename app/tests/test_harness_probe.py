@@ -112,6 +112,22 @@ def test_matching_observation_passes_the_row_and_the_receipt():
     assert rec["ok"] is True
 
 
+def test_every_house_pin_has_the_same_probe_rows():
+    """Compile+probe grades the same five names for every registry template."""
+    _load_probe()
+    from harness_probe.matrix import matrix_for
+    from devcake.house_pins import HOUSE_PINS
+
+    names = ("healthy", "http_401", "empty", "plan_mode", "resume")
+    for template in HOUSE_PINS:
+        got = tuple(spec.name for spec in matrix_for(template))
+        assert got == names, template
+        by = {spec.name: spec for spec in matrix_for(template)}
+        assert by["healthy"].required is True
+        assert by["empty"].required is True
+        assert by["plan_mode"].required is True
+
+
 def test_loader_refuses_the_working_tree_entrypoint(tmp_path):
     """Capture rig is /srv-first. The probe must not grade that path."""
     _load_probe()
@@ -252,3 +268,97 @@ def test_required_row_absent_is_not_ok():
     from harness_probe.receipt import receipt_ok
     stripped = {**rec, "rows": [r for r in rec["rows"] if r["name"] != "http_401"]}
     assert receipt_ok(stripped) is False
+
+
+def _attribute():
+    _load_probe()
+    from harness_probe.cause import attribute
+    return attribute
+
+
+def test_empty_journal_is_an_aim_miss():
+    """CLI never reached the stub lane — leftover env or a stale recipe."""
+    attribute = _attribute()
+    got = attribute(
+        row="healthy",
+        expected={"exit": 11, "class": "", "reason": None},
+        observed={"exit": 15, "class": "DEV_HARNESS_FAULT",
+                  "reason": "terminal_error"},
+        journal_hits=(),
+    )
+    assert got == "aim"
+
+
+def test_launch_refused_is_an_aim_miss():
+    attribute = _attribute()
+    got = attribute(
+        row="healthy",
+        expected={"exit": 11, "class": "", "reason": None},
+        observed=None,
+        journal_hits=(),
+        launched=False,
+    )
+    assert got == "aim"
+
+
+def test_hit_on_the_right_lane_with_wrong_classify_is_dialect():
+    """We served the tape; fault/classify disagreed with the matrix."""
+    attribute = _attribute()
+    got = attribute(
+        row="healthy",
+        expected={"exit": 11, "class": "", "reason": None},
+        observed={"exit": 15, "class": "DEV_HARNESS_FAULT",
+                  "reason": "empty_completion"},
+        journal_hits=({
+            "scenario": "healthy",
+            "path": "/v1/chat/completions",
+        },),
+    )
+    assert got == "dialect"
+
+
+def test_hit_on_the_wrong_protocol_is_stub():
+    attribute = _attribute()
+    got = attribute(
+        row="healthy",
+        expected={"exit": 11, "class": "", "reason": None},
+        observed={"exit": 15, "class": "DEV_HARNESS_FAULT",
+                  "reason": "terminal_error"},
+        journal_hits=({
+            "scenario": "healthy",
+            "path": "/v1/embeddings",
+        },),
+    )
+    assert got == "stub"
+
+
+def test_http_401_tape_classified_auth_is_auth():
+    """The 401 lane proving classify still works — not a failure cause."""
+    attribute = _attribute()
+    got = attribute(
+        row="http_401",
+        expected={"exit": 12, "class": "DEV_AUTH", "reason": "terminal_error"},
+        observed={"exit": 12, "class": "DEV_AUTH", "reason": "terminal_error"},
+        journal_hits=({
+            "scenario": "http_401",
+            "path": "/v1/chat/completions",
+        },),
+    )
+    assert got == "auth"
+
+
+def test_failed_classify_row_persists_cause_on_the_receipt():
+    compile_receipt = _compile()
+    rec = compile_receipt(
+        digest="sha256:test",
+        template="grok-build",
+        cli_version="0.2.112",
+        reports={"healthy": {"observed": {
+            "exit": 15, "class": "DEV_HARNESS_FAULT",
+            "reason": "terminal_error"}}},
+        journal_hits=(),
+    )
+    row = next(r for r in rec["rows"] if r["name"] == "healthy")
+    assert row["status"] == "fail"
+    assert row["cause"] == "aim"
+    assert row["evidence"]["journal_hits"] == 0

@@ -353,7 +353,7 @@ class PollRuntime:
         """
         from ..bake_status import (
             annotate_liveness, baker_transition, drain_baker_log,
-            read_bake_status,
+            read_bake_status, replay_baker_spans,
         )
         from ..telemetry import push_oo_log
 
@@ -369,7 +369,9 @@ class PollRuntime:
                 span.set_attribute(
                     "devcake.baker.state", status.get("state") or "")
         self.baker_alive = alive
-        for rec in drain_baker_log():
+        recs = drain_baker_log()
+        replay_baker_spans(recs, tracer)
+        for rec in recs:
             await push_oo_log("baker", rec)
 
     async def loop(self) -> None:

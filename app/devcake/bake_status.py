@@ -19,6 +19,7 @@ from typing import Any
 
 STATUS_NAME = "harness_bake_status.json"
 BAKER_LOG_NAME = "harness_baker.jsonl"
+OUTBOX_DIR = "harness_outbox"
 PRUNE_REQUEST_NAME = "harness_prune_request.json"
 CURSOR_NAME = "state/baker_log.offset"
 HEARTBEAT_STALE_SECONDS = 30
@@ -97,12 +98,15 @@ def baker_transition(prev_alive: bool | None, alive: bool) -> str | None:
 
 
 def drain_baker_log(root: Path | None = None) -> list[dict[str, Any]]:
-    """Return new jsonl records since the last drain. Cursor is a byte offset."""
+    """Return new baker records. Complete outbox files are claimed and
+    deleted (baker→app mailbox). The legacy growing jsonl uses a cursor
+    until emit_event writes only outbox files."""
     base = _data_root(root)
+    records = _drain_outbox(base)
     log_path = base / BAKER_LOG_NAME
     cursor_path = base / CURSOR_NAME
     if not log_path.is_file():
-        return []
+        return records
     try:
         offset = int(cursor_path.read_text().strip() or "0")
     except (OSError, ValueError):
@@ -110,10 +114,10 @@ def drain_baker_log(root: Path | None = None) -> list[dict[str, Any]]:
     try:
         size = log_path.stat().st_size
     except OSError:
-        return []
+        return records
     if offset > size:
         offset = 0
-    records: list[dict[str, Any]] = []
+    legacy: list[dict[str, Any]] = []
     try:
         with log_path.open() as fh:
             fh.seek(offset)
@@ -126,13 +130,114 @@ def drain_baker_log(root: Path | None = None) -> list[dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(rec, dict):
-                    records.append(rec)
+                    legacy.append(rec)
             new_offset = fh.tell()
     except OSError:
-        return []
+        return records
     cursor_path.parent.mkdir(parents=True, exist_ok=True)
     cursor_path.write_text(str(new_offset) + "\n")
+    return records + legacy
+
+
+def _drain_outbox(base: Path) -> list[dict[str, Any]]:
+    box = base / OUTBOX_DIR
+    if not box.is_dir():
+        return []
+    records: list[dict[str, Any]] = []
+    for path in sorted(box.glob("*.jsonl")):
+        if path.name.endswith(".taking"):
+            continue
+        taking = path.with_name(path.name + ".taking")
+        try:
+            path.replace(taking)
+        except OSError:
+            if taking.is_file():
+                pass
+            else:
+                continue
+        try:
+            for line in taking.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict):
+                    records.append(rec)
+        except OSError:
+            continue
+        try:
+            taking.unlink()
+        except OSError:
+            pass
     return records
+
+
+def replay_baker_spans(records: list[dict[str, Any]], tracer) -> None:
+    """Turn span-shaped outbox records into real OTEL spans (same trace_id).
+
+    The host baker has no tracer. Poll is the chokepoint. Quiet / non-span
+    records are ignored. Baker span_ids are replay keys; the exported tree
+    parents children under the live parent span.
+    """
+    from opentelemetry import context as otel_context
+    from opentelemetry.trace import (
+        NonRecordingSpan,
+        SpanContext,
+        SpanKind,
+        Status,
+        StatusCode,
+        TraceFlags,
+        set_span_in_context,
+    )
+
+    spans = [r for r in records
+             if isinstance(r, dict) and r.get("event") == "span"
+             and r.get("trace_id") and r.get("span_id") and r.get("name")]
+    spans.sort(key=lambda r: int(r.get("start_ns") or 0))
+    live: dict[str, object] = {}
+    for rec in spans:
+        try:
+            tid = int(str(rec["trace_id"]), 16)
+        except ValueError:
+            continue
+        parent_hex = str(rec.get("parent") or "")
+        token = None
+        if parent_hex and parent_hex in live:
+            token = otel_context.attach(live[parent_hex])
+        else:
+            dummy = SpanContext(
+                trace_id=tid, span_id=1, is_remote=True,
+                trace_flags=TraceFlags(0x01))
+            token = otel_context.attach(
+                set_span_in_context(NonRecordingSpan(dummy)))
+        try:
+            start = rec.get("start_ns")
+            end = rec.get("end_ns")
+            kwargs: dict[str, Any] = {"kind": SpanKind.INTERNAL}
+            if isinstance(start, int):
+                kwargs["start_time"] = start
+            span = tracer.start_span(str(rec["name"]), **kwargs)
+            live[str(rec["span_id"])] = set_span_in_context(span)
+            if rec.get("cause"):
+                span.set_attribute(
+                    "devcake.baker.cause", str(rec["cause"]))
+            if rec.get("template"):
+                span.set_attribute("devcake.harness", str(rec["template"]))
+            if rec.get("cli_version"):
+                span.set_attribute(
+                    "devcake.cli_version", str(rec["cli_version"]))
+            if rec.get("status") == "error":
+                span.set_status(Status(StatusCode.ERROR))
+            if isinstance(end, int):
+                span.end(end_time=end)
+            else:
+                span.end()
+        finally:
+            if token is not None:
+                otel_context.detach(token)
 
 
 def write_prune_request(*, root: Path | None = None,
@@ -156,6 +261,12 @@ def write_prune_request(*, root: Path | None = None,
     return dest
 
 
-def request_prune(*, root: Path | None = None) -> dict[str, Any]:
+def request_prune(*, root: Path | None = None,
+                  dev_types: dict | None = None) -> dict[str, Any]:
+    """Prune inbox. When Dev Types are passed, also drop a fresh keep-set
+    order so the baker has desired pins on the same tick."""
+    if dev_types is not None:
+        from .keep_set import publish_keep_set
+        publish_keep_set(dev_types, root=root)
     write_prune_request(root=root)
     return {"ok": True, "requested": True}

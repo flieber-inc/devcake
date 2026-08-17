@@ -331,3 +331,97 @@ def test_profile_secret_snapshots_are_covered_by_the_redaction_glob(tmp_path, mo
          "harness": {"ANTHROPIC_API_KEY": value + "-h"}}))
     out = security.redact(f"transcript {value} and {value}-h end")
     assert value not in out and MASK in out
+
+
+def test_make_gitea_adapter_registers_tokens_without_prefix_collision():
+    """CAKE-38: registration keys must not be token[:6] — Gitea PATs that
+    share a 6-hex prefix would overwrite each other in _runtime_secrets and
+    eventually drop out of the prior list (cap 64), unmasking live mission
+    tokens. Content-addressed (or otherwise unique-per-value) keys keep every
+    concurrent token redacted."""
+    from devcake.adapters.registry import make_gitea_adapter
+    from devcake.security import register_runtime_secret, unregister_runtime_secret
+    import devcake.security as sec
+
+    # 40-char hex-like tokens sharing the first 6 chars (realistic Gitea shape)
+    tokens = [f"aaaaaa{i:034d}" for i in range(70)]
+    try:
+        for tok in tokens:
+            make_gitea_adapter("http://gitea:3000/devcake-internal/m.git",
+                              tok, None)
+        first, last = tokens[0], tokens[-1]
+        out = redact(f"leak {first} and {last}")
+        assert first not in out and last not in out
+        assert MASK in out
+    finally:
+        sec._runtime_secrets.clear()
+        sec._runtime_secret_priors.clear()
+
+
+def test_make_pmo_registers_api_key_for_every_system(tmp_path, monkeypatch):
+    """CAKE-38: every make_pmo path must register_runtime_secret the instance
+    key. Linear historically skipped factory registration and relied only on
+    store write + pattern match — unusual key shapes under the 16-char disk
+    scan floor then had no factory-side redaction line."""
+    import json as _json
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.adapters.registry import PMO_SYSTEMS, make_pmo
+    from devcake.config import PMOInstance
+    from devcake.security import unregister_runtime_secret
+
+    # 12 chars: above redact's 8-char floor, below disk-scan's 16-char floor —
+    # only runtime registration (factory or register_all) can mask it.
+    secret = "short-pmo-k1"
+    assert 8 <= len(secret) < 16
+    for system in sorted(PMO_SYSTEMS):
+        # instance names: ^[a-z][a-z0-9]{0,11}$
+        inst_name = ("linear" if system == "linear"
+                     else system.replace("_", "")[:12])
+        # direct disk write — skip secrets.write_* so conn: keys are absent
+        conn = tmp_path / "secrets" / "connections"
+        conn.mkdir(parents=True, exist_ok=True)
+        (conn / f"pmo-{inst_name}.json").write_text(
+            _json.dumps({"api_key": secret}))
+        inst = PMOInstance(
+            name=inst_name, system=system, team_key="T",
+            api_base="http://example.test" if system != "linear" else None)
+        try:
+            make_pmo(inst)
+            out = redact(f"pmo leak {secret}")
+            assert secret not in out, f"{system} did not register api_key"
+            assert MASK in out
+        finally:
+            unregister_runtime_secret(f"pmo_key:{inst_name}")
+
+
+def test_internal_forge_store_invalidates_scan_and_is_0600(tmp_path, monkeypatch):
+    """CAKE-38: internal_forge token files share the redaction glob. A plain
+    write_text+chmod is not atomic (default umask window) and used to skip
+    invalidate_secret_scan — a just-minted token could miss the disk-scan
+    half of redaction until some other store write flushed the cache.
+    Runtime register covers mint, but load-from-disk / cold scan must see
+    the file immediately too."""
+    import json as _json
+    import stat
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake.adapters.gitea.provision import GiteaProvisioner
+    from devcake import security
+
+    monkeypatch.setattr(security, "_SECRETS_DIR", tmp_path / "secrets")
+    security.invalidate_secret_scan()
+    security.redact("warm the known-values cache")  # populate empty result
+
+    prov = GiteaProvisioner(url="http://gitea:3000", admin_user="a",
+                            admin_password="p")
+    token = "just-minted-internal-token-abcdef"
+    prov._store("service.json", {"app_token": token, "reviewer_token": ""})
+
+    path = tmp_path / "secrets" / "internal_forge" / "service.json"
+    assert path.is_file()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert _json.loads(path.read_text())["app_token"] == token
+    # no leftover tmp from a non-atomic writer
+    assert list((tmp_path / "secrets" / "internal_forge").glob("*.tmp")) == []
+    # disk scan half: without invalidate this stays unmasked after cache warm
+    out = security.redact(f"transcript {token} end")
+    assert token not in out and MASK in out

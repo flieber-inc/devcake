@@ -131,28 +131,25 @@ def make_pmo(inst) -> PMOPort:
     if inst.system not in PMO_SYSTEMS:
         raise ValueError(f"unknown PMO system {inst.system!r} — registered: "
                          f"{sorted(PMO_SYSTEMS)}")
+    # Factory registration is the redaction line for unusual key shapes under
+    # the 16-char disk-scan floor (store write + register_all cover the rest).
+    # Every system registers under the same pmo_key:{name} scheme.
+    from ..security import register_runtime_secret
+    if inst.api_key:
+        register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
     if inst.system == "linear":
         from .linear import LinearAdapter
         return LinearAdapter(inst.api_key, instance=inst.name)
     if inst.system == "gitea_issues":
         from .gitea_issues import GiteaIssuesAdapter
-        from ..security import register_runtime_secret
-        if inst.api_key:
-            register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
         return GiteaIssuesAdapter(
             inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
     if inst.system == "github_issues":
         from .github_issues import GitHubIssuesAdapter
-        from ..security import register_runtime_secret
-        if inst.api_key:
-            register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
         return GitHubIssuesAdapter(
             inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
     if inst.system == "gitlab_issues":
         from .gitlab_issues import GitLabIssuesAdapter
-        from ..security import register_runtime_secret
-        if inst.api_key:
-            register_runtime_secret(f"pmo_key:{inst.name}", inst.api_key)
         return GitLabIssuesAdapter(
             inst.api_base, inst.api_key, inst.team_key, instance=inst.name)
     raise AssertionError("unreachable")  # registry and constructors in sync
@@ -188,12 +185,20 @@ def make_internal_forge():
 def make_gitea_adapter(url: str, token: str, reviewer_token: str | None = None):
     """Construct a Gitea ForgePort with EXPLICIT tokens (not env-resolved) —
     the app-side adapter for an internal-forge mission repo. Registers the
-    tokens for redaction like make_forge does."""
+    tokens for redaction like make_forge does.
+
+    Keys are content-addressed (sha256 prefix), not token[:6]: Gitea PATs are
+    40-hex and concurrent mission tokens can share a 6-char prefix — a
+    prefix key would overwrite in _runtime_secrets and eventually drop older
+    values out of the prior list (CAKE-38).
+    """
+    import hashlib
     from .gitea import GiteaForge
     from ..security import register_runtime_secret
     for v in (token, reviewer_token):
         if v:
-            register_runtime_secret(f"forge_token:gitea:{v[:6]}", v)
+            digest = hashlib.sha256(v.encode()).hexdigest()[:16]
+            register_runtime_secret(f"forge_token:gitea:{digest}", v)
     return GiteaForge(url, token, reviewer_token)
 
 

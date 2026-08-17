@@ -670,11 +670,11 @@ class GiteaProvisioner:
     # ── secret storage (0600, two-level path → auto-redaction scan) ─────────
 
     def _store(self, name: str, data: dict) -> None:
-        d = _secrets_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / name
-        path.write_text(json.dumps(data))
-        path.chmod(0o600)
+        """Atomic 0600 JSON under internal_forge/; invalidates the redaction
+        scan so a just-minted token is disk-scanned before the next redact
+        (same contract as secrets._atomic_write — CAKE-38)."""
+        from ...secrets import write_system_secret_json
+        write_system_secret_json("internal_forge", name, data)
 
     def _load(self, name: str) -> dict | None:
         path = _secrets_dir() / name

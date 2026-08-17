@@ -364,10 +364,21 @@ values and token patterns with `«REDACTED»` (`app/devcake/security.py`):
 - **Registry contributions** — every registered PMO/forge adapter’s
   `secret_env_vars` / `token_patterns` (configured or not). Superset tripwire in
   `app/tests/test_security.py`.
+- **GUI secret store (disk + write/boot registration)** — every long-ish
+  string value (≥16 chars) under `/data/secrets/*/*` is scanned; every store
+  write also `register_runtime_secret`s the value, and boot calls
+  `secrets.register_all()` so values under the 16-char scan floor stay exact-
+  match masked (ADR-0011). System-managed files under `internal_forge/` use
+  the same atomic write + scan-invalidation choke point.
 - **Gitea internal tokens** — 40 hex; patterns would mask git SHAs. Value
-  registration only (`register_runtime_secret` + `/data/secrets/internal_forge/`).
-- **Runtime registry** — per-run Redis ACL password; empty after app restart
-  (inbound envelope scrub still covers the dominant echo path).
+  registration only (`register_runtime_secret` at mint/load + the disk scan
+  of `/data/secrets/internal_forge/`). Factory registration for explicit
+  Gitea adapter tokens is content-addressed (not a token prefix) so concurrent
+  mission PATs cannot collide in the runtime map.
+- **Runtime registry** — per-run Redis ACL password (empty after app restart
+  until the next run mints one) plus the write/boot/factory registrations
+  above. Inbound envelope scrub still covers the dominant Redis-password
+  echo path.
 
 Redaction matters **because Devs hold secrets**. It is the last line of defense
 for **app-mediated** posts to PMO systems and forges, not a substitute for zone C.

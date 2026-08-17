@@ -65,6 +65,19 @@ def test_non_numeric_token_fields_yield_no_estimate_not_500():
         _grok_report(cache_write_tokens="oops"), GROK_45) is not None
 
 
+def test_non_finite_token_fields_yield_no_estimate():
+    """NaN/inf survive isinstance(float) and would stamp a non-number USD
+    estimate into feed/OTel/API — refuse the estimate instead."""
+    nan, inf, ninf = float("nan"), float("inf"), float("-inf")
+    for hole, bad in (("input_tokens", nan), ("cache_read_tokens", inf),
+                      ("output_tokens", ninf)):
+        assert costing.estimate_cost_usd(
+            _grok_report(**{hole: bad}), GROK_45) is None
+    # non-finite cache_write alone must not poison a valid split either
+    assert costing.estimate_cost_usd(
+        _grok_report(cache_write_tokens=nan), GROK_45) == 5.60
+
+
 def test_null_cache_write_prices_as_zero_not_blocking():
     with_write = costing.estimate_cost_usd(
         _grok_report(cache_write_tokens=1_000_000),

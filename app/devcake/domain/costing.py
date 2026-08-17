@@ -15,6 +15,7 @@ Honesty rules (feedback 2026-08-01):
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -47,8 +48,13 @@ def estimate_cost_usd(token_report: dict,
         # → no estimate; a NON-numeric value (a harness that emitted a string
         # count) would otherwise TypeError on the multiply and 500 GET /runs.
         # bool is an int subclass — reject it too, a True count is nonsense.
+        # NaN/inf pass isinstance(float) but must not become a USD stamp.
         v = token_report.get(key)
-        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            return None
+        if isinstance(v, float) and not math.isfinite(v):
+            return None
+        return v
 
     inp = _num("input_tokens")
     cache_read = _num("cache_read_tokens")

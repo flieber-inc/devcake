@@ -138,7 +138,7 @@ Exit criteria — **all verified 2026-07-11. M7 complete — golden path / pre-r
 - [x] Tutorials re-walked and corrected post-M6 (OAuth wizard as primary login, Config-tab reality).
 - [x] **CI economics:** `scripts/ci_suite.sh` = the full unit suite + stub-harness pipeline smoke, deterministic and model-free (~1 min); `scripts/acceptance.py` is the manual, token-spending pre-release gate.
 - [x] **Fresh-`/data` operator drill** (carried from M6): volume backed up, wiped, first boot re-seeded config + dev types from env, ensured labels idempotently, health all green with empty secrets awaiting the operator's OAuth click; backup restored intact and CI green after the round trip.
-- [x] OpenObserve **DevCake dashboard** provisioned via API (cost/hour by dev type, runs by outcome, failure signals); alert provisioning ships in `scripts/provision_oo.py` (activates when `OO_ALERT_WEBHOOK` is set).
+- [x] OpenObserve **DevCake dashboard** provisioned via API (four panels: cost/hour, runs by outcome, failure signals, **estimated** cost/hour rate-card — `12` §5); alert provisioning ships in `scripts/provision_oo.py` (activates when `OO_ALERT_WEBHOOK` is set; inventory in `15` §6).
 
 ## M7.1 — Post-v0 shipped
 

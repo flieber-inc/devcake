@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """Provision the DevCake dashboard (+ alerts, when a destination is configured)
-in OpenObserve — docs/12 §5, docs/15 §6. Idempotent by name; safe to re-run."""
+in OpenObserve — docs/12 §5, docs/15 §6.
+
+Dual path (docs/12 §5): app boot already creates/resyncs the OO ingest service
+account for telemetry connectivity. This host script still ensures ingest
+(repair without restart), then creates the **DevCake** dashboard and optional
+alerts. Neither path is required for the other; this script is ops polish, not
+a connectivity prerequisite.
+
+Idempotency (honest): create-if-missing by name. An existing dashboard titled
+DevCake is left untouched (panels are **not** updated in place — delete and
+re-create, or edit in OO, when the panel schema changes). Alert/destination
+POSTs treat an “already exists” body as success. Fail-loud on every other
+error (A20). Never prints passwords.
+"""
 
 import base64
 import json

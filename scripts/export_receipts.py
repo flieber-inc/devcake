@@ -3,22 +3,26 @@
 
 Two clocks erase receipts on a live host: OpenObserve retention ages spans
 out, and Clear-runs sweeps run records and `activity-*` repos. This script
-captures, into one private directory:
+captures, into one private directory (mode ``0o700``; default under
+``$XDG_DATA_HOME/devcake/receipts/`` or ``~/.local/share/devcake/receipts/``):
 
   1. deploy identity — git describe/HEAD, DEVCAKE_TAG, image digests,
-     `docker compose ps` (which code actually ran);
+     ``docker compose ps`` (which code actually ran);
   2. every TRACES stream in OpenObserve, exported raw as JSONL (the span
      record IS the receipt: token reports, fault classes, durations —
      aggregates stay derivable offline; docs/16 two-ledger doctrine: OO is
      exhaust, so this export is a copy of derived data, never load-bearing);
   3. a sanitized /data tarball — run records, state, audit log — with
-     `/data/secrets` EXCLUDED (unlike backup_data.sh, this pack is safe to
-     keep outside the password-manager tier; it still holds mission
-     content, so it stays private).
+     ``/data/secrets`` EXCLUDED (``--exclude ./secrets``). Unlike
+     backup_data.sh, this pack is not a secret-tier dump, but it still holds
+     **mission content** and must stay private — never “safe to share”
+     publicly.
 
 Log streams (container logs) are NOT exported by default — they are bulky
-and rarely evidence — but they are NAMED in the manifest so the omission
-is visible (no silent caps). Pass --include-logs to export them too.
+and rarely evidence — but they are NAMED in MANIFEST.json
+(``skipped_log_streams``) so the omission is visible (no silent caps). Pass
+``--include-logs`` to export them too. Root OO password is used only for the
+API call; it is never written into the pack.
 
 This is NOT a backup. Full recovery needs scripts/backup_data.sh +
 scripts/backup_gitea.sh (both include secrets — password-export handling).

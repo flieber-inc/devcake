@@ -212,7 +212,8 @@ cp .env.example .env
 # Configure Dev Types in the admin UI — the host baker compiles those pins.
 
 open http://localhost:8080   # basic auth → Config / the Adapters pages → secrets + connection tests
-# Optional OO dashboard/alerts: python3 scripts/provision_oo.py
+# Telemetry connectivity: app boot auto-provisions the OO ingest user from OO_INGEST_*.
+# Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
 ```
 
 `./up.sh` is the supported start path: it reads the docker socket’s group id
@@ -262,8 +263,10 @@ docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl ci
 
 PR CI (`.github/workflows/ci.yml`) also runs pin gate, npm checks, pip-audit,
 compose with Gitea, and contract batteries — see `docs/13-deployment.md` §6.
-Token-spending golden path (optional, real models/forges):
-`scripts/acceptance.py` — including internal-forge / Gitea lanes when configured.
+Token-spending golden path (**manual pre-release only**, real models/forges —
+**not** FOSS CI / `ci_suite` / GHA unit path): `scripts/acceptance.py` —
+including internal-forge / Gitea lanes when configured. Tester credentials
+from shell/`.env`; spends model + PMO tokens.
 
 Coding agents: follow [`AGENTS.md`](AGENTS.md). Security and autonomy claims
 must not exceed [`docs/14-security.md`](docs/14-security.md).

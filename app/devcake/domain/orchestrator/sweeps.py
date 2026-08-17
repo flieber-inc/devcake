@@ -22,10 +22,13 @@ tracer = trace.get_tracer("devcake")
 async def sweeps(mgr, missions: list[Mission]) -> None:
     # prune the merge-hand-off advisories to missions still awaiting a
     # merge: covers merged/canceled AND the human label-swap intervention
-    # (which also reopens the window state for a possible next episode)
+    # (which also reopens the window state for a possible next episode).
+    # Status gate is non-terminal (not only in_progress): forge-issue PMOs
+    # (GitHub/Gitea Issues) map open → backlog (docs/05 §9.2); requiring
+    # in_progress stranded DEVCAKE-MERGE after review:merge_deferred forever.
     merge_ids = {m.pmo_id for m in missions
                  if m.pmo_kind == "issue" and LABEL_MERGE in m.labels
-                 and m.status == "in_progress"}
+                 and m.status not in ("done", "canceled")}
     mgr.merge_handoffs = {k: v for k, v in mgr.merge_handoffs.items()
                            if k in merge_ids}
     mgr._merge_window_closed &= merge_ids
@@ -52,7 +55,7 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
         try:
             # spans only when a sweep actually acts (inside the helpers)
             if m.pmo_kind == "issue" and LABEL_MERGE in m.labels \
-                    and m.status == "in_progress":
+                    and m.status not in ("done", "canceled"):
                 await merge_sweep(mgr, m)
             if m.pmo_kind == "project" and LABEL_TRACKING in m.labels \
                     and m.status not in ("done", "canceled"):
@@ -68,7 +71,8 @@ async def sweeps(mgr, missions: list[Mission]) -> None:
     unsatisfied = {
         m.repo for m in missions
         if m.pmo_kind == "issue" and LABEL_MERGE in m.labels
-        and m.status == "in_progress" and m.repo in mgr.rearm_merge_repos
+        and m.status not in ("done", "canceled")
+        and m.repo in mgr.rearm_merge_repos
         and m.pmo_id not in mgr._rearm_satisfied}
     mgr.rearm_merge_repos = mgr.rearm_merge_repos & unsatisfied
 

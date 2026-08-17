@@ -44,6 +44,16 @@ Run records are accessed through **`StatePort`** (`ports/state.py`); the product
     events.jsonl                # append-only audit log: every PMO write + settings changes (profile ops, exports)
     mission_owner.json          # multi-PMO claim map (which instance owns which pmo_id)
     profiles.json               # last-applied-profile breadcrumb (advisory; wiped harmlessly by clear-runs)
+    baker_log.offset            # byte cursor for draining leftover harness_baker.jsonl (12 §1)
+  # Host baker / pin factory (top-level on this volume — not under config/ or state/;
+  # never part of a settings bundle — settings_bundle.py). Normative ops: 13 §6.
+  harness_receipts/             # {template}@{cli_version}.json — ok/not-ok bake receipts
+                                #   (host baker writes; app require_staffed / resolve_image read)
+  harness_keep_set.json         # app-published pin set the host baker compiles (keep_set.py)
+  harness_bake_status.json      # baker heartbeat + job rows (host writes; /health bake_status)
+  harness_prune_request.json    # operator prune inbox (timestamp only; baker claims + deletes)
+  harness_outbox/               # baker → app complete records (poll drains → OO / spans)
+  harness_baker.jsonl           # legacy/leftover baker log; drained by cursor until aged out
 ```
 
 (The poll snapshot served by `GET /api/v1/missions` is in-memory only — rebuilt

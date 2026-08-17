@@ -211,14 +211,23 @@ def test_product_docs_name_config_freshness_budget_not_fixed_two():
     """docs/03 §4.1 and docs/15 §2 must track the live bound
     (AppConfig.budgets.freshness_rereviews, default 5) — not the obsolete
     fixed-2 constant ADR-0031 originally shipped beside MAX_CONFLICT_RESOLVES.
-    Pin against the CAKE-16 / CAKE-32 discovery that product docs lagged."""
+    Pin against the CAKE-16 / CAKE-32 discovery that product docs lagged.
+
+    Path resolution matches test_failure_taxonomy: host checkout is
+    repo/app/tests → repo/; app-test container is /srv/tests with docs
+    bind-mounted at /srv/docs (CI / scripts/pytest_app.sh)."""
     from pathlib import Path
-    root = Path(__file__).resolve().parents[2]
-    for rel in ("docs/03-mission-lifecycle.md",
-                "docs/15-errors-and-retries.md"):
-        text = (root / rel).read_text()
-        assert "budget 2 per mission lifetime" not in text, rel
-        assert "freshness_rereviews" in text, rel
+    roots = [Path(__file__).resolve().parents[2],
+             Path(__file__).resolve().parents[1]]
+    for name in ("03-mission-lifecycle.md", "15-errors-and-retries.md"):
+        path = next((r / "docs" / name for r in roots
+                     if (r / "docs" / name).exists()), None)
+        assert path is not None, (
+            f"mount missing — pytest must bind docs → /srv/docs "
+            f"(or run from the repo checkout) for {name}")
+        text = path.read_text()
+        assert "budget 2 per mission lifetime" not in text, name
+        assert "freshness_rereviews" in text, name
 
 
 def test_deleted_watermark_treats_all_as_unread(tmp_path):

@@ -20,9 +20,21 @@ tracer = trace.get_tracer("devcake")
 
 
 def _pre_wipe(mgr, run: Run) -> bool:
-    """True when run.store_gen predates the store's last clear-runs wipe."""
-    wipe_gen = int(getattr(mgr.runs.store, "wipe_generation", 0) or 0)
-    return int(getattr(run, "store_gen", 0) or 0) < wipe_gen
+    """True when run is not stamped for the store's current wipe generation.
+
+    After any clear-runs in this process, only an exact store_gen match is
+    current — prior-process stamps (store_gen > wipe_generation) used to
+    slip past a strict-less-than check and resurrect wiped records.
+    """
+    store = mgr.runs.store
+    check = getattr(store, "is_current_generation", None)
+    if callable(check):
+        return not check(run)
+    wipe_gen = int(getattr(store, "wipe_generation", 0) or 0)
+    gen = int(getattr(run, "store_gen", 0) or 0)
+    if wipe_gen <= 0:
+        return False
+    return gen != wipe_gen
 
 
 async def _checkpoint(mgr, run: Run, key: str, fn) -> None:

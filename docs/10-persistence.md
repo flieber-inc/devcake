@@ -63,9 +63,9 @@ Clear-runs must not be undone by in-flight writers that still hold a `Run` in me
 |---|---|
 | `RunBootstrap.launch` | Stamps `run.store_gen = store.wipe_generation` before the durable save |
 | `RunStore.clear()` | Bumps `wipe_generation`, then unlinks every run JSON (and quarantine) |
-| `RunStore.save(run)` | **No-op** when `run.store_gen < wipe_generation` (log at info) |
-| Mission / hello finalize | Early-abort when pre-wipe — no further PMO posts after a wipe is observed mid-flight |
-| Startup `reconcile_runs` | Re-stamps adopted / finalizing-for-reclaim runs to **this** process's `wipe_generation` (resets to 0 on restart). Without that, a prior process's `store_gen ≥ 1` would survive a restart and miss the first post-restart clear |
+| `RunStore.save(run)` | **No-op** when the run is not current for this process's wipe counter (`is_current_generation`): before any clear in THIS process (`wipe_generation == 0`) every stamp is accepted (including prior-process stamps on disk after a restart); after the first clear (`wipe_generation ≥ 1`) only an **exact** `store_gen == wipe_generation` match may persist (log at info). A strict-less-than fence alone was fail-open for prior-process stamps (e.g. `store_gen=2` after wipe 0→1) |
+| Mission / hello finalize | Early-abort when not current — no further PMO posts after a wipe is observed mid-flight |
+| Startup `reconcile_runs` | Re-stamps adopted / finalizing-for-reclaim runs to **this** process's `wipe_generation` (resets to 0 on restart) so heartbeats and adoption stay aligned; the post-clear exact-match fence is the anti-resurrection chokepoint even when restamp was skipped |
 
 Legacy records without the field load as `store_gen: 0` (additive optional field — no schema bump). After a clear in-process, only runs launched **after** the wipe (stamped with the new generation) may persist again.
 

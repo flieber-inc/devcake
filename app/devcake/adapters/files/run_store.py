@@ -46,12 +46,29 @@ class RunStore:
             if os.path.exists(tmp):
                 os.unlink(tmp)
 
+    def is_current_generation(self, run: Run) -> bool:
+        """True when ``run`` may still be persisted under this process's wipe
+        counter (docs/10 store_gen).
+
+        Before any clear-runs in THIS process (``wipe_generation == 0``), every
+        stamp is accepted — including prior-process stamps that survived a
+        restart on disk. After the first clear (``wipe_generation >= 1``), only
+        an exact stamp match may save: the old ``gen < wipe_generation`` fence
+        was fail-open for prior-process stamps (e.g. store_gen=2 after wipe
+        0→1, because 2 < 1 is false) and let in-flight finalize/kill resurrect
+        wiped records.
+        """
+        gen = int(getattr(run, "store_gen", 0) or 0)
+        if self.wipe_generation <= 0:
+            return True
+        return gen == self.wipe_generation
+
     def save(self, run: Run) -> None:
         gen = int(getattr(run, "store_gen", 0) or 0)
-        if gen < self.wipe_generation:
+        if not self.is_current_generation(run):
             log.info(
-                "drop save for %s (store_gen=%s < wipe_generation=%s) — "
-                "run predates the last clear-runs wipe",
+                "drop save for %s (store_gen=%s, wipe_generation=%s) — "
+                "run is not stamped for the current clear-runs generation",
                 run.run_id, gen, self.wipe_generation,
             )
             return

@@ -21,10 +21,13 @@ def _restamp_store_gen(store, run) -> None:
 
     ``wipe_generation`` is process-local and resets to 0 on restart, but run
     files may still carry ``store_gen`` from a prior process (e.g. 2 after
-    two clears). Without restamping, the first clear in the new process
-    bumps wipe 0→1 and ``_pre_wipe(store_gen=2, wipe=1)`` is false — so
-    in-flight finalize after that clear can still post to the PMO and
-    resurrect the record. Orphaned runs are not restamped (they are
+    two clears). Restamp keeps the on-disk stamp aligned with this process
+    so heartbeats and adoption stay current before any clear. Anti-
+    resurrection after clear is fail-closed at the store fence itself
+    (``is_current_generation``: after wipe_generation ≥ 1 only an exact
+    stamp match may save) — restamp is no longer the sole defense against
+    prior-process stamps, but it still avoids carrying dead high stamps
+    into the active set. Orphaned runs are not restamped (they are
     terminalled via kill and leave the active set).
     """
     wipe_gen = int(getattr(store, "wipe_generation", 0) or 0)

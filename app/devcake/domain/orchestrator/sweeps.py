@@ -96,9 +96,9 @@ async def merge_sweep(mgr, m: Mission) -> None:
         # normal (forge list lag / branch-naming miss). Surface it instead of
         # returning silently — otherwise a mission whose PR never appears sits
         # parked with no visible reason. Self-clears next cycle once the PR is
-        # found (schedule() rebuilds blocked_reasons). When auto_merge is ON,
-        # finalize has already posted a retry marker, so the merge auto-drives
-        # the moment the PR surfaces.
+        # found (gate_map rebuilds blocked_reasons at the top of each poll).
+        # When auto_merge is ON, finalize has already posted a retry marker, so
+        # the merge auto-drives the moment the PR surfaces.
         mgr.blocked_reasons[m.pmo_id] = (
             f"{m.key}: no open PR found for branch "
             f"{mission_branch(m.instance, m.key)} — merge sweep deferred "
@@ -263,11 +263,25 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
 
 
 async def tracking_sweep(mgr, m: Mission) -> None:
-    children = await mgr.pmo.children_of(m.ref)
+    try:
+        children = await mgr.pmo.children_of(m.ref)
+    except Exception as e:
+        # Port F1: projects_supported=False adapters raise on project-kind
+        # refs (never return []). Transient children reads can also fail.
+        # Never false-complete; surface like merge missing-forge/PR so the
+        # wedge is admin-visible — outer sweeps() only log.exception is not
+        # enough for /health blocked_reasons (CAKE-46).
+        mgr.blocked_reasons[m.pmo_id] = (
+            f"{m.key}: tracking children unreadable — {type(e).__name__}: "
+            f"{str(e)[:120]}")
+        raise
     if children and all(c.status in ("done", "canceled") for c in children):
         with tracer.start_as_current_span("sweep.tracking") as span:
             span.set_attribute("devcake.mission.key", m.key)
             span.set_attribute("devcake.children", len(children))
+            # status FIRST (same commit-point as complete_merged): a failed
+            # status leaves TRACKING so the next cycle still selects; a failed
+            # swap after Done is leftover hygiene on a terminal project.
             await mgr.pmo.set_status(m.ref, "done")
             await mgr.pmo.swap_labels(m.ref, remove={LABEL_TRACKING}, add=set())
             mgr._audit(m.pmo_id, "tracking_sweep_completed",

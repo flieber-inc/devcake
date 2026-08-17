@@ -3,7 +3,30 @@
 > **Audience:** implementers. This is the most correctness-sensitive document in the set.
 > **Depends on:** `00-overview.md` (INV-1…6), `02-domain-model.md` (derivation table, Run, AppConfig).
 
-The orchestrator is the always-on core of the main app. **Implementation** lives under `app/devcake/domain/orchestrator/` as a package (ISSUES #36, structure per ADR-0015): `MissionManager` is the DI container + advisory state + public verb surface, holding explicit delegating methods; schedule, dispatch, finalize, transitions, review, freshness (the ADR-0031 gate on REVIEW's context-closing finalize — `docs/03` §4.1), decomposition, sweeps, feed policy, and STEWARD mission ops are focused modules whose functions take the manager (`mgr`) as an explicit first parameter. Step-finalization and sweep seams are module-public (`transitions.transition`, `review.finalize_review`, `freshness.review_freshness_gate`/`disclose_unread_at_close`, `decomposition.finalize_decomposition`, `sweeps.merge_sweep`/`tracking_sweep`, `dispatch.attempt_number`/`resolve_repo`/`resolve_repo_live`/`decomposition_rule`/`steward_repo`, `steward.apply_steward_edges`) — the sanctioned test seam. `StewardService` (cadence) stays in `domain/steward_service.py`; `CronService` (Scheduled Tasks — ADR-0035's one-verb ticket creator, fire ledger in `adapters/files/cron_store.py`) in `domain/cron_service.py`. Composition is `api/services.build_services()`. The three loops are started from `api/main.py`'s lifespan: poll (`api/poll.py` `PollRuntime`), ingress (`adapters/redis/messaging.py`), watchdog (`domain/watchdog.py`). Each poll segment ends with `rotate_grace()` so a write this cycle is skipped next cycle.
+The orchestrator is the always-on core of the main app. **Implementation** lives under `app/devcake/domain/orchestrator/` as a package (structure per ADR-0015 / ADR-0034). `MissionManager` (`manager.py`) is the DI container + advisory state + public verb surface, holding explicit delegating methods. Focused modules take the manager (`mgr`) as an explicit first parameter:
+
+| Module | Role |
+|---|---|
+| `schedule.py` | candidate gate map + schedule order |
+| `dispatch.py` | mission dispatch (prompt, attempts, repo resolution) |
+| `finalize.py` | run finalize spine, checkpoints, `restore_after_failure` |
+| `transitions.py` | outcome → label/status transitions |
+| `review.py` | REVIEW finalize (approve/reject) |
+| `freshness.py` | ADR-0031 gate on REVIEW's context-closing finalize (`docs/03` §4.1) + deferred-merge disclose |
+| `completion.py` | merge-complete, conflict-resolve routing |
+| `decomposition.py` | ONBOARD `decomposed` finalize |
+| `discovery.py` | harvest / pending / discovery sweep (ADR-0033) |
+| `deliver.py` | internal zip deliverable after merge |
+| `sweeps.py` | `merge_sweep` / `tracking_sweep` |
+| `feed.py` | comment posting choke-point (`_feed`), provenance helpers |
+| `markers.py` | `LEGAL_OUTCOMES`, feed markers, conflict/freshness constants |
+| `steps.py` | **checkpoint step-key registry** — sole authority for `finalized_steps` keys (ADR-0034) |
+| `steward.py` | STEWARD dispatch/finalize + edge/discovery apply |
+| `family_graph.py` | discovery family map |
+| `activity_payload.py` | activity-folder mount payload |
+| `router.py` | multi-instance `FinalizerRouter` (`RunFinalizer` over N managers) |
+
+**Module-public seams** (sanctioned test surface — module-level functions, not private helpers): `transitions.transition`, `review.finalize_review`, `freshness.review_freshness_gate` / `disclose_unread_at_close`, `decomposition.finalize_decomposition`, `sweeps.merge_sweep` / `tracking_sweep`, `dispatch.attempt_number` / `resolve_repo` / `resolve_repo_live` / `decomposition_rule` / `steward_repo`, `steward.apply_steward_edges`, `discovery.harvest` / `discovery_sweep`, `completion.complete_merged` / `route_conflict_to_execute`. Cadence outside the package: `StewardService` in `domain/steward_service.py`; `CronService` (Scheduled Tasks — ADR-0035; fire ledger in `adapters/files/cron_store.py`) in `domain/cron_service.py`. Shared dispatch spine: `domain/run_bootstrap.py` `RunBootstrap.launch`. Composition is `api/services.build_services()`. The three loops are started from `api/main.py`'s lifespan: poll (`api/poll.py` `PollRuntime`), ingress (`adapters/redis/messaging.py`), watchdog (`domain/watchdog.py`). Each poll segment ends with `rotate_grace()` so a write this cycle is skipped next cycle.
 
 It runs three cooperating loops on one asyncio event loop:
 
@@ -40,7 +63,7 @@ A `PMOTransient` on one instance skips **only that instance's segment** for this
 
 **Dependency-cycle detection (§2a):** `gate_map` runs a pure cycle finder (`find_cycles`, `domain/model.py`) over the snapshot's blocked-by graph. A cycle is an *unsatisfiable* wait — every member is parked until a human deletes a relation — so members get the explicit reason `dependency cycle: A → B → A — will never unblock; delete one relation in Linear` instead of ordinary blocking, `/api/v1/health` reports `dependency_cycles`, and the SPA surfaces an amber alert (Overview + slim strip elsewhere). Nothing prevents a human from creating a cycle (the PMO accepts both relations); DevCake's job is to make the deadlock unmistakable.
 
-> **Philosophy — blocking is deliberately pipeline-coarse.** A blocked Mission does not ONBOARD, PLAN, or anything else until its blockers are done. Better bottlenecked by a single well-ordered lane than accumulating parallel garbage: routing quality is the product thesis (founder decision 2026-07-12).
+> **Philosophy — blocking is deliberately pipeline-coarse.** A blocked Mission does not ONBOARD, PLAN, or anything else until its blockers are done. Better bottlenecked by a single well-ordered lane than accumulating parallel garbage: routing quality is the product thesis.
 
 ## 3. Scheduling algorithm (normative pseudocode)
 
@@ -107,9 +130,9 @@ def dispatch(mission, dev_type):                   # MissionManager — mission 
     run.spec_prompt = resolve_prompt(mission, dev_type)  # includes {blocker_repos}
     run.blocker_work = resolve_blocker_work(...)         # ADR-0017: done blockers' repo_refs
     run.mirror_repos = needed                            # the mirror gate's proven set,
-    #                                                      snapshotted (2026-08: the runspec
+    #                                                      snapshotted at dispatch: the runspec
     #                                                      serves mirrors from THIS, never
-    #                                                      from live config — 09 §3)
+    #                                                      from live config — 09 §3
     bootstrap.launch(run, image=harness_image(dev_type))
     # launch = workspace gate → ACL user → durable Run file → workspace dir
     # BEFORE the Dagu trigger (WorkspaceUnavailable at any of those steps is
@@ -122,9 +145,9 @@ def dispatch(mission, dev_type):                   # MissionManager — mission 
         audit_log.append(...)                      # feeds the grace cycle (§2)
 ```
 
-Writing the Run file *before* the executor trigger means a crash between (1) and (2) leaves a `dispatched` Run with no Dagu counterpart — repaired by startup reconciliation (§6), never dispatched twice (a blind re-trigger with the same `dag_run_id` would 409 regardless — verified, `13-deployment.md` §4).
+Writing the Run file *before* the executor trigger means a crash between (1) and (2) leaves a `dispatched` Run with no Dagu counterpart — repaired by startup reconciliation (§6), never dispatched twice (a blind re-trigger with the same `dag_run_id` would 409 regardless — `13-deployment.md` §4).
 
-**Failure symmetry rule (added at M3):** every side effect of a dispatch whose run then fails must be reverted so the mission re-derives exactly as before the attempt. Concretely, step (3)'s backlog→in_progress write is undone on `failed`/`timed_out`/`orphaned` runs — after a live re-read confirming a human hasn't moved the mission meanwhile. Kill and failed finalization call `RunFinalizer.restore_after_failure` (`ports/finalizer.py`; production adapter = `MissionManager`) so `RunManager` never types against the concrete orchestrator. The watchdog's liveness reference is `last_heartbeat or started_at` and Devs send their first heartbeat immediately, so a Dev killed in its first seconds is detected within the heartbeat grace, not at the wall-clock timeout (both gaps found and fixed live at M3).
+**Failure symmetry rule:** every side effect of a dispatch whose run then fails must be reverted so the mission re-derives exactly as before the attempt. Concretely, step (3)'s backlog→in_progress write is undone on `failed`/`timed_out`/`orphaned` runs — after a live re-read confirming a human hasn't moved the mission meanwhile (`finalize.restore_after_failure`). Kill and failed finalization call `RunFinalizer.restore_after_failure` (`ports/finalizer.py`; production path = `MissionManager` via `FinalizerRouter` when multi-PMO) so `RunManager` never types against the concrete orchestrator. The watchdog's liveness reference is `last_heartbeat or started_at` and Devs send their first heartbeat immediately, so a Dev killed in its first seconds is detected within the heartbeat grace, not at the wall-clock timeout.
 
 The run spec (stage-2 env, credentials, repo info) is fully resolved by the app at dispatch and served to the Dev over `runspec.get` (`09-messaging.md` §3); Dagu receives only non-secret params and executes with zero business logic (app is the brain, Dagu is muscle).
 
@@ -162,7 +185,7 @@ def compare_and_transition(run, intended: Transition):
             "DevCake completed a {type} run, but the mission's state was changed "
             "externally while it ran. Its output is posted above; no status/label "
             "changes were applied.")
-        return EXTERNAL_TRANSITION                       # not an error; 15-errors §
+        return EXTERNAL_TRANSITION                       # not an error; 15-errors-and-retries.md §1
     pmo.swap_labels(run.mission_ref,
                     remove=intended.remove, add=intended.add)   # single adapter call
     if intended.status: pmo.set_status(run.mission_ref, intended.status)
@@ -171,7 +194,7 @@ def compare_and_transition(run, intended: Transition):
 
 4. **Forge side effects** (EXECUTE/REVIEW only): PR comments/approval per `03-mission-lifecycle.md` and `06-forge-adapter.md`. **Exception to the ordering:** on REVIEW-approve, the merge (when the mission's repo has `auto_merge` on) runs *before* the status transition — Done is only declared after a real merge; a failed merge lands on `DEVCAKE-MERGE` instead (`03-mission-lifecycle.md` §4.1).
 
-Each completed side effect is appended to `run.finalized_steps` and the Run file rewritten (atomic tmp+rename), so a crash mid-finalization resumes exactly where it stopped — already-done steps are skipped by their step keys.
+Each completed side effect is appended to `run.finalized_steps` (keys from `orchestrator/steps.py` only — ADR-0034) and the Run file rewritten (atomic tmp+rename), so a crash mid-finalization resumes exactly where it stopped — already-done steps are skipped by their step keys.
 
 Because the *label swap is the stage-advancing PMO mutation* and scheduling only derives work from live labels, a Mission can never be worked twice concurrently: until the swap lands, the Mission still derives as its old type, and the in-flight guard + grace cycle (§2) keep it out of candidates; after the swap, it derives as the next type. (Feed posts and other non-stage side effects may still land after the swap on some paths — the scheduler keys on the stage label, not on "last write wins.")
 
@@ -179,9 +202,9 @@ Because the *label swap is the stage-advancing PMO mutation* and scheduling only
 
 Runs every 10 s over all Runs in `dispatched | running`:
 
-- **Timeout:** if `now - created_at > timeout_seconds` (default from `dev_timeout_minutes` at dispatch, 120 min), kill the run via Dagu's stop endpoint — `POST /api/v1/dag-runs/dev-run/{run_id}/stop` (verified: SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed, run `aborted`) — and mark the Run `timed_out`. Counts as a failed attempt (`15-errors-and-retries.md`, `DEV_TIMEOUT`). Ages are measured from **`created_at`**, not `started_at`. Dagu-side timeouts are intentionally not relied on — the app owns the kill (single owner; `13-deployment.md` §4 sets a belt-and-suspenders `timeout_sec` well above the app's). The app needs no `docker.sock` for this.
+- **Timeout:** if `now - created_at > timeout_seconds` (default from `dev_timeout_minutes` at dispatch, 120 min), kill the run via Dagu's stop endpoint — `POST /api/v1/dag-runs/dev-run/{run_id}/stop` (SIGTERM → SIGKILL after `max_clean_up_time_sec` → container force-removed, run `aborted`) — and mark the Run `timed_out`. Counts as a failed attempt (`15-errors-and-retries.md`, `DEV_TIMEOUT`). Ages are measured from **`created_at`**, not `started_at`. Dagu-side timeouts are intentionally not relied on — the app owns the kill (single owner; `13-deployment.md` §4 sets a belt-and-suspenders `timeout_sec` well above the app's). The app needs no `docker.sock` for this.
 - **Liveness:** a Run in `running` whose last `run.heartbeat` (`09-messaging.md`) is older than 5 minutes triggers a Dagu run-status query; a non-running Dagu status ⇒ Run `failed` (`DEV_KILLED` — the kill-chokepoint catch-all; exit 10/20 `DEV_CRASH` is only stamped when a Dev failure artifact or orphan post-mortem carries that code). A `dispatched` run that never starts within the startup grace (90 s) is treated the same way.
-- **Every kill branch re-reads before it kills (2026-08 evaluation).** The loop's snapshot of `store.active()` goes stale at every `await` (earlier kills, the Dagu status probe), so the timeout and liveness branches re-read the record and re-derive their verdict on the FRESH state immediately before killing — a run that finalized, entered finalize, or heartbeat mid-window is left alone. The same guard has always protected the stalled-finalize branch; `_kill_inner` additionally aborts its save (and the mission-status restore) if the state moved during its own teardown awaits — the mover wins.
+- **Every kill branch re-reads before it kills.** The loop's snapshot of `store.active()` goes stale at every `await` (earlier kills, the Dagu status probe), so the timeout and liveness branches re-read the record and re-derive their verdict on the FRESH state immediately before killing — a run that finalized, entered finalize, or heartbeat mid-window is left alone. The same guard protects the stalled-finalize branch; `_kill_inner` (`domain/runs.py`) additionally aborts its save (and the mission-status restore) if the state moved during its own teardown awaits — the mover wins.
 - **No mid-run kill on mission terminal:** the watchdog does **not** poll the PMO for `done`/`canceled` mid-run. `EXTERNAL_TRANSITION` is decided only at **finalize**, when compare-and-transition re-reads the live stage label and finds it differs from `stage_label_at_dispatch` (artifacts still post; no further stage mutation).
 - **Finalize-stall backstop:** Runs in `finalizing` are never wall-clock-killed while their `run.artifacts` entry can still be redelivered (crash+reclaim resumes them). But if a run is past `timeout_seconds + DEVCAKE_FINALIZE_STALL_SECONDS` (default 3600, age from `created_at`) **and** its entry is no longer on the ingress stream (poison dead-lettered per `15-errors-and-retries.md` §5, or lost), nothing can ever finish it — the watchdog fails it without re-entering finalize, so it stops blocking its mission and holding a concurrency slot.
 
@@ -190,14 +213,15 @@ Runs every 10 s over all Runs in `dispatched | running`:
 On every app boot, before the first poll cycle:
 
 1. Load config; validate (`CONFIG_INVALID` blocks startup with a clear admin-panel health error).
-2. Ensure the ten managed labels exist in the configured team (`05-pmo-adapter.md` §5).
-3. **Reconcile Runs:** for each local Run in a non-terminal state, query the Dagu run-status API for `run_id`:
+2. Ensure the managed labels in `domain/model.py` `ALL_LABELS` exist in the configured team (`05-pmo-adapter.md` §5) — eleven names today, including `DEVCAKE-DISCOVERY` (ADR-0033 sweep gate; not a derivation stage).
+3. **Reconcile Runs** (`domain/reconcile.py`): for each local Run in a non-terminal state, query the Dagu run-status API for `run_id`:
    - Dagu says finished + artifacts message present in Redis (pending-entries reclaim, `09-messaging.md` §5) → resume finalization from `finalized_steps`.
    - Dagu says running → adopt it: mark `running`, resume watchdog coverage.
-   - Dagu says failed/aborted, or has no such run → mark `orphaned`; counts as a failed attempt; the Mission (whose label never advanced — INV-3) reschedules naturally.
-   - A `dispatched` Run with no Dagu run → the §3.1 crash window; mark `orphaned` (never re-trigger blindly — a duplicate `dagRunId` trigger returns 409 `already_exists`, verified).
+   - Dagu status/label is in the exact dead set `failed` / `aborted` / `error` / `cancelled` (British spelling on the label arm), or the API returns no such run → mark `orphaned` (`DEV_ORPHANED`); counts as a failed attempt; the Mission (whose label never advanced — INV-3) reschedules naturally. American `canceled` is **not** in this exact set (watchdog §5 uses a `cancel` substring and would treat it as dead mid-flight).
+   - A `dispatched` Run with no Dagu run → the §3.1 crash window; mark `orphaned` (never re-trigger blindly — a duplicate `dagRunId` trigger returns 409 `already_exists`).
+   - Runs in `finalizing` are left for reclaim (step 4), not orphan-killed.
 4. Reclaim pending Redis messages older than the consumer's dead-time (XAUTOCLAIM) and process them.
-5. Start the poll, ingress, and watchdog loops. The poll task runs the **initial full forge sweep** (bounded-parallel, `ForgeRuntime.refresh_all`) before its first cycle — off the boot critical path (a large catalog probed inside lifespan held the listen socket and failed the compose healthcheck, incident 2026-08-01) but still ahead of any dispatch, so a definitively bad repo credential latches its breaker before cycle 1 can burn an attempt. `/health.forge_probe` reports the sweep's progress; a sweep that misses its 60 s budget is retried each cycle until one completes.
+5. Start the poll, ingress, and watchdog loops. The poll task runs the **initial full forge sweep** (bounded-parallel, `ForgeRuntime.refresh_all`) before its first cycle — off the boot critical path (so a large catalog probe does not hold the listen socket past the compose healthcheck) but still ahead of any dispatch, so a definitively bad repo credential latches its breaker before cycle 1 can burn an attempt. `/health.forge_probe` reports the sweep's progress; a sweep that misses its 60 s budget is retried each cycle until one completes.
 
 ## 7. Crash matrix (summary)
 
@@ -205,7 +229,7 @@ On every app boot, before the first poll cycle:
 |---|---|---|
 | App crashes mid-poll | Nothing dispatched twice (Run file precedes trigger) | §6 reconciliation |
 | App crashes mid-finalization | Some side effects applied | `finalized_steps` + idempotency keys resume the rest |
-| Dev container crashes | Mission label untouched (INV-3); **the dispatch-time backlog→in_progress status write is reverted** (live compare first — human edits win), else a failed first ONBOARD would strand the mission at derivation row 9 (verified at M3) | Run `failed`; attempt++; reschedules next cycle; after `max_attempts` → `DEVCAKE-FAILED` |
+| Dev container crashes | Mission label untouched (INV-3); **the dispatch-time backlog→in_progress status write is reverted** (live compare first — human edits win), else a failed first ONBOARD would strand the mission at derivation row 9 | Run `failed`; attempt++; reschedules next cycle; after `max_attempts` → `DEVCAKE-FAILED` |
 | Dev exceeds timeout | Watchdog kills container | Same as crash (`DEV_TIMEOUT`) |
 | Redis down | Devs buffer/retry publishes with backoff; app consumer reconnects | Streams are durable (AOF); nothing lost; finalization is stream-driven |
 | Linear down | That instance's poll segment skips; other instances continue; running Devs unaffected (they don't talk to PMO — INV-4) | Next poll tick re-tries the sick instance (`PMO_TRANSIENT`); finalizations queue on the ingress until PMO is writable |

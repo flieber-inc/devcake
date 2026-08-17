@@ -160,12 +160,34 @@ def _params(fn):
     return [p for p in inspect.signature(fn).parameters if p != "self"]
 
 
+# docs/06 §1a table — honest divergence model; pin exact values so a fourth
+# forge or a silent flip fails here instead of call sites guessing.
+_CAPABILITIES_MATRIX = {
+    "github": dict(mergeable_tristate=True, self_approval_blocked=True,
+                   branch_protection_read="admin", pr_list_head_filter=True),
+    "gitlab": dict(mergeable_tristate=True, self_approval_blocked=False,
+                   branch_protection_read="maintainer", pr_list_head_filter=True),
+    "gitea": dict(mergeable_tristate=False, self_approval_blocked=True,
+                  branch_protection_read="admin", pr_list_head_filter=False),
+}
+
+
 @pytest.mark.parametrize("cls", [GitHubForge, GitLabForge, GiteaForge])
 def test_adapters_declare_capabilities(cls):
     from devcake.ports.forge import ForgeCapabilities
     assert isinstance(cls.capabilities, ForgeCapabilities)
-    assert cls.capabilities.branch_protection_read in (
-        "writer", "maintainer", "admin")
+    expected = _CAPABILITIES_MATRIX[cls.descriptor.id]
+    for field, want in expected.items():
+        got = getattr(cls.capabilities, field)
+        assert got == want, (
+            f"{cls.__name__}.capabilities.{field}: got {got!r}, want {want!r}")
+
+
+def test_capabilities_matrix_covers_every_registered_forge():
+    """A newly registered forge must declare an exact §1a row here — no silent
+    default ForgeCapabilities() that looks like GitHub."""
+    from devcake.adapters.registry import forges
+    assert set(forges()) == set(_CAPABILITIES_MATRIX)
 
 
 @pytest.mark.parametrize("cls", [GitHubForge, GitLabForge, GiteaForge])

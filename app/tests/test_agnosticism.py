@@ -215,3 +215,36 @@ def test_no_forge_host_literals_outside_adapters():
     assert not offenders, (
         "forge-host string literals outside adapters/ (extend the allowlist "
         "only with a reason):\n" + "\n".join(offenders))
+
+
+def test_forge_adapters_constructed_only_via_registry():
+    """Sole construction chokepoint: production code must not call
+    GitHubForge/GitLabForge/GiteaForge/GiteaProvisioner outside
+    adapters/registry.py and the vendor packages themselves. Callers use
+    make_forge / make_internal_forge / make_gitea_adapter (F1)."""
+    allowed = {Path("adapters/registry.py")}
+    allowed_vendor = {"github", "gitlab", "gitea"}
+    ctors = {"GitHubForge", "GitLabForge", "GiteaForge", "GiteaProvisioner"}
+    offenders = []
+    for path in _package_files():
+        rel = path.relative_to(PKG_ROOT)
+        if rel in allowed:
+            continue
+        if (len(rel.parts) >= 2 and rel.parts[0] == "adapters"
+                and rel.parts[1] in allowed_vendor):
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = None
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            if name in ctors:
+                offenders.append(f"{rel}:{node.lineno}: {name}(")
+    assert not offenders, (
+        "forge adapter constructed outside registry factories:\n"
+        + "\n".join(offenders))

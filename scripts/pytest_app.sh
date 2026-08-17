@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Always-fresh unit suite: rebake app-test (COPY'd tree) then pytest.
+# Always-fresh unit suite: rebuild app-test (COPY'd tree) then pytest.
 # Avoids the stale-image false green when app/ or tests/ changed since last bake.
+# Uses scripts/lib/bake_app_test.sh: Docker Buildx bake when available, else
+# `docker build -f app/Dockerfile --target test` (podman/buildah hosts).
 # For the full local suite (forge battery + dispatch smoke) use ci_suite.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -20,8 +22,8 @@ if [[ -f .env ]]; then
   done < <(grep -E '^REDIS_PASSWORD=' .env || true)
 fi
 
-echo "── bake app-test (ensures image matches working tree)"
-docker buildx bake -f docker-bake.hcl app-test
+# Always rebuild before pytest (stale COPY'd image = silent false green).
+bash scripts/lib/bake_app_test.sh
 
 TAG="${DEVCAKE_TAG:-latest}"
 NET_ARGS=()

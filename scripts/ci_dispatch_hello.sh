@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Stub-harness smoke: full dispatch pipeline (Dagu → container → Redis → finalize).
-# Preconditions: compose stack up (app + admin + redis + dagu + …), hello image
-# baked as devcake/dev-hello:${DEVCAKE_TAG:-latest}, ADMIN_* credentials set.
+# Preconditions: compose stack up and healthy (app + admin + redis + dagu + …);
+# hello image present as devcake/dev-hello:${DEVCAKE_TAG:-latest}; ADMIN_* set.
+# This script does not bake or compose-up — bring the stack with
+# scripts/ci_compose_for_dispatch.sh (or ./up.sh) first.
 # Used by scripts/ci_suite.sh and .github/workflows/ci.yml.
 set -euo pipefail
 

@@ -41,12 +41,12 @@ copy voice, evidence loop). Read it before touching the SPA. Iron rules:
 | Change type | Minimum proof |
 |---|---|
 | Docker / Bake / Compose | `docker buildx bake …` succeeds **and** `docker compose up -d` + healthchecks pass |
-| App / API | **`docker buildx bake app-test`** (or `scripts/pytest_app.sh`) **then** pytest in that image, **or** `PYTHONPATH=app` on Python **3.12** against the working tree; **and** bake/restart prod `app` when the run path changed |
+| App / API | **`./scripts/pytest_app.sh`** (always rebuilds `app-test` via Bake or Dockerfile `--target test`, then pytest), **or** `docker buildx bake app-test` then pytest in that image, **or** `PYTHONPATH=app` on Python **3.12** against the working tree; **and** bake/restart prod `app` when the run path changed |
 | Admin SPA | `bake admin` **and** load UI / nginx-health |
 | Dev harness / entrypoint | `bake images` (or affected target) **and** smoke CLI + import entrypoint |
 | Docs-only | No runtime required; still re-read for accuracy |
 
-**Stale `app-test` trap:** the `devcake/app-test` image **COPY**s `app/devcake` and `app/tests` at bake time. Re-running pytest on an old `devcake/app-test:latest` grades the last bake, not your working tree — a silent false green. Always rebake after `app/` edits, or use `PYTHONPATH=app` on 3.12, or `./scripts/pytest_app.sh` (always bakes first). CI rebakes on every run; local agent loops often forget.
+**Stale `app-test` trap:** the `devcake/app-test` image **COPY**s `app/devcake` and `app/tests` at bake time. Re-running pytest on an old `devcake/app-test:latest` grades the last bake, not your working tree — a silent false green. Always rebake after `app/` edits, or use `PYTHONPATH=app` on 3.12, or `./scripts/pytest_app.sh` (always rebuilds first via `scripts/lib/bake_app_test.sh`: Docker Buildx bake when available, else `docker build -f app/Dockerfile --target test`). CI rebakes on every run; local agent loops often forget.
 
 Never claim done from "build succeeded" alone when the user-facing path is run/up. Name anything still unproven.
 
@@ -130,13 +130,13 @@ docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
 
 | Workflow | When | What |
 |---|---|---|
-| `ci.yml` | every PR + `main` | Bake group `ci` → ruff → Redis + `app-test` pytest → minimal compose (no Gitea) via `scripts/ci_compose_for_dispatch.sh` → `scripts/ci_dispatch_hello.sh` |
-| `docker-images.yml` | `images/**` changes + `main` + manual | Bake group `images` → harness CLI smoke + hello redis-import smoke (layer only; full dispatch is `ci.yml`) |
-| `docker-publish.yml` | **manual** (`workflow_dispatch`) | Bake `all` + push to GHCR (`ghcr.io/<owner>/devcake/<name>`) |
+| `ci.yml` | every PR + `main` | Pin gate → admin npm checks → bake group `ci` (sbom:false) → ruff → pip-audit → Redis + fresh `app-test` pytest → compose via `scripts/ci_compose_for_dispatch.sh` **with Gitea** (`CI_COMPOSE_WITH_GITEA=1`) → `scripts/ci_dispatch_hello.sh` → forge/PMO contract batteries. Permissions: `contents: read` only. |
+| `docker-images.yml` | `images/**` changes + `main` + manual | Bake group `images` → harness CLI smoke + hello redis-import smoke (layer only; full dispatch is `ci.yml`). No SBOM. |
+| `docker-publish.yml` | **manual** (`workflow_dispatch`) | Bake `all` + push to GHCR (`ghcr.io/<owner>/devcake/<name>`); `packages: write`; SBOM + provenance on this bake only — not a tree-wide SBOM program. |
 
-**Local unit path:** `./scripts/pytest_app.sh` (always rebakes `app-test`, then pytest).  
-**Local full suite:** `scripts/ci_suite.sh` — pin gate + bake app-test + pytest + Gitea forge battery + dispatch smoke.  
-**Clean-room dispatch compose:** `scripts/ci_compose_for_dispatch.sh` (minimal services; set `CI_COMPOSE_WRITE_ENV=1` only when you intend to overwrite `.env`).
+**Local unit path:** `./scripts/pytest_app.sh` — always rebuilds `app-test` (Buildx bake preferred; Dockerfile `--target test` fallback when bake is missing, e.g. buildah), then pytest.  
+**Local suite:** `scripts/ci_suite.sh` — pin gate + rebuild app-test + ruff + pytest + forge/PMO contracts + dispatch-hello; requires a **healthy stack already up**; not a full GHA clone (no npm/pip-audit, no control-plane rebake); mixed-version live stack prints a loud banner and is not tree evidence.  
+**Clean-room dispatch compose:** `scripts/ci_compose_for_dispatch.sh` (default without Gitea; set `CI_COMPOSE_WITH_GITEA=1` for contracts). `CI_COMPOSE_WRITE_ENV=1` / `GITHUB_ACTIONS=true` **overwrites `.env`**.
 
 ### Do
 

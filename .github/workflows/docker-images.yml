@@ -1,5 +1,8 @@
 # Bake Dev harness images (shared base stage) with GHA BuildKit cache.
 # Heavy job — runs when harness paths change (PR and main) or on dispatch.
+# Proves layer presence + harness CLI pins + hello redis-import only.
+# Full Dagu→hello→finalize dispatch smoke is ci.yml, not this workflow.
+# No SBOM/provenance (publish-only); permissions: contents:read.
 name: Docker images
 
 on:

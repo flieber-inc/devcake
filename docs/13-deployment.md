@@ -279,7 +279,25 @@ DAG's `name:` keys (ADR-0025), with the human-readable run id format of
 
 **Cache:** opt-in local `.buildx-cache/` — `BAKE_LOCAL_CACHE=1 docker buildx bake …` (needs a docker-container builder or the containerd image store; the default `docker` driver cannot export cache, so plain `bake all` works everywhere without it). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
 
-**GitHub Actions:** `.github/workflows/ci.yml` bakes group `ci` + pytest on every PR; `docker-images.yml` bakes harnesses when `images/**` changes; `docker-publish.yml` (manual) pushes all images to GHCR.
+**Bake prerequisite:** full matrix targets (`ci`, `images`, `all`, control-plane) need real **Docker Buildx bake**. On hosts where `docker` is Podman and `docker buildx` is Buildah, `bake` is missing and `-f` may be rejected — only the **app-test unit path** has a fallback (`scripts/lib/bake_app_test.sh` → `docker build -f app/Dockerfile --target test`). Admin/hello/harness builds still need Docker Buildx (or GHA).
+
+**GitHub Actions (what green means):**
+
+| Workflow | Permissions | What it proves | What it does not |
+|---|---|---|---|
+| `ci.yml` (every PR + `main`) | `contents: read` | Pin gate; admin npm helper tests + audit; bake group `ci` (**sbom: false**, **provenance: false**); ruff; pip-audit; pytest on tree-fresh `app-test`; compose with **Gitea on** (`CI_COMPOSE_WITH_GITEA=1`); hello dispatch smoke; forge + PMO contract batteries (bundled Gitea, no external tokens) | Token-spending `scripts/acceptance.py`; full harness matrix; SBOM attestation |
+| `docker-images.yml` (path-filtered / manual) | `contents: read` | Bake group `images`; harness CLI pin smoke; hello redis-import (layer only) | Full dispatch (that is `ci.yml`); SBOM |
+| `docker-publish.yml` (**manual** only) | `contents: read` + `packages: write` | Bake `all` + push GHCR; **sbom: true** + **provenance: true** on that bake | Not an automatic publish; not a committed tree-wide SBOM artifact program |
+
+**Local scripts (model-free):**
+
+| Script | Role |
+|---|---|
+| `./scripts/pytest_app.sh` | Always rebuilds `app-test` then pytest (+ throwaway Redis if compose is down) |
+| `scripts/ci_suite.sh` | Pin gate → app-test rebuild → ruff → pytest → forge/PMO contracts → dispatch-hello; **stack must already be healthy**; mixed-version banner if live app ≠ local tag (warn, not fail) |
+| `scripts/ci_compose_for_dispatch.sh` | Clean-room compose for smoke/contracts; default without Gitea; `CI_COMPOSE_WITH_GITEA=1` for batteries. `CI_COMPOSE_WRITE_ENV=1` overwrites `.env` |
+| `scripts/ci_dispatch_hello.sh` | Dagu → hello → Redis → finalize only (no bake) |
+
 | Image | Bake target | Context / Dockerfile target | Default tag |
 |---|---|---|---|
 | `devcake/app` | `app` → `runtime` | `./app` | `devcake/app:${TAG}` |

@@ -1,5 +1,7 @@
-# Optional publish of DevCake images to GHCR (manual).
+# Optional publish of DevCake images to GHCR (manual workflow_dispatch only).
 # Images: ghcr.io/<owner>/devcake/<name>:<sha12> and :latest
+# SBOM + provenance are enabled on this bake only — there is no committed
+# tree-wide SBOM artifact process; PR CI keeps sbom/provenance false.
 name: Docker publish
 
 on:

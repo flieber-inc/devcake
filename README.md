@@ -244,16 +244,22 @@ More detail: [`AGENTS.md`](AGENTS.md) · [`docs/13-deployment.md`](docs/13-deplo
 ## Verify
 
 ```bash
-# Unit suite only (always rebakes app-test so the image matches the tree):
+# Unit suite only (always rebuilds app-test so the image matches the tree).
+# Prefers Docker Buildx bake; falls back to Dockerfile --target test when bake
+# is missing (e.g. podman/buildah hosts — see scripts/lib/bake_app_test.sh):
 ./scripts/pytest_app.sh
 
-# CI-shaped bake (Docker): see .github/workflows/ci.yml
+# CI-shaped bake (requires real Docker Buildx — not buildah's buildx shim):
 docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl ci
 
-# Full local suite (stack up; forge battery + dispatch-hello smoke):
+# Local suite (healthy stack already up; pin gate + ruff + pytest + forge/PMO
+# contracts + dispatch-hello). Not a full GHA clone (no npm/pip-audit; no
+# control-plane rebake). Mixed-version live stack prints a warning banner:
 ./scripts/ci_suite.sh
 ```
 
+PR CI (`.github/workflows/ci.yml`) also runs pin gate, npm checks, pip-audit,
+compose with Gitea, and contract batteries — see `docs/13-deployment.md` §6.
 Token-spending golden path (optional, real models/forges):
 `scripts/acceptance.py` — including internal-forge / Gitea lanes when configured.
 

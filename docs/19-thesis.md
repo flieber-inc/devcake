@@ -4,8 +4,8 @@
 > a skeptical practitioner, a potential contributor, a researcher.
 > [`17-positioning.md`](17-positioning.md) is the compressed voice of this
 > document; the README is the applied version of `17`.
-> **Status:** adopted 2026-07-28 (first version) — expected to evolve with
-> evidence (§2, §7).
+> **Status:** adopted — normative thesis; evidence labels in §0 and falsifiers
+> in §7 evolve with field data (history in [`16-roadmap.md`](16-roadmap.md)).
 > **Security:** aligned with [`14-security.md`](14-security.md) — nothing here
 > claims a stronger posture, and every autonomy claim inherits the trust
 > clauses of `17` §1a.

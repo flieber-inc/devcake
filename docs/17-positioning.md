@@ -3,15 +3,18 @@
 > **Audience:** anyone writing outward-facing words about this project — README,
 > website, pitch, launch post. The README is the applied version of this doc;
 > the full argument it compresses is [`19-thesis.md`](19-thesis.md).
-> **Status:** adopted at v0 close; last revised 2026-08-11 — §1, §1c, §6.
+> **Status:** adopted — normative for outward copy.
 > **Aligned with the product security contract**
 > in [`14-security.md`](14-security.md). Outward copy must not claim a stronger
-> posture than `14`.
+> posture than `14`. Ship history and backlog live in
+> [`16-roadmap.md`](16-roadmap.md).
 
 ## 1. The core insight
 
 DevCake is a **meta-harness** — a CLI agent orchestrator. It does not replace
-Claude Code, Grok Build, or Codex; it **staffs** them. Those tools are model
+Claude Code, Grok Build, Codex, or the other registry harnesses; it **staffs**
+them (examples, not an exclusive roster — full launch-supported set in
+[`08-harness-templates.md`](08-harness-templates.md)). Those tools are model
 harnesses: one session between a model and its tools. DevCake is the outer
 envelope that turns board work into sequenced, isolated, accountable harness
 runs — swap the workers without changing the control plane.
@@ -68,9 +71,11 @@ both lists recognizable within the first minute.
 
 **Use DevCake when:**
 
-- Your team already runs real work through a task board (Linear in-tree today)
-  and the board has discipline: tickets are written to be picked up, and
-  labels mean things.
+- Your team already runs real work through a task board (**Linear** and
+  **Gitea Issues** are launch-supported; **GitHub Issues** and **GitLab
+  Issues** are experimental — [`05-pmo-adapter.md`](05-pmo-adapter.md)) and
+  the board has discipline: tickets are written to be picked up, and labels
+  mean things.
 - One adult operator can own a dedicated machine and the trust envelope that
   comes with it — team membership, branch protection, credentials, backups
   ([`18-operator-contract.md`](18-operator-contract.md)).
@@ -146,20 +151,22 @@ multi-tenant sandbox, and receipts do not make agents injection-proof
 > tight.
 
 **Two minutes (engineers):** the thirty-second pitch, then:
-> Under the hood it's deliberately boring: your PMO system (Linear in v0) is
-> the single source of truth, and labels form the state machine — triage, plan,
-> execute, review. Each step runs as a disposable Docker container wrapping a
-> real coding harness — Claude Code, Grok Build, or Codex — using the
-> subscription or API credentials you provide. Dagu holds `docker.sock` on a
-> dedicated host; that is intentional, not an accident (`14`). There are no
-> persistent per-Mission leases or checkouts: a crashed agent holds nothing,
-> while process-local locks only serialize dispatch and maintenance. A human
-> edit to a ticket always beats an in-flight agent. "Done"
-> means *merged* — never before. Everything is traced in OpenTelemetry down to
-> token counts; a large test suite pins behavioral invariants. The security
-> contract is adult-operator: prompt injection is in scope of “ticket writers
-> are trusted,” and the real supply-chain defense is branch protection and
-> human merge. One Bake + compose brings up the stack on loopback.
+> Under the hood it's deliberately boring: your PMO system (Linear and Gitea
+> Issues launch-supported; GitHub/GitLab Issues experimental) is the single
+> source of truth, and labels form the state machine — triage, plan, execute,
+> review. Each step runs as a disposable Docker container wrapping a real
+> coding harness from the registry — Claude Code, Grok Build, Codex, Pi,
+> OpenCode, Qwen Code — using the subscription or API credentials you provide.
+> Dagu holds `docker.sock` on a dedicated host; that is intentional, not an
+> accident (`14`). There are no persistent per-Mission leases or checkouts: a
+> crashed agent holds nothing, while process-local locks only serialize
+> dispatch and maintenance. A human edit to a ticket always beats an in-flight
+> agent. "Done" means *merged* — never before. Everything is traced in
+> OpenTelemetry down to token counts; a large test suite pins behavioral
+> invariants. The security contract is adult-operator: prompt injection is in
+> scope of “ticket writers are trusted,” and the real supply-chain defense is
+> branch protection and human merge. One Bake + compose brings up the stack on
+> loopback (images are Bake-only — compose never builds them).
 
 ## 3. Message house
 
@@ -168,7 +175,7 @@ multi-tenant sandbox, and receipts do not make agents injection-proof
 | **Roof (motto)** | *Your board is the interface.* (board-native day-to-day Mission work — and you own the trust envelope) |
 | **Pillar 1 — Board-native Mission work** | Your task board is the day-to-day Mission interface. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. The admin UI remains the configuration and operations surface. |
 | **Pillar 2 — Autonomy with receipts** | Every step posts transcript + token bill. Traced and audited. REVIEW is always a pipeline stage; formal forge approval uses the **reviewer token** when configured. “Done” never lies about merge. |
-| **Pillar 3 — Your box, your rules** | Self-hosted on a **dedicated** machine; you own the trust envelope — team membership, branch protection, the merge button, backups (`18`). Mix Claude/Grok/Codex per role. Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
+| **Pillar 3 — Your box, your rules** | Self-hosted on a **dedicated** machine; you own the trust envelope — team membership, branch protection, the merge button, backups (`18`). Mix registry harnesses per role (Claude, Grok, Codex, and the rest of the launch-supported roster). Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
 | **Foundation** | Verified, not vibed: acceptance path tickets → PRs, GitHub, GitLab, and Gitea, invariant tests, redaction of app-mediated posts. Security contract in `14`. |
 
 ## 4. Tone guide

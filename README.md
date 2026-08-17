@@ -233,6 +233,7 @@ into `.env`, optionally bakes, then runs compose. Control ports bind
 2. [Tutorial 2 — daily operations](docs/tutorials/02-operating-devcake.md)
 3. [Tutorial 3 — MCP plugins](docs/tutorials/03-mcp-plugins.md)
 4. Fresh empty volume drill: [operator-drill](docs/tutorials/operator-drill.md)
+5. Pre-v1 host wipe-and-re-onboard: [host-refresh](docs/tutorials/host-refresh.md)
 
 After upgrades or changes under `app/`, `admin/`, or `images/`:
 
@@ -246,18 +247,30 @@ More detail: [`AGENTS.md`](AGENTS.md) · [`docs/13-deployment.md`](docs/13-deplo
 
 ## Verify
 
+Primary local unit path (always rebakes `app-test` so the image matches the
+tree; prefers Docker Buildx bake and falls back to a plain Dockerfile build
+where bake is unavailable — e.g. podman/buildah hosts, see
+`scripts/lib/bake_app_test.sh`):
+
 ```bash
-# Unit suite only (always rebuilds app-test so the image matches the tree).
-# Prefers Docker Buildx bake; falls back to Dockerfile --target test when bake
-# is missing (e.g. podman/buildah hosts — see scripts/lib/bake_app_test.sh):
 ./scripts/pytest_app.sh
+```
 
-# CI-shaped bake (requires real Docker Buildx — not buildah's buildx shim):
+CI-shaped proof on a full Docker Engine (real Buildx — not buildah's shim)
+matches [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — bake group
+`ci`, then Redis + pytest in `app-test`, then the dispatch smoke. The bake
+line CI uses is:
+
+```bash
 docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl ci
+```
 
-# Local suite (healthy stack already up; pin gate + ruff + pytest + forge/PMO
-# contracts + dispatch-hello). Not a full GHA clone (no npm/pip-audit; no
-# control-plane rebake). Mixed-version live stack prints a warning banner:
+Full local suite when the stack is up (pin gate + ruff + pytest + forge/PMO
+contract batteries + dispatch-hello smoke). Not a full GHA clone (no
+npm/pip-audit, no control-plane rebake); a mixed-version live stack prints a
+warning banner:
+
+```bash
 ./scripts/ci_suite.sh
 ```
 

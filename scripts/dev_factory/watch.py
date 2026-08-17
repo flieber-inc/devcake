@@ -98,12 +98,17 @@ def compose_rm(rel: str) -> None:
 
 
 def compose_claim(rel: str) -> None:
-    """Rename /data/rel → /data/rel.taking if the inbox is present."""
+    """Rename /data/rel → /data/rel.taking if the inbox is present.
+
+    Paths ride argv ($1/$2), never shell interpolation — keep-set / prune
+    names are fixed constants today; this stays safe if that changes.
+    """
     src = f"/data/{rel}"
     dst = f"/data/{rel}{TAKING_SUFFIX}"
     subprocess.run(
         ["docker", "compose", "exec", "-T", "app",
-         "sh", "-c", f"if [ -f {src!s} ]; then mv -f {src} {dst}; fi"],
+         "sh", "-c", 'if [ -f "$1" ]; then mv -f "$1" "$2"; fi',
+         "claim", src, dst],
         cwd=REPO, check=False, timeout=15)
 
 

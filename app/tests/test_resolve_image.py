@@ -134,7 +134,7 @@ def test_publish_keep_set_is_the_template_list_not_yaml(tmp_path):
         root=tmp_path,
     )
     body = json.loads((tmp_path / "harness_keep_set.json").read_text())
-    assert body["templates"] == ["claude-code", "grok-build"]
+    assert list(body.keys()) == ["pins"]
     assert {"template": "grok-build", "cli_version": "0.2.112"} in body["pins"]
     assert {"template": "claude-code", "cli_version": "2.1.229"} in body["pins"]
 
@@ -157,12 +157,13 @@ def test_upsert_and_delete_publish_the_keep_set(tmp_path, monkeypatch):
         {"name": "implementer", "harness_template": "grok-build"},
         dev_types=dts))
     body = json.loads((tmp_path / "harness_keep_set.json").read_text())
-    assert body["templates"] == ["grok-build"]
+    assert body["pins"] == [
+        {"template": "grok-build", "cli_version": "0.2.112"}]
     cfg = AppConfig(assignments={
         mt: Assignment(dev_type="judgment")
         for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")})
     loop.run_until_complete(devtypes_service.remove_dev_type(
         "implementer", config=cfg, dev_types=dts))
     body = json.loads((tmp_path / "harness_keep_set.json").read_text())
-    assert body["templates"] == []
+    assert body["pins"] == []
     loop.close()

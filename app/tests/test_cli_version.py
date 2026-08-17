@@ -86,12 +86,54 @@ def test_keep_set_records_concrete_pins(tmp_path):
     )
     import json
     body = json.loads((tmp_path / "harness_keep_set.json").read_text())
-    assert body["templates"] == ["claude-code", "grok-build"]
+    # Pins are the sole keep-set contract — not a parallel free-form table.
+    assert list(body.keys()) == ["pins"]
     assert body["pins"] == [
         {"template": "claude-code", "cli_version": "2.1.229"},
         {"template": "grok-build", "cli_version": "0.2.112"},
         {"template": "grok-build", "cli_version": "1.0.4"},
     ]
+
+
+def test_publish_keep_set_refuses_unknown_template(tmp_path):
+    """Publish re-validates — host refuse is not the only gate (CAKE-40)."""
+    from types import SimpleNamespace
+
+    from devcake.keep_set import publish_keep_set
+
+    with pytest.raises(ValueError, match="unknown template"):
+        publish_keep_set(
+            {"evil": SimpleNamespace(harness_template="nginx",
+                                     cli_version="1.2.3")},
+            root=tmp_path,
+        )
+    assert not (tmp_path / "harness_keep_set.json").exists()
+
+
+def test_publish_keep_set_never_emits_image_fields(tmp_path):
+    """Even if a caller object carries docker_image, the file is pins only."""
+    from types import SimpleNamespace
+
+    from devcake.keep_set import publish_keep_set
+
+    publish_keep_set(
+        {
+            "d": SimpleNamespace(
+                harness_template="grok-build",
+                cli_version="1.0.4",
+                docker_image="evil/smuggle:latest",
+            ),
+        },
+        root=tmp_path,
+    )
+    import json
+    body = json.loads((tmp_path / "harness_keep_set.json").read_text())
+    assert body == {
+        "pins": [{"template": "grok-build", "cli_version": "1.0.4"}],
+    }
+    text = (tmp_path / "harness_keep_set.json").read_text()
+    assert "docker_image" not in text
+    assert "evil/smuggle" not in text
 
 
 def test_latest_gesture_returns_a_planted_semver():

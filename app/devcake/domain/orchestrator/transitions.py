@@ -46,10 +46,10 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
             mgr._audit(pmo_id, "project_bad_outcome_parked", outcome)
         await mgr._checkpoint(run, steps.TRANSITION_PROJECT_PARK, _proj_park)
         run.verdict = redact(
-            f"rejected: project returned {outcome} (only decomposed "
-            f"is legal) — parked with DEVCAKE-SKIP")
-        log.warning("project %s returned %s (only decomposed is legal) — parked",
-                    run.mission_key, outcome)
+            f"rejected: project returned {outcome} (only decomposed/"
+            f"human_needed are legal) — parked with DEVCAKE-SKIP")
+        log.warning("project %s returned %s (only decomposed/human_needed "
+                    "are legal) — parked", run.mission_key, outcome)
         return
     # A redelivery must not mistake its OWN checkpointed label swap for an
     # external change — but a change a human made BETWEEN deliveries (e.g.
@@ -138,21 +138,31 @@ async def transition(mgr, run: Run, result: dict, plan_md: str | None) -> None:
     elif outcome == "decomposed":
         await decomposition.finalize_decomposition(mgr, run, result)
     elif outcome == "plan_needed" and plan_md:
+        # Mirror the planned path's attach contract: skip upload when the
+        # PMO has no attachment API (GitHub Issues raises), and on redelivery
+        # after a checkpointed upload re-inline plan_md rather than a dead
+        # link (plan_url_box is always empty on a fresh transition entry).
         plan_name = f"PLAN_{run.seq}.md"
         plan_url_box: list[str] = []
 
         async def _plan_attach_upload():
+            if not feed._attachments_supported(mgr):
+                return
             url = await mgr.pmo.upload_attachment(
                 pmo_id, plan_name, redact(plan_md).encode())
             plan_url_box.clear()
             plan_url_box.append(url)
 
         async def _plan_attach_feed():
-            url = plan_url_box[0] if plan_url_box else f"(see {plan_name})"
-            await mgr._feed(
-                pmo_id, run.pmo_kind,
-                f"📋 DevCake attached an opportunistic plan from triage: "
-                f"[{plan_name}]({url}) — skipping the PLAN step.")
+            if plan_url_box:
+                url = plan_url_box[0]
+                body = (f"📋 DevCake attached an opportunistic plan from triage: "
+                        f"[{plan_name}]({url}) — skipping the PLAN step.")
+            else:
+                body = (f"📋 DevCake attached an opportunistic plan from triage "
+                        f"(`{plan_name}`) — skipping the PLAN step:\n\n"
+                        + (redact(plan_md or "") or f"(see {plan_name})"))
+            await mgr._feed(pmo_id, run.pmo_kind, body)
 
         async def _plan_attach_labels():
             await mgr.pmo.swap_labels(MissionRef(pmo_id, "issue"),

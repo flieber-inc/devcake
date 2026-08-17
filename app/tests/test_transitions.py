@@ -654,6 +654,68 @@ def test_onboard_opportunistic_plan_skips_plan_stage(tmp_path):
     assert ({"DEVCAKE-EXECUTE"} in [add for _, add in fake.swaps])
 
 
+def test_plan_needed_attach_without_attachments_posts_plan_inline(tmp_path):
+    """Parity with planned: GitHub Issues has no attachment API. The
+    opportunistic-plan path must not call upload_attachment (which raises
+    and wedges finalize in finalizing) — post the plan bytes inline and
+    still jump to EXECUTE."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    fake.attachments_supported = False
+
+    async def _boom(*a, **k):
+        raise RuntimeError("github_issues: attachments are not supported")
+    fake.upload_attachment = _boom
+    plan = "## Plan\nappend the line to README.md"
+    run_coro(transitions.transition(
+        mgr, _run("ONBOARD", None),
+        {"outcome": "plan_needed", "summary": "s"}, plan))
+    assert fake.uploads == []
+    assert any("opportunistic plan" in c and "append the line" in c
+               for c in fake.comments)
+    assert "DEVCAKE-EXECUTE" in m.labels
+    assert "DEVCAKE-PLAN" not in m.labels
+    assert "DEVCAKE-SKIP" not in m.labels
+
+
+def test_plan_needed_attach_redelivery_after_upload_inlines_plan(tmp_path):
+    """If upload was checkpointed but feed has not run yet, redelivery
+    re-enters with an empty plan_url_box. Must not post a dead
+    ``[(see PLAN_n.md)]`` link — inline the plan bytes (same contract as
+    the planned path)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, fake, store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run.finalized_steps = ["transition:plan_needed_attach:upload"]
+    store.save(run)
+    plan = "## Plan\ndo X then Y"
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "plan_needed", "summary": "s"}, plan))
+    assert fake.uploads == []
+    assert any("opportunistic plan" in c and "do X then Y" in c
+               for c in fake.comments)
+    assert "DEVCAKE-EXECUTE" in m.labels
+    assert "transition:plan_needed_attach:feed" in run.finalized_steps
+    assert "transition:plan_needed_attach:labels" in run.finalized_steps
+
+
+def test_project_park_message_names_both_legal_outcomes(tmp_path):
+    """Projects accept decomposed and human_needed; the park copy must not
+    claim only decomposed is legal (honesty — human_needed is the other
+    legal project outcome and has its own handler)."""
+    m = mission("in_progress", {"DEVCAKE"})
+    m.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run.pmo_kind = "project"
+    run_coro(transitions.transition(
+        mgr, run, {"outcome": "plan_needed", "summary": "s"}, None))
+    assert "DEVCAKE-SKIP" in m.labels
+    assert "decomposed" in run.verdict
+    assert "human_needed" in run.verdict
+    assert "only decomposed is legal" not in run.verdict
+
+
 def test_apply_health_and_latch_noop_for_unregistered_repo():
     """Audit A29 (resurrection race): a probe or finalize latch completing
     AFTER a rebuild/delete removed the repo must not re-create health or

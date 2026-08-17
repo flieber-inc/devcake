@@ -11,11 +11,11 @@ _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
 
 
 def resolve_latest(template: str, *, source) -> str:
-    """Look up the remote semver. Experimental and unknown ids refuse."""
+    """Look up the remote semver. Unknown ids refuse."""
     if template not in HARNESSES:
         raise ValueError(f"unknown harness {template!r}")
-    if template not in LAUNCH_SUPPORTED or HARNESSES[template].experimental:
-        raise ValueError(f"{template} is experimental — house-pin only")
+    if template not in LAUNCH_SUPPORTED:
+        raise ValueError(f"unknown harness {template!r}")
     pin = (source.latest(template) or "").strip()
     if not pin:
         raise ValueError(f"no latest version for {template}")

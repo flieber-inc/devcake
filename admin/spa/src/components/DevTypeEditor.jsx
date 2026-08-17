@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { KeyRound, Upload } from "lucide-react";
 import { get, send } from "../api.js";
-import { Field, Help, ListTextarea, SecretField, Input, Select } from "./Field.jsx";
+import { Field, Help, ListTextarea, Textarea, SecretField, Input, Select } from "./Field.jsx";
 import InstantZone from "./InstantZone.jsx";
 import Button from "./Button.jsx";
 import { Modal } from "./Modal.jsx";
@@ -113,7 +113,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             hidden by the fold. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Harness template"
-            help="Which coding agent this Dev runs: claude-code (Claude Code), grok-build (Grok Build) or codex (Codex). Authoritative — the Docker image and credential requirements under Advanced follow it automatically on Save. Experimental ids have not passed a live operator battery.">
+            help="Which coding agent this Dev runs (claude-code, grok-build, codex, pi, opencode, qwen-code). Authoritative — the Docker image and credential requirements under Advanced follow it automatically on Save.">
             <Select
               value={d.harness_template}
               onChange={(e) => set("harness_template", e.target.value)}
@@ -131,6 +131,21 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               placeholder={h.default_model ? `harness default: ${h.default_model}` : "e.g. claude-fable-5"}
               onChange={(e) => set("model", e.target.value)} />
           </Field>
+          <Field label="Backend base URL" hint="Empty = vendor default"
+            help="Leave empty to use the harness vendor (Anthropic, xAI, OpenAI, …). A non-empty URL aims the CLI at that backend — OpenRouter, local vLLM / llama.cpp, or any compatible origin. DevCake writes the env, argv, and files that CLI needs. No files are written when this is empty. Claude: no /v1 suffix. Everyone else: include /v1. OpenCode Model field becomes devcake/<id> automatically when aimed.">
+            <Input value={d.backend_base_url || ""}
+              placeholder="e.g. http://vllm:8000/v1"
+              onChange={(e) => set("backend_base_url", e.target.value)} />
+          </Field>
+          {!!(d.backend_base_url || "").trim() && (h.credential_files || []).some(
+            (cf) => filePresent(cf.secret_file)) && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 sm:col-span-2">
+              A stored OAuth/credential file is still delivered on every run.
+              For a local or OpenRouter backend, clear it under Advanced
+              (or Dev Types → ⋯ → Clear secrets) so the CLI does not prefer
+              the vendor session over the aimed URL.
+            </p>
+          )}
           <Field label="CLI version" hint={housePin ? `Empty = house ${housePin}` : "Empty = house pin"}
             help="Which coding-harness binary this Dev Type runs (not the model, not the DevCake image tag). Empty uses the house pin. After you Save a new number, the host baker compiles it — missions wait until that image is ready.">
             <Input value={pin}
@@ -288,20 +303,32 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               <a className="underline" href="#/config/prompts">Prompts section</a>.
             </p>
             <Field
-              label="MCP setup commands (one per line)"
-              hint="⚠ Runs arbitrary code in the Dev container before the agent starts."
-              help="A failing or hung command fails the run (exit 14, 300 s cap per command) with the command and stderr in the run error."
+              label="Entrypoint script"
+              hint="⚠ Runs in the Dev container. Unchecked, it is extra setup — not the harness."
+              help="Aiming (env, files, extra argv) always happens first. Unchecked (default): lines here run next — register MCP servers (claude mcp add … / grok mcp add …), fix PATH — then the default harness CLI starts. Checked: the default CLI is not started; this textbox must be the whole process if you still want an agent."
             >
-              <ListTextarea
-                rows={2}
-                value={d.mcp_setup_commands || []}
-                onChange={(v) => set("mcp_setup_commands", v)}
+              <Textarea
+                rows={6}
+                value={d.dev_entrypoint ?? (d.mcp_setup_commands || []).join("\n")}
+                onChange={(e) => set("dev_entrypoint", e.target.value)}
               />
+            </Field>
+            <Field label="Override harness adapter"
+              help="Off (default): the script above is additive — it runs after aiming, then DevCake starts the harness CLI (including aimed extras such as Codex -c provider blocks and Pi --provider). On: DevCake does not start the harness CLI and does not pass dialect argv. Aiming still runs first (env + HOME files). If you still want an agent, your script must launch it and pass $DEVCAKE_MODEL (and any extras) itself. Use this only when you need a completely different process.">
+              <label className="flex items-start gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={!!d.override_harness_adapter}
+                  onChange={(e) => set("override_harness_adapter", e.target.checked)}
+                />
+                <span>Do not start the default harness CLI</span>
+              </label>
             </Field>
             <Field
               label="Secret env vars (one per line)"
               hint="Names only (UPPER_SNAKE_CASE) — paste each value below."
-              help="Values live in the secret store, never in config, and are delivered to this Dev Type's runs so MCP setup commands can reference them (e.g. $DD_API_KEY). A name referenced by a setup command must have a stored value or the mission won't dispatch."
+              help="Values live in the secret store, never in config, and are delivered to this Dev Type's runs so the entrypoint script can reference them (e.g. $DD_API_KEY). A name referenced by the script must have a stored value or the mission won't dispatch."
             >
               <ListTextarea
                 rows={2}

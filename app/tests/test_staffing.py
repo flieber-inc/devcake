@@ -195,10 +195,15 @@ def test_fabricated_ungated_receipt_is_refused():
         require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
 
 
-def test_experimental_template_is_not_gated():
-    from devcake.staffing import SENTINEL_DIGEST, require_staffed
+def test_every_registry_template_is_gated_the_same_way():
+    """Bake verb is compile+probe+receipt for every HARNESSES id. No skip."""
+    from devcake.harness import HARNESSES
+    from devcake.staffing import HarnessNotStaffed, require_staffed
 
-    require_staffed(_dt("pi"), digest=SENTINEL_DIGEST, store=_Store(None))
+    for template in HARNESSES:
+        with pytest.raises(HarnessNotStaffed, match="no receipt"):
+            require_staffed(
+                _dt(template), digest="sha256:abc", store=_Store(None))
 
 
 def test_pin_summary_has_no_host_command():

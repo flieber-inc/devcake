@@ -28,19 +28,20 @@ def test_dev_type_accepts_exactly_the_registry_ids():
         DevType(name="t", harness_template="not-a-harness")
 
 
-def test_registry_and_admin_payload_carry_experimental():
-    """Picker blast-radius: experimental is a registry flag, not prose."""
+def test_every_registry_template_is_pinnable_and_not_experimental():
+    """The bake verb and the pin field are the same for every HARNESSES id."""
     from devcake.api.devtypes_service import list_harnesses
-    launch = {"claude-code", "grok-build", "codex"}
-    for name, h in HARNESSES.items():
-        want = name not in launch
-        assert h.experimental is want, name
-        st = dev_type_status(DevType(name="t", harness_template=name))
-        assert st["harness"]["experimental"] is want
+    from devcake.house_pins import HOUSE_PINS, LAUNCH_SUPPORTED
+
+    assert LAUNCH_SUPPORTED == frozenset(HOUSE_PINS)
     payload = run_coro(list_harnesses())
     assert set(payload) == set(HARNESSES)
-    for name, row in payload.items():
-        assert row["experimental"] is (name not in launch), name
+    for name, h in HARNESSES.items():
+        assert h.experimental is False, name
+        st = dev_type_status(DevType(name="t", harness_template=name))
+        assert st["harness"]["experimental"] is False
+        assert payload[name]["experimental"] is False
+        assert payload[name]["cli_pin_allowed"] is True
 
 
 def test_dev_type_status_credentials_ready(monkeypatch, tmp_path):
@@ -340,6 +341,7 @@ def test_runspec_payload_carries_mcp_setup_commands(tmp_path, monkeypatch):
         config=cfg, instance=inst, dev_types=dts,
         forge_runtime=FakeForgeRuntime(object(), inst=cfg.repos[0]))
     payload = mgr.runspec_secret_payload(run)
+    assert payload["dev_entrypoint"] == cmds[0]
     assert payload["mcp_setup_commands"] == cmds
     assert payload["env"]["DD_API_KEY"] == "dd-api-key-0123456789abcdef"
 
@@ -357,16 +359,19 @@ def test_runspec_payload_carries_mcp_setup_commands(tmp_path, monkeypatch):
     mgr2 = make_mission_manager(
         config=cfg, instance=inst, dev_types=dts,
         forge_runtime=fr, internal_forge=FakeInternalForge())
-    assert mgr2.runspec_secret_payload(run)["mcp_setup_commands"] == cmds
+    p2 = mgr2.runspec_secret_payload(run)
+    assert p2["dev_entrypoint"] == cmds[0]
+    assert p2["mcp_setup_commands"] == cmds
 
-    # no commands configured → key absent (deploy-skew-safe: the entrypoint
-    # spec.get()s it with a default)
+    # no script configured → keys absent (deploy-skew-safe)
     plain = {"senior-dev": DevType(name="senior-dev",
                                    harness_template="claude-code")}
     mgr3 = make_mission_manager(
         config=cfg, instance=inst, dev_types=plain,
         forge_runtime=FakeForgeRuntime(object(), inst=cfg.repos[0]))
-    assert "mcp_setup_commands" not in mgr3.runspec_secret_payload(run)
+    p3 = mgr3.runspec_secret_payload(run)
+    assert "mcp_setup_commands" not in p3
+    assert "dev_entrypoint" not in p3
 
 
 def test_runspec_get_served_while_active_and_refused_after(tmp_path):

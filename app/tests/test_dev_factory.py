@@ -628,29 +628,33 @@ def test_host_probe_does_not_mount_the_data_volume():
     assert "alpine" not in text
 
 
-def test_run_bake_skips_probe_for_experimental_and_writes_a_receipt(tmp_path):
+def test_run_bake_probes_every_registry_template(tmp_path):
+    """Compile then probe. No template writes an ungated compile-only receipt."""
     factory = _load_factory()
-    calls = []
+    from devcake.house_pins import HOUSE_PINS
 
-    def run(argv, **kw):
-        calls.append(list(argv))
-        return type("R", (), {"returncode": 0})()
+    for template, version in HOUSE_PINS.items():
+        calls = []
 
-    factory.run_bake(
-        factory.BakeJob("pi", "0.84.2"),
-        tag="latest",
-        house={"pi": "0.84.2"},
-        receipts_dir=tmp_path,
-        digest="sha256:abc",
-        repo=Path("/repo"),
-        run=run,
-    )
-    assert len(calls) == 1
-    assert calls[0][:4] == ["docker", "buildx", "bake", "pi"]
-    rec = json.loads((tmp_path / "pi@0.84.2.json").read_text())
-    assert rec["ok"] is True
-    assert rec["digest"] == "sha256:abc"
-    assert rec["gated"] is False
+        def run(argv, **kw):
+            calls.append(list(argv))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        dest = tmp_path / f"{template}@{version}.json"
+        if dest.exists():
+            dest.unlink()
+        factory.run_bake(
+            factory.BakeJob(template, version),
+            tag="latest",
+            house=dict(HOUSE_PINS),
+            receipts_dir=tmp_path,
+            digest="sha256:abc",
+            repo=Path("/repo"),
+            run=run,
+        )
+        assert calls[0][:4] == ["docker", "buildx", "bake", template]
+        assert any("host_probe.sh" in str(part) for part in calls[1]), template
+        assert not dest.exists(), f"{template} must not write a compile-only receipt"
 
 
 def test_image_ref_is_one_rule_for_app_and_baker():

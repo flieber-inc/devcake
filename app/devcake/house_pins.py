@@ -11,8 +11,8 @@ import os
 
 SENTINEL_DIGEST = "DEVCAKE_APP_DIGEST_UNSET"
 
-# Launch-supported first; experimental stay house-pin only (probe v1
-# does not grade them, so fail-closed does not gate them).
+# Every registry template is launch-supported: the bake verb is compile +
+# hermetic probe + receipt, and staffing is fail-closed on that receipt.
 HOUSE_PINS: dict[str, str] = {
     "claude-code": "2.1.229",
     "codex": "0.147.0",
@@ -22,7 +22,7 @@ HOUSE_PINS: dict[str, str] = {
     "qwen-code": "0.21.12",
 }
 
-LAUNCH_SUPPORTED = frozenset({"claude-code", "codex", "grok-build"})
+LAUNCH_SUPPORTED = frozenset(HOUSE_PINS)
 
 PACKAGE_IDS: dict[str, str] = {
     "claude-code": "@anthropic-ai/claude-code",

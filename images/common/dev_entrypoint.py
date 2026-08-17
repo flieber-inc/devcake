@@ -1,7 +1,27 @@
 """DevCake Dev entrypoint — shared across harness images (docs/07, docs/08).
 
-Composition root / façade for the Zone-B package `devcake_dev` (fault, render,
-workspace, bus). ENTRYPOINT path stays `/dev_entrypoint.py`.
+Composition root / façade for Zone-B package ``devcake_dev``. Image
+``ENTRYPOINT`` stays ``/dev_entrypoint.py``; logic lives under
+``images/common/devcake_dev/`` (copied to ``/devcake_dev``).
+
+Where to look (do not re-implement in this file):
+
+* Exit codes 0/10–16/20 + structured ``error_class`` → ``domain.fault``
+  (``PRODUCED``) and emit sites here; app classifies via
+  ``failure_taxonomy`` (ADR-0018).
+* Unknown harness id → ``harness.dialect.get_dialect`` raises → ``_fail_20``
+  (exit 20 / ``DEV_CRASH``). Never fall through to Claude.
+* CLI argv / parse / fault / dump → dialect modules via ``composed_launch``
+  (``harness.launch``) and ``get_dialect``.
+* Continuation loop (ADR-0022) → ``harness.continuation`` composed in
+  ``harness_main``.
+* TokenReport v1 shape / merge → ``harness.tokens`` +
+  ``continuation.merge_token_reports``.
+* MCP setup / override-script failure → exit 14 / ``DEV_MCP_SETUP``.
+* Legal outcomes first-line check → ``legal_outcomes`` dict in
+  ``harness_main`` (must match ``markers.LEGAL_OUTCOMES``; STEWARD is
+  entrypoint-only — pinned by ``test_legal_outcomes_pin``).
+* Backend aim (base URL → env/argv/files) → ``harness.aim`` (docs/08 §8).
 
 Exit codes per docs/07 §4: 0 ok · 10 harness crash · 11 bad result.json ·
 12 auth · 13 clone/forge · 14 MCP setup · 15 harness fault · 16 turn budget ·

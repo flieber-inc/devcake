@@ -760,14 +760,17 @@ roster is what picked the track up.
 
 **Why it exists on the roadmap.** The control plane already has a deep harness
 registry (`app/devcake/harness.py`: image, credentials, OAuth, `skills_dir`,
-`default_model`). The Dev side has a package layout but still dispatches on
-stringly `if harness == …` across argv, render, tokens, fault, dump, and
-`dev_entrypoint.py` — with **unknown ids silently falling through to the Claude
-path**. Adding a fourth template today is a vertical slice that is
-intentionally expensive (docs/08 §9). Interest in more coding CLIs (qwen-code
-and peers under consideration) makes that tax worth *documenting* as a possible
-investment: fix the platform once, then each CLI is a dialect module + image +
-captures — **if** we decide the Nth harness is worth building.
+`default_model`). **H1 is landed:** the Dev side dispatches through a fail-closed
+`HarnessDialect` registry (`images/common/devcake_dev/harness/dialect.py` +
+`dialects.py`); `dev_entrypoint.py` is a composition façade with no
+`if harness ==` for parse/fault/dump/render/argv; unknown ids raise and the
+production entrypoint maps that to exit 20 (`DEV_CRASH`) — **no Claude
+fall-through**. Capture rig dump/CLI resolve go through the same `get_dialect`
+chokepoint (`scripts/harness_capture/in_container.py`, pinned by
+`test_harness_capture_rig`). Adding an Nth template remains a vertical slice
+(registry + dialect + Bake target + captures + docs/08 §9) — H3–H5 below are
+optional follow-ons when a real CLI needs multi-env / settings-file auth or a
+capture-campaign platformization, not a re-open of the dialect seam.
 
 **Standing premise (do not invert):**
 
@@ -813,16 +816,15 @@ URLs in `fault()` / `classify()`, or classify in the stub server.
 out-of-repo plugin harnesses (app↔image remain lockstep — docs/13).
 
 **Exit criteria:**
-- [x] All three existing templates are pure dialect modules; `dev_entrypoint`
+- [x] Launch-supported templates are pure dialect modules; `dev_entrypoint`
       has no `if harness ==` for parse/fault/dump/render/argv.
-- [ ] Capture rig imports dialects only; no duplicated argv construction
-      (argv goes through `harness_argv`; dump/last_message still branch, and
-      unknown `--harness` still falls through to the Claude dump).
+- [x] Capture rig imports dialects only; dump/CLI resolve via `get_dialect`
+      (no Claude else-arm; unknown ids raise — `test_harness_capture_rig`).
 - [x] Planted unknown harness id fails closed (unit test).
 - [x] Full harness capture suite green; `bake images` + entrypoint import smoke.
 
-**Demo:** delete the Claude fall-through; suite still green; intentional
-unknown-id run dies loudly.
+**Demo (done):** unknown-id run dies loudly (exit 20 / `ValueError`); suite
+green without a Claude fall-through.
 
 #### H2 — Registry is the single source of harness ids
 

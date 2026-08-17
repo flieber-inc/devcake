@@ -77,15 +77,15 @@ check("rename inside a same-length list still wins over fresh", () => {
   assert.equal(getIn(next, "cfg.pmos.0.name"), "renamed");
 });
 
-check("scaffolds carry every server-model field (pmo: 11, repo: 8)", () => {
+check("scaffolds carry every server-model field (pmo: 11, repo: 9)", () => {
   assert.deepEqual(Object.keys(newPmoCard("x", "linear")).sort(),
     ["api_base", "assignments", "discovery_routing", "intake_paused",
      "managed", "memory_repos", "name", "reference_repos", "repos",
      "system", "team_key"]);
   assert.deepEqual(Object.keys(newRepoCard("x")).sort(),
     ["api_base", "auto_merge", "auto_resolve_merge_conflicts",
-     "default_branch", "forge", "merge_retry_window_minutes", "name",
-     "url"]);
+     "default_branch", "forge", "merge_retry_window_minutes",
+     "merge_settle_minutes", "name", "url"]);
 });
 
 check("skill sources: name shape, dupes, repo-name collision", () => {

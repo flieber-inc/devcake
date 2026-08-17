@@ -321,10 +321,7 @@ export default function Sidebar({
         )}
         {!collapsed && (
           <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
-            DevCake v0 ·{" "}
-            <a className="underline" href="https://github.com/fidecastro/devcake" target="_blank" rel="noopener">
-              spec &amp; source
-            </a>
+            DevCake v0 · spec &amp; source in-tree under docs/
           </p>
         )}
         <button

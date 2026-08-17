@@ -198,7 +198,9 @@ real EXECUTE: §9.
 ## Quickstart
 
 ```bash
-git clone https://github.com/fidecastro/devcake && cd devcake
+# Clone the remote or fork you intend to run (a fixed public product URL is
+# not published yet — pre-FOSS; do not invent one):
+git clone <this-repo-url> && cd devcake
 cp .env.example .env
 # Edit .env: strong ADMIN / REDIS / DAGU / OO / GITEA passwords only.
 # Leave DOCKER_GID blank. Empty/change-me* passwords refuse boot unless

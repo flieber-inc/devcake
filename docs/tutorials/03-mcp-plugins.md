@@ -11,11 +11,11 @@ Type fields on the Config page:
   plugin. Admin-equivalent execution inside the disposable container by
   design (`../14-security.md` §2 Zone B).
 
-Worked example throughout: **devcake-logs-mcp**, the official log-platform
-connector (Datadog / AWS CloudWatch Logs) —
-<https://github.com/fidecastro/devcake-logs-mcp>. Backend-specific detail
-(key scopes, IAM permissions, query dialects) lives in that repo's README,
-not here.
+Worked example throughout: **devcake-logs-mcp**, a log-platform connector
+(Datadog / AWS CloudWatch Logs). The companion is **not yet published** at a
+fixed public URL — substitute your operator's `OWNER/REPO` (and pin a release
+tag) when you install it. Backend-specific detail (key scopes, IAM
+permissions, query dialects) lives in that plugin repo's README, not here.
 
 ## 1. Declare the secret names
 
@@ -41,7 +41,7 @@ permission **Contents: Read-only**.
 **MCP setup commands**, in order (install, then register):
 
 ```
-pip install --user --quiet "git+https://${LOGS_MCP_GIT_TOKEN}@github.com/fidecastro/devcake-logs-mcp@v0.1.0"
+pip install --user --quiet "git+https://${LOGS_MCP_GIT_TOKEN}@github.com/OWNER/REPO@v0.1.0"
 claude mcp add devcake-logs -e DD_API_KEY=$DD_API_KEY -e DD_APP_KEY=$DD_APP_KEY -e DD_SITE=datadoghq.com -- python -m logs_mcp.server
 ```
 

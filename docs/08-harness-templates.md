@@ -284,7 +284,7 @@ Scope caveat: `claude mcp add`'s default (local) scope is **cwd-keyed**, and the
 
 ### Installing MCP plugins at run time
 
-Plugins are standalone MCP servers living OUTSIDE this repo (hexagonal rule: core ships no vendor/connector code). A Dev Type opts in with two `mcp_setup_commands` lines — install, then register (worked example: `tutorials/03-mcp-plugins.md`; the official log connector is <https://github.com/fidecastro/devcake-logs-mcp>):
+Plugins are standalone MCP servers living OUTSIDE this repo (hexagonal rule: core ships no vendor/connector code). A Dev Type opts in with two `mcp_setup_commands` lines — install, then register (worked example: `tutorials/03-mcp-plugins.md`; the log-connector companion is operator-supplied until a public `OWNER/REPO` is published):
 
 ```
 pip install --user --quiet "git+https://${PLUGIN_GIT_TOKEN}@github.com/OWNER/REPO@vX.Y.Z"

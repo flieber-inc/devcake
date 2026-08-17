@@ -289,7 +289,7 @@ unchanged and bounds the whole loop.
 
 There is **no write access** to the PMO mid-run (INV-4). Writes travel as end-of-run artifacts that the app applies. Mid-run re-fetch of the activity payload uses the same `activity.get` request/reply channel the entrypoint already speaks.
 
-Other tooling (log-platform access and the like) arrives as **MCP plugins** — standalone servers living outside this repo, installed per Dev Type at run time via `mcp_setup_commands` (`08-harness-templates.md` §7, `tutorials/03-mcp-plugins.md`). The official log connector is <https://github.com/fidecastro/devcake-logs-mcp>.
+Other tooling (log-platform access and the like) arrives as **MCP plugins** — standalone servers living outside this repo, installed per Dev Type at run time via `mcp_setup_commands` (`08-harness-templates.md` §7, `tutorials/03-mcp-plugins.md`). The log-connector companion is operator-supplied (`OWNER/REPO` pin) until a public product remote is published.
 
 ## 7. Network and resources
 

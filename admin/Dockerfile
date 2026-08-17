@@ -22,9 +22,10 @@ RUN npm run build
 # ── serve ───────────────────────────────────────────────────────────────────
 FROM ${NGINX_IMAGE}
 
+# image.source is omitted until a public product remote is published
+# (pre-FOSS — do not hardcode a personal/private URL here).
 LABEL org.opencontainers.image.title="devcake-admin" \
-      org.opencontainers.image.description="DevCake admin SPA (nginx)" \
-      org.opencontainers.image.source="https://github.com/fidecastro/devcake"
+      org.opencontainers.image.description="DevCake admin SPA (nginx)"
 
 # htpasswd (basic auth, docs/11 §5) + curl (compose healthcheck)
 RUN apk add --no-cache \

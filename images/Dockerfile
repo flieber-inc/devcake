@@ -37,9 +37,10 @@ FROM ${NODE_IMAGE} AS node-tools
 # ── Shared Dev base: git, forge CLIs, Python relay deps, non-root user ───────
 FROM ${PYTHON_IMAGE} AS base
 
+# image.source is omitted until a public product remote is published
+# (pre-FOSS — do not hardcode a personal/private URL here).
 LABEL org.opencontainers.image.title="devcake-dev-base" \
-      org.opencontainers.image.description="Shared base for DevCake Dev harnesses" \
-      org.opencontainers.image.source="https://github.com/fidecastro/devcake"
+      org.opencontainers.image.description="Shared base for DevCake Dev harnesses"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

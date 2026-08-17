@@ -1061,8 +1061,8 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
   until then; opportunity cost is high (CA lifecycle, allowlists, Dagu spawn
   path, every TLS client in the Dev image).
 - **Additional log-connector backends** (Loki; others on demand) in the
-  standalone plugin repo <https://github.com/fidecastro/devcake-logs-mcp>
-  (`LogBackend` seam; core MCP ports already shipped).
+  standalone log-connector plugin (`OWNER/REPO` — companion not yet at a
+  fixed public URL; core MCP ports already shipped).
 - **Priority-conditional Dev Type assignment** (e.g. Urgent EXECUTE → stronger
   Dev Type — relaxes 1 Mission Type → 1 Dev Type). The **instance** dimension
   shipped as ADR-0019 (per-PMO override rows); a condition language did not.
@@ -1076,8 +1076,10 @@ the strategy the adapter declares. Sidecar is the honest Jira default.
 - **First-class OTel metrics layer** — when dashboards need pre-aggregation
   or long retention (`12` §4 still SQL-over-spans).
 - **SQLite `StatePort` swap** — if run history outgrows files.
-- **Public-release hygiene** — LICENSE, SECURITY.md, CONTRIBUTING, CHANGELOG,
-  SBOM (ISSUES #38) if audience expands.
+- **Public-release hygiene (remaining)** — LICENSE and a fuller tree-wide
+  SBOM process (ISSUES #38). Root `SECURITY.md`, `CONTRIBUTING.md`, and
+  `CHANGELOG.md` (pointer to this living log) already landed; CI already
+  runs pip-audit / npm audit and publish-time Bake SBOM.
 - **Internal-forge orphan sweep** — reconcile Gitea org repos/svc users vs
   `/data/secrets/internal_forge/mission-*.json` (pre-v0.1.1 Clear leak;
   leak path itself is fixed).

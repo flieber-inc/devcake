@@ -4,12 +4,13 @@
 ADR-0016 addendum (shared `context_sourcing_strict` knob). Decided across
 three Fable↔Grok debate rounds plus founder rulings (D1–D12, F1′–F4 — the
 `devcake-internal/memorytalk` repo holds the full record); built by
-PR #150 + remediation. **Not "shipped"**: docs/16 still gates that claim on
-pre-registered throwaway-box A/B pilot receipts (historically tracked as
-`PLAN_MEMORY.md` §14–§15). Distilled decisions live **in this ADR**; the
-former root `PLAN_MEMORY.md` build plan is **not in the repository** (deleted
-after the decisions were accepted here) and must not be treated as a live
-openable contract.
+PR #150 + remediation. **Not "shipped"**: docs/16 gates that claim on the
+pre-registered throwaway-box A/B pilot with receipts (criteria below;
+formerly §14–§15 of the implementation plan). The build contract lived at
+root `PLAN_MEMORY.md` and was **removed after implementation** (commit
+`372e336`, message "Delete PLAN_MEMORY.md"); this ADR + the docs/16
+residual are the surviving product-facing contract. In-tree code comments
+that cite `PLAN_MEMORY §n` are provenance only — not a live file path.
 
 ## Context
 
@@ -113,14 +114,63 @@ seeded by the app.
    every `.claims/*.json` (all origin boards are being wiped; orphans
    from deleted boards have no owner left) and leaves every note.
 
+## Ship gate (throwaway-box A/B — not yet satisfied)
+
+**Not called shipped** until a throwaway-box pilot has receipts written
+up in docs/16. Criteria distilled from the former root plan §14–§15
+(`git show 372e336^:PLAN_MEMORY.md`); do not improvise metrics.
+
+**Setup (after bake):**
+
+1. Create a notebook (ordinary repo card + README layout policy).
+2. Bind it board-bound on the **product** pilot board — not in that
+   board's work list.
+3. Create a second PMO instance: the Curator board. Work list =
+   `[that card]` only. Assignments: EXECUTE → a Curator-shaped Dev
+   Type (drain `.claims/`); REVIEW → judgment (or equivalent). Enable
+   the reserved Memory Curator scheduled task; set interval.
+4. Optionally bind a second small notebook domain-bound on one Dev Type
+   to exercise the union.
+5. Write one tacit note by hand.
+6. Leave `memory_auto_merge` off unless deliberately testing the consent
+   modal path.
+7. Run the A/B.
+
+**A/B (same board, same Dev Type, same product repos):**
+
+- **Arm A:** memory bindings on; claims conveyor live; Memory Curator on.
+- **Arm B:** no memory bindings (no mounts, no claims).
+
+Keep `context_sourcing_strict` at its default (true) so arm A cannot
+silently run memoryless.
+
+**Fixed metrics** (report honestly even when they embarrass the feature):
+
+- Re-discovery of facts already in **notes**.
+- Consultation of note paths from receipts (transcript / tool args),
+  never self-report.
+- Consultation of `.claims/` from receipts.
+- Whether claims are drained or the queue only grows; queue depth over
+  time.
+- REVIEW pass rate; tokens; wall time.
+- Merge lag; note additions vs corrections.
+- Staleness-window incidents: a consumer run whose mounted commit omits
+  an in-flight Curator PR that would have changed a path it opened.
+- Inherit check: Curator workspace contains the consumer boards'
+  `repos ∪ reference_repos` as read-only extras.
+
+Primary success: note consultation happens **and** re-discovery drops.
+Claims-seen and claims-drained are reported even if they fail. Write-up
+in docs/16 style, whatever they show. "Nobody consulted the notebook" is
+an allowed outcome.
+
 ## Consequences
 
 - Memory quality is entirely the operator's: DevCake guarantees
   delivery, gating, and provenance — never that a note is true or that
-  a Dev reads it. The pre-registered A/B pilot (historically
-  `PLAN_MEMORY.md` §15; criteria now owned by docs/16 residuals) must be
-  allowed to report "nobody consulted the notebook"; claims-seen and
-  claims-drained are reported even if they embarrass the feature.
+  a Dev reads it. The pre-registered A/B above must be allowed to report
+  "nobody consulted the notebook"; claims-seen and claims-drained are
+  reported even if they embarrass the feature.
 - Chosen risk, on the record: the full loop (mounts, conveyor, cron,
   curation) was built before measuring consultation. The pilot's
   falsification power is narrower for it.
@@ -134,9 +184,10 @@ seeded by the app.
 
 ## References
 
-Historical build plan `PLAN_MEMORY.md` (retired / not in-tree; §17 rulings
-log lived there during design); ADR-0014 (operator repos), ADR-0016 addendum
-(strict knob lineage), ADR-0020 (merge chokepoint, amended here),
-ADR-0024/0025 (mirror + provision), ADR-0033 (discoveries; D7 steward
-non-authorship); docs/02/03/07/09/10/11/14/16 carry the seam-level detail
-and the pilot/"shipped" residual gate.
+Former root `PLAN_MEMORY.md` (deleted in `372e336`; historical build
+contract + rulings log — recover via `git show 372e336^:PLAN_MEMORY.md`
+if needed); ADR-0014 (operator repos), ADR-0016 addendum (strict knob
+lineage), ADR-0020 (merge chokepoint, amended here), ADR-0024/0025
+(mirror + provision), ADR-0033 (discoveries; D7 steward non-authorship);
+docs/02/03/07/09/10/11/14 carry the seam-level detail; docs/16 residual
+"Memory + Cron" holds the living ship-gate status.

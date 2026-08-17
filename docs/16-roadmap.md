@@ -592,6 +592,19 @@ until that run exists, field evidence below stays operator-self-reported.
   smoke) and stale per-dev-type grok credential copies (device-bound —
   heal via the OAuth device flow, never file copies).
 
+- **Dedicated skill sources** (ADR-0016 addendum 2, 2026-08-14): external
+  skills moved off repo cards onto their own `skill_sources` connections —
+  `config.SkillSource`, Skills page management, `skill:` secret scope;
+  `RepoInstance.skills_subdir` deleted. Mirror-backed, read-only by
+  construction; fail-closed skill-source sync shares
+  `context_sourcing_strict` with memory (ADR-0035). **built** (hermetic /
+  in-tree; no separate live pilot named as a ship gate).
+- **Memory + Cron surfaces** (ADR-0035, PR #150 + remediation, 2026-08-14):
+  memory notebooks, `.claims/` conveyor, `memory_auto_merge`, CronService /
+  Scheduled Tasks (incl. reserved Memory Curator), Curator inherit extras.
+  **built** in tree — **not called shipped** until the throwaway-box A/B
+  receipts land (see residuals + ADR-0035 ship gate; former root
+  `PLAN_MEMORY.md` deleted in `372e336`).
 - **Skeptical-audit intervention campaign** (ADR-0034 + 18 PRs #119–#136,
   2026-08-12): a seven-reviewer skeptical audit at `ccc6da9` found the
   codebase sound but with two structural weaknesses — guarantees enforced by
@@ -669,7 +682,9 @@ among them).
 ### Still open (residuals)
 
 Not new features — demos or proofs still owed from Layers 1–2 (milestones or
-the v0.2 trailer list).
+the v0.2 trailer list). Each **⏳** below is intentionally deferred (not
+forgotten); see [Intentional deferred inventory](#intentional-deferred-inventory)
+for evidence paths and why.
 
 - **M9 additivity residuals**: dual-Linear production use is field-reported
   (Field evidence above) — the operational proof is no longer owed. Still
@@ -681,10 +696,15 @@ the v0.2 trailer list).
   batteries; live GitLab MRs are field-reported (Field evidence above),
   but the two-forges-in-one-instance demo and the token-spending golden
   paths remain **⏳**.
-- **Memory + Cron (PLAN_MEMORY)**: schema, sourcing, claims conveyor,
-  merge guard, CronService, and admin surfaces are in the tree. **Not
-  called shipped** until the throwaway-box A/B has receipts
-  (`PLAN_MEMORY.md` §14–§15). **⏳**
+- **Memory + Cron (ADR-0035)**: schema, sourcing, claims conveyor, merge
+  guard, CronService, and admin Scheduled Tasks / memory surfaces are in
+  the tree (`domain/claims.py`, `domain/cron_service.py`,
+  `config.memory_repos` / `crons`, admin Skills-adjacent memory + Scheduled
+  Tasks). **Not called shipped** until the throwaway-box A/B pilot has
+  receipts written up here — setup, arm A/B, and fixed metrics are inlined
+  in [ADR-0035 ship gate](adr/0035-memory-notebooks-claims-conveyor-and-scheduled-tasks.md#ship-gate-throwaway-box-ab-not-yet-satisfied)
+  (the former root `PLAN_MEMORY.md` was deleted after implementation in
+  `372e336`; do not treat that path as a live file). **⏳**
 - **Fresh-`/data` operator-drill re-run** after the post-v0.2 surface growth
   (profiles, skills, Gitea Issues, per-PMO intake, default board, composer,
   freshness, handoff): **⏳** non-gating trailer. Dual-team production and
@@ -697,6 +717,36 @@ the v0.2 trailer list).
   founder decisions on publishable detail (mission keys / MR numbers, exact
   dual-Linear topology, quotable numbers) and the field-derived host-sizing
   guidance for `13`/`18`. **⏳**
+
+### Intentional deferred inventory
+
+Pre-FOSS residuals honesty: every item that must stay **⏳** (or is otherwise
+not launch-supported) with an evidence path and why it is intentionally not
+shipped. Matches code/docs; do not close a row by implementing aspirational
+demos.
+
+| Item | Evidence | Why still open (intentional) |
+|---|---|---|
+| M9 colliding-id completion + dual-workspace / dual-key ceremony | Residuals above; Field evidence (dual-Linear production is field-reported, not this completion) | Operator live demo owed — multi-instance production ≠ deliberate colliding-identifier end-to-end proof |
+| M10 two-forge merged-PR demo; M11/M12 live model golden paths | Residuals above; hermetic forge adapters + contract batteries exist under `adapters/{github,gitlab,gitea}/` | Operator live demos / token-spending golden paths; machinery is hermetic-proven only |
+| Memory + Cron pilot ship gate | ADR-0035 ship gate; residual above; code in tree (`domain/claims.py`, `domain/cron_service.py`, `api/cron_service.py`, admin Scheduled Tasks) | Built, not pilot-shipped — throwaway-box A/B receipts not yet written into docs/16 |
+| Fresh-`/data` operator-drill re-run | Residuals above; v0.2 FINAL trailer (same ritual) | Non-gating stranger-operability trailer; production use does not substitute for wipe-and-reconfigure |
+| Field-evidence detail pass | Field evidence section above; host-sizing for `docs/13` / `docs/18` | Founder publish decisions (what detail is quotable) — not a missing feature |
+| GitHub Issues / GitLab Issues PMO experimental | `adapters/registry.py` → `PMO_SYSTEMS`; docs/00, docs/05 §9.7–9.8; launch roster table below | In-tree, not launch-supported until each board's live `contract_tests_pmo.py` battery has been run |
+| Harness resume off for `pi` / `opencode` / `qwen-code` | `images/common/devcake_dev/harness/dialects.py` (`resume_spec = None`); launch roster note; docs/08 § per-template | Launch-supported templates; resume stays off until a committed capture pair lands in `RESUME_SPECS` |
+
+**Not residual (closed this audit):** dedicated skill sources (ADR-0016
+addendum 2) — feature is **built** in tree (`config.SkillSource`,
+`domain/skills.py`, admin Skills page / `skill:` secret scope;
+`skills_subdir` gone). No unpaid live pilot was named as a ship gate; the
+prior residual bullet described completed work under **⏳** without a proof
+still owed. Shipped entry under living log.
+
+**Match (no change):** six house harnesses launch-supported
+(`house_pins.LAUNCH_SUPPORTED` = all six; `Harness.experimental` default
+false for all — admin `(experimental)` chrome is harness-flag only). Launch-
+supported PMOs = Linear + Gitea Issues. PMO experimental is docs/product
+posture, not an admin SPA chip.
 
 ---
 
@@ -889,9 +939,10 @@ long-lived incomplete dialect API.
 (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`, `qwen-code`) are
 launch-supported in the registry: dialect + Bake + hermetic captures +
 backend `aim()`. Host CLIs characterize only; production truth is the
-baked image / in-container adaptor. **PMO half still experimental** until
-each new board's live battery has been run (hermetic pytest is necessary
-and not sufficient). Launch-supported PMOs remain Linear + Gitea Issues.
+baked image / in-container adaptor. **GitHub Issues / GitLab Issues stay
+experimental** until each board's live battery has been run (hermetic
+pytest is necessary and not sufficient). Launch-supported PMOs remain
+Linear + Gitea Issues.
 
 **Build (this campaign)**
 

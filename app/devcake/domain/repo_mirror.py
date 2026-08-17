@@ -121,6 +121,27 @@ class RepoCache:
                  and name not in self.forges.internal)
                 or self._skill_source(name) is not None)
 
+    def has_last_good(self, name: str) -> bool:
+        """Open-mode stale_cache precondition (ADR-0035 / PLAN_MEMORY §3.5).
+
+        True only when a prior successful sync left branch content — the
+        in-process ledger recorded a success, or the on-disk bare mirror
+        still has heads (survives process restart). A bare `git init`
+        dir alone (fetch never succeeded) is False so callers omit rather
+        than proceeding on empty heads. Do NOT use ``mirror_path.is_dir``
+        as a stand-in: that is true after a failed first sync too.
+        """
+        st = self.ledger.get(name)
+        if st is not None and st.synced_at is not None:
+            return True
+        if name in self._synced_mono:
+            return True
+        heads = self.mirror_path(name) / "refs" / "heads"
+        try:
+            return heads.is_dir() and any(heads.iterdir())
+        except OSError:
+            return False
+
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict],
                    dev_type=None, config=None) -> list[str]:
@@ -451,6 +472,9 @@ class NullRepoCache:
         return Path(f"/mirrors/{name}.git")
 
     def eligible(self, name: str) -> bool:
+        return False
+
+    def has_last_good(self, name: str) -> bool:
         return False
 
     def needed_for(self, **_kw) -> list[str]:

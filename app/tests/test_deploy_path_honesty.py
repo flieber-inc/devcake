@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[2]
 
 _BAKE = next(
@@ -85,8 +87,9 @@ def test_docs_agree_with_live_dag_pull_never():
 def test_compose_never_builds_devcake_images():
     """Bake-only contract: compose has no build: keys; app/admin never-pull."""
     if _COMPOSE is None:
-        # CI app-test does not always bind compose; skip rather than invent.
-        return
+        pytest.skip(
+            "docker-compose.yml not mounted in this runner "
+            "(local tree or bind-mount required; pin gate covers CI)")
     text = _COMPOSE.read_text()
     for line in text.splitlines():
         stripped = line.strip()

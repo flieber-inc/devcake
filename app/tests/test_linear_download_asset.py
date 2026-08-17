@@ -76,3 +76,28 @@ def test_download_asset_refuses_oversized_body():
         "C", (), {"attachment_max_bytes": 40})()
     with pytest.raises(RuntimeError, match="refused"):
         run(a.download_asset("https://uploads.linear.app/team/big.bin"))
+
+
+def test_download_asset_maps_http_status_to_domain_errors():
+    """Port Liskov: httpx status/network failures must not escape the adapter
+    — only PMOTransient (retryable) or permanent RuntimeError."""
+    from devcake.ports.pmo import PMOTransient
+
+    def handler_5xx(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="upstream down")
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(handler_5xx))
+    with pytest.raises(PMOTransient, match="download"):
+        run(a.download_asset("https://uploads.linear.app/team/x.bin"))
+
+    def handler_4xx(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(handler_4xx))
+    with pytest.raises(RuntimeError, match="download") as ei:
+        run(a.download_asset("https://uploads.linear.app/team/x.bin"))
+    assert not isinstance(ei.value, httpx.HTTPError)

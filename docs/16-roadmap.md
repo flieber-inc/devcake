@@ -895,14 +895,15 @@ and not sufficient). Launch-supported PMOs remain Linear + Gitea Issues.
 
 | Kind | Names | Registry id | Gate / status |
 |---|---|---|---|
-| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | **experimental** — live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
+| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | **experimental** — `PMOSystemInfo.experimental=True` in the adapter registry (admin SPA select suffix + operator_note). Live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
 | Platform | `HarnessDialect` + registry-as-id-source + `aim()` | — | shipped for all six house templates |
 | Harness | Pi, OpenCode, Qwen Code | `pi`, `opencode`, `qwen-code` | **launch-supported** (dialect + Bake + aim + captures; resume still off until a capture pair) |
 
 Copy the `gitea_issues` profile (docs/05 §9): issue-only, `open→backlog`,
 `DEVCAKE-*` labels, `team_key=owner/repo`, `global_ids=False`. Separate
-packages — do **not** add issue methods to `ForgePort`. Do **not** extract a
-shared Issues port until the second forge-issue adapter exists (§9.6).
+packages — do **not** add issue methods to `ForgePort`. Cancel footer is
+shared via `adapters/forge_issue.py`; still do **not** invent a second
+Issues Port abstraction beyond that chokepoint (docs/05 §9.6).
 
 H1 lives in `images/common/devcake_dev/harness/` (Dev hexagon). Do not add
 `ports/harness.py` on the app. `app/devcake/harness.py` stays image / creds /

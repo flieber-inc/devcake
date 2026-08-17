@@ -334,6 +334,8 @@ class GitLabIssuesAdapter:
         return found
 
     async def children_of(self, ref: MissionRef) -> list[Mission]:
+        self._require_issue(ref)
+        # Issue-only: no project children. Decomposition uses markers + relations.
         return []
 
     async def post_feed(self, ref: MissionRef, markdown: str) -> None:

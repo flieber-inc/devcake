@@ -359,6 +359,15 @@ def test_project_ref_get_raises():
         run(pmo.get(MissionRef("1", "project")))
 
 
+def test_children_of_project_ref_raises_never_empty_list():
+    """projects_supported=False: children_of must not silently return [] on a
+    project ref (port F1 — every method raises the permanent family)."""
+    pmo = make_pmo()
+    with pytest.raises(RuntimeError, match="projects are not supported"):
+        run(pmo.children_of(MissionRef("1", "project")))
+    assert run(pmo.children_of(MissionRef("1", "issue"))) == []
+
+
 def test_429_is_pmo_transient():
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(429, text="slow down")

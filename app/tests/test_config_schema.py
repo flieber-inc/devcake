@@ -427,6 +427,32 @@ def test_registry_payload_carries_operator_notes():
     assert by_id["linear"]["operator_note"] == ""
 
 
+def test_registry_marks_github_and_gitlab_issues_experimental():
+    """Launch vs experimental is registry metadata (not docs-only).
+
+    Linear + Gitea Issues are launch-supported; GitHub/GitLab Issues stay
+    experimental until the live contract battery graduates them (docs/05 §9.7–9.8,
+    docs/16). The SPA select and operator_note ride this flag.
+    """
+    import asyncio
+    from devcake.adapters.registry import PMO_SYSTEMS
+    from devcake.api.connections_service import connections_registry
+
+    assert PMO_SYSTEMS["linear"].experimental is False
+    assert PMO_SYSTEMS["gitea_issues"].experimental is False
+    assert PMO_SYSTEMS["github_issues"].experimental is True
+    assert PMO_SYSTEMS["gitlab_issues"].experimental is True
+    assert "experimental" in PMO_SYSTEMS["github_issues"].operator_note.lower()
+    assert "experimental" in PMO_SYSTEMS["gitlab_issues"].operator_note.lower()
+
+    payload = asyncio.new_event_loop().run_until_complete(connections_registry())
+    by_id = {s["id"]: s for s in payload["pmo_systems"]}
+    assert by_id["linear"]["experimental"] is False
+    assert by_id["gitea_issues"]["experimental"] is False
+    assert by_id["github_issues"]["experimental"] is True
+    assert by_id["gitlab_issues"]["experimental"] is True
+
+
 def test_stale_put_bodies_rejected_not_dropped():
     """pydantic ignores unknown keys, so without the guard a stale client's
     PUT would silently lose the edit instead of failing."""

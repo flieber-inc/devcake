@@ -431,6 +431,7 @@ class GiteaIssuesAdapter:
         return found
 
     async def children_of(self, ref: MissionRef) -> list[Mission]:
+        self._require_issue(ref)
         # Issue-only: no project children. Decomposition uses markers + relations.
         return []
 
@@ -767,4 +768,6 @@ class GiteaIssuesAdapter:
             attachment_max_bytes=50 * 1024 * 1024,
             native_label_swap_atomic=True,  # PUT full label set
             relations_supported=True,
+            attachments_supported=True,
+            global_ids=False,  # issue numbers collide across Gitea instances
         )

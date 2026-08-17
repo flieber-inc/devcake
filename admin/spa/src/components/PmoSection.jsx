@@ -148,7 +148,16 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
     <>
       <Section id="pmo" title="PMO connections"
         description="The PMO teams DevCake watches, and how missions are adopted."
-        help={`One instance per team. Supported: ${registry.pmo_systems.map((s) => s.display_name).join(", ")}. Instance names prefix branches and run ids (MYTEAM-DEV-17).`}
+        help={(() => {
+          const systems = registry.pmo_systems || [];
+          const launch = systems.filter((s) => !s.experimental).map((s) => s.display_name);
+          const exp = systems.filter((s) => s.experimental).map((s) => s.display_name);
+          const bits = [];
+          if (launch.length) bits.push(`Launch-supported: ${launch.join(", ")}`);
+          if (exp.length) bits.push(`Experimental (in-tree, not launch-supported): ${exp.join(", ")}`);
+          bits.push("Instance names prefix branches and run ids (MYTEAM-DEV-17).");
+          return `One instance per team. ${bits.join(". ")}`;
+        })()}
         actions={
           <MoreMenu label="More PMO actions" items={[
             { label: CLEAR_SECRETS_ENTRY.menuLabel, danger: true,
@@ -313,7 +322,9 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
                     aria-label="PMO system"
                   >
                     {(registry.pmo_systems || []).map((s) => (
-                      <option key={s.id} value={s.id}>{s.display_name}</option>
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}{s.experimental ? " (experimental)" : ""}
+                      </option>
                     ))}
                   </select>
                 </Field>

@@ -209,8 +209,8 @@ def test_ok_receipt_for_a_gone_image_is_dropped_and_the_pin_rebakes(tmp_path):
         require_staffed(
             DevType(name="d", harness_template="grok-build"),
             digest="sha256:abc",
-            store=FileReceiptStore(receipts))
-
+            store=FileReceiptStore(receipts),
+            baker_alive=True)
 
 def test_receipt_stays_when_the_named_image_is_still_local(tmp_path):
     factory = _load_factory()

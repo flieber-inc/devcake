@@ -66,9 +66,8 @@ def test_staffing_looks_up_the_stored_pin_not_the_house_arg():
                  cli_version="1.0.4")
     store = Store()
     with pytest.raises(HarnessNotStaffed, match="1.0.4"):
-        require_staffed(dt, digest="sha256:abc", store=store)
+        require_staffed(dt, digest="sha256:abc", store=store, baker_alive=True)
     assert store.asked == ("sha256:abc", "grok-build", "1.0.4")
-
 
 def test_keep_set_records_concrete_pins(tmp_path):
     from devcake.keep_set import publish_keep_set

@@ -110,7 +110,9 @@ def test_matching_observation_passes_the_row_and_the_receipt():
     assert row["expected"] == GROK_401
     assert row["observed"] == GROK_401
     assert rec["ok"] is True
-
+    # Host receipts must stamp gated so app staffing cannot green-wash
+    # a fabricated {ok: True} without the probe path.
+    assert rec["gated"] is True
 
 def test_every_house_pin_has_the_same_probe_rows():
     """Compile+probe grades the same five names for every registry template."""

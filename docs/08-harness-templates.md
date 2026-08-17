@@ -27,9 +27,15 @@ Changing a Dev Type's model does not add a template.
 
 Every registry template is **launch-supported**. The bake verb is the same
 for all six: compile the image, run the hermetic probe matrix, write a
-receipt. Staffing is fail-closed on that receipt. `DevType.cli_version`
-accepts a stored semver on every template (empty = house ARG). Hello is
-not a harness template and is not gated.
+receipt. Staffing (`require_staffed`) is fail-closed: missing receipt,
+`ok` not true, `gated` not true (host `compile_receipt` stamps
+`gated: true`), sentinel app digest, or a dead/never-checked-in host
+baker all refuse launch. `HARNESSES`, `HOUSE_PINS` / `LAUNCH_SUPPORTED`,
+and pin maps are one template-id matrix (ratchet-tested).
+`resolve_image` / `image_ref` refuse unknown templates — they do not
+invent `devcake/dev-*` refs. `DevType.cli_version` accepts a stored
+semver on every template (empty = house ARG). Hello is not a harness
+template and is not gated.
 
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 

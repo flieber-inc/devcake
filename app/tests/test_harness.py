@@ -44,6 +44,25 @@ def test_every_registry_template_is_pinnable_and_not_experimental():
         assert payload[name]["cli_pin_allowed"] is True
 
 
+def test_harness_matrix_is_one_set_of_template_ids():
+    """HARNESSES, HOUSE_PINS, LAUNCH_SUPPORTED, and pin maps share one key set.
+
+    Independent expected: set equality across the hand tables — not a
+    recomputed join of production helpers.
+    """
+    from devcake.house_pins import (
+        DOCKERFILE_ARG,
+        HOUSE_PINS,
+        LAUNCH_SUPPORTED,
+        PACKAGE_IDS,
+    )
+
+    keys = set(HARNESSES)
+    assert set(HOUSE_PINS) == keys
+    assert set(LAUNCH_SUPPORTED) == keys
+    assert set(PACKAGE_IDS) == keys
+    assert set(DOCKERFILE_ARG) == keys
+
 def test_dev_type_status_credentials_ready(monkeypatch, tmp_path):
     """Overview 'Devs' card (v0.1.1 B3): readiness is server-computed —
     any ONE of the harness's env keys in the store, or any credential file

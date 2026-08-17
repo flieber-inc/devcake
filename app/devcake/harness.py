@@ -134,10 +134,14 @@ def resolve_image(dev_type) -> str:
     Empty pin and a stored house pin both name :TAG (keep-set only
     records the effective version). A different stored pin is
     :TAG-cli_version. Hello stays HELLO_IMAGE.
+
+    Unknown harness_template raises — never invents an image ref.
     """
     from .house_pins import effective_cli_version, image_ref
-    return image_ref(
-        dev_type.harness_template, effective_cli_version(dev_type), tag=_TAG)
+    template = dev_type.harness_template
+    if template not in HARNESSES:
+        raise ValueError(f"unknown harness template: {template!r}")
+    return image_ref(template, effective_cli_version(dev_type), tag=_TAG)
 
 
 def missing_referenced_secret_env(dt) -> list[str]:

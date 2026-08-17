@@ -120,12 +120,12 @@ class FakeInternalForge:
 
 
 class OkReceiptStore:
-    """Test double: every lookup is an ok receipt. Production uses FileReceiptStore."""
+    """Test double: every lookup is an ok gated receipt. Production uses FileReceiptStore."""
 
     def get(self, *, digest, template, cli_version):
         return {"digest": digest, "template": template,
-                "cli_version": cli_version, "ok": True, "rows": []}
-
+                "cli_version": cli_version, "ok": True, "gated": True,
+                "rows": []}
 
 def make_mission_manager(
     tmp_path: Path | None = None,

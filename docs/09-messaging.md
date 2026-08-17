@@ -10,7 +10,7 @@
 
 Redis Streams mediate **all** Dev↔app traffic. Redis is a **transport buffer, never a source of truth**: a lost message is recoverable because artifacts also exist in Dagu run logs, and the Mission's label was never advanced (INV-3) — the step simply re-runs.
 
-The app's domain programs against **`MessagingPort`** (`ports/messaging.py`); the production adapter is `adapters/redis/messaging.py`. Per-run ACL creation is also the first step of `RunBootstrap.launch` (`04-orchestrator.md` §3.1).
+The app's domain programs against **`MessagingPort`** (`ports/messaging.py`); the production adapter is `adapters/redis/messaging.py`. Wire failures on Protocol surface methods (ACL lifecycle, reply, unresolved scan, setup) raise **`MessagingError`** — never raw `redis.exceptions`. The long-running ingress consumer still reconnects in-loop on disconnect (no `MessagingError` for transient outages). Per-run ACL creation is also the first step of `RunBootstrap.launch` (`04-orchestrator.md` §3.1).
 
 ## 1. Topology
 

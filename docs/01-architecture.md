@@ -80,14 +80,14 @@ app/devcake/
                    #   ForgeDescriptor, ForgeCapabilities, ForgeError,
                    #   mission_branch(instance, key) (06)
     internal_forge.py  # InternalForgePort — bundled Gitea provisioner (ADR-0010)
-    executor.py    #   ExecutorPort — start/stop/status (dagu adapter)
+    executor.py    #   ExecutorPort + ExecutorError/DuplicateRun (dagu adapter)
     state.py       #   StatePort — run-record persistence (files adapter)
-    messaging.py   #   MessagingPort — Redis Streams surface (redis adapter)
+    messaging.py   #   MessagingPort + MessagingError (redis adapter)
     finalizer.py   #   RunFinalizer — mission finalize/restore (MissionManager)
     cron.py        #   CronStore — scheduled-task fire ledger (ADR-0035)
-    claims.py      #   ClaimsNotebooks — .claims/ forge write seam (ADR-0035)
-    receipts.py    #   ReceiptStore — host bake drift-probe receipts
-    versions.py    #   HarnessVersionSource — CLI version probes
+    receipts.py    #   ReceiptStore — harness bake receipts (staffing, fail-closed)
+    versions.py    #   HarnessVersionSource — operator-asked remote CLI latest
+    claims.py      #   ClaimsNotebooks — memory `.claims/` forge write seam
   adapters/
     registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), make_internal_forge(),
                    #   forges() — the ONE place that knows which adapters exist
@@ -95,9 +95,11 @@ app/devcake/
     gitea_issues/  #   PMOPort impl — forge-issue family (05 §9; not ForgePort)
     github/ gitlab/ gitea/  # ForgePort impls + Gitea provisioner (06, ADR-0010)
     dagu/          #   ExecutorPort impl
-    files/         #   StatePort + CronStore impls (+ runlog.py, owner_store.py,
+    files/         #   StatePort + CronStore impls (+ receipts.py, runlog.py, owner_store.py,
                    #   cron_store.py — the scheduled-task fire ledger) (10)
     redis/         #   MessagingPort impl — ingress + replies (09)
+    claims_writer.py     # ClaimsNotebooks impl (git subprocess via adapters.git)
+    registry_versions.py # HarnessVersionSource impl (npm / x.ai, operator-asked)
   api/             # FastAPI (11, ADR-0015/0028): services.py = the
                    #   composition root (Services graph + build_services(),
                    #   called by the lifespan — importing main.py builds
@@ -121,7 +123,7 @@ app/devcake/
 
 The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.
 
-**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010), run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`), and scheduled-task / memory seams (`CronStore`, `ClaimsNotebooks` — ADR-0035). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files (incl. cron outcome ledger), Redis Streams; `MissionManager` satisfies `RunFinalizer`. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, steward, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
+**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`, plus secondary `ReceiptStore`, `HarnessVersionSource`, `ClaimsNotebooks`, and the scheduled-task `CronStore` — ADR-0035). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files (runs + receipts + cron ledger), Redis Streams, claims writer, registry versions; `MissionManager` / `FinalizerRouter` satisfy `RunFinalizer`. Wire adapters raise port-level errors (`ExecutorError`/`DuplicateRun`, `MessagingError`, `ForgeError`, `PMOTransient`) — never raw httpx/redis types. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, steward, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
 
 **Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). Domain modules depend on **port Protocols**, not adapter packages.
 

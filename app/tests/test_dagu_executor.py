@@ -11,7 +11,8 @@ import json
 import httpx
 import pytest
 
-from devcake.adapters.dagu.executor import DAG_NAME, DaguExecutor, DuplicateRun
+from devcake.adapters.dagu.executor import DAG_NAME, DaguExecutor
+from devcake.ports.executor import DuplicateRun
 
 
 def run_coro(c):

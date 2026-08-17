@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from ..adapters.dagu import DuplicateRun
+from ..ports.executor import DuplicateRun
 from .. import secrets as secrets_store
 from .. import security
 from ..domain.model import ALL_LABELS
@@ -913,5 +913,5 @@ async def dispatch_hello(sleep: int = 3, payload_kb: int = 1,
     try:
         run = await svc().manager.dispatch_hello(sleep, payload_kb, timeout_seconds)
     except DuplicateRun as e:
-        raise HTTPException(409, f"duplicate dagRunId {e}")
+        raise HTTPException(409, str(e))
     return {"run_id": run.run_id, "state": run.state}

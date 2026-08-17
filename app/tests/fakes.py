@@ -76,6 +76,9 @@ class FakeExecutor:
     async def status(self, dag_run_id):
         return None
 
+    async def node_errors(self, dag_run_id):
+        return []
+
 
 DEFAULT_INSTANCE = PMOInstance(name="linear", team_key="DEV")
 

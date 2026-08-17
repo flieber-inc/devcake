@@ -23,10 +23,14 @@ from redis.exceptions import (ConnectionError as RedisConnectionError,
                               ResponseError,
                               TimeoutError as RedisTimeoutError)
 
+from ...ports.messaging import MessagingError
 from ...security import MASK, register_runtime_secret, unregister_runtime_secret
 
 log = logging.getLogger("devcake.messaging")
 tracer = trace.get_tracer("devcake")
+
+# Wire failures that must never escape Protocol surface methods as redis types
+_REDIS_WIRE = (RedisConnectionError, RedisTimeoutError, ResponseError, OSError)
 
 INGRESS = "devcake:ingress"
 # concurrent run.artifacts finalizes (audit F11) — bounded so a burst of
@@ -84,7 +88,10 @@ class Messaging:
             await self.redis.xgroup_create(INGRESS, GROUP, id="0", mkstream=True)
         except ResponseError as e:
             if "BUSYGROUP" not in str(e):
-                raise
+                raise MessagingError(
+                    f"setup: consumer group create failed: {e}") from e
+        except (RedisConnectionError, RedisTimeoutError, OSError) as e:
+            raise MessagingError(f"setup: network failure: {e}") from e
 
     # ── per-run ACL users (docs/09 §1a) ──────────────────────────────────────
 
@@ -93,20 +100,28 @@ class Messaging:
         # Redis 7 key selectors (ISSUES #14): write-only on shared ingress so a
         # concurrent Dev cannot XREAD other runs' plaintext `auth` envelopes;
         # read/write only on this run's reply stream.
-        await self.redis.execute_command(
-            "ACL", "SETUSER", f"dev-{run_id}", "on", f">{password}",
-            f"%W~{INGRESS}", f"%RW~{reply_stream(run_id)}",
-            "+xadd", "+xread", "+xlen", "+ping", "+client|setinfo",
-        )
-        await self._acl_save()
+        try:
+            await self.redis.execute_command(
+                "ACL", "SETUSER", f"dev-{run_id}", "on", f">{password}",
+                f"%W~{INGRESS}", f"%RW~{reply_stream(run_id)}",
+                "+xadd", "+xread", "+xlen", "+ping", "+client|setinfo",
+            )
+            await self._acl_save()
+        except _REDIS_WIRE as e:
+            raise MessagingError(
+                f"create_run_user({run_id}): network/ACL failure: {e}") from e
         # the only place the plaintext exists app-side — register it here so
         # redact() masks it in everything PMO-bound (docs/14 §5)
         register_runtime_secret(run_id, password)
         return password
 
     async def delete_run_user(self, run_id: str) -> None:
-        await self.redis.execute_command("ACL", "DELUSER", f"dev-{run_id}")
-        await self._acl_save()
+        try:
+            await self.redis.execute_command("ACL", "DELUSER", f"dev-{run_id}")
+            await self._acl_save()
+        except _REDIS_WIRE as e:
+            raise MessagingError(
+                f"delete_run_user({run_id}): network/ACL failure: {e}") from e
         unregister_runtime_secret(run_id)
 
     async def revoke_leftover_run_users(self) -> int:
@@ -155,16 +170,25 @@ class Messaging:
             "v": 1, "run_id": run_id, "kind": kind,
             "ts": datetime.now(timezone.utc).isoformat(), "payload": payload,
         }
-        pipe = self.redis.pipeline(transaction=False)
-        pipe.xadd(stream, {"m": json.dumps(envelope)})
-        pipe.expire(stream, REPLY_TTL_SECONDS)   # one round-trip: the TTL is
-        # the docs/09 §5 secret-lingering guard — never separated from the add
-        await pipe.execute()
+        try:
+            pipe = self.redis.pipeline(transaction=False)
+            pipe.xadd(stream, {"m": json.dumps(envelope)})
+            pipe.expire(stream, REPLY_TTL_SECONDS)   # one round-trip: the TTL is
+            # the docs/09 §5 secret-lingering guard — never separated from the add
+            await pipe.execute()
+        except _REDIS_WIRE as e:
+            raise MessagingError(
+                f"reply({run_id}, {kind}): network failure: {e}") from e
 
     async def delete_runspec_result(self, run_id: str) -> None:
         """XDEL runspec.result entries as soon as the Dev acknowledges (docs/09 §1a)."""
         stream = reply_stream(run_id)
-        for entry_id, fields in await self.redis.xrange(stream):
+        try:
+            entries = await self.redis.xrange(stream)
+        except _REDIS_WIRE as e:
+            raise MessagingError(
+                f"delete_runspec_result({run_id}): network failure: {e}") from e
+        for entry_id, fields in entries:
             try:
                 if json.loads(fields.get("m", "{}")).get("kind") == "runspec.result":
                     await self.redis.xdel(stream, entry_id)
@@ -174,7 +198,11 @@ class Messaging:
                 continue
 
     async def delete_reply_stream(self, run_id: str) -> None:
-        await self.redis.delete(reply_stream(run_id))
+        try:
+            await self.redis.delete(reply_stream(run_id))
+        except _REDIS_WIRE as e:
+            raise MessagingError(
+                f"delete_reply_stream({run_id}): network failure: {e}") from e
 
     # ── ingress consumption (Devs → app) ─────────────────────────────────────
 
@@ -264,20 +292,27 @@ class Messaging:
         resume it)."""
         out: set[str] = set()
         start = "-"
-        while True:
-            entries = await self.redis.xrange(INGRESS, min=start, max="+", count=200)
-            for _entry_id, fields in entries:
-                try:
-                    envelope = json.loads((fields or {}).get("m", "{}"))
-                    run_id = str(envelope.get("run_id", ""))
-                except Exception:  # noqa: BLE001 — scan must finish; skip is logged
-                    log.warning("ingress run-id scan: skipping unparseable entry %s", _entry_id)
-                    continue
-                if run_id:
-                    out.add(run_id)
-            if len(entries) < 200:
-                return out
-            start = "(" + entries[-1][0]
+        try:
+            while True:
+                entries = await self.redis.xrange(
+                    INGRESS, min=start, max="+", count=200)
+                for _entry_id, fields in entries:
+                    try:
+                        envelope = json.loads((fields or {}).get("m", "{}"))
+                        run_id = str(envelope.get("run_id", ""))
+                    except Exception:  # noqa: BLE001 — scan must finish; skip is logged
+                        log.warning(
+                            "ingress run-id scan: skipping unparseable entry %s",
+                            _entry_id)
+                        continue
+                    if run_id:
+                        out.add(run_id)
+                if len(entries) < 200:
+                    return out
+                start = "(" + entries[-1][0]
+        except _REDIS_WIRE as e:
+            raise MessagingError(
+                f"unresolved_run_ids: network failure: {e}") from e
 
     async def _ack_delete(self, entry_ids: list[str]) -> None:
         if not entry_ids:

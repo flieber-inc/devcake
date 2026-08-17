@@ -324,7 +324,7 @@ function NeedsHumanPanel({ merge, attention }) {
             <span
               className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                 r.kind === "merge"
-                  ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300"
+                  ? "bg-accent-100 text-accent-800 dark:bg-accent-950 dark:text-accent-300"
                   : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
               }`}
             >
@@ -444,7 +444,7 @@ export default function OverviewPage({
         </Stat>
         <Stat icon={Bot} label="Devs">
           {/* the Dev fleet in the Runs-table color code (founder decision):
-              green available · blue running · red broken (breaker latched
+              green available · accent running · red broken (breaker latched
               or no credentials). Service health lives in the sidebar. */}
           {devTypes === null ? (
             <span className="font-display text-2xl font-extrabold tracking-tight">—</span>

@@ -1,11 +1,11 @@
 import React from "react";
 
 // Status dot. Preferred API: state ∈ ok | running | broken | unknown
-// (the Runs-table color code — green / pulsing blue / red / grey).
-// Legacy API: ok = true | false | undefined (sidebar services — no blue).
+// (the Runs-table color code — green / pulsing accent / red / grey).
+// Legacy API: ok = true | false | undefined (sidebar services — no running).
 const STATE_CLS = {
   ok: "bg-green-500",
-  running: "bg-blue-500 animate-pulse",
+  running: "bg-accent-500 animate-pulse",
   broken: "bg-red-500",
   unknown: "bg-neutral-400",
 };

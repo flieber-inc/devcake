@@ -13,14 +13,14 @@ export default function StatusPill({ state, verdict }) {
       ? "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300"
       : FAILED.includes(state)
         ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300"
-        : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300";
+        : "bg-accent-100 text-accent-800 dark:bg-accent-950 dark:text-accent-300";
   const dot = flagged
     ? "bg-amber-500"
     : state === "finished"
       ? "bg-green-500"
       : FAILED.includes(state)
         ? "bg-red-500"
-        : "bg-blue-500 animate-pulse";
+        : "bg-accent-500 animate-pulse";
   return (
     <span title={flagged ? verdict : undefined}
       className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>

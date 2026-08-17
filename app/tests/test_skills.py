@@ -313,6 +313,25 @@ def test_payload_store_present_does_not_silently_ship_builtin(tmp_path):
     assert not any(s.get("name") == "tdd" for s in payload)
 
 
+def test_payload_store_oversize_skill_md_ships_nothing(tmp_path):
+    """ADR-0016 Decision 4: a size-capped skill is skipped entirely.
+    Per-file cap on SKILL.md must not leave a helpers-only payload entry
+    (that would still count as shipped for Required soft-force)."""
+    from devcake.domain import skills as skills_mod
+    huge = b"x" * (skills_mod.MAX_FILE_BYTES + 1)
+    forge = _FakeForge({
+        "tdd/SKILL.md": huge,
+        "tdd/helper.md": b"small helper",
+    })
+    svc = skills_mod.SkillService(
+        internal_forge=forge, builtin_dir=_builtin_tree(tmp_path))
+    payload, warnings = _run(svc.payload_for(["tdd"]))
+    assert payload == []
+    assert any("SKILL.md" in w and "exceeds" in w for w in warnings)
+    assert "tdd/helper.md" not in forge.file_calls
+    assert "tdd/SKILL.md" not in forge.file_calls
+
+
 def test_payload_store_read_failure_still_falls_back_to_builtin(tmp_path):
     """I/O failure on a store skill (not a cap drop) still tries the
     bundled copy — additive, same contract as store-down."""
@@ -366,6 +385,25 @@ def test_get_skill_store_caps_before_download(tmp_path):
     assert got["source"] == "store"
     assert any("huge.bin" in w for w in got["warnings"])
     assert forge.file_calls == ["tdd/SKILL.md"]
+
+
+def test_get_skill_store_oversize_skill_md_is_not_found(tmp_path):
+    """View must not return a skill body without SKILL.md when the
+    manifest itself is file-cap dropped (helpers alone are not a skill)."""
+    from devcake.domain import skills as skills_mod
+    from devcake.domain.skills import SkillStoreError
+    huge = b"x" * (skills_mod.MAX_FILE_BYTES + 1)
+    forge = _FakeForge({
+        "tdd/SKILL.md": huge,
+        "tdd/helper.md": b"small helper",
+    })
+    svc = skills_mod.SkillService(
+        internal_forge=forge, builtin_dir=tmp_path / "none")
+    with pytest.raises(SkillStoreError) as e:
+        _run(svc.get_skill("tdd"))
+    assert e.value.status == 404
+    assert "exceeds" in str(e.value)
+    assert forge.file_calls == []
 
 
 # ── authoring: compose / import-validate / save / delete (admin UI flow) ─────
@@ -804,6 +842,21 @@ def test_payload_external_caps_apply_before_reading(tmp_path):
     assert {f["path"] for f in payload[0]["files"]} == {"tdd/SKILL.md"}
     assert any("huge.bin" in w for w in warnings)
     assert ("myrepo", "tdd", "huge.bin") not in mirror.reads
+
+
+def test_payload_external_oversize_skill_md_ships_nothing(tmp_path):
+    """Same ADR-0016 Decision 4 honesty as store: oversized SKILL.md must
+    not ship helpers-only for an external skill (one _collect pipe)."""
+    from devcake.domain import skills as skills_mod
+    svc, mirror = _ext_svc(tmp_path)
+    mirror.trees[("myrepo", "")] = {"tdd": {
+        "SKILL.md": skills_mod.MAX_FILE_BYTES + 1, "helper.md": 12}}
+    mirror.files[("myrepo", "tdd", "helper.md")] = b"small helper"
+    payload, warnings = _run(svc.payload_for(["myrepo/tdd"]))
+    assert payload == []
+    assert any("SKILL.md" in w and "exceeds" in w for w in warnings)
+    assert ("myrepo", "tdd", "helper.md") not in mirror.reads
+    assert ("myrepo", "tdd", "SKILL.md") not in mirror.reads
 
 
 def test_payload_external_respects_source_subdir(tmp_path):

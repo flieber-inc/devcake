@@ -1,16 +1,20 @@
 """SkillService — the skill store's domain seam (docs/16 skill store v1).
 
 Skills are standard Claude Code skills (`<name>/SKILL.md` + optional
-supporting files). Two sources, store-first:
+supporting files). Three sources, store-first for flat names:
 - the operator-editable `skill-store` repo on the bundled Gitea (read via
-  the InternalForgePort — F1: domain never imports adapters), and
+  the InternalForgePort — F1: domain never imports adapters),
 - the bundled copies under app/devcake/skills/ (the seed content), which
-  keep built-in skills working when the internal forge is disabled or down.
+  keep built-in skills working when the internal forge is disabled or down,
+- and external `<source>/<skill>` names from dedicated `skill_sources`
+  connections (ADR-0016 addendum 2; read via RepoCache, never repo cards).
 
 Skills are additive: every failure here degrades to a warning, never a
 refused run. Size caps are enforced from the tree listing's blob sizes
 BEFORE any download — an oversized store file must never be pulled into
-the shared control-plane process (review finding, 2026-07-17).
+the shared control-plane process (review finding, 2026-07-17). A skill
+whose SKILL.md is file-cap dropped is skipped entirely (no helpers-only
+payload — ADR-0016 Decision 4 / Required soft-force honesty).
 """
 
 from __future__ import annotations
@@ -620,7 +624,14 @@ class SkillService:
     async def _collect(self, name: str, sized: list[tuple[str, int]],
                        total: int, fetch) -> tuple[list[dict], int, list[str]]:
         """One skill's files within the caps: sizes are checked BEFORE
-        fetch; a store exception propagates (payload_for falls back)."""
+        fetch; a store exception propagates (payload_for falls back).
+
+        SKILL.md is required: if it is present in the sized tree and
+        over MAX_FILE_BYTES, return empty — do not ship helpers alone
+        (ADR-0016 Decision 4: size-capped skills must not appear as
+        shipped for Required soft-force). Total-cap mid-skill still
+        keeps SKILL.md and drops later helpers.
+        """
         entry: list[dict] = []
         used = 0
         warns: list[str] = []
@@ -634,6 +645,10 @@ class SkillService:
             if _over_file_cap(size):
                 warns.append(f"skill {name!r}: {path} exceeds "
                              f"{MAX_FILE_BYTES} bytes — skipped")
+                if path == anchor:
+                    # Manifest unusable → whole skill unusable; stop
+                    # before fetching any helpers.
+                    return [], 0, warns
                 continue
             if total + used + size > MAX_TOTAL_BYTES:
                 warns.append(f"skills payload cap ({MAX_TOTAL_BYTES} bytes) "

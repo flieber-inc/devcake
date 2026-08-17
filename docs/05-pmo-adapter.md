@@ -46,6 +46,11 @@ class PMOPort(Protocol):
         # Feed POLICY (redaction, sentinel, suppression) is the orchestrator's
         # job; transport is the adapter's.
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
+    async def cancel_mission(self, ref: MissionRef) -> None: ...
+        # terminal cancel/archive — used by decomposition (issue children) and
+        # the merge sweep (PR closed unmerged). Idempotent. Dedicated seam
+        # (not just set_status("canceled")): some PMOs express abandonment
+        # as archive/close rather than a plain status write.
     async def swap_labels(self, ref: MissionRef, remove: set[str],
                           add: set[str]) -> None: ...
         # single call so each adapter implements the closest-to-atomic native op
@@ -58,18 +63,15 @@ class PMOPort(Protocol):
         # the `devcake:cron:v1 job=<id>` marker)
     async def create_relation(self, blocker_id: str, blocked_id: str) -> None: ...
         # native "blocker blocks blocked" relation (adr/0007); duplicate-tolerant
+    async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
+        # creates the managed set in EVERY namespace the vendor requires
+        # (Linear: team issue labels + workspace project labels)
     async def append_description(self, ref: MissionRef, text: str) -> None: ...
         # append-only INTENT with markdown fidelity (adr/0012); Linear
         # implements it as an unguarded read-modify-write, so a human edit
         # saved inside the window is lost (last writer wins — accepted for
         # the sole v0 caller: a short lineage footer on an issue canceled
         # moments later). Issues only; callers treat failures as non-fatal.
-    async def ensure_labels(self, team_ref: str, names: set[str]) -> None: ...
-        # creates the managed set in EVERY namespace the vendor requires
-        # (Linear: team issue labels + workspace project labels)
-    async def cancel_mission(self, ref: MissionRef) -> None: ...
-        # terminal cancel/archive — used by decomposition (issue children) and
-        # the merge sweep (PR closed unmerged)
 
     # ── assets ──
     async def upload_attachment(self, pmo_id: str, filename: str,
@@ -101,7 +103,7 @@ class PMOCapabilities(BaseModel):
     relations_supported: bool = False # write support; GitLab Free latches False on 403
     attachments_supported: bool = True  # official file-upload API; False → feed multipart (GitHub)
     comment_max_chars: int | None = None  # GitHub Issues: 65536; None = no extra cap
-    global_ids: bool = False          # Linear UUIDs True; forge-issue numbers False
+    global_ids: bool = False          # pmo_ids unique across the vendor environment (Linear UUIDs: True; forge-issue numbers: False)
 ```
 
 `/health` and `POST /api/v1/connections/pmo/{name}/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.

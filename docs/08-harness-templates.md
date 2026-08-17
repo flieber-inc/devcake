@@ -325,8 +325,8 @@ lets a run proceed on a last-good mirror or omit a never-synced card.
 There is **no harness-native memory directory** — consumer notebooks land
 at `/workspace/memory/<card>/` via the entrypoint, and when any are
 mounted the playbook prompt gains the factual mount sentence that names
-`.claims/` (PLAN_MEMORY D1). All
-three CLIs read the same `SKILL.md` format; the verified read-set per pinned
+`.claims/` (PLAN_MEMORY D1). All six
+templates read the same `SKILL.md` format; the verified read-set per pinned
 or observed CLI:
 
 | Harness | skills_dir | Verified read locations |

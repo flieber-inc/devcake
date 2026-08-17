@@ -10,7 +10,28 @@
 
 Redis Streams mediate **all** Dev↔app traffic. Redis is a **transport buffer, never a source of truth**: a lost message is recoverable because artifacts also exist in Dagu run logs, and the Mission's label was never advanced (INV-3) — the step simply re-runs.
 
-The app's domain programs against **`MessagingPort`** (`ports/messaging.py`); the production adapter is `adapters/redis/messaging.py`. Wire failures on Protocol surface methods (ACL lifecycle, reply, unresolved scan, setup) raise **`MessagingError`** — never raw `redis.exceptions`. The long-running ingress consumer still reconnects in-loop on disconnect (no `MessagingError` for transient outages). Per-run ACL creation is also the first step of `RunBootstrap.launch` (`04-orchestrator.md` §3.1).
+The app's domain programs against **`MessagingPort`** (`ports/messaging.py`); the production adapter is `adapters/redis/messaging.py`. Wire failures on Protocol surface methods (ACL lifecycle, reply, unresolved scan, setup) raise **`MessagingError`** — never raw `redis.exceptions`; the long-running ingress consumer still reconnects in-loop on disconnect (no `MessagingError` for transient outages). Per-run ACL creation is also the first step of `RunBootstrap.launch` (`04-orchestrator.md` §3.1). Port methods (normative signatures):
+
+```python
+class MessagingPort(Protocol):
+    async def create_run_user(self, run_id: str) -> str: ...
+    async def delete_run_user(self, run_id: str) -> None: ...
+    async def unresolved_run_ids(self) -> set[str]: ...
+    async def reply(self, run_id: str, kind: str, payload: dict[str, Any]) -> None: ...
+    async def delete_runspec_result(self, run_id: str) -> None: ...
+    async def delete_reply_stream(self, run_id: str) -> None: ...
+    async def setup(self) -> None: ...
+    async def reclaim_pending(
+        self, handler: Handler,
+        verify_auth: Callable[[str, str | None], bool],
+    ) -> None: ...
+    async def consume_forever(
+        self, handler: Handler,
+        verify_auth: Callable[[str, str | None], bool],
+    ) -> None: ...
+```
+
+Live constants in `adapters/redis/messaging.py`: ingress stream `devcake:ingress`, consumer group `app`, reply stream `devcake:reply:{run_id}` with `REPLY_TTL_SECONDS = 900`, dead-letter `devcake:dead` (`DEAD_STREAM_MAXLEN = 1000`), chunk caps `MAX_CHUNKS = 128` / `MAX_ASSEMBLED_BYTES = 50 MiB` / `MAX_ACTIVE_CHUNK_GROUPS = 16` / `MAX_BUFFERED_CHUNK_BYTES = 100 MiB`, reclaim every 60 s, poison after 5 deliveries (stalled chunk groups only — progress within 300 s defers poison).
 
 ## 1. Topology
 

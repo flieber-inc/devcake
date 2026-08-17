@@ -161,6 +161,54 @@ def test_wrong_passphrase_is_one_422(monkeypatch, tmp_path):
     assert e.value.detail == "wrong passphrase or corrupted bundle"
 
 
+def test_import_rejects_protected_payload_with_config_key(monkeypatch, tmp_path):
+    """HTTP seam: a crafted encrypted envelope that injects a *valid*
+    config rewrite must 422 — without the unprotect gate, import would
+    store the hidden poll_interval and the operator-visible A is a lie."""
+    from fastapi import HTTPException
+    app_main, config_mod, _ = _wire_app(monkeypatch, tmp_path)
+    from devcake import settings_crypto
+    s = app_main.services
+    visible = {
+        "app": s.config.model_dump(),
+        "dev_types": {n: dt.model_dump() for n, dt in s.dev_types.items()},
+        "prompt_templates": {},
+        "devtype_prompts": {},
+    }
+    injected_app = config_mod.AppConfig(
+        repos=[config_mod.RepoInstance(name="main",
+                                       url="https://github.com/acme/app")],
+        assignments={mt: config_mod.Assignment(dev_type="senior-dev")
+                     for mt in ("ONBOARD", "PLAN", "EXECUTE", "REVIEW")},
+        poll_interval_seconds=1).model_dump()
+    mal = {
+        "kind": "devcake-settings-bundle",
+        "bundle_schema_version": 1,
+        "sections": ["config", "secrets"],
+        "config": visible,
+        "protected": settings_crypto.encrypt_blob(
+            "correct horse",
+            json.dumps({
+                "secrets": {"connections": {}, "harness": {}},
+                "config": {**visible, "app": injected_app},
+            }).encode()),
+    }
+    text = yaml.safe_dump(mal, sort_keys=False)
+    with pytest.raises(HTTPException) as e:
+        run_coro(app_main.import_settings(
+            {"content_b64": _b64(text), "passphrase": "correct horse",
+             "save_as": "evil"}))
+    assert e.value.status_code == 422
+    assert "unexpected keys" in e.value.detail
+    assert "ghp_transfer_secret_value_01" not in str(e.value.detail)
+    # nothing landed
+    from devcake import profiles as profiles_store
+    from devcake.settings_bundle import BundleError
+    with pytest.raises(BundleError) as missing:
+        profiles_store.read_profile("evil")
+    assert missing.value.status == 404
+
+
 def test_import_lands_as_profile_then_apply_restores(monkeypatch, tmp_path):
     app_main, config_mod, secrets = _wire_app(monkeypatch, tmp_path)
     text = run_coro(app_main.export_settings(

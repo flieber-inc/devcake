@@ -528,16 +528,34 @@ def protect_bundle(bundle: dict, passphrase: str) -> dict:
 
 def unprotect_bundle(bundle: dict, passphrase: str) -> dict:
     """Inverse of protect_bundle. Raises settings_crypto.DecryptError on a
-    wrong passphrase or tampering (one indistinguishable message)."""
+    wrong passphrase or tampering (one indistinguishable message).
+
+    The envelope may carry only B and C (`secrets`, `setup_env`). Any other
+    key (notably `config`) is refused so a crafted ciphertext cannot rewrite
+    the operator-visible plaintext section A after passphrase entry. Outer
+    YAML `secrets`/`setup_env`/`plaintext_secrets` are discarded whenever
+    `protected` is present — the envelope is the sole source of B/C.
+    """
     from . import settings_crypto
     plaintext = settings_crypto.decrypt_blob(passphrase, bundle["protected"])
     try:
         sections = json.loads(plaintext)
-        assert isinstance(sections, dict)
+        if not isinstance(sections, dict):
+            raise ValueError("not a mapping")
     except Exception:  # noqa: BLE001 — any parse/shape failure of decrypted bytes maps to one typed 422; never leaks internals
         raise BundleError(422, "decrypted payload is not a bundle section map")
-    out = {k: v for k, v in bundle.items() if k != "protected"}
-    out.update(sections)
+    allowed = ("secrets", "setup_env")
+    unknown = sorted(set(sections) - set(allowed))
+    if unknown:
+        raise BundleError(
+            422, "protected payload may only carry secrets and setup_env — "
+                 f"unexpected keys: {', '.join(unknown)}")
+    # Drop outer B/C and the plaintext flag: envelope is authoritative.
+    out = {k: v for k, v in bundle.items()
+           if k not in ("protected", "secrets", "setup_env", "plaintext_secrets")}
+    for key in allowed:
+        if key in sections:
+            out[key] = sections[key]
     return out
 
 

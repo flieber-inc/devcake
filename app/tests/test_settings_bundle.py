@@ -507,6 +507,113 @@ def test_setup_env_vars_tripwire_matches_env_example():
         f"extra {sorted(ours - declared)}")
 
 
+# ── protect / unprotect envelope integrity (ADR-0013 B/C only) ───────────────
+
+def test_protect_removes_plaintext_secret_sections(monkeypatch, tmp_path):
+    """Encrypt-by-default must not leave live secrets/setup_env keys beside
+    the protected envelope — the wire form is A + protected only."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    monkeypatch.setenv("ADMIN_PASSWORD", "admin-pass-value-xyz")
+    bundle = sb.serialize_current(cfg, dts, include_config=True,
+                                  include_secrets=True, include_setup_env=True)
+    assert "secrets" in bundle and "setup_env" in bundle
+    out = sb.protect_bundle(bundle, "correct horse")
+    assert "protected" in out
+    assert "secrets" not in out
+    assert "setup_env" not in out
+    assert "plaintext_secrets" not in out
+    assert "admin-pass-value-xyz" not in json.dumps(out)
+    assert "lin_api_secret_value_0001" not in json.dumps(out)
+    # section A still readable
+    assert out["config"]["app"]["poll_interval_seconds"] == 45
+    # round-trip restores B and C only
+    back = sb.unprotect_bundle(out, "correct horse")
+    assert "protected" not in back
+    assert back["secrets"]["harness"]["ANTHROPIC_API_KEY"] == "sk-ant-secret-0003"
+    assert back["setup_env"]["values"]["ADMIN_PASSWORD"] == "admin-pass-value-xyz"
+    assert back["config"] == out["config"]
+
+
+def test_unprotect_refuses_non_secret_keys_in_envelope(monkeypatch, tmp_path):
+    """The protected payload is B/C only. A crafted ciphertext that also
+    carries config (or kind/name) must not overwrite the operator-visible
+    plaintext section A after passphrase entry."""
+    sb, *_ = _env(monkeypatch, tmp_path)
+    from devcake import settings_crypto
+    visible = {"app": {"poll_interval_seconds": 30}, "operator_saw": True}
+    mal_payload = {
+        "secrets": {"connections": {}, "harness": {"K": "from-envelope"}},
+        "config": {"app": {"poll_interval_seconds": 1}, "evil": True},
+    }
+    doc = {
+        "kind": sb.BUNDLE_KIND,
+        "bundle_schema_version": sb.BUNDLE_SCHEMA_VERSION,
+        "config": visible,
+        "protected": settings_crypto.encrypt_blob(
+            "correct horse", json.dumps(mal_payload).encode()),
+    }
+    with pytest.raises(sb.BundleError) as e:
+        sb.unprotect_bundle(doc, "correct horse")
+    assert e.value.status == 422
+    assert "secrets" in str(e.value).lower() or "setup_env" in str(e.value).lower()
+    assert "evil" not in str(e.value)
+    # honest payload still works
+    good = {
+        "kind": sb.BUNDLE_KIND,
+        "bundle_schema_version": sb.BUNDLE_SCHEMA_VERSION,
+        "config": visible,
+        "protected": settings_crypto.encrypt_blob(
+            "correct horse",
+            json.dumps({"secrets": mal_payload["secrets"]}).encode()),
+    }
+    out = sb.unprotect_bundle(good, "correct horse")
+    assert out["config"] == visible
+    assert out["secrets"]["harness"]["K"] == "from-envelope"
+    assert "protected" not in out
+
+
+def test_unprotect_discards_outer_plaintext_secret_sections(monkeypatch, tmp_path):
+    """An 'encrypted' YAML that also carries outer plaintext secrets/
+    setup_env must not smuggle those values past unprotect — the envelope
+    is the sole source of B/C when `protected` is present."""
+    sb, *_ = _env(monkeypatch, tmp_path)
+    from devcake import settings_crypto
+    env_only = settings_crypto.encrypt_blob(
+        "correct horse",
+        json.dumps({"setup_env": {"values": {"ADMIN_PASSWORD": "from-env"}}}
+                   ).encode())
+    smuggled = "sk-smuggled-plaintext-SECRET-99"
+    doc = {
+        "kind": sb.BUNDLE_KIND,
+        "bundle_schema_version": sb.BUNDLE_SCHEMA_VERSION,
+        "config": {"app": {}},
+        "secrets": {"connections": {}, "harness": {"ANTHROPIC_API_KEY": smuggled}},
+        "plaintext_secrets": True,
+        "protected": env_only,
+    }
+    out = sb.unprotect_bundle(doc, "correct horse")
+    assert "secrets" not in out
+    assert out["setup_env"]["values"]["ADMIN_PASSWORD"] == "from-env"
+    assert "plaintext_secrets" not in out
+    assert smuggled not in json.dumps(out)
+
+
+def test_audit_event_redacts_known_secret_values(monkeypatch, tmp_path):
+    """Belt-and-braces: if a caller ever put a stored secret into detail,
+    the audit line must not keep the live value."""
+    sb, _, secrets, *_ = _env(monkeypatch, tmp_path)
+    secret = "lin_audit_scrub_secret_ABCDEF"
+    secrets.write_connection_secret("pmo", "linear", "api_key", secret)
+    sb.audit_event("settings_exported",
+                   f"sections=secrets note={secret}")
+    line = (tmp_path / "state" / "events.jsonl").read_text().strip()
+    assert secret not in line
+    rec = json.loads(line)
+    assert rec["action"] == "settings_exported"
+    assert secret not in rec["detail"]
+
+
 # ── audit events ─────────────────────────────────────────────────────────────
 
 def test_audit_event_appends_scrubbed_line(monkeypatch, tmp_path):

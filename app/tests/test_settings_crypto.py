@@ -71,3 +71,25 @@ def test_hostile_scrypt_params_rejected_fast():
 
     # matching params (the ones encrypt wrote) still decrypt
     assert decrypt_blob("correct horse", {**env, **_KDF}) == b"payload-bytes"
+
+
+def test_malformed_envelope_fields_share_wrong_passphrase_message():
+    """Missing/garbage salt, nonce, or ciphertext must not distinguish
+    themselves from a wrong passphrase — one message for any corruption
+    that is not a version/cipher/kdf/param mismatch."""
+    env = encrypt_blob("correct horse", b"payload-bytes")
+    expected = "wrong passphrase or corrupted bundle"
+    cases = [
+        {**env, "salt_b64": "!!!not-base64!!!"},
+        {**env, "nonce_b64": "!!!not-base64!!!"},
+        {**env, "ct_b64": "!!!not-base64!!!"},
+        {k: v for k, v in env.items() if k != "salt_b64"},
+        {k: v for k, v in env.items() if k != "ct_b64"},
+        "not-a-mapping",
+        None,
+        [],
+    ]
+    for bad in cases:
+        with pytest.raises(DecryptError) as e:
+            decrypt_blob("correct horse", bad)  # type: ignore[arg-type]
+        assert str(e.value) == expected, f"case {bad!r} leaked: {e.value}"

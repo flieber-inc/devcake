@@ -250,12 +250,26 @@ class RunManager:
                 run.harness_version = ver.strip()[:120]
             self.store.save(run)
         elif kind == "runspec.get":
-            secret = (self._runspec_secret(run)
-                      if run.state in ("dispatched", "running") else None)
+            secret = None
+            refresh_err: str | None = None
+            if run.state in ("dispatched", "running"):
+                try:
+                    secret = self._runspec_secret(run)
+                except Exception as e:  # noqa: BLE001 — narrowed to CredentialRefreshError below; other types re-raise
+                    # Fail closed at inject: host-side Grok OAuth refresh.
+                    from .grok_oauth import CredentialRefreshError
+                    if isinstance(e, CredentialRefreshError):
+                        refresh_err = str(e)
+                        log.warning("runspec refused for %s: %s", run_id,
+                                    refresh_err)
+                    else:
+                        raise
             if secret is None:
                 await self.messaging.reply(
                     run_id, "runspec.error",
-                    {"error": "run is not active, its dev type was deleted, or its repo was removed from config"},
+                    {"error": refresh_err or (
+                        "run is not active, its dev type was deleted, "
+                        "or its repo was removed from config")},
                 )
                 return
             # ADR-0025 R1: the provision step asks with {"phase":

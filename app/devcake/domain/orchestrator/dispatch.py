@@ -757,7 +757,12 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     """Secret half of a run spec, built from current config on request
     (docs/09 §5): nothing secret is at rest between dispatch and the Dev's
     runspec.get, and a slow container start or Redis restart cannot expire
-    it. verify_auth has already authenticated the requester."""
+    it. verify_auth has already authenticated the requester.
+
+    May raise ``CredentialRefreshError`` (fail closed): host-side Grok OAuth
+    refresh failed — ingress maps it to ``runspec.error`` with a reconnect
+    message so the Dev never boots on a known-bad session.
+    """
     dt = mgr.dev_types.get(run.dev_type)
     if dt is None:
         return None            # dev type deleted mid-run → runspec.error
@@ -977,12 +982,34 @@ def _credential_spec(mgr, dev_type: DevType) -> tuple[dict[str, str], list[dict]
                    / "secrets" / dev_type.name)
     for cf in harness.credential_files:
         p = secrets_dir / cf.secret_file
-        if p.exists():
-            files.append({"path_hint": cf.path_hint,
-                          "content": p.read_text(), "mode": "600"})
-        else:
+        if not p.exists():
             log.warning("credential file %s missing for %s — connect via OAuth "
                         "or upload it on the admin Config page", p, dev_type.name)
+            continue
+        content = p.read_text()
+        # Host-side Grok OAuth refresh at the inject chokepoint (no Dev
+        # write-back). Fail closed → CredentialRefreshError → runspec.error.
+        if (cf.secret_file == "grok-auth.json"
+                and getattr(mgr, "oidc_tokens", None) is not None):
+            from ..grok_oauth import (CredentialRefreshError,
+                                      ensure_fresh_for_inject)
+            from ... import secrets as _sec
+
+            def _write(text: str, _dt=dev_type.name, _fn=cf.secret_file) -> None:
+                _sec.write_credential_file(_dt, _fn, text)
+
+            try:
+                content = ensure_fresh_for_inject(
+                    content,
+                    token_port=mgr.oidc_tokens,
+                    write_full=_write,
+                    lock_path=secrets_dir / ".grok-auth.lock",
+                    reread=p.read_text,
+                )
+            except CredentialRefreshError:
+                raise
+        files.append({"path_hint": cf.path_hint,
+                      "content": content, "mode": "600"})
     return env, files
 
 

@@ -196,7 +196,7 @@ Credential requirements are **registry-driven** (`HARNESSES` in `app/devcake/har
 | Template | `credential_env` (registry) | File / OAuth (registry `credential_files` / `oauth`) |
 |---|---|---|
 | `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` **or** `ANTHROPIC_API_KEY` (any one stored is enough) | **No** `credential_files` entry. Preferred: `claude setup-token` once → paste the OAuth token into the admin panel as `CLAUDE_CODE_OAUTH_TOKEN`. |
-| `grok-build` | `XAI_API_KEY` | Device-code OAuth → secret file **`grok-auth.json`** → `~/.grok/auth.json` in-container. |
+| `grok-build` | `XAI_API_KEY` | Device-code OAuth → secret file **`grok-auth.json`** → `~/.grok/auth.json` in-container. **Host-side refresh** at `runspec` inject (`domain/grok_oauth.py`): if the access JWT is near expiry the app refreshes via `auth.x.ai` using the stored `refresh_token`, rewrites the host file, then delivers the **full** CLI file (including `refresh_token` so mid-run Grok refresh still works). Refresh failure is **fail closed** (`runspec.error` — reconnect via admin OAuth). Mission Devs never write auth files back to the host. |
 | `codex` | `CODEX_API_KEY` | Device-code OAuth → secret file **`codex-auth.json`** → `~/.codex/auth.json` in-container. |
 | `pi` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`pi-auth.json`** → `~/.pi/agent/auth.json`. No headless device-code (`/login` is interactive). |
 | `opencode` | `ANTHROPIC_API_KEY` **or** `OPENAI_API_KEY` **or** `XAI_API_KEY` (any one) | Optional uploaded **`opencode-auth.json`** → `~/.local/share/opencode/auth.json`. `/connect` is interactive. |

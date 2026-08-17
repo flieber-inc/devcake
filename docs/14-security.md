@@ -240,6 +240,11 @@ branch protection is weak or absent**, or exfiltrating tokens.
 2. Uploaded harness credential files: `/data/secrets/{dev_type}/…`, `0600`,
    delivered via runspec; entrypoint writes harness path then continues non-root
    (`07-dev-runtime.md`, `08-harness-templates.md`). No secret bind mounts into Devs.
+   **Grok OAuth refresh is control-plane only** (`ports/oidc_token` +
+   `domain/grok_oauth`): the app may call `auth.x.ai` and rewrite the host
+   `grok-auth.json` before inject. Mission Devs must **never** return
+   `auth.json` / tokens to the app (no write-back channel) — that would be
+   credential exfiltration past the one-way runspec boundary.
 3. Forge tokens reach git via credential helper, not embedded remote URLs on disk.
 4. Secrets never logged at app choke points — redaction (§7).
 5. Minimum forge scopes: `06-forge-adapter.md`. PMO credentials scoped by

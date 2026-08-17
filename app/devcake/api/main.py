@@ -863,8 +863,10 @@ async def run_cron(job_id: str):
 @app.post("/api/v1/steward/run")
 async def run_steward(instance: str | None = None):
     """Manual trigger (docs/11): works regardless of the enabled toggle — the
-    toggle governs only the periodic service. Requires a valid dev_type.
-    ?instance= selects the PMO instance; default = the first configured."""
+    toggle governs only the periodic service. Honors intake pause (docs/03
+    §4b) — not a back door around the master/per-instance switch. Requires a
+    valid dev_type. ?instance= selects the PMO instance; default = the first
+    configured."""
     s = svc()
     names = [i.name for i in s.config.pmos if i.name in s.stewards]
     if not names:

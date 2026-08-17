@@ -270,6 +270,36 @@ def test_run_now_errors(tmp_path):
         run_coro(svc.run_now())
 
 
+def test_run_now_honors_intake_pause(tmp_path):
+    """docs/03 §4b + docs/11: intake pause freezes NEW steward runs too —
+    including the manual "Run now" path. Periodic is already withheld by
+    the poll segment; run_now must not be a back door."""
+    from devcake.config import PMOInstance
+    svc, mgr, dispatched = make_service(tmp_path)
+    svc.config.intake_paused = True
+    with pytest.raises(StewardUnconfigured, match="intake"):
+        run_coro(svc.run_now())
+    assert dispatched == []
+
+    svc, mgr, dispatched = make_service(tmp_path)
+    svc.config.intake_paused = False
+    # instance switch alone freezes this board's steward
+    mgr.instance = PMOInstance(name="eng", team_key="ENG", intake_paused=True)
+    with pytest.raises(StewardUnconfigured, match="intake"):
+        run_coro(svc.run_now())
+    assert dispatched == []
+
+
+def test_maybe_dispatch_self_guards_intake_pause(tmp_path):
+    """ADR-0034: pause guard travels with the steward path, not only the
+    poll caller — so a future caller cannot reintroduce a back door."""
+    svc, mgr, dispatched = make_service(tmp_path)
+    svc.config.intake_paused = True
+    svc._last_at = time.monotonic() - 10**6
+    run_coro(svc.maybe_dispatch([]))
+    assert dispatched == []
+
+
 def test_run_now_gates_on_missing_referenced_secret_env(tmp_path, monkeypatch):
     """Steward runs use the same gate as mission dispatch: a referenced-but-
     unstored secret env var refuses run_now with a 422-bound

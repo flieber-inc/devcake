@@ -364,8 +364,17 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         return None                                            # world moved on
     # per-mission repo resolution, re-checked LIVE at dispatch (M10; sticky —
     # a mid-mission routing change gates instead of re-routing, plan H3;
-    # M11: zero-repo missions un-gate onto the internal forge)
-    repo_name, gate_reason = await resolve_repo_live(mgr, live)
+    # M11: zero-repo missions un-gate onto the internal forge). A forge
+    # outage here must gate THIS mission (A1), matching poll's resolve wrap.
+    try:
+        repo_name, gate_reason = await resolve_repo_live(mgr, live)
+    except Exception as e:  # noqa: BLE001 — any forge/PMO failure gates this ONE mission (reason recorded + logged); escaping would abort the whole poll segment (audit A1)
+        mgr.blocked_reasons[live.pmo_id] = (
+            f"repo resolve failed at dispatch: "
+            f"{type(e).__name__}: {str(e)[:150]}")
+        log.warning("dispatch of %s refused — repo resolve failed: %s",
+                    live.key, e)
+        return None
     if repo_name is None:
         mgr.blocked_reasons[live.pmo_id] = gate_reason
         log.info("dispatch of %s refused — %s", live.key, gate_reason)
@@ -375,15 +384,29 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
     if live.blocked_by:
         open_blockers = await schedule.open_blockers_live(mgr, live)
         if open_blockers:
-            log.info("dispatch of %s aborted — blocked by %s",
-                     live.key, ", ".join(open_blockers))
+            # same reason shape as schedule.gate_map so the missions row
+            # names the live TOCTOU, not a silent skip
+            mgr.blocked_reasons[live.pmo_id] = (
+                "blocked by " + ", ".join(open_blockers))
+            log.info("dispatch of %s aborted — %s",
+                     live.key, mgr.blocked_reasons[live.pmo_id])
             return None
 
     if mission.pmo_kind == "project":
         seq = 1                       # projects only ever ONBOARD (ADR-0006)
         activity = None
     else:
-        activity = await mgr.pmo.get_activity(mission.ref)
+        # audit A1 twin of pmo.get above: feed failure gates THIS mission,
+        # never the whole poll segment (schedule/poll would poll_degrade)
+        try:
+            activity = await mgr.pmo.get_activity(mission.ref)
+        except Exception as e:  # noqa: BLE001 — any PMO failure gates this ONE mission (reason recorded + logged); escaping would abort the whole poll segment (audit A1)
+            mgr.blocked_reasons[live.pmo_id] = (
+                f"PMO activity read failed at dispatch: "
+                f"{type(e).__name__}: {str(e)[:150]}")
+            log.warning("dispatch of %s refused — PMO activity read failed: %s",
+                        live.key, e)
+            return None
         seq = _derive_seq(activity)
     # attempts restart when a human removes DEVCAKE-FAILED (docs/15 §3), a
     # later step finishes, or — per `attempt_reset` (ADR-0026) — a human

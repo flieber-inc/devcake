@@ -91,6 +91,8 @@ class Services:
     version_source: Any = None
     cron: Any = None
     claims: Any = None
+    # Host-side Grok OAuth refresh (OidcTokenPort); shared across managers.
+    oidc_tokens: Any = None
 
     def build_managers(self) -> None:
         """(Re)build the manager set IN PLACE to match config.pmos: existing
@@ -113,6 +115,7 @@ class Services:
                 mgr.blocker_locator = self.blocker_locator
                 mgr.repo_cache = self.repo_cache
                 mgr.receipt_store = self.receipt_store
+                mgr.oidc_tokens = self.oidc_tokens
             else:
                 self.managers[name] = MissionManager(
                     self.config, self.dev_types, p, self.forge_runtime,
@@ -123,7 +126,8 @@ class Services:
                     backend_degraded=self.shared_backend_degraded,
                     blocker_locator=self.blocker_locator,
                     repo_cache=self.repo_cache,
-                    receipt_store=self.receipt_store)
+                    receipt_store=self.receipt_store,
+                    oidc_tokens=self.oidc_tokens)
                 self.stewards[name] = StewardService(
                     self.config, self.dev_types, self.managers[name])
                 # ADR-0033: harvest's event trigger for the discovery lane —
@@ -276,6 +280,11 @@ def build_services() -> Services:
                                receipt_store=s.receipt_store)
     manager.oauth_mgr = s.oauth_mgr
     manager.runlog = runlog
+    from ..adapters.xai.token import XaiOidcTokenAdapter
+    s.oidc_tokens = XaiOidcTokenAdapter()
+    # Repoint managers that already exist (build_managers ran above).
+    for mgr in s.managers.values():
+        mgr.oidc_tokens = s.oidc_tokens
     from ..keep_set import publish_keep_set
     publish_keep_set(dev_types)
     return s

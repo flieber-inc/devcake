@@ -53,9 +53,12 @@ class MissionManager:
                  internal_forge=None, skills=None,
                  backend_degraded: dict[str, str] | None = None,
                  blocker_locator=None, repo_cache=None,
-                 receipt_store=None):
+                 receipt_store=None, oidc_tokens=None):
         self.config = config
         self.dev_types = dev_types
+        # Host-side OIDC refresh (Grok OAuth); None in unit tests that don't
+        # exercise inject refresh. Wired from build_services.
+        self.oidc_tokens = oidc_tokens
         # per-config-generation once-latch (audit F3): the poll cycle
         # ensures the managed labels ONCE after each boot/repoint —
         # the /health probe is read-only now and heals nothing

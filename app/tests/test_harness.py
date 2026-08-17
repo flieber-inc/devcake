@@ -190,6 +190,7 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
 
     from fakes import make_mission_manager
     mgr = make_mission_manager(noop_audit=False)
+    # oidc_tokens None → no host refresh; legacy/non-CLI shapes pass through
     env, files = dispatch._credential_spec(mgr, DevType(name="main-dev",
                                               harness_template="grok-build"))
     assert env == {"XAI_API_KEY": "xai-test-000000000000000000000"}
@@ -202,6 +203,84 @@ def test_credential_spec_derives_from_registry(tmp_path, monkeypatch):
                                               harness_template="claude-code"))
     assert "CLAUDE_CODE_OAUTH_TOKEN" in env and "XAI_API_KEY" not in env
     assert files == []  # claude-code requires no credential files
+
+
+def test_credential_spec_host_refreshes_expired_grok_auth(tmp_path, monkeypatch):
+    """Host-side refresh at inject: expired grok-auth.json is refreshed via
+    OidcTokenPort before content is placed on the runspec."""
+    import json
+    import time
+    import base64
+    from datetime import datetime, timezone
+
+    from devcake.domain.grok_oauth import CredentialRefreshError
+    from devcake.ports.oidc_token import TokenRefreshResult
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    now = time.time()
+
+    def jwt(exp: int) -> str:
+        def b64(obj):
+            raw = json.dumps(obj, separators=(",", ":")).encode()
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+        return f"{b64({'alg': 'none'})}.{b64({'exp': exp})}.x"
+
+    auth_path = tmp_path / "secrets" / "main-dev" / "grok-auth.json"
+    auth_path.parent.mkdir(parents=True)
+    old_exp = now - 60
+    auth_path.write_text(json.dumps({
+        "https://auth.x.ai::cid": {
+            "key": jwt(int(old_exp)),
+            "refresh_token": "rt-host",
+            "expires_at": datetime.fromtimestamp(
+                old_exp, timezone.utc).isoformat().replace("+00:00", "Z"),
+            "oidc_client_id": "cid",
+            "email": "op@example.com",
+        }
+    }))
+
+    class Port:
+        def refresh(self, **kw):
+            assert kw["refresh_token"] == "rt-host"
+            return TokenRefreshResult(
+                access_token=jwt(int(now + 9000)),
+                refresh_token="rt-new",
+                expires_in=9000,
+            )
+
+    from fakes import make_mission_manager
+    mgr = make_mission_manager(noop_audit=False)
+    mgr.oidc_tokens = Port()
+    env, files = dispatch._credential_spec(
+        mgr, DevType(name="main-dev", harness_template="grok-build"))
+    assert len(files) == 1
+    body = json.loads(files[0]["content"])
+    entry = body["https://auth.x.ai::cid"]
+    assert entry["refresh_token"] == "rt-new"
+    assert entry["email"] == "op@example.com"
+    # Host file updated atomically
+    host = json.loads(auth_path.read_text())
+    assert host["https://auth.x.ai::cid"]["refresh_token"] == "rt-new"
+
+    # Revoked → fail closed
+    class Bad:
+        def refresh(self, **kw):
+            from devcake.ports.oidc_token import OidcRefreshRevoked
+            raise OidcRefreshRevoked("nope")
+
+    auth_path.write_text(json.dumps({
+        "https://auth.x.ai::cid": {
+            "key": jwt(int(old_exp)),
+            "refresh_token": "rt-dead",
+            "expires_at": datetime.fromtimestamp(
+                old_exp, timezone.utc).isoformat().replace("+00:00", "Z"),
+            "oidc_client_id": "cid",
+        }
+    }))
+    mgr.oidc_tokens = Bad()
+    with pytest.raises(CredentialRefreshError, match="revoked"):
+        dispatch._credential_spec(
+            mgr, DevType(name="main-dev", harness_template="grok-build"))
 
 
 def test_credential_spec_includes_dev_type_secret_env(tmp_path, monkeypatch):

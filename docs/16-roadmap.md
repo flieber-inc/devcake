@@ -369,11 +369,14 @@ until that run exists, field evidence below stays operator-self-reported.
   Dev Types (`judgment` / `implementer` / `steward`); registry `skills_dir`
   snapshotted onto the Run. Normative ADR + `app/devcake/skills/README.md`.
   **External skill repos SHIPPED 2026-08-13** (ADR-0016 addendum, founder
-  ruling "just a forge adapter"): `<card>/<skill>` names serve read-only
-  from the card's ADR-0024 mirror (no second cache), fail-closed via the
-  existing gate's needed-set union, payload paths flattened so the
-  container contract is untouched, `Run.skill_repo_heads` provenance,
-  private repos via card tokens day one.
+  ruling "just a forge adapter"), then **dedicated skill sources SHIPPED
+  2026-08-14** (addendum 2 — supersedes the repo-card source design):
+  `<source>/<skill>` names serve read-only from `AppConfig.skill_sources`
+  via the ADR-0024 mirror (no second cache), fail-closed via the existing
+  gate's needed-set union (`context_sourcing_strict`), payload paths
+  flattened so the container contract is untouched, `Run.skill_repo_heads`
+  provenance, read tokens under the `skill:` secret scope. Managed on the
+  Skills page; `RepoInstance.skills_subdir` is gone.
   **built**.
 - **Admin skill/prompt Markdown View** (PR #45, post-ADR-0016): skill and
   prompt View render as Markdown in the SPA. **built**.
@@ -678,10 +681,6 @@ the v0.2 trailer list).
   batteries; live GitLab MRs are field-reported (Field evidence above),
   but the two-forges-in-one-instance demo and the token-spending golden
   paths remain **⏳**.
-- **Dedicated skill sources (2026-08-14)**: external skills moved off
-  repo cards onto their own `skill_sources` connections (ADR-0016
-  addendum 2) — the `skills_subdir` facet is gone; the Skills page
-  manages sources; read tokens ride the new `skill:` secret scope. **⏳**
 - **Memory + Cron (PLAN_MEMORY)**: schema, sourcing, claims conveyor,
   merge guard, CronService, and admin surfaces are in the tree. **Not
   called shipped** until the throwaway-box A/B has receipts

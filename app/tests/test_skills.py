@@ -30,8 +30,8 @@ def test_devtype_skills_accepts_valid_names_and_dedupes():
 
 @pytest.mark.parametrize("bad", [
     "", "UPPER", "has space", "-leading-hyphen", "a" * 65, "dot.name",
-    # external `<card>/<skill>` shape violations (ADR-0016 addendum): one
-    # slash max, prefix in repo-card shape (starts alpha, no hyphens, ≤12)
+    # external `<source>/<skill>` shape violations (ADR-0016 addendum 2):
+    # one slash max, prefix instance-shaped (starts alpha, no hyphens, ≤12)
     "a/b/c", "SL/ash", "1x/skill", "has-hyphen/skill", "toolongcardxx/skill",
     "/ash", "sl/",
 ])
@@ -41,8 +41,8 @@ def test_devtype_skills_rejects_bad_names(bad):
 
 
 def test_devtype_external_skill_names_and_basename_collisions():
-    """`<card>/<skill>` selects from an external repo card (ADR-0016
-    addendum). Basenames must be unique across the selection — the payload
+    """`<source>/<skill>` selects from a dedicated skill source (ADR-0016
+    addendum 2). Basenames must be unique across the selection — the payload
     flattens external paths to the basename dir."""
     dt = _dt(skills=["sl/ash", "tdd"], skills_required=["sl/ash"])
     assert dt.skills == ["sl/ash", "tdd"]
@@ -294,6 +294,78 @@ def test_payload_oversized_file_skipped_without_fetching(tmp_path):
     # the cap must be enforced from the tree's size field BEFORE download —
     # an oversized store file must never be pulled into app memory
     assert forge.file_calls == ["big/SKILL.md"]
+
+
+def test_payload_store_present_does_not_silently_ship_builtin(tmp_path):
+    """Store-first: when the skill is IN the store but every file is
+    dropped by the size cap, do not fall through to the bundled copy —
+    that would silently re-ship an older override the operator replaced."""
+    from devcake.domain import skills as skills_mod
+    huge = b"x" * (skills_mod.MAX_FILE_BYTES + 1)
+    forge = _FakeForge({"tdd/SKILL.md": huge})
+    svc = skills_mod.SkillService(
+        internal_forge=forge, builtin_dir=_builtin_tree(tmp_path))
+    payload, warnings = _run(svc.payload_for(["tdd"]))
+    assert payload == []
+    assert any("exceeds" in w for w in warnings)
+    assert forge.file_calls == []
+    # builtin must not be consulted as a silent replacement
+    assert not any(s.get("name") == "tdd" for s in payload)
+
+
+def test_payload_store_read_failure_still_falls_back_to_builtin(tmp_path):
+    """I/O failure on a store skill (not a cap drop) still tries the
+    bundled copy — additive, same contract as store-down."""
+    from devcake.domain.skills import SkillService
+
+    class _BoomOnFile(_FakeForge):
+        async def skill_store_file(self, path):
+            self.file_calls.append(path)
+            raise RuntimeError("blob 500")
+
+    forge = _BoomOnFile({"tdd/SKILL.md": b"---\nname: tdd\n---\nSTORE\n"})
+    svc = SkillService(internal_forge=forge,
+                       builtin_dir=_builtin_tree(tmp_path))
+    payload, warnings = _run(svc.payload_for(["tdd"]))
+    assert b"Test-first" in _b64(payload, "tdd", "tdd/SKILL.md")
+    assert any("store read failed" in w for w in warnings)
+
+
+def test_list_skills_store_skips_oversized_manifest_without_reading(tmp_path):
+    """Catalog must not pull an oversized store SKILL.md into memory —
+    same audit class as external_infos (2026-08-13)."""
+    from devcake.domain import skills as skills_mod
+    huge = b"x" * (skills_mod.MAX_FILE_BYTES + 1)
+    forge = _FakeForge({
+        "big/SKILL.md": huge,
+        "ok/SKILL.md": b"---\ndescription: Fine\n---\n",
+    })
+    svc = skills_mod.SkillService(
+        internal_forge=forge, builtin_dir=tmp_path / "none")
+    skills, store = _run(svc.list_skills())
+    assert store["ok"] is True
+    by_name = {s.name: s for s in skills}
+    assert by_name["ok"].description == "Fine"
+    assert by_name["big"].description.startswith("(SKILL.md exceeds")
+    assert "big/SKILL.md" not in forge.file_calls
+    assert "ok/SKILL.md" in forge.file_calls
+
+
+def test_get_skill_store_caps_before_download(tmp_path):
+    """Admin View for store skills must ride size gates before fetch —
+    external already does; store was the remaining uncapped path."""
+    from devcake.domain import skills as skills_mod
+    forge = _FakeForge({
+        "tdd/SKILL.md": b"---\nname: tdd\ndescription: D\n---\nbody",
+        "tdd/huge.bin": b"x" * (skills_mod.MAX_FILE_BYTES + 1),
+    })
+    svc = skills_mod.SkillService(
+        internal_forge=forge, builtin_dir=tmp_path / "none")
+    got = _run(svc.get_skill("tdd"))
+    assert [f["path"] for f in got["files"]] == ["SKILL.md"]
+    assert got["source"] == "store"
+    assert any("huge.bin" in w for w in got["warnings"])
+    assert forge.file_calls == ["tdd/SKILL.md"]
 
 
 # ── authoring: compose / import-validate / save / delete (admin UI flow) ─────
@@ -652,16 +724,16 @@ def test_payload_ships_skill_md_first_under_mid_skill_cap(tmp_path):
     assert any("cap" in w for w in warnings)
 
 
-# ── external skills: `<card>/<skill>` from the repo-card mirror ──────────────
-# (ADR-0016 addendum: no second cache — the ADR-0024 mirror's read-side)
+# ── external skills: `<source>/<skill>` from a skill-source mirror ───────────
+# (ADR-0016 addendum 2: dedicated skill_sources; ADR-0024 mirror read-side)
 
 class _FakeMirror:
-    """RepoCache read-side stub: fixed head, one tree per (card, subdir)."""
+    """RepoCache read-side stub: fixed head, one tree per (source, subdir)."""
 
     def __init__(self, trees=None, head="abc123", files=None):
-        self.trees = trees or {}     # (card, subdir) -> {skill: {rel: size}}
+        self.trees = trees or {}     # (source, subdir) -> {skill: {rel: size}}
         self.head = head             # None = unreadable mirror
-        self.files = files or {}     # (card, skill, rel) -> bytes
+        self.files = files or {}     # (source, skill, rel) -> bytes
         self.reads: list[tuple] = []
 
     async def tree_head(self, name):
@@ -712,10 +784,11 @@ def test_payload_external_never_falls_back_to_store_or_builtin(tmp_path):
     assert any("no tdd/SKILL.md" in w for w in warnings)
 
 
-def test_payload_external_unconfigured_card_and_dead_mirror_warn(tmp_path):
+def test_payload_external_unconfigured_source_and_dead_mirror_warn(tmp_path):
     svc, mirror = _ext_svc(tmp_path)
     payload, warnings = _run(svc.payload_for(["ghost/tdd"]))
-    assert payload == [] and any("not configured" in w for w in warnings)
+    assert payload == []
+    assert any("skill source" in w and "not configured" in w for w in warnings)
     svc2, _m = _ext_svc(tmp_path / "b", head=None)
     payload, warnings = _run(svc2.payload_for(["myrepo/tdd"]))
     assert payload == [] and any("no readable head" in w for w in warnings)
@@ -755,12 +828,16 @@ def test_get_skill_external_reads_the_mirror_and_stays_read_only(tmp_path):
     with pytest.raises(SkillStoreError) as e:
         _run(svc.get_skill("myrepo/none"))
     assert e.value.status == 404
+    with pytest.raises(SkillStoreError) as e2:
+        _run(svc.get_skill("ghost/tdd"))
+    assert e2.value.status == 404
+    assert "skill source" in str(e2.value)
     # read-only BY CONSTRUCTION: authoring names refuse the slash
     with pytest.raises(SkillStoreError):
         _run(svc.delete_skill("myrepo/tdd"))
 
 
-def test_external_infos_lists_every_skill_in_referenced_cards(tmp_path):
+def test_external_infos_lists_every_skill_in_referenced_sources(tmp_path):
     svc, mirror = _ext_svc(tmp_path)
     mirror.trees[("myrepo", "")] = {
         "tdd": {"SKILL.md": 5}, "review": {"SKILL.md": 5, "extra.md": 3}}
@@ -794,7 +871,7 @@ def test_get_skill_external_caps_ride_the_one_collect_pipe(tmp_path):
 
 def test_external_infos_skips_oversized_manifests_without_reading(tmp_path):
     """Same audit class for the catalog: an oversized SKILL.md on a
-    referenced card gets a placeholder description, never a fetch."""
+    referenced skill source gets a placeholder description, never a fetch."""
     from devcake.domain import skills as skills_mod
     svc, mirror = _ext_svc(tmp_path)
     mirror.trees[("myrepo", "")] = {

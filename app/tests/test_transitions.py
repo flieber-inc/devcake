@@ -1717,6 +1717,24 @@ def test_sweep_merges_when_ready(tmp_path):
     assert any("Merged after deferred retry" in c for c in fake.comments)
 
 
+def test_sweeps_selects_merge_missions_on_backlog_status(tmp_path):
+    """GitHub/Gitea Issues map open → backlog (docs/05 §9.2). merge_sweep must
+    still run for DEVCAKE-MERGE — gating on in_progress only stranded memory
+    curator PRs forever after review:merge_deferred."""
+    m = mission("backlog", {"DEVCAKE", "DEVCAKE-MERGE"})
+    forge = FakeForge(mergeable_result=True)
+    mgr, fake, store = make_mgr(tmp_path, m, forge=forge)
+    mgr.forges.instance("main").auto_merge = True
+    fake.activity_entries = [ActivityEntry(
+        ts=datetime.now(timezone.utc), author="devcake", kind="comment",
+        body="⏳ deferred `devcake:merge-retry`\n\n`devcake:v1`")]
+    fake.all_missions = [m]
+    run_coro(sweeps.sweeps(mgr, [m]))
+    assert forge.merges == [8]
+    assert m.status == "done"
+    assert "DEVCAKE-MERGE" not in m.labels
+
+
 def test_sweep_waits_while_computing(tmp_path):
     m, mgr, fake, forge = sweep_mgr(tmp_path, mergeable_result=None)
     run_coro(sweeps.merge_sweep(mgr, m))

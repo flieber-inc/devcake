@@ -42,6 +42,21 @@ def test_stale_heartbeat_is_dead():
     assert "31" in live["reason"] or "checked in" in live["reason"]
 
 
+def test_drain_outbox_deletes_the_file_after_reading(tmp_path, monkeypatch):
+    """Baker→app mailbox: a complete outbox file is claimed and deleted."""
+    from devcake import bake_status as bs
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    box = tmp_path / bs.OUTBOX_DIR
+    box.mkdir()
+    dest = box / "tick-1.jsonl"
+    dest.write_text('{"event":"tick","state":"ready"}\n')
+    first = bs.drain_baker_log(root=tmp_path)
+    assert [r.get("event") for r in first] == ["tick"]
+    assert not dest.is_file()
+    assert bs.drain_baker_log(root=tmp_path) == []
+
+
 def test_drain_baker_log_returns_only_new_lines(tmp_path, monkeypatch):
     from devcake import bake_status as bs
 
@@ -71,6 +86,22 @@ def test_prune_request_writes_timestamp_and_no_image_names(tmp_path, monkeypatch
     assert "nginx" not in body
     rec = __import__("json").loads(body)
     assert "requested_at" in rec
+
+
+def test_prune_request_also_drops_a_fresh_keep_set_order(tmp_path, monkeypatch):
+    """Prune click is two inboxes: keep-set (desired pins) + prune request."""
+    from devcake import bake_status as bs
+    from devcake.config import DevType
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    bs.request_prune(
+        root=tmp_path,
+        dev_types={"d": DevType(name="d", harness_template="grok-build")})
+    keep = tmp_path / "harness_keep_set.json"
+    assert keep.is_file()
+    body = __import__("json").loads(keep.read_text())
+    assert body["pins"][0]["template"] == "grok-build"
+    assert (tmp_path / bs.PRUNE_REQUEST_NAME).is_file()
 
 
 def test_baker_transition_fires_on_edges_only():

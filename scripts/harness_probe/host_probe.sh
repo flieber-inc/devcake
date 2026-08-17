@@ -27,7 +27,7 @@ docker run --rm \
   -e REDIS_URL=redis://127.0.0.1:6399/0 \
   -e REDIS_USER=probe \
   -e REDIS_PASSWORD=probe \
-  -e PYTHONPATH=/opt/devcake-scripts \
+  -e PYTHONPATH=/:/opt/devcake-scripts \
   -v "$(pwd)/scripts:/opt/devcake-scripts:ro" \
   -v "${RECEIPTS_MOUNT}" \
   --entrypoint python \

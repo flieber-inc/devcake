@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from .cause import attribute, evidence
 from .matrix import RowSpec, matrix_for
 
 
@@ -13,6 +14,7 @@ def compile_receipt(
     template: str,
     cli_version: str,
     reports: Mapping[str, Mapping[str, Any]],
+    journal_hits: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
 ) -> dict:
     """Grade `reports` against the matrix. Always emits every matrix row.
 
@@ -21,9 +23,12 @@ def compile_receipt(
       {"skipped": "why"}
       {"error": "why"}
     Missing report on a required row → status error (absent).
+    Failed classify rows (and launch errors) carry `cause` + `evidence`
+    when journal_hits is supplied — bakery attribution, not a DEV_* class.
     """
     specs = matrix_for(template)
-    rows = [_grade(spec, reports.get(spec.name)) for spec in specs]
+    rows = [_grade(spec, reports.get(spec.name), journal_hits=journal_hits)
+            for spec in specs]
     return {
         "digest": digest,
         "template": template,
@@ -59,7 +64,8 @@ def _ok(
     return True
 
 
-def _grade(spec: RowSpec, report: Mapping[str, Any] | None) -> dict:
+def _grade(spec: RowSpec, report: Mapping[str, Any] | None, *,
+           journal_hits: tuple | list = ()) -> dict:
     row: dict[str, Any] = {
         "name": spec.name,
         "required": spec.required,
@@ -81,6 +87,8 @@ def _grade(spec: RowSpec, report: Mapping[str, Any] | None) -> dict:
     if "error" in report:
         row["status"] = "error"
         row["detail"] = str(report["error"])
+        _stamp_cause(row, spec, observed=None, journal_hits=journal_hits,
+                     launched=False)
         return row
     if spec.kind == "flag_accept":
         accepted = report.get("flag_accepted")
@@ -108,4 +116,18 @@ def _grade(spec: RowSpec, report: Mapping[str, Any] | None) -> dict:
         row["status"] = "pass"
     else:
         row["status"] = "fail"
+        _stamp_cause(row, spec, observed=triple, journal_hits=journal_hits,
+                     launched=True)
     return row
+
+
+def _stamp_cause(row: dict, spec: RowSpec, *, observed, journal_hits,
+                 launched: bool) -> None:
+    row["cause"] = attribute(
+        row=spec.name,
+        expected=spec.expected,
+        observed=observed,
+        journal_hits=journal_hits,
+        launched=launched,
+    )
+    row["evidence"] = evidence(journal_hits=journal_hits, row=spec.name)

@@ -31,7 +31,7 @@ KNOWN_TEMPLATES = frozenset({
 })
 
 # Single source: app/devcake/house_pins.py (PYTHONPATH includes app/).
-from devcake.house_pins import LAUNCH_SUPPORTED
+from devcake.house_pins import LAUNCH_SUPPORTED  # re-exported for factory tests
 
 # Same rule as DevType.cli_version — concrete semver only.
 _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?")
@@ -69,6 +69,34 @@ class KeepSet:
 class BakeJob:
     template: str
     cli_version: str
+
+
+TAKING_SUFFIX = ".taking"
+
+
+def claim_inbox(path: Path | str) -> Path | None:
+    """Atomically take an inbox file. Leftover `.taking` is resume.
+
+    A fresh inbox replaces a stale `.taking` (newer desired set wins).
+    None = nothing to honor this tick.
+    """
+    dest = Path(path)
+    taking = dest.with_name(dest.name + TAKING_SUFFIX)
+    if dest.is_file():
+        dest.replace(taking)
+        return taking
+    if taking.is_file():
+        return taking
+    return None
+
+
+def release_inbox(path: Path | str) -> None:
+    """Delete a claimed inbox after it has been honored."""
+    dest = Path(path)
+    try:
+        dest.unlink()
+    except FileNotFoundError:
+        return
 
 
 def load_keep_set(path: Path | str | None) -> KeepSet | None:
@@ -151,6 +179,22 @@ def _require_dev_image(ref: str) -> str:
     if not _IMAGE_REF.fullmatch(ref):
         raise InvalidKeepSet(f"refusing image name {ref!r}")
     return ref
+
+
+def prune_keep_list(
+    keep_set: KeepSet | None,
+    *,
+    tag: str,
+    house: Mapping[str, str],
+) -> tuple[str, ...] | None:
+    """Desired images for a prune tick. None = refuse (no order this tick)."""
+    if keep_set is None or not keep_set.pins:
+        return None
+    keep = [f"devcake/dev-hello:{tag}"]
+    for pin in keep_set.pins:
+        keep.append(image_ref(
+            pin.template, pin.cli_version, tag=tag, house=house))
+    return tuple(keep)
 
 
 def plan_prune(
@@ -249,6 +293,46 @@ def bake_argv(
     return argv
 
 
+def drop_receipts_missing_images(
+    receipts_dir: Path | str,
+    *,
+    local_images: tuple[str, ...] | list[str],
+    tag: str,
+    house: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Delete receipts whose named image is not on the host.
+
+    The image is the registrar. A leftover ok file after docker rmi is
+    not a bake.
+    """
+    if local_images is None:
+        return ()
+    present = {str(ref) for ref in local_images if _IMAGE_REF.fullmatch(str(ref))}
+    root = Path(receipts_dir)
+    if not root.is_dir():
+        return ()
+    dropped: list[str] = []
+    for path in sorted(root.glob("*.json")):
+        stem = path.stem
+        if "@" not in stem:
+            continue
+        template, version = stem.split("@", 1)
+        if template not in KNOWN_TEMPLATES:
+            continue
+        try:
+            ref = image_ref(template, version, tag=tag, house=house)
+        except InvalidKeepSet:
+            continue
+        if ref in present:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        dropped.append(stem)
+    return tuple(dropped)
+
+
 def load_receipts(receipts_dir: Path | str) -> dict[tuple[str, str], dict]:
     root = Path(receipts_dir)
     if not root.is_dir():
@@ -318,8 +402,12 @@ def reconcile(
     baker: Callable[[BakeJob], None],
     tag: str,
     house: Mapping[str, str],
+    local_images: tuple[str, ...] | list[str] | None = None,
 ) -> dict:
     """One watch tick. Baker is injected — this module does not call Docker."""
+    if local_images is not None:
+        drop_receipts_missing_images(
+            receipts_dir, local_images=local_images, tag=tag, house=house)
     try:
         keep_set = load_keep_set(keep_set_path)
     except InvalidKeepSet as exc:
@@ -435,10 +523,6 @@ def run_bake(
         raise RuntimeError(
             f"bake {job.template}@{job.cli_version} exited {code}"
             + _run_tail(result))
-    if job.template not in LAUNCH_SUPPORTED:
-        _write_ungated_receipt(
-            Path(receipts_dir), job, digest)
-        return
     image = image_ref(job.template, job.cli_version, tag=tag, house=house)
     probe = [
         "bash",
@@ -476,16 +560,6 @@ def _run_tail(result: object) -> str:
     return ": " + text[-800:]
 
 
-def _write_ungated_receipt(receipts_dir: Path, job: BakeJob, digest: str) -> None:
-    receipts_dir.mkdir(parents=True, exist_ok=True)
-    dest = receipts_dir / f"{job.template}@{job.cli_version}.json"
-    dest.write_text(json.dumps({
-        "digest": digest,
-        "template": job.template,
-        "cli_version": job.cli_version,
-        "ok": True,
-        "gated": False,
-        "rows": [],
-    }) + "\n")
+
 
 

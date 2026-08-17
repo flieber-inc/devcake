@@ -118,6 +118,119 @@ def test_plan_bakes_skips_any_receipt_for_this_digest():
     ]
 
 
+def test_claim_inbox_renames_then_release_deletes(tmp_path):
+    factory = _load_factory()
+    dest = tmp_path / "harness_keep_set.json"
+    dest.write_text('{"pins":[]}\n')
+    claimed = factory.claim_inbox(dest)
+    assert claimed == tmp_path / "harness_keep_set.json.taking"
+    assert claimed.is_file()
+    assert not dest.is_file()
+    factory.release_inbox(claimed)
+    assert not claimed.is_file()
+
+
+def test_claim_inbox_picks_up_a_leftover_taking_file(tmp_path):
+    """A crashed baker left .taking; the next baker resumes it."""
+    factory = _load_factory()
+    taking = tmp_path / "harness_keep_set.json.taking"
+    taking.write_text('{"pins":[]}\n')
+    claimed = factory.claim_inbox(tmp_path / "harness_keep_set.json")
+    assert claimed == taking
+    assert taking.is_file()
+
+
+def test_new_inbox_replaces_a_stale_taking(tmp_path):
+    factory = _load_factory()
+    dest = tmp_path / "harness_keep_set.json"
+    dest.write_text('{"pins":[{"template":"grok-build","cli_version":"0.2.112"}]}\n')
+    taking = tmp_path / "harness_keep_set.json.taking"
+    taking.write_text('{"pins":[]}\n')
+    claimed = factory.claim_inbox(dest)
+    assert claimed.read_text().startswith('{"pins":[{"template"')
+    assert not dest.is_file()
+
+
+def test_prune_without_a_this_tick_keep_set_is_refused():
+    """Ephemeral keep-set: prune has no last-good. No order → no rmi."""
+    factory = _load_factory()
+    assert factory.prune_keep_list(None, tag="latest", house={}) is None
+    empty = factory.KeepSet(pins=())
+    assert factory.prune_keep_list(empty, tag="latest", house={}) is None
+
+
+def test_failed_image_listing_does_not_drop_receipts(tmp_path):
+    """A dead docker CLI must not look like 'zero images'."""
+    factory = _load_factory()
+    receipts = tmp_path / "harness_receipts"
+    receipts.mkdir()
+    dest = receipts / "grok-build@0.2.112.json"
+    dest.write_text(json.dumps({
+        "ok": True, "digest": "sha256:abc",
+        "template": "grok-build", "cli_version": "0.2.112",
+    }))
+    dropped = factory.drop_receipts_missing_images(
+        receipts,
+        local_images=None,
+        tag="latest",
+        house={"grok-build": "0.2.112"},
+    )
+    assert dropped == ()
+    assert dest.is_file()
+
+
+def test_ok_receipt_for_a_gone_image_is_dropped_and_the_pin_rebakes(tmp_path):
+    """Images are the registrar. A leftover ok receipt after docker rmi
+    must not keep the pin staffed or skip the rebake."""
+    factory = _load_factory()
+    receipts = tmp_path / "harness_receipts"
+    receipts.mkdir()
+    dest = receipts / "grok-build@0.2.112.json"
+    dest.write_text(json.dumps({
+        "ok": True, "digest": "sha256:abc", "gated": True,
+        "template": "grok-build", "cli_version": "0.2.112",
+    }))
+    dropped = factory.drop_receipts_missing_images(
+        receipts,
+        local_images=(),
+        tag="latest",
+        house={"grok-build": "0.2.112"},
+    )
+    assert dropped == ("grok-build@0.2.112",)
+    assert not dest.is_file()
+    ks = factory.KeepSet(pins=(factory.Pin("grok-build", "0.2.112"),))
+    jobs = factory.plan_bakes(ks, digest="sha256:abc", receipts={})
+    assert [(j.template, j.cli_version) for j in jobs] == [
+        ("grok-build", "0.2.112")]
+    from devcake.adapters.files.receipts import FileReceiptStore
+    from devcake.config import DevType
+    from devcake.staffing import HarnessNotStaffed, require_staffed
+    with pytest.raises(HarnessNotStaffed, match="no receipt"):
+        require_staffed(
+            DevType(name="d", harness_template="grok-build"),
+            digest="sha256:abc",
+            store=FileReceiptStore(receipts))
+
+
+def test_receipt_stays_when_the_named_image_is_still_local(tmp_path):
+    factory = _load_factory()
+    receipts = tmp_path / "harness_receipts"
+    receipts.mkdir()
+    dest = receipts / "grok-build@0.2.112.json"
+    dest.write_text(json.dumps({
+        "ok": True, "digest": "sha256:abc",
+        "template": "grok-build", "cli_version": "0.2.112",
+    }))
+    dropped = factory.drop_receipts_missing_images(
+        receipts,
+        local_images=("devcake/dev-grok-build:latest",),
+        tag="latest",
+        house={"grok-build": "0.2.112"},
+    )
+    assert dropped == ()
+    assert dest.is_file()
+
+
 def test_plan_bakes_empty_when_every_pin_has_a_receipt_for_this_digest():
     factory = _load_factory()
     ks = factory.KeepSet(pins=(factory.Pin("grok-build", "0.2.112"),))
@@ -607,13 +720,13 @@ def test_skip_reconcile_only_when_idle_and_mtimes_are_known():
     assert skip_reconcile(
         state="baking", trees=1.0, keep=2.0,
         last_trees=1.0, last_keep=2.0) is False
-    # a failed stat is unknown — never equal to a previous unknown
+    # no inbox (keep is None) — nothing to honor; do not loop
     assert skip_reconcile(
         state="ready", trees=1.0, keep=None,
-        last_trees=1.0, last_keep=None) is False
+        last_trees=1.0, last_keep=None) is True
     assert skip_reconcile(
         state="ready", trees=1.0, keep=None,
-        last_trees=1.0, last_keep=2.0) is False
+        last_trees=1.0, last_keep=2.0) is True
 
 
 def test_host_probe_does_not_mount_the_data_volume():
@@ -626,6 +739,20 @@ def test_host_probe_does_not_mount_the_data_volume():
     text = path.read_text()
     assert "DEVCAKE_RECEIPTS_VOLUME" not in text
     assert "alpine" not in text
+
+
+def test_host_probe_pythonpath_includes_image_root_for_devcake_dev():
+    """Probe runs in the baked image; aim lives at /devcake_dev (not under scripts)."""
+    candidates = [
+        Path(__file__).resolve().parents[2] / "scripts" / "harness_probe" / "host_probe.sh",
+        Path("/srv/repo-scripts/harness_probe/host_probe.sh"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None
+    text = path.read_text()
+    # Must put image root on PYTHONPATH so `import devcake_dev` resolves.
+    assert "PYTHONPATH=/:/opt/devcake-scripts" in text or (
+        "PYTHONPATH=/" in text and "opt/devcake-scripts" in text)
 
 
 def test_run_bake_probes_every_registry_template(tmp_path):

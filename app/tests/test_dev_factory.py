@@ -212,6 +212,21 @@ def test_plan_prune_keeps_pins_running_and_hello_and_ignores_nginx():
     assert gone == ("devcake/dev-qwen-code:latest",)
 
 
+def test_plan_prune_skips_dangling_none_tags_instead_of_aborting():
+    factory = _load_factory()
+    gone = factory.plan_prune(
+        keep_images=("devcake/dev-hello:latest",),
+        running_images=("devcake/dev-hello:<none>",),
+        local_images=(
+            "devcake/dev-hello:latest",
+            "devcake/dev-hello:<none>",
+            "devcake/dev-qwen-code:latest",
+            "<none>:<none>",
+        ),
+    )
+    assert gone == ("devcake/dev-qwen-code:latest",)
+
+
 def test_run_prune_is_docker_rmi_of_the_planned_refs_only():
     factory = _load_factory()
     calls = []

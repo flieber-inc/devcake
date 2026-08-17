@@ -38,7 +38,6 @@ from .liveness import (
     unhealthy_verdict,
 )
 INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_INTERVAL", "5"))
-READY_INTERVAL = float(os.environ.get("DEVCAKE_FACTORY_READY_INTERVAL", "30"))
 KEEP_SET = "harness_keep_set.json"
 STATUS = "harness_bake_status.json"
 RECEIPTS = "harness_receipts"
@@ -50,7 +49,8 @@ def compose_read(rel: str) -> str | None:
     try:
         out = subprocess.check_output(
             ["docker", "compose", "exec", "-T", "app", "cat", f"/data/{rel}"],
-            cwd=REPO, text=True, timeout=15)
+            cwd=REPO, text=True, timeout=15,
+            stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     return out
@@ -389,7 +389,9 @@ def main(argv: list[str] | None = None) -> int:
                 except (OSError, json.JSONDecodeError):
                     current = {}
             publish_status(work, current or {"state": "ready", "jobs": []})
-            time.sleep(READY_INTERVAL)
+            # Wake often enough to see a prune request; skip_reconcile already
+            # avoided the digest/bake work.
+            time.sleep(INTERVAL)
             continue
         if cached_digest is None or cached_trees != trees:
             cached_digest = _checkout_digest()
@@ -443,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
             last_state = status.get("state")
         last_trees = trees
         last_keep = keep_m
-        time.sleep(READY_INTERVAL if last_state in _IDLE else INTERVAL)
+        time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":

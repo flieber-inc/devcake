@@ -159,10 +159,10 @@ from devcake_dev.workspace.forensics import (  # noqa: E402
     workspace_forensics,
     _git_tracked,
 )
+from devcake_dev.harness.launch import composed_launch  # noqa: E402
 from devcake_dev.workspace.setup import (  # noqa: E402
-    MCP_SETUP_TIMEOUT_SECS,
     install_skills,
-    run_mcp_setup,
+    run_mcp_setup,  # façade re-export — test_entrypoint_mcp
 )
 from devcake_dev.workspace.transcript import (  # noqa: E402
     assemble_transcript,
@@ -218,6 +218,57 @@ def _write_credential_files(spec: dict) -> None:
                 text = json.dumps(_deep_merge_json(existing, incoming))
         p.write_text(text)
         p.chmod(0o600)
+
+
+def _apply_backend_aim(spec: dict, env: dict, extra: list, stop) -> list:
+    """Empty URL: vendor default, no files. Non-empty: full aim()."""
+    url = (spec.get("backend_base_url") or "").strip()
+    if not url:
+        return extra
+    from devcake_dev.harness.aim import (
+        aim, aimed_model_id, api_key_from_env, merge_grok_config_toml,
+    )
+    template = (env.get("DEVCAKE_HARNESS")
+                or os.environ.get("DEVCAKE_HARNESS", "claude-code"))
+    model = aimed_model_id(template, env.get("DEVCAKE_MODEL", ""))
+    if model != (env.get("DEVCAKE_MODEL") or "").strip():
+        env["DEVCAKE_MODEL"] = model
+        os.environ["DEVCAKE_MODEL"] = model
+    try:
+        aimed = aim(
+            template, url,
+            api_key=api_key_from_env(template, env),
+            cli_version=env.get("DEVCAKE_CLI_VERSION", ""),
+            model=model,
+        )
+    except ValueError as e:
+        detail = str(e)
+        # Config, not crash and not AUTH breaker — operator must set key/model.
+        print(f"backend aim refused: {detail}", file=sys.stderr)
+        send_artifacts({
+            "result": None, "exit_code": 14,
+            "error_class": "DEV_MCP_SETUP",
+            "error_detail": detail,
+            "transcript_md": f"Backend aim refused:\n\n{detail}\n",
+            "token_report": unavailable_report()})
+        if stop is not None:
+            stop.set()
+        sys.exit(14)
+    os.environ.update(aimed.env)
+    env.update(aimed.env)
+    files = []
+    for f in aimed.files:
+        content = f.content
+        if f.path_hint.endswith("config.toml") and template == "grok-build":
+            dest = pathlib.Path(os.path.expanduser(f.path_hint))
+            if dest.is_file():
+                try:
+                    content = merge_grok_config_toml(dest.read_text(), content)
+                except OSError:
+                    pass
+        files.append({"path_hint": f.path_hint, "content": content, "mode": "600"})
+    _write_credential_files({"credential_files": files})
+    return list(extra) + list(aimed.extra_argv)
 
 
 def _start_heartbeats() -> threading.Event:
@@ -520,20 +571,10 @@ def harness_main() -> None:
                                or ".claude/skills"):
         print(note)
 
-    failed = run_mcp_setup(spec.get("mcp_setup_commands", []), workdir)  # docs/07 §5 step 5
-    if failed:
-        cmd, detail = failed
-        # `cmd` is the raw config string ($VAR unexpanded — no secret can
-        # appear); artifacts mirror the exit-13 clone block so the app maps
-        # the failure to a visible DEV_MCP_SETUP run error
-        print("mcp setup failed:", cmd, detail[-300:], file=sys.stderr)
-        send_artifacts({"result": None, "exit_code": 14,
-                        "error_class": "DEV_MCP_SETUP",
-                        "error_detail": f"{cmd}: {detail}",
-                        "transcript_md": (f"MCP setup command failed:\n`{cmd}`"
-                                          f"\n\n```\n{detail}\n```"),
-                        "token_report": unavailable_report()})
-        sys.exit(14)
+    script = (spec.get("dev_entrypoint") or "").strip()
+    if not script:
+        script = "\n".join(spec.get("mcp_setup_commands") or []).strip()
+    override = bool(spec.get("override_harness_adapter"))
 
     # ── telemetry (stage-2 creds — docs/07 §3) ───────────────────────────────
     from opentelemetry import trace
@@ -556,12 +597,23 @@ def harness_main() -> None:
     harness = os.environ.get("DEVCAKE_HARNESS", "claude-code")
     plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
+    extra = _apply_backend_aim(spec, env, extra, stop)
     model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
     try:
         dialect = get_dialect(harness)
-        cmd = harness_argv(harness, prompt, plan_mode=plan_mode, model=model,
-                           extra=extra)
+        os.environ["DEVCAKE_PROMPT"] = prompt
+        cmd = composed_launch(
+            harness, prompt, plan_mode=plan_mode, model=model,
+            extra=extra, script=script, override=override)
     except ValueError as e:
+        if "override" in str(e):
+            send_artifacts({
+                "result": None, "exit_code": 14,
+                "error_class": "DEV_MCP_SETUP",
+                "error_detail": str(e),
+                "transcript_md": f"Entrypoint script failed:\n{e}",
+                "token_report": unavailable_report()})
+            sys.exit(14)
         _fail_20(stop, "unknown harness", str(e))
     inv_prompt = prompt   # THIS invocation's prompt — the nudge on relaunches;
     #                       it is what anchors grok_export_activity honestly
@@ -873,8 +925,15 @@ def harness_main() -> None:
                 inv_prompt = resume_nudge_prompt(
                     mission_type, legal, attempt=cont.used,
                     budget=cont_cfg.max_continuations, stray_note=note)
-                cmd = harness_resume_argv(harness, last_sid(chains), inv_prompt,
-                                          model=model, extra=extra)
+                if override or script:
+                    os.environ["DEVCAKE_PROMPT"] = inv_prompt
+                    cmd = composed_launch(
+                        harness, inv_prompt, plan_mode=False, model=model,
+                        extra=extra, script=script, override=override)
+                else:
+                    cmd = harness_resume_argv(
+                        harness, last_sid(chains), inv_prompt,
+                        model=model, extra=extra)
             if decision.action == "fresh" or cmd is None:
                 # `cmd is None` is defensive only: a harness in RESUME_SPECS
                 # always has a builder arm — degrade to fresh, never crash
@@ -882,8 +941,10 @@ def harness_main() -> None:
                 inv_prompt = fresh_nudge_prompt(
                     prompt, mission_type, legal, attempt=cont.used,
                     budget=cont_cfg.max_continuations, stray_note=note)
-                cmd = harness_argv(harness, inv_prompt, plan_mode=False,
-                                   model=model, extra=extra)
+                os.environ["DEVCAKE_PROMPT"] = inv_prompt
+                cmd = composed_launch(
+                    harness, inv_prompt, plan_mode=False, model=model,
+                    extra=extra, script=script, override=override)
             relay.add(f"[devcake] continuation {cont.used}/"
                       f"{cont_cfg.max_continuations} ({mode}): "
                       f"{decision.reason} — relaunching {harness}",

@@ -751,6 +751,12 @@ HarnessDialect
 `DIALECTS: dict[str, HarnessDialect]` is fail-closed: unknown `DEVCAKE_HARNESS`
 aborts with a clear error — **no Claude fallback**.
 
+The dialect is not the backend-aiming seam. **The adaptor’s job is: given
+this CLI and this base URL, produce the env, argv, and files that make the
+process talk to that URL** (`08-harness-templates.md` §8). Probe stub,
+OpenRouter, and local vLLM / llama.cpp are the same caller. Do not put stub
+URLs in `fault()` / `classify()`, or classify in the stub server.
+
 **Out of scope:** declarative JSONPath “configure a harness without code”;
 out-of-repo plugin harnesses (app↔image remain lockstep — docs/13).
 
@@ -847,17 +853,18 @@ same change set as the first new dialect) so the slice is repeatable:
 
 - Each new CLI is: characterize headless contract → capture matrix → dialect
   module → registry + Bake → docs/08 tables → operator smoke.
-- **Experimental on this track (not launch-supported):** `pi`, `opencode`,
-  `qwen-code` (each a dialect + Bake target + capture matrix; resume stays
-  off until a capture pair). Launch-supported harnesses remain
-  `claude-code`, `grok-build`, `codex`. Cursor Agent is deferred (trigger
-  in the roster note).
+- **Launch-supported harnesses (house registry):** `claude-code`,
+  `grok-build`, `codex`, `pi`, `opencode`, `qwen-code` — each a dialect +
+  Bake target + aim recipe + capture matrix (resume still off until a
+  capture pair where missing). Cursor Agent is deferred (trigger in the
+  roster note).
 - **CLI candidates still under consideration** (not commitments): other
   agentic terminal CLIs. A candidate that is Claude-stream-adjacent may
   share helpers *after* captures prove it — never by silent alias.
   Multi-provider / settings.json auth is an H3 consumer.
 - **Not a new harness:** pointing an existing template at a new model or a
-  local OpenAI-compatible backend (`DevType.model`, secret_env, `08` §8).
+  local OpenAI-compatible backend (`DevType.backend_base_url` → `aim()`,
+  `DevType.model`, stored key — `08` §8).
 
 **Explicit non-goals for this track:**
 
@@ -876,20 +883,21 @@ long-lived incomplete dialect API.
 
 ### Candidates — launch roster (2026-08-15)
 
-**Status: committed campaign, not yet shipped. In-tree support for the
-new PMOs and harnesses is experimental** until each increment's live
-battery has been run on the operator stack (hermetic pytest is necessary
-and not sufficient). Launch-supported remains Linear + Gitea Issues and
-`claude-code` / `grok-build` / `codex`. Host CLIs characterize only;
-production truth is the baked image / in-container adapter.
+**Status: harness half shipped.** The six house templates
+(`claude-code`, `grok-build`, `codex`, `pi`, `opencode`, `qwen-code`) are
+launch-supported in the registry: dialect + Bake + hermetic captures +
+backend `aim()`. Host CLIs characterize only; production truth is the
+baked image / in-container adaptor. **PMO half still experimental** until
+each new board's live battery has been run (hermetic pytest is necessary
+and not sufficient). Launch-supported PMOs remain Linear + Gitea Issues.
 
-**Build (this campaign) — experimental until the gate passes**
+**Build (this campaign)**
 
-| Kind | Names | Registry id | Gate |
+| Kind | Names | Registry id | Gate / status |
 |---|---|---|---|
-| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
-| Platform | `HarnessDialect` + registry-as-id-source | — | existing three capture batteries + **Grok Build live ONBOARD** |
-| Harness | Pi, OpenCode, Qwen Code | `pi`, `opencode`, `qwen-code` | H4 capture matrix from the **baked** image + hello + ONBOARD + INV-5 report |
+| PMO | GitHub Issues, GitLab Issues | `github_issues`, `gitlab_issues` | **experimental** — live `contract_tests_pmo.py`: row 12 never skippable; row 8/13 skip iff `attachments_supported` is false; row 10 matches row 14 (`relations_supported`, probed from the live token — not hardcoded). No blanket “documented capability skip”. |
+| Platform | `HarnessDialect` + registry-as-id-source + `aim()` | — | shipped for all six house templates |
+| Harness | Pi, OpenCode, Qwen Code | `pi`, `opencode`, `qwen-code` | **launch-supported** (dialect + Bake + aim + captures; resume still off until a capture pair) |
 
 Copy the `gitea_issues` profile (docs/05 §9): issue-only, `open→backlog`,
 `DEVCAKE-*` labels, `team_key=owner/repo`, `global_ids=False`. Separate

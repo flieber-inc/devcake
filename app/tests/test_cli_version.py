@@ -1,8 +1,8 @@
 """Slice 3: DevType.cli_version is empty or a concrete semver.
 
-`latest` is a resolve-once gesture, never a stored value. Experimental
-templates stay house-pin only. Independent expected values are the
-literals `latest`, `2.1.250`, and 422-shaped errors.
+`latest` is a resolve-once gesture, never a stored value. Every
+registry template accepts a stored semver the same way. Independent
+expected values are the literals `latest`, `2.1.250`, and 422-shaped errors.
 """
 
 from __future__ import annotations
@@ -32,11 +32,13 @@ def test_stored_latest_is_rejected():
                 cli_version="latest")
 
 
-def test_experimental_nonempty_pin_is_rejected():
-    with pytest.raises(ValidationError, match="house-pin only"):
-        DevType(name="pi-dev", harness_template="pi", cli_version="0.84.2")
-    dt = DevType(name="pi-dev", harness_template="pi")
-    assert dt.cli_version == ""
+def test_every_registry_template_accepts_a_stored_semver():
+    from devcake.harness import HARNESSES
+
+    for template in HARNESSES:
+        dt = DevType(name="pin-dev", harness_template=template,
+                     cli_version="0.84.2")
+        assert dt.cli_version == "0.84.2"
 
 
 def test_effective_cli_version_is_house_or_the_stored_pin():
@@ -114,20 +116,20 @@ def test_latest_gesture_rejects_a_non_semver():
         resolve_latest("claude-code", source=Junk())
 
 
-def test_latest_on_experimental_is_rejected():
+def test_latest_resolves_for_every_registry_template():
+    from devcake.harness import HARNESSES
     from devcake.versions import resolve_latest
 
-    class Boom:
-        def latest(self, template: str) -> str:  # pragma: no cover
-            raise AssertionError("must not call the registry")
+    class Planted:
+        def latest(self, template: str) -> str:
+            return "9.9.9"
 
-    with pytest.raises(ValueError, match="house-pin only"):
-        resolve_latest("pi", source=Boom())
+    for template in HARNESSES:
+        assert resolve_latest(template, source=Planted()) == "9.9.9"
 
 
 def test_latest_cli_service_returns_the_planted_number():
     import asyncio
-    from fastapi import HTTPException
     from devcake.api import devtypes_service
 
     class Planted:
@@ -138,8 +140,7 @@ def test_latest_cli_service_returns_the_planted_number():
     body = loop.run_until_complete(
         devtypes_service.latest_cli_version("claude-code", source=Planted()))
     assert body == {"cli_version": "2.1.250"}
-    with pytest.raises(HTTPException) as exc:
-        loop.run_until_complete(
-            devtypes_service.latest_cli_version("pi", source=Planted()))
-    assert exc.value.status_code == 422
+    pi = loop.run_until_complete(
+        devtypes_service.latest_cli_version("pi", source=Planted()))
+    assert pi == {"cli_version": "2.1.250"}
     loop.close()

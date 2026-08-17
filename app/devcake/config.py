@@ -584,7 +584,11 @@ class DevType(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
     harness_template: str
     identifying_prompt: str = ""
-    mcp_setup_commands: list[str] = Field(default_factory=list)
+    # Operator shell. Additive after aiming unless override_harness_adapter.
+    # Legacy YAML `mcp_setup_commands` (list of lines) joins into this on read.
+    dev_entrypoint: str = ""
+    # When True, dialect argv is not launched — the script is the process.
+    override_harness_adapter: bool = False
     # Skill-store skills installed to the harness's registry-declared skills
     # dir before the harness starts (harness.py skills_dir; a harness
     # without one skips them with a warning). Selected = Available
@@ -602,6 +606,9 @@ class DevType(BaseModel):
     memory_repos: list[str] = Field(default_factory=list)
     max_concurrency: int = Field(1, ge=1)
     model: str = ""  # harness model override (e.g. claude-fable-5); "" = harness default
+    # OpenAI-compatible / Anthropic-compatible backend. Empty = vendor
+    # default (no aim). Non-empty → entrypoint aim() writes env/argv/files.
+    backend_base_url: str = ""
     # Coding-harness binary pin (not DEVCAKE_TAG, not model). Empty = house
     # Dockerfile ARG. `latest` is a resolve-once gesture, never stored.
     cli_version: str = ""
@@ -624,6 +631,29 @@ class DevType(BaseModel):
             if name not in out:
                 out.append(name)
         return out
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_mcp_setup_commands(cls, data):
+        if not isinstance(data, dict):
+            return data
+        script = data.get("dev_entrypoint")
+        if isinstance(script, str) and script.strip():
+            return data
+        legacy = data.get("mcp_setup_commands")
+        if isinstance(legacy, list) and legacy:
+            data = dict(data)
+            data["dev_entrypoint"] = "\n".join(
+                str(x) for x in legacy if str(x).strip())
+        elif isinstance(legacy, str) and legacy.strip():
+            data = dict(data)
+            data["dev_entrypoint"] = legacy
+        return data
+
+    @property
+    def mcp_setup_commands(self) -> list[str]:
+        """Line view of the entrypoint script — secret-ref scans + old callers."""
+        return [ln for ln in self.dev_entrypoint.splitlines() if ln.strip()]
 
     @field_validator("harness_template")
     @classmethod
@@ -649,6 +679,11 @@ class DevType(BaseModel):
     def _skill_required_names_valid(cls, v):
         return cls._dedupe_skill_names(v, field="skills_required")
 
+    @field_validator("backend_base_url")
+    @classmethod
+    def _strip_backend_url(cls, v: str) -> str:
+        return (v or "").strip()
+
     @field_validator("cli_version")
     @classmethod
     def _cli_version_is_empty_or_semver(cls, v: str) -> str:
@@ -662,15 +697,6 @@ class DevType(BaseModel):
             raise ValueError(
                 "cli_version must be empty (house pin) or a semver like 2.1.250")
         return pin
-
-    @model_validator(mode="after")
-    def _experimental_house_pin_only(self):
-        from .harness import HARNESSES
-        h = HARNESSES.get(self.harness_template)
-        if h is not None and h.experimental and self.cli_version:
-            raise ValueError(
-                f"{self.harness_template} is experimental — house-pin only")
-        return self
 
     @model_validator(mode="after")
     def _skills_required_subset(self):

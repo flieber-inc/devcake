@@ -14,6 +14,7 @@ from opentelemetry.propagate import inject
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from ...harness import HARNESSES, missing_referenced_secret_env, resolve_image
+from ...house_pins import effective_cli_version
 from ...staffing import HarnessNotStaffed, app_digest, require_staffed
 from ...ports.forge import mission_branch
 from ...telemetry import OTEL_COLLECTOR_URL
@@ -746,6 +747,7 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         "DEVCAKE_LFS": "1" if lfs else "",
         "DEVCAKE_MODEL": (dev_type.model
                           or HARNESSES[dev_type.harness_template].default_model),
+        "DEVCAKE_CLI_VERSION": effective_cli_version(dev_type),
         # Devs export through the collector, credential-free (ISSUES #13)
         "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OTEL_COLLECTOR_URL}/v1/traces",
     }
@@ -799,8 +801,14 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     memory = _memory_repos_for(mgr, run)
     if memory:
         payload["memory_repos"] = memory
-    if dt.mcp_setup_commands:             # docs/07 §5 step 5 (exit 14)
+    if dt.dev_entrypoint.strip():
+        payload["dev_entrypoint"] = dt.dev_entrypoint
         payload["mcp_setup_commands"] = list(dt.mcp_setup_commands)
+    if dt.override_harness_adapter:
+        payload["override_harness_adapter"] = True
+    url = (dt.backend_base_url or "").strip()
+    if url:
+        payload["backend_base_url"] = url
     # ADR-0014 D4: the activity-repo RO clone spec (secret half — the token
     # never rests on the Run). Absent for STEWARD (no mission, no repo), when
     # the forge is off, or before the boot mint — the entrypoint then falls

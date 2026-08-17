@@ -102,7 +102,6 @@ HARNESSES: dict[str, Harness] = {
         # Reads ~/.pi/agent/skills AND ~/.agents/skills; .agents is the
         # Agent Skills standard the other templates already use.
         skills_dir=".agents/skills",
-        experimental=True,
     ),
     "opencode": Harness(
         image=f"devcake/dev-opencode:{_TAG}",
@@ -113,7 +112,6 @@ HARNESSES: dict[str, Harness] = {
         # Also reads ~/.claude/skills and ~/.config/opencode/skills;
         # .agents is the shared Agent Skills dir.
         skills_dir=".agents/skills",
-        experimental=True,
     ),
     "qwen-code": Harness(
         image=f"devcake/dev-qwen-code:{_TAG}",
@@ -126,7 +124,6 @@ HARNESSES: dict[str, Harness] = {
         # Personal skills: ~/.qwen/skills (project .qwen/skills is unused —
         # never write into the clone).
         skills_dir=".qwen/skills",
-        experimental=True,
     ),
 }
 
@@ -154,7 +151,7 @@ def missing_referenced_secret_env(dt) -> list[str]:
     word-bounded (mirrors shell longest-identifier expansion); indirection
     like `printenv NAME` is not detected."""
     from . import secrets as secrets_store
-    cmds = "\n".join(dt.mcp_setup_commands)
+    cmds = dt.dev_entrypoint
     return [var for var in dt.secret_env
             if not secrets_store.read_harness_secret(var)
             and re.search(rf"\$(?:{var}\b|\{{{var}\}})", cmds)]

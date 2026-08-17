@@ -386,7 +386,7 @@ async def mission_create(body: _CreateMissionBody):
 
 @app.post("/api/v1/missions/{pmo_id}/actions")
 async def mission_action(pmo_id: str, body: _MissionActionBody):
-    """Retry / park / unpark / resume via label swap. Returns projected labels."""
+    """Retry / park / unpark / resume / force_freshness. Returns projected labels."""
     from .mission_actions import label_action
     s = svc()
     return await label_action(pmo_id, body.action,

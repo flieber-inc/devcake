@@ -91,6 +91,10 @@ RAW_REPO_MARKER = re.compile(r"`devcake-repo:([^`]*)`", re.IGNORECASE)
 CONFLICT_MARKER = re.compile(r"`devcake:conflict-resolve:(\d+)`")
 MERGE_RETRY_MARKER = "`devcake:merge-retry`"
 MERGE_HANDOFF_MARKER = "`devcake:merge-handoff`"
+# Auto-merge post-approve settle hold: wait N minutes (repo.merge_settle_minutes)
+# for sibling discovery-in traffic, then recheck freshness before merging.
+# Latest of {settle, retry, handoff} wins for sweep mode selection.
+MERGE_SETTLE_MARKER = "`devcake:merge-settle`"
 MAX_CONFLICT_RESOLVES = 2
 
 # ADR-0031 — the Freshness Gate's re-review directive, counted exactly like

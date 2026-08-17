@@ -3,7 +3,9 @@
 // many it dropped — a freshly created unadopted mission otherwise vanishes
 // with no counter, no empty state, nothing (founder report 2026-08-05).
 import assert from "node:assert/strict";
-import { bucketize, columnOf, unadoptedHiddenCount } from "../src/lib/board.js";
+import {
+  bucketize, columnOf, contextActions, unadoptedHiddenCount,
+} from "../src/lib/board.js";
 
 let failed = 0;
 const check = (name, fn) => {
@@ -60,6 +62,19 @@ check("empty / missing input is 0, never a crash", () => {
   assert.equal(unadoptedHiddenCount([], "opt_in"), 0);
   assert.equal(unadoptedHiddenCount(null, "opt_in"), 0);
   assert.equal(unadoptedHiddenCount([null], "opt_in"), 0);
+});
+
+console.log("board helpers — contextActions");
+
+check("MERGE rows offer Re-check freshness", () => {
+  const items = contextActions(row(["DEVCAKE", "DEVCAKE-MERGE"], "in_progress"));
+  assert.ok(items.some((it) => it.id === "force_freshness"));
+  assert.ok(items.some((it) => it.id === "park"));
+});
+
+check("non-MERGE rows do not offer force_freshness", () => {
+  const items = contextActions(row(["DEVCAKE", "DEVCAKE-REVIEW"], "in_progress"));
+  assert.ok(!items.some((it) => it.id === "force_freshness"));
 });
 
 if (failed) {

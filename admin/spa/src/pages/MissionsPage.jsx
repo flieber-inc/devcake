@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Plus, RefreshCw } from "lucide-react";
 import PageHeader from "../components/PageHeader.jsx";
 import Button from "../components/Button.jsx";
+import MoreMenu from "../components/MoreMenu.jsx";
 import MissionRow from "../components/MissionRow.jsx";
 import MissionDrawer from "../components/MissionDrawer.jsx";
 import NewMissionDialog from "../components/NewMissionDialog.jsx";
@@ -102,7 +103,39 @@ const CONFIRM_COPY = {
       "Nothing is deleted; the mission stays in your PMO.",
     confirmLabel: "Park mission",
   },
+  force_freshness: {
+    title: "Re-check freshness?",
+    body:
+      "Checks for feed activity the last REVIEW did not see (including routed " +
+      "discoveries). If anything material is unread, REVIEW re-opens and the " +
+      "standing approve is set aside until a new verdict.\n" +
+      "Uses one slot from this mission's freshness re-review budget.\n" +
+      "If nothing is unread, labels stay on merge wait.",
+    confirmLabel: "Re-check freshness",
+  },
+  force_freshness_all: {
+    title: "Re-check freshness on all merge-wait missions?",
+    // body is filled at confirm time with the live count
+    body: "",
+    confirmLabel: "Re-check all merge-wait",
+  },
 };
+
+function mergeWaitRows(rows) {
+  return (rows || []).filter((r) =>
+    (r.labels || []).includes("DEVCAKE-MERGE"));
+}
+
+function forceFreshnessAllBody(n) {
+  return (
+    `Runs the same freshness re-check on every mission currently on merge wait ` +
+    `(${n} mission${n === 1 ? "" : "s"} in this view).\n` +
+    `For each one: unread material (including routed discoveries) re-opens ` +
+    `REVIEW and sets aside the standing approve; nothing unread leaves it on ` +
+    `merge wait.\n` +
+    `Each re-open uses one slot from that mission's freshness re-review budget.`
+  );
+}
 
 // "Last polled Ns ago" — honest cadence disclosure per docs/11 §0. The PMO is
 // the source of truth (INV-1); the SPA is only ever as fresh as the last poll.
@@ -277,6 +310,12 @@ export default function MissionsPage() {
     [filteredRows, data.adoption_mode]
   );
 
+  // Merge-wait targets for bulk force-freshness (respects the PMO filter).
+  const mergeWaitTargets = useMemo(
+    () => mergeWaitRows(filteredRows),
+    [filteredRows]
+  );
+
   const doAction = async ({ pmo_id, instance }, action) => {
     try {
       const result = await send("POST", `/missions/${encodeURIComponent(pmo_id)}/actions`, {
@@ -289,10 +328,77 @@ export default function MissionsPage() {
           labels: result.labels || [], syncing: true, polls: 0,
         },
       }));
-      setFlash(`${action} sent — waiting for the next poll to confirm.`);
-      setTimeout(() => setFlash(""), 4000);
+      let flash = `${action} sent — waiting for the next poll to confirm.`;
+      if (action === "force_freshness") {
+        if (result.tripped) {
+          flash = "Unread material found — REVIEW re-opened. Waiting for the next poll to dispatch.";
+        } else if (result.reason === "nothing_unread") {
+          flash = "No unread material since the last REVIEW — still waiting on merge.";
+        } else if (result.reason === "budget_exhausted") {
+          flash = "Freshness re-review budget is spent; standing approve stands. See the mission feed.";
+        } else if (result.reason === "no_review_anchor") {
+          flash = "No finished REVIEW on record — nothing to re-check against.";
+        }
+      }
+      setFlash(flash);
+      setTimeout(() => setFlash(""), 5000);
+      return result;
     } catch (e) {
       setError(`Action ${action} failed: ${e.message || e}`);
+      throw e;
+    }
+  };
+
+  const doForceFreshnessAll = async (targets) => {
+    const list = targets || mergeWaitTargets;
+    if (!list.length) {
+      setFlash("No missions on merge wait in this view.");
+      setTimeout(() => setFlash(""), 4000);
+      return;
+    }
+    let reopened = 0;
+    let clean = 0;
+    let exhausted = 0;
+    let other = 0;
+    let failed = 0;
+    const pendingPatch = {};
+    for (const row of list) {
+      try {
+        const result = await send(
+          "POST",
+          `/missions/${encodeURIComponent(row.pmo_id)}/actions`,
+          { action: "force_freshness", instance: row.instance },
+        );
+        pendingPatch[refKey(row.instance, row.pmo_id)] = {
+          labels: result.labels || [], syncing: true, polls: 0,
+        };
+        if (result.tripped) reopened += 1;
+        else if (result.reason === "nothing_unread") clean += 1;
+        else if (result.reason === "budget_exhausted") exhausted += 1;
+        else other += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    if (Object.keys(pendingPatch).length) {
+      setPending((prev) => ({ ...prev, ...pendingPatch }));
+    }
+    const parts = [];
+    if (reopened) parts.push(`${reopened} re-opened REVIEW`);
+    if (clean) parts.push(`${clean} still clean on merge wait`);
+    if (exhausted) parts.push(`${exhausted} budget exhausted`);
+    if (other) parts.push(`${other} other`);
+    if (failed) parts.push(`${failed} failed`);
+    setFlash(
+      `Freshness re-check on ${list.length} merge-wait mission${list.length === 1 ? "" : "s"}: ` +
+      (parts.join("; ") || "done") +
+      ". Waiting for the next poll to confirm.",
+    );
+    setTimeout(() => setFlash(""), 8000);
+    if (failed) {
+      setError(
+        `Re-check freshness failed on ${failed} of ${list.length} mission${list.length === 1 ? "" : "s"}.`,
+      );
     }
   };
 
@@ -304,11 +410,33 @@ export default function MissionsPage() {
     }
   };
 
+  const requestForceFreshnessAll = () => {
+    const n = mergeWaitTargets.length;
+    if (!n) {
+      setFlash("No missions on merge wait in this view.");
+      setTimeout(() => setFlash(""), 4000);
+      return;
+    }
+    setConfirmAction({
+      action: "force_freshness_all",
+      count: n,
+      targets: mergeWaitTargets,
+    });
+  };
+
   const confirmProceed = async () => {
     if (!confirmAction) return;
     setConfirmBusy(true);
     try {
-      await doAction(confirmAction.ref, confirmAction.action);
+      if (confirmAction.action === "force_freshness_all") {
+        await doForceFreshnessAll(confirmAction.targets);
+      } else {
+        await doAction(confirmAction.ref, confirmAction.action);
+      }
+      setConfirmAction(null);
+    } catch {
+      // doAction already set error; keep the dialog closed only on success —
+      // on failure leave closed too so the operator sees the banner.
       setConfirmAction(null);
     } finally {
       setConfirmBusy(false);
@@ -375,7 +503,22 @@ export default function MissionsPage() {
             {/* one visually primary action per header (DESIGN.md §3): with a
                 composer, creating work is the thing the operator comes to
                 do; Poll now stays visible as a ghost — a cadence nudge the
-                cadence line already narrates, never buried in a menu */}
+                cadence line already narrates, never buried in a menu.
+                Rare board-wide ops (bulk freshness) live in the header ⋯. */}
+            <MoreMenu
+              label="More mission-board actions"
+              items={[
+                {
+                  label: mergeWaitTargets.length
+                    ? `Re-check freshness (all merge-wait · ${mergeWaitTargets.length})`
+                    : "Re-check freshness (all merge-wait)",
+                  desc: mergeWaitTargets.length
+                    ? "Runs the post-approve freshness re-check on every merge-wait mission in this view."
+                    : "No missions are on merge wait in this view right now.",
+                  onClick: requestForceFreshnessAll,
+                },
+              ]}
+            />
             <Button
               kind="ghost"
               icon={RefreshCw}
@@ -627,7 +770,11 @@ export default function MissionsPage() {
         <ConfirmDialog
           open
           title={CONFIRM_COPY[confirmAction.action].title}
-          body={CONFIRM_COPY[confirmAction.action].body}
+          body={
+            confirmAction.action === "force_freshness_all"
+              ? forceFreshnessAllBody(confirmAction.count || 0)
+              : CONFIRM_COPY[confirmAction.action].body
+          }
           confirmLabel={CONFIRM_COPY[confirmAction.action].confirmLabel}
           busy={confirmBusy}
           onConfirm={confirmProceed}

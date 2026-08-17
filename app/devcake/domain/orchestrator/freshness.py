@@ -16,12 +16,16 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from ..model import MissionRef
+from typing import Literal
+
+from ..model import LABEL_MERGE, LABEL_REVIEW, Mission, MissionRef
 from . import steps
 from ..run import Run, aware
 from .dispatch import mission_cost
 from .feed import is_devcake_comment, unquoted
 from .markers import ELEVATED_MARKERS, FRESHNESS_MARKER
+
+RecheckResult = Literal["pass", "tripped", "exhausted", "no_review_anchor"]
 
 log = logging.getLogger("devcake.missions")
 
@@ -203,6 +207,82 @@ async def review_freshness_gate(mgr, run: Run) -> str:
     return "tripped"
 
 
+def _newest_finished_review(mgr, pmo_id: str) -> Run | None:
+    """Newest finished REVIEW run for a mission — the post-approve watermark
+    anchor (force re-review / merge-settle / disclose-at-close)."""
+    reviews = [r for r in mgr.runs.store.all()
+               if r.mission_pmo_id == pmo_id
+               and mgr._run_is_ours(r) and r.mission_type == "REVIEW"
+               and r.state == "finished"]
+    if not reviews:
+        return None
+    return max(reviews, key=lambda r: aware(r.created_at))
+
+
+async def recheck_and_maybe_rereview(
+        mgr, mission: Mission, *, reason: str) -> RecheckResult:
+    """Post-approve freshness re-check for a MERGE-hold mission.
+
+    Used by the operator Force action and the auto-merge settle window end.
+    Anchors on the newest finished REVIEW run's watermark (not an in-flight
+    finalize Run). Returns:
+      pass            — no material after watermark (labels untouched)
+      tripped         — 🔄 directive posted, DEVCAKE-MERGE → DEVCAKE-REVIEW
+      exhausted       — budget spent; ⚠ disclosed; labels untouched
+      no_review_anchor — no finished REVIEW on record (nothing to compare)
+
+    Shares material rules, markers, and budgets.freshness_rereviews with
+    review_freshness_gate — does not checkpoint a Run (there may not be one).
+    """
+    run = _newest_finished_review(mgr, mission.pmo_id)
+    if run is None:
+        return "no_review_anchor"
+    try:
+        found, count = await _unread_material(mgr, run)
+    except Exception:  # noqa: BLE001 — fail-OPEN: a recheck bug must not wedge the operator action or the merge sweep
+        log.exception("freshness recheck failed for %s — treating as pass",
+                      mission.key)
+        return "pass"
+    if not found:
+        return "pass"
+
+    pmo_id = mission.pmo_id
+    cap = mgr.config.budgets.freshness_rereviews
+    if cap and count >= cap:
+        names = "; ".join(_describe(found)[:5])
+        more = f" (+{len(found) - 5} more)" if len(found) > 5 else ""
+        await mgr._feed(
+            pmo_id, "issue",
+            f"⚠️ Closing with unevaluated activity: the freshness "
+            f"re-review budget ({cap}) is spent, so "
+            f"the standing approve verdict proceeds. Unevaluated: "
+            f"{names}{more}. Cumulative recorded mission cost: "
+            f"${mission_cost(mgr, pmo_id):.2f}.")
+        mgr._audit(pmo_id, "freshness_exhausted",
+                   f"{reason}: {len(found)} unread entries")
+        mgr.anomalies[pmo_id] = (
+            f"{mission.key}: closed with unevaluated feed activity "
+            f"(re-review budget spent)")
+        return "exhausted"
+
+    n = count + 1
+    await mgr._feed(pmo_id, "issue", _directive_body(run, n, found, cap))
+    ref = MissionRef(pmo_id, mission.pmo_kind)
+    await mgr.pmo.swap_labels(ref, remove={LABEL_MERGE}, add={LABEL_REVIEW})
+    # mission.labels is mutated by FakePMO; live adapters re-fetch on next poll
+    if LABEL_MERGE in mission.labels:
+        mission.labels = (mission.labels - {LABEL_MERGE}) | {LABEL_REVIEW}
+    handoffs = getattr(mgr, "merge_handoffs", None)
+    if isinstance(handoffs, dict):
+        handoffs.pop(pmo_id, None)
+    audit_action = ("freshness_forced" if reason == "operator_force"
+                    else "freshness_tripped")
+    mgr._audit(pmo_id, audit_action,
+               f"{reason}: re-review {_count_label(n, cap)}: "
+               f"{len(found)} unread entries")
+    return "tripped"
+
+
 async def disclose_unread_at_close(mgr, mission) -> None:
     """ADR-0031 D1 inventory, deferred-merge sweep row: DISCLOSE-ONLY. The
     sweep's merge was operator-sanctioned minutes-to-hours after the gate
@@ -211,13 +291,9 @@ async def disclose_unread_at_close(mgr, mission) -> None:
     must not gain a new failure mode. Anchored on the newest finished REVIEW
     run's watermark; no REVIEW run on record ⇒ nothing to compare, skip."""
     try:
-        reviews = [r for r in mgr.runs.store.all()
-                   if r.mission_pmo_id == mission.pmo_id
-                   and mgr._run_is_ours(r) and r.mission_type == "REVIEW"
-                   and r.state == "finished"]
-        if not reviews:
+        run = _newest_finished_review(mgr, mission.pmo_id)
+        if run is None:
             return
-        run = max(reviews, key=lambda r: aware(r.created_at))
         found, _ = await _unread_material(mgr, run)
         if not found:
             return

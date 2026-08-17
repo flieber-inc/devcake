@@ -11,7 +11,8 @@ from ...ports.forge import run_branch
 from . import completion, dispatch, steps
 from .freshness import review_freshness_gate
 from .markers import (HANDOFF_APPEND_MAX, HANDOFF_MARKER,
-                      MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER, defang)
+                      MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
+                      MERGE_SETTLE_MARKER, defang)
 
 log = logging.getLogger("devcake.missions")
 
@@ -141,6 +142,34 @@ async def finalize_review(mgr, run: Run, result: dict) -> None:
         from ...config import auto_merge_permitted
         if auto_merge_permitted(mgr.config, inst, run.repo_ref,
                                 mgr.dev_types) and pr:
+            settle_min = int(getattr(inst, "merge_settle_minutes", 0) or 0)
+            # Post-approve settle: park on MERGE and wait for sibling
+            # discovery-in traffic before the first auto-merge attempt.
+            # Redelivery past this step falls through to merge / retry.
+            if settle_min > 0 \
+                    and steps.REVIEW_MERGE_SETTLE not in run.finalized_steps \
+                    and steps.REVIEW_MERGE not in run.finalized_steps \
+                    and steps.REVIEW_MERGE_FAILED not in run.finalized_steps \
+                    and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \
+                    and steps.REVIEW_CONFLICT_ROUTED not in run.finalized_steps \
+                    and steps.REVIEW_AWAITING_MERGE not in run.finalized_steps:
+                async def _settle_park():
+                    await mgr.pmo.swap_labels(
+                        MissionRef(pmo_id, "issue"),
+                        remove={LABEL_REVIEW}, add={LABEL_MERGE})
+                    await mgr._feed(
+                        pmo_id, "issue",
+                        f"⏳ REVIEW approved — waiting up to {settle_min} min "
+                        f"for sibling discoveries before auto-merge of "
+                        f"{pr_url}. Material that lands in this window can "
+                        f"re-open REVIEW. You can merge manually at any time. "
+                        f"{MERGE_SETTLE_MARKER}")
+                    mgr._audit(pmo_id, "merge_settle_parked",
+                               f"{settle_min}m {pr_url}")
+                    mgr._merge_window_closed.discard(pmo_id)
+                await mgr._checkpoint(
+                    run, steps.REVIEW_MERGE_SETTLE, _settle_park)
+                return
             if steps.REVIEW_DONE not in run.finalized_steps \
                     and steps.REVIEW_MERGE_FAILED not in run.finalized_steps \
                     and steps.REVIEW_MERGE_DEFERRED not in run.finalized_steps \

@@ -101,6 +101,9 @@ export function contextActions(row) {
   const items = [];
   if (set.has("DEVCAKE-FAILED"))       items.push({ id: "retry",  label: "Retry" });
   if (set.has("DEVCAKE-NEEDS-HUMAN"))  items.push({ id: "resume", label: "Resume" });
+  if (set.has("DEVCAKE-MERGE")) {
+    items.push({ id: "force_freshness", label: "Re-check freshness" });
+  }
   if (set.has("DEVCAKE-SKIP"))         items.push({ id: "unpark", label: "Unpark" });
   else                                  items.push({ id: "park",   label: "Park", danger: false });
   return items;

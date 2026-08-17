@@ -175,6 +175,64 @@ def test_unknown_action_returns_422():
         run(ma.label_action("pmo-1", "yolo",
                             missions_cache=cache, managers=managers))
     assert exc.value.status_code == 422
+    assert "force_freshness" in str(exc.value.detail)
+
+
+# ── force_freshness (post-approve recheck) ───────────────────────────────────
+
+class _MissionGetPMO(FakePMO):
+    """FakePMO + get() returning a SimpleNamespace mission with labels."""
+
+    def __init__(self, labels: set[str], **kw):
+        super().__init__(**kw)
+        self._labels = set(labels)
+
+    async def get(self, ref: MissionRef):
+        return SimpleNamespace(
+            pmo_id=ref.pmo_id, pmo_kind=ref.kind, key="DEV-1",
+            labels=set(self._labels))
+
+
+def test_force_freshness_without_merge_returns_409():
+    cache, managers = _fresh_env(row_labels={"DEVCAKE", "DEVCAKE-REVIEW"})
+    with pytest.raises(HTTPException) as exc:
+        run(ma.label_action("pmo-1", "force_freshness",
+                            missions_cache=cache, managers=managers))
+    assert exc.value.status_code == 409
+
+
+def test_force_freshness_tripped_returns_projection(monkeypatch):
+    pmo = _MissionGetPMO({"DEVCAKE", "DEVCAKE-MERGE"})
+    cache, managers = _fresh_env(
+        row_labels={"DEVCAKE", "DEVCAKE-MERGE"}, pmo=pmo)
+
+    async def _trip(mgr, mission, *, reason):
+        mission.labels = {"DEVCAKE", "DEVCAKE-REVIEW"}
+        return "tripped"
+
+    monkeypatch.setattr(ma.freshness, "recheck_and_maybe_rereview", _trip)
+    result = run(ma.label_action("pmo-1", "force_freshness",
+                                 missions_cache=cache, managers=managers))
+    assert result["tripped"] is True
+    assert result["reason"] == "reopened"
+    assert result["labels"] == ["DEVCAKE", "DEVCAKE-REVIEW"]
+    assert managers["linear"].audits[-1][1] == "ui_force_freshness"
+
+
+def test_force_freshness_nothing_unread(monkeypatch):
+    pmo = _MissionGetPMO({"DEVCAKE", "DEVCAKE-MERGE"})
+    cache, managers = _fresh_env(
+        row_labels={"DEVCAKE", "DEVCAKE-MERGE"}, pmo=pmo)
+
+    async def _pass(mgr, mission, *, reason):
+        return "pass"
+
+    monkeypatch.setattr(ma.freshness, "recheck_and_maybe_rereview", _pass)
+    result = run(ma.label_action("pmo-1", "force_freshness",
+                                 missions_cache=cache, managers=managers))
+    assert result["tripped"] is False
+    assert result["reason"] == "nothing_unread"
+    assert "DEVCAKE-MERGE" in result["labels"]
 
 
 def test_unknown_pmo_id_returns_404():

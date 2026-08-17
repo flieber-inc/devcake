@@ -151,7 +151,7 @@ Issue priority (Linear numeric):
 | 3 (and 0 = none) | `medium` |
 | 4 | `low` |
 
-Projects: Linear Project statuses come in five fixed categories — Backlog, Planned, In Progress, Completed, Canceled — mapped `Backlog/Planned→backlog`, `In Progress→in_progress`, `Completed→done`, `Canceled→canceled` (plus `Paused→backlog`). Project priority uses the same five-level scale and maps identically. Project labels are first-class in Linear (shipped 2025-06) — the same ten managed labels are ensured for projects.
+Projects: Linear Project statuses come in five fixed categories — Backlog, Planned, In Progress, Completed, Canceled — mapped `Backlog/Planned→backlog`, `In Progress→in_progress`, `Completed→done`, `Canceled→canceled` (plus `Paused→backlog`). Project priority uses the same five-level scale and maps identically. Project labels are first-class in Linear (shipped 2025-06) — the same managed labels (`ALL_LABELS` in `domain/model.py`; `managed_labels_expected == len(ALL_LABELS)`, currently 11 including `DEVCAKE-DISCOVERY`) are ensured for projects.
 
 **Blocked-by relations (adr/0007):** issue queries (`list_all`, `_get_issue`) additionally fetch `inverseRelations(first: 50)` with `pageInfo`; nodes of type `blocks` map to `Mission.blocked_by` (on issue B, `inverseRelations` holds relations where B is `relatedIssue`, so each node's `issue` is a blocker). A full first page is **cursor-walked** (`_paginate_issue_relations`, ceiling 10 × 50 with a fail-loud warning — adr/0012: a truncated read would under-block the gate and silently skip decomposition edge inheritance). `create_relation` → `issueRelationCreate(input: {issueId: blocker, relatedIssueId: blocked, type: blocks})`, tolerating the duplicate-relation error so decomposition resume stays idempotent. Relations are **issue-only** in Linear — projects always normalize with `blocked_by = []`.
 
@@ -181,7 +181,7 @@ Projects: Linear Project statuses come in five fixed categories — Backlog, Pla
 
 ## 5. Label bootstrap
 
-At startup (`04-orchestrator.md` §6) — and again after every config `PUT`, via `reload_connections()` (§1a) — the app calls `ensure_labels(team, {the ten managed labels})` — `02-domain-model.md` §5. Missing labels are created via `issueLabelCreate` scoped to the team (issue labels) and `projectLabelCreate` (workspace-level project labels). Existing labels are matched case-insensitively but always written in canonical uppercase form.
+At startup (`04-orchestrator.md` §6) — and again after every config `PUT`, via `reload_connections()` (§1a) — the app calls `ensure_labels(team, ALL_LABELS)` — `domain/model.py` / `02-domain-model.md` §5 (`len(ALL_LABELS)` is the live count; currently 11 including `DEVCAKE-DISCOVERY`). Missing labels are created via `issueLabelCreate` scoped to the team (issue labels) and `projectLabelCreate` (workspace-level project labels). Existing labels are matched case-insensitively but always written in canonical uppercase form.
 
 `swap_labels(ref, remove, add)` on issues is implemented as a single `issueUpdate(labelIds: [...])` computed from the live label set (read-modify-write with the removal and addition applied together), which is the closest-to-atomic operation Linear offers; `capabilities().native_label_swap_atomic = True`. The project branch (`_swap_project_labels`) does the same read-modify-write via `projectUpdate(labelIds)` against the workspace-level project-label ids.
 
@@ -191,7 +191,7 @@ At startup (`04-orchestrator.md` §6) — and again after every config `PUT`, vi
 
 **Verified at M5:** Linear caps project `description` at **255 chars** — the long-form body lives in `content` (the adapter reads `content or description`); projects have **no issue-style comments API** — the project-native feed is `projectUpdates`, which full mode mirrors (above); project-run transcripts/token reports are still recorded in the audit log + OpenObserve only (the substance lands on the child issues anyway, per ADR-0006).
 
-**Verified at M2:** (a) Linear **project labels are a separate, workspace-level entity** (`projectLabels` / `projectLabelCreate`) — `ensure_labels` creates the ten managed labels in *both* namespaces, and `ProjectUpdateInput.labelIds` takes project-label ids, not issue-label ids; (b) Linear enforces a **per-query complexity budget** (~10k) — queries stay small and split rather than nesting team+issues+projects in one request.
+**Verified at M2:** (a) Linear **project labels are a separate, workspace-level entity** (`projectLabels` / `projectLabelCreate`) — `ensure_labels` creates every member of `ALL_LABELS` in *both* namespaces, and `ProjectUpdateInput.labelIds` takes project-label ids, not issue-label ids; (b) Linear enforces a **per-query complexity budget** (~10k) — queries stay small and split rather than nesting team+issues+projects in one request.
 
 ## 6. Projects as Missions
 
@@ -292,7 +292,7 @@ Internal vs external is **only** `api_base` + token + board path — one system,
 
 1. Gitea UI → create org/repo e.g. `myteam/missions` (empty git repo is fine).
 2. Mint a PAT with issue write on that repo.
-3. Admin → PMO page (`#/pmo`, under Adapters) → system **Gitea Issues**, api base of that Gitea, issues repo `myteam/missions`, paste PAT → Save → Test connection (expect 10/10 managed labels).
+3. Admin → PMO page (`#/pmo`, under Adapters) → system **Gitea Issues**, api base of that Gitea, issues repo `myteam/missions`, paste PAT → Save → Test connection (expect `managed_labels_present == managed_labels_expected == len(ALL_LABELS)` — currently 11/11 including `DEVCAKE-DISCOVERY`).
 4. Label an issue `DEVCAKE` (opt-in) and poll.
 
 Work forge remains independent (GitHub/GitLab/Gitea repo cards, or empty → per-mission internal forge).

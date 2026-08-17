@@ -220,6 +220,74 @@ def test_ts_fallback_without_watermark(tmp_path):
     assert any("freshness-rereview:1" in c for c in fake.comments)
 
 
+# ── post-approve recheck (force / merge-settle seam) ─────────────────────────
+
+def _finished_review_in_store(store, watermark_id="e1", seq=4):
+    """Persist a finished REVIEW run so recheck can anchor on its watermark."""
+    r = _review_run(watermark_id=watermark_id)
+    r.seq = seq
+    r.state = "finished"
+    r.pmo_ref = "main"  # LEGACY_PMO_REFS — _run_is_ours always True
+    store.save(r)
+    return r
+
+
+def _recheck(mgr, mission, reason="operator_force"):
+    return run_coro(freshness.recheck_and_maybe_rereview(
+        mgr, mission, reason=reason))
+
+
+def test_recheck_pass_when_no_unread_material(tmp_path):
+    m, mgr, fake = _gate_mgr(
+        tmp_path,
+        [_entry("e1", "brief" + SENTINEL, author="devcake")],
+        auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-MERGE"}
+    _finished_review_in_store(mgr.runs.store, "e1")
+    assert _recheck(mgr, m) == "pass"
+    assert "DEVCAKE-MERGE" in m.labels and "DEVCAKE-REVIEW" not in m.labels
+    assert not any("freshness-rereview" in c for c in fake.comments)
+
+
+def test_recheck_trips_on_discovery_in_after_watermark(tmp_path):
+    m, mgr, fake = _gate_mgr(
+        tmp_path,
+        [_entry("e1", "brief" + SENTINEL, author="devcake"),
+         _entry("e2", "`devcake:discovery-in:v1 src=T-9 step=3`\n\n"
+                "> finding\n\n" + SENTINEL, author="devcake")],
+        auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-MERGE"}
+    _finished_review_in_store(mgr.runs.store, "e1")
+    mgr.merge_handoffs[m.pmo_id] = f"{m.key}: awaiting human merge"
+    assert _recheck(mgr, m, reason="operator_force") == "tripped"
+    assert "DEVCAKE-REVIEW" in m.labels and "DEVCAKE-MERGE" not in m.labels
+    assert any("`devcake:freshness-rereview:1`" in c for c in fake.comments)
+    assert m.pmo_id not in mgr.merge_handoffs
+
+
+def test_recheck_exhausted_discloses_without_reopen(tmp_path):
+    m, mgr, fake = _gate_mgr(
+        tmp_path,
+        [_entry("e1", "🔄 `devcake:freshness-rereview:5`\n\n" + SENTINEL,
+                author="devcake"),
+         _entry("e2", "late human steering")],
+        auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-MERGE"}
+    _finished_review_in_store(mgr.runs.store, "e1")
+    assert _recheck(mgr, m) == "exhausted"
+    assert "DEVCAKE-MERGE" in m.labels and "DEVCAKE-REVIEW" not in m.labels
+    assert any("unevaluated activity" in c for c in fake.comments)
+    assert not any("freshness-rereview:6" in c for c in fake.comments)
+
+
+def test_recheck_no_review_anchor(tmp_path):
+    m, mgr, fake = _gate_mgr(tmp_path, [], auto_merge=False)
+    m.labels = {"DEVCAKE", "DEVCAKE-MERGE"}
+    # store empty — no finished REVIEW
+    assert _recheck(mgr, m) == "no_review_anchor"
+    assert fake.comments == [] and fake.swaps == []
+
+
 # ── fail-open / fail-closed boundaries ───────────────────────────────────────
 
 def test_check_failure_fails_open(tmp_path):

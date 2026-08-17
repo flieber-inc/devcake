@@ -36,7 +36,8 @@ from typing import Any, Awaitable, Callable, Protocol
 from fastapi import HTTPException
 
 from ..domain import failure_taxonomy
-from ..domain.model import MissionRef
+from ..domain.model import LABEL_MERGE, MissionRef
+from ..domain.orchestrator import freshness
 from ..ports.pmo import PMOTransient
 from ..security import redact
 
@@ -136,6 +137,73 @@ def _try_audit(mgr: Any, pmo_id: str, action: str, detail: str = "") -> None:
 
 # ── 1) label actions: retry / park / unpark / resume ────────────────────────
 
+_FORCE_REASONS = {
+    "pass": "nothing_unread",
+    "tripped": "reopened",
+    "exhausted": "budget_exhausted",
+    "no_review_anchor": "no_review_anchor",
+}
+
+
+async def force_freshness(
+    pmo_id: str,
+    *,
+    missions_cache: list[dict],
+    managers: dict[str, Any],
+    instance: str | None = None,
+) -> dict:
+    """Operator re-check: if material landed after the last REVIEW watermark
+    while the mission sits on DEVCAKE-MERGE, post a freshness re-review
+    directive and re-open REVIEW. See freshness.recheck_and_maybe_rereview."""
+    row = _find_row(missions_cache, pmo_id, instance)
+    mgr = _resolve_mgr(managers, row["instance"])
+    labels = set(row.get("labels") or [])
+    if LABEL_MERGE not in labels:
+        raise HTTPException(
+            status_code=409,
+            detail="cannot force_freshness: missing labels "
+                   f"['{LABEL_MERGE}']")
+    ref = MissionRef(pmo_id, row["kind"])
+    try:
+        mission = await mgr.pmo.get(ref)
+    except PMOTransient as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo transient error while loading mission: {e}") from e
+    except Exception as e:  # noqa: BLE001 — surface adapter refusal as 502, not 500
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo rejected mission get: {e}") from e
+
+    try:
+        outcome = await freshness.recheck_and_maybe_rereview(
+            mgr, mission, reason="operator_force")
+    except PMOTransient as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"pmo transient error during freshness recheck: {e}") from e
+    except Exception as e:  # noqa: BLE001 — recheck failures must not 500 the UI; 502 keeps the PMO/forge family together
+        log.exception("force_freshness recheck failed for %s", pmo_id)
+        raise HTTPException(
+            status_code=502,
+            detail=f"freshness recheck failed: {e}") from e
+
+    # recheck mutates mission.labels on trip (and FakePMO.swap_labels does too);
+    # otherwise keep the cache projection the UI already had.
+    if getattr(mission, "labels", None) is not None:
+        projected = sorted(mission.labels)
+    else:
+        projected = sorted(labels)
+
+    reason = _FORCE_REASONS.get(outcome, outcome)
+    _try_audit(mgr, pmo_id, "ui_force_freshness", reason)
+    return {
+        "labels": projected,
+        "tripped": outcome == "tripped",
+        "reason": reason,
+    }
+
+
 async def label_action(
     pmo_id: str,
     action: str,
@@ -145,12 +213,18 @@ async def label_action(
     instance: str | None = None,
 ) -> dict:
     """Apply the label swap for one UI action. Returns the projected label list."""
+    if action == "force_freshness":
+        return await force_freshness(
+            pmo_id, missions_cache=missions_cache, managers=managers,
+            instance=instance)
+
     spec = ACTION_SPECS.get(action)
     if spec is None:
+        known = sorted(set(ACTION_SPECS) | {"force_freshness"})
         raise HTTPException(
             status_code=422,
             detail=f"unknown action: {action!r}; "
-                   f"expected one of {sorted(ACTION_SPECS)}")
+                   f"expected one of {known}")
 
     row = _find_row(missions_cache, pmo_id, instance)
     mgr = _resolve_mgr(managers, row["instance"])

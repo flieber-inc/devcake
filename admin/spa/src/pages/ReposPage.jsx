@@ -583,6 +583,17 @@ export default function ReposPage({ onHealthChange }) {
                         setField(`cfg.repos.${idx}.auto_resolve_merge_conflicts`,
                           !(repo.auto_resolve_merge_conflicts ?? true))} />
                   </SettingRow>
+                  <SettingRow label="Post-approve settle"
+                    desc="Minutes to wait after REVIEW approve before auto-merge, so sibling discoveries can land."
+                    help="Only when auto-merge is ON. After approve, DevCake holds on DEVCAKE-MERGE for this long so routed discoveries from sibling missions can arrive; at the end of the window it re-checks freshness and may re-open REVIEW. 0 = merge as soon as the forge allows (today's behavior). Distinct from the merge retry window (CI / mergeability)." >
+                    <Input type="number" className="w-24" min="0"
+                      disabled={!repo.auto_merge}
+                      aria-label="Post-approve settle (minutes)"
+                      value={repo.merge_settle_minutes ?? 0}
+                      onChange={(e) => setField(
+                        `cfg.repos.${idx}.merge_settle_minutes`,
+                        Math.max(0, Number(e.target.value)))} />
+                  </SettingRow>
                   <SettingRow label="Merge retry window"
                     desc="Minutes to keep retrying a not-yet-mergeable PR before handing off."
                     help="When a merge isn't possible yet (CI running, mergeability computing), DevCake keeps retrying via the merge sweep for this long before handing off with DEVCAKE-MERGE. Lower it on CI-light repos; raise it on CI-heavy repos. 0 = hand off immediately.">

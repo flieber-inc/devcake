@@ -28,6 +28,7 @@ export const newRepoCard = (name) => ({
   auto_merge: false,
   auto_resolve_merge_conflicts: true,
   merge_retry_window_minutes: 30,
+  merge_settle_minutes: 0,
 });
 
 // dedicated skills connection (2026-08-14 ruling — never a repo card)

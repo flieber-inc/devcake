@@ -11,8 +11,9 @@ from ...ports.forge import legacy_branch, mission_branch
 from ..model import (LABEL_MERGE, LABEL_NEEDS_HUMAN, LABEL_TRACKING, Mission,
                      STAGE_LABELS)
 from ..run import aware, utcnow
-from . import completion, discovery, dispatch, feed
-from .markers import MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER
+from . import completion, discovery, dispatch, feed, freshness
+from .markers import (MERGE_HANDOFF_MARKER, MERGE_RETRY_MARKER,
+                      MERGE_SETTLE_MARKER)
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
@@ -152,7 +153,12 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
     live-tunable and restart-safe. The label stays DEVCAKE-MERGE
     throughout: a manual human merge mid-window is caught by the
     external-merge branch above on the next cycle. ``inst`` is the
-    mission's RepoInstance (per-repo doctrine, ADR-0020)."""
+    mission's RepoInstance (per-repo doctrine, ADR-0020).
+
+    Post-approve settle (``devcake:merge-settle``): when that marker is
+    latest, wait ``merge_settle_minutes`` for sibling discoveries, then
+    recheck freshness (may re-open REVIEW) before the first merge attempt.
+    """
     rearm = m.repo in mgr.rearm_merge_repos
     if m.pmo_id in mgr._merge_window_closed:
         if not rearm:
@@ -167,7 +173,7 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             f"deferred merge retry skipped")
         return
     act = await mgr.pmo.get_activity(m.ref)
-    retry_ts = handoff_ts = None
+    retry_ts = handoff_ts = settle_ts = None
     for e in act.entries:
         body = feed.unquoted(e.body)
         ts = aware(e.ts)  # a naive PMO timestamp must not TypeError
@@ -175,8 +181,43 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
             retry_ts = max(retry_ts, ts) if retry_ts else ts
         if MERGE_HANDOFF_MARKER in body:
             handoff_ts = max(handoff_ts, ts) if handoff_ts else ts
+        if MERGE_SETTLE_MARKER in body:
+            settle_ts = max(settle_ts, ts) if settle_ts else ts
+
+    # Settle is active when its marker is the newest merge-state marker.
+    settle_active = bool(
+        settle_ts
+        and (not retry_ts or settle_ts >= retry_ts)
+        and (not handoff_ts or settle_ts >= handoff_ts))
+    if settle_active:
+        settle_min = int(getattr(inst, "merge_settle_minutes", 0) or 0)
+        # App is intentionally holding — not a human-merge banner
+        mgr.merge_handoffs.pop(m.pmo_id, None)
+        mgr._rearm_satisfied.add(m.pmo_id)
+        if settle_min > 0 and (utcnow() - settle_ts).total_seconds() / 60 < settle_min:
+            return  # still coalescing sibling discoveries
+        # Window elapsed (or settle_min lowered to 0 live): recheck feed
+        outcome = await freshness.recheck_and_maybe_rereview(
+            mgr, m, reason="merge_settle")
+        if outcome == "tripped":
+            return  # REVIEW re-opened; next poll dispatches
+        # pass / exhausted / no_review_anchor → attempt merge below
+        # Open a merge-retry window so forge-not-ready can keep driving
+        # without re-entering settle on every cycle (retry marker is newer).
+        window = inst.merge_retry_window_minutes
+        if window > 0:
+            await mgr._feed(
+                m.pmo_id, "issue",
+                f"⏳ Settle complete — DevCake is auto-merging {pr_url}, "
+                f"retrying for up to {window} minutes if the forge is not "
+                f"ready yet. {MERGE_RETRY_MARKER}")
+            mgr._audit(m.pmo_id, "merge_settle_complete", pr_url)
+            return  # next cycle drives via merge-retry
+        # window 0: fall through into a one-shot merge attempt (no retry marker)
+
     window = inst.merge_retry_window_minutes
-    if not retry_ts or (handoff_ts and handoff_ts >= retry_ts):
+    if not settle_active and (
+            not retry_ts or (handoff_ts and handoff_ts >= retry_ts)):
         if rearm and window > 0:
             # auto_merge flipped OFF→ON for this mission's repo with it
             # parked (founder request 2026-07-15, per-repo ADR-0020): open
@@ -195,7 +236,7 @@ async def _deferred_merge_retry(mgr, m: Mission, pr,
         mgr._merge_window_closed.add(m.pmo_id)
         mgr._rearm_satisfied.add(m.pmo_id)   # AUD-005: nothing more to (re)arm
         return  # no active retry window (auto_merge-OFF parks land here)
-    if (utcnow() - retry_ts).total_seconds() / 60 > window:
+    if not settle_active and (utcnow() - retry_ts).total_seconds() / 60 > window:
         with tracer.start_as_current_span("sweep.merge_retry") as span:
             span.set_attribute("devcake.mission.key", m.key)
             span.set_attribute("devcake.outcome", "window_exhausted")

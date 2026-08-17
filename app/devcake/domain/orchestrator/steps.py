@@ -90,6 +90,8 @@ REVIEW_FRESHNESS_EXHAUSTED = "review:freshness_exhausted"
 REVIEW_FRESHNESS_DIRECTIVE = "review:freshness_directive"
 REVIEW_FRESHNESS_OK = "review:freshness_ok"
 REVIEW_FRESHNESS_TRIPPED = "review:freshness_tripped"
+# Auto-merge settle park (past gate: approve already sanctioned)
+REVIEW_MERGE_SETTLE = "review:merge_settle"
 
 # ── discovery.py (ADR-0033 harvest) ──────────────────────────────────────────
 DISCOVERY_POST = "discovery:post"
@@ -159,6 +161,7 @@ REGISTRY: tuple[Step, ...] = (
     Step(REVIEW_MERGE_DEFERRED, stage_after=None, past_freshness_gate=True),
     Step(REVIEW_MERGE_FAILED, stage_after=None, past_freshness_gate=True),
     Step(REVIEW_AWAITING_MERGE, stage_after=None, past_freshness_gate=True),
+    Step(REVIEW_MERGE_SETTLE, stage_after=None, past_freshness_gate=True),
     Step(REVIEW_REJECT_FEED),
     Step(REVIEW_REJECT_PR_COMMENT),
     Step(REVIEW_REJECT_LABELS, stage_after=LABEL_EXECUTE),

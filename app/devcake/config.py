@@ -226,6 +226,12 @@ class RepoInstance(BaseModel):
     auto_merge: bool = False
     auto_resolve_merge_conflicts: bool = True
     merge_retry_window_minutes: int = Field(30, ge=0)
+    # Post-approve settle (auto-merge only): wait this many minutes after
+    # REVIEW approve before the first auto-merge attempt so sibling
+    # discovery-in posts can land; at window end a freshness recheck can
+    # re-open REVIEW. 0 = today's immediate merge path. Distinct from
+    # merge_retry_window_minutes (forge readiness / CI), which runs after.
+    merge_settle_minutes: int = Field(0, ge=0)
     # Token VALUES are GUI-stored 0600 under /data/secrets (schema v4, F5):
     # the `token`/`token_ro`/`reviewer_token` properties read them by instance
     # name. An optional read-only token for non-EXECUTE stages (ISSUES #15);

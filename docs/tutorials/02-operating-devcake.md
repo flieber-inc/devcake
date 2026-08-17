@@ -16,7 +16,7 @@ This tutorial is the vocabulary plus the interventions you'll actually use.
 | `DEVCAKE-PLAN` | Queued for a planning run | — |
 | `DEVCAKE-EXECUTE` | Queued for implementation (a plan exists in the feed) | — |
 | `DEVCAKE-REVIEW` | Implementation done; queued for skeptical review | — |
-| `DEVCAKE-MERGE` | **Approved — waiting for your merge.** The PR comment has the copy-paste command | Merge (→ Done) or close the PR (→ Canceled) |
+| `DEVCAKE-MERGE` | **Approved — waiting for your merge.** The PR comment has the copy-paste command | Merge (→ Done) or close the PR (→ Canceled). If sibling discoveries landed after approve, **Re-check freshness** from the mission ⋯ menu may re-open REVIEW |
 | `DEVCAKE-CREATED` | This issue was authored by DevCake (a decomposition child) | Treat as any adopted issue |
 | `DEVCAKE-TRACKING` | A decomposed project; auto-completes when its children finish | — |
 | `DEVCAKE-FAILED` | Gave up after 3 failed attempts (comment explains; trace linked) | Fix the cause, remove the label → fresh retries |

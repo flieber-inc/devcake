@@ -24,6 +24,7 @@ def test_swap_marker_stage_matches_the_pre_registry_literal_table():
         "review:merge_failed": None,
         "review:merge_deferred": None,
         "review:awaiting_merge": None,
+        "review:merge_settle": None,
     }
 
 
@@ -31,7 +32,7 @@ def test_past_gate_steps_matches_the_pre_registry_literal_tuple():
     assert set(_PAST_GATE_STEPS) == {
         "review:done", "review:merge", "review:merge_failed",
         "review:merge_deferred", "review:conflict_routed",
-        "review:awaiting_merge",
+        "review:awaiting_merge", "review:merge_settle",
     }
 
 

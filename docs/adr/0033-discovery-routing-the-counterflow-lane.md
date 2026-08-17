@@ -1,9 +1,11 @@
 # ADR-0033 — Discovery routing: the counterflow lane
 
-- **Status:** accepted (2026-08-11) — founder + assistant sparring session;
+- **Status:** accepted (2026-08-11); **amended in-body** (numbered
+  implementation rulings; ruling 14 deletes the numeric routing budgets —
+  dedup + family size are the bounds). Founder + assistant sparring session;
   fills the seam ADR-0031 shipped empty (`ELEVATED_MARKERS`) and ADR-0032's
   consequences deferred ("that is discovery routing's lane"). Implementation
-  follows as PR-1 (harvest) + PR-2 (routing).
+  = PR-1 (harvest) + PR-2 (routing).
 - **Extends:** ADR-0007 (STEWARD gains a second duty, same propose-only
   contract), ADR-0031 (`ELEVATED_MARKERS` gains its first member), ADR-0032
   (the sibling lane — handoff flows *with* the graph at close; discovery

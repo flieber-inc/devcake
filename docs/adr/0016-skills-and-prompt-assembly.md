@@ -1,6 +1,9 @@
 # ADR-0016 — Skills philosophy and prompt assembly layers
 
-- **Status:** accepted (2026-07-20)
+- **Status:** accepted (2026-07-20); **addendum 1** (2026-08-13, external skill
+  repos over the ADR-0024 mirror); **addendum 2** (2026-08-14, dedicated
+  `skill_sources` — supersedes addendum-1 decision 1 and makes the fail-closed
+  gate toggle-governed via `context_sourcing_strict`, shared with ADR-0035)
 - **Context:** DevCake composes every Dev run from identifying prompts, mission
   playbooks, and optional skill-store packages. Early product work shipped
   **illustrative vendored skills** (generic PM ceremony, interactive craft
@@ -208,9 +211,9 @@ essentially work just like a forge adapter — and could just be one").
    refuses the run. Zero-skills is intact (no external names ⇒ the union
    is empty ⇒ byte-identical behavior).
 
-   **Addendum (PLAN_MEMORY / D12):** the skill-source fail-closed gate is
-   now the true side of `AppConfig.context_sourcing_strict` (default
-   true). When that knob is false, a last-good mirror is used
+   **Addendum (historical PLAN_MEMORY D12 / ADR-0035):** the skill-source
+   fail-closed gate is now the true side of `AppConfig.context_sourcing_strict`
+   (default true). When that knob is false, a last-good mirror is used
    (`stale_cache`) and a never-synced skill card is omitted; the run
    continues. Payload reads after a passed gate stay additive.
 4. **Payload flattening keeps the container contract untouched.** An

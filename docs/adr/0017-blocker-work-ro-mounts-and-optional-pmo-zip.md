@@ -1,6 +1,9 @@
 # ADR-0017 — Blocker RO work mounts + optional PMO changeset zip
 
-- **Status:** accepted (2026-07-21)
+- **Status:** accepted (2026-07-21); **amended 2026-07-28** (cross-instance
+  blocker resolution via `BlockerLocator`). Mechanism is an RO **token** +
+  prompt contract in ordinary writable clone dirs — not a filesystem mount
+  (falls back to the write token when no `token_ro` is configured)
 - **Context:** Two usability gaps. (1) Zero-repo / internal missions always zip the merged change set to the PMO (ADR-0010); configured work repos never did — operators who live in Linear saw no files. (2) Pipeline missions ordered by `blocked_by` had no way to see upstream **internal** work trees: each mission gets its own internal repo, so dependents started empty and could only recover artifacts by downloading Linear attachments (losing git shape). Zip-on-A does not appear in B’s activity folder (per-mission materialization).
 
 ## Decision

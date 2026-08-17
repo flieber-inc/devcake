@@ -1,6 +1,6 @@
 # ADR-0002 — File-Based Local Persistence (No Database in v0)
 
-**Status:** accepted (v0).
+**Status:** accepted (v0); **amended 2026-08-04** — the "backup = copy `/data`" sentence is superseded by `13-deployment.md` §8 (see amendment blockquote below).
 
 ## Context
 

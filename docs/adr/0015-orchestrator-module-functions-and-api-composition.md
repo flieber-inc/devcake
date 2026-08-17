@@ -1,9 +1,11 @@
 # ADR-0015 — Orchestrator module functions + API composition-root discipline
 
-- **Status:** accepted (2026-07-18); ships as the C1–C7 series of the pre-v0.2
-  structural plan. C1 (this ADR + the binding-block removal + the structure
-  guard test) is the normative anchor; C2/C3 finish the orchestrator, C4–C6
-  split the API composition root, C7 splits the admin ConfigPage.
+- **Status:** accepted (2026-07-18); **amended by ADR-0028** (composition-root
+  *construction* moved to `api/services.build_services()`; the route-forward
+  ratchet and ≤4-statement bodies remain). Ships as the C1–C7 series of the
+  pre-v0.2 structural plan. C1 (this ADR + the binding-block removal + the
+  structure guard test) is the normative anchor; C2/C3 finish the orchestrator,
+  C4–C6 split the API composition root, C7 splits the admin ConfigPage.
 - **Context:** ISSUES #36 split the ~1.8k-line orchestrator god module into
   `domain/orchestrator/` but left a *transitional façade*: ~50 free functions
   taking `self`, bound onto `MissionManager` by module-level assignment after
@@ -13,6 +15,14 @@
   public seam. Meanwhile `api/main.py` accreted to ~1.8k lines: composition
   root + poll loop + health probes + ~60 endpoint bodies. Both were flagged by
   the 2026-07-18 skeptical review as "file split, not modularity."
+
+> **Amended by ADR-0028 (2026-08-04):** Decision 3's "main.py is composition
+> root" still governs *where routes live* and the ≤4-statement forward ratchet
+> (guard-tested residual count is authority — seven, not the C6 draft's nine).
+> **Object-graph construction** moved to `api/services.build_services()`;
+> `main.py` is wiring + route forwards only. Read ADR-0028 for the factory
+> seam; do not treat Decision 3 alone as current law on *where* dependencies
+> are built.
 
 ## Decision 1 — the manager is DI container + advisory state + verbs
 
@@ -44,6 +54,11 @@ runtime objects (`FinalizerRouter`; `PollRuntime` from C4) hold the managers
 dict by live reference and are never rebuilt on config reload.
 
 ## Decision 3 — main.py is composition root + route forwards, nothing else
+
+> **Scope note (post ADR-0028):** this decision remains normative for *route
+> placement and body size*. For *construction of the object graph*, the
+> composition root is `api/services.build_services()` (ADR-0028) — `main.py`
+> no longer builds managers/adapters as import-time globals.
 
 Endpoint behavior lives in `api/` application-service modules (the
 `mission_actions.py`/`clear.py` pattern: explicit parameters, raise

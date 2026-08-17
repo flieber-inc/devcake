@@ -1,8 +1,8 @@
 """Cron fire-outcome persistence: one JSON file under /data/state
-(PLAN_MEMORY §6.2). Degradation must be store-derived and restart-safe
-like the Steward's — but Steward derives from the run store because
-steward runs ARE runs, while cron fires create PMO tickets, so they
-need this tiny ledger of their own. Advisory telemetry only (INV-1):
+(ADR-0035; ports.cron.CronStore). Degradation must be store-derived and
+restart-safe like the Steward's — but Steward derives from the run store
+because steward runs ARE runs, while cron fires create PMO tickets, so
+they need this tiny ledger of their own. Advisory telemetry only (INV-1):
 wiping it re-arms automatic fires, nothing else."""
 
 from __future__ import annotations

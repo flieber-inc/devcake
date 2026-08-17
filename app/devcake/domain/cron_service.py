@@ -1,4 +1,4 @@
-"""Cron module — one verb: create a labeled ticket (PLAN_MEMORY §6).
+"""Cron module — one verb: create a labeled ticket (ADR-0035, docs/04 §1.8).
 
 Reserved `memory-curator` fans out to every Curator board (repos == [m]
 for each memory-bound card). Generic rows fire at `row.pmo`.
@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from ..config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
                       intake_blocks_dispatch, memory_bound_names)
+from ..ports.cron import CronStore
 from . import claims as claims_mod
 from .model import LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN, LABEL_REVIEW
 
@@ -27,7 +27,6 @@ _STAGE_LABEL = {
     "EXECUTE": LABEL_EXECUTE,
     "REVIEW": LABEL_REVIEW,
 }
-CRON_MARKER_RE = re.compile(r"`devcake:cron:v1 job=([a-z0-9_-]+)`")
 CRON_MARKER = "`devcake:cron:v1 job={id}`"
 
 
@@ -49,9 +48,9 @@ class CronUnconfigured(Exception):
 
 
 class _MemoryCronLedger:
-    """In-memory fallback with the CronStore interface — test/default
-    wiring only; production injects adapters.files.CronStore so the
-    outcome ledger survives restarts (PLAN_MEMORY §6.2)."""
+    """In-memory CronStore for tests/default wiring. Production injects
+    the file-backed adapter so the outcome ledger survives restarts
+    (ADR-0035; docs/10 cron_outcomes.json)."""
 
     def __init__(self):
         self._state: dict[str, dict] = {}
@@ -66,28 +65,32 @@ class _MemoryCronLedger:
     def outcomes(self, job_id: str) -> list[str]:
         return list(self._state.get(job_id, {}).get("outcomes") or [])
 
-    def last_fire_at(self, job_id: str):
+    def last_fire_at(self, job_id: str) -> datetime | None:
         raw = self._state.get(job_id, {}).get("last_fire_at")
         if not raw:
             return None
-        return datetime.fromisoformat(raw)
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
 
 
 class CronService:
     """Single-process cadence + Run-now. One lock per job id (and, for
     memory-curator, per target board as well). Degradation and the fire
-    schedule are derived from the injected outcome ledger — restart-safe
-    when wired with the file-backed CronStore (services.py)."""
+    schedule are derived from the injected CronStore — restart-safe when
+    wired with the file-backed adapter (api/services.py)."""
 
     def __init__(self, config: AppConfig, managers: dict[str, MissionManager],
-                 claims=None, dev_types=None, store=None):
+                 claims=None, dev_types=None, store: CronStore | None = None):
         self.config = config
         self.managers = managers
         self.claims = claims
         # live Dev Type map — set M must include domain-bound notebooks
-        # (PLAN_MEMORY §6.3: "same set as I2"), not just instance lists
+        # (ADR-0035: same set as claims/memory mounts), not just instance lists
         self.dev_types = dev_types if dev_types is not None else {}
-        self.store = store if store is not None else _MemoryCronLedger()
+        self.store: CronStore = (
+            store if store is not None else _MemoryCronLedger())
         self._locks: dict[str, asyncio.Lock] = {}
         self.no_board: set[str] = set()  # memory_curator_no_board:<m>
 
@@ -117,26 +120,31 @@ class CronService:
         """Interval path — one pass per poll cycle. Elapsed-time
         semantics off the ledger's last_fire_at: one attempt per interval
         window, restart-safe, and a stalled poll cycle can't skip a whole
-        window (the old minute-multiple watermark could)."""
+        window (the old minute-multiple watermark could). Exceptions on
+        one row never kill the cycle (docs/04 §1.8)."""
         now = datetime.now(timezone.utc)
         degraded = self.degraded
         for row in list(self.config.crons):
             if not row.enabled or row.id in degraded:
                 continue
-            last = self.store.last_fire_at(row.id)
-            interval = max(row.interval_minutes, 1)
-            if last is not None and now - last < timedelta(minutes=interval):
-                continue
-            stamp = now.isoformat()
             try:
-                created = await self.fire(row.id, automatic=True)
-                self.store.record(row.id, "created" if created else "skipped",
-                                  fired_at=stamp)
-            except (CronBusy, CronUnconfigured):
-                self.store.record(row.id, "skipped", fired_at=stamp)
-            except Exception:  # noqa: BLE001 — one row must not kill the cycle
-                log.exception("cron %s automatic fire failed", row.id)
-                self.store.record(row.id, "failed", fired_at=stamp)
+                last = self.store.last_fire_at(row.id)
+                interval = max(row.interval_minutes, 1)
+                if last is not None and now - last < timedelta(minutes=interval):
+                    continue
+                stamp = now.isoformat()
+                try:
+                    created = await self.fire(row.id, automatic=True)
+                    self.store.record(
+                        row.id, "created" if created else "skipped",
+                        fired_at=stamp)
+                except (CronBusy, CronUnconfigured):
+                    self.store.record(row.id, "skipped", fired_at=stamp)
+                except Exception:  # noqa: BLE001 — one row must not kill the cycle
+                    log.exception("cron %s automatic fire failed", row.id)
+                    self.store.record(row.id, "failed", fired_at=stamp)
+            except Exception:  # noqa: BLE001 — ledger/window faults stay isolated
+                log.exception("cron %s automatic pass failed", row.id)
 
     async def fire(self, job_id: str, *, automatic: bool) -> list[dict]:
         """Create tickets. `automatic=False` is Run now (F4: no empty skip).
@@ -207,8 +215,8 @@ class CronService:
         return created
 
     async def _claims_depth(self, card: str) -> int:
-        """Skip-if-empty must be confirmed by listing (PLAN_MEMORY §6.3) —
-        the cache alone goes stale the moment a drain PR merges, and a
+        """Skip-if-empty must be confirmed by listing (ADR-0035) — the
+        cache alone goes stale the moment a drain PR merges, and a
         trusted stale >0 would fire an empty Curator ticket every interval.
         refresh_depth falls back to the cache when the listing fails."""
         if self.claims is None:
@@ -250,5 +258,3 @@ class CronService:
             mgr.instance.team_key, title, body, "normal", labels)
         log.info("cron %s created %s on %s", row.id, key, mgr.instance_name)
         return {"pmo": mgr.instance_name, "key": key, "pmo_id": pmo_id}
-
-

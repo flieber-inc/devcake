@@ -10,6 +10,8 @@
 # treat it exactly like a /data backup — a password-manager export.
 #
 # Usage: scripts/backup_gitea.sh [output.tar.gz]
+# Default: ${XDG_DATA_HOME:-$HOME/.local/share}/devcake/backups/
+# Override the default directory with DEVCAKE_BACKUP_DIR.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,7 +20,13 @@ cd "$(dirname "$0")/.."
 ALPINE_IMAGE="${DEVCAKE_ALPINE_IMAGE:-alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce}"
 
 VOLUME="${GITEA_VOLUME:-devcake_gitea_data}"
-OUT="${1:-devcake-gitea-$(date -u +%Y%m%d-%H%M).tar.gz}"
+if [[ $# -gt 0 ]]; then
+  OUT="$1"
+else
+  BACKUP_DIR="${DEVCAKE_BACKUP_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/devcake/backups}"
+  install -d -m 700 "$BACKUP_DIR"
+  OUT="$BACKUP_DIR/devcake-gitea-$(date -u +%Y%m%d-%H%M).tar.gz"
+fi
 
 docker volume inspect "$VOLUME" >/dev/null
 

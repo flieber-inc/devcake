@@ -8,7 +8,11 @@
 >
 > **Wipe warning:** `docker volume rm …devcake_data` destroys config **and**
 > all GUI secrets on a dedicated host — treat the volume like a secret store
-> (`14-security.md` §1).
+> (`14-security.md` §1). On a host you care about, take volume backups first
+> ([host-refresh](host-refresh.md) Phase 1); this drill assumes a disposable
+> volume. Payload/host-script pytest (`test_backup_cli`) proves archive
+> safety only — it does **not** replace this stranger wipe→GUI→mission path
+> (`13` §8 residual; still ⏳ on the roadmap).
 
 ## 0. Bootstrap `.env` (the only file you edit)
 

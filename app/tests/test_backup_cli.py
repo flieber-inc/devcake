@@ -7,6 +7,8 @@ from pathlib import Path
 
 BACKUP_SCRIPT = Path("/srv/repo-scripts/backup_data.sh")
 RESTORE_SCRIPT = Path("/srv/repo-scripts/restore_data.sh")
+BACKUP_GITEA_SCRIPT = Path("/srv/repo-scripts/backup_gitea.sh")
+RESTORE_GITEA_SCRIPT = Path("/srv/repo-scripts/restore_gitea.sh")
 PAYLOADS = Path("/srv/repo-scripts/lib")
 PINNED = re.compile(r"@sha256:[0-9a-f]{64}\b")
 
@@ -41,16 +43,22 @@ def _tree(root: Path) -> dict[str, str]:
             for p in root.rglob("*") if p.is_file()}
 
 
-def test_data_backup_defaults_outside_the_checkout(tmp_path):
-    """A no-argument secret backup must not land beside tracked files."""
-    assert BACKUP_SCRIPT.exists(), (
-        "mount missing — the pytest runner must bind scripts → /srv/repo-scripts"
-    )
+def _fake_docker_ok(tmp_path):
+    """docker that always succeeds (volume inspect / compose ps empty / run)."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_docker = fake_bin / "docker"
     fake_docker.write_text("#!/bin/sh\nexit 0\n")
     fake_docker.chmod(0o700)
+    return fake_bin
+
+
+def test_data_backup_defaults_outside_the_checkout(tmp_path):
+    """A no-argument secret backup must not land beside tracked files."""
+    assert BACKUP_SCRIPT.exists(), (
+        "mount missing — the pytest runner must bind scripts → /srv/repo-scripts"
+    )
+    fake_bin = _fake_docker_ok(tmp_path)
 
     operator_home = tmp_path / "operator-home"
     operator_home.mkdir()
@@ -72,6 +80,36 @@ def test_data_backup_defaults_outside_the_checkout(tmp_path):
 
     expected_dir = operator_home / ".local/share/devcake/backups"
     assert f"wrote {expected_dir}/devcake-data-" in result.stdout
+    assert expected_dir.stat().st_mode & 0o777 == 0o700
+
+
+def test_gitea_backup_defaults_outside_the_checkout(tmp_path):
+    """Gitea backups are credential dumps too — same outside-checkout default."""
+    assert BACKUP_GITEA_SCRIPT.exists(), (
+        "mount missing — the pytest runner must bind scripts → /srv/repo-scripts"
+    )
+    fake_bin = _fake_docker_ok(tmp_path)
+
+    operator_home = tmp_path / "operator-home"
+    operator_home.mkdir()
+    env = {
+        **os.environ,
+        "HOME": str(operator_home),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+    env.pop("XDG_DATA_HOME", None)
+    env.pop("DEVCAKE_BACKUP_DIR", None)
+
+    result = subprocess.run(
+        [str(BACKUP_GITEA_SCRIPT)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    expected_dir = operator_home / ".local/share/devcake/backups"
+    assert f"wrote {expected_dir}/devcake-gitea-" in result.stdout
     assert expected_dir.stat().st_mode & 0o777 == 0o700
 
 
@@ -272,3 +310,79 @@ def test_restore_script_uses_pinned_image_and_payload(tmp_path):
     assert "restore_payload.sh" in args
     assert "KIND=data" in args
     assert "find /dst" not in args, "delete-first restore must stay dead"
+
+
+def test_gitea_backup_script_uses_pinned_image_and_payload(tmp_path):
+    fake_bin, log = _fake_docker(tmp_path)
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
+           "DEVCAKE_BACKUP_DIR": str(tmp_path / "backups")}
+    r = subprocess.run([str(BACKUP_GITEA_SCRIPT)], check=True, capture_output=True,
+                       text=True, env=env)
+    args = log.read_text()
+    assert PINNED.search(args), "gitea backup container image must be digest-pinned"
+    assert "backup_payload.sh" in args
+    assert "KIND=gitea" in args
+    assert "(verified readable)" in r.stdout
+
+
+def test_gitea_restore_script_uses_pinned_image_and_payload(tmp_path):
+    fake_bin, log = _fake_docker(tmp_path)
+    tarball = tmp_path / "devcake-gitea-x.tar.gz"
+    tarball.write_bytes(b"irrelevant - docker is faked")
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    subprocess.run([str(RESTORE_GITEA_SCRIPT), str(tarball)], check=True,
+                   capture_output=True, text=True, env=env)
+    args = log.read_text()
+    assert PINNED.search(args), "gitea restore container image must be digest-pinned"
+    assert "restore_payload.sh" in args
+    assert "KIND=gitea" in args
+    assert "find /dst" not in args, "delete-first restore must stay dead"
+
+
+def _fake_docker_service_running(tmp_path, service: str):
+    """docker compose ps -q <service> reports a container id; other cmds ok."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "docker-args.log"
+    fake = fake_bin / "docker"
+    # Compose invocations look like: docker compose ps -q app
+    fake.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = compose ] && [ "$2" = ps ] && [ "$3" = -q ] '
+        f'&& [ "$4" = "{service}" ]; then\n'
+        '  echo "fake-container-id"\n'
+        "  exit 0\n"
+        "fi\n"
+        f'if [ "$1" = run ]; then echo "$@" >> {log}; fi\n'
+        "exit 0\n"
+    )
+    fake.chmod(0o700)
+    return fake_bin, log
+
+
+def test_restore_data_refuses_while_app_is_running(tmp_path):
+    fake_bin, log = _fake_docker_service_running(tmp_path, "app")
+    tarball = tmp_path / "devcake-data-x.tar.gz"
+    tarball.write_bytes(b"not extracted when service is up")
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    r = subprocess.run([str(RESTORE_SCRIPT), str(tarball)], capture_output=True,
+                       text=True, env=env)
+    assert r.returncode == 1
+    assert "app service is running" in r.stderr
+    assert not log.exists() or log.read_text() == "", (
+        "restore must not invoke docker run while the service is up"
+    )
+
+
+def test_restore_gitea_refuses_while_gitea_is_running(tmp_path):
+    fake_bin, log = _fake_docker_service_running(tmp_path, "gitea")
+    tarball = tmp_path / "devcake-gitea-x.tar.gz"
+    tarball.write_bytes(b"not extracted when service is up")
+    env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    r = subprocess.run([str(RESTORE_GITEA_SCRIPT), str(tarball)],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 1
+    assert "gitea service is running" in r.stderr
+    assert not log.exists() or log.read_text() == "", (
+        "restore must not invoke docker run while the service is up"
+    )

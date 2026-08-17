@@ -389,6 +389,42 @@ def test_upload_and_download_round_trip():
     assert r.notes[1] == []  # feed chokepoint posts the note, not upload
 
 
+def test_download_asset_maps_http_status_to_domain_errors():
+    """Port Liskov: download 429/5xx are retryable (PMOTransient); other ≥400
+    permanent. Mirrors upload_attachment / gitea_issues download mapping."""
+    url = ("https://gitlab.com/api/v4/projects/o%2Fr/"
+           "uploads/abc123/plan.md")
+
+    def handler_5xx(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="upstream down")
+
+    pmo = GitLabIssuesAdapter(
+        "https://gitlab.com", "tok", "o/r",
+        transport=httpx.MockTransport(handler_5xx))
+    with pytest.raises(PMOTransient, match="download"):
+        run(pmo.download_asset(url))
+
+    def handler_429(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="slow down")
+
+    pmo = GitLabIssuesAdapter(
+        "https://gitlab.com", "tok", "o/r",
+        transport=httpx.MockTransport(handler_429))
+    with pytest.raises(PMOTransient, match="download"):
+        run(pmo.download_asset(url))
+
+    def handler_4xx(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    pmo = GitLabIssuesAdapter(
+        "https://gitlab.com", "tok", "o/r",
+        transport=httpx.MockTransport(handler_4xx))
+    with pytest.raises(RuntimeError, match="download") as ei:
+        run(pmo.download_asset(url))
+    assert not isinstance(ei.value, PMOTransient)
+    assert not isinstance(ei.value, httpx.HTTPError)
+
+
 def test_download_asset_refuses_evil_host():
     pmo = make_pmo()
     with pytest.raises(RuntimeError, match="refused"):

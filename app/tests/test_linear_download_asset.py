@@ -101,3 +101,54 @@ def test_download_asset_maps_http_status_to_domain_errors():
     with pytest.raises(RuntimeError, match="download") as ei:
         run(a.download_asset("https://uploads.linear.app/team/x.bin"))
     assert not isinstance(ei.value, httpx.HTTPError)
+
+
+async def _file_upload_gql(query, variables=None):
+    """Canned fileUpload mutation so tests can drive only the PUT status map."""
+    _ = query, variables
+    return {
+        "fileUpload": {
+            "success": True,
+            "uploadFile": {
+                "uploadUrl": "https://uploads.linear.app/put",
+                "assetUrl": "https://uploads.linear.app/asset/x",
+                "headers": [{"key": "Upload-Key", "value": "v"}],
+            },
+        },
+    }
+
+
+def test_upload_attachment_maps_http_status_to_domain_errors():
+    """Port Liskov: permanent PUT 4xx must not become PMOTransient via
+    raise_for_status() + blanket HTTPError (HTTPStatusError ⊆ HTTPError).
+    Retryable 429/5xx → PMOTransient; other ≥400 → permanent RuntimeError."""
+    from devcake.ports.pmo import PMOTransient
+
+    def put_status(code: int, text: str = ""):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.method == "PUT"
+            return httpx.Response(code, text=text or f"status {code}")
+        return handler
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(put_status(403, "forbidden")))
+    a._gql = _file_upload_gql  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="upload") as ei:
+        run(a.upload_attachment("issue-id", "plan.md", b"# plan"))
+    assert not isinstance(ei.value, PMOTransient)
+    assert not isinstance(ei.value, httpx.HTTPError)
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(put_status(503, "upstream down")))
+    a._gql = _file_upload_gql  # type: ignore[method-assign]
+    with pytest.raises(PMOTransient, match="upload"):
+        run(a.upload_attachment("issue-id", "plan.md", b"# plan"))
+
+    a = LinearAdapter(
+        api_key="lin_api_test_key_xxxxxxxxxxxx",
+        transport=httpx.MockTransport(put_status(429, "slow down")))
+    a._gql = _file_upload_gql  # type: ignore[method-assign]
+    with pytest.raises(PMOTransient, match="upload"):
+        run(a.upload_attachment("issue-id", "plan.md", b"# plan"))

@@ -50,7 +50,7 @@ async function mockRoutes(page, { adoption = "opt_in", createResult = null,
         { id: "linear", display_name: "Linear", supports_priority: true },
         { id: "gitea_issues", display_name: "Gitea Issues",
           supports_priority: false },
-      ], forges: [], secret_shape_prefixes: [], managed_labels_expected: 10 }),
+      ], forges: [], secret_shape_prefixes: [], managed_labels_expected: 11 }),
     }));
   await page.route(/\/api\/v1\/poll\/run$/, (route) => {
     polls.push(1);

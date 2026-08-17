@@ -15,7 +15,6 @@ from fastapi import HTTPException
 
 from .. import secrets as secrets_store
 from ..config import HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE
-from ..domain.model import ALL_LABELS
 from ..harness import HARNESSES
 from ..ports.forge import ForgeError, mission_branch
 from ..ports.pmo import PMOTransient
@@ -277,34 +276,10 @@ async def clear_secrets(body: dict, *, forge_runtime, reload, config,
 async def connections_registry():
     """Available PMO systems and forges with display metadata — drives the
     admin Config page's selectors and paste guard, so adding an adapter never
-    means editing the SPA (docs/11)."""
-    from ..adapters.registry import PMO_SYSTEMS, forges
-    forge_descriptors = forges()
-    return {
-        "pmo_systems": [
-            {
-                "id": s.id,
-                "display_name": s.display_name,
-                "needs_api_base": s.needs_api_base,
-                "team_key_label": s.team_key_label,
-                "team_key_help": s.team_key_help,
-                "api_base_help": s.api_base_help,
-                "supports_priority": s.supports_priority,
-                "operator_note": s.operator_note,
-                "attachments_supported": s.attachments_supported,
-                "relations_supported": s.relations_supported,
-                "experimental": s.experimental,
-            }
-            for s in PMO_SYSTEMS.values()
-        ],
-        "forges": [{"id": d.id, "display_name": d.display_name}
-                   for d in forge_descriptors.values()],
-        "secret_shape_prefixes": sorted(
-            {p for s in PMO_SYSTEMS.values() for p in s.secret_shape_prefixes}
-            | {p for d in forge_descriptors.values()
-               for p in d.secret_shape_prefixes}),
-        "managed_labels_expected": len(ALL_LABELS),
-    }
+    means editing the SPA (docs/11). Single projection:
+    adapters.registry.connections_registry_payload (spa-contracts pin)."""
+    from ..adapters.registry import connections_registry_payload
+    return connections_registry_payload()
 
 
 def _with_error(payload: dict, *, detail: str = "") -> dict:

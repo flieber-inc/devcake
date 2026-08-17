@@ -185,6 +185,43 @@ def forges() -> dict[str, "ForgeDescriptor"]:
     return {fid: cls.descriptor for fid, cls in _forge_classes().items()}
 
 
+def connections_registry_payload() -> dict:
+    """SPA-visible GET /connections/registry body — one projection for the
+    HTTP handler, spa-contracts pin, and admin FALLBACK table.
+
+    Secrets (token patterns, env var names) stay server-side; the SPA only
+    needs display metadata, paste-guard prefixes, and managed-label count.
+    """
+    from ..domain.model import ALL_LABELS
+
+    forge_descriptors = forges()
+    return {
+        "pmo_systems": [
+            {
+                "id": s.id,
+                "display_name": s.display_name,
+                "needs_api_base": s.needs_api_base,
+                "team_key_label": s.team_key_label,
+                "team_key_help": s.team_key_help,
+                "api_base_help": s.api_base_help,
+                "supports_priority": s.supports_priority,
+                "operator_note": s.operator_note,
+                "attachments_supported": s.attachments_supported,
+                "relations_supported": s.relations_supported,
+                "experimental": s.experimental,
+            }
+            for s in PMO_SYSTEMS.values()
+        ],
+        "forges": [{"id": d.id, "display_name": d.display_name}
+                   for d in forge_descriptors.values()],
+        "secret_shape_prefixes": sorted(
+            {p for s in PMO_SYSTEMS.values() for p in s.secret_shape_prefixes}
+            | {p for d in forge_descriptors.values()
+               for p in d.secret_shape_prefixes}),
+        "managed_labels_expected": len(ALL_LABELS),
+    }
+
+
 def make_internal_forge():
     """The bundled-Gitea provisioner (docs/16 M11). Sole construction site —
     keeps the F1 import tripwire honest (adapters.gitea imported only here)."""

@@ -311,7 +311,7 @@ docker compose exec -T app python - < scripts/contract_tests_pmo.py
 
 Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same script against a Linear config instance uses the Linear profile rows (projects + urgent priority).
 
-**GHA `ci.yml` note:** the minimal dispatch compose has no Gitea, so the PMO live battery stays in **local `ci_suite.sh`** (full stack), not the PR-minimal job — same as the forge contract battery today.
+**GHA `ci.yml` note:** PR CI (`.github/workflows/ci.yml`) exports `CI_COMPOSE_WITH_GITEA=1` on the compose stack (bundled Gitea) and runs **both** live batteries in the same job — `scripts/contract_tests_forge.py` then `scripts/contract_tests_pmo.py` (step **Forge + PMO contract batteries**). Local `scripts/ci_suite.sh` remains a valid full-suite path; it is **not** the only place those batteries run.
 
 ### 9.6 GitHub / GitLab Issues — experimental in-tree
 

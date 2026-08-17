@@ -183,8 +183,8 @@ def test_quoted_discovery_in_marker_does_not_trip(tmp_path):
 
 
 def test_truncated_fetch_trips_never_passes(tmp_path):
-    # gitea_issues pages ASCENDING — its hard stop drops the NEWEST entries,
-    # exactly the ones the gate exists to catch: truncated ⇒ material-unknown
+    # Activity.truncated is material-UNKNOWN regardless of which end the
+    # adapter's hard stop drops (ADR-0031 D2): truncated ⇒ trip, never pass
     m, mgr, fake = _gate_mgr(tmp_path, [
         _entry("e1", "brief" + SENTINEL, author="devcake")])
     fake.activity_truncated = True
@@ -192,6 +192,33 @@ def test_truncated_fetch_trips_never_passes(tmp_path):
     assert fake.statuses == []
     assert any("feed truncated" in c and "freshness-rereview:1" in c
                for c in fake.comments)
+
+
+def test_own_discovery_post_does_not_trip_the_gate(tmp_path):
+    """Source-side `devcake:discovery:v1` is deliberately NOT elevated —
+    a mission's own harvest must never re-trip its own freshness gate
+    (livelock guarantee; contrast discovery-in which is elevated)."""
+    m, mgr, fake = _gate_mgr(tmp_path, [
+        _entry("e1", "brief" + SENTINEL, author="devcake"),
+        _entry("e2", "🔎 discoveries\n`devcake:discovery:v1 step=2 n=1`"
+               "\n\n" + SENTINEL, author="devcake")])
+    _approve(mgr, _review_run(watermark_id="e1"))
+    assert "done" in fake.statuses
+    assert not any("freshness-rereview" in c for c in fake.comments)
+
+
+def test_product_docs_name_config_freshness_budget_not_fixed_two():
+    """docs/03 §4.1 and docs/15 §2 must track the live bound
+    (AppConfig.budgets.freshness_rereviews, default 5) — not the obsolete
+    fixed-2 constant ADR-0031 originally shipped beside MAX_CONFLICT_RESOLVES.
+    Pin against the CAKE-16 / CAKE-32 discovery that product docs lagged."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    for rel in ("docs/03-mission-lifecycle.md",
+                "docs/15-errors-and-retries.md"):
+        text = (root / rel).read_text()
+        assert "budget 2 per mission lifetime" not in text, rel
+        assert "freshness_rereviews" in text, rel
 
 
 def test_deleted_watermark_treats_all_as_unread(tmp_path):

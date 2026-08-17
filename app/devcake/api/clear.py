@@ -243,14 +243,10 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — best-effort teardown; failure logged and recorded as ingress_trimmed=False, sweep continues
         log.warning("redis xtrim ingress: %s", e)
         ingress_trimmed = False
-    # revoke any leftover per-run ACL users (dev-*)
+    # revoke leftover per-run ACL users (dev-*) via the messaging chokepoint
+    # so ACL SAVE + runtime-secret unregister stay coupled to DELUSER (docs/09)
     try:
-        users = await r.execute_command("ACL", "USERS")
-        for u in users or []:
-            name = u.decode() if isinstance(u, (bytes, bytearray)) else str(u)
-            if name.startswith("dev-"):
-                await r.execute_command("ACL", "DELUSER", name)
-                users_deleted += 1
+        users_deleted = await messaging.revoke_leftover_run_users()
     except Exception as e:  # noqa: BLE001 — clear-runs teardown is best-effort per subsystem; failure logged, sweep continues
         log.warning("redis ACL cleanup: %s", e)
     # in-process chunk reassembly

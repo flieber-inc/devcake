@@ -79,6 +79,8 @@ def test_forged_auth_dropped(msg):
         fields = {"m": json.dumps(env)}
         await msg._handle_entry(entry, fields, handler, verify)
         assert seen == []                     # forged message never reached the handler
+        # acked + deleted — a forgery must not stay pending for reclaim/poison
+        assert await msg.redis.xrange(INGRESS, min=entry, max=entry) == []
     run(main())
 
 

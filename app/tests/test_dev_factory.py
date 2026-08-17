@@ -660,14 +660,18 @@ def test_resolve_image_agrees_with_factory_image_ref(monkeypatch):
         "grok-build", "1.0.4", tag="latest", house=HOUSE_PINS)
 
 
-def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
+def _up_sh_text() -> str:
     candidates = [
         Path(__file__).resolve().parents[2] / "up.sh",
         Path("/srv/up.sh"),
     ]
     path = next((p for p in candidates if p.is_file()), None)
     assert path is not None, "up.sh missing — bind /srv/up.sh"
-    text = path.read_text()
+    return path.read_text()
+
+
+def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
+    text = _up_sh_text()
     assert "docker buildx bake app admin hello" in text
     assert "python3 -m dev_factory" in text
     assert "PYTHONPATH=" in text
@@ -679,6 +683,22 @@ def test_up_sh_default_bake_is_control_plane_and_starts_the_baker():
     assert init is not None
     body = init.read_text()
     assert body.index("sys.path.insert") < body.index("from .core import")
+
+
+def test_up_sh_persists_devcake_tag_into_env():
+    """AUD-004 residual: a process-env pin must survive plain compose up.
+
+    Bake reads process env / HCL only; compose substitutes from .env when the
+    shell no longer exports DEVCAKE_TAG. up.sh already upserts DOCKER_GID and
+    DEVCAKE_WS_HOST — the image tag pin must do the same.
+    """
+    text = _up_sh_text()
+    assert "upsert_env_var DEVCAKE_TAG" in text
+    assert "would upsert DEVCAKE_TAG=" in text
+    assert 'export DEVCAKE_TAG="$TAG"' in text
+    # Same durable upserts as the host-specific trio operators move between hosts.
+    for key in ("DOCKER_GID", "DEVCAKE_WS_HOST", "DEVCAKE_TAG"):
+        assert f"upsert_env_var {key}" in text
 
 
 def test_tee_run_keeps_a_tail_and_writes_through():

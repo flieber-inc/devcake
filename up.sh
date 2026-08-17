@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up the DevCake stack with host-discovered DOCKER_GID.
 #
-#   ./up.sh                 # upsert DOCKER_GID → compose up -d → host baker
+#   ./up.sh                 # upsert GID/WS_HOST/TAG → compose up -d → baker
 #   ./up.sh --bake          # bake control plane + hello, then up + baker
 #   ./up.sh --bake app admin
 #   ./up.sh -- dagu app     # pass service names to compose up
@@ -9,7 +9,8 @@
 #
 # DOCKER_GID is host-specific (the group of /var/run/docker.sock). Compose
 # requires it for Dagu's sock access; this script always re-discovers and
-# writes it into .env so plain `docker compose up -d` works afterwards too.
+# writes it (plus DEVCAKE_WS_HOST and DEVCAKE_TAG) into .env so plain
+# `docker compose up -d` works afterwards too.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -120,10 +121,12 @@ echo "── DEVCAKE_WS_HOST=${WS_HOST}"
 # AUD-004: bake and compose MUST agree on the image tag. `docker buildx bake`
 # reads DEVCAKE_TAG from the PROCESS env / HCL default — never from .env — so a
 # pinned `.env` tag would bake `:latest` while compose runs the pin, silently
-# dispatching dev-* images that were never baked this round (pull_policy:
-# missing). Resolve ONCE and export for both. Precedence: an already-exported
-# DEVCAKE_TAG (the `export DEVCAKE_TAG=$(git rev-parse --short HEAD)` release
-# ritual) > .env > "latest".
+# dispatching dev-* images that were never baked this round (dev-run.yaml
+# pull: never). Resolve ONCE, export for both, and upsert into .env so a later
+# plain `docker compose up -d` (no shell export) stays lockstep. Precedence:
+# already-exported DEVCAKE_TAG (the
+# `export DEVCAKE_TAG=$(git rev-parse --short HEAD)` release ritual) > .env >
+# "latest".
 TAG="${DEVCAKE_TAG:-$(grep -E '^DEVCAKE_TAG=' .env 2>/dev/null | head -1 | cut -d= -f2- || true)}"
 TAG="${TAG:-latest}"
 echo "── DEVCAKE_TAG=${TAG}  (bake + compose lockstep)"
@@ -144,6 +147,7 @@ fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "── would upsert DOCKER_GID=${GID} in .env"
   echo "── would upsert DEVCAKE_WS_HOST=${WS_HOST} in .env (+ mkdir -p, chmod 700)"
+  echo "── would upsert DEVCAKE_TAG=${TAG} in .env"
   if [[ "$DO_BAKE" -eq 1 ]]; then
     echo "── would: docker compose stop dagu (deploy window — ADR-0025 R9)"
     echo "── would: compute DEVCAKE_APP_DIGEST from scripts/app_digest.py"
@@ -160,6 +164,7 @@ fi
 
 upsert_env_var DOCKER_GID "$GID" .env
 upsert_env_var DEVCAKE_WS_HOST "$WS_HOST" .env
+upsert_env_var DEVCAKE_TAG "$TAG" .env
 # 2026-08 evaluation: .env holds every bootstrap password (and the admin
 # password is host-root-equivalent via settings export — docs/14 §3), yet a
 # file created before up.sh existed kept whatever mode it was born with —
@@ -170,6 +175,8 @@ mkdir -p "$WS_HOST"
 chmod 700 "$WS_HOST"
 # Export so this shell's bake + compose invocations all see the same values
 # even if env_file order is odd (AUD-004: DEVCAKE_TAG for the bake too).
+# .env upsert above is the durable half — plain compose after this session
+# substitutes the same pin without needing the export still in the shell.
 export DOCKER_GID="$GID"
 export DEVCAKE_WS_HOST="$WS_HOST"
 export DEVCAKE_TAG="$TAG"

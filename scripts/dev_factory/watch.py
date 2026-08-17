@@ -12,17 +12,25 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
+from .spans import new_ids, probe_spans_from_receipt, span_record
 from .core import (
+    TAKING_SUFFIX,
+    InvalidKeepSet,
+    claim_inbox,
+    drop_receipts_missing_images,
     house_from_dockerfile,
     image_ref,
     load_keep_set,
     plan_prune,
+    prune_keep_list,
     receipt_path,
     reconcile,
+    release_inbox,
     run_bake,
     run_prune,
     touch_status,
@@ -32,7 +40,6 @@ from .run import tee_run
 from .liveness import (
     SENTINEL,
     UNHEALTHY_NEED,
-    append_baker_event,
     classify_app,
     tick_decision,
     unhealthy_verdict,
@@ -42,6 +49,7 @@ KEEP_SET = "harness_keep_set.json"
 STATUS = "harness_bake_status.json"
 RECEIPTS = "harness_receipts"
 BAKER_LOG = "harness_baker.jsonl"
+OUTBOX = "harness_outbox"
 PRUNE_REQUEST = "harness_prune_request.json"
 
 
@@ -89,53 +97,100 @@ def compose_rm(rel: str) -> None:
         cwd=REPO, check=False, timeout=15)
 
 
-def docker_name_list(argv: list[str]) -> list[str]:
+def compose_claim(rel: str) -> None:
+    """Rename /data/rel → /data/rel.taking if the inbox is present."""
+    src = f"/data/{rel}"
+    dst = f"/data/{rel}{TAKING_SUFFIX}"
+    subprocess.run(
+        ["docker", "compose", "exec", "-T", "app",
+         "sh", "-c", f"if [ -f {src!s} ]; then mv -f {src} {dst}; fi"],
+        cwd=REPO, check=False, timeout=15)
+
+
+def docker_name_list(argv: list[str]) -> list[str] | None:
+    """None = the listing failed (do not treat as zero images)."""
     try:
         out = subprocess.check_output(argv, text=True, timeout=20)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return []
+        return None
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
 def apply_prune(*, work: Path, tag: str, house: dict[str, str],
-                status: dict) -> dict:
-    req = compose_read(PRUNE_REQUEST)
-    if req is None:
+                status: dict, keep_set=None,
+                trace_id: str = "", parent: str = "") -> dict:
+    compose_claim(PRUNE_REQUEST)
+    taking = PRUNE_REQUEST + TAKING_SUFFIX
+    text = compose_read(taking)
+    prune_path = work / PRUNE_REQUEST
+    if prune_path.exists():
+        prune_path.unlink()
+    if text is not None:
+        prune_path.write_text(text)
+    claimed = claim_inbox(prune_path)
+    if claimed is None:
         return status
-    keep_images: list[str] = [f"devcake/dev-hello:{tag}"]
+    prune_t0 = time.time_ns()
+    keep_images = prune_keep_list(keep_set, tag=tag, house=house)
+    if keep_images is None:
+        release_inbox(claimed)
+        compose_rm(taking)
+        compose_rm(PRUNE_REQUEST)
+        return {**status, "prune": {
+            "removed": [], "kept": 0,
+            "detail": "refused: no keep-set order this tick",
+        }}
     try:
-        ks = load_keep_set(work / KEEP_SET)
-    except Exception:  # noqa: BLE001 — prune still runs hello-only if keep-set is junk
-        ks = None
-    if ks is not None:
-        for pin in ks.pins:
-            keep_images.append(image_ref(
-                pin.template, pin.cli_version, tag=tag, house=house))
-    try:
+        running = docker_name_list(
+            ["docker", "ps", "-a", "--format", "{{.Image}}"])
+        local = docker_name_list(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
+        if running is None or local is None:
+            raise RuntimeError("docker listing failed — prune refused")
         gone = plan_prune(
             keep_images=keep_images,
-            running_images=docker_name_list(
-                ["docker", "ps", "-a", "--format", "{{.Image}}"]),
-            local_images=docker_name_list(
-                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"]),
+            running_images=running,
+            local_images=local,
         )
         run_prune(gone, run=subprocess.run)
+        local = docker_name_list(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
+        dropped = drop_receipts_missing_images(
+            work / RECEIPTS, local_images=local, tag=tag, house=house)
+        for stem in dropped:
+            try:
+                compose_rm(f"{RECEIPTS}/{stem}.json")
+            except Exception:  # noqa: BLE001 — projection rewrite is best-effort
+                pass
         status = {**status, "prune": {
             "removed": list(gone),
             "kept": len(keep_images),
             "detail": "" if gone else "nothing to prune",
+            "receipts_dropped": list(dropped),
         }}
     except Exception as exc:  # noqa: BLE001 — prune failure is operator-visible, not a baker crash
         status = {**status, "prune": {
             "removed": [], "kept": 0, "detail": str(exc),
         }}
-    try:
-        compose_rm(PRUNE_REQUEST)
-    except Exception:  # noqa: BLE001 — next tick will see a stale request; status already records the result
-        pass
-    local = work / PRUNE_REQUEST
-    if local.is_file():
-        local.unlink()
+    release_inbox(claimed)
+    compose_rm(taking)
+    compose_rm(PRUNE_REQUEST)
+    tid, parent_id = trace_id, parent
+    if not tid:
+        tid, parent_id = new_ids()
+        parent_id = ""
+    _, prune_sid = new_ids()
+    err = (status.get("prune") or {}).get("detail")
+    emit_event(work, span_record(
+        name="baker.prune",
+        trace_id=tid,
+        span_id=prune_sid,
+        parent=parent_id,
+        start_ns=prune_t0,
+        end_ns=time.time_ns(),
+        status="error" if err else "ok",
+        removed=len((status.get("prune") or {}).get("removed") or []),
+    ))
     return status
 
 
@@ -189,10 +244,15 @@ def _dockerfile_text() -> str:
 
 
 def emit_event(work: Path, record: dict) -> dict:
-    rec = append_baker_event(work / BAKER_LOG, record)
-    line = json.dumps(rec, separators=(",", ":")) + "\n"
+    rec = dict(record)
+    rec.setdefault("ts", datetime.now(timezone.utc).isoformat())
+    box = work / OUTBOX
+    box.mkdir(parents=True, exist_ok=True)
+    name = f"{time.time_ns()}-{rec.get('event', 'evt')}.jsonl"
+    dest = box / name
+    dest.write_text(json.dumps(rec, separators=(",", ":")) + "\n")
     try:
-        compose_append(BAKER_LOG, line)
+        compose_write(f"{OUTBOX}/{name}", dest.read_text())
     except RuntimeError:
         pass
     return rec
@@ -273,10 +333,13 @@ _IDLE = frozenset({"ready", "virgin"})
 
 def skip_reconcile(*, state: str | None, trees: float | None, keep: float | None,
                    last_trees: float | None, last_keep: float | None) -> bool:
-    """Unknown mtimes (None) force a full tick — never compare 0==0."""
+    """No inbox (keep is None) is idle — nothing to honor. Unknown *tree*
+    mtimes still force a tick. Never compare 0==0."""
     if state not in _IDLE:
         return False
-    if None in (trees, keep, last_trees, last_keep):
+    if keep is None:
+        return True
+    if None in (trees, last_trees, last_keep):
         return False
     return trees == last_trees and keep == last_keep
 
@@ -297,13 +360,15 @@ def keep_set_mtime() -> float | None:
 
 def once(*, work: Path, tag: str, house: dict[str, str],
          digest: str) -> dict:
+    compose_claim(KEEP_SET)
+    taking_name = KEEP_SET + TAKING_SUFFIX
+    text = compose_read(taking_name)
     keep_path = work / KEEP_SET
-    text = compose_read(KEEP_SET)
-    if text is None:
-        if keep_path.exists():
-            keep_path.unlink()
-    else:
+    if keep_path.exists():
+        keep_path.unlink()
+    if text is not None:
         keep_path.write_text(text)
+    claimed = claim_inbox(keep_path)
     receipts = work / RECEIPTS
     receipts.mkdir(parents=True, exist_ok=True)
     for name in compose_ls(RECEIPTS):
@@ -313,27 +378,87 @@ def once(*, work: Path, tag: str, house: dict[str, str],
         if body is not None:
             (receipts / name).write_text(body)
 
-    def baker(job):
+    images = docker_name_list(
+        ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
+    dropped = drop_receipts_missing_images(
+        receipts, local_images=images, tag=tag, house=house)
+    listed = list(images) if images is not None else []
+    for stem in dropped:
         try:
-            run_bake(
-                job, tag=tag, house=house, receipts_dir=receipts,
-                digest=digest, repo=REPO, run=beating_run(work))
-        finally:
-            # A receipt is the bake verb's result even when the gate failed.
-            local = receipt_path(receipts, job)
-            if local.is_file():
-                compose_write(f"{RECEIPTS}/{local.name}", local.read_text())
+            compose_rm(f"{RECEIPTS}/{stem}.json")
+        except Exception:  # noqa: BLE001 — gone-image receipt must not block the tick
+            pass
 
-    status = reconcile(
-        keep_set_path=keep_path,
-        receipts_dir=receipts,
-        status_path=work / STATUS,
-        digest=digest,
-        baker=baker,
-        tag=tag,
-        house=house,
-    )
-    status = apply_prune(work=work, tag=tag, house=house, status=status)
+    keep_set = None
+    trace_id, root_id = "", ""
+    t0 = time.time_ns()
+    if claimed is None:
+        has_dev = any(str(ref).startswith("devcake/dev-") for ref in listed)
+        status = write_status(work / STATUS, {
+            "state": "ready" if has_dev else "virgin",
+            "digest": digest,
+            "jobs": [],
+            "detail": "" if has_dev else "no keep-set — control plane + hello only",
+        })
+    else:
+        try:
+            keep_set = load_keep_set(claimed)
+        except InvalidKeepSet:
+            keep_set = None
+        trace_id, root_id = new_ids()
+
+        def baker(job):
+            c0 = time.time_ns()
+            _, compile_sid = new_ids()
+            rec: dict = {}
+            try:
+                run_bake(
+                    job, tag=tag, house=house, receipts_dir=receipts,
+                    digest=digest, repo=REPO, run=beating_run(work))
+            finally:
+                local = receipt_path(receipts, job)
+                if local.is_file():
+                    compose_write(f"{RECEIPTS}/{local.name}", local.read_text())
+                    try:
+                        loaded = json.loads(local.read_text())
+                    except (OSError, json.JSONDecodeError):
+                        loaded = {}
+                    if isinstance(loaded, dict):
+                        rec = loaded
+                c1 = time.time_ns()
+                emit_event(work, span_record(
+                    name="baker.compile",
+                    trace_id=trace_id, span_id=compile_sid, parent=root_id,
+                    start_ns=c0, end_ns=c1,
+                    status="error" if not rec.get("ok") else "ok",
+                    template=job.template, cli_version=job.cli_version))
+                for kid in probe_spans_from_receipt(
+                        rec, trace_id=trace_id, parent=compile_sid,
+                        start_ns=c0, end_ns=c1):
+                    emit_event(work, kid)
+
+        status = reconcile(
+            keep_set_path=claimed,
+            receipts_dir=receipts,
+            status_path=work / STATUS,
+            digest=digest,
+            baker=baker,
+            tag=tag,
+            house=house,
+            local_images=images,
+        )
+        release_inbox(claimed)
+        compose_rm(taking_name)
+        compose_rm(KEEP_SET)
+        emit_event(work, span_record(
+            name="baker.reconcile",
+            trace_id=trace_id, span_id=root_id, parent="",
+            start_ns=t0, end_ns=time.time_ns(),
+            status="error" if status.get("state") == "error" else "ok",
+        ))
+    status = apply_prune(
+        work=work, tag=tag, house=house, status=status, keep_set=keep_set,
+        trace_id=trace_id, parent=root_id)
     try:
         compose_write(STATUS, json.dumps(status, indent=2) + "\n")
     except RuntimeError as exc:

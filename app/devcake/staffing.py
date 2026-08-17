@@ -30,14 +30,21 @@ class HarnessNotStaffed(ValueError):
 
 
 def require_staffed(dev_type, *, digest: str | None = None,
-                    store) -> None:
-    """Raise HarnessNotStaffed unless a matching ok receipt exists.
-
-    Experimental templates are not gated (no v1 probe matrix).
-    """
+                    store, baker_alive: bool | None = None) -> None:
+    """Raise HarnessNotStaffed unless a matching ok receipt exists."""
+    if baker_alive is None:
+        from .bake_status import baker_liveness, read_bake_status
+        status = read_bake_status()
+        if status.get("heartbeat_at"):
+            baker_alive = bool(baker_liveness(status).get("alive"))
+    if baker_alive is False:
+        raise HarnessNotStaffed(
+            "host baker is not running — cannot vouch for images",
+            kind="baker")
     template = dev_type.harness_template
     if template not in LAUNCH_SUPPORTED:
-        return
+        raise HarnessNotStaffed(
+            f"no receipt for {template}", kind="missing")
     digest = SENTINEL_DIGEST if digest is None else digest
     if digest == SENTINEL_DIGEST:
         raise HarnessNotStaffed(
@@ -134,11 +141,6 @@ def _pin_entry(template: str, version: str, digest: str, store,
         "cli_version": version,
         "gated": template in LAUNCH_SUPPORTED,
     }
-    if template not in LAUNCH_SUPPORTED:
-        entry["ok"] = None
-        entry["state"] = "experimental"
-        entry["reason"] = "experimental — house pin only"
-        return entry
     job_state = _job_state(template, version, bake_status)
     fake = SimpleNamespace(harness_template=template, cli_version=version)
     try:

@@ -33,11 +33,18 @@ def run_probe(
             reports[spec.name] = run_row(spec)
         except Exception as exc:  # noqa: BLE001 — row error, not a skip
             reports[spec.name] = {"error": f"{type(exc).__name__}: {exc}"}
+    hits: list = []
+    try:
+        from .live import journal_hits as _journal_hits
+        hits = list(_journal_hits())
+    except ImportError:
+        hits = []
     rec = compile_receipt(
         digest=digest,
         template=template,
         cli_version=cli_version,
         reports=reports,
+        journal_hits=hits,
     )
     dest = receipt_path(out_dir, template, cli_version)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +65,8 @@ def main(argv: list[str] | None = None) -> int:
         template=args.template,
         cli_version=args.cli_version,
         out_dir=args.out,
-        run_row=lambda spec: run_live_row(args.template, spec),
+        run_row=lambda spec: run_live_row(
+            args.template, spec, cli_version=args.cli_version),
     )
     print(json.dumps({"ok": rec["ok"], "path": str(
         receipt_path(args.out, args.template, args.cli_version))}))

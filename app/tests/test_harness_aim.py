@@ -225,10 +225,23 @@ def test_stub_lane_uses_the_cli_url_shape():
 def test_aim_module_is_the_backend_recipe_chokepoint():
     """Recipes live in aim.py — one function per template, no secret_env-only path."""
     aim = _load_aim()
-    # Public seam: aim(template, url, api_key=...) for every known template.
     for template in (
         "claude-code", "codex", "grok-build", "pi", "opencode", "qwen-code",
     ):
         got = aim.aim(template, "", api_key="k")
         assert got.env == {}
         assert got.files == ()
+
+
+def test_probe_live_has_no_per_template_aim_ladder():
+    """The adaptor is the chokepoint — live.py must not keep the if-ladder."""
+    candidates = [
+        Path(__file__).resolve().parents[2] / "scripts" / "harness_probe" / "live.py",
+        Path("/srv/repo-scripts/harness_probe/live.py"),
+    ]
+    path = next((p for p in candidates if p.is_file()), None)
+    assert path is not None
+    text = path.read_text()
+    assert "from devcake_dev.harness.aim import aim" in text or "aim(" in text
+    assert "GROK_MODELS_BASE_URL" not in text
+    assert "model_providers.stub.base_url" not in text

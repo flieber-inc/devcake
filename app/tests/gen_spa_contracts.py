@@ -42,6 +42,7 @@ _PMO_CARD_FIELDS = ("team_key", "api_base", "repos", "reference_repos",
                     "managed")
 _REPO_CARD_FIELDS = ("forge", "api_base", "default_branch", "auto_merge",
                      "auto_resolve_merge_conflicts",
+                     "merge_settle_minutes",
                      "merge_retry_window_minutes")
 
 

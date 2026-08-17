@@ -122,6 +122,8 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 
 Adapter class imports are lazy inside these factories, so importing the registry never drags in the httpx-heavy adapter modules. Composition callers (`api/services.build_services`, `domain/forge_runtime.rebuild`) receive factories — they never construct vendor classes directly.
 
+SPA cold-start forge ids ride the same pinned mirror as PMO metadata (`admin/spa/src/lib/registry_fallback.json` ↔ `GET /connections/registry`; pin: `test_spa_registry_fallback.py`, ADR-0034).
+
 `RepoInstance` (`config.py`, schema v4): identity + URL/forge/branch fields in config; **tokens are GUI-stored** (`token` / `token_ro` / `reviewer_token` read-throughs — ADR-0011). The `forge` field is **registry-validated** — an unknown forge id is rejected at config load.
 
 - `api_base` (default `None`): explicit API endpoint override — this is what unlocks **GitHub Enterprise** (`https://ghe.corp/api/v3`).

@@ -425,6 +425,10 @@ def test_registry_payload_carries_operator_notes():
     assert "Premium" in by_id["gitlab_issues"]["operator_note"]
     assert by_id["gitlab_issues"]["relations_supported"] is False
     assert by_id["linear"]["operator_note"] == ""
+    assert by_id["github_issues"]["experimental"] is True
+    assert by_id["gitlab_issues"]["experimental"] is True
+    assert by_id["linear"]["experimental"] is False
+    assert by_id["gitea_issues"]["experimental"] is False
 
 
 def test_registry_marks_github_and_gitlab_issues_experimental():

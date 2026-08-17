@@ -60,10 +60,12 @@ instance, eventually — without touching the core.
    GitHub/GitLab Issues are experimental; Linear + Gitea Issues are not).
    Config `system`/`forge` fields are open strings validated against the
    registry (an unknown value 422s exactly like the old `Literal`s). A config
-   PUT calls `reload_connections()`: both adapters rebuild, and managed
-   labels are re-ensured for the (possibly new) team.
-   `GET /api/v1/connections/registry` feeds the admin SPA, so adding an
-   adapter never edits the UI.
+   PUT calls `reload_connections()`: both adapters rebuild, and managed labels
+   are re-ensured for the (possibly new) team. `GET /api/v1/connections/registry`
+   feeds the admin SPA at runtime. The SPA cold-start FALLBACK
+   (`admin/spa/src/lib/registry_fallback.json`) is a **pinned mirror** of that
+   payload (ADR-0034) — not a second authority; `test_spa_registry_fallback.py`
+   fails on drift.
 
 4. **`ForgeDescriptor` owns the dev-side dialect.** Everything forge-specific
    that is not an API call — PR/MR CLI instructions, clone auth user, git

@@ -1,0 +1,78 @@
+{
+  "pmo_systems": [
+    {
+      "id": "linear",
+      "display_name": "Linear",
+      "needs_api_base": false,
+      "team_key_label": "Team key",
+      "team_key_help": "The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.",
+      "api_base_help": "",
+      "supports_priority": true,
+      "operator_note": "",
+      "attachments_supported": true,
+      "relations_supported": true,
+      "experimental": false
+    },
+    {
+      "id": "gitea_issues",
+      "display_name": "Gitea Issues",
+      "needs_api_base": true,
+      "team_key_label": "Issues repo",
+      "team_key_help": "owner/repo of the dedicated issues board this instance watches (e.g. devcake-pmo/missions). Not a per-mission work repo. Empty = instance stays idle.",
+      "api_base_help": "Gitea origin reachable from the app container. Bundled stack: http://gitea:3000 (browser UI is http://localhost:3300). External: https://gitea.example.com",
+      "supports_priority": false,
+      "operator_note": "",
+      "attachments_supported": true,
+      "relations_supported": true,
+      "experimental": false
+    },
+    {
+      "id": "github_issues",
+      "display_name": "GitHub Issues",
+      "needs_api_base": true,
+      "team_key_label": "Issues repo",
+      "team_key_help": "owner/repo of the dedicated issues board this instance watches (e.g. myorg/missions). Not a per-mission work repo. Empty = instance stays idle.",
+      "api_base_help": "GitHub API origin reachable from the app container. github.com: leave empty or https://api.github.com. GitHub Enterprise: https://ghe.example.com/api/v3",
+      "supports_priority": false,
+      "operator_note": "GitHub's public API cannot attach files to issues. Transcripts, plans, and other deliverables still land in the mission's activity repo; the ticket comment carries a short reference. This is a GitHub limitation, not a DevCake setting.",
+      "attachments_supported": false,
+      "relations_supported": true,
+      "experimental": true
+    },
+    {
+      "id": "gitlab_issues",
+      "display_name": "GitLab Issues",
+      "needs_api_base": true,
+      "team_key_label": "Issues repo",
+      "team_key_help": "path_with_namespace of the dedicated issues board (e.g. mygroup/missions). Not a per-mission work repo. Empty = instance stays idle.",
+      "api_base_help": "GitLab origin reachable from the app container. gitlab.com: https://gitlab.com. Self-hosted: https://gitlab.example.com",
+      "supports_priority": false,
+      "operator_note": "Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token — Free boards will not write decomposition traffic-control edges, and child missions will not block each other. File attachments work. This is a GitLab license limit, not a DevCake setting.",
+      "attachments_supported": true,
+      "relations_supported": false,
+      "experimental": true
+    }
+  ],
+  "forges": [
+    {
+      "id": "github",
+      "display_name": "GitHub"
+    },
+    {
+      "id": "gitlab",
+      "display_name": "GitLab"
+    },
+    {
+      "id": "gitea",
+      "display_name": "Gitea"
+    }
+  ],
+  "secret_shape_prefixes": [
+    "ghp_",
+    "github_pat_",
+    "glpat-",
+    "lin_api_",
+    "lin_oauth_"
+  ],
+  "managed_labels_expected": 11
+}

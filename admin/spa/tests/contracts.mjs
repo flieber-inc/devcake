@@ -58,6 +58,30 @@ check("repo card scaffold equals the server-model defaults", () => {
   assert.deepEqual(rest, contracts.repo_card_defaults);
 });
 
+// Adapter registry FALLBACK is a pinned mirror of GET /connections/registry
+// (ADR-0034 / CAKE-23). Pytest owns the Python↔JSON equality; this side
+// guards the SPA import path so a reintroduced inline second table is red.
+check("registry.js cold-start FALLBACK is the pinned JSON mirror", () => {
+  const src = readFileSync(join(here, "../src/lib/registry.js"), "utf8");
+  assert.ok(
+    src.includes('from "./registry_fallback.json"'),
+    "registry.js must import registry_fallback.json (not an inline FALLBACK table)",
+  );
+  assert.ok(
+    !/\bconst\s+FALLBACK\s*=\s*\{/.test(src),
+    "registry.js must not reintroduce an inline FALLBACK object",
+  );
+  const fallback = JSON.parse(
+    readFileSync(join(here, "../src/lib/registry_fallback.json"), "utf8"));
+  assert.ok(Array.isArray(fallback.pmo_systems) && fallback.pmo_systems.length >= 4);
+  assert.ok(Array.isArray(fallback.forges) && fallback.forges.length >= 3);
+  for (const s of fallback.pmo_systems) {
+    assert.equal(typeof s.experimental, "boolean", `${s.id}.experimental`);
+    assert.equal(typeof s.supports_priority, "boolean", `${s.id}.supports_priority`);
+  }
+  assert.equal(typeof fallback.managed_labels_expected, "number");
+});
+
 // ── board derivation replay ─────────────────────────────────────────────────
 // Vector = [status_i, adoption_i, [labels], reason_i]; the mapping from the
 // Python derivation ROW to the board column/badge is test data HERE (small,

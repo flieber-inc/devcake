@@ -92,6 +92,11 @@ _MATRIX: dict[str, tuple[RowSpec, ...]] = {
 }
 
 
+def matrix_templates() -> frozenset[str]:
+    """Ids that have a probe matrix row set — must equal HOUSE_PINS keys."""
+    return frozenset(_MATRIX)
+
+
 def matrix_for(template: str) -> tuple[RowSpec, ...]:
     try:
         return _MATRIX[template]

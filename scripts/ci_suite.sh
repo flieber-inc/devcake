@@ -62,6 +62,8 @@ docker run --rm \
   -e "REDIS_PASSWORD=${REDIS_PASSWORD}" \
   -v "$(pwd)/images/common:/srv/images/common:ro" \
   -v "$(pwd)/images/hello:/srv/images/hello:ro" \
+  -v "$(pwd)/images:/srv/images-tree:ro" \
+  -v "$(pwd)/docker-compose.yml:/srv/docker-compose.yml:ro" \
   -v "$(pwd)/docker-bake.hcl:/srv/docker-bake.hcl:ro" \
   -v "$(pwd)/.github/workflows/docker-publish.yml:/srv/docker-publish.yml:ro" \
   -v "$(pwd)/dagu/dags:/srv/dagu-dags:ro" \

@@ -117,9 +117,10 @@ def test_matching_observation_passes_the_row_and_the_receipt():
 def test_every_house_pin_has_the_same_probe_rows():
     """Compile+probe grades the same five names for every registry template."""
     _load_probe()
-    from harness_probe.matrix import matrix_for
+    from harness_probe.matrix import matrix_for, matrix_templates
     from devcake.house_pins import HOUSE_PINS
 
+    assert matrix_templates() == frozenset(HOUSE_PINS)
     names = ("healthy", "http_401", "empty", "plan_mode", "resume")
     for template in HOUSE_PINS:
         got = tuple(spec.name for spec in matrix_for(template))
@@ -128,6 +129,21 @@ def test_every_house_pin_has_the_same_probe_rows():
         assert by["healthy"].required is True
         assert by["empty"].required is True
         assert by["plan_mode"].required is True
+
+
+def test_intentional_probe_skips_stay_visible_and_non_required():
+    """Matrix honesty: optional rows must not silently pass as required."""
+    _load_probe()
+    from harness_probe.matrix import matrix_for
+
+    claude = {s.name: s for s in matrix_for("claude-code")}
+    assert claude["http_401"].required is False
+    assert "claude_http_401" in claude["http_401"].skip_reason
+
+    for template in ("pi", "opencode", "qwen-code"):
+        resume = {s.name: s for s in matrix_for(template)}["resume"]
+        assert resume.required is False, template
+        assert "RESUME_SPECS" in resume.skip_reason, template
 
 
 def test_loader_refuses_the_working_tree_entrypoint(tmp_path):

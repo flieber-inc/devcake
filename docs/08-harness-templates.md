@@ -37,6 +37,17 @@ invent `devcake/dev-*` refs. `DevType.cli_version` accepts a stored
 semver on every template (empty = house ARG). Hello is not a harness
 template and is not gated.
 
+The probe matrix names the same five rows for every template (`healthy`,
+`http_401`, `empty`, `plan_mode`, `resume`). Required rows grade live against
+the stub; optional rows skip with a visible `skip_reason` — not a silent pass.
+Today those skips are: `claude-code` `http_401` (no committed
+`claude_http_401` capture; Claude has never been stub-driven in a failure
+scenario) and `pi` / `opencode` / `qwen-code` `resume` (not in `RESUME_SPECS`
+until a `<id>_resume_nudge` capture pair lands). Dev images remain **Bake-only**
+(`docker buildx bake` / group `images`); compose never builds `devcake/*`, and
+there is no per-harness Dockerfile under `images/<harness>/` — only the
+multi-target `images/Dockerfile`.
+
 Each template defines: base image, invocation pattern, plan-mode mapping, credential modes, MCP registration syntax, transcript source, and token-extraction strategy.
 
 > **Version-currency doctrine (founder, 2026-08-04).** DevCake follows the

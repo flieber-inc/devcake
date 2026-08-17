@@ -34,7 +34,8 @@ def test_every_registry_template_is_pinnable_and_not_experimental():
     from devcake.house_pins import HOUSE_PINS, LAUNCH_SUPPORTED
 
     assert LAUNCH_SUPPORTED == frozenset(HOUSE_PINS)
-    # Keep-set / baker allowlist and registry ids are one set — no drift.
+    # Launch identity is split (HARNESSES vs HOUSE_PINS) but the key sets must
+    # not drift — staffing/bake pin off HOUSE_PINS; image metadata is HARNESSES.
     assert set(HARNESSES) == set(HOUSE_PINS)
     payload = run_coro(list_harnesses())
     assert set(payload) == set(HARNESSES)

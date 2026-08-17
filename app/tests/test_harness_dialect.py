@@ -38,6 +38,19 @@ _PUBLISH_CANDIDATES = [
 ]
 PUBLISH = next((p for p in _PUBLISH_CANDIDATES if p.exists()), None)
 
+_COMPOSE_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "docker-compose.yml",
+    Path("/srv/docker-compose.yml"),
+]
+COMPOSE = next((p for p in _COMPOSE_CANDIDATES if p.is_file()), None)
+
+# Full images/ tree (not only common/hello binds) — Bake-only path.
+_IMAGES_TREE_CANDIDATES = [
+    Path(__file__).resolve().parents[2] / "images",
+    Path("/srv/images-tree"),
+]
+IMAGES_TREE = next((p for p in _IMAGES_TREE_CANDIDATES if p.is_dir()), None)
+
 
 def _dialects():
     assert COMMON is not None, (
@@ -116,4 +129,33 @@ def test_images_common_has_no_harness_identity_branch():
                 offenders.append(f"{rel}:{node.lineno} .get(harness, default)")
     assert not offenders, (
         "identity branching leaked out of dialects.py (docs/16 H1):\n  "
+        + "\n  ".join(offenders))
+
+
+def test_compose_never_builds_devcake_images():
+    """Bake-only: compose may pull/run third-party images, never build devcake/*."""
+    assert COMPOSE is not None, (
+        "docker-compose.yml missing — bind it at /srv/docker-compose.yml")
+    text = COMPOSE.read_text()
+    # No compose `build:` key at all today; if one appears later it must not
+    # target a DevCake image (app / admin / dev-*). Hard fail on any build: —
+    # resurrecting compose-built DevCake images is the regression this guards.
+    assert re.search(r"(?m)^\s*build\s*:", text) is None, (
+        "docker-compose.yml must not build images — use docker buildx bake "
+        "(AGENTS.md / docs/13)")
+
+
+def test_no_per_harness_dockerfile_under_images():
+    """Single multi-target images/Dockerfile — no images/<harness>/Dockerfile."""
+    assert IMAGES_TREE is not None, (
+        "images/ tree missing — bind it at /srv/images-tree")
+    root_dockerfile = IMAGES_TREE / "Dockerfile"
+    assert root_dockerfile.is_file(), "images/Dockerfile is the only allowed Dockerfile"
+    offenders = sorted(
+        p.relative_to(IMAGES_TREE).as_posix()
+        for p in IMAGES_TREE.rglob("Dockerfile")
+        if p.resolve() != root_dockerfile.resolve()
+    )
+    assert not offenders, (
+        "per-harness Dockerfiles are forbidden (Bake multi-target only):\n  "
         + "\n  ".join(offenders))

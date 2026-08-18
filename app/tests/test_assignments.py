@@ -78,6 +78,32 @@ def test_schedule_surfaces_unassigned_mission_type(tmp_path):
     assert "unassigned" in cs.blocked_reasons["p1"]
 
 
+def test_schedule_skips_when_bound_notebook_breaker_is_latched(tmp_path):
+    """CAKE-60: passenger memory notebooks bind via instance/Dev Type
+    memory_repos. A latched notebook card must freeze those missions even
+    when the work repo's breaker is clear (docs/15 §1 DEV_FORGE_AUTH note)."""
+    mgr, dispatched = _mgr(
+        tmp_path, PMOInstance(name="eng", team_key="ENG",
+                              memory_repos=["nb"]))
+    mgr.forges.breakers["nb"] = "repository credential rejected in run-x"
+    run_coro(mgr.schedule([m("p1", "T-1")]))
+    assert dispatched == []
+
+    del mgr.forges.breakers["nb"]
+    run_coro(mgr.schedule([m("p1", "T-1")]))
+    assert dispatched == [("T-1", "ONBOARD", "judgment")]
+
+
+def test_schedule_skips_when_work_repo_breaker_is_latched(tmp_path):
+    """Control: work-repo latch still gates on mission.repo alone."""
+    mgr, dispatched = _mgr(
+        tmp_path, PMOInstance(name="eng", team_key="ENG",
+                              memory_repos=["nb"]))
+    mgr.forges.breakers["main"] = "repository credential rejected in run-y"
+    run_coro(mgr.schedule([m("p1", "T-1")]))
+    assert dispatched == []
+
+
 def test_dispatch_spec_env_uses_override_args_wholesale(tmp_path):
     """A REAL dispatch() on an overriding instance carries the OVERRIDE row's
     CLI args into the runspec — never the global row's (flags are harness-

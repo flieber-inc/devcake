@@ -180,6 +180,120 @@ def test_github_post_pr_comment_is_write_path_with_auth():
     run_coro(forge.post_pr_comment(3, "hello"))
 
 
+def test_github_post_pr_comment_redacts_secret_shapes():
+    """docs/06 §1: forge-bound PR comment bodies pass through security.redact."""
+    from devcake.security import MASK
+
+    bodies: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.read().decode())
+        return httpx.Response(201, json={"id": 1})
+
+    secret = "ghp_" + ("a" * 36)
+    forge = GitHubForge(
+        "https://github.com/o/r", "gh-write",
+        transport=httpx.MockTransport(handler),
+    )
+    run_coro(forge.post_pr_comment(3, f"see {secret} in the report"))
+    assert len(bodies) == 1
+    assert secret not in bodies[0]
+    assert MASK in bodies[0]
+
+
+def test_gitlab_post_pr_comment_redacts_secret_shapes():
+    """docs/06 §1: same redact chokepoint on GitLab MR notes."""
+    from devcake.security import MASK
+
+    bodies: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.read().decode())
+        return httpx.Response(201, json={"id": 1})
+
+    secret = "glpat-" + ("b" * 20)
+    forge = GitLabForge(
+        "https://gitlab.com/group/proj", "gl-write",
+        transport=httpx.MockTransport(handler),
+    )
+    run_coro(forge.post_pr_comment(3, f"token {secret} leaked"))
+    assert len(bodies) == 1
+    assert secret not in bodies[0]
+    assert MASK in bodies[0]
+
+
+def test_github_approve_same_token_is_noop_when_self_approval_blocked():
+    """self_approval_blocked=True: write token pasted as reviewer is not a
+    distinct reviewer — return False without a wire call (docs/06 §4)."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"id": 1})
+
+    same = "gh-same-tok"
+    forge = GitHubForge(
+        "https://github.com/o/r", same, same,
+        transport=httpx.MockTransport(handler),
+    )
+    assert run_coro(forge.approve(8)) is False
+    assert seen == []
+
+
+def test_gitea_approve_same_token_is_noop_when_self_approval_blocked():
+    """self_approval_blocked=True: same doctrine as GitHub — the pasted write
+    token is not a distinct reviewer; no wire call (docs/06 §4, §7a)."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"id": 1})
+
+    same = "gitea-same-tok"
+    forge = GiteaForge(
+        "http://gitea:3000/o/r", same, same,
+        transport=httpx.MockTransport(handler),
+    )
+    assert run_coro(forge.approve(8)) is False
+    assert seen == []
+
+
+def test_gitlab_approve_same_token_allowed_when_self_approval_not_blocked():
+    """self_approval_blocked=False: GitLab allows author approve by default —
+    same write/reviewer token still posts the approve call."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        assert request.headers.get("PRIVATE-TOKEN") == "gl-same"
+        return httpx.Response(201, json={"id": 1})
+
+    same = "gl-same"
+    forge = GitLabForge(
+        "https://gitlab.com/group/proj", same, same,
+        transport=httpx.MockTransport(handler),
+    )
+    assert run_coro(forge.approve(3)) is True
+    assert len(seen) == 1
+
+
+def test_approve_returns_false_without_reviewer_token():
+    """Port contract: approve() is False when no reviewer token is configured."""
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"approve must not hit the wire: {request.url}")
+
+    gh = GitHubForge(
+        "https://github.com/o/r", "gh-write",
+        transport=httpx.MockTransport(boom),
+    )
+    gl = GitLabForge(
+        "https://gitlab.com/group/proj", "gl-write",
+        transport=httpx.MockTransport(boom),
+    )
+    assert run_coro(gh.approve(1)) is False
+    assert run_coro(gl.approve(1)) is False
+
+
 def test_github_empty_token_does_not_send_illegal_bearer():
     """ADR-0011 class: empty token must not build Authorization: Bearer <empty>.
     Fail closed before send; health_probe maps the error to ok=False."""

@@ -137,7 +137,8 @@ GitHub and Gitea forbid approving a PR with the account that opened it (`self_ap
 
 1. **Reviewer token (recommended for formal forge approval under branch protection)** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`. App-only — never injected into a Dev. Not the same as staffing a different Dev Type for the REVIEW stage.
 2. **Without it** — `approve()` returns `False` (no error): the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
-3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
+3. **Same write token pasted as reviewer on a `self_approval_blocked` forge** — `approve()` returns `False` without a wire call (the paste is not a distinct reviewer). On GitLab (`self_approval_blocked=False`) the same token still posts the approve call.
+4. **Always, in every case** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
 
 ### Token posture (operator)
 
@@ -196,7 +197,7 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 - Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos) plus the provisioner method **`create_operator_repo`** for operator/"gitea (internal)" repo cards incl. memory notebooks (admin `POST …/internal-repos/create` → `internal_repos_service.create_internal_repo`; refuses `activity-*` names, never swept by Clear — not a Protocol method today). Isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped). Day-to-day PR ops use the ordinary `ForgePort` from `mission_repo_binding` → `make_gitea_adapter` on **org service tokens** (PR comment/merge); the per-mission write/read pair is Dev/runspec only.
 - Auth: Gitea personal/access tokens; machine users + scoped token pairs for per-mission isolation on the internal forge (ADR-0010; container isolation posture `14` §6 — Gitea admin password never enters the Dev env).
 - **Machine-user naming (measured, Gitea 1.27.1):** usernames are capped at 40 chars and reject **consecutive hyphens** — `_svc_user()` therefore rstrips hyphens off the truncated stem before appending the full-name hash. Provisioning also discriminates Gitea's overloaded **422**: `"already exists"` is tolerated (idempotent re-provision), anything else — notably `"invalid username"` — fails loud. Both were one bug: the ADR-0030 board's repo names truncated exactly onto a hyphen, the invalid user was silently never created, and every zero-repo board mission then gated on the collaborator PUT with `user does not exist` (founder report 2026-08-05).
-- Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True`, `pr_list_head_filter=False` (client-side head filter).
+- Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True` (enforced client-side like GitHub — a pasted write token returns `False` from `approve()` without a wire call, §4 item 3), `pr_list_head_filter=False` (client-side head filter).
 - **Merge 405:** Gitea's 405 is overloaded — `"Please try again later"` (async mergeability) is retried briefly inside `merge()`; `"Does not have enough approvals"` and already-merged paths are definitive (probe `merged` before reporting failure so redelivery is safe).
 - Contract battery: `scripts/contract_tests_forge.py` default / `DEVCAKE_CONTRACT_FORGE=gitea` lane (wired into `ci_suite.sh` / GHA when the stack+Gitea are up).
 
@@ -220,8 +221,9 @@ Two layers:
 | 10 | `mission_branch(instance, key)` single definition: `devcake/{INSTANCE}-{key}` prefix |
 | 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea) |
 | 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
+| 13 | `approve()`: False without reviewer; same write/reviewer token no-ops on `self_approval_blocked` forges and still posts on GitLab; `post_pr_comment` redacts known secret shapes on the wire (`test_forge_http.py`) |
 
-**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape and full URL assembly for GitHub, GitLab, and Gitea (incl. Gitea's `APPROVED` review event) so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` default/`DEVCAKE_CONTRACT_FORGE=gitea` lane (vendor drift).
+**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape, full URL assembly, PR-comment redaction, self-approval same-token honesty for GitHub/GitLab, and Gitea's `APPROVED` review event, so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` default/`DEVCAKE_CONTRACT_FORGE=gitea` lane (vendor drift); GitHub/GitLab live lanes stay operator-token-gated (`DEVCAKE_CONTRACT_FORGE` + `DEVCAKE_CONTRACT_REPO_URL` + adapter token envs) and are not the CI default.
 
 ## 9. Adding a forge (checklist)
 

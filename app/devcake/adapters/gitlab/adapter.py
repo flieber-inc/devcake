@@ -141,7 +141,13 @@ class GitLabForge:
                         json={"body": redact(markdown)})
 
     async def approve(self, pr_number: int) -> bool:
-        if not self.reviewer_token:
+        """Formal approval with the reviewer token; False when none configured.
+
+        self_approval_blocked=False (docs/06 §4/§7): GitLab allows an MR
+        author to approve by default, so a write token reused as reviewer
+        still posts the approve call.
+        """
+        if not (self.reviewer_token or "").strip():
             return False
         await self._req("POST", f"/merge_requests/{pr_number}/approve", reviewer=True)
         return True

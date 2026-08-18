@@ -128,8 +128,16 @@ class GitHubForge:
                         json={"body": redact(markdown)})
 
     async def approve(self, pr_number: int) -> bool:
-        """Formal approval with the reviewer token; False when none configured."""
-        if not self.reviewer_token:
+        """Formal approval with the reviewer token; False when none configured.
+
+        self_approval_blocked=True (docs/06 §4): the write token pasted as
+        reviewer is not a distinct reviewer account — return False without a
+        wire call rather than letting GitHub reject the self-approve.
+        """
+        rev = (self.reviewer_token or "").strip()
+        if not rev:
+            return False
+        if rev == (self.token or "").strip():
             return False
         await self._req("POST", f"/pulls/{pr_number}/reviews", reviewer=True,
                         json={"event": "APPROVE",

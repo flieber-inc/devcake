@@ -74,7 +74,13 @@ class StewardService:
         return None
 
     async def maybe_dispatch(self, missions: list[Mission]) -> None:
-        """The interval path, called once per poll cycle (never while paused)."""
+        """The interval path, called once per poll cycle (never while paused).
+
+        Self-guards intake pause (ADR-0034: the guard travels with the
+        path, not only the poll caller — same as maybe_dispatch_discovery).
+        """
+        if intake_blocks_dispatch(self.config, self.mgr.instance):
+            return
         rm = self.config.steward
         dt = self.dev_type()
         repo = self.mgr.steward_repo()
@@ -299,7 +305,22 @@ class StewardService:
 
     async def run_now(self) -> Run:
         """Manual trigger: works regardless of the periodic toggle and of the
-        degraded state — a human pressing the button IS the reset signal."""
+        degraded state — a human pressing the button IS the reset signal.
+
+        Intake pause still freezes this path (docs/03 §4b, docs/11): pause
+        means no NEW Dev runs (missions or steward), and "Run now" is not a
+        back door around the master or per-instance switch.
+        """
+        if intake_blocks_dispatch(self.config, self.mgr.instance):
+            # name which switch is on so the 422 is actionable
+            if self.config.intake_paused:
+                raise StewardUnconfigured(
+                    "intake is paused (global master) — unpause Mission "
+                    "intake in the sidebar before running the steward")
+            raise StewardUnconfigured(
+                f"intake is paused for PMO instance "
+                f"{self.mgr.instance.name!r} — unpause it on the PMO page "
+                f"before running the steward")
         dt = self.dev_type()
         if dt is None:
             raise StewardUnconfigured(

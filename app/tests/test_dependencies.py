@@ -21,6 +21,7 @@ class DepPMO:
         self.by_id = by_id or {}
         self.fail_ids = set(fail_ids)
         self.live_fetches = []
+        self.activity_exc = None
 
     def capabilities(self):
         from fakes import fake_pmo_capabilities
@@ -32,12 +33,26 @@ class DepPMO:
             raise RuntimeError("pmo unreachable")
         return self.by_id[ref.pmo_id]
 
+    async def get_activity(self, ref, full=False):
+        # Real dispatch reads activity for seq/attempt after the live gates.
+        # Tests that must exercise that path (or its failure) set activity_exc
+        # or rely on this empty feed default.
+        if self.activity_exc is not None:
+            raise self.activity_exc
+        from devcake.domain.model import Activity
+        m = self.by_id.get(ref.pmo_id)
+        return Activity(mission=m, entries=[])
+
 
 def make_mgr(tmp_path, pmo):
     from fakes import make_mission_manager
+    from devcake.config import PMOInstance
     mgr = make_mission_manager(
         tmp_path, pmo=pmo,
         forge=SimpleNamespace(descriptor=SimpleNamespace(pr_noun='pull request')),
+        # repos=["main"] matches FakeForgeRuntime's default instance name so
+        # real-dispatch tests (live re-check) resolve past the M10/M11 gate
+        instance=PMOInstance(name="linear", team_key="DEV", repos=["main"]),
         dev_types={
             "judgment": DevType(name="judgment", harness_template="claude-code"),
             "implementer": DevType(name="implementer", harness_template="grok-build"),
@@ -230,6 +245,27 @@ def test_dispatch_recheck_aborts_on_live_blocker(tmp_path):
     dt = mgr.dev_types["judgment"]
     run = run_coro(mgr.dispatch(live, MissionType.ONBOARD, dt))
     assert run is None                              # aborted before any side effect
+    # live re-check must surface WHY on the missions row (same shape as gate_map)
+    assert "T-1" in mgr.blocked_reasons["b2"]
+
+
+def test_dispatch_activity_failure_gates_one_mission(tmp_path):
+    """Audit A1 twin: pmo.get is already mission-gated; get_activity (seq /
+    attempt feed) must match — a feed failure gates THIS mission via
+    blocked_reasons and returns None, never raising into schedule/poll
+    (which would mark the whole instance poll_degraded)."""
+    from devcake.domain.model import MissionType
+    live = m("b2", "T-2")
+    pmo = DepPMO(by_id={"b2": live})
+    pmo.activity_exc = RuntimeError("feed unavailable")
+    mgr, _ = make_mgr(tmp_path, pmo)
+    del mgr.dispatch
+    dt = mgr.dev_types["judgment"]
+    run = run_coro(mgr.dispatch(live, MissionType.ONBOARD, dt))
+    assert run is None
+    assert "feed" in mgr.blocked_reasons["b2"].lower() or \
+        "activity" in mgr.blocked_reasons["b2"].lower() or \
+        "PMO" in mgr.blocked_reasons["b2"]
 
 
 # ── cross-instance blockers (ADR-0009 amendment): a native edge to a PEER

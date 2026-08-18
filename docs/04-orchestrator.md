@@ -33,8 +33,8 @@ A `PMOTransient` on one instance skips **only that instance's segment** for this
 - fail the opt-in adoption gate, or have no derivable type (rows 5–11 of the derivation table: terminal, conflict, `DEVCAKE-SKIP`, `DEVCAKE-FAILED`, in-progress-without-label, awaiting-merge, `DEVCAKE-NEEDS-HUMAN`);
 - have an active local Run in state `dispatched | running | finalizing` (in-flight guard — this is bookkeeping, not a lock: if `/data/state` is wiped, the reconciliation in §6 rebuilds it from the Dagu API before the first cycle);
 - were transitioned by *us* within the last poll cycle (**grace cycle**): the app keeps an **in-memory** set (`MissionManager._grace` / `_grace_next`, rotated each poll cycle) of pmo_ids it wrote to and treats those as busy for one cycle, absorbing the PMO's read-after-write staleness — not a re-read of `events.jsonl`;
-- have an **open blocker** (`adr/0007`): any Mission in `blocked_by` whose normalized status is not `done`/`canceled`. The check resolves blockers against the poll snapshot (terminal Missions included, so done blockers resolve); a blocker outside the snapshot resolves once per cycle (memoized) through the deployment-wide `BlockerLocator` — owner map, then same-system PEER instances (Linear only; ADR-0009 amendment), then the local adapter — so a native edge to a peer instance's mission gates identically to a local one; a blocker no path can read counts as open — fail-safe, self-healing next cycle. Cycle detection stays on the local instance graph (a cross-instance edge cannot close a local cycle). A blocker carrying `DEVCAKE-FAILED`/`DEVCAKE-SKIP` is still open: the prerequisite will not complete autonomously, so dependents stay parked and the reason string names the guard label (surfaced in `/api/v1/missions` — this makes blocked-on-a-dead-blocker deadlocks visible). The gate is re-verified live at dispatch (§3.1). Because it honors *any* blocked-by relation, humans steer ordering by adding/removing relations in the PMO UI — no DevCake-specific knowledge needed. Treating a `canceled` blocker as satisfied stays sound under decomposition because inherited edges are **fail-closed**: the finalizer replicates a decomposed original's edges onto its children strictly before canceling it, and any edge failure keeps the original open and gating (`03-mission-lifecycle.md` §1.3, `adr/0012`) — dependents hand over from the original to the still-open children with no released window.
-- are a **decomposition child whose issue parent is still open** (the family gate, `adr/0012`): the parent's cancel is finalization's *last* step, so an open issue-parent means the child's inherited and sibling edges may not all exist yet (or the parent is parked for a human) — the child waits, with the reason naming the parent. Parent trust is the same `markers.decomposition_parent_ref` chokepoint as `family_of` (`DEVCAKE-CREATED` gates the marker; parent= resolves by pmo_id or key). Project parents (which stay open by design under `DEVCAKE-TRACKING`) and parents missing from the snapshot are exempt.
+- have an **open blocker** (`adr/0007`): any Mission in `blocked_by` whose normalized status is not `done`/`canceled`. The check resolves blockers against the poll snapshot (terminal Missions included, so done blockers resolve); a blocker outside the snapshot resolves once per cycle (memoized) through the deployment-wide `BlockerLocator` — owner map, then same-system PEER instances (Linear only; ADR-0009 amendment), then the local adapter — so a native edge to a peer instance's mission gates identically to a local one; a blocker no path can read counts as open — fail-safe, self-healing next cycle. Cycle detection stays on the local instance graph (a cross-instance edge cannot close a local cycle). A blocker carrying `DEVCAKE-FAILED`/`DEVCAKE-SKIP` is still open: the prerequisite will not complete autonomously, so dependents stay parked and the reason string names the guard label (surfaced in `/api/v1/missions` — this makes blocked-on-a-dead-blocker deadlocks visible). **Blocked-by is re-verified live at dispatch** (§3.1); a live reopen surfaces the same `blocked by …` reason on the missions row. Because it honors *any* blocked-by relation, humans steer ordering by adding/removing relations in the PMO UI — no DevCake-specific knowledge needed. Treating a `canceled` blocker as satisfied stays sound under decomposition because inherited edges are **fail-closed**: the finalizer replicates a decomposed original's edges onto its children strictly before canceling it, and any edge failure keeps the original open and gating (`03-mission-lifecycle.md` §1.3, `adr/0012`) — dependents hand over from the original to the still-open children with no released window.
+- are a **decomposition child whose issue parent is still open** (the family gate, `adr/0012`): the parent's cancel is finalization's *last* step, so an open issue-parent means the child's inherited and sibling edges may not all exist yet (or the parent is parked for a human) — the child waits, with the reason naming the parent. Parent trust is the same `markers.decomposition_parent_ref` chokepoint as `family_of` (`DEVCAKE-CREATED` gates the marker; parent= resolves by pmo_id or key). Project parents (which stay open by design under `DEVCAKE-TRACKING`) and parents missing from the snapshot are exempt. Enforced at `schedule` from the poll snapshot (not re-fetched at dispatch — see §3 Properties).
 
 **The gate is a poll artifact (`MissionManager.gate_map`), not a scheduling side effect:** the poll loop computes it EVERY cycle — paused or not — and both `schedule()` and the `/api/v1/missions` snapshot consume the same map. Pause freezes dispatch, never information: relations edited in Linear during a pause are reflected within one poll interval.
 
@@ -63,7 +63,7 @@ def schedule(candidates, config, dev_types, active_runs):
 Properties:
 
 - The effective ceiling is min(`global_max`, Σ per-type caps) — it falls out of the two checks; there is no separate rule.
-- Priority and labels used in the sort come from the poll snapshot, but are **re-verified live at dispatch** (§3.1) so a stale snapshot can never dispatch wrong work (INV-1).
+- Priority and labels used in the sort come from the poll snapshot, but type/repo/blockers are **re-verified live at dispatch** (§3.1) so a stale snapshot can never dispatch wrong work (INV-1). The **family gate** (ADR-0012, open issue-parent) is enforced at `schedule` from the poll snapshot — an issue-parent cannot flip from open to finalized mid-cycle without the finalize that already completed wiring, so a second live parent fetch is not required for correctness.
 
 ### 3.1 Dispatch (ordered, crash-safe)
 
@@ -71,12 +71,12 @@ Mission-specific fields (prompt, attempts, stage label, PMO refs) are built by t
 
 ```
 def launch(run, *, image):                         # RunBootstrap — all four flavors
+  if workspaces.volume_error:                         # (0) ADR-0025 fail-closed gate:
+      raise WorkspaceUnavailable(...)                 #     BEFORE the lock and any side
+      # effect — an unusable workspace base refuses cleanly; callers (dispatch,
+      # steward) catch this and surface a blocked_reason; NO attempt burns, NO
+      # poll_degraded (the AUD-001/002 fix — fail-closed for real)
   async with dispatch_lock:                        # clear-runs holds this for the full wipe
-    if workspaces.volume_error:                       # (0) ADR-0025 fail-closed gate:
-        raise WorkspaceUnavailable(...)               #     an unusable workspace base
-        # refuses BEFORE any side effect — callers (dispatch, steward) catch
-        # this and surface a blocked_reason; NO attempt burns, NO
-        # poll_degraded (the AUD-001/002 fix — fail-closed for real)
     password = messaging.create_run_user(run.run_id)  # MessagingPort (+ ACL SAVE, 09 §1a)
     run.auth_digest = sha256(password)                # never persist the raw ACL secret
     run.store_gen = store.wipe_generation             # clear-runs generation guard
@@ -97,6 +97,8 @@ def dispatch(mission, dev_type):                   # MissionManager — mission 
     live = pmo.get(mission.ref)                    # live re-read: INV-1, INV-3
     if derive_type(live) != mission.type: return   # world moved on; skip silently
     if open_blockers(live): return                 # blocked-by re-check, live (§2)
+    # PMO activity / live repo resolve failures gate THIS mission only (A1)
+
     run = Run(run_id=make_run_id(instance, mission.key, seq, mission.type),  # 02 §7 → {INSTANCE}-{key}-{seq}-{TYPE}-{suffix}
               state="dispatched",
               seq=derive_seq(live),                # 02-domain-model.md §8

@@ -586,6 +586,29 @@ def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
     assert "main" in mgr.forges.breakers and not mgr.breakers
 
 
+def test_notebook_clone_forge_auth_latches_notebook_card_not_work_repo(tmp_path):
+    """CAKE-60: strict memory-notebook DEV_FORGE_AUTH must latch the notebook
+    card. Latching run.repo_ref lets healthy work-repo probes clear the
+    breaker while DEV_FORGE_AUTH stays uncounted → infinite retry."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run.repo_ref = "main"
+    run.memory_mounts = [{"card": "nb", "binding": "board", "path": "memory/nb"}]
+    error = mgr.dev_failure_error(run, {
+        "exit_code": 13,
+        "error_class": "DEV_FORGE_AUTH",
+        "error_detail": (
+            "memory notebook nb clone failed: "
+            "remote returned 403: Authentication failed"),
+    })
+    assert error.startswith("DEV_FORGE_AUTH:")
+    assert run.error_class == "DEV_FORGE_AUTH"
+    assert "nb" in mgr.forges.breakers
+    assert "main" not in mgr.forges.breakers
+    assert not mgr.breakers
+
+
 def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):
     """A bare '403' in stderr (rate limit, URL fragment) must not halt all
     dispatch — only the Dev's structured DEV_FORGE_AUTH class may latch."""

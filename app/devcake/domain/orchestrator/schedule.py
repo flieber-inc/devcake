@@ -8,6 +8,7 @@ from ...config import assignment_for
 from .. import backend_health
 from ..model import (LABEL_FAILED, LABEL_SKIP, Mission,
                      MissionType, PRIORITY_RANK, derive, find_cycles)
+from ..repo_sourcing import memory_mount_names
 from .markers import DISPATCHABLE_TYPES, decomposition_parent_ref
 
 log = logging.getLogger("devcake.missions")
@@ -116,6 +117,14 @@ async def schedule(mgr, missions: list[Mission],
                 f"{d.mission_type.value} is assigned to Dev Type "
                 f"{assignment.dev_type!r}, which does not exist — fix the "
                 f"assignment (global or this instance's override)")
+            continue
+        # ADR-0035 / CAKE-60: passenger memory notebooks bind via
+        # instance/Dev Type memory_repos. A latched notebook card must freeze
+        # every mission that binds it (same silent skip as work-repo latch).
+        if any(name in mgr.forges.breakers
+               for name in memory_mount_names(
+                   instance=mgr.instance, dev_type=dev_type,
+                   repo_ref=mission.repo)):
             continue
         if dev_type.name in mgr.breakers:
             continue  # auth breaker tripped (docs/15 §4)

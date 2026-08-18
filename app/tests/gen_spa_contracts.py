@@ -1,8 +1,7 @@
 """Generator for docs/contracts/spa-contracts.json (ADR-0034; 2026-08-12
-audit: the SPA hand-mirrors backend contracts — board derivation
-precedence, the instance-name rule, the card scaffolds, and the
-connections-registry offline FALLBACK — with "Mirrors X" comments and no
-cross-language test until pinned).
+audit: the SPA hand-mirrors three backend contracts — the board derivation
+precedence, the instance-name rule, the card scaffolds — with "Mirrors X"
+comments and no cross-language test).
 
 The committed JSON is generated FROM THE PYTHON SOURCE OF TRUTH here and
 pinned by both suites: test_spa_contracts.py asserts the file matches a
@@ -20,7 +19,6 @@ from __future__ import annotations
 import itertools
 import json
 
-from devcake.adapters.registry import connections_registry_payload
 from devcake.config import (HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE,
                             PMOInstance, RepoInstance)
 from devcake.domain.model import Mission, derive
@@ -84,9 +82,6 @@ def build() -> dict:
         "repo_card_defaults": {
             k: RepoInstance(name="x", url="https://h/o/r").model_dump()[k]
             for k in _REPO_CARD_FIELDS},
-        # Offline SPA FALLBACK (admin/spa/src/lib/registry.js) must match
-        # this object field-for-field — contracts.mjs asserts equality.
-        "connections_registry": connections_registry_payload(),
         "board": {
             "statuses": list(_STATUSES),
             "adoption_modes": list(_ADOPTION),

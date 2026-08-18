@@ -39,10 +39,12 @@ def test_vector_sweep_is_the_full_powerset():
     assert len(data["board"]["reasons"]) >= 8
 
 
-def test_connections_registry_pin_names_priority_and_eleven_labels():
-    """Independent domain rules for the SPA registry FALLBACK pin — not a
-    re-read of the same generator fields under a different name."""
-    data = build()["connections_registry"]
+def test_connections_registry_payload_domain_rules():
+    """Independent domain rules for the registry projection (the single
+    source behind GET /connections/registry and the SPA FALLBACK pin) — not
+    a re-read of the same fields under a different name."""
+    from devcake.adapters.registry import connections_registry_payload
+    data = connections_registry_payload()
     # ALL_LABELS includes DEVCAKE-DISCOVERY (sweep gate); count is 11.
     assert data["managed_labels_expected"] == 11
     by_id = {s["id"]: s for s in data["pmo_systems"]}

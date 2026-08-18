@@ -625,6 +625,44 @@ def test_recon_restamps_store_gen_for_adopted_and_finalizing(tmp_path):
     assert posts == []
 
 
+def test_finalize_drops_prior_process_store_gen_after_clear_without_restamp(tmp_path):
+    """CAKE-28: even when reconcile never restamped a held-in-memory Run
+    (store_gen from a prior process), the first clear in THIS process must
+    still make finalize a no-op — gen < wipe was fail-open for gen > wipe."""
+    from devcake.domain.orchestrator import finalize as fin_mod
+
+    store = RunStore(tmp_path / "runs")
+    mgr = RunManager(store, FakeMessaging(), FakeExecutor())
+    posts: list[str] = []
+    # Prior process stamp; never restamped into this process.
+    run = _make_run(store, state="running", run_id="PRIOR-GEN",
+                    mission_pmo_id="pmo-1", store_gen=3)
+    store.clear()
+    assert store.wipe_generation == 1
+    assert store.get(run.run_id) is None
+
+    class M:
+        pass
+
+    m = M()
+    m.runs = mgr
+    m.messaging = mgr.messaging
+
+    async def _feed(pmo_id, kind, md, externalize=True):
+        posts.append("feed")
+
+    m._feed = _feed
+    # Hold the pre-clear in-memory object with the prior-process stamp.
+    assert run.store_gen == 3
+    run_coro(fin_mod.finalize(m, run, {
+        "result": {"outcome": "executed"},
+        "transcript_md": "must not land",
+        "token_report": {"total_tokens": 1},
+    }))
+    assert store.get(run.run_id) is None
+    assert posts == []
+
+
 def test_recon_enriches_exit14_mcp_setup(tmp_path):
     """Same enrichment for the other classified pre-harness exit: a dead run
     whose step errors carry exit status 14 (MCP setup failed while the app

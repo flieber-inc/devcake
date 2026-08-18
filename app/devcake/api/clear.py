@@ -145,17 +145,30 @@ async def stop_and_drain(store: RunStore, executor: DaguExecutor,
 
 def clear_local_state(store: RunStore,
                       runlog: RunLogStore | None = None) -> dict[str, int]:
-    """Wipe run files, run logs, and the audit log. Config/secrets untouched."""
+    """Wipe run files, run logs, the audit log, and the profiles breadcrumb.
+
+    Config/secrets untouched. ``profiles.json`` is the ADR-0013 last-applied
+    advisory sidecar (docs/10 layout) — clear-runs is the documented wipe.
+    """
     runs_deleted = store.clear()
     runlogs_deleted = runlog.clear() if runlog is not None else 0
     audit_cleared = 0
     if AUDIT_PATH.exists():
         AUDIT_PATH.write_text("")
         audit_cleared = 1
+    profiles_cleared = 0
+    profiles_path = STATE_DIR / "profiles.json"
+    if profiles_path.exists():
+        try:
+            profiles_path.unlink()
+            profiles_cleared = 1
+        except OSError:
+            log.warning("clear: could not remove %s", profiles_path)
     return {
         "runs_deleted": runs_deleted,
         "runlogs_deleted": runlogs_deleted,
         "audit_cleared": audit_cleared,
+        "profiles_cleared": profiles_cleared,
     }
 
 

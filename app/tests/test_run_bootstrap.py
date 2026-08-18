@@ -30,9 +30,14 @@ class InMemoryStore:
         self._runs: dict[str, Run] = {}
         self.wipe_generation: int = 0
 
-    def save(self, run: Run) -> None:
+    def is_current_generation(self, run: Run) -> bool:
         gen = int(getattr(run, "store_gen", 0) or 0)
-        if gen < self.wipe_generation:
+        if self.wipe_generation <= 0:
+            return True
+        return gen == self.wipe_generation
+
+    def save(self, run: Run) -> None:
+        if not self.is_current_generation(run):
             return
         self._runs[run.run_id] = run.model_copy(deep=True)
 

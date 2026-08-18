@@ -54,12 +54,45 @@ def test_runstore_save_drops_pre_wipe_runs(tmp_path: Path):
     assert store.get(run.run_id) is not None
 
 
+def test_runstore_save_drops_prior_process_store_gen_after_clear(tmp_path: Path):
+    """CAKE-28: wipe_generation resets to 0 on process restart, but run files
+    (and in-memory objects) can still carry store_gen from a prior process
+    (e.g. 2 after two clears). The old gen < wipe_generation fence treated
+    store_gen=2 after this process's first clear (wipe 0→1) as CURRENT —
+    2 < 1 is false — so save resurrected the record. After any clear in
+    THIS process, only an exact stamp match may persist."""
+    store = RunStore(root=tmp_path / "runs")
+    assert store.wipe_generation == 0
+    # Prior process left a high stamp; this process has never cleared.
+    run = Run(
+        run_id="T-7-1-ONBOARD-PRIORG",
+        mission_key="T-7",
+        mission_type="ONBOARD",
+        dev_type="senior-dev",
+        seq=1,
+        store_gen=2,
+    )
+    store.save(run)
+    assert store.get(run.run_id) is not None
+    store.clear()
+    assert store.wipe_generation == 1
+    assert store.get(run.run_id) is None
+    run.state = "finished"
+    store.save(run)                                   # prior-process stamp
+    assert store.get(run.run_id) is None              # must not resurrect
+    run.store_gen = store.wipe_generation
+    store.save(run)
+    assert store.get(run.run_id) is not None
+
+
 def test_clear_local_state_preserves_nothing_but_wipes_audit(tmp_path: Path, monkeypatch):
     data = tmp_path / "data"
     runs = data / "state" / "runs"
     runs.mkdir(parents=True)
     audit = data / "state" / "events.jsonl"
     audit.write_text('{"ts":"x","pmo_id":"p","action":"devcake_failed"}\n')
+    profiles = data / "state" / "profiles.json"
+    profiles.write_text('{"last_applied":{"name":"prod","at":"2026-01-01T00:00:00Z"}}')
     (data / "config").mkdir()
     (data / "config" / "config.yaml").write_text("schema_version: 2\n")
     (data / "secrets").mkdir()
@@ -80,8 +113,10 @@ def test_clear_local_state_preserves_nothing_but_wipes_audit(tmp_path: Path, mon
     result = clear_local_state(store)
     assert result["runs_deleted"] == 1
     assert result["audit_cleared"] == 1
+    assert result["profiles_cleared"] == 1
     assert store.all() == []
     assert audit.read_text() == ""
+    assert not profiles.exists()                      # ADR-0013 breadcrumb
     assert (data / "config" / "config.yaml").exists()
     assert (data / "secrets" / "keep.me").read_text() == "secret"
 

@@ -191,11 +191,19 @@ class RunManager:
         )
 
     def _pre_wipe(self, run: Run) -> bool:
-        """True when this run was stamped before the last clear-runs wipe
-        (docs/10 store_gen). In-flight finalize/heartbeat must not resurrect
-        records or drive further PMO side effects after "start fresh"."""
+        """True when this run is not stamped for the store's current wipe
+        generation (docs/10 store_gen). In-flight finalize/heartbeat must not
+        resurrect records or drive further PMO side effects after "start
+        fresh". Prefer RunStore.is_current_generation when present so the
+        fence stays one implementation."""
+        check = getattr(self.store, "is_current_generation", None)
+        if callable(check):
+            return not check(run)
         wipe_gen = int(getattr(self.store, "wipe_generation", 0) or 0)
-        return int(getattr(run, "store_gen", 0) or 0) < wipe_gen
+        gen = int(getattr(run, "store_gen", 0) or 0)
+        if wipe_gen <= 0:
+            return False
+        return gen != wipe_gen
 
     async def handle(self, run_id: str, kind: str, payload: dict) -> None:
         run = self.store.get(run_id)

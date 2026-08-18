@@ -49,24 +49,30 @@ function InternalReposSection({ onClear, onClearAll, refreshKey }) {
       )}
       {data.repos.length > 0 && (
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="text-left text-neutral-500">
-            <tr><th className="py-1 pr-3">Mission</th><th className="pr-3">Repo</th>
-              <th className="pr-3">Size</th><th className="pr-3">Open PRs</th><th></th></tr>
+        <table className="w-full min-w-[32rem] text-sm">
+          <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+            <tr>
+              <th className="py-1 pr-3 text-left font-medium">Mission</th>
+              <th className="pr-3 text-left font-medium">Repo</th>
+              <th className="pr-3 text-left font-medium">Size</th>
+              <th className="pr-3 text-left font-medium">Open PRs</th>
+              <th className="text-right font-medium"><span className="sr-only">Actions</span></th>
+            </tr>
           </thead>
           <tbody>
             {data.repos.map((r) => (
-              <tr key={r.name} className="border-t border-neutral-200 dark:border-neutral-800">
-                <td className="py-1.5 pr-3 font-mono">{r.mission_key}</td>
+              <tr key={r.name}
+                className="border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
+                <td className="py-1.5 pr-3 font-mono text-xs">{r.mission_key}</td>
                 <td className="pr-3">
-                  <a className="text-accent-600 hover:underline" href={r.html_url}
+                  <a className="text-accent-600 hover:underline dark:text-accent-300" href={r.html_url}
                     target="_blank" rel="noreferrer">{r.name}</a>
                 </td>
-                <td className="pr-3">{Math.round(r.size_kb)} KB</td>
-                <td className="pr-3">{r.open_prs}</td>
+                <td className="pr-3 tabular-nums">{Math.round(r.size_kb)} KB</td>
+                <td className="pr-3 tabular-nums">{r.open_prs}</td>
                 <td className="text-right">
-                  <Button kind="danger-ghost" icon={Trash2}
-                    onClick={() => onClear(r.name)}>Clear</Button>
+                  <Button kind="danger-ghost" size="sm" icon={Trash2}
+                    onClick={() => onClear(r.name)}>Clear data</Button>
                 </td>
               </tr>
             ))}

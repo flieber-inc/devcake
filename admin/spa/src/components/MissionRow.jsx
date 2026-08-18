@@ -84,7 +84,7 @@ export default function MissionRow({ row, multiPmo, syncing, sectionReason, onOp
       {syncing && (
         <span
           title="Waiting for the next poll cycle to confirm this change"
-          className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800 dark:bg-blue-950 dark:text-blue-300"
+          className="shrink-0 rounded-full bg-accent-100 px-2 py-0.5 text-[10px] font-medium text-accent-800 dark:bg-accent-950 dark:text-accent-300"
         >
           syncing…
         </span>

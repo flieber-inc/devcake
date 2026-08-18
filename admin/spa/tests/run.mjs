@@ -23,6 +23,8 @@ const SUITES = [
   "contracts.mjs",
   "req_seq.mjs",
   "mission_identity.mjs",
+  "alerts.mjs",
+  "design_tokens.mjs",
   "settings.mjs",
   "tasks.mjs",
   "hierarchy.mjs",

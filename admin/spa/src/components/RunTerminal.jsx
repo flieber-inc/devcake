@@ -64,13 +64,13 @@ export default function RunTerminal({ run, onClose }) {
       className="flex h-[75vh] max-w-5xl flex-col overflow-hidden">
         <div className="flex items-center gap-2 border-b border-neutral-800 bg-neutral-900 px-4 py-2.5">
           <span className="h-3 w-3 rounded-full bg-red-500" />
-          <span className="h-3 w-3 rounded-full bg-yellow-500" />
+          <span className="h-3 w-3 rounded-full bg-amber-400" />
           <span className="h-3 w-3 rounded-full bg-green-500" />
           <span className="ml-3 truncate font-mono text-xs text-neutral-300">
             {run.run_id}
           </span>
           <span className={`rounded px-1.5 py-0.5 text-xs ${
-            live ? "bg-blue-900 text-blue-200" : "bg-neutral-800 text-neutral-400"}`}>
+            live ? "bg-accent-900 text-accent-200" : "bg-neutral-800 text-neutral-400"}`}>
             {live ? "live" : run.state}
           </span>
           {(run.memory_mounts || []).length > 0 && (

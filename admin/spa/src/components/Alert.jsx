@@ -3,9 +3,10 @@ import { Info, TriangleAlert, OctagonAlert, ChevronRight, ExternalLink, X } from
 
 const STYLES = {
   info: {
-    box: "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-900 dark:bg-sky-950/60 dark:text-sky-200",
+    // quiet informational — neutral register, not a second brand accent
+    box: "border-neutral-200 bg-neutral-50 text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900/60 dark:text-neutral-200",
     icon: Info,
-    iconCls: "text-sky-500 dark:text-sky-400",
+    iconCls: "text-neutral-500 dark:text-neutral-400",
   },
   warning: {
     box: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200",

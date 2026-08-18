@@ -31,7 +31,7 @@ class MessagingPort(Protocol):
     ) -> None: ...
 ```
 
-Live constants in `adapters/redis/messaging.py`: ingress stream `devcake:ingress`, consumer group `app`, reply stream `devcake:reply:{run_id}` with `REPLY_TTL_SECONDS = 900`, dead-letter `devcake:dead` (`DEAD_STREAM_MAXLEN = 1000`), chunk caps `MAX_CHUNKS = 128` / `MAX_ASSEMBLED_BYTES = 50 MiB` / `MAX_ACTIVE_CHUNK_GROUPS = 16` / `MAX_BUFFERED_CHUNK_BYTES = 100 MiB`, reclaim every 60 s, poison after 5 deliveries (stalled chunk groups only — progress within 300 s defers poison).
+Live constants in `adapters/redis/messaging.py`: ingress stream `devcake:ingress`, consumer group `app`, reply stream `devcake:reply:{run_id}` with `REPLY_TTL_SECONDS = 900`, dead-letter `devcake:dead` (`DEAD_STREAM_MAXLEN = 1000`), chunk caps `MAX_CHUNKS = 128` / `MAX_ASSEMBLED_BYTES = 50 MiB` / `MAX_ACTIVE_CHUNK_GROUPS = 16` / `MAX_BUFFERED_CHUNK_BYTES = 100 MiB`, reclaim every 60 s, poison after 5 deliveries (a chunk group still making progress within 300 s defers poison; the whole group is dead-lettered together).
 
 ## 1. Topology
 

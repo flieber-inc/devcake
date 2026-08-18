@@ -35,7 +35,11 @@ if you want them. Repeat per host.
    `activity-*`, sqlite DB).
 
 Both tarballs hold plaintext credentials: store them like a
-password-manager export.
+password-manager export. With no output path, both scripts write under
+`${XDG_DATA_HOME:-$HOME/.local/share}/devcake/backups` (not into the
+checkout). Prefer a quiet snapshot: `docker compose stop app` (and
+`gitea` for the gitea pair) before each backup, then `up -d` after —
+live snapshots are crash-consistent only (`13` §8).
 
 ## Phase 2 — the wipe scope (one volume, not four)
 

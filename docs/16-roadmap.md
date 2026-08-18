@@ -690,7 +690,10 @@ the v0.2 trailer list).
   (profiles, skills, Gitea Issues, per-PMO intake, default board, composer,
   freshness, handoff): **⏳** non-gating trailer. Dual-team production and
   the corpus run do **not** substitute for the wipe-and-reconfigure
-  stranger-operability ritual.
+  stranger-operability ritual. Backup/restore **script residual** (gitea
+  outside-checkout default, refuse-while-running tests, docs honesty) was
+  closed separately — payload/host-script pytest still does not replace
+  this live drill (`13` §8 residual; `tutorials/operator-drill.md`).
 - **Field-evidence detail pass**: the pictures above are shape-only pending
   founder decisions on publishable detail (mission keys / MR numbers, exact
   dual-Linear topology, quotable numbers) and the field-derived host-sizing

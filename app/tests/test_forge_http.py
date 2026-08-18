@@ -240,6 +240,24 @@ def test_github_approve_same_token_is_noop_when_self_approval_blocked():
     assert seen == []
 
 
+def test_gitea_approve_same_token_is_noop_when_self_approval_blocked():
+    """self_approval_blocked=True: same doctrine as GitHub — the pasted write
+    token is not a distinct reviewer; no wire call (docs/06 §4, §7a)."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"id": 1})
+
+    same = "gitea-same-tok"
+    forge = GiteaForge(
+        "http://gitea:3000/o/r", same, same,
+        transport=httpx.MockTransport(handler),
+    )
+    assert run_coro(forge.approve(8)) is False
+    assert seen == []
+
+
 def test_gitlab_approve_same_token_allowed_when_self_approval_not_blocked():
     """self_approval_blocked=False: GitLab allows author approve by default —
     same write/reviewer token still posts the approve call."""

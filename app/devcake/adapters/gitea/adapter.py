@@ -15,7 +15,7 @@ Every divergence below was LIVE-VERIFIED against 1.24.7-rootless (M11 probe):
   True/False/None; the merge-first ordering in the sweep compensates;
 - tokens are 40 hex chars — a redaction regex would mask every git SHA, so
   token_patterns is DELIBERATELY empty; value registration is the only
-  redaction line (docs/14 §5);
+  redaction line (docs/14 §7);
 - clone auth: the token in the URL userinfo authenticates regardless of the
   username half → a static clone_user works.
 """
@@ -173,8 +173,16 @@ class GiteaForge:
     async def approve(self, pr_number: int) -> bool:
         """Formal approval with the reviewer token; False when none configured.
         NOTE: only counts toward required_approvals when the reviewer is on
-        the protection's approvals whitelist or has write access (verified)."""
-        if not self.reviewer_token:
+        the protection's approvals whitelist or has write access (verified).
+
+        self_approval_blocked=True (docs/06 §4): the write token pasted as
+        reviewer is not a distinct reviewer account — return False without a
+        wire call rather than letting Gitea reject the self-approve.
+        """
+        rev = (self.reviewer_token or "").strip()
+        if not rev:
+            return False
+        if rev == (self.token or "").strip():
             return False
         await self._req("POST", f"/pulls/{pr_number}/reviews", reviewer=True,
                         json={"event": "APPROVED",

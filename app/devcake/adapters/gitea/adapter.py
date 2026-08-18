@@ -129,10 +129,16 @@ class GiteaForge:
             # access, invisible private repo) — no rate-limit carve-out on
             # self-hosted Gitea
             definitive = e.status in (401, 403, 404)
+            if e.status is None:
+                detail = "repository access failed (network)"
+            else:
+                detail = (
+                    f"repository access failed (HTTP {e.status}); the "
+                    f"token needs write:repository scope and repo access"
+                )
             return ForgeHealth(
                 ok=False, repository=repository, transient=not definitive,
-                detail=f"repository access failed (HTTP {e.status}); the "
-                       f"token needs write:repository scope and repo access")
+                detail=detail)
         can_push = bool((repo.get("permissions") or {}).get("push"))
         return ForgeHealth(
             ok=can_push, repository=repository, can_push=can_push,

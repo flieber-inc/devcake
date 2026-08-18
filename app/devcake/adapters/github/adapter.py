@@ -88,10 +88,14 @@ class GitHubForge:
             # repo) — except GitHub's rate-limit 403, which is transient
             definitive = e.status in (401, 403, 404) and not (
                 e.status == 403 and "rate limit" in str(e).lower())
-            hint = ("; for a fine-grained PAT, select this repository and grant "
-                    "Contents and Pull requests read/write")
+            if e.status is None:
+                detail = "repository access failed (network)"
+            else:
+                hint = ("; for a fine-grained PAT, select this repository and grant "
+                        "Contents and Pull requests read/write")
+                detail = f"repository access failed (HTTP {e.status}){hint}"
             return ForgeHealth(ok=False, repository=repository, transient=not definitive,
-                               detail=f"repository access failed (HTTP {e.status}){hint}")
+                               detail=detail)
         can_push = bool((repo.get("permissions") or {}).get("push"))
         return ForgeHealth(
             ok=can_push,

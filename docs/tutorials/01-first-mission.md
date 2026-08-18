@@ -64,7 +64,9 @@ Open **http://localhost:8080** (loopback; admin user/password from `.env`).
 
 Labels `DEVCAKE-*` appear on the team after a successful PMO connection.
 
-## Step 2 — Meet the seven pages
+## Step 2 — Meet the admin pages
+
+Six top-level sidebar items (Adapters expands to two pages — seven surfaces total):
 
 - **Overview** — masthead answer sentence, Let's get baking checklist, alerts, Needs Human Action, stats, In the oven, recent runs, quick links. Service health = **sidebar** dots.
 - **Missions** — pipeline strip (stage counts) + grouped mission list of the poll snapshot; **Poll now**; row MoreMenu (Park/Retry/…); drawer Send guidance + Stop run.

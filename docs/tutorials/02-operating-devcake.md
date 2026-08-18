@@ -1,6 +1,7 @@
 # Tutorial 2 — Operating DevCake Day to Day
 
-Your board is the interface — you operate work **through Linear**, not a chat
+Your board is the interface — you operate work **through the PMO** (Linear or
+Gitea Issues launch-supported; GitHub/GitLab Issues experimental), not a chat
 UI. Labels and statuses are the control surface; DevCake reads them as
 instructions and reports back the same way. The admin panel is for config,
 health, secrets, and runs — keep it on **localhost** (or SSH tunnel); it is

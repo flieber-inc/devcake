@@ -12,10 +12,11 @@ Type fields on the Config page:
   design (`../14-security.md` §2 Zone B).
 
 Worked example throughout: **devcake-logs-mcp**, a log-platform connector
-(Datadog / AWS CloudWatch Logs). The companion is **not yet published** at a
-fixed public URL — substitute your operator's `OWNER/REPO` (and pin a release
-tag) when you install it. Backend-specific detail (key scopes, IAM
-permissions, query dialects) lives in that plugin repo's README, not here.
+(Datadog / AWS CloudWatch Logs). Treat it as a **pattern**, not a guaranteed
+public install: the official companion may be private or unpublished. Substitute
+an `OWNER/REPO` (and pin a release tag) for a plugin git URL **you** control.
+Backend-specific detail (key scopes, IAM permissions, query dialects) lives in
+that plugin repo's README, not here.
 
 ## 1. Declare the secret names
 
@@ -53,10 +54,10 @@ Mechanics worth knowing (`../07-dev-runtime.md` §5, `../08-harness-templates.md
   entrypoint shell — values never enter config.
 - **Pin a release tag** (`@v0.1.0`) — runs must not float with a moving
   branch.
-- Register with `python -m <module>` (or an absolute path):
-  `pip install --user` puts console scripts in `~/.local/bin`, which is
-  NOT on `PATH` in the claude/codex Dev images.
-- When the plugin repo goes public, drop `${LOGS_MCP_GIT_TOKEN}@` from the
+- Register with `python -m <module>` or the installed console script:
+  `pip install --user` lands scripts in `~/.local/bin`, which is **on**
+  `PATH` in every registry harness image (ADR-0023 toolchain floor).
+- When the plugin repo is public, drop `${LOGS_MCP_GIT_TOKEN}@` from the
   install line and delete that secret.
 
 ## 3. Save and verify

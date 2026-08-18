@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Bring up the minimal compose set for hello dispatch smoke (no Gitea).
+# Bring up the compose set for hello dispatch smoke (and optional contracts).
 # Used by GHA ci.yml and optionally for local clean-room proof.
 #
-# Service set (transitive deps for app + Dagu spawning hello):
+# Default service set is WITHOUT Gitea (dispatch-only):
 #   fluentbit  — redis/dagu depend_on + fluentd log driver
 #   openobserve — app depends_on service_started
 #   otel-collector — hello OTLP export target
 #   redis, dagu, app, admin
+# Set CI_COMPOSE_WITH_GITEA=1 to add bundled Gitea (as ci.yml does for the
+# forge + PMO contract-battery lane). Off by default for a minimal smoke.
+#
+# FOOTGUN: CI_COMPOSE_WRITE_ENV=1 or GITHUB_ACTIONS=true OVERWRITES ./.env
+# with synthetic CI credentials. Never set WRITE_ENV on a developer machine
+# that has a real .env you care about.
 #
 # Third-party pull resilience (no registry credentials):
 #   - Skip services whose digest-pinned image is already local (GHA unit-test

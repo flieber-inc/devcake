@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
-# DevCake CI suite (docs/16 M7): deterministic, model-free, ~1 minute.
-# Requires the compose stack running + Bake images present.
-# Real-model acceptance is scripts/acceptance.py.
+# DevCake model-free local suite — not a full clone of GHA ci.yml.
+#
+# Preconditions (fail late if missing):
+#   - healthy compose stack already up (app + redis + dagu + … + gitea for
+#     contracts); use scripts/ci_compose_for_dispatch.sh with
+#     CI_COMPOSE_WITH_GITEA=1 for a clean-room bring-up
+#   - hello image present as devcake/dev-hello:${DEVCAKE_TAG:-latest}
+#   - ADMIN_* / REDIS_PASSWORD in .env (or environment)
+#
+# Steps: pin gate → app-test rebuild (tree) → ruff → pytest → forge/PMO
+# contracts (live app) → dispatch-hello. Mixed-version is warn-not-fail
+# (banner only): unit lanes grade the tree; dispatch/contracts grade the
+# live stack. Does NOT: npm helper tests, npm audit, pip-audit, rebake
+# prod app/admin/hello, or write SBOM.
+#
+# App-test rebuild: scripts/lib/bake_app_test.sh (Buildx bake preferred;
+# Dockerfile --target test fallback on buildah/podman).
+# Token-spending acceptance: scripts/acceptance.py (not this script).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -43,8 +58,8 @@ mixed_version_banner() {
 echo "── digest-pin gate (ISSUES #29)"
 python3 scripts/check_image_pins.py
 
-echo "── bake app-test (prod image has no pytest; DEVCAKE_TAG=${DEVCAKE_TAG:-latest} lockstep)"
-docker buildx bake -f docker-bake.hcl app-test
+echo "── rebuild app-test (prod image has no pytest; DEVCAKE_TAG=${DEVCAKE_TAG:-latest} lockstep)"
+bash scripts/lib/bake_app_test.sh
 mixed_version_banner
 
 echo "── ruff (syntax / undefined names / blanket-except policy, docs/15 §7)"

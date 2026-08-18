@@ -1,5 +1,12 @@
-# DevCake CI — Bake control-plane images (GHA BuildKit cache) + pytest +
-# minimal compose hello-dispatch smoke. Compose never builds; see docker-bake.hcl.
+# DevCake PR/main CI (model-free proof path). Compose never builds; see docker-bake.hcl.
+#
+# Matrix (single job): pin gate → admin npm helper tests + npm audit → Bake
+# group `ci` (app, app-test, admin, hello; load:true, sbom:false) → Redis →
+# ruff → pip-audit → pytest on fresh app-test → compose bring-up with
+# CI_COMPOSE_WITH_GITEA=1 → hello dispatch smoke → forge/PMO contract
+# batteries against bundled Gitea. Permissions: contents:read only (no
+# packages:write). No SBOM/provenance on this path — those are publish-only
+# (docker-publish.yml). Does not run scripts/acceptance.py (token-gated).
 name: CI
 
 on:
@@ -124,8 +131,8 @@ jobs:
           docker rm -f devcake-ci-redis 2>/dev/null || true
           docker network rm devcake_control 2>/dev/null || true
 
-      # Minimal compose (no Gitea) + hard readiness — scripts/ci_compose_for_dispatch.sh
-      # then real Dagu → hello → Redis → finalize (scripts/ci_dispatch_hello.sh).
+      # Compose for dispatch + contract batteries (Gitea on via CI_COMPOSE_WITH_GITEA=1).
+      # scripts/ci_compose_for_dispatch.sh then hello smoke + forge/PMO batteries.
       - name: Compose stack for dispatch smoke
         run: |
           set -euo pipefail

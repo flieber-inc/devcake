@@ -114,7 +114,11 @@ class GitLabForge:
         )
 
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]:
-        mrs = await self._req("GET", f"/merge_requests?source_branch={branch}"
+        # Percent-encode so `#` in forge-issue branch names is not a URL
+        # fragment (same trap as GitHub's `head=` filter).
+        from urllib.parse import quote
+        source = quote(branch, safe="")
+        mrs = await self._req("GET", f"/merge_requests?source_branch={source}"
                                      f"&order_by=created_at&sort=desc")
         if not mrs:
             return None

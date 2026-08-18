@@ -104,9 +104,17 @@ class GitHubForge:
         )
 
     async def get_pr_by_branch(self, branch: str) -> Optional[PullRequest]:
-        """Newest PR (any state) whose head is the given branch."""
+        """Newest PR (any state) whose head is the given branch.
+
+        Branch names from forge-issue PMO keys carry ``#`` (``owner/repo#N``).
+        Percent-encode the head value so ``#`` is not treated as a URL
+        fragment — otherwise GitHub never sees the filter and merge_sweep
+        cannot complete after a merge.
+        """
+        from urllib.parse import quote
+        head = quote(f"{self.owner}:{branch}", safe="")
         prs = await self._req(
-            "GET", f"/pulls?head={self.owner}:{branch}&state=all&sort=created&direction=desc")
+            "GET", f"/pulls?head={head}&state=all&sort=created&direction=desc")
         if not prs:
             return None
         pr = prs[0]

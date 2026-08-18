@@ -218,6 +218,43 @@ def test_get_pr_by_branch_shape_parity():
     assert run_coro(stub_req(gl(), []).get_pr_by_branch("x")) is None
 
 
+def test_get_pr_by_branch_encodes_hash_in_query():
+    """Forge-issue mission keys mint branches with `#` (owner/repo#N). An
+    unescaped `#` is a URL fragment — the forge never sees the head /
+    source_branch filter, so merge_sweep cannot complete after a merge."""
+    from urllib.parse import quote
+
+    branch = "devcake/DEVCAKEMEM-fidecastro/devcake-memories#3"
+
+    seen: list[str] = []
+    g = gh()
+
+    async def gh_req(method, path, **kw):
+        seen.append(path)
+        return [GH_PR_MERGED_ITEM]
+
+    g._req = gh_req
+    pr = run_coro(g.get_pr_by_branch(branch))
+    assert pr is not None and pr.number == 9
+    assert len(seen) == 1
+    assert f"head={quote(f'o:{branch}', safe='')}" in seen[0]
+    assert "#" not in seen[0]
+
+    seen.clear()
+    l = gl()
+
+    async def gl_req(method, path, **kw):
+        seen.append(path)
+        return [GL_MR_MERGED]
+
+    l._req = gl_req
+    mr = run_coro(l.get_pr_by_branch(branch))
+    assert mr is not None and mr.number == 9
+    assert len(seen) == 1
+    assert f"source_branch={quote(branch, safe='')}" in seen[0]
+    assert "#" not in seen[0]
+
+
 def test_pr_state_shape_parity():
     s = run_coro(stub_req(gh(), {"number": 8, "html_url": "u", "state": "closed",
                                  "merged": True}).pr_state(8))

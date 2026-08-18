@@ -106,13 +106,38 @@ await withPage(async (page) => {
       dev_type: "senior-dev", seq: 1, state: "finished",
       started_at: new Date(Date.now() - 120000).toISOString(),
       ended_at: new Date(Date.now() - 60000).toISOString() },
+    { run_id: "T-7-1-PLAN-FAILEDXX", mission_key: "T-7", mission_type: "PLAN",
+      dev_type: "senior-dev", seq: 1, state: "failed",
+      error: "exit 11: model backend down",
+      started_at: new Date(Date.now() - 240000).toISOString(),
+      ended_at: new Date(Date.now() - 180000).toISOString() },
   ];
   await page.route(/\/api\/v1\/runs(?:\?.*)?$/, (route) =>
     route.fulfill({ status: 200, contentType: "application/json",
-      body: JSON.stringify({ total: 2, total_runs: 2, runs, totals: null,
+      body: JSON.stringify({ total: 3, total_runs: 3, runs, totals: null,
                              pmo_refs: [], rate_card: {} }) }));
   await gotoFresh(page, "#/runs");
   await page.waitForSelector("table tbody tr");
+
+  // ── 2026-08-18 layout round: run ids are OFF the screen (popup + CSV
+  // only — they wrapped at every hyphen), and trace is a per-row icon
+  // beside the terminal icon instead of a column. Rows are one line. ──
+  check("run id is not printed in any cell",
+    !(await page.innerText("tbody")).includes("T-9-1-EXECUTE-RUNNIN"));
+  check("stage glyph popup carries the run id",
+    (await page.locator('tbody span[role="img"][title*="T-9-1-EXECUTE-RUNNIN"]').count()) === 1);
+  check("terminal icon button on every row",
+    (await page.locator('td button[title="Open the run terminal"]').count()) === 3);
+  check("trace is a per-row icon link, not a column",
+    (await page.locator('th:text-is("trace")').count()) === 0 &&
+    (await page.locator('a[aria-label="Open traces for run T-9-1-EXECUTE-RUNNIN"]').count()) === 1);
+  check("trace icon deep-links OpenObserve traces",
+    ((await page.locator('a[aria-label="Open traces for run T-9-1-EXECUTE-RUNNIN"]')
+      .getAttribute("href")) || "").includes("/web/traces"));
+  check("error rides the state cell as a popup, not a second line",
+    (await page.locator('tbody span[title="exit 11: model backend down"]').count()) === 1 &&
+    !(await page.innerText("tbody")).includes("exit 11"));
+
   check("running row carries a Stop button",
     (await page.locator('button[aria-label="Stop run T-9-1-EXECUTE-RUNNIN"]').count()) === 1);
   check("finished row carries NO Stop button",

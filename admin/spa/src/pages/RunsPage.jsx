@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, SquareTerminal } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, ExternalLink, ScrollText, TriangleAlert } from "lucide-react";
 import { download, get, send } from "../api.js";
 import { makeReqSeq } from "../lib/reqSeq.js";
 import PageHeader from "../components/PageHeader.jsx";
@@ -128,7 +128,7 @@ export default function RunsPage() {
       // whitespace-nowrap on th AND button: grouped mode's wide colSpan
       // mission cells squeeze the numeric columns, and "cache r" / an
       // active "started ▼" otherwise wrap into stacked header lines
-      <th className={`whitespace-nowrap pr-3 ${extra}`}
+      <th className={`whitespace-nowrap pr-2 ${extra}`}
         aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending")
                           : undefined}>
         <button type="button" title={`Sort by ${label}`}
@@ -153,7 +153,9 @@ export default function RunsPage() {
                           : (data.runs || []).length > 0;
 
   const telCell = (value) => (
-    <span className="whitespace-nowrap font-mono text-xs text-neutral-600 dark:text-neutral-300"
+    // truncate, don't wrap: fully-qualified model ids (us.anthropic.…-v1:0)
+    // would otherwise decide the whole table's width — the title has it all
+    <span className="inline-block max-w-[9rem] truncate align-bottom font-mono text-xs text-neutral-600 dark:text-neutral-300"
       title={value || undefined}>
       {value || "—"}
     </span>
@@ -195,77 +197,83 @@ export default function RunsPage() {
     );
   };
 
+  // no stage badge here: the stage glyph sits immediately left of this cell
+  // and carries the same fact (plus the run id) in its popup — printing it
+  // twice per row bought nothing but width
   const missionCell = (r) => {
     if (!r.mission_key) {
       return <span className="text-xs text-neutral-500 dark:text-neutral-400">—</span>;
     }
     return (
-      <span className="inline-flex items-center gap-1.5"
+      <span className="whitespace-nowrap"
         onClick={(e) => { if (pmoHref(r.mission_url)) e.stopPropagation(); }}>
         {missionKeyLink(r.mission_key, r.mission_url)}
-        {r.mission_type && (
-          <span className="rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-            {r.mission_type}
-          </span>
-        )}
       </span>
     );
   };
 
   // one renderer for both modes: flat rows and the runs inside a mission
-  // group (grouped mode keeps pipeline order — seq — whatever the sort)
+  // group (grouped mode keeps pipeline order — seq — whatever the sort).
+  // The run id is deliberately NOT printed (2026-08-18): everything it
+  // encodes is on the row already, and the long hyphenated id wrapped into
+  // multi-line cells. It lives in the stage glyph's popup, the icon
+  // aria-labels, the run terminal's header — and always in the CSV export.
+  const iconAction = "rounded p-0.5 text-neutral-500 transition hover:text-accent-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-accent-300";
   const runRow = (r) => (
     <tr key={r.run_id} onClick={() => setOpenRun(r)}
       title="Click to open the run terminal"
       className="cursor-pointer border-t border-neutral-100 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900">
-      <td className="max-w-[18rem] py-2 pr-3">
-        <span className="flex items-center gap-2">
-          {r.mission_type && <StageGlyph stage={r.mission_type} />}
+      <td className="py-2 pr-2">
+        <span className="flex items-center gap-1 whitespace-nowrap">
+          <StageGlyph stage={r.mission_type} detail={`run ${r.run_id}`} />
           <button type="button"
             onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
             title="Open the run terminal"
-            className="inline-flex items-center gap-1.5 rounded font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
-            <SquareTerminal size={12} className="shrink-0 text-neutral-500 dark:text-neutral-400" aria-hidden />
-            {r.run_id}
+            aria-label={`Open the terminal for run ${r.run_id}`}
+            className={iconAction}>
+            <ScrollText size={14} aria-hidden />
           </button>
+          <a href={traceUrl(r.run_id)}
+            onClick={(e) => e.stopPropagation()}
+            target="_blank" rel="noopener"
+            title="Open traces in OpenObserve"
+            aria-label={`Open traces for run ${r.run_id}`}
+            className={iconAction}>
+            <Activity size={14} aria-hidden />
+          </a>
         </span>
-        {(r.error || r.verdict) && (
-          <span
-            title={r.error || r.verdict}
-            className={`block truncate text-[11px] ${
-              r.error
-                ? "text-red-600 dark:text-red-400"
-                : "text-amber-600 dark:text-amber-400"
-            }`}
-          >
-            {r.error || r.verdict}
-          </span>
-        )}
       </td>
-      <td className="pr-3">{missionCell(r)}</td>
-      <td className="pr-3">{harnessCell(r)}</td>
-      <td className="pr-3">{telCell(r.model)}</td>
-      <td className="pr-3"><StatusPill state={r.state} verdict={r.verdict} /></td>
-      <td className="whitespace-nowrap pr-3 text-xs text-neutral-500 dark:text-neutral-400"
+      <td className="pr-2">{missionCell(r)}</td>
+      <td className="pr-2">{harnessCell(r)}</td>
+      <td className="pr-2">{telCell(r.model)}</td>
+      <td className="pr-2">
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <StatusPill state={r.state} verdict={r.verdict} />
+          {/* the old second line, folded to a popup — one-line rows */}
+          {(r.error || r.verdict) && (
+            <span role="img"
+              title={r.error || r.verdict}
+              aria-label={r.error ? `error: ${r.error}` : `verdict: ${r.verdict}`}
+              className={r.error
+                ? "text-red-500 dark:text-red-400"
+                : "text-amber-500 dark:text-amber-400"}>
+              <TriangleAlert size={13} aria-hidden />
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="whitespace-nowrap pr-2 text-xs text-neutral-500 dark:text-neutral-400"
         title={fullTime(r.started_at)}>
         {relTime(r.started_at)}
       </td>
-      <td className="whitespace-nowrap pr-3 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+      <td className="whitespace-nowrap pr-2 text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
         {duration(r.started_at, r.ended_at)}
       </td>
-      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
-      <td className="pr-3 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokens(r.output_tokens)}</td>
-      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
-      <td className="pr-3 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
-      <td className="pr-3 text-right text-xs tabular-nums">{costCell(r)}</td>
-      <td>
-        <a className="inline-flex items-center gap-0.5 text-xs text-accent-700 underline underline-offset-2 dark:text-accent-300"
-          href={traceUrl(r.run_id)}
-          onClick={(e) => e.stopPropagation()}
-          target="_blank" rel="noopener">
-          trace <ExternalLink size={10} aria-hidden />
-        </a>
-      </td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.input_tokens)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={outCellTitle(r)}>{tokens(r.output_tokens)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_read_tokens)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums" title={tokenCellTitle(r)}>{tokens(r.cache_write_tokens)}</td>
+      <td className="pr-2 text-right text-xs tabular-nums">{costCell(r)}</td>
       <td className="pl-2 text-right">
         {/* dispatched/running only — finalizing hides Stop too: the Dev has
             already exited and the backend 409s a stop there by design */}
@@ -476,15 +484,19 @@ export default function RunsPage() {
             </Button>
           </span>
         </div>
+        {/* no min-width: every cell is one nowrap line, so the table's own
+            content decides its floor and overflow-x only kicks in when the
+            viewport genuinely can't hold it (the old 76rem floor forced a
+            scrollbar even inside the page's 72rem max-w cap) */}
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[76rem] text-left text-sm">
+          <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <tr>
-                <th className="py-1.5 pr-3">run</th>
-                <th className="pr-3">mission</th>
-                <th className="whitespace-nowrap pr-3">harness</th>
-                <th className="whitespace-nowrap pr-3">model</th>
-                <th className="pr-3">state</th>
+                <th className="py-1.5 pr-2">run</th>
+                <th className="pr-2">mission</th>
+                <th className="whitespace-nowrap pr-2">harness</th>
+                <th className="whitespace-nowrap pr-2">model</th>
+                <th className="pr-2">state</th>
                 {sortableTh("started", "started")}
                 {sortableTh("duration", "duration")}
                 {sortableTh("input_tokens", "in", "text-right")}
@@ -492,20 +504,19 @@ export default function RunsPage() {
                 {sortableTh("cache_read_tokens", "cache r", "text-right")}
                 {sortableTh("cache_write_tokens", "cache w", "text-right")}
                 {sortableTh("cost", "cost", "text-right")}
-                <th>trace</th>
                 <th aria-label="run actions" />
               </tr>
             </thead>
             <tbody>
               {!hasRows && (
-                <tr><td colSpan={14} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
+                <tr><td colSpan={13} className="py-6 text-center text-sm text-neutral-500 dark:text-neutral-400">
                   No runs{filter ? " match this filter" : " yet"}.
                 </td></tr>
               )}
               {data.totals && hasRows && (
                 <tr data-testid="runs-totals"
                   className="border-t border-neutral-200 bg-stone-50/70 text-xs font-medium dark:border-neutral-700 dark:bg-neutral-900/70">
-                  <td className="py-2 pr-3" colSpan={6}>
+                  <td className="py-2 pr-2" colSpan={6}>
                     filtered totals — {data.total_runs ?? data.total} run{(data.total_runs ?? data.total) === 1 ? "" : "s"}
                     {data.totals.total_tokens_effective != null && (
                       <span className="font-normal text-neutral-500 dark:text-neutral-400"
@@ -514,19 +525,18 @@ export default function RunsPage() {
                       </span>
                     )}
                   </td>
-                  <td className="whitespace-nowrap pr-3 tabular-nums"
+                  <td className="whitespace-nowrap pr-2 tabular-nums"
                     title="Sum of completed runs' durations (live runs excluded)">
                     {durationSeconds(data.totals.runtime_seconds)}
                   </td>
-                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.input_tokens)}</td>
-                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.output_tokens)}</td>
-                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.cache_read_tokens)}</td>
-                  <td className="pr-3 text-right tabular-nums">{tokens(data.totals.cache_write_tokens)}</td>
-                  <td className="pr-3 text-right tabular-nums"
+                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.input_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.output_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.cache_read_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums">{tokens(data.totals.cache_write_tokens)}</td>
+                  <td className="pr-2 text-right tabular-nums"
                     title={`native ${usd(data.totals.cost_usd)} · estimated ${usd(data.totals.cost_usd_estimated)}`}>
                     {usd(data.totals.cost_usd_effective)}
                   </td>
-                  <td />
                   <td />
                 </tr>
               )}
@@ -534,7 +544,7 @@ export default function RunsPage() {
                 <React.Fragment key={`${g.pmo_ref}:${g.mission_key}`}>
                   <tr data-testid="mission-group"
                     className="border-t border-neutral-200 bg-stone-50/40 text-xs dark:border-neutral-700 dark:bg-neutral-900/40">
-                    <td className="py-1.5 pr-3" colSpan={6}>
+                    <td className="py-1.5 pr-2" colSpan={6}>
                       {missionKeyLink(g.mission_key,
                         (g.runs || []).find((r) => r.mission_url)?.mission_url,
                         { bold: true })}
@@ -544,19 +554,18 @@ export default function RunsPage() {
                           <> · {tokens(g.subtotal.total_tokens_effective)} tokens</>}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap pr-3 tabular-nums"
+                    <td className="whitespace-nowrap pr-2 tabular-nums"
                       title="Sum of this mission's completed runs' durations">
                       {durationSeconds(g.subtotal.runtime_seconds)}
                     </td>
-                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.input_tokens)}</td>
-                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.output_tokens)}</td>
-                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.cache_read_tokens)}</td>
-                    <td className="pr-3 text-right tabular-nums">{tokens(g.subtotal.cache_write_tokens)}</td>
-                    <td className="pr-3 text-right tabular-nums" title={subtotalTitle(g.subtotal)}>
+                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.input_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.output_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.cache_read_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums">{tokens(g.subtotal.cache_write_tokens)}</td>
+                    <td className="pr-2 text-right tabular-nums" title={subtotalTitle(g.subtotal)}>
                       {usd(g.subtotal.cost_usd_effective)}
                     </td>
                     <td />
-                  <td />
                   </tr>
                   {g.runs.map(runRow)}
                 </React.Fragment>

@@ -47,7 +47,7 @@ await withPage(async (page) => {
     skip("RunTerminal dialog behavior", "no runs recorded on this stack");
   } else {
     await runBtn.click();
-    await checked("run id opens the terminal dialog", async () => {
+    await checked("terminal icon opens the terminal dialog", async () => {
       await page.waitForSelector('[role="dialog"][aria-label^="Run terminal"]',
         { timeout: 8000 });
       return (await page.locator(
@@ -57,7 +57,7 @@ await withPage(async (page) => {
     await page.waitForTimeout(100);
     check("Esc closes the terminal",
       (await page.locator('[role="dialog"]').count()) === 0);
-    check("focus returns to the run-id button",
+    check("focus returns to the terminal icon button",
       await page.evaluate(() =>
         document.activeElement?.getAttribute("title") === "Open the run terminal"));
   }

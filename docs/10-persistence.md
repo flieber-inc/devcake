@@ -2,6 +2,9 @@
 
 > **Audience:** implementers and operators.
 > **Decision record:** `adr/0002-file-based-persistence.md` (files over a database), `adr/0003-pmo-as-single-source-of-truth.md`.
+> **Secrets posture:** GUI-stored values under `/data/secrets/` are plaintext
+> files mode 0600 — not a vault. Product security contract:
+> [`14-security.md`](14-security.md) §0 / §4 (never outrun that file).
 
 All local app **state** lives as plain files on the `devcake_data` volume (mounted at `/data`) so it is trivially inspectable, diffable, and recoverable. Since ADR-0024/0025 the app also holds two **non-state** stores this document is not the authority on: the `/mirrors` volume (bare source mirrors — a DISPOSABLE cache that re-warms) and the `$DEVCAKE_WS_HOST` host bind (`/workspaces` in-container — per-run scratch, reclaimed at run end). **Backup story: back up `/data` (via `scripts/backup_data.sh`) AND `gitea_data`; mirrors and workspaces are reconstructible and deliberately excluded** — the full story, including why the excluded trees still deserve host-snapshot care (they hold repo source), is `13-deployment.md` §8.
 
@@ -73,7 +76,7 @@ Legacy records without the field load as `store_gen: 0` (additive optional field
 
 Schema **v4** (docs/16 M12): the connection blocks are plural lists of **instances-with-identities** — each entry carries an operator-chosen `name` (lowercase alnum, ≤12 chars, no hyphens; `^[a-z][a-z0-9]{0,11}$`). The name is the instance's identity everywhere: `Run.pmo_ref`/`repo_ref`, branch prefixes (`devcake/LINEAR-DEV-17`), run ids. **0..N** PMO instances and repos (empty = idle first boot). Two PMO instances must not target the same `(system, api_base, team_key)`; two repos must not target the same URL. An instance with an empty `team_key` (or a repo with an empty `url`) is **valid but idle**. **No `*_env` fields:** secret VALUES are GUI-stored under `/data/secrets/` (ADR-0011) — `config.yaml` holds no credentials.
 
-**Hand-migration** (the app refuses stale files at boot; no deployments exist): v1 → plural lists; v2 → `id:`→`name:`; **v3 → v4: remove every `*_env` field** (`api_key_env`, `token_env`, `token_ro_env`, `reviewer_token_env`) and re-enter the secret VALUES via the Config page (or move them into `/data/secrets/connections/{scope}-{name}.json`); set `schema_version: 4`. Existing run records with `pmo_ref: main` stay valid (review/merge lookups fall back to the pre-v3 unprefixed branch via `legacy_branch`; the FinalizerRouter routes them to the sole manager). **Add a SECOND instance only after draining pre-v3 in-flight runs.** Alternatively delete the file and reconfigure via the admin panel.
+**Hand-migration** (the app refuses stale files at boot; no deployments exist): v1 → plural lists; v2 → `id:`→`name:`; **v3 → v4: remove every `*_env` field** (`api_key_env`, `token_env`, `token_ro_env`, `reviewer_token_env`) and re-enter the secret VALUES via the admin UI — **Repositories** / **PMO** / Configuration secret fields (or move them into `/data/secrets/connections/{scope}-{name}.json`); set `schema_version: 4`. Existing run records with `pmo_ref: main` stay valid (review/merge lookups fall back to the pre-v3 unprefixed branch via `legacy_branch`; the FinalizerRouter routes them to the sole manager). **Add a SECOND instance only after draining pre-v3 in-flight runs.** Alternatively delete the file and reconfigure via the admin panel.
 
 ```yaml
 schema_version: 4

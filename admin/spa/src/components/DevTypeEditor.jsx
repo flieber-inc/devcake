@@ -267,7 +267,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
           <div className="space-y-2">
             {(h.credential_env || []).map((v) => (
               <SecretField key={v} label={v}
-                help={`API key for the ${d.harness_template} harness. Stored securely — never echoed, never in .env.`}
+                help={`API key for the ${d.harness_template} harness. Stored as plaintext mode 0600 on the app volume — never echoed, never in .env.`}
                 refKey={v} checkKind="harness" paste />
             ))}
           </div>
@@ -340,7 +340,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               <InstantZone note="secret values store immediately">
                 {[...new Set(d.secret_env || [])].map((v) => (
                   <SecretField key={v} label={v}
-                    help={`Delivered to ${name} runs as $${v}. Stored securely — never echoed, never in .env.`}
+                    help={`Delivered to ${name} runs as $${v}. Stored as plaintext mode 0600 on the app volume — never echoed, never in .env.`}
                     refKey={v} checkKind="harness" paste />
                 ))}
               </InstantZone>

@@ -5,6 +5,9 @@
 > `09-messaging.md` (poison messages),
 > `adr/0018-harness-fault-classification-and-backend-brake.md` (exits 15/16, auth
 > precedence, backend brake).
+> **Trust language:** out-of-pipeline merge and related residuals are
+> **detection / tripwire**, not prevention — product contract
+> [`14-security.md`](14-security.md) §2 zone C · §8.
 
 ## 1. Error classes
 

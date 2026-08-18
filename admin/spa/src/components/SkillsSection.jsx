@@ -325,7 +325,7 @@ function SkillSourcesCard() {
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <SecretField label="Read token"
-              help="Token with read access to the repository (private sources). Stored securely — never echoed back."
+              help="Token with read access to the repository (private sources). Stored as plaintext mode 0600 on the app volume — never echoed back."
               refKey={`skill:${src.name}:token_ro`} paste
               locked={!savedNames.has(src.name)} />
             <SecretField label="Token (fallback)"

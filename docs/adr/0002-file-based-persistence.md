@@ -20,6 +20,11 @@ Plain files on one `/data` volume: YAML for human-edited config, JSON-per-file f
 
 Backup = copy `/data`. Every consumer must use the atomic-write recipe. Escape hatch documented: if run history outgrows files, `state/runs/` swaps to SQLite behind `StatePort` without touching anything else (post-v0 backlog).
 
+**Claim honesty:** `/data` (and its backups) is a **secret dump** — GUI values
+are plaintext mode 0600, not vault storage (`14-security.md` §1 · §4). Treat
+backups like a password-manager export; that is operator-owned residual risk
+(`14` §10 Zone A), not multi-tenant encryption.
+
 > **Amendment (2026-08-04):** "backup = copy `/data`" predates the app's two
 > non-state stores — the `/mirrors` volume (ADR-0024, disposable cache) and
 > the `$DEVCAKE_WS_HOST` workspace bind (ADR-0025, per-run scratch). The

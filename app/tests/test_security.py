@@ -1,4 +1,4 @@
-"""docs/14 §5 — the redaction filter."""
+"""docs/14 §7 — transcript redaction (hygiene) and §8 security_warnings copy."""
 import os
 
 from devcake.security import MASK, redact, redact_value
@@ -36,7 +36,7 @@ def test_structured_values_are_redacted_before_persistence(monkeypatch):
     assert scrubbed["nested"][1:] == [7, None]
 
 
-# ── registry-driven redaction: the superset tripwire (docs/14 §5) ────────────
+# ── registry-driven redaction: the superset tripwire (docs/14 §7) ────────────
 # The v0 lists frozen as literals: the generated SECRET_ENV_VARS/TOKEN_PATTERNS
 # must always contain AT LEAST these. A dropped entry means a secret could hit
 # the PMO unredacted — unrecoverable — so this test must exist BEFORE and pass
@@ -313,6 +313,37 @@ def test_read_only_repo_in_work_set_warns(tmp_path, monkeypatch):
                                        reference_repos=["docs"])])
     ids2 = {w["id"] for w in security.security_warnings(cfg2)}
     assert "repo-read-only:docs" not in ids2
+
+
+def test_security_warnings_bodies_match_product_contract(tmp_path, monkeypatch):
+    """CAKE-30 claim honesty: security_warnings copy must not outrun
+    docs/14 (wrong § pointers, wrong admin surface, understated residual)."""
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    from devcake import security
+    from devcake.config import AppConfig, RepoInstance
+    s.write_connection_secret("repo", "main", "token", "write-tok-for-warn-1")
+    cfg = AppConfig(repos=[RepoInstance(name="main",
+                                        url="https://host.example/o/r")])
+    by_id = {w["id"]: w for w in security.security_warnings(cfg)}
+
+    gui = by_id["gui-secrets-basic-auth"]
+    body = gui["body"]
+    # OIDC/SSO is §11 backlog; dedicated-host / basic-auth posture is §0/§4.
+    # §7 is transcript redaction — must not be the posture pointer.
+    assert "docs/14 §7" not in body
+    assert "§11" in body or "docs/14 §0" in body or "docs/14 §4" in body
+    assert "OIDC" in body
+
+    write = by_id["forge-write-token:main"]
+    wbody = write["body"]
+    # Tokens live on Repositories (#/repos), not a generic "Config page".
+    assert "Repositories" in wbody
+    assert "Config page" not in wbody
+    # Residual matches docs/14 §2/§3: write-capable non-EXECUTE can push
+    # and, without forge branch protection, may merge.
+    assert "push" in wbody.lower()
+    assert "merge" in wbody.lower()
 
 
 def test_profile_secret_snapshots_are_covered_by_the_redaction_glob(tmp_path, monkeypatch):

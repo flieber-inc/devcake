@@ -42,7 +42,7 @@ class ForgePort(Protocol):
         # the copy-pasteable approve+merge command footer (D14, §4)
 ```
 
-All adapters raise the same `ForgeError` (with a `status` attribute carrying the HTTP code) — callers never see forge-native exception types (the GitLab adapter in particular must never leak `httpx` exceptions).
+All adapters raise the same `ForgeError` — callers never see forge-native or `httpx` exception types. `status` carries the HTTP code when one exists; **network / transport failures use `status=None`** (health probes treat that as transient). The wire call is ONE chokepoint: `adapters/http.forge_request` (ADR-0034; pinned by `test_forge_error_contract.py`). Adapter `_req` methods must call it rather than re-implementing the map.
 
 Normalized DTOs (pydantic models in `ports/forge.py`):
 
@@ -110,10 +110,17 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 
 ## 3b. The registry and config
 
-`app/devcake/adapters/registry.py` is the single place that knows which forges exist:
+`app/devcake/adapters/registry.py` is the **sole construction site** for forge adapters and the internal provisioner (F1 tripwire in `test_agnosticism.py`):
 
-- `forges()` → `{id: ForgeDescriptor}` for every registered forge (feeds the SPA registry endpoint and the redaction contributions). Adapter imports are lazy, so importing the registry never drags in the httpx-heavy adapter modules.
-- `make_forge(inst)` constructs the adapter for **one** configured `RepoInstance` (any of `config.repos`), passing `(url, token, reviewer_token, api_base=inst.api_base)`. `ForgeRuntime.rebuild(config.repos, make_forge)` builds the full set.
+| Factory / export | Builds | Also |
+|---|---|---|
+| `DEFAULT_FORGE` | Seed default forge id for a first-boot `RepoInstance` (`"github"`) | Config derives its default lazily from this — the only forge-name default allowed outside a descriptor |
+| `forges()` | `{id: ForgeDescriptor}` for every registered forge | SPA registry endpoint + `security.redact` pattern/env contributions |
+| `make_forge(inst)` | Ordinary `ForgePort` for one configured `RepoInstance` | Registers `token` / `token_ro` / `reviewer_token` values for redaction; reference-only repos fall back to the read token. `ForgeRuntime.rebuild(config.repos, make_forge)` builds the full set |
+| `make_internal_forge()` | Bundled-Gitea `InternalForgePort` provisioner | Admin/provision only — day-to-day PR ops stay on the `ForgePort` adapter from `mission_repo_binding` |
+| `make_gitea_adapter(url, token, reviewer_token=…)` | Explicit-token `GiteaForge` for an internal mission repo | Registers the explicit token values for redaction (Gitea `token_patterns` is deliberately empty — 40-hex tokens collide with git SHAs; value registration is the redaction line, ADR-0010 / docs/14) |
+
+Adapter class imports are lazy inside these factories, so importing the registry never drags in the httpx-heavy adapter modules. Composition callers (`api/services.build_services`, `domain/forge_runtime.rebuild`) receive factories — they never construct vendor classes directly.
 
 `RepoInstance` (`config.py`, schema v4): identity + URL/forge/branch fields in config; **tokens are GUI-stored** (`token` / `token_ro` / `reviewer_token` read-throughs — ADR-0011). The `forge` field is **registry-validated** — an unknown forge id is rejected at config load.
 
@@ -201,14 +208,15 @@ Two layers:
 | 1 | Port conformance: registered adapters implement every `ForgePort` method with signatures that match the protocol |
 | 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
 | 3 | `merge()` retries a transient GitHub 409 twice then succeeds/raises; non-retryable 405s raise (Gitea's "try again later" 405 is the documented exception — §7a) |
-| 4 | Error normalization: adapters raise `ForgeError` with `.status` from `_req` (GitLab never leaks httpx exceptions) |
+| 4 | Error normalization: every forge `_req` routes through `adapters/http.forge_request` → `ForgeError` only (`status=None` for network; HTTP ≥400 preserves status). Direct chokepoint + all three adapter classes pinned in `test_forge_error_contract.py` |
 | 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub/GitLab/Gitea payloads to identical `PullRequest` values; no PR → `None` |
 | 6 | `BranchProtection` DTO: GitHub `protected` flag; GitLab 404 → `protected=False` |
 | 7 | `api_base`: GitHub default vs GHE override; GitLab origin derived from the repo URL, explicit override wins, project path stays URL-encoded |
-| 8 | Registry: `forges()` covers `{github, gitlab, gitea}` with real descriptors; `make_forge` constructs each (passing `api_base`); an unknown forge is rejected by `RepoInstance` validation |
-| 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile |
+| 8 | Registry: `forges()` covers `{github, gitlab, gitea}` with real descriptors; `make_forge` constructs each (passing `api_base`); `make_internal_forge` / `make_gitea_adapter` are the only other construction paths; production AST scan forbids direct `*Forge(` outside the registry; an unknown forge is rejected by `RepoInstance` validation |
+| 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile (Gitea may be empty — intentional) |
 | 10 | `mission_branch(instance, key)` single definition: `devcake/{INSTANCE}-{key}` prefix |
-| 11 | `ForgeCapabilities` ClassVar present and diverges correctly across adapters |
+| 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea) |
+| 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
 
 **HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape and full URL assembly for GitHub, GitLab, and Gitea so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` (vendor drift).
 

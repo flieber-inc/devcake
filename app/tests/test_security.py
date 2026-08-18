@@ -183,16 +183,44 @@ def test_stored_forge_token_registered_at_construction(tmp_path, monkeypatch):
                                           "ghs_apptoken0123456789abcdef")
     secrets_store.write_connection_secret("repo", "main", "token_ro",
                                           "custom-ro-value-0123456789abcdef")
+    secrets_store.write_connection_secret("repo", "main", "reviewer_token",
+                                          "reviewer-secret-value-abcdef01")
     inst = RepoInstance(name="main", url="https://github.com/o/r", forge="github")
     try:
         make_forge(inst)
         out = redact("leak ghs_apptoken0123456789abcdef and "
-                     "custom-ro-value-0123456789abcdef end")
+                     "custom-ro-value-0123456789abcdef and "
+                     "reviewer-secret-value-abcdef01 end")
         assert "ghs_apptoken" not in out and "custom-ro-value" not in out
+        assert "reviewer-secret-value" not in out
         assert MASK in out
     finally:
         for key in ("forge_token:main", "forge_token_ro:main",
                     "forge_reviewer:main"):
+            unregister_runtime_secret(key)
+
+
+def test_make_gitea_adapter_registers_explicit_tokens():
+    """Internal mission adapters are built with EXPLICIT tokens (not env
+    resolved). make_gitea_adapter is the construction chokepoint that must
+    register them — Gitea token_patterns are deliberately empty (40-hex /
+    git-SHA collision), so value registration is the only redaction line
+    (ADR-0010, docs/14)."""
+    from devcake.adapters.registry import make_gitea_adapter
+    from devcake.security import unregister_runtime_secret
+
+    write = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    reviewer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    keys = []
+    try:
+        make_gitea_adapter("http://gitea:3000/o/r", write, reviewer)
+        keys = [f"forge_token:gitea:{write[:6]}",
+                f"forge_token:gitea:{reviewer[:6]}"]
+        out = redact(f"leak {write} and {reviewer} end")
+        assert write not in out and reviewer not in out
+        assert MASK in out
+    finally:
+        for key in keys:
             unregister_runtime_secret(key)
 
 

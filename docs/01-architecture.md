@@ -49,7 +49,9 @@ app/devcake/
                    #   save → workspace dir → executor.start (04 §3.1, ADR-0025)
     orchestrator/  #   package: MissionManager (DI + verbs) + module functions (04, ADR-0015)
                    #     manager, schedule, dispatch, finalize, transitions,
-                   #     review, decomposition, sweeps, feed, markers, steward
+                   #     review, decomposition, sweeps, feed, markers, steward,
+                   #     discovery, steps, router, family_graph, freshness,
+                   #     completion, deliver, activity_payload
     steward_service.py  # Relations Steward cadence (ADR-0007; ISSUES #36 first cut)
     cron_service.py     # Scheduled Tasks: one-verb ticket creator + reserved
                         #   Memory Curator fan-out (ADR-0035); fires ride the poll loop
@@ -57,12 +59,15 @@ app/devcake/
                         #   notebooks at harvest (ADR-0035); app-blind to notes
     runs.py        #   ingress, kill, hello dispatch; holds RunBootstrap + RunFinalizer
     oauth.py       #   harness OAuth flows (launches via RunBootstrap)
+    grok_oauth.py  #   host-side Grok CLI session refresh at runspec inject
     watchdog.py    #   timeout/zombie detection + workspace sweep cadence
     reconcile.py   #   boot reconciliation: adopt/orphan runs vs the Dagu API (04 §6)
     workspaces.py  #   WorkspaceStore — per-run host-bind tree, fail-closed
                    #   volume gate, sweep (ADR-0025)
     repo_mirror.py #   RepoCache — mandatory source mirrors, freshness gate,
                    #   needed_for (ADR-0024)
+    repo_sourcing.py   # ONE rule for which repo names a run draws in
+                   #   (primary / refs / blockers / memory stages — ADR-0034)
     forge_runtime.py   # ForgeRuntime — live adapter set, per-repo breakers,
                    #   bounded health sweeps (M10)
     repo_routing.py    # mission → work-repo resolution (M10 markers)
@@ -92,14 +97,19 @@ app/devcake/
   adapters/
     registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), make_internal_forge(),
                    #   forges() — the ONE place that knows which adapters exist
-    linear/        #   PMOPort impl (05)
-    gitea_issues/  #   PMOPort impl — forge-issue family (05 §9; not ForgePort)
+    registry_versions.py  # HarnessVersionSource impl (npm / x.ai latest lookup)
+    linear/        #   PMOPort impl — launch-supported (05)
+    gitea_issues/  #   PMOPort impl — forge-issue family, launch-supported (05 §9)
+    github_issues/ #   PMOPort impl — forge-issue family, experimental (05)
+    gitlab_issues/ #   PMOPort impl — forge-issue family, experimental (05)
+    forge_issue.py #   shared forge-issue PMO helpers
     github/ gitlab/ gitea/  # ForgePort impls + Gitea provisioner (06, ADR-0010)
     dagu/          #   ExecutorPort impl
     files/         #   StatePort + CronStore impls (+ receipts.py, runlog.py, owner_store.py,
                    #   cron_store.py — the scheduled-task fire ledger) (10)
     redis/         #   MessagingPort impl — ingress + replies (09)
     claims_writer.py     # ClaimsNotebooks impl (git subprocess via adapters.git)
+    git.py         #   shared git subprocess site for app-side clones/pushes
     registry_versions.py # HarnessVersionSource impl (npm / x.ai, operator-asked)
     xai/           #   OidcTokenPort impl — auth.x.ai refresh (Grok CLI sessions)
   api/             # FastAPI (11, ADR-0015/0028): services.py = the
@@ -112,6 +122,7 @@ app/devcake/
                    #   profiles_service.py, settings_transfer.py,
                    #   devtypes_service.py, connections_service.py,
                    #   internal_repos_service.py, runs_service.py, cron_service.py,
+                   #   default_board.py (ADR-0030 managed board provision),
                    #   auth.py (basic-auth + intent-header middleware —
                    #   attached in main.py; load-bearing, tested via
                    #   tests/test_api_surface.py)
@@ -121,11 +132,20 @@ app/devcake/
                    #   cross-cutting — consumed by domain, adapters, and api alike)
   security.py      # redaction choke point, fed token shapes by the registry (14)
   harness.py       # harness registry: CLI/image/credential runtime adapters (08)
+  secrets.py       # GUI-stored operator secrets under /data/secrets (ADR-0011)
+  staffing.py      # staffability chokepoint vs ReceiptStore (dispatch/steward/OAuth)
+  profiles.py      # named config profiles (ADR-0013)
+  settings_bundle.py  # versioned settings-bundle serialization (ADR-0013)
+  settings_crypto.py  # passphrase encryption for secret-bearing bundle sections
+  keep_set.py      # app-published keep-set for the host bake verb
+  house_pins.py    # house CLI pin versions (app-side half of Dockerfile ARGs)
+  bake_status.py   # host baker status on /data (app reads; baker writes)
+  versions.py      # resolve-once `latest` CLI gesture (never stored)
 ```
 
-The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.
+The app boots via `uvicorn devcake.api.main:app`. Package-root modules (`config.py`, `security.py`, `harness.py`, secrets/staffing/settings/bake helpers) are cross-cutting concerns, not layer members.
 
-**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`, plus secondary `ReceiptStore`, `HarnessVersionSource`, `ClaimsNotebooks`, `OidcTokenPort`, and the scheduled-task `CronStore` — ADR-0035). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files (runs + receipts + cron ledger), Redis Streams, claims writer, registry versions, x.ai token refresh; `MissionManager` / `FinalizerRouter` satisfy `RunFinalizer`. Wire adapters raise port-level errors (`ExecutorError`/`DuplicateRun`, `MessagingError`, `ForgeError`, `PMOTransient`) — never raw httpx/redis types. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, steward, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
+**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`, plus secondary `ReceiptStore`, `HarnessVersionSource`, `ClaimsNotebooks`, `OidcTokenPort`, and the scheduled-task `CronStore` — ADR-0035). Production adapters: Linear + Gitea Issues (launch-supported PMO) and GitHub/GitLab Issues (experimental PMO); GitHub/GitLab/Gitea forges; Dagu, files (runs + receipts + cron ledger), Redis Streams, claims writer, registry versions, x.ai token refresh; `MissionManager` / `FinalizerRouter` satisfy `RunFinalizer`. Wire adapters raise port-level errors (`ExecutorError`/`DuplicateRun`, `MessagingError`, `ForgeError`, `PMOTransient`) — never raw httpx/redis types. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, steward, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
 
 **Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). Domain modules depend on **port Protocols**, not adapter packages.
 

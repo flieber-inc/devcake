@@ -40,8 +40,9 @@ The following are explicitly **out of scope** (see also `14-security.md` and
   **0..N** PMO instances and repos *per stack* are in scope (multi-connection).
 - Human-in-the-loop approval steps *inside* DevCake (approval happens in the PMO
   System and the forge).
-- PMO systems beyond the in-tree set (Linear + Gitea Issues; adapters are
-  pluggable). Markdown-fidelity markers are a port requirement
+- PMO systems beyond the in-tree set (launch-supported: Linear + Gitea Issues;
+  experimental: GitHub Issues + GitLab Issues — all registered in
+  `adapters/registry.py`). Markdown-fidelity markers are a port requirement
   (`ports/pmo.py`) — multi-PMO is not adapter-only for ADF/rich-text systems.
 - Hosted multi-tenant SaaS.
 
@@ -78,16 +79,15 @@ The following are explicitly **out of scope** (see also `14-security.md` and
 | **Memory notebook** | An ordinary repository card bound as team memory (`memory_repos`, ADR-0035): curated notes maintained by humans and a Curator board, mounted read-only at `/workspace/memory/<card>/` into every run that binds it. Raw leads queue under its `.claims/` folder until reviewed. Survives Clear. |
 | **Skill source** | A dedicated skills connection (ADR-0016 addendum 2): a git repository whose folders each hold one skill, served read-only from the mirror as `<source>/<skill>`. Its own connection with its own read tokens — never a repo card. |
 
-The complete set of ten managed labels is defined in `02-domain-model.md` §5 and nowhere else.
+The complete set of eleven managed labels is defined in `02-domain-model.md` §5 and nowhere else.
 
 ## 4. Core invariants
 
 These are **behavioral** contracts (not the full security model — that is
 `14-security.md`). They are referenced by ID (`INV-n`) throughout the docs;
-the *behaviors* they name are pinned by the unit suite (`16-roadmap.md`, M7),
-though there is no invariant-indexed test map — coverage is by behavior, not
-by `INV-n` key (2026-08 truth sweep: the earlier wording implied an index
-that does not exist).
+the *behaviors* they name are pinned by the unit suite (`16-roadmap.md`, M7).
+There is no invariant-indexed test map — coverage is by behavior, not by
+`INV-n` key.
 
 - **INV-1 — The PMO System is the single source of truth.** All Mission status, labels, and priority are read live from the PMO System. No local data is ever deemed current; local state (`/data/state`) is advisory telemetry that can be wiped without corrupting the system (consequences of a wipe are documented in `10-persistence.md`).
 - **INV-2 — At most one stage label per Mission.** A Mission carrying two or more stage labels is in conflict: DevCake refuses to schedule it (`LABEL_CONFLICT` — unschedulable gate reason only; no auto-comment; `15-errors-and-retries.md`).
@@ -167,7 +167,7 @@ Operating duties — once at setup and recurring — live in
 | `02-domain-model.md` | Entities, fields, Mission Type derivation, label set, state machine |
 | `03-mission-lifecycle.md` | The four Mission Type playbooks, `result.json`, canonical prompts |
 | `04-orchestrator.md` | Poll loop, scheduling, no-lock atomicity, crash recovery |
-| `05-pmo-adapter.md` | `PMOPort` + Linear + Gitea Issues adapters |
+| `05-pmo-adapter.md` | `PMOPort` + Linear + forge-issue adapters (Gitea launch-supported; GitHub/GitLab experimental) |
 | `06-forge-adapter.md` | `ForgePort` + GitHub/GitLab/Gitea adapters, PR/branch conventions |
 | `07-dev-runtime.md` | Dev container contract: filesystem, env, exit codes, lifecycle |
 | `08-harness-templates.md` | Harness invocation, plan mode, token extraction, MCP setup, local backends |

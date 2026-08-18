@@ -4,6 +4,7 @@ PMOPort / ForgePort (pluggable vendors — ADR-0008).
 ExecutorPort / StatePort / MessagingPort / RunFinalizer (run infrastructure).
 ReceiptStore / HarnessVersionSource / ClaimsNotebooks (secondary infra).
 CronStore (scheduled-task fire ledger — ADR-0035).
+OidcTokenPort (control-plane OAuth refresh) is imported from ports.oidc_token.
 """
 
 from .claims import ClaimsNotebooks

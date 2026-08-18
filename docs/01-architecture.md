@@ -88,6 +88,7 @@ app/devcake/
     receipts.py    #   ReceiptStore — harness bake receipts (staffing, fail-closed)
     versions.py    #   HarnessVersionSource — operator-asked remote CLI latest
     claims.py      #   ClaimsNotebooks — memory `.claims/` forge write seam
+    oidc_token.py  #   OidcTokenPort — host-side OAuth refresh at runspec inject
   adapters/
     registry.py    #   PMO_SYSTEMS, make_pmo(), make_forge(), make_internal_forge(),
                    #   forges() — the ONE place that knows which adapters exist
@@ -100,6 +101,7 @@ app/devcake/
     redis/         #   MessagingPort impl — ingress + replies (09)
     claims_writer.py     # ClaimsNotebooks impl (git subprocess via adapters.git)
     registry_versions.py # HarnessVersionSource impl (npm / x.ai, operator-asked)
+    xai/           #   OidcTokenPort impl — auth.x.ai refresh (Grok CLI sessions)
   api/             # FastAPI (11, ADR-0015/0028): services.py = the
                    #   composition root (Services graph + build_services(),
                    #   called by the lifespan — importing main.py builds
@@ -123,7 +125,7 @@ app/devcake/
 
 The app boots via `uvicorn devcake.api.main:app`. `config.py`, `security.py`, and `harness.py` sit at the package root because they are cross-cutting concerns, not layer members.
 
-**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`, plus secondary `ReceiptStore`, `HarnessVersionSource`, `ClaimsNotebooks`, and the scheduled-task `CronStore` — ADR-0035). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files (runs + receipts + cron ledger), Redis Streams, claims writer, registry versions; `MissionManager` / `FinalizerRouter` satisfy `RunFinalizer`. Wire adapters raise port-level errors (`ExecutorError`/`DuplicateRun`, `MessagingError`, `ForgeError`, `PMOTransient`) — never raw httpx/redis types. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, steward, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
+**Ports today:** vendor seams (`PMOPort`, `ForgePort` — ADR-0008; `InternalForgePort` — ADR-0010) and run-infrastructure seams (`ExecutorPort`, `StatePort`, `MessagingPort`, `RunFinalizer`, plus secondary `ReceiptStore`, `HarnessVersionSource`, `ClaimsNotebooks`, `OidcTokenPort`, and the scheduled-task `CronStore` — ADR-0035). Production adapters: Linear, GitHub/GitLab/Gitea, Dagu, files (runs + receipts + cron ledger), Redis Streams, claims writer, registry versions, x.ai token refresh; `MissionManager` / `FinalizerRouter` satisfy `RunFinalizer`. Wire adapters raise port-level errors (`ExecutorError`/`DuplicateRun`, `MessagingError`, `ForgeError`, `PMOTransient`) — never raw httpx/redis types. Composition root (`api/services.build_services()`, ADR-0028 — called once by the lifespan, never at import) builds adapters (incl. optional `make_internal_forge()` when Gitea admin creds are set), injects them into `RunManager` / per-instance `MissionManager`s, then `manager.set_finalizer(…)` so ingress/kill never type against the concrete orchestrator. Skill-store + per-mission repo routing (`resolve_repo` / `resolve_repo_live`) ride the same composition. All four dispatch flavors (hello, mission, steward, OAuth) call `RunBootstrap.launch` for the durable-intent-before-trigger spine (`04-orchestrator.md` §3.1).
 
 **Rule:** the domain core is testable with fakes of the ports; adapters never leak vendor types upward (normalized DTOs only, `02-domain-model.md`). Domain modules depend on **port Protocols**, not adapter packages.
 

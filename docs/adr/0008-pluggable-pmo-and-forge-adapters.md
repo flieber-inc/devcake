@@ -140,6 +140,7 @@ docs/04 §3.1). This does **not** reopen vendor pluggability decisions above.
 | `ReceiptStore` | harness bake receipts (staffing fail-closed) | `adapters/files/receipts` |
 | `HarnessVersionSource` | operator-asked remote CLI latest | `adapters/registry_versions` |
 | `ClaimsNotebooks` | memory notebook `.claims/` write | `adapters/claims_writer` |
+| `OidcTokenPort` | control-plane OAuth token refresh (host-side) | `adapters/xai` |
 | `domain/run_bootstrap.py` | deep dispatch spine shared by hello, mission, steward, OAuth | — |
 
 `RunManager` binds the finalizer via `set_finalizer` after composition (breaks

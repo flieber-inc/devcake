@@ -84,17 +84,17 @@ Consequences for the operator. On a **claude-code** or **grok-build** Dev, raisi
 `--max-turns` in that Mission Type's extra CLI args (`11-admin-panel.md` §3) is
 the literal remedy the `run.error` names, and both report the stop as
 `DEV_TURN_BUDGET`. On a **codex** Dev there is nothing to raise: an unbounded run
-is stopped only by `dev_timeout_minutes` (`config.py:343`, default 120 — a
+is stopped only by `dev_timeout_minutes` (`AppConfig.dev_timeout_minutes`, default 120 — a
 **global** setting, so lowering it to fence one Dev Type shortens every run) and
 it arrives as a signal kill reported `DEV_TIMEOUT`, never `DEV_TURN_BUDGET`. The
 levers there are a smaller task, a different Dev Type, or accepting the timeout as
-the bound. Do not go looking for a codex turn flag; at 0.147.0 there is not one (re-probed at the bump).
+the bound. Do not go looking for a codex turn flag; at 0.147.0 there is not one.
 
-**grok's cap has no default**, so nothing sits above the value you set: measured
-2026-07-25 it stops exactly where it is told (`grok_loop_varying_cap20` at 20;
-`grok_turn_budget` at 2), `--max-turns <N>` is documented with no default, and
-`config.toml` has no `max_turns` key. The 16 in §2b is a different stop path
-entirely — do not mistake it for a ceiling on this flag.
+**grok's cap has no default**, so nothing sits above the value you set: it stops
+exactly where it is told (`grok_loop_varying_cap20` at 20; `grok_turn_budget` at 2),
+`--max-turns <N>` is documented with no default, and `config.toml` has no
+`max_turns` key. The 16 in §2b is a different stop path entirely — do not mistake
+it for a ceiling on this flag.
 
 ## 2b. grok's silent non-progress halt — a `DEV_BAD_OUTPUT` with no diagnosis
 
@@ -146,7 +146,7 @@ Scenario captures: `grok_loop_*` under `app/tests/fixtures/harness_streams/`
 
 After `max_attempts` (default 3) counted failures of the **same step** (mission + type):
 
-1. Add the `DEVCAKE-FAILED` label (one of the ten managed labels, `02-domain-model.md` §5).
+1. Add the `DEVCAKE-FAILED` label (one of the managed labels in `ALL_LABELS`, `02-domain-model.md` §5 / `domain/model.py`).
 2. Post a comment: last error class + message, attempt count, and the OpenObserve trace link for the final attempt.
 3. Stop scheduling the Mission (derivation row 8).
 4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event count toward the next give-up (advisory local state — `10-persistence.md` §5).
@@ -167,7 +167,7 @@ The `human_needed` outcome (`03-mission-lifecycle.md` §4a) is a **successful ru
 
 Contrast: `DEVCAKE-FAILED` = involuntary give-up after repeated errors; `DEVCAKE-SKIP` = human opt-out; `DEVCAKE-NEEDS-HUMAN` = clean hand-off.
 
-**Loop guardrail (warnings only):** repeats on the same (mission, stage) escalate the baton-pass comment from the 2nd hand-off on ("Hand-off #N … add `DEVCAKE-SKIP` to stop DevCake"); DevCake never auto-parks — the human always decides (founder decision 2026-07-12). The prompts require evidence (quote the exact error) before any hand-off.
+**Loop guardrail (warnings only):** repeats on the same (mission, stage) escalate the baton-pass comment from the 2nd hand-off on ("Hand-off #N … add `DEVCAKE-SKIP` to stop DevCake"); DevCake never auto-parks — the human always decides. The prompts require evidence (quote the exact error) before any hand-off.
 
 **Steward degradation:** 3 consecutive dead STEWARD runs ⇒ the periodic service backs off (`steward_degraded` in `/health` + the admin card); "Run now" remains available and a successful run clears it. Store-derived — restart-safe, no counters to reset.
 

@@ -255,6 +255,6 @@ class CronService:
             labels.add(_STAGE_LABEL[stage])
         await mgr.pmo.ensure_labels(mgr.instance.team_key, labels)
         key, pmo_id = await mgr.pmo.create_mission(
-            mgr.instance.team_key, title, body, "normal", labels)
+            mgr.instance.team_key, title, body, "medium", labels)
         log.info("cron %s created %s on %s", row.id, key, mgr.instance_name)
         return {"pmo": mgr.instance_name, "key": key, "pmo_id": pmo_id}

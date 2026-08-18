@@ -16,7 +16,8 @@ from fastapi import HTTPException
 
 from devcake.api import mission_actions
 from devcake.api.mission_actions import create_mission
-from devcake.domain.model import MissionRef
+from devcake.domain.model import MissionRef, PRIORITY_RANK
+
 
 
 def run_coro(c):
@@ -43,6 +44,8 @@ class CreatePMO:
 
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):
+        if priority not in PRIORITY_RANK:
+            raise ValueError(f"illegal priority {priority!r}")
         self.created.append((team_ref, title, description, priority,
                              set(label_names)))
         return "DEV-9", "pmo-new"

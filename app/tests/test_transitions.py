@@ -13,7 +13,9 @@ from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.orchestrator import decomposition, review, transitions
-from devcake.domain.model import Activity, ActivityEntry, Mission, MissionType
+from devcake.domain.model import (Activity, ActivityEntry, Mission, MissionType,
+                                  PRIORITY_RANK)
+
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
 from devcake.domain import backend_health
@@ -112,6 +114,8 @@ class FakePMO:
 
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):
+        if priority not in PRIORITY_RANK:
+            raise ValueError(f"illegal priority {priority!r}")
         self.created.append((title, parent_ref))
         key, pmo_id = f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
         self.all_missions.append(Mission(
@@ -121,6 +125,7 @@ class FakePMO:
             parent_ref=parent_ref,
         ))
         return key, pmo_id
+
 
     async def list_all(self, team_ref):
         return list(self.all_missions)
@@ -584,6 +589,29 @@ def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
     assert error.startswith("DEV_FORGE_AUTH:")
     # M10: the latch is per-repo on the runtime, never the dev-type dict
     assert "main" in mgr.forges.breakers and not mgr.breakers
+
+
+def test_notebook_clone_forge_auth_latches_notebook_card_not_work_repo(tmp_path):
+    """CAKE-60: strict memory-notebook DEV_FORGE_AUTH must latch the notebook
+    card. Latching run.repo_ref lets healthy work-repo probes clear the
+    breaker while DEV_FORGE_AUTH stays uncounted → infinite retry."""
+    m = mission("in_progress", {"DEVCAKE"})
+    mgr, _fake, _store = make_mgr(tmp_path, m)
+    run = _run("ONBOARD", None)
+    run.repo_ref = "main"
+    run.memory_mounts = [{"card": "nb", "binding": "board", "path": "memory/nb"}]
+    error = mgr.dev_failure_error(run, {
+        "exit_code": 13,
+        "error_class": "DEV_FORGE_AUTH",
+        "error_detail": (
+            "memory notebook nb clone failed: "
+            "remote returned 403: Authentication failed"),
+    })
+    assert error.startswith("DEV_FORGE_AUTH:")
+    assert run.error_class == "DEV_FORGE_AUTH"
+    assert "nb" in mgr.forges.breakers
+    assert "main" not in mgr.forges.breakers
+    assert not mgr.breakers
 
 
 def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):

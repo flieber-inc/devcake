@@ -103,7 +103,8 @@ Each adapter ships a `descriptor` classvar (a `ForgeDescriptor`); prompts, `spec
 | `id`, `display_name` | registry key + UI label | registry, admin SPA |
 | `pr_instructions` | PR/MR CLI instructions for the EXECUTE playbook — a template with placeholders `{key}` `{title}` `{default}` `{branch}` (`{branch}` fed by `mission_branch()`, `{default}` by the resolved repo's `default_branch`) | `prompts.execute_prompt(…, pr_instructions=…)` |
 | `clone_user` | credential-in-URL user for https clones (`x-access-token` / `oauth2`) | `DEVCAKE_CLONE_USER` in `spec_env`; also `RepoCache`'s injected `clone_user_of` resolver — mirror fetches of **skill sources** read the descriptor directly because a source has no live adapter (ADR-0016 addendum 2) |
-| `git_user_name`, `git_email` | the Dev's git identity | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` |
+| `git_user_name`, `git_email` | the Dev's git identity (`git_email` is required on the port — every adapter supplies its own) | `DEVCAKE_GIT_NAME` / `DEVCAKE_GIT_EMAIL` |
+| `pr_noun` | user-facing noun (`"pull request"` / `"merge request"` on GitLab) | SPA + playbook copy |
 | `cli_token_envs` | env vars the entrypoint mirrors the forge token into for the CLI (`GH_TOKEN` / `GITLAB_TOKEN` / `GITEA_SERVER_TOKEN`) | `DEVCAKE_FORGE_CLI_ENVS` (comma-joined) |
 | `secret_env_vars`, `token_patterns` | the secret shapes this forge's tokens take | `security.redact` (`14-security.md` §7) |
 | `secret_shape_prefixes` | token prefixes (`ghp_`, `glpat-`, …) | admin SPA paste guard |

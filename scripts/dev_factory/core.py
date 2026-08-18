@@ -136,6 +136,11 @@ def load_keep_set(path: Path | str | None) -> KeepSet | None:
 def _parse_pin(item: object) -> Pin:
     if not isinstance(item, dict):
         raise InvalidKeepSet("each pin must be an object")
+    # Image names are derived on the host from template + cli_version + tag.
+    # A crafted pin that carries them is refused, not silently ignored.
+    for banned in ("image", "docker_image"):
+        if banned in item:
+            raise InvalidKeepSet(f"pin must not carry {banned!r}")
     template = item.get("template")
     version = item.get("cli_version")
     if not isinstance(template, str) or not template:

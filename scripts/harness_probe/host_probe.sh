@@ -16,6 +16,18 @@ else
   DIGEST="$(python3 scripts/app_digest.py)"
 fi
 
+# Defense in depth: only known template shape + house image namespace.
+# The factory already validates; this refuses a hand-invoked probe of
+# an arbitrary image that is not the published bake contract.
+if [[ ! "$TEMPLATE" =~ ^[a-z0-9-]+$ ]]; then
+  echo "host_probe: refusing template ${TEMPLATE@Q}" >&2
+  exit 2
+fi
+if [[ ! "$IMAGE" =~ ^devcake/dev-[a-z0-9-]+:[A-Za-z0-9._-]+$ ]]; then
+  echo "host_probe: refusing image ${IMAGE@Q}" >&2
+  exit 2
+fi
+
 mkdir -p "$OUT"
 # Image user is uid 1000; receipts must be writable by that user.
 chmod a+rwx "$OUT" 2>/dev/null || true

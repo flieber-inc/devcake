@@ -69,6 +69,44 @@ def test_unknown_template_is_refused(tmp_path):
         factory.load_keep_set(dest)
 
 
+def test_pin_image_fields_are_refused(tmp_path):
+    """A crafted keep-set cannot smuggle image/docker_image past load."""
+    factory = _load_factory()
+    dest = tmp_path / "harness_keep_set.json"
+    dest.write_text(json.dumps({
+        "pins": [{
+            "template": "grok-build",
+            "cli_version": "1.0.4",
+            "docker_image": "evil/smuggle:latest",
+        }],
+    }))
+    with pytest.raises(factory.InvalidKeepSet, match="docker_image"):
+        factory.load_keep_set(dest)
+    dest.write_text(json.dumps({
+        "pins": [{
+            "template": "grok-build",
+            "cli_version": "1.0.4",
+            "image": "nginx:latest",
+        }],
+    }))
+    with pytest.raises(factory.InvalidKeepSet, match="image"):
+        factory.load_keep_set(dest)
+
+
+def test_legacy_templates_field_is_ignored_not_trusted(tmp_path):
+    """Old keep-sets may still carry templates[]; only pins bake."""
+    factory = _load_factory()
+    dest = tmp_path / "harness_keep_set.json"
+    dest.write_text(json.dumps({
+        "templates": ["nginx", "evil"],
+        "pins": [{"template": "grok-build", "cli_version": "1.0.4"}],
+    }))
+    ks = factory.load_keep_set(dest)
+    assert [(p.template, p.cli_version) for p in ks.pins] == [
+        ("grok-build", "1.0.4"),
+    ]
+
+
 def test_non_semver_and_latest_are_refused(tmp_path):
     factory = _load_factory()
     dest = tmp_path / "harness_keep_set.json"
@@ -580,9 +618,25 @@ def test_reconcile_finishes_every_job_when_one_fails(tmp_path):
 def test_arg_names_match_the_app_house_pins():
     factory = _load_factory()
     from devcake.house_pins import DOCKERFILE_ARG, HOUSE_PINS, LAUNCH_SUPPORTED
+    from devcake.harness import HARNESSES
     assert factory.ARG_NAMES == DOCKERFILE_ARG
     assert factory.KNOWN_TEMPLATES == frozenset(HOUSE_PINS)
+    assert factory.KNOWN_TEMPLATES == frozenset(HARNESSES)
     assert factory.LAUNCH_SUPPORTED == LAUNCH_SUPPORTED
+
+
+def test_compose_claim_passes_paths_as_argv_not_shell():
+    """Watch-loop claim must not interpolate paths into sh -c text."""
+    # Same resolve as _load_factory: local tree or CI /srv/repo-scripts mount.
+    scripts = next(
+        (p for p in _FACTORY_CANDIDATES if (p / "dev_factory" / "watch.py").is_file()),
+        None,
+    )
+    assert scripts is not None, "scripts/dev_factory/watch.py not found"
+    text = (scripts / "dev_factory" / "watch.py").read_text()
+    assert 'if [ -f "$1" ]; then mv -f "$1" "$2"; fi' in text
+    assert "if [ -f {src" not in text
+    assert "f\"if [ -f" not in text
 
 
 def test_house_from_dockerfile_reads_arg_defaults():

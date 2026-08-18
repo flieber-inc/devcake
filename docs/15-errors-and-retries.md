@@ -309,15 +309,24 @@ Per `09-messaging.md` §4: an ingress entry failing 5 handling attempts moves to
 ## 6. Alerting (v0)
 
 OpenObserve scheduled alerts (`scripts/provision_oo.py`, needs
-`OO_ALERT_WEBHOOK` in `.env`), each an SQL condition over the traces stream —
-there is no metrics pipeline in v0 (`12-observability.md` §4):
+`OO_ALERT_WEBHOOK` in `.env`), each an SQL condition over the traces stream
+`default` — there is no metrics pipeline in v0 (`12-observability.md` §4).
+Destination name: **`devcake-webhook`**. Alert names and periods below match
+the script (period is minutes; threshold is the SQL result `>=` count):
 
-1. any give-up — `mission.give_up` spans in a 5-min window;
-1a. any needs-human hand-off — `audit.event` spans with `devcake.audit.action = devcake_needs_human` (the audit log is span-mirrored precisely so this alert can fire);
-2. tripped breaker (DEV_AUTH or forge) — and, separately, `dev.backend_degraded` spans for model-backend throttling (§4a, NOT a breaker) — `breaker.trip` spans;
-3. `PMO_TRANSIENT`/`FORGE_TRANSIENT` persistent > 15 min — `poll.cycle` outcome attribute plus `forge.probe_transient` spans;
-4. poison message — `ingress.poison` spans;
-5. daily cost threshold — SUM of `devcake.cost.usd` over `run.finalize` spans (`OO_DAILY_COST_ALERT_USD`, default 50).
+| Alert name | Condition (SQL over traces) | Period (min) | Threshold |
+|---|---|---|---|
+| `devcake-give-up` | `operation_name = 'mission.give_up'` | 10 | 1 |
+| `devcake-kills` | `operation_name = 'watchdog.kill'` | 10 | 1 |
+| `devcake-needs-human` | `audit.event` with `devcake_audit_action = 'devcake_needs_human'` (audit log is span-mirrored so this can fire) | 15 | 1 |
+| `devcake-dev-auth-breaker` | `operation_name = 'breaker.trip'` (DEV_AUTH or forge). Separately, `dev.backend_degraded` spans signal model-backend throttling (§4a) — **not** this alert | 15 | 1 |
+| `devcake-pmo-forge-transient` | `poll.cycle` with `devcake_outcome = 'PMO_TRANSIENT'` **or** `forge.probe_transient` | 15 | 3 |
+| `devcake-poison` | `operation_name = 'ingress.poison'` | 10 | 1 |
+| `devcake-daily-cost` | `SUM(devcake_cost_usd)` where not null | 1440 (24 h) | `OO_DAILY_COST_ALERT_USD` (default **50**) |
+
+Without `OO_ALERT_WEBHOOK`, the script skips alerts (exit 0). Re-post is
+idempotent: an “already exists” body is success; other errors fail loud
+(`12-observability.md` §5).
 
 ## 7. Blanket-exception policy
 

@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Seed the sandbox Linear team with fixtures covering EVERY derivation-table row
+"""Seed a Linear team with fixtures covering EVERY derivation-table row
 (docs/02 §2) — M2 exit criterion. Idempotent: fixtures are found by exact title.
 
-Standalone (stdlib only). Reads LINEAR_API_KEY + DEVCAKE_TEAM_KEY from .env/env.
+Sandbox **operator tooling**, not FOSS CI. Mutates a real Linear team: requires
+explicit ``LINEAR_API_KEY`` + ``DEVCAKE_TEAM_KEY`` from env/``.env`` (no production
+defaults). Stdlib only; never prints the API key. Fails loud on missing secrets
+or GraphQL errors.
+
 Run AFTER the app has bootstrapped the ten labels (or run the app once first).
 """
 

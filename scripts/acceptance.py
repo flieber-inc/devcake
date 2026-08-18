@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""DevCake v0 acceptance (docs/16 M7): the golden path, unattended, with REAL
+"""DevCake acceptance (docs/16 M7): the golden path, unattended, with REAL
 models. Creates a fresh mission in the sandbox Linear team and asserts it
 travels Backlog → In Progress → (labels progressing) → merged PR → Done with a
 transcript + token report for every step. Exits nonzero on any violation.
 
-Run manually before releases (it spends real tokens):
+**Manual / pre-release only.** Spends real model + PMO tokens. **Not** part of
+default FOSS CI (``scripts/ci_suite.sh`` / GitHub Actions unit path are
+model-free). Tester credentials come from the shell/``.env`` — never DevCake
+stored secrets. Live founder-token gates may still block a full green run on a
+given host; that residual is operational, not a silent CI obligation.
+
+Run manually before releases:
     python3 scripts/acceptance.py [--runs 2] [--forge github|gitlab|gitea]
 
 GitHub is the default. GitLab uses GITLAB_TOKEN and api.gitlab.com (or the

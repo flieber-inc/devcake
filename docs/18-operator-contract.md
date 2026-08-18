@@ -28,7 +28,7 @@ proving a fresh machine works is the
 
 | Duty | When | How (normative source) |
 |---|---|---|
-| **Read `/health`** — `security_warnings`, `circuit_breakers`, `poll_degraded`, merge queue, needs-human | Routinely; always when something feels off | Admin Overview renders it ([`11`](11-admin-panel.md)); OpenObserve alerts back it ([`12`](12-observability.md) §5–6) |
+| **Read `/health`** — `security_warnings`, `circuit_breakers`, `poll_degraded`, merge queue, needs-human | Routinely; always when something feels off | Admin Overview renders it ([`11`](11-admin-panel.md)); OpenObserve alerts back it when you provisioned them ([`12`](12-observability.md) §5–6 — optional `scripts/provision_oo.py` + `OO_ALERT_WEBHOOK`; ingest connectivity is app-boot, not this script) |
 | **Acknowledge breakers** | When tripped | `DEV_AUTH`: re-upload that Dev Type's credentials — the write clears the breaker ([`15`](15-errors-and-retries.md) §4). Repo breakers clear on a green probe: fix the token, wait a poll |
 | **Back up `/data`** | Before every upgrade; weekly otherwise | `scripts/backup_data.sh` — secret dump; no-arg default under `~/.local/share/devcake/backups` ([`13`](13-deployment.md) §8) |
 | **Back up `gitea_data`** | Same cadence, if the internal forge holds real work | `scripts/backup_gitea.sh` / `restore_gitea.sh` — same outside-checkout default and password-export handling ([`13`](13-deployment.md) §8) |
@@ -69,6 +69,18 @@ secrets. Rotation is not complete until you have re-exported and re-backed-up �
 or accepted that the old artifacts must now be guarded like the old secret.
 
 ## 5. What the app will not do for you
+
+Operator scripts outside the FOSS CI path (not obligations for a stranger
+clone's green build):
+
+- **`scripts/acceptance.py`** — manual pre-release golden path; spends real
+  model + PMO tokens; **not** `ci_suite` / default GitHub Actions.
+- **`scripts/seed_sandbox.py`** — mutates a real Linear team; needs explicit
+  API key + team key; sandbox fixtures only.
+- **`scripts/export_receipts.py`** — evidence pack (not a backup); excludes
+  `/data/secrets` but still holds private mission content.
+- **`scripts/provision_oo.py`** — optional dashboard/alerts polish after boot
+  already created the ingest user ([`12`](12-observability.md) §5).
 
 The app warns; **you** gate (`14` §8):
 

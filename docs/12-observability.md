@@ -120,15 +120,53 @@ split plus `total` from its `end` event, codex the split with no total.
 
 ## 5. Pre-provisioned dashboard + alerts (`scripts/provision_oo.py`, idempotent)
 
-The **ingest service account** is created/resynced at **app boot** (not by
-this script — see §1). The host-side script remains for the **DevCake**
-dashboard and optional alerts: all panels SQL over the traces stream —
-**Cost per hour (USD, by dev type)** · **Dev runs by outcome (daily)** ·
-**Failure signals (kills, give-ups)**. With `OO_ALERT_WEBHOOK` set in `.env`,
-the script also provisions the alert set of `15-errors-and-retries.md` §6
-against the same stream. The admin panel's Consoles page deep-links here
-(`11-admin-panel.md` §5). Safe to re-run; still ensures the ingest user if
-you want a host-side check without restarting the app.
+### Dual path (connectivity vs polish)
+
+| Path | What it does | Required for first connectivity? |
+|---|---|---|
+| **App boot** (`telemetry/oo_provision.ensure_oo_ingest_user`) | Creates/resyncs the OO **ingest service account** from `OO_INGEST_*` + root — fail-loud with retries | **Yes** — a filled `.env` + `compose up` is enough for telemetry |
+| **Host script** (`scripts/provision_oo.py`) | Still ensures the ingest user (repair without app restart), then provisions the **DevCake** dashboard and, when `OO_ALERT_WEBHOOK` is set, the **alert destination + alert set** | **No** — optional ops polish (dashboard/alerts) + offline credential repair |
+
+Neither path requires the other for first connectivity. Boot does not need
+the host script; the host script is not required to create the ingest user.
+
+### Dashboard panels (script installs these four on create)
+
+All panels are SQL over the traces stream `default` (org from `OO_ORG`,
+default `default` — same multi-org footgun as fluent-bit, §1 / `13` §7):
+
+| # | Panel title | Primary signal |
+|---|---|---|
+| 1 | **Cost per hour (USD, by dev type)** | `devcake_cost_usd` (harness-reported) |
+| 2 | **Dev runs by outcome (daily)** | `dev.run` by `devcake_outcome` |
+| 3 | **Failure signals (kills, give-ups)** | `watchdog.kill`, `mission.give_up` |
+| 4 | **Estimated cost per hour (USD, by dev type — rate card)** | `devcake_cost_usd_estimated` (ADR-0021) |
+
+Panels 1 and 4 are the two cost surfaces from §4 — billed vs rate-card
+estimate; they never coalesce.
+
+### Alerts
+
+With `OO_ALERT_WEBHOOK` set in `.env`, the script provisions destination
+`devcake-webhook` and the named alert set of `15-errors-and-retries.md` §6
+against the same traces stream. Without the webhook, alerts are skipped
+(exit 0 unless earlier failures). Daily cost threshold:
+`OO_DAILY_COST_ALERT_USD` (default **50**). The admin panel's Consoles page
+deep-links here (`11-admin-panel.md` §5).
+
+### Idempotency / fail-loud (honest re-run contract)
+
+| Artifact | When | Re-run behavior | Fail-loud |
+|---|---|---|---|
+| Ingest user (`service_account`) | Always (script + boot) | GET users → verify streams → create or password resync | exit / `OoProvisionError` |
+| Dashboard title `DevCake` | Script only | **Skip create if title exists** (“leaving it”) — **existing panels are not updated in place** | Collect into `failures` |
+| Destination `devcake-webhook` | Only if webhook set | Body containing “exist” treated success | Fail-loud on other errors |
+| Named alerts | Same | Same exist-as-success | Fail-loud |
+
+Safe to re-run for **create-if-missing** + alert re-post with exist-as-success
++ ingest repair. **Panel schema changes require delete-and-recreate of the
+DevCake dashboard in OO (or manual panel edit)** — the script will not refresh
+an existing dashboard's panels.
 
 ## 6. Run-failure log stream (`run_failures`) — the executor's dying words
 

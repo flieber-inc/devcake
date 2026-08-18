@@ -101,8 +101,8 @@ The mirror is strictly chronological and complete — *all* the current activity
 Delivery happens in two stages, because Dagu trigger params are visible unmasked in its UI (verified — `13-deployment.md` §4):
 
 - **Stage 1 — container env from the Dagu DAG:** `DEVCAKE_RUN_ID`, `TRACEPARENT`, `REDIS_URL`, and the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD` — the one deliberate param-borne secret, `09-messaging.md` §1a).
-- **Stage 2 — the run spec, fetched by the entrypoint** over Redis (`runspec.get` → keyed by run id, `09-messaging.md` §4): everything else below, including all secrets, scoped to exactly what this run's Dev Type needs. The entrypoint exports these as env vars (or writes credential files) **before** launching the harness — so from the harness's point of view the full table is simply its environment. Under ADR-0025 the `runspec.get` payload carries the caller's `phase`: the **provision** step receives a REDUCED spec (no credential files, no harness/model or Dev-Type secret env; the forge token only for direct-clone internal repos) — it runs no agent and needs only what cloning needs; the **harness** step receives the full table below (this §3; channel shape in
-  `09-messaging.md` §4 `runspec.get`).
+- **Stage 2 — the run spec, fetched by the entrypoint** over Redis (`runspec.get` → keyed by run id, `09-messaging.md` §3): everything else below, including all secrets, scoped to exactly what this run's Dev Type needs. The entrypoint exports these as env vars (or writes credential files) **before** launching the harness — so from the harness's point of view the full table is simply its environment. Under ADR-0025 the `runspec.get` payload carries the caller's `phase`: the **provision** step receives a REDUCED spec (no credential files, no harness/model or Dev-Type secret env; the forge token only for direct-clone internal repos) — it runs no agent and needs only what cloning needs; the **harness** step receives the full table below (this §3; channel shape in
+  `09-messaging.md` §3 `runspec.get`).
 
 | Variable | Stage | Meaning |
 |---|---|---|

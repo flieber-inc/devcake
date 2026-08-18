@@ -241,6 +241,6 @@ are reconcile-adopted.
   `test_settings_bundle.py`; the 2026-08-03 LFS-steering and DAG-precondition
   probes recorded above.
 - Supersedes: ADR-0024 §5 accepted "ambient mirror read" risk.
-- Operator: `07-dev-runtime.md` §§1, 3, 5, 7b; `09-messaging.md` §4;
+- Operator: `07-dev-runtime.md` §§1, 3, 5, 7b; `09-messaging.md` §3;
   `13-deployment.md` §§1, 3-5, 8; `14-security.md` §§1, 4 (item 7), 5–6;
   `15-errors-and-retries.md` §§1-2; `02-domain-model.md` §7; `00`, `01`, `12`.

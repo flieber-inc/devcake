@@ -195,6 +195,25 @@ _RESERVED_SECRET_DIRS = frozenset({
 })
 
 
+def write_system_secret_json(subdir: str, filename: str, data: dict) -> Path:
+    """Atomic 0600 JSON under /data/secrets/{subdir}/{filename}.
+
+    For system-managed reserved dirs (internal_forge, …) that share the
+    redaction glob. Same write choke point as connection/harness secrets —
+    invalidates the redaction scan cache. Path components are validated so
+    callers cannot escape the secrets root.
+    """
+    if subdir not in _RESERVED_SECRET_DIRS:
+        raise ValueError(f"not a system secret dir: {subdir!r}")
+    base = os.path.basename(filename or "")
+    if (not base or base != filename or base in (".", "..")
+            or "/" in base or "\\" in base):
+        raise ValueError(f"invalid system secret filename {filename!r}")
+    path = _root() / subdir / base
+    _atomic_write(path, data)
+    return path
+
+
 def require_credential_ref(dev_type: str, filename: str) -> None:
     """Path components only — refuse reserved dirs and traversal."""
     if (not dev_type or dev_type in _RESERVED_SECRET_DIRS

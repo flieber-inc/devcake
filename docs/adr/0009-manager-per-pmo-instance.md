@@ -48,13 +48,20 @@ non-DevCake automation) owns cross-team coordination. Decision:
   hot path, not a fallback) → same-system peer scan (config order, first
   success) → local adapter fallback → unreadable (fail-safe open, ADR-0007
   semantics unchanged).
-- **Peer resolution is restricted to global-id systems** (`linear`):
-  `gitea_issues` pmo_ids are per-repo issue numbers, so peer resolve and
-  peer run history are hard-refused for them — not best-effort.
+- **Peer resolution is restricted by adapter capability**
+  (`PMOCapabilities.global_ids`, not a vendor-name set): systems whose
+  pmo_ids are globally unique across the vendor environment (Linear UUIDs
+  declare `global_ids=True`) may resolve via peer adapters and accept peer
+  run history on a locally-resolved foreign id. Colliding-id systems
+  (`gitea_issues` / forge-issue numbers declare `global_ids=False`) hard-
+  refuse peer resolve and peer run history — not best-effort. Adding a PMO
+  no longer edits domain policy (2026-08 evaluation F10).
 - **Attribution guards inheritance:** the locator returns
   `accepted_pmo_refs` — the instances whose run histories may serve each
-  blocker — and `resolve_blocker_work` filters its run index by it
-  (ADR-0017 amendment). A bare id-keyed index would let a purely local
-  Gitea blocker `#3` mount a peer instance's unrelated `#3` tree.
+  blocker (always including pre-schema-v3 `""`/`"main"` stamps for the
+  attributed instance, so multi-PMO upgrades do not orphan pre-v3 work) —
+  and `resolve_blocker_work` filters its run index by it (ADR-0017
+  amendment). A bare id-keyed index would let a purely local Gitea blocker
+  `#3` mount a peer instance's unrelated `#3` tree.
 - The missions cache resolves peer blocker ids to keys in a zero-network
   merged post-pass; ids in no instance's snapshot stay raw (advisory).

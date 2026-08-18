@@ -496,7 +496,8 @@ def test_locator_sees_owner_after_claim(tmp_path):
     r = run_coro(eng.blocker_locator.resolve(
         "uuid-a", local_mgr=eng, memo={}))
     assert r.mission is cs_m
-    assert r.accepted_pmo_refs == frozenset({"cs"})
+    from devcake.domain.run import LEGACY_PMO_REFS
+    assert r.accepted_pmo_refs == LEGACY_PMO_REFS | frozenset({"cs"})
 
 
 def test_main_wires_one_shared_locator():

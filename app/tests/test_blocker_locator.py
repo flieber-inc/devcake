@@ -35,13 +35,17 @@ def _mission(pmo_id, key, status="done", instance=""):
 
 
 class CountingPMO:
-    def __init__(self, missions=None, fail=False, global_ids=True):
+    def __init__(self, missions=None, fail=False, global_ids=True,
+                 raise_caps=False):
         self.missions = missions or {}
         self.fail = fail
         self.global_ids = global_ids
+        self.raise_caps = raise_caps
         self.gets: list[str] = []
 
     def capabilities(self):
+        if self.raise_caps:
+            raise RuntimeError("capabilities probe failed")
         from fakes import fake_pmo_capabilities
         return fake_pmo_capabilities(global_ids=self.global_ids)
 
@@ -55,19 +59,28 @@ class CountingPMO:
         return m
 
 
-def _mgr(name, system="linear", missions=None, fail=False):
-    # global_ids rides the adapter capability now (2026-08 F10): the linear
-    # shape declares it, the colliding-id shape (gitea_issues) does not
+def _mgr(name, system="linear", missions=None, fail=False, *, global_ids=None):
+    # Peer allow/deny rides PMOCapabilities.global_ids (F10), not the system
+    # name. Default True for the linear-shaped fixture only so existing peer
+    # tests stay short; colliding-id fixtures pass global_ids=False explicitly.
+    if global_ids is None:
+        global_ids = True
     return SimpleNamespace(
         instance=SimpleNamespace(name=name, system=system),
         instance_name=name,
-        pmo=CountingPMO(missions, fail=fail,
-                        global_ids=(system == "linear")))
+        pmo=CountingPMO(missions, fail=fail, global_ids=global_ids))
 
 
 def _locator(managers, owner=None):
     owner = owner or {}
     return BlockerLocator(managers, owner.get)
+
+
+# Peer-resolved attribution always carries LEGACY_PMO_REFS so pre-schema-v3
+# runs (pmo_ref ""/"main") on that peer's history still mount (mirrors local).
+from devcake.domain.run import LEGACY_PMO_REFS
+
+_PEER_CS_REFS = LEGACY_PMO_REFS | frozenset({"cs"})
 
 
 def test_owner_map_resolves_via_peer_adapter():
@@ -77,7 +90,7 @@ def test_owner_map_resolves_via_peer_adapter():
     loc = _locator({"cs": cs, "eng": eng}, owner={"a": "cs"})
     r = run_coro(loc.resolve("a", local_mgr=eng, memo={}))
     assert r.mission is a
-    assert r.accepted_pmo_refs == frozenset({"cs"})
+    assert r.accepted_pmo_refs == _PEER_CS_REFS
     assert eng.pmo.gets == []
 
 
@@ -89,7 +102,7 @@ def test_owner_released_peer_scan_is_primary_path():
     loc = _locator({"cs": cs, "eng": eng})       # no owner entry at all
     r = run_coro(loc.resolve("a", local_mgr=eng, memo={}))
     assert r.mission is a
-    assert r.accepted_pmo_refs == frozenset({"cs"})
+    assert r.accepted_pmo_refs == _PEER_CS_REFS
 
 
 def test_owner_points_at_missing_manager_falls_through():
@@ -98,7 +111,7 @@ def test_owner_points_at_missing_manager_falls_through():
     loc = _locator({"cs": cs, "eng": eng}, owner={"a": "gone"})
     r = run_coro(loc.resolve("a", local_mgr=eng, memo={}))
     assert r.mission is a
-    assert r.accepted_pmo_refs == frozenset({"cs"})
+    assert r.accepted_pmo_refs == _PEER_CS_REFS
 
 
 def test_different_system_peer_never_called():
@@ -114,8 +127,8 @@ def test_different_system_peer_never_called():
 def test_colliding_id_system_never_scans_peers():
     """gitea_issues pmo_ids are per-repo issue NUMBERS — a same-system peer
     holding '3' is a DIFFERENT mission. Hard-refused, not best-effort."""
-    g1 = _mgr("g1", system="gitea_issues")
-    g2 = _mgr("g2", system="gitea_issues", missions={
+    g1 = _mgr("g1", system="gitea_issues", global_ids=False)
+    g2 = _mgr("g2", system="gitea_issues", global_ids=False, missions={
         "3": _mission("3", "#3", instance="g2")})
     loc = _locator({"g1": g1, "g2": g2})
     r = run_coro(loc.resolve("3", local_mgr=g1, memo={}))
@@ -127,8 +140,8 @@ def test_colliding_id_system_local_fallback_keeps_local_attribution():
     """A gitea instance's own aged-out blocker still resolves through its own
     adapter, with attribution unchanged from today's `_run_is_ours` set."""
     a = _mission("3", "#3", instance="g1")
-    g1 = _mgr("g1", system="gitea_issues", missions={"3": a})
-    g2 = _mgr("g2", system="gitea_issues")
+    g1 = _mgr("g1", system="gitea_issues", global_ids=False, missions={"3": a})
+    g2 = _mgr("g2", system="gitea_issues", global_ids=False)
     loc = _locator({"g1": g1, "g2": g2})
     r = run_coro(loc.resolve("3", local_mgr=g1, memo={}))
     assert r.mission is a
@@ -203,6 +216,10 @@ def test_slow_peer_counts_as_miss(monkeypatch):
         def __init__(self):
             self.gets = []
 
+        def capabilities(self):
+            from fakes import fake_pmo_capabilities
+            return fake_pmo_capabilities(global_ids=True)
+
         async def get(self, ref):
             self.gets.append(ref.pmo_id)
             await asyncio.sleep(5)
@@ -216,3 +233,78 @@ def test_slow_peer_counts_as_miss(monkeypatch):
     r = run_coro(loc.resolve("a", local_mgr=eng, memo={}))
     assert r.mission is a          # fell through to the local adapter
     assert cs.pmo.gets == ["a"]    # peer tried once, timed out, moved on
+
+
+def test_peer_attribution_includes_legacy_pmo_refs():
+    """Pre-schema-v3 runs on a peer instance carry pmo_ref ""/"main". Peer
+    resolution must accept those stamps or multi-PMO upgrade orphans the
+    peer's pre-v3 work trees at resolve_blocker_work."""
+    a = _mission("a", "CS-1", instance="cs")
+    eng, cs = _mgr("eng"), _mgr("cs", missions={"a": a})
+    loc = _locator({"cs": cs, "eng": eng}, owner={"a": "cs"})
+    r = run_coro(loc.resolve("a", local_mgr=eng, memo={}))
+    assert r is not None
+    assert LEGACY_PMO_REFS <= r.accepted_pmo_refs
+    assert "cs" in r.accepted_pmo_refs
+
+
+def test_global_ids_capability_not_system_name():
+    """F10: peer allow/deny is PMOCapabilities.global_ids, not the vendor
+    system string. A non-linear system name that declares global_ids peers;
+    a linear-shaped name with global_ids=False never does."""
+    # global_ids=True under an arbitrary system name → peer scan legal
+    peer_m = _mission("uuid", "X-1", instance="peer")
+    local = _mgr("local", system="acme_board", global_ids=True)
+    peer = _mgr("peer", system="acme_board", global_ids=True,
+                missions={"uuid": peer_m})
+    r = run_coro(_locator({"local": local, "peer": peer}).resolve(
+        "uuid", local_mgr=local, memo={}))
+    assert r is not None and r.mission is peer_m
+    assert peer.pmo.gets == ["uuid"]
+    assert local.pmo.gets == []
+
+    # global_ids=False under a linear system name → peers hard-refused
+    foreign = _mission("uuid", "CS-1", instance="cs")
+    eng = _mgr("eng", system="linear", global_ids=False)
+    cs = _mgr("cs", system="linear", global_ids=False,
+              missions={"uuid": foreign})
+    r2 = run_coro(_locator({"eng": eng, "cs": cs}).resolve(
+        "uuid", local_mgr=eng, memo={}))
+    assert r2 is None
+    assert cs.pmo.gets == []
+
+
+def test_capabilities_probe_failure_skips_peers_fail_safe():
+    """A capabilities() raise fails CLOSED for peer resolution (never crash
+    the locator) — a peer-only blocker then returns None so the gate stays
+    open (ADR-0007), not hard-blocked on a probe blip."""
+    peer_m = _mission("a", "CS-1", instance="cs")
+    eng = _mgr("eng")
+    eng.pmo = CountingPMO(raise_caps=True)
+    cs = _mgr("cs", missions={"a": peer_m})
+    r = run_coro(_locator({"cs": cs, "eng": eng}, owner={"a": "cs"}).resolve(
+        "a", local_mgr=eng, memo={}))
+    assert r is None
+    assert cs.pmo.gets == []          # peer never consulted
+    assert eng.pmo.gets == ["a"]      # local fallback tried and missed
+
+
+def test_get_uses_issue_kind_mission_ref():
+    """Native blocked_by edges are issue ids across adapters — the locator
+    always queries kind 'issue' (projects normalize blocked_by=[])."""
+    a = _mission("a", "CS-1", instance="cs")
+    eng, cs = _mgr("eng"), _mgr("cs", missions={"a": a})
+    # Record full MissionRef, not just pmo_id
+    refs: list = []
+    orig_get = cs.pmo.get
+
+    async def tracking_get(ref):
+        refs.append(ref)
+        return await orig_get(ref)
+
+    cs.pmo.get = tracking_get
+    run_coro(_locator({"cs": cs, "eng": eng}, owner={"a": "cs"}).resolve(
+        "a", local_mgr=eng, memo={}))
+    assert len(refs) == 1
+    assert refs[0].pmo_id == "a"
+    assert refs[0].kind == "issue"

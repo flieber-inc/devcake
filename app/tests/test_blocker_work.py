@@ -136,6 +136,27 @@ def test_resolve_blocker_work_accepts_attributed_peer_runs(tmp_path):
     assert skips == []
 
 
+def test_resolve_blocker_work_peer_accepts_legacy_pmo_ref_runs(tmp_path):
+    """Multi-PMO upgrade: a peer-owned done blocker's pre-schema-v3 runs
+    (pmo_ref "" or "main") must still mount — peer attribution includes
+    LEGACY_PMO_REFS, not only the peer instance name."""
+    from devcake.domain.blocker_locator import BlockerLocator
+    a = _mission("a", "CS-1", status="done")
+    a.instance = "cs"
+    b = _mission("b", "ENG-1", blocked_by=["a"])
+    legacy = _run("a", "CS-1", "cs-cs-1")
+    legacy.pmo_ref = ""                       # pre-v3 stamp
+    mgr = make_mission_manager(tmp_path, pmo=BlockerPMO({"b": b}),
+                               internal_forge=_ROInternal())
+    cs = _peer("cs", "linear", {"a": a})
+    mgr.blocker_locator = BlockerLocator(
+        {"linear": mgr, "cs": cs}, lambda bid: None)
+    entries, skips, _notes = run_coro(
+        dispatch.resolve_blocker_work(mgr, b, "primary", [legacy]))
+    assert entries == [{"repo_ref": "cs-cs-1", "mission_key": "CS-1"}]
+    assert skips == []
+
+
 def test_resolve_blocker_work_colliding_gitea_id_never_mounts_peer(tmp_path):
     """Regression guard for the colliding-id hole: gitea_issues pmo_ids are
     per-repo issue NUMBERS, so a purely LOCAL blocker '3' must never index a

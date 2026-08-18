@@ -149,10 +149,11 @@ async def _open_blockers(mgr, m: Mission, by_id: dict[str, Mission],
     """Blockers of `m` that are still open (status not done/canceled), as
     human-readable keys. Off-snapshot ids resolve through the deployment-wide
     BlockerLocator (ADR-0009 amendment): owner map → same-system peers
-    (Linear v1) → local adapter — so a native edge to a peer instance's
-    mission gates exactly like a local one. A blocker no path can read
-    counts as open (fail-safe; self-heals next cycle). ADR-0007. `memo`
-    holds `Resolved | None` per bid (locator-managed, one walk per cycle)."""
+    when the local adapter declares PMOCapabilities.global_ids → local
+    adapter — so a native edge to a peer instance's mission gates exactly
+    like a local one. A blocker no path can read counts as open
+    (fail-safe; self-heals next cycle). ADR-0007. `memo` holds
+    `Resolved | None` per bid (locator-managed, one walk per cycle)."""
     open_ = []
     for bid in m.blocked_by:
         b = by_id.get(bid)

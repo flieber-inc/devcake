@@ -31,15 +31,16 @@ from .model import Mission, MissionRef
 # self-healing next cycle).
 PEER_GET_TIMEOUT_S = 5.0
 
-# Whether a system's pmo_ids are globally unique (⇒ peer resolution legal)
-# is now the adapter-declared `PMOCapabilities.global_ids` (2026-08
-# evaluation F10): the old GLOBAL_ID_SYSTEMS vendor-name literal meant
-# adding a PMO required editing domain policy.
+# Peer resolution is legal only when the LOCAL adapter declares
+# PMOCapabilities.global_ids (2026-08 evaluation F10). The old
+# GLOBAL_ID_SYSTEMS vendor-name literal meant adding a PMO required
+# editing domain policy — capabilities keep domain vendor-agnostic.
 
-# Pre-schema-v3 run records always count as local — hiding them would orphan
-# pre-v3 blocker work (mirrors MissionManager._run_is_ours). Definition lives
-# with the Run model; re-exported here for existing importers.
-from .run import LEGACY_PMO_REFS  # noqa: E402,F401 — deliberate re-export
+# Pre-schema-v3 run records always count for the attributed instance —
+# hiding them would orphan pre-v3 blocker work (mirrors
+# MissionManager._run_is_ours). Definition lives with the Run model;
+# re-exported here for existing importers (manager._run_is_ours).
+from .run import LEGACY_PMO_REFS  # noqa: E402 — deliberate re-export
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,9 @@ class BlockerLocator:
                     and peer.instance.system == system:
                 got = await self._get(peer, bid, timeout=PEER_GET_TIMEOUT_S)
                 if got is not None:
-                    return Resolved(got, frozenset({peer.instance_name}))
+                    # Same attribution shape as local: LEGACY stamps so a
+                    # multi-PMO upgrade does not orphan pre-v3 peer runs.
+                    return Resolved(got, self._instance_refs(peer))
             # The owner map misses done+aged-out blockers BY DESIGN
             # (release_stale_ownership frees entries the owner no longer
             # sees) — for extant pipelines this scan is the hot path, not a
@@ -97,7 +100,7 @@ class BlockerLocator:
                     continue       # already tried via the owner map
                 got = await self._get(peer, bid, timeout=PEER_GET_TIMEOUT_S)
                 if got is not None:
-                    return Resolved(got, frozenset({peer.instance_name}))
+                    return Resolved(got, self._instance_refs(peer))
         got = await self._get(local_mgr, bid)
         if got is not None:
             # Same-workspace vendor keys can resolve a peer's id through the
@@ -105,7 +108,7 @@ class BlockerLocator:
             # is stamped with the local instance (adapters are
             # instance-bound). Widening attribution to every same-system
             # instance is safe only where ids cannot collide.
-            refs = self._local_refs(local_mgr)
+            refs = self._instance_refs(local_mgr)
             if peers_allowed:
                 refs |= {m.instance_name for m in self._managers.values()
                          if m.instance.system == system}
@@ -115,6 +118,9 @@ class BlockerLocator:
     @staticmethod
     async def _get(mgr, bid: str,
                    timeout: float | None = None) -> Mission | None:
+        # Native blocked_by edges are issue-kind across adapters (projects
+        # always normalize blocked_by=[]). Kind is therefore not part of the
+        # opaque id — always query as issue.
         try:
             if timeout is not None:
                 async with asyncio.timeout(timeout):
@@ -124,5 +130,12 @@ class BlockerLocator:
             return None
 
     @staticmethod
-    def _local_refs(local_mgr) -> frozenset[str]:
-        return LEGACY_PMO_REFS | {local_mgr.instance_name}
+    def _instance_refs(mgr) -> frozenset[str]:
+        """Run-history stamps accepted for work attributed to `mgr`.
+
+        Pre-schema-v3 records always count as that instance's history —
+        hiding them would orphan pre-v3 blocker work (mirrors
+        MissionManager._run_is_ours). Used for both local and peer
+        attribution so peer-resolved blockers keep the same contract.
+        """
+        return LEGACY_PMO_REFS | {mgr.instance_name}

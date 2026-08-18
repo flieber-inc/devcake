@@ -20,6 +20,10 @@ def gl():
     return GitLabForge("https://gitlab.com/o/r", "tok")
 
 
+def gt():
+    return GiteaForge("http://gitea:3000/o/r", "tok")
+
+
 def run_coro(c):
     return asyncio.get_event_loop().run_until_complete(c)
 
@@ -64,6 +68,18 @@ def test_github_mergeable_signal_map(payload, expected):
 ])
 def test_gitlab_mergeable_signal_map(payload, expected):
     assert run_coro(stub_req(gl(), payload).mergeable(8)) is expected
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"mergeable": True}, True),
+    ({"mergeable": False}, False),
+    ({}, None),                          # absent → unknown (boolean-only forge)
+    ({"mergeable": None}, None),
+])
+def test_gitea_mergeable_boolean_only(payload, expected):
+    """docs/06 §7a: Gitea has no mergeable_state — True/False/absent →
+    True/False/None (capability mergeable_tristate=False)."""
+    assert run_coro(stub_req(gt(), payload).mergeable(8)) is expected
 
 
 # ── merge(): transient-409 retry ─────────────────────────────────────────────
@@ -113,6 +129,57 @@ def test_merge_gives_up_after_retries_and_405_is_immediate(make, monkeypatch):
         run_coro(forge2.merge(8))
     # one merge attempt + one already-merged probe; no 409-style retries
     assert len(calls2) == 2 and e.value.status == 405
+
+
+def test_gitea_merge_retries_try_again_later_405(monkeypatch):
+    """docs/06 §7a: only the transient "Please try again later" 405 retries."""
+    async def no_sleep(_):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    forge, calls = gt(), []
+
+    async def _req(method, path, **kw):
+        calls.append((method, path))
+        if len(calls) < 3:
+            raise ForgeError("Please try again later", status=405)
+    forge._req = _req
+    run_coro(forge.merge(8))
+    assert len(calls) == 3
+    assert all(m == "POST" and path.endswith("/merge") for m, path in calls)
+
+
+def test_gitea_merge_definitive_405_probes_already_merged(monkeypatch):
+    """Approvals/conflict 405s must not retry as transient; ISSUES #6 probe
+    still absorbs a successful-but-redelivered merge."""
+    async def no_sleep(_):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    forge, calls = gt(), []
+
+    async def approvals_405(method, path, **kw):
+        calls.append((method, path))
+        if method == "GET":
+            return {"number": 8, "html_url": "https://g/8", "state": "open",
+                    "merged": False}
+        raise ForgeError("Does not have enough approvals", status=405)
+    forge._req = approvals_405
+    with pytest.raises(ForgeError) as e:
+        run_coro(forge.merge(8))
+    assert e.value.status == 405
+    assert len(calls) == 2                     # one POST + one GET probe
+    assert calls[0][0] == "POST" and calls[1][0] == "GET"
+
+    forge2, calls2 = gt(), []
+
+    async def already_merged(method, path, **kw):
+        calls2.append((method, path))
+        if method == "GET":
+            return {"number": 8, "html_url": "https://g/8", "state": "closed",
+                    "merged": True}
+        raise ForgeError("already merged", status=405)
+    forge2._req = already_merged
+    run_coro(forge2.merge(8))                  # probe absorbs the failure
+    assert len(calls2) == 2
 
 
 # ── error normalization: both adapters raise ForgeError with .status ─────────
@@ -239,6 +306,41 @@ def test_get_pr_by_branch_shape_parity():
     assert run_coro(stub_req(gh(), []).get_pr_by_branch("x")) is None
     assert run_coro(stub_req(gl(), []).get_pr_by_branch("x")) is None
 
+    # Gitea: server ignores `head` — adapter filters client-side on head.ref
+    gitea_open = {"number": 8, "html_url": "https://gt/pr/8", "state": "open",
+                  "merged": False, "head": {"ref": "devcake/DEV-1"}}
+    gitea_other = {"number": 7, "html_url": "https://gt/pr/7", "state": "open",
+                   "merged": False, "head": {"ref": "someone-else"}}
+    pr = run_coro(stub_req(gt(), [gitea_other, gitea_open]).get_pr_by_branch(
+        "devcake/DEV-1"))
+    assert pr == PullRequest(number=8, url="https://gt/pr/8", state="open",
+                             merged=False)
+    assert run_coro(stub_req(gt(), [gitea_other]).get_pr_by_branch(
+        "devcake/DEV-1")) is None
+
+
+def test_gitea_get_pr_by_branch_no_server_head_filter():
+    """pr_list_head_filter=False: requests must not rely on a `head=` query;
+    matching is client-side across the listed page(s)."""
+    seen: list[str] = []
+    forge = gt()
+
+    async def _req(method, path, **kw):
+        seen.append(path)
+        return [
+            {"number": 1, "html_url": "https://gt/1", "state": "open",
+             "merged": False, "head": {"ref": "noise"}},
+            {"number": 2, "html_url": "https://gt/2", "state": "open",
+             "merged": False, "head": {"ref": "devcake/DEV-9"}},
+        ]
+
+    forge._req = _req
+    pr = run_coro(forge.get_pr_by_branch("devcake/DEV-9"))
+    assert pr is not None and pr.number == 2
+    assert len(seen) == 1
+    assert "head=" not in seen[0]
+    assert "state=all" in seen[0]
+
 
 def test_get_pr_by_branch_encodes_hash_in_query():
     """Forge-issue mission keys mint branches with `#` (owner/repo#N). An
@@ -283,6 +385,10 @@ def test_pr_state_shape_parity():
     assert s == PullRequest(number=8, url="u", state="closed", merged=True)
     s = run_coro(stub_req(gl(), GL_MR_MERGED).pr_state(9))
     assert s == PullRequest(number=9, url="https://gl/mr/9", state="closed",
+                            merged=True)
+    s = run_coro(stub_req(gt(), {"number": 8, "html_url": "https://gt/8",
+                                 "state": "closed", "merged": True}).pr_state(8))
+    assert s == PullRequest(number=8, url="https://gt/8", state="closed",
                             merged=True)
 
 
@@ -393,6 +499,12 @@ def test_registry_covers_all_forges_and_constructs():
     gt = make_forge(RepoInstance(forge="gitea",
                                  url="http://gitea:3000/devcake-internal/x-y"))
     assert isinstance(gt, GiteaForge) and gt.api == "http://gitea:3000"
+
+
+def test_gitea_token_patterns_deliberately_empty():
+    """40-hex Gitea tokens collide with git SHAs — value registration is the
+    only redaction line (ADR-0010). Distinct from gitea_issues PMO patterns."""
+    assert GiteaForge.descriptor.token_patterns == []
 
 
 @pytest.mark.parametrize("cls", [GitHubForge, GitLabForge, GiteaForge])

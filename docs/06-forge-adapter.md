@@ -89,10 +89,10 @@ Restated from `03-mission-lifecycle.md`:
 
 ## 3. Division of labor: Dev vs. app
 
-- The **Dev** (inside its container, during EXECUTE/REVIEW) clones, branches, commits at end, pushes, and opens/updates the PR using injected forge credentials and the forge CLI (`gh`/`glab`/`tea` as applicable, shipped in the Dev images). This is unavoidable — the code lives in the Dev's workspace. The dev side is **descriptor-driven, not string-templated**: everything forge-specific the Dev needs (clone auth user, git identity, CLI token envs, PR/MR CLI instructions) comes from the adapter's `ForgeDescriptor` (§3a) — the orchestrator injects it via `spec_env` (`07-dev-runtime.md` §3) and via the EXECUTE playbook's `pr_instructions` slot; the app carries no per-forge tables outside the adapters.
+- The **Dev** (inside its container, during EXECUTE/REVIEW) clones, branches, commits at end, pushes, and opens/updates the PR using injected forge credentials and the forge dialect from `ForgeDescriptor` — `gh`/`glab` where those dialects use a CLI (shipped in the Dev images); Gitea uses descriptor `pr_instructions` (curl against `/api/v1` — no `tea` CLI in the images). This is unavoidable — the code lives in the Dev's workspace. The dev side is **descriptor-driven, not string-templated**: everything forge-specific the Dev needs (clone auth user, git identity, CLI token envs, PR/MR instructions) comes from the adapter's `ForgeDescriptor` (§3a) — the orchestrator injects it via `spec_env` (`07-dev-runtime.md` §3) and via the EXECUTE playbook's `pr_instructions` slot; the app carries no per-forge tables outside the adapters.
 - The **app** performs the *decision-bearing* forge effects at finalization through `ForgePort` (§1): PR lookup and state, PR comments with the approval footer, formal approval, and merge (`auto_merge`). This keeps the auditable actions in one instrumented place, driven by `result.json` (INV-4 analog for the forge).
 
-The idempotency rule binds both sides: the descriptor's `pr_instructions` template instructs create-or-update by head branch (`gh pr view` before `gh pr create`, `glab mr list` before `glab mr create`); the app side uses `get_pr_by_branch` and keyed comments.
+The idempotency rule binds both sides: the descriptor's `pr_instructions` template instructs create-or-update by head branch (`gh pr view` before `gh pr create`, `glab mr list` before `glab mr create`, Gitea list-then-POST curl in §7a); the app side uses `get_pr_by_branch` and keyed comments.
 
 ### 3a. `ForgeDescriptor` — the dev-side dialect
 
@@ -193,12 +193,12 @@ GitLab < 15.6 has no `detailed_merge_status`; the adapter falls back to the lega
 
 ## 7a. Gitea specifics
 
-- Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos, and operator repos incl. memory notebooks via `create_internal_repo` — refuses `activity-*` names, never swept by Clear); isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped).
+- Ships as both an external forge (`RepoInstance(forge="gitea", …)`) and the **bundled internal fallback** for zero-repo missions (`make_internal_forge()`, ADR-0010). Provisioning surface is **`InternalForgePort`** (`ports/internal_forge.py` — mission machine users, skill-store, activity repos) plus the provisioner method **`create_operator_repo`** for operator/"gitea (internal)" repo cards incl. memory notebooks (admin `POST …/internal-repos/create` → `internal_repos_service.create_internal_repo`; refuses `activity-*` names, never swept by Clear — not a Protocol method today). Isolation honesty is **docs/14 §2 Zone B** + ADR-0010 (tokens are user-scoped, not repo-scoped). Day-to-day PR ops use the ordinary `ForgePort` from `mission_repo_binding` → `make_gitea_adapter` on **org service tokens** (PR comment/merge); the per-mission write/read pair is Dev/runspec only.
 - Auth: Gitea personal/access tokens; machine users + scoped token pairs for per-mission isolation on the internal forge (ADR-0010; container isolation posture `14` §6 — Gitea admin password never enters the Dev env).
 - **Machine-user naming (measured, Gitea 1.27.1):** usernames are capped at 40 chars and reject **consecutive hyphens** — `_svc_user()` therefore rstrips hyphens off the truncated stem before appending the full-name hash. Provisioning also discriminates Gitea's overloaded **422**: `"already exists"` is tolerated (idempotent re-provision), anything else — notably `"invalid username"` — fails loud. Both were one bug: the ADR-0030 board's repo names truncated exactly onto a hyphen, the invalid user was silently never created, and every zero-repo board mission then gated on the collaborator PUT with `user does not exist` (founder report 2026-08-05).
 - Capabilities: `mergeable_tristate=False`, `self_approval_blocked=True`, `pr_list_head_filter=False` (client-side head filter).
 - **Merge 405:** Gitea's 405 is overloaded — `"Please try again later"` (async mergeability) is retried briefly inside `merge()`; `"Does not have enough approvals"` and already-merged paths are definitive (probe `merged` before reporting failure so redelivery is safe).
-- Contract battery: `scripts/contract_tests_forge.py --forge gitea` (wired into `ci_suite.sh`).
+- Contract battery: `scripts/contract_tests_forge.py` default / `DEVCAKE_CONTRACT_FORGE=gitea` lane (wired into `ci_suite.sh` / GHA when the stack+Gitea are up).
 
 ## 8. Adapter contract tests
 
@@ -209,19 +209,19 @@ Two layers:
 | # | Scenario |
 |---|---|
 | 1 | Port conformance: registered adapters implement every `ForgePort` method with signatures that match the protocol |
-| 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
-| 3 | `merge()` retries a transient GitHub 409 twice then succeeds/raises; non-retryable 405s raise (Gitea's "try again later" 405 is the documented exception — §7a) |
+| 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback) **and** Gitea's boolean-only True/False/absent → True/False/None; unknown states → `None` |
+| 3 | `merge()` retries a transient GitHub 409 twice then succeeds/raises; non-retryable 405s raise; Gitea's "try again later" 405 retries inside the adapter while approvals/already-merged 405s probe then raise/absorb (§7a) |
 | 4 | Error normalization: every forge `_req` routes through `adapters/http.forge_request` → `ForgeError` only (`status=None` for network; HTTP ≥400 preserves status). Direct chokepoint + all three adapter classes pinned in `test_forge_error_contract.py` |
-| 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub/GitLab/Gitea payloads to identical `PullRequest` values; no PR → `None` |
+| 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub/GitLab/Gitea payloads to identical `PullRequest` values; Gitea filters head client-side (no `head=` query); no PR → `None` |
 | 6 | `BranchProtection` DTO: GitHub `protected` flag; GitLab 404 → `protected=False` |
 | 7 | `api_base`: GitHub default vs GHE override; GitLab origin derived from the repo URL, explicit override wins, project path stays URL-encoded |
 | 8 | Registry: `forges()` covers `{github, gitlab, gitea}` with real descriptors; `make_forge` constructs each (passing `api_base`); `make_internal_forge` / `make_gitea_adapter` are the only other construction paths; production AST scan forbids direct `*Forge(` outside the registry; an unknown forge is rejected by `RepoInstance` validation |
-| 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile (Gitea may be empty — intentional) |
+| 9 | Descriptor completeness: every field non-empty; `pr_instructions` renders against `{key}/{title}/{default}/{branch}` without `KeyError`; `token_patterns` compile; Gitea `token_patterns == []` is pinned (intentional — SHA collision) |
 | 10 | `mission_branch(instance, key)` single definition: `devcake/{INSTANCE}-{key}` prefix |
 | 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea) |
 | 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
 
-**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape and full URL assembly for GitHub, GitLab, and Gitea so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` (vendor drift).
+**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape and full URL assembly for GitHub, GitLab, and Gitea (incl. Gitea's `APPROVED` review event) so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` default/`DEVCAKE_CONTRACT_FORGE=gitea` lane (vendor drift).
 
 ## 9. Adding a forge (checklist)
 

@@ -205,17 +205,19 @@ def test_make_gitea_adapter_registers_explicit_tokens():
     resolved). make_gitea_adapter is the construction chokepoint that must
     register them — Gitea token_patterns are deliberately empty (40-hex /
     git-SHA collision), so value registration is the only redaction line
-    (ADR-0010, docs/14)."""
+    (ADR-0010, docs/14). Keys are content-addressed (CAKE-38), not token[:6]."""
+    import hashlib
     from devcake.adapters.registry import make_gitea_adapter
     from devcake.security import unregister_runtime_secret
 
     write = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     reviewer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    keys = []
+    keys = [
+        f"forge_token:gitea:{hashlib.sha256(v.encode()).hexdigest()[:16]}"
+        for v in (write, reviewer)
+    ]
     try:
         make_gitea_adapter("http://gitea:3000/o/r", write, reviewer)
-        keys = [f"forge_token:gitea:{write[:6]}",
-                f"forge_token:gitea:{reviewer[:6]}"]
         out = redact(f"leak {write} and {reviewer} end")
         assert write not in out and reviewer not in out
         assert MASK in out

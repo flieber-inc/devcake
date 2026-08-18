@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from devcake.adapters.github.adapter import GitHubForge
-from devcake.ports.forge import ForgeError
+from devcake.ports.forge import BranchProtection, ForgeError
 from devcake.adapters.gitea.adapter import GiteaForge
 from devcake.adapters.gitlab.adapter import GitLabForge
 
@@ -180,6 +180,69 @@ def test_gitea_merge_definitive_405_probes_already_merged(monkeypatch):
     forge2._req = already_merged
     run_coro(forge2.merge(8))                  # probe absorbs the failure
     assert len(calls2) == 2
+
+
+def test_github_merge_already_merged_is_success():
+    """ISSUES #6: redelivery after a successful merge must not report failure."""
+    forge, calls = gh(), []
+
+    async def merged_405(method, path, **kw):
+        calls.append((method, path))
+        if method == "GET":
+            return {"number": 8, "html_url": "https://x/8", "state": "closed",
+                    "merged": True}
+        raise ForgeError("already merged", status=405)
+
+    forge._req = merged_405
+    run_coro(forge.merge(8))  # must not raise
+    assert calls[0][0] == "PUT" and calls[1][0] == "GET"
+
+
+def test_gitlab_merge_already_merged_is_success():
+    """ISSUES #6: GitLab derives merged from MR state == 'merged'."""
+    forge, calls = gl(), []
+
+    async def merged_405(method, path, **kw):
+        calls.append((method, path))
+        if method == "GET":
+            return {"iid": 8, "web_url": "https://x/8", "state": "merged"}
+        raise ForgeError("already merged", status=405)
+
+    forge._req = merged_405
+    run_coro(forge.merge(8))  # must not raise
+    assert calls[0][0] == "PUT" and calls[1][0] == "GET"
+
+
+def test_github_branch_protection_detail_403_keeps_protected_flag():
+    """branch_protection_read=admin: classic protection may 403 without admin
+    scope — still return the branch `protected` flag; requires_reviews stays
+    None rather than inventing a false negative."""
+    g = gh()
+    calls = []
+
+    async def _req(method, path, **kw):
+        calls.append(path)
+        if path.startswith("/branches/") and "/protection" not in path and not path.startswith("/rules"):
+            return {"protected": True, "name": "main"}
+        if "/protection" in path or path.startswith("/rules"):
+            raise ForgeError("need admin", status=403)
+        raise AssertionError(path)
+
+    g._req = _req
+    p = run_coro(g.default_branch_protection())
+    assert p == BranchProtection(protected=True, requires_reviews=None)
+    assert any("/protection" in c for c in calls)
+
+
+def test_gitlab_branch_protection_non_404_is_unreadable():
+    """Maintainer-readable protection: 403 → None (unknown), not unprotected."""
+    l = gl()
+
+    async def gl_403(method, path, **kw):
+        raise ForgeError("forbidden", status=403)
+
+    l._req = gl_403
+    assert run_coro(l.default_branch_protection()) is None
 
 
 # ── error normalization: both adapters raise ForgeError with .status ─────────

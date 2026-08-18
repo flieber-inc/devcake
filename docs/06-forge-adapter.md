@@ -137,7 +137,8 @@ GitHub and Gitea forbid approving a PR with the account that opened it (`self_ap
 
 1. **Reviewer token (recommended for formal forge approval under branch protection)** — GUI secret `reviewer_token` (different account, e.g. a `devcake-reviewer` machine user). When present, `approve(pr_number)` files a formal approval review and returns `True`. App-only — never injected into a Dev. Not the same as staffing a different Dev Type for the REVIEW stage.
 2. **Without it** — `approve()` returns `False` (no error): the REVIEW PR comment carries the `APPROVED-BY-DEVCAKE` marker and the Mission's Done status is the signal; no formal approval is filed.
-3. **Always, in both cases** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
+3. **Same write token pasted as reviewer on a `self_approval_blocked` forge** — `approve()` returns `False` without a wire call (the paste is not a distinct reviewer). On GitLab (`self_approval_blocked=False`) the same token still posts the approve call.
+4. **Always, in every case** — every REVIEW PR comment ends with the copy-pasteable approval command footer with concrete refs (`approval_footer`, `03-mission-lifecycle.md` §5), so one paste in a human terminal approves/merges.
 
 ### Token posture (operator)
 
@@ -220,8 +221,9 @@ Two layers:
 | 10 | `mission_branch(instance, key)` single definition: `devcake/{INSTANCE}-{key}` prefix |
 | 11 | `ForgeCapabilities` ClassVar present and matches the §1a matrix exactly (GitHub / GitLab / Gitea) |
 | 12 | Redaction at construction: `make_forge` registers token / token_ro / reviewer; `make_gitea_adapter` registers explicit tokens (`test_security.py`) |
+| 13 | `approve()`: False without reviewer; same write/reviewer token no-ops on `self_approval_blocked` forges and still posts on GitLab; `post_pr_comment` redacts known secret shapes on the wire (`test_forge_http.py`) |
 
-**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape and full URL assembly for GitHub, GitLab, and Gitea (incl. Gitea's `APPROVED` review event) so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` default/`DEVCAKE_CONTRACT_FORGE=gitea` lane (vendor drift).
+**HTTP contract** (`app/tests/test_forge_http.py`) — hermetic `httpx.MockTransport` injected via optional constructor `transport=` (same seam as Linear / Gitea provisioner). Asserts auth header shape, full URL assembly, PR-comment redaction, self-approval same-token honesty for GitHub/GitLab, and Gitea's `APPROVED` review event, so empty `_headers()` or a broken `_req` URL fails the suite. Live Gitea battery remains `scripts/contract_tests_forge.py` default/`DEVCAKE_CONTRACT_FORGE=gitea` lane (vendor drift); GitHub/GitLab live lanes stay operator-token-gated (`DEVCAKE_CONTRACT_FORGE` + `DEVCAKE_CONTRACT_REPO_URL` + adapter token envs) and are not the CI default.
 
 ## 9. Adding a forge (checklist)
 

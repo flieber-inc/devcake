@@ -147,7 +147,7 @@ Real secrets (harness and forge credentials) never appear in Dagu params, DAG YA
 | 11 | `result.json` missing or schema-invalid — reached only after the in-container continuation budget is spent, when the loop is enabled (ADR-0022, §5a) | `DEV_BAD_OUTPUT` |
 | 12 | Credential/auth failure (harness) | `DEV_AUTH` |
 | 13 | Clone or forge operation failed | `DEV_FORGE` / `DEV_FORGE_AUTH` (classified from git stderr — `15-errors-and-retries.md` §4) |
-| 14 | MCP setup command failed or timed out (300 s per command) | `DEV_MCP_SETUP` (counted) |
+| 14 | Additive entrypoint setup line failed or timed out (300 s per command), or override script aborted (`set -e` / non-zero) | `DEV_MCP_SETUP` (counted) |
 | 15 | Harness reported a failure in-band, or produced no output at all, despite the process exit status | `DEV_HARNESS_FAULT` — counted unless the failure is *correlated* across ≥2 missions (`15-errors-and-retries.md` §4a) |
 | 16 | Harness stopped at its configured turn cap (`--max-turns`) — **`claude-code` and `grok-build`; unreachable for `codex`**, see below | `DEV_TURN_BUDGET` (always counted; deterministic, so never correlated) |
 | 20 | Entrypoint internal error | `DEV_CRASH` |
@@ -229,11 +229,18 @@ HARNESS container (dev-<run_id>, DEVCAKE_PHASE=harness, workspace ONLY)
   │      (external `<source>/<skill>` skills arrive in the SAME field with
   │      basename-flattened paths — the container cannot tell the source;
   │      their card joins the fail-closed mirror gate app-side, ADR-0016)
-  │ 5. run mcp_setup_commands — stdin closed, own process group, 300 s cap per
+  │ 5. additive entrypoint setup (Dev Type script / legacy mcp_setup_commands
+  │      lines) — once, before the continuation loop: each non-empty line via
+  │      `run_mcp_setup` with stdin closed, own process group, 300 s cap per
   │      command; first failure/timeout → run.artifacts {exit_code: 14,
-  │      DEV_MCP_SETUP, command + stderr tail} then exit 14
+  │      DEV_MCP_SETUP, command + stderr/timeout tail} then exit 14.
+  │      Discrete shells (no cross-line `export` into the harness; PATH floor
+  │      covers pip/npm user-bin — ADR-0023). Override mode skips this step —
+  │      the script *is* the process (fail-closed `set -e`, stdin closed;
+  │      hangs → run wall-clock / watchdog `DEV_TIMEOUT`, not the 300 s cap).
   │ 6. launch harness: identifying prompt + mission-type playbook prompt
-  │      (+ optional required-skills soft-force block — 03 §7)
+  │      (+ optional required-skills soft-force block — 03 §7); additive
+  │      setup is NOT re-inlined into the launch argv (dialect-only after step 5)
   │      • heartbeat sidecar emits `run.heartbeat` every 30 s throughout
   │      • the live log announces harness start and, while user-visible output is
   │        absent, emits one liveness notice per 60 s (hidden reasoning stays hidden)
@@ -284,7 +291,7 @@ unchanged and bounds the whole loop.
 |---|---|
 | `domain.fault` | ADR-0018 harness fault classification; container-produced `(exit_code, error_class)` pairs in `PRODUCED` (pure) |
 | `harness.dialect` / `dialects` | Fail-closed `HarnessDialect` registry — argv / render / parse / fault / session id; unknown id → `ValueError` (docs/16 H1) |
-| `harness.launch` | Single `composed_launch` chokepoint (dialect argv ± operator script / override) |
+| `harness.launch` | Single `composed_launch` chokepoint (dialect argv, or override script with `set -e`); additive setup is `run_mcp_setup`, not a bash prelude |
 | `harness.aim` | Backend adaptor (docs/08 §8): base URL → env / extra argv / files — not fault classification |
 | `harness.continuation` | ADR-0022 continuation policy, nudges, session chains, token-report merge, terminal evidence (pure) |
 | `harness.render` / `tokens` / `argv` | Live relay, stream dumps, CLI argv (+ resume dialects, `RESUME_SPECS`) |

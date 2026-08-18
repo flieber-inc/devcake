@@ -181,8 +181,9 @@ from devcake_dev.workspace.forensics import (  # noqa: E402
 )
 from devcake_dev.harness.launch import composed_launch  # noqa: E402
 from devcake_dev.workspace.setup import (  # noqa: E402
+    MCP_SETUP_TIMEOUT_SECS,
     install_skills,
-    run_mcp_setup,  # façade re-export — test_entrypoint_mcp
+    run_mcp_setup,
 )
 from devcake_dev.workspace.transcript import (  # noqa: E402
     assemble_transcript,
@@ -595,6 +596,13 @@ def harness_main() -> None:
     if not script:
         script = "\n".join(spec.get("mcp_setup_commands") or []).strip()
     override = bool(spec.get("override_harness_adapter"))
+    # Additive setup lines run once via run_mcp_setup BEFORE the continuation
+    # loop (docs/07 §5). Continuations must not re-run them — pass empty
+    # additive script into composed_launch after this gate.
+    setup_lines = (
+        [] if override
+        else [ln for ln in script.splitlines() if ln.strip()])
+    launch_script = script if override else ""
 
     # ── telemetry (stage-2 creds — docs/07 §3) ───────────────────────────────
     from opentelemetry import trace
@@ -614,23 +622,46 @@ def harness_main() -> None:
     ctx = extract({"traceparent": TRACEPARENT}) if TRACEPARENT else None
 
     # ── harness (docs/08 §§1,3) ──────────────────────────────────────────────
+    # Aiming (env / HOME files / extra argv) always runs before additive setup.
     harness = os.environ.get("DEVCAKE_HARNESS", "claude-code")
     plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
     extra = _apply_backend_aim(spec, env, extra, stop)
     model = env.get("DEVCAKE_MODEL", "").strip()  # per-DevType pin; "" = harness default
+
+    # ── additive MCP / entrypoint setup (docs/07 §5 step 5) ─────────────────
+    # stdin closed, own process group, 300 s per command; first failure → 14.
+    # Heartbeats are already running so a hung install cannot idle unnoticed.
+    # Discrete shells: no cross-line `export` into the harness (PATH floor
+    # covers the common pip/npm user-bin case — ADR-0023).
+    if setup_lines:
+        failed = run_mcp_setup(
+            setup_lines, workdir, timeout=MCP_SETUP_TIMEOUT_SECS)
+        if failed is not None:
+            fcmd, detail = failed
+            send_artifacts({
+                "result": None, "exit_code": 14,
+                "error_class": "DEV_MCP_SETUP",
+                "error_detail": _one_line(f"{fcmd}: {detail}", 500),
+                "transcript_md": (
+                    f"Entrypoint setup failed:\n{fcmd}\n{detail}\n"),
+                "token_report": unavailable_report()})
+            stop.set()
+            sys.exit(14)
+
     try:
         dialect = get_dialect(harness)
         os.environ["DEVCAKE_PROMPT"] = prompt
         cmd = composed_launch(
             harness, prompt, plan_mode=plan_mode, model=model,
-            extra=extra, script=script, override=override)
+            extra=extra, script=launch_script, override=override)
     except ValueError as e:
-        if "override" in str(e):
+        err = str(e)
+        if "override" in err or "run_mcp_setup" in err:
             send_artifacts({
                 "result": None, "exit_code": 14,
                 "error_class": "DEV_MCP_SETUP",
-                "error_detail": str(e),
+                "error_detail": err,
                 "transcript_md": f"Entrypoint script failed:\n{e}",
                 "token_report": unavailable_report()})
             sys.exit(14)
@@ -708,8 +739,12 @@ def harness_main() -> None:
         render = dialect.renderer()
         with tracer.start_as_current_span("harness.exec", context=dev_ctx) as hspan:
             hspan.set_attribute("devcake.continuation", attempt)
-            proc = subprocess.Popen(argv_now, cwd=workdir, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, bufsize=1)
+            # stdin closed: additive setup already ran with DEVNULL; override
+            # scripts must not block on interactive prompts (docs/07 §5).
+            proc = subprocess.Popen(
+                argv_now, cwd=workdir, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1)
             relay.add(f"[devcake] {harness} started; waiting for model output",
                       visible_output=False)
             pumps = [threading.Thread(target=_pump, daemon=True, args=(
@@ -834,6 +869,13 @@ def harness_main() -> None:
 
         if harness_exit != 0:
             err = err_text[-1500:]
+            # Override: the operator script *is* the process (docs/11). Non-zero
+            # (including set -e abort) is entrypoint-setup failure → exit 14,
+            # not harness crash/auth classification.
+            if override:
+                fail(14, "DEV_MCP_SETUP",
+                     err or f"entrypoint script exit {harness_exit}",
+                     f"entrypoint script exited {harness_exit}\n\n```\n{err}\n```")
             # the whole rule lives in the pure helper (docs/15 §4 asymmetry: a
             # false 12 pauses an entire Dev Type) — this only renders it
             code, error_class = classify_nonzero_exit(err, fault, api_status)
@@ -945,11 +987,13 @@ def harness_main() -> None:
                 inv_prompt = resume_nudge_prompt(
                     mission_type, legal, attempt=cont.used,
                     budget=cont_cfg.max_continuations, stray_note=note)
-                if override or script:
+                # Additive setup already ran once before the loop — do not
+                # re-embed it. Override remains the process on every relaunch.
+                if override:
                     os.environ["DEVCAKE_PROMPT"] = inv_prompt
                     cmd = composed_launch(
                         harness, inv_prompt, plan_mode=False, model=model,
-                        extra=extra, script=script, override=override)
+                        extra=extra, script=launch_script, override=True)
                 else:
                     cmd = harness_resume_argv(
                         harness, last_sid(chains), inv_prompt,
@@ -964,7 +1008,7 @@ def harness_main() -> None:
                 os.environ["DEVCAKE_PROMPT"] = inv_prompt
                 cmd = composed_launch(
                     harness, inv_prompt, plan_mode=False, model=model,
-                    extra=extra, script=script, override=override)
+                    extra=extra, script=launch_script, override=override)
             relay.add(f"[devcake] continuation {cont.used}/"
                       f"{cont_cfg.max_continuations} ({mode}): "
                       f"{decision.reason} — relaunching {harness}",

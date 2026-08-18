@@ -305,7 +305,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
             <Field
               label="Entrypoint script"
               hint="⚠ Runs in the Dev container. Unchecked, it is extra setup — not the harness."
-              help="Aiming (env, files, extra argv) always happens first. Unchecked (default): lines here run next — register MCP servers (claude mcp add … / grok mcp add …), fix PATH — then the default harness CLI starts. Checked: the default CLI is not started; this textbox must be the whole process if you still want an agent."
+              help="Aiming (env, files, extra argv) always happens first. Unchecked (default): each non-empty line runs once before the harness (stdin closed, 300s cap per line; first failure ends the run as DEV_MCP_SETUP) — register MCP servers (claude mcp add … / grok mcp add …), fix PATH — then the default harness CLI starts. Checked: the default CLI is not started; this textbox must be the whole process (fail-closed) if you still want an agent."
             >
               <Textarea
                 rows={6}
@@ -314,7 +314,7 @@ export default function DevTypeEditor({ name, draftDt, serverDt, harnesses, setF
               />
             </Field>
             <Field label="Override harness adapter"
-              help="Off (default): the script above is additive — it runs after aiming, then DevCake starts the harness CLI (including aimed extras such as Codex -c provider blocks and Pi --provider). On: DevCake does not start the harness CLI and does not pass dialect argv. Aiming still runs first (env + HOME files). If you still want an agent, your script must launch it and pass $DEVCAKE_MODEL (and any extras) itself. Use this only when you need a completely different process.">
+              help="Off (default): the script above is additive setup (fail-closed, once before the harness), then DevCake starts the harness CLI (including aimed extras such as Codex -c provider blocks and Pi --provider). On: DevCake does not start the harness CLI and does not pass dialect argv — the script runs with set -e and closed stdin. Aiming still runs first (env + HOME files). If you still want an agent, your script must launch it and pass $DEVCAKE_MODEL (and any extras) itself. Use this only when you need a completely different process.">
               <label className="flex items-start gap-2 text-sm text-neutral-700 dark:text-neutral-300">
                 <input
                   type="checkbox"

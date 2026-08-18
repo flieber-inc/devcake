@@ -146,18 +146,15 @@ class GiteaForge:
         IGNORES a `head` query param (live-verified) — filter client-side,
         paginating so a busy repo (>50 PRs) doesn't hide our PR beyond page 1
         (review finding #10)."""
-        matching: list[dict] = []
-        page = 1
-        while page <= 20:                # bound: 1000 PRs is plenty of headroom
-            batch = await self._req(
-                "GET", f"/pulls?state=all&sort=recentupdate&limit=50&page={page}")
-            if not batch:
-                break
-            matching.extend(p for p in batch
-                            if ((p.get("head") or {}).get("ref")) == branch)
-            if len(batch) < 50:
-                break
-            page += 1
+        from .._toolkit import paginate_rest
+        raw, _ = await paginate_rest(
+            lambda page: self._req(
+                "GET",
+                f"/pulls?state=all&sort=recentupdate&limit=50&page={page}"),
+            page_size=50, max_pages=20,
+            what="gitea get_pr_by_branch", on_ceiling="warn")
+        matching = [p for p in raw
+                    if ((p.get("head") or {}).get("ref")) == branch]
         if not matching:
             return None
         pr = max(matching, key=lambda p: p.get("number", 0))
@@ -252,22 +249,17 @@ class GiteaForge:
 
     async def pr_files(self, pr_number: int) -> list[PRFile]:
         """Changed files across the PR (paginated — large changesets)."""
-        out: list[PRFile] = []
-        page = 1
-        while True:
-            batch = await self._req(
-                "GET", f"/pulls/{pr_number}/files?limit=50&page={page}")
-            if not batch:
-                break
-            for f in batch:
-                out.append(PRFile(path=f.get("filename", ""),
-                                  status=f.get("status", "modified"),
-                                  additions=int(f.get("additions") or 0),
-                                  deletions=int(f.get("deletions") or 0)))
-            if len(batch) < 50:
-                break
-            page += 1
-        return out
+        from .._toolkit import paginate_rest
+        raw, _ = await paginate_rest(
+            lambda page: self._req(
+                "GET", f"/pulls/{pr_number}/files?limit=50&page={page}"),
+            page_size=50, max_pages=40,
+            what=f"gitea pr_files #{pr_number}", on_ceiling="warn")
+        return [PRFile(path=f.get("filename", ""),
+                       status=f.get("status", "modified"),
+                       additions=int(f.get("additions") or 0),
+                       deletions=int(f.get("deletions") or 0))
+                for f in raw]
 
     async def file_content(self, path: str, ref: str) -> bytes:
         """Raw bytes of a file at a ref (base64-safe — non-code deliverables

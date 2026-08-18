@@ -109,6 +109,28 @@ class Messaging:
         await self._acl_save()
         unregister_runtime_secret(run_id)
 
+    async def revoke_leftover_run_users(self) -> int:
+        """Clear-runs bulk revoke of every leftover ``dev-*`` ACL user.
+
+        Per-run ``delete_run_user`` already ``ACL SAVE``s; the wipe path used
+        to ``DELUSER`` in a loop without SAVE, so a redis-only restart
+        resurrected wiped users from the compose ``aclfile`` (boot preserves
+        non-default lines). One SAVE after the bulk delete closes that gap.
+        Also drops process-local redaction registry entries for those run ids.
+        """
+        users = await self.redis.execute_command("ACL", "USERS")
+        deleted = 0
+        for u in users or []:
+            name = u.decode() if isinstance(u, (bytes, bytearray)) else str(u)
+            if not name.startswith("dev-"):
+                continue
+            await self.redis.execute_command("ACL", "DELUSER", name)
+            unregister_runtime_secret(name[len("dev-"):])
+            deleted += 1
+        if deleted:
+            await self._acl_save()
+        return deleted
+
     async def _acl_save(self) -> None:
         """Persist ACL users to the configured aclfile (2026-08 evaluation):
         SETUSER lives in redis MEMORY only — without this, a redis-only

@@ -114,9 +114,11 @@ def test_clear_openobserve_deletes_data_streams_spares_metadata(monkeypatch):
 
 
 def test_clear_redis_revokes_dev_acl_users_and_drains(monkeypatch):
-    """The incident logic itself: `ACL DELUSER dev-*` + reply-stream drain +
-    ingress trim, run against the live redis. (test_clear.py pins the ORDER
-    that keeps this from racing the SIGTERM grace; this pins the BODY.)"""
+    """The incident logic itself: bulk `dev-*` revoke (with ACL SAVE via
+    Messaging.revoke_leftover_run_users) + reply-stream drain + ingress trim,
+    run against the live redis. (test_clear.py pins the ORDER that keeps this
+    from racing the SIGTERM grace; this pins the BODY. Hermetic ACL SAVE
+    ordering is test_messaging_acl_durability.py.)"""
     import os
     import uuid
 

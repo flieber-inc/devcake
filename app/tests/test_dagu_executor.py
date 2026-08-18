@@ -84,6 +84,70 @@ def test_stop_posts_dag_run_stop():
     assert run_coro(_executor(handler).stop("run-x")) is True
 
 
+def test_stop_returns_false_on_non_success_without_raising():
+    """Operator/clear kill paths treat a failed stop as best-effort bool —
+    they must not raise on 4xx/5xx (teardown continues to ACL revoke)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"message": "not stoppable"})
+
+    assert run_coro(_executor(handler).stop("busy")) is False
+
+
+def test_stop_all_posts_dags_stop_all():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == (
+            f"http://dagu.test:8080/api/v1/dags/{DAG_NAME}/stop-all")
+        return httpx.Response(200, json={"errors": ["e1"]})
+
+    assert run_coro(_executor(handler).stop_all()) == ["e1"]
+
+
+def test_stop_all_404_is_empty_errors():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={})
+
+    assert run_coro(_executor(handler).stop_all()) == []
+
+
+def test_delete_accepts_204_and_404():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        rid = request.url.path.rsplit("/", 1)[-1]
+        if rid == "gone":
+            return httpx.Response(404)
+        if rid == "ok":
+            return httpx.Response(204)
+        if rid == "running":
+            return httpx.Response(400, text="still running")
+        return httpx.Response(500, text="boom")
+
+    ex = _executor(handler)
+    assert run_coro(ex.delete("ok")) is True
+    assert run_coro(ex.delete("gone")) is True
+    assert run_coro(ex.delete("running")) is False
+    with pytest.raises(httpx.HTTPStatusError):
+        run_coro(ex.delete("boom"))
+
+
+def test_list_all_run_ids_paginates():
+    pages = {
+        None: ({"dagRuns": [{"dagRunId": "a"}, {"dagRunId": "b"}],
+                "nextCursor": "c1"}),
+        "c1": ({"dagRuns": [{"dagRunId": "c"}], "nextCursor": None}),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        cursor = request.url.params.get("cursor")
+        body = pages[cursor]
+        return httpx.Response(200, json=body)
+
+    assert run_coro(_executor(handler).list_all_run_ids()) == ["a", "b", "c"]
+
+
 def test_start_must_issue_http_request():
     """Mutation bar: a no-op start() leaves seen empty → fail."""
     seen: list[httpx.Request] = []

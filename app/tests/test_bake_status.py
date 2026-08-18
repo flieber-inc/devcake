@@ -104,6 +104,42 @@ def test_prune_request_also_drops_a_fresh_keep_set_order(tmp_path, monkeypatch):
     assert (tmp_path / bs.PRUNE_REQUEST_NAME).is_file()
 
 
+def test_harness_prune_http_route_returns_ok(tmp_path, monkeypatch):
+    """POST /api/v1/harness/prune must read Dev Types from services, not AppConfig.
+
+    Regression: the route used svc().config.dev_types (AttributeError → 500).
+    Dev Types live on Services as svc().dev_types.
+    """
+    import json
+
+    import pytest
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from fakes import make_services
+    from devcake import bake_status as bs
+    from devcake.api import main as app_main
+    from devcake.config import AppConfig, DevType
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    dts = {"d": DevType(name="d", harness_template="grok-build")}
+    monkeypatch.setattr(app_main, "services", make_services(
+        config=AppConfig(), dev_types=dts))
+
+    probe = FastAPI()
+    probe.add_api_route(
+        "/api/v1/harness/prune", app_main.request_harness_prune, methods=["POST"])
+    response = TestClient(probe).post("/api/v1/harness/prune")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "requested": True}
+    assert (tmp_path / bs.PRUNE_REQUEST_NAME).is_file()
+    keep = tmp_path / "harness_keep_set.json"
+    assert keep.is_file()
+    assert json.loads(keep.read_text())["pins"][0]["template"] == "grok-build"
+
+
 def test_baker_transition_fires_on_edges_only():
     from devcake.bake_status import baker_transition
 

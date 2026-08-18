@@ -783,7 +783,7 @@ async def test_forge(name: str):
 
 @app.post("/api/v1/harness/prune")
 async def request_harness_prune():
-    return bake_status_mod.request_prune(dev_types=svc().config.dev_types)
+    return bake_status_mod.request_prune(dev_types=svc().dev_types)
 
 
 # ── internal-forge repos + skill store (M11, docs/16) — bodies in

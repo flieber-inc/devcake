@@ -158,7 +158,17 @@ class ClaimsWriter:
             raise RuntimeError(
                 f"claims notebook clone failed though {want} exists: "
                 f"{detail}")
-        # Reachable remote with no heads / no default-branch ref —
+        if heads:
+            # Populated remote without the configured branch: almost
+            # certainly a misconfigured default_branch — reading it as a
+            # confidently empty notebook is the exact failure this helper
+            # exists to prevent. Bootstrap is the no-heads case below.
+            have = ", ".join(sorted(h.removeprefix("refs/heads/")
+                                    for h in heads)[:5])
+            raise RuntimeError(
+                f"claims notebook unlistable: remote has no {want} "
+                f"(branches: {have}) — check the card's default_branch")
+        # Reachable remote with no heads at all (fresh bare repo) —
         # empty-init so the first commit can push the branch.
         dest.mkdir(parents=True)
         for args in (["init", "-b", branch],

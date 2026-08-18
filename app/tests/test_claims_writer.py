@@ -303,3 +303,29 @@ def test_default_branch_exists_but_clone_fails_is_unlistable(tokens):
     assert run_coro(w.snapshot("nb")) is None
     assert run_coro(w.has_readme("nb")) is None
     assert run_coro(w.list_claim_meta("nb")) is None
+
+
+def test_branch_missing_on_populated_remote_is_unlistable(tokens):
+    """ls-remote shows other heads but not the configured branch → None.
+    A typo'd default_branch must never read as a confidently empty
+    notebook; empty-init is reserved for a remote with no heads at all."""
+    tokens[("nb", "token")] = "tok"
+    card = RepoInstance(name="nb", forge="github",
+                        url="https://github.com/acme/notes",
+                        default_branch="main")
+
+    async def wrong_branch_git(args, cwd=None, env=None):
+        if args[:1] == ["clone"]:
+            return _git_result(128, stderr="Remote branch main not found")
+        if args[:2] == ["ls-remote", "--heads"]:
+            return _git_result(
+                0, stdout="abc123\trefs/heads/master\ndef456\trefs/heads/dev\n")
+        if args[:1] == ["init"] or args[:2] == ["remote", "add"]:
+            return _git_result(0)
+        return _git_result(1, stderr=f"unexpected git {args!r}")
+
+    w = ClaimsWriter(_cfg(card), git=wrong_branch_git)
+    assert run_coro(w.list_json_names("nb")) is None
+    assert run_coro(w.snapshot("nb")) is None
+    assert run_coro(w.has_readme("nb")) is None
+    assert run_coro(w.list_claim_meta("nb")) is None

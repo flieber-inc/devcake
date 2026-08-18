@@ -6,9 +6,9 @@ import logging
 
 from ...config import assignment_for
 from .. import backend_health
-from ..model import (LABEL_CREATED, LABEL_FAILED, LABEL_SKIP, Mission,
+from ..model import (LABEL_FAILED, LABEL_SKIP, Mission,
                      MissionType, PRIORITY_RANK, derive, find_cycles)
-from .markers import DISPATCHABLE_TYPES, decomposition_marker
+from .markers import DISPATCHABLE_TYPES, decomposition_parent_ref
 
 log = logging.getLogger("devcake.missions")
 
@@ -21,6 +21,7 @@ async def gate_map(mgr, missions: list[Mission]) -> dict[str, str]:
     unsatisfiable-wait reason instead of ordinary blocking (docs/04 §2a).
     Also refreshes mgr.blocked_reasons / mgr.cycles (advisory mirrors)."""
     by_id = {m.pmo_id: m for m in missions}
+    by_key = {m.key.upper(): m for m in missions if m.key}
     id_to_key = {m.pmo_id: m.key for m in missions}
     graph = {m.pmo_id: set(m.blocked_by) for m in missions
              if m.pmo_kind == "issue" and m.blocked_by}
@@ -52,14 +53,16 @@ async def gate_map(mgr, missions: list[Mission]) -> dict[str, str]:
     # Project parents stay open by design (DEVCAKE-TRACKING) and vanished
     # parents can never terminate — both exempt (fail-open, pre-ADR
     # behavior; the snapshot includes terminal missions, docs/04 §2).
+    # Parent trust + resolve match family_of: decomposition_parent_ref
+    # (LABEL_CREATED) and pmo_id-or-key lookup (key is a defensive alias).
     for m in missions:
-        if m.pmo_kind != "issue" or LABEL_CREATED not in m.labels \
-                or m.status in ("done", "canceled") or m.pmo_id in gate:
+        if m.pmo_kind != "issue" or m.status in ("done", "canceled") \
+                or m.pmo_id in gate:
             continue
-        marker = decomposition_marker(m.description)
-        if not marker:
+        pref = decomposition_parent_ref(m)
+        if not pref:
             continue
-        parent = by_id.get(marker.group(1))
+        parent = by_id.get(pref) or by_key.get(pref.upper())
         if parent is not None and parent.pmo_kind == "issue" \
                 and parent.status not in ("done", "canceled"):
             gate[m.pmo_id] = (f"decomposition of {parent.key} not finalized "

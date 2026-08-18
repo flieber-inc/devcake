@@ -341,10 +341,11 @@ these rulings amend it where implementation surfaced better information.
 4. **Recovery is label-gated.** Harvest adds a `DEVCAKE-DISCOVERY` label — a
    pure sweep gate (the poll cycle has no unconditional per-mission feed
    reads; the DEVCAKE-MERGE precedent). The label may never affect
-   derivation, scheduling, or dispatch (AST-guarded); it accumulates until
-   the routing half ships and drains it, and pending work is the pure board
-   arithmetic `posted markers − routed receipts`
-   (`` `devcake:discovery-routed:v1 step=<n> to=<KEY>` ``).
+   derivation, scheduling, or dispatch (AST-guarded). The routing half
+   (PR-2, shipped) drains it via `discovery_sweep` + steward apply: pending
+   work is the pure board arithmetic `posted markers − routed receipts`
+   (`` `devcake:discovery-routed:v1 step=<n> to=<KEY>` ``). Toggle-off leaves
+   the label as honest board state until routing is re-enabled.
 5. **Provenance drops the commit-sha segment** (`[KEY · step n · date]`): no
    structured anchor field is captured at harvest, and parsing shas out of
    evidence prose would violate the never-parse-prose rule — shas live
@@ -353,12 +354,12 @@ these rulings amend it where implementation surfaced better information.
    pipe (`feed.post_attachment_comment`, transcript posting retrofitted);
    one marker-defang transformation (`markers.defang`, handoff append
    retrofitted); one pending-scan pipe (`discovery.scan_source`, shared by
-   recovery and the future routing sweep); one feed-comment entry renderer
-   (`discovery.render_entry_lines`, shared with the future delivery
-   comment).
+   recovery, the discovery sweep, and steward apply); one feed-comment
+   entry renderer (`discovery.render_entry_lines`, shared with delivery
+   comments).
 7. **The per-PMO `discovery_routing` toggle ships as a draft field**
    (Save-applied), not an instant toggle — routing is not an emergency
-   control; the caps bound the blast radius. (Lands with the routing half.)
+   control; the caps bound the blast radius. (Shipped with the routing half.)
 8. **"Entrypoint unchanged" (Related, below) is superseded.** The steward
    outcome renamed `relations_mapped` → **`stewarded`** — one duty-agnostic
    outcome for every steward flavor, so a future run issuing discoveries

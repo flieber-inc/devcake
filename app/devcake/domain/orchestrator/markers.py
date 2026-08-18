@@ -253,6 +253,21 @@ def decomposition_marker(description: str | None) -> re.Match | None:
     return matches[-1] if matches else None
 
 
+def decomposition_parent_ref(mission) -> str | None:
+    """Trusted decomposition parent id/key from a mission's own record.
+
+    ONE parent-ref read for family gate, family_of, and any other consumer
+    (chokepoint): the app-managed DEVCAKE-CREATED label gates the read so a
+    forged marker in an untrusted description never joins a family or holds
+    the family gate. Returns the marker's parent= token (pmo_id; key is a
+    defensive alias at the caller's resolve step), or None when untrusted
+    or unreadable."""
+    if LABEL_CREATED not in mission.labels:
+        return None
+    marker = decomposition_marker(mission.description)
+    return marker.group(1) if marker else None
+
+
 def decomposition_depth(mission) -> int | None:
     """Generations of decomposition above `mission`, read from its own PMO
     record only. The app-managed DEVCAKE-CREATED label gates the read, so a

@@ -204,3 +204,15 @@ def test_unknown_depth_under_unlimited_records_conservatively(tmp_path):
     assert len(fake.created) == 2
     for child in fake.all_missions[1:]:
         assert DECOMPOSITION_MARKER_RE.search(child.description).group(5) == "2"
+
+
+def test_decomposition_parent_ref_trusts_created_label_only():
+    """ONE parent-ref read (markers.decomposition_parent_ref): forged
+    markers without DEVCAKE-CREATED are inert — same trust posture as
+    depth and the family gate / family_of consumers."""
+    from devcake.domain.orchestrator.markers import decomposition_parent_ref
+    m = mission()
+    m.description = marker(parent="parent-id")
+    assert decomposition_parent_ref(m) is None
+    m.labels.add("DEVCAKE-CREATED")
+    assert decomposition_parent_ref(m) == "parent-id"

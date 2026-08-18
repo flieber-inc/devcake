@@ -6,11 +6,11 @@ between runs (founder ruling 2026-08-13). Harvest is UNCONDITIONAL
 memorialization (Decision 11): render DISCOVERY_<seq>.md and attach it as
 the Mission Step's deliverable, post the marked source-feed comment, add the
 DEVCAKE-DISCOVERY sweep-gate label, seed the advisory pending set. Routing
-(the STEWARD discovery flavor, PR-2) consumes the pending state;
-`scan_source` is the ONE pending-scan pipe both halves share, and
-`render_entry_lines` the ONE feed-comment entry renderer (chokepoint
-rulings). Error doctrine is HANDOFF's, not completion's F4: every sub-step
-is best-effort — harvest must never wedge a close.
+(the STEWARD discovery flavor) consumes the pending state; `scan_source`
+is the ONE pending-scan pipe both halves share, and `render_entry_lines`
+the ONE feed-comment entry renderer (chokepoint rulings). Error doctrine
+is HANDOFF's, not completion's F4: every sub-step is best-effort — harvest
+must never wedge a close.
 """
 
 from __future__ import annotations
@@ -191,7 +191,7 @@ async def harvest(mgr, run: Run, result: dict) -> int:
 @dataclass
 class SourceState:
     posted: list[tuple[int, int]]     # (step, n) markers on the source feed
-    receipted: set[tuple[int, str]]   # (step, target) routing receipts (PR-2)
+    receipted: set[tuple[int, str]]   # (step, target) routing receipts
     truncated: bool = False           # fail-closed: counts unknown
 
     @property
@@ -203,12 +203,13 @@ class SourceState:
 
 
 async def scan_source(mgr, m) -> SourceState:
-    """The ONE labeled-mission feed scan (shared with PR-2's sweep arm):
-    posted markers and routing receipts, both over unquoted bodies (IRON
-    RULE). full=True so newest receipts (gitea pages oldest-first) cannot
-    fall off the window. truncated ⇒ fail-closed: callers must not treat
-    the feed as empty or write to=-. pending = posted − receipted when
-    counts are known — restart-proof board arithmetic, no local ledger."""
+    """The ONE labeled-mission feed scan (shared by harvest recovery, the
+    discovery sweep, and steward apply): posted markers and routing
+    receipts, both over unquoted bodies (IRON RULE). full=True so newest
+    receipts (gitea pages oldest-first) cannot fall off the window.
+    truncated ⇒ fail-closed: callers must not treat the feed as empty or
+    write to=-. pending = posted − receipted when counts are known —
+    restart-proof board arithmetic, no local ledger."""
     act = await mgr.pmo.get_activity(MissionRef(m.pmo_id, "issue"), full=True)
     posted: list[tuple[int, int]] = []
     receipted: set[tuple[int, str]] = set()

@@ -122,6 +122,20 @@ def test_family_gate_exempts_project_parents_and_missing_parents(tmp_path):
     assert "T-11" in dispatched                    # parent off-snapshot
 
 
+def test_family_gate_resolves_parent_by_key_alias(tmp_path):
+    """family_of accepts the parent's key as a defensive alias for parent=
+    (family_graph docstring). The family gate must use the same resolution:
+    a child whose marker carries the open issue-parent's KEY (not pmo_id)
+    must still wait — otherwise the mid-wiring adoption window reopens for
+    that alias shape while family_of already treats the edge as real."""
+    parent = m("o1", "T-1", status="in_progress")
+    child = created_child("c1", "T-10", parent="T-1")   # key alias, not id
+    mgr, dispatched = make_mgr(tmp_path, DepPMO())
+    run_coro(mgr.schedule([parent, child]))
+    assert "T-10" not in dispatched
+    assert "T-1" in mgr.blocked_reasons["c1"]
+
+
 def test_decomposed_original_gates_dependents_via_children(tmp_path):
     """ADR-0012 end-to-end: post-decomposition snapshot — the dependent
     carries the canceled original PLUS the inherited children edges, so it

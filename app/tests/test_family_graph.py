@@ -45,6 +45,15 @@ def test_decomposition_parent_edges_join_the_tree():
     assert set(fam.by_id) == {"p", "c1", "c2"}    # sibling via the parent
 
 
+def test_decomposition_parent_key_alias_joins_the_tree():
+    """parent= may carry the parent's key (defensive alias); family walk
+    must join the same way it does for pmo_id refs."""
+    p = _m("p", "T-1")
+    c1 = _m("c1", "T-2", parent="T-1", labels={"DEVCAKE-CREATED"})
+    fam = family_of(c1, [p, c1])
+    assert set(fam.by_id) == {"p", "c1"}
+
+
 def test_forged_marker_without_created_label_is_inert():
     # decomposition_depth precedent: no DEVCAKE-CREATED label ⇒ the marker
     # in the (untrusted) description never joins a family

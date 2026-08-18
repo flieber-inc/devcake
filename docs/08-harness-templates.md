@@ -176,7 +176,7 @@ Each template is a target in the multi-stage `images/Dockerfile` (shared `base` 
 | `opencode` | `opencode` | Node 22 + `opencode-ai@1.18.18`, git, shared entrypoint |
 | `qwen-code` | `qwen-code` | Node 22 + `@qwen-code/qwen-code@0.21.12`, git, shared entrypoint |
 
-Images are built only by Bake (`docker-bake.hcl`; `13-deployment.md` §6) and referenced by **tag**. The host baker (`./up.sh`) compiles the keep-set; `./up.sh --bake` is control plane + hello, and `bake images` / `bake all` still exist for CI and full upgrades. Digest pinning is not implemented; rebuild Dev images lockstep with app upgrades (Dagu's `pull_policy: missing` keeps stale local tags otherwise). Compose never builds them. The app never talks to Docker.
+Images are built only by Bake (`docker-bake.hcl`; `13-deployment.md` §6) and referenced by **tag**. The host baker (`./up.sh`) compiles the keep-set; `./up.sh --bake` is control plane + hello, and `bake images` / `bake all` still exist for CI and full upgrades. Digest pinning is not implemented; rebuild Dev images lockstep with app upgrades (`dev-run.yaml` uses `pull: never` on every Dev launch — stale local tags keep running unless rebaked). Compose never builds them. The app never talks to Docker.
 
 ## 3. Plan-mode mapping (the "/plan function")
 

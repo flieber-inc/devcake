@@ -187,14 +187,18 @@ Optional tag pin (bake and compose must match):
 
 ```bash
 export DEVCAKE_TAG=$(git rev-parse --short HEAD)
+./up.sh --bake all            # upserts pin into .env + bake + compose
+# or without up.sh:
 docker buildx bake all
-docker compose up -d
+docker compose up -d          # needs export still set, or DEVCAKE_TAG in .env
 ```
 
-`docker compose up -d` must run with `DEVCAKE_TAG` still exported — compose
-passes it into the app container, and **dispatch derives the harness image
-tags from it** (`app/devcake/harness.py`). An app container recreated without
-the export falls back to `:latest` for app, admin, *and* dispatched harnesses.
+`./up.sh` resolves `DEVCAKE_TAG` once (process env > `.env` > `latest`),
+exports it for bake + compose, and **upserts it into `.env`** so a later plain
+`docker compose up -d` stays lockstep. Compose passes the pin into the app
+container, and **dispatch derives the harness image tags from it**
+(`app/devcake/harness.py`). An app container recreated with neither export nor
+`.env` pin falls back to `:latest` for app, admin, *and* dispatched harnesses.
 
 ### Third-party images
 

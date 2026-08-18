@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Activity, Play, Pause, Bot, ExternalLink, Workflow, ScrollText,
-  BookOpen, Hand, GitMerge, SquareTerminal,
+  BookOpen, Hand, GitMerge,
 } from "lucide-react";
 import { Card } from "../components/Card.jsx";
 import Alert from "../components/Alert.jsx";
@@ -506,15 +506,19 @@ export default function OverviewPage({
                       title="Click to open the run terminal"
                       className="cursor-pointer border-t border-neutral-100 first:border-t-0 hover:bg-stone-50 dark:border-neutral-800 dark:hover:bg-neutral-900"
                     >
+                      {/* no printed run id (2026-08-18, the Runs-table rule):
+                          it wrapped at every hyphen in this narrow card — it
+                          lives in the glyph popup and the terminal header */}
                       <td className="py-2 pr-3">
-                        <span className="flex items-center gap-2">
-                          {r.mission_type && <StageGlyph stage={r.mission_type} size={12} />}
+                        <span className="flex items-center gap-1 whitespace-nowrap">
+                          <StageGlyph stage={r.mission_type} size={12}
+                            detail={`run ${r.run_id}`} />
                           <button type="button"
                             onClick={(e) => { e.stopPropagation(); setOpenRun(r); }}
                             title="Open the run terminal"
-                            className="inline-flex items-center gap-1.5 rounded font-mono text-xs underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
-                            <SquareTerminal size={11} className="shrink-0 text-neutral-500 dark:text-neutral-400" aria-hidden />
-                            {r.run_id}
+                            aria-label={`Open the terminal for run ${r.run_id}`}
+                            className="rounded p-0.5 text-neutral-500 transition hover:text-accent-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:text-neutral-400 dark:hover:text-accent-300">
+                            <ScrollText size={13} aria-hidden />
                           </button>
                         </span>
                       </td>

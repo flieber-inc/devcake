@@ -6,10 +6,16 @@ const STAGES = ["ONBOARD", "PLAN", "EXECUTE", "REVIEW"];
 // layers, baked bottom-up. Filled = stages before this run, accent = the
 // stage this run executes. Purely informational — it sits beside the status
 // pill and adds the "how far along" axis the pill doesn't carry.
-export default function StageGlyph({ stage, size = 14 }) {
+// `detail` rides along in the hover popup (the Runs table parks the run id
+// there); when detail is set an unknown stage still renders — as four
+// unbaked layers — so the popup is never lost with it.
+export default function StageGlyph({ stage, size = 14, detail }) {
   const idx = STAGES.indexOf(stage);
-  if (idx === -1) return null;
-  const label = `stage ${idx + 1} of 4 — ${stage}`;
+  if (idx === -1 && !detail) return null;
+  const label = [
+    idx === -1 ? null : `stage ${idx + 1} of 4 — ${stage}`,
+    detail,
+  ].filter(Boolean).join("\n");
   return (
     <span
       role="img"

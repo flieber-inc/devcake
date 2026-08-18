@@ -59,6 +59,7 @@ app/devcake/
                         #   notebooks at harvest (ADR-0035); app-blind to notes
     runs.py        #   ingress, kill, hello dispatch; holds RunBootstrap + RunFinalizer
     oauth.py       #   harness OAuth flows (launches via RunBootstrap)
+    grok_oauth.py  #   host-side Grok CLI session refresh at runspec inject
     watchdog.py    #   timeout/zombie detection + workspace sweep cadence
     reconcile.py   #   boot reconciliation: adopt/orphan runs vs the Dagu API (04 §6)
     workspaces.py  #   WorkspaceStore — per-run host-bind tree, fail-closed

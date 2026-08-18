@@ -16,6 +16,9 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 
 ## 1. REST API contract (`/api/v1`)
 
+Full control-plane inventory (source of truth: `app/devcake/api/main.py`;
+pin: `test_docs11_rest_table_covers_every_main_route`). Auth posture: §6.
+
 | Method + path | Purpose |
 |---|---|
 | `GET /api/v1/health` | Full component health (below) |
@@ -55,7 +58,7 @@ Simple but beautiful: a static SPA (React + Vite + Tailwind, `admin/spa/`) serve
 | `POST /api/v1/system/clear-runs` | Operator wipe: stop **and drain** in-flight Devs (wait for container exit, capped just past Dagu's 30 s SIGTERM grace — the later ACL sweep must never race a live Dev), delete local run records + audit log + profiles breadcrumb, wipe per-run workspace dirs, purge Dagu run history, delete OpenObserve log/trace streams, trim Redis ingress / reply streams / `dev-*` ACL users, **delete every `activity-*` repo on the internal Gitea** (ADR-0014 D4 — the PMO stays the source of truth; repo git history, incl. pre-edit feed states, is lost; the `activity-` prefix is reserved — never hand-create repos with it in `devcake-repos`, the sweep would delete them), prune memory-notebook `.claims/*.json` (notes stay). Config + secrets + PMO + operator repos + skill-store + work repos + notebook notes untouched (`10-persistence.md` §5; full step list in §4) |
 | `POST /api/v1/steward/run` | Manually dispatch a Relations Steward run (`03-mission-lifecycle.md` §4b). Works regardless of the `enabled` toggle and of steward degradation (which govern only the interval service); **honors intake pause** (global master or that instance's switch) — 422 while paused. Also 422 without a valid `dev_type` / unusable workspace, 409 while a steward run is active |
 | `GET /api/v1/cron` | List cron rows from live config (reserved `memory-curator` always present) |
-| `POST /api/v1/cron/{id}/run` | Fire a scheduled task now (instant). 422 unknown; 409 in-flight (generic rows); 200 `{created: [{pmo, key}]}` — the Memory Curator fan-out returns an empty `created` when every board is busy/paused/absent. Memory Curator Run-now bypasses skip-if-empty (F4) |
+| `POST /api/v1/cron/{job_id}/run` | Fire a scheduled task now (instant). 422 unknown; 409 in-flight (generic rows); 200 `{created: [{pmo, key}]}` — the Memory Curator fan-out returns an empty `created` when every board is busy/paused/absent. Memory Curator Run-now bypasses skip-if-empty (F4) |
 | `GET /api/v1/profiles` | Config profile rows (ADR-0013): counts + presence only, plus the last-applied breadcrumb and the divergence boolean. Never a secret value |
 | `GET /api/v1/profiles/{name}` | One profile: metadata, full section A, a secrets **presence map**, and the apply-preview `diff` vs current settings |
 | `POST /api/v1/profiles` | Save-current-as: snapshots the live settings + secret values under `{"name": …}`. 409 on collision unless `overwrite: true`; warnings name configured instances whose secret is missing from the snapshot |

@@ -7,23 +7,26 @@ executable after it — no module-level ``MissionManager.<attr> = ...`` bindings
 C6 rule: ``api/main.py`` is composition root + route forwards — every
 ``@app.<verb>`` route body is ≤ 4 statements (docstring excluded). Endpoint
 behavior lives in ``api/`` service modules. The allowlist below is the
-residual read-side surface at close-out; it may SHRINK, never grow — a new
+residual thick body at close-out; it may SHRINK, never grow — a new
 endpoint that needs more than a forward gets a service module.
+
+Also pins ``docs/11-admin-panel.md`` §1 REST table against the live
+``main.py`` route list (method + path skeletons).
 """
 
 import ast
+import re
 from pathlib import Path
 
 MANAGER = (Path(__file__).parents[1] / "devcake" / "domain" / "orchestrator"
            / "manager.py")
 MAIN = Path(__file__).parents[1] / "devcake" / "api" / "main.py"
 
-# Residual bodies allowed in main.py (C6 close-out; shrink opportunistically):
-# the CI fixture, the steward/OAuth trio, and the small read-side runs/log/
-# clear endpoints. Everything else forwards to a service module.
+# Residual bodies allowed in main.py (C6 close-out; shrink opportunistically).
+# Only ``run_steward`` still exceeds 4 statements; everything else forwards
+# to a service module or is already a short forward (≤4). May SHRINK, never grow.
 ROUTE_BODY_ALLOWLIST = {
-    "dispatch_hello", "run_steward", "oauth_start", "oauth_status",
-    "clear_runs", "get_run_log", "stream_run_log",
+    "run_steward",
 }
 
 
@@ -122,6 +125,73 @@ def test_main_route_bodies_stay_thin():
     assert not offenders, (
         "main.py route bodies grew past 4 statements — move the behavior to "
         "an api/ service module (ADR-0015 Decision 3): " + "; ".join(offenders))
+
+
+# ── docs/11 §1 REST table ↔ main.py route inventory ─────────────────────────
+
+# Host checkout: repo/app/tests → repo/docs; container: /srv/tests → /srv/docs
+# (pytest_app.sh binds docs at /srv/docs).
+_DOC_ROOTS = [Path(__file__).parents[2], Path(__file__).parents[1]]
+DOCS_11 = next(
+    (r / "docs" / "11-admin-panel.md" for r in _DOC_ROOTS
+     if (r / "docs" / "11-admin-panel.md").exists()),
+    _DOC_ROOTS[0] / "docs" / "11-admin-panel.md",
+)
+
+
+def _skeleton(path: str) -> str:
+    """Normalize `/api/v1/foo/{name:path}` / `{VAR}` → `/api/v1/foo/{}`."""
+    path = path.split("?")[0].lower()
+    return re.sub(r"\{[^}]+\}", "{}", path)
+
+
+def _main_route_skeletons() -> set[tuple[str, str]]:
+    out: set[tuple[str, str]] = set()
+    for m in re.finditer(
+        r'@app\.(get|post|put|patch|delete)\("([^"]+)"\)', MAIN.read_text()
+    ):
+        out.add((m.group(1).upper(), _skeleton(m.group(2))))
+    return out
+
+
+def _docs11_rest_skeletons() -> set[tuple[str, str]]:
+    """Parse Method+path cells from docs/11 §1 (before the next ## heading)."""
+    text = DOCS_11.read_text()
+    sec = re.search(r"(## 1[^\n]*\n)(.*?)(\n## )", text, re.S)
+    assert sec is not None, "docs/11 §1 heading not found"
+    out: set[tuple[str, str]] = set()
+    cell_re = re.compile(
+        r"`((?:GET|POST|PUT|PATCH|DELETE)"
+        r"(?:\s*[·•/]\s*(?:GET|POST|PUT|PATCH|DELETE))*)"
+        r"\s+(/api/v1/[^`]+)`"
+    )
+    for m in cell_re.finditer(sec.group(2)):
+        methods = re.findall(r"GET|POST|PUT|PATCH|DELETE", m.group(1))
+        skel = _skeleton(m.group(2))
+        for method in methods:
+            out.add((method, skel))
+    return out
+
+
+def test_docs11_rest_table_covers_every_main_route():
+    """Contributor REST inventory must not silently drop live control-plane
+    paths (CAKE-48). Compare method + path *skeletons* so `{job_id}` vs
+    `{id}` / `{VAR}` vs `{var}` / `{name:path}` vs `{name}` stay notation-
+    only, not inventory holes. Both directions: missing rows and ghost rows.
+    """
+    code = _main_route_skeletons()
+    docs = _docs11_rest_skeletons()
+    missing = sorted(code - docs)
+    ghosts = sorted(docs - code)
+    assert not missing, (
+        "docs/11 §1 REST table missing live main.py routes: "
+        + ", ".join(f"{m} {p}" for m, p in missing)
+    )
+    assert not ghosts, (
+        "docs/11 §1 REST table lists paths absent from main.py: "
+        + ", ".join(f"{m} {p}" for m, p in ghosts)
+    )
+    assert len(code) >= 70, f"unexpectedly small main.py surface ({len(code)})"
 
 
 # ── ADR-0028: the composition root is a factory, not an import side effect ───

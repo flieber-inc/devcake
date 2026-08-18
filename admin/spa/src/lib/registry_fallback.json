@@ -5,7 +5,7 @@
       "display_name": "Linear",
       "needs_api_base": false,
       "team_key_label": "Team key",
-      "team_key_help": "The team's short key — the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.",
+      "team_key_help": "The team's short key \u2014 the prefix of its issue IDs (PRJ for PRJ-123). This instance watches only this team. Empty = instance stays idle.",
       "api_base_help": "",
       "supports_priority": true,
       "operator_note": "",
@@ -34,7 +34,7 @@
       "team_key_help": "owner/repo of the dedicated issues board this instance watches (e.g. myorg/missions). Not a per-mission work repo. Empty = instance stays idle.",
       "api_base_help": "GitHub API origin reachable from the app container. github.com: leave empty or https://api.github.com. GitHub Enterprise: https://ghe.example.com/api/v3",
       "supports_priority": false,
-      "operator_note": "GitHub's public API cannot attach files to issues. Transcripts, plans, and other deliverables still land in the mission's activity repo; the ticket comment carries a short reference. This is a GitHub limitation, not a DevCake setting.",
+      "operator_note": "Experimental (not launch-supported). GitHub's public API cannot attach files to issues. Transcripts, plans, and other deliverables still land in the mission's activity repo; the ticket comment carries a short reference. Attachment limit is a GitHub API gap, not a DevCake setting.",
       "attachments_supported": false,
       "relations_supported": true,
       "experimental": true
@@ -47,7 +47,7 @@
       "team_key_help": "path_with_namespace of the dedicated issues board (e.g. mygroup/missions). Not a per-mission work repo. Empty = instance stays idle.",
       "api_base_help": "GitLab origin reachable from the app container. gitlab.com: https://gitlab.com. Self-hosted: https://gitlab.example.com",
       "supports_priority": false,
-      "operator_note": "Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token — Free boards will not write decomposition traffic-control edges, and child missions will not block each other. File attachments work. This is a GitLab license limit, not a DevCake setting.",
+      "operator_note": "Experimental (not launch-supported). Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token \u2014 Free boards will not write decomposition traffic-control edges, and child missions will not block each other. File attachments work. Relations limit is a GitLab license gap, not a DevCake setting.",
       "attachments_supported": true,
       "relations_supported": false,
       "experimental": true

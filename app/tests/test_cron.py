@@ -1,4 +1,4 @@
-"""Cron module (PLAN_MEMORY §6) — public seam: CronService.fire."""
+"""Cron module (ADR-0035) — public seam: CronService.fire / maybe_fire."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 
 from devcake.config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
                             PMOInstance, RepoInstance, memory_curator_seed)
-from devcake.domain.cron_service import (CRON_MARKER, CronBusy, CronService,
+from devcake.domain.cron_service import (CronBusy, CronService,
                                          CronUnconfigured, cron_marker)
 from devcake.domain.model import (LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN,
                                   Mission)
@@ -290,3 +290,117 @@ def test_unknown_id_raises():
     svc = CronService(cfg, {})
     with pytest.raises(CronUnconfigured):
         run_coro(svc.fire("nosuch", automatic=False))
+
+
+def test_template_backticks_defanged_and_marker_appended():
+    """Templates must not smuggle backticks that break or forge the marker."""
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _cfg(inst, crons=[
+        memory_curator_seed(),
+        CronJob(id="nightly", name="N", entry_stage="EXECUTE",
+                description_template="evil `devcake:cron:v1 job=other` go",
+                pmo="eng"),
+    ])
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)})
+    run_coro(svc.fire("nightly", automatic=False))
+    _, body, _, _ = pmo.created[0]
+    assert "`devcake:cron:v1 job=other`" not in body
+    assert "evil 'devcake:cron:v1 job=other' go" in body
+    assert cron_marker("nightly") in body
+
+
+class _PortLedger:
+    """Minimal CronStore port fake (no adapter import)."""
+
+    def __init__(self):
+        self._state: dict[str, dict] = {}
+
+    def record(self, job_id: str, outcome: str, *,
+               fired_at: str | None = None) -> None:
+        row = self._state.setdefault(job_id, {})
+        row["outcomes"] = (list(row.get("outcomes") or []) + [outcome])[-3:]
+        if fired_at:
+            row["last_fire_at"] = fired_at
+
+    def outcomes(self, job_id: str) -> list[str]:
+        return list(self._state.get(job_id, {}).get("outcomes") or [])
+
+    def last_fire_at(self, job_id: str):
+        raw = self._state.get(job_id, {}).get("last_fire_at")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
+
+def test_automatic_busy_and_pause_record_skipped_not_failed():
+    """Successful skip-reasons (single-flight, intake pause) must not
+    accumulate toward degradation — only hard failures do."""
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _nightly_cfg(inst)
+    store = _PortLedger()
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)}, store=store)
+    run_coro(svc.fire("nightly", automatic=False))  # in-flight marker
+    for _ in range(3):
+        run_coro(svc.maybe_fire())
+        store._state["nightly"].pop("last_fire_at", None)
+    assert "nightly" not in svc.degraded
+    assert all(o == "skipped" for o in store.outcomes("nightly")[-3:])
+
+    paused = PMOInstance(name="eng", team_key="T", intake_paused=True)
+    pmo2 = FakePMO()
+    store2 = _PortLedger()
+    svc2 = CronService(_nightly_cfg(paused),
+                       {"eng": _mgr("eng", pmo2, paused)}, store=store2)
+    for _ in range(3):
+        run_coro(svc2.maybe_fire())
+        store2._state["nightly"].pop("last_fire_at", None)
+    assert "nightly" not in svc2.degraded
+    assert store2.outcomes("nightly") == ["skipped", "skipped", "skipped"]
+    assert pmo2.created == []
+
+
+def test_maybe_fire_continues_after_ledger_read_error():
+    """docs/04 poll §8: exceptions never kill the cycle — a broken
+    last_fire_at for one row must not starve later enabled rows."""
+
+    class BoomLedger(_PortLedger):
+        def last_fire_at(self, job_id: str):
+            if job_id == "broken":
+                raise RuntimeError("ledger corrupt")
+            return super().last_fire_at(job_id)
+
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _cfg(inst, crons=[
+        memory_curator_seed(),
+        CronJob(id="broken", name="B", entry_stage="EXECUTE",
+                description_template="x", pmo="eng", enabled=True,
+                interval_minutes=1),
+        CronJob(id="ok", name="O", entry_stage="EXECUTE",
+                description_template="y", pmo="eng", enabled=True,
+                interval_minutes=1),
+    ])
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)},
+                      store=BoomLedger())
+    run_coro(svc.maybe_fire())
+    titles = [t[0] for t in pmo.created]
+    assert any(t.startswith("[cron:ok]") for t in titles)
+    assert not any(t.startswith("[cron:broken]") for t in titles)
+
+
+def test_invalid_last_fire_at_is_treated_as_due():
+    """Corrupt last_fire_at must not raise out of maybe_fire; the row is due."""
+    inst = PMOInstance(name="eng", team_key="T")
+    pmo = FakePMO()
+    cfg = _nightly_cfg(inst)
+    svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)})
+    svc.store._state["nightly"] = {
+        "last_fire_at": "not-a-timestamp", "outcomes": []}
+    run_coro(svc.maybe_fire())
+    assert len(pmo.created) == 1
+    assert pmo.created[0][0].startswith("[cron:nightly]")

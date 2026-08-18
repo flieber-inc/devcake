@@ -20,6 +20,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
+from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
@@ -492,7 +493,15 @@ class GiteaIssuesAdapter:
 
     async def swap_labels(self, ref: MissionRef, remove: set[str],
                           add: set[str]) -> None:
+        # Read-modify-write over the full label set: hold the per-mission
+        # lock so a concurrent swap's read never goes stale mid-write
+        # (the CAKE-48 clobber — see _toolkit.label_write_lock).
         self._require_issue(ref)
+        async with label_write_lock(ref.pmo_id):
+            await self._swap_labels_locked(ref, remove, add)
+
+    async def _swap_labels_locked(self, ref: MissionRef, remove: set[str],
+                                  add: set[str]) -> None:
         await self._ensure_label_cache()
         current = await self._issue_label_names(ref.pmo_id)
         next_names = (current - remove) | add

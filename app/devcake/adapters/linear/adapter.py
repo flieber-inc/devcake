@@ -16,6 +16,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionDocument, MissionRef,
                              NormalizedStatus, Priority)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
+from .._toolkit import label_write_lock
 
 log = logging.getLogger("devcake.linear")
 
@@ -713,8 +714,9 @@ class LinearAdapter:
 
     @staticmethod
     def _refuse_truncated_rewrite(conn: dict, what: str) -> None:
-        """Shared fail-loud contract for both label-swap write paths: a
-        rewrite from a truncated read would delete the overflow labels."""
+        """Shared fail-loud contract for both label-swap paths: a project
+        rewrite from a truncated read would delete the overflow labels, and
+        an issue removal cannot be verified against one."""
         if (conn.get("pageInfo") or {}).get("hasNextPage"):
             raise RuntimeError(
                 f"{what}: more than {LABELS_PAGE * MAX_LABEL_PAGES} labels — "
@@ -722,31 +724,48 @@ class LinearAdapter:
 
     async def _swap_issue_labels(self, pmo_id: str, remove: set[str],
                                  add: set[str]) -> None:
-        """Single issueUpdate(labelIds) — the closest-to-atomic op Linear offers.
-        Read-modify-write: the read MUST see every label or the rewrite deletes
-        the overflow, so it paginates and refuses to write past the ceiling
-        (ISSUES #7 — the write path is where truncation destroys data)."""
-        data = await self._gql(
-            """query($id: String!) { issue(id: $id) {
-                 team { key }
-                 labels(first: 50) { pageInfo { hasNextPage endCursor }
-                                    nodes { id name } } } }""", {"id": pmo_id})
-        issue = data["issue"]
-        await self._paginate_issue_labels(pmo_id, issue)
-        self._refuse_truncated_rewrite(issue["labels"], f"issue {pmo_id}")
-        team = await self._team(issue["team"]["key"])
-        by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
-        current = {l["name"].upper(): l["id"] for l in issue["labels"]["nodes"]}
-        for name in remove:
-            current.pop(name.upper(), None)
-        for name in add:
-            if name.upper() not in by_name:
-                raise RuntimeError(f"label {name} missing — ensure_labels not run?")
-            current[name.upper()] = by_name[name.upper()]
-        await self._gql(
-            """mutation($id: String!, $labelIds: [String!]!) {
-                 issueUpdate(id: $id, input: {labelIds: $labelIds}) { success } }""",
-            {"id": pmo_id, "labelIds": sorted(current.values())})
+        """Per-label ``issueAddLabel`` / ``issueRemoveLabel`` mutations
+        (schema-verified live). No full-set rewrite exists on this path any
+        more, so a concurrent writer's labels can never be clobbered and a
+        truncated read can no longer delete overflow labels — the paginated
+        read only resolves removal ids and skips no-op mutations. The ceiling
+        refusal stays: past it a removal cannot be verified (ISSUES #7).
+        Serialized per mission like every swap path (the CAKE-48 race:
+        finalize's stage-label add and the discovery sweep's gate retire
+        landed in the same second, and the sweep's stale full-set rewrite
+        deleted the fresh stage label)."""
+        async with label_write_lock(pmo_id):
+            data = await self._gql(
+                """query($id: String!) { issue(id: $id) {
+                     team { key }
+                     labels(first: 50) { pageInfo { hasNextPage endCursor }
+                                        nodes { id name } } } }""", {"id": pmo_id})
+            issue = data["issue"]
+            await self._paginate_issue_labels(pmo_id, issue)
+            self._refuse_truncated_rewrite(issue["labels"], f"issue {pmo_id}")
+            team = await self._team(issue["team"]["key"])
+            by_name = {l["name"].upper(): l["id"] for l in team["labels"]["nodes"]}
+            current = {l["name"].upper(): l["id"]
+                       for l in issue["labels"]["nodes"]}
+            for name in sorted(remove):
+                lid = current.get(name.upper())
+                if lid is None:
+                    continue      # absent — nothing to remove
+                await self._gql(
+                    """mutation($id: String!, $lid: String!) {
+                         issueRemoveLabel(id: $id, labelId: $lid) { success } }""",
+                    {"id": pmo_id, "lid": lid})
+            for name in sorted(add):
+                lid = by_name.get(name.upper())
+                if lid is None:
+                    raise RuntimeError(
+                        f"label {name} missing — ensure_labels not run?")
+                if name.upper() in current:
+                    continue      # already present — the add would no-op
+                await self._gql(
+                    """mutation($id: String!, $lid: String!) {
+                         issueAddLabel(id: $id, labelId: $lid) { success } }""",
+                    {"id": pmo_id, "lid": lid})
 
     async def ensure_labels(self, team_ref: str, names: set[str] = frozenset(ALL_LABELS)) -> None:
         # team-scoped issue labels
@@ -867,9 +886,17 @@ class LinearAdapter:
 
     async def _swap_project_labels(self, project_id: str, remove: set[str],
                                    add: set[str]) -> None:
-        """Project labels are a separate workspace-level entity (verified live).
-        Same read-modify-write hazard as _swap_issue_labels: paginate the read,
-        refuse the rewrite past the ceiling (ISSUES #7)."""
+        """Project labels are a separate workspace-level entity (verified live)
+        with no per-label mutation counterpart, so this path keeps the full-set
+        read-modify-write: paginate the read, refuse the rewrite past the
+        ceiling (ISSUES #7), and hold the per-mission lock so a concurrent
+        writer's label is never rewritten away."""
+        async with label_write_lock(project_id):
+            return await self._swap_project_labels_locked(project_id, remove, add)
+
+    async def _swap_project_labels_locked(self, project_id: str,
+                                          remove: set[str],
+                                          add: set[str]) -> None:
         by_name = await self._all_project_labels()
         proj = await self._gql(
             """query($id: String!) { project(id: $id) {

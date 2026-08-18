@@ -15,8 +15,10 @@ import it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from typing import Awaitable, Callable
 
 import httpx
@@ -180,3 +182,42 @@ async def paginate_rest_newest(
         items.extend(batch)
     _rest_ceiling(what, max_pages, page_size, on_ceiling, ceiling_error)
     return items, True
+
+
+# --- per-mission label-write serialization ---------------------------------
+
+_LABEL_LOCKS: dict[str, "asyncio.Lock"] = {}
+_LABEL_LOCKS_MAX = 512
+
+
+def _label_lock(pmo_id: str) -> "asyncio.Lock":
+    lock = _LABEL_LOCKS.get(pmo_id)
+    if lock is None:
+        if len(_LABEL_LOCKS) >= _LABEL_LOCKS_MAX:
+            for key, held in list(_LABEL_LOCKS.items()):
+                if not held.locked():
+                    del _LABEL_LOCKS[key]
+        lock = _LABEL_LOCKS.setdefault(pmo_id, asyncio.Lock())
+    return lock
+
+
+@asynccontextmanager
+async def label_write_lock(pmo_id: str):
+    """Serialize label mutations per mission within this process.
+
+    Every adapter's ``swap_labels`` is a read-modify-write over the issue's
+    full label set (or, on Linear issues, a read that steers per-label
+    mutations). Two orchestrator tasks legitimately mutate the same mission's
+    labels in the same instant — the ingress consumer's finalize advancing
+    the stage label while a poll-loop sweep retires a gate label — and a
+    full-set write computed from a pre-write read then deletes the other
+    writer's label. Observed live 2026-08-17 (CAKE-48): the discovery
+    sweep's retire erased the freshly added stage label, stranding the
+    mission as "in_progress without stage label — not DevCake's".
+
+    Keyed by pmo_id across adapter instances; a numeric-id collision between
+    two boards only over-serializes, never under-serializes. The registry
+    drops unheld locks once it grows past _LABEL_LOCKS_MAX.
+    """
+    async with _label_lock(pmo_id):
+        yield

@@ -1,6 +1,7 @@
-"""ISSUES #7 regression: label reads paginate past a full first page, and the
-label-swap WRITE paths (read-modify-write over the full set) must never rewrite
-from a truncated read — that silently deletes the overflow labels."""
+"""ISSUES #7 regression + the CAKE-48 clobber: label reads paginate past a
+full first page; the issue swap path uses per-label mutations (never a
+full-set rewrite, so a concurrent writer's labels survive); the project path
+still rewrites and must never do so from a truncated read."""
 import asyncio
 
 import pytest
@@ -33,8 +34,14 @@ def _swap_adapter(total, mutations, extra_team_labels=()):
     async def _gql(query, variables=None):
         v = dict(variables or {})
         if "issueUpdate" in query:
-            mutations.append(v)
-            return {"issueUpdate": {"success": True}}
+            raise AssertionError(
+                "full-set rewrite is banned on the issue path (CAKE-48)")
+        if "issueRemoveLabel" in query:
+            mutations.append(("remove", v["lid"]))
+            return {"issueRemoveLabel": {"success": True}}
+        if "issueAddLabel" in query:
+            mutations.append(("add", v["lid"]))
+            return {"issueAddLabel": {"success": True}}
         start = int(v["after"]) if v.get("after") else 0
         issue = {"labels": _labels_conn(labels, start)}
         if not v.get("after"):
@@ -51,27 +58,33 @@ def _swap_adapter(total, mutations, extra_team_labels=()):
     return ad
 
 
-def test_swap_issue_labels_paginates_before_rewrite():
-    """55 labels: the rewrite must carry all of them (minus removed, plus
-    added) — pre-fix it read only the first 50 and deleted the overflow."""
+def test_swap_issue_labels_is_per_label_and_paginates_removal_ids():
+    """55 labels: the swap issues exactly one remove and one add mutation —
+    no issueUpdate(labelIds) rewrite exists to clobber concurrent writers —
+    and the removal id (L54, overflow page) proves the read paginated."""
     mutations = []
     ad = _swap_adapter(55, mutations, extra_team_labels=["DEVCAKE-REVIEW"])
-    run_coro(ad._swap_issue_labels("i1", remove={"L3"}, add={"DEVCAKE-REVIEW"}))
-    assert len(mutations) == 1
-    ids = set(mutations[0]["labelIds"])
-    assert len(ids) == 55                    # 55 - 1 removed + 1 added
-    assert "lid-54" in ids                   # overflow label survived
-    assert "lid-3" not in ids                # removed
-    assert "tid-DEVCAKE-REVIEW" in ids       # added
+    run_coro(ad._swap_issue_labels("i1", remove={"L54"}, add={"DEVCAKE-REVIEW"}))
+    assert mutations == [("remove", "lid-54"), ("add", "tid-DEVCAKE-REVIEW")]
+
+
+def test_swap_issue_labels_skips_absent_removal_and_present_add():
+    """Absent removal is a no-op; adding a label already on the issue issues
+    no mutation (the read steers, it never rewrites)."""
+    mutations = []
+    ad = _swap_adapter(3, mutations)
+    run_coro(ad._swap_issue_labels("i1", remove={"NOPE"}, add={"L1"}))
+    assert mutations == []
 
 
 def test_swap_issue_labels_refuses_past_ceiling():
-    """Past the fail-loud ceiling the swap must raise, not delete labels."""
+    """Past the fail-loud ceiling the swap must raise before mutating —
+    a removal cannot be verified against a truncated read."""
     mutations = []
     ad = _swap_adapter(LABELS_PAGE * MAX_LABEL_PAGES + 1, mutations)
     with pytest.raises(RuntimeError, match="refusing label swap"):
         run_coro(ad._swap_issue_labels("i1", remove=set(), add=set()))
-    assert mutations == []                   # nothing was rewritten
+    assert mutations == []                   # nothing was mutated
 
 
 def _team_gql(labels):

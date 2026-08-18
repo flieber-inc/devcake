@@ -154,7 +154,9 @@ know — add it to result.json alongside your other fields:
 session context — no coined terminology, no unanchored references>",
 "evidence": "<the receipt: file paths, exact error text, the reproducing
 command, the commit sha — an entry without evidence is an opinion and is
-dropped>", "scope": "<what it applies to, and what it does not>"}]
+dropped>", "scope": "<what it applies to, and what it does not>",
+"about": ["<optional topic tags — non-strings / missing → empty; stripped
+strings only>"]}]
 """
 DISCOVERIES_EPILOGUE_TAIL = """
 Discoveries vs handoff: `discoveries` is the canonical, structured record

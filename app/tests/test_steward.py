@@ -935,6 +935,63 @@ def test_apply_routes_delivery_post_fail_does_not_receipt(tmp_path):
     assert not _receipted_nowhere(pmo)
 
 
+def test_apply_routes_partial_multi_recipient_hold_withholds_all_receipts(
+        tmp_path):
+    """ADR-0033 addendum 10: a transient hold on ANY recipient in a
+    multi-target batch must leave the whole (source, step) unreceipted so
+    pending stays alive and the sweep re-drives held siblings. Success
+    deliveries that already landed stay idempotent via discovery-in."""
+    from devcake.domain.orchestrator import discovery
+
+    tgt2 = m("tgt2", "T-U", status="in_progress", blocked_by=["src"])
+    pmo, mgr, run = _route_setup(tmp_path, extra_missions=(tgt2,))
+    pmo.feeds["tgt2"] = Activity(
+        mission=tgt2, entries=[], truncated=False)
+    src = next(mm for mm in pmo.missions if mm.pmo_id == "src")
+    mgr._discoveries_pending.add("src")
+
+    async def _hold_second(ref, full=False):
+        if ref.pmo_id == "tgt2":
+            raise RuntimeError("PMO 502")
+        return await RoutePMO.get_activity(pmo, ref, full=full)
+    pmo.get_activity = _hold_second
+
+    delivered, rejected = _apply(mgr, run, [
+        _route(target="T-T"),
+        _route(target="T-U", finding=2),
+    ])
+    assert delivered == 1 and rejected == 1
+    tgt_posts = [md for pid, md in pmo.comments if pid == "tgt"]
+    assert len(tgt_posts) == 1
+    assert "`devcake:discovery-in:v1 src=T-S step=2`" in tgt_posts[0]
+    assert not any(pid == "tgt2" for pid, _ in pmo.comments)
+    assert not any("discovery-routed:v1" in md for md in _src_comments(pmo))
+    assert ("src", {"DEVCAKE-DISCOVERY"}, set()) not in pmo.swaps
+    state = asyncio.new_event_loop().run_until_complete(
+        discovery.scan_source(mgr, src))
+    assert any(step == 2 for step, _n in state.pending)
+
+    # Hold clears — re-drive must finish the sibling and only then receipt.
+    pmo.get_activity = lambda ref, full=False: RoutePMO.get_activity(
+        pmo, ref, full=full)
+    delivered2, rejected2 = _apply(mgr, run, [
+        _route(target="T-T"),
+        _route(target="T-U", finding=2),
+    ])
+    assert (delivered2, rejected2) == (1, 0)
+    assert len([md for pid, md in pmo.comments if pid == "tgt"]) == 1
+    assert any("`devcake:discovery-in:v1 src=T-S step=2`" in md
+               for pid, md in pmo.comments if pid == "tgt2")
+    src_posts = _src_comments(pmo)
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-T`" in md
+               for md in src_posts)
+    assert any("`devcake:discovery-routed:v1 step=2 to=T-U`" in md
+               for md in src_posts)
+    state2 = asyncio.new_event_loop().run_until_complete(
+        discovery.scan_source(mgr, src))
+    assert not any(step == 2 for step, _n in state2.pending)
+
+
 def test_apply_routes_toggle_off_writes_nothing(tmp_path):
     pmo, mgr, run = _route_setup(tmp_path)
     mgr.instance.discovery_routing = False

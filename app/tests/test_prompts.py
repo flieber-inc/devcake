@@ -132,6 +132,7 @@ def test_discoveries_epilogue_in_authoring_playbooks():
     for p in (onboard_prompt("ID", M), execute_prompt("ID", M, "repo", GH_PR),
               review_prompt("ID", M)):
         assert '"discoveries"' in p
+        assert '"about"' in p                     # optional topic tags
         assert "memory this otherwise memoryless system" in p
         assert "an entry without evidence is an opinion" in p
         assert "At most 3 discoveries" in p       # default cap rendered

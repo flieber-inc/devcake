@@ -62,8 +62,10 @@ seeded by the app.
    the app copies each entry to every notebook on the run's dispatch
    snapshot as `.claims/<id>.json` — one file per lead, id =
    hash(source_instance, source_pmo_id, step, index), dedup =
-   file-exists. Append creates files, drain deletes files, Clear-prune
-   deletes files: the three writers structurally cannot merge-conflict.
+   file-exists. Claim shape carries finding/evidence/scope plus the
+   optional harvest `about` topic tags (ADR-0033). Append creates
+   files, drain deletes files, Clear-prune deletes files: the three
+   writers structurally cannot merge-conflict.
    `.claims/README.md` (create-if-missing, never rewritten) carries the
    leads-not-truths framing. Caps: `budgets.claims_queue_max` per
    notebook, refuse-new-never-evict. Conveyor failure never fails the

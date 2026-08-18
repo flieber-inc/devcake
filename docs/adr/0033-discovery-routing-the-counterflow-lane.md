@@ -56,6 +56,9 @@ Each entry is structured, not free text:
   reproducing command, the commit sha at discovery time. A discovery
   without evidence is an opinion; the schema demands the receipt.
 - `scope` — what the discoverer believes it applies to, and what it does not.
+- `about` (optional) — `list[str]` topic tags; non-strings / missing →
+  empty; stripped strings only. Rides harvest into `.claims/*.json`
+  (ADR-0035); not required for a valid entry.
 
 Authorship follows result.json authorship: **ONBOARD, EXECUTE, and REVIEW**
 may contribute discoveries (steward runs are excluded — Decision 7).

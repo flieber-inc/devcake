@@ -209,7 +209,6 @@ Two layers:
 | 2 | `mergeable()` maps every row of the §5 signal table (incl. the GitLab legacy fallback); unknown states → `None` |
 | 3 | `merge()` retries a transient GitHub 409 twice then succeeds/raises; non-retryable 405s raise (Gitea's "try again later" 405 is the documented exception — §7a) |
 | 4 | Error normalization: every forge `_req` routes through `adapters/http.forge_request` → `ForgeError` only (`status=None` for network; HTTP ≥400 preserves status). Direct chokepoint + all three adapter classes pinned in `test_forge_error_contract.py` |
-
 | 5 | DTO shape parity: `get_pr_by_branch`/`pr_state` normalize GitHub/GitLab/Gitea payloads to identical `PullRequest` values; no PR → `None` |
 | 6 | `BranchProtection` DTO: GitHub `protected` flag; GitLab 404 → `protected=False` |
 | 7 | `api_base`: GitHub default vs GHE override; GitLab origin derived from the repo URL, explicit override wins, project path stays URL-encoded |

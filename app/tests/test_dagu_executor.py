@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from devcake.adapters.dagu.executor import DAG_NAME, DaguExecutor
-from devcake.ports.executor import DuplicateRun
+from devcake.ports.executor import DuplicateRun, ExecutorError
 
 
 def run_coro(c):
@@ -129,8 +129,9 @@ def test_delete_accepts_204_and_404():
     assert run_coro(ex.delete("ok")) is True
     assert run_coro(ex.delete("gone")) is True
     assert run_coro(ex.delete("running")) is False
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ExecutorError) as exc:
         run_coro(ex.delete("boom"))
+    assert exc.value.status == 500
 
 
 def test_list_all_run_ids_paginates():

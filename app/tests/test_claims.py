@@ -1,5 +1,5 @@
-"""`.claims/` conveyor (PLAN_MEMORY §5) — public seam: append_from_harvest,
-prune_board, claim_id. Fake notebooks; independent expected values."""
+"""`.claims/` conveyor (ADR-0035 D4/D8) — public seam: append_from_harvest,
+prune_board, prune_all, claim_id. Fake notebooks; independent expected values."""
 
 from __future__ import annotations
 
@@ -192,6 +192,64 @@ def test_prune_deletes_matching_source_leaves_readme_and_other_boards():
     assert ".claims/README.md" in nb.files["nb"]
 
 
+def test_prune_board_and_filters_when_both_source_fields_set():
+    """N6: colliding numeric pmo ids across boards must not cross-delete.
+
+    When both source_instance and source_pmo_id are provided, each non-empty
+    filter must match (AND). An OR match would delete the other board's claim
+    that only shares the pmo id — the same collision N6 salted claim_id for.
+    """
+    id_target = claims.claim_id("eng", "pmo-1", 2, 0)
+    id_same_pmo_other_board = claims.claim_id("cs", "pmo-1", 1, 0)
+    id_same_board_other_mission = claims.claim_id("eng", "pmo-2", 1, 0)
+    nb = FakeNotebooks(
+        writable={"nb"},
+        files={"nb": {
+            ".claims/README.md": claims.CLAIMS_README,
+            f".claims/{id_target}.json": json.dumps({
+                "id": id_target, "source_instance": "eng",
+                "source_pmo_id": "pmo-1"}),
+            f".claims/{id_same_pmo_other_board}.json": json.dumps({
+                "id": id_same_pmo_other_board, "source_instance": "cs",
+                "source_pmo_id": "pmo-1"}),
+            f".claims/{id_same_board_other_mission}.json": json.dumps({
+                "id": id_same_board_other_mission, "source_instance": "eng",
+                "source_pmo_id": "pmo-2"}),
+        }})
+    got = run_coro(claims.prune_board(
+        nb, ["nb"], source_instance="eng", source_pmo_id="pmo-1"))
+    assert got == {"nb": 1}
+    assert f".claims/{id_target}.json" not in nb.files["nb"]
+    assert f".claims/{id_same_pmo_other_board}.json" in nb.files["nb"]
+    assert f".claims/{id_same_board_other_mission}.json" in nb.files["nb"]
+
+
+def test_prune_board_instance_only_wipes_all_missions_on_that_board():
+    """Board-level prune (no source_pmo_id): every claim from that instance."""
+    id_a = claims.claim_id("eng", "pmo-1", 2, 0)
+    id_b = claims.claim_id("eng", "pmo-2", 1, 0)
+    id_other = claims.claim_id("cs", "pmo-1", 1, 0)
+    nb = FakeNotebooks(
+        writable={"nb"},
+        files={"nb": {
+            f".claims/{id_a}.json": json.dumps({
+                "id": id_a, "source_instance": "eng",
+                "source_pmo_id": "pmo-1"}),
+            f".claims/{id_b}.json": json.dumps({
+                "id": id_b, "source_instance": "eng",
+                "source_pmo_id": "pmo-2"}),
+            f".claims/{id_other}.json": json.dumps({
+                "id": id_other, "source_instance": "cs",
+                "source_pmo_id": "pmo-1"}),
+        }})
+    got = run_coro(claims.prune_board(
+        nb, ["nb"], source_instance="eng"))
+    assert got == {"nb": 2}
+    assert f".claims/{id_a}.json" not in nb.files["nb"]
+    assert f".claims/{id_b}.json" not in nb.files["nb"]
+    assert f".claims/{id_other}.json" in nb.files["nb"]
+
+
 def test_two_file_creates_do_not_share_a_path():
     """Drain-delete vs concurrent create cannot conflict: distinct files."""
     id0 = claims.claim_id("eng", "pmo-1", 2, 0)
@@ -216,7 +274,51 @@ def test_prune_all_removes_orphans_and_keeps_readme():
                 "id": id_orphan, "source_instance": "gone",
                 "source_pmo_id": "pmo-9"}),
         }})
+    claims.claims_queue_capped.add("nb")
     got = run_coro(claims.prune_all(nb, ["nb"]))
     assert got == {"nb": 2}
     assert list(nb.files["nb"]) == [".claims/README.md"]
     assert claims.claims_depth["nb"] == 0
+    # Clear emptied the queue — standing cap alert must not outlive it.
+    assert "nb" not in claims.claims_queue_capped
+
+
+def test_prune_all_empty_queue_zeros_depth_and_clears_capped():
+    """Empty on disk after Clear: still refresh advisory depth + cap flag."""
+    nb = FakeNotebooks(
+        writable={"nb"},
+        files={"nb": {".claims/README.md": claims.CLAIMS_README}})
+    claims.claims_depth["nb"] = 7
+    claims.claims_queue_capped.add("nb")
+    got = run_coro(claims.prune_all(nb, ["nb"]))
+    assert got == {}
+    assert claims.claims_depth["nb"] == 0
+    assert "nb" not in claims.claims_queue_capped
+    assert nb.files["nb"] == {".claims/README.md": claims.CLAIMS_README}
+
+
+def test_append_clears_capped_when_listing_shows_room_and_nothing_to_write():
+    """Curator drain can free the queue without an app write.
+
+    Next harvest that lists under-cap depth must drop the standing
+    claims_queue_capped warning even when every entry is a file-exists dedup
+    (no commit) — otherwise /health keeps claiming leads are refused.
+    """
+    existing_id = claims.claim_id("eng", "pmo-1", 2, 0)
+    nb = FakeNotebooks(
+        writable={"nb"},
+        files={"nb": {
+            ".claims/README.md": claims.CLAIMS_README,
+            f".claims/{existing_id}.json": json.dumps({
+                "id": existing_id, "source_instance": "eng",
+                "source_pmo_id": "pmo-1"}),
+        }})
+    cfg = AppConfig(budgets=Budgets(claims_queue_max=50))
+    claims.claims_queue_capped.add("nb")
+    claims.claims_depth["nb"] = 50  # stale post-drain
+    got = run_coro(claims.append_from_harvest(
+        nb, cfg, _run(),
+        [{"finding": "f", "evidence": "e", "scope": "s"}]))
+    assert got == {}
+    assert claims.claims_depth["nb"] == 1
+    assert "nb" not in claims.claims_queue_capped

@@ -1,4 +1,4 @@
-"""`.claims/` conveyor — the fast lane (PLAN_MEMORY §5).
+"""`.claims/` conveyor — the fast lane (ADR-0035 D4 / D8).
 
 The app writes one file per harvested discovery onto every memory card
 snapshotted on the run. No judgment. Failure never fails the discovering
@@ -34,8 +34,9 @@ CLAIMS_README = (
 # advisory depth cache: card → json-file count. Restart-stale until the
 # next append or list-only refresh.
 claims_depth: dict[str, int] = {}
-# health: last cap event per card (standing warning until a successful
-# under-cap write). Restart-stale; next append refreshes.
+# health: standing "refusing new leads" warning per card. Set on refuse-new;
+# cleared when listing/write shows room under cap, depth hits 0, or Clear.
+# Restart-stale until the next append or list-only refresh.
 claims_queue_capped: set[str] = set()
 
 
@@ -95,6 +96,9 @@ async def refresh_depth(notebooks: ClaimsNotebooks, card: str) -> int:
         return claims_depth.get(card, 0)
     depth = len(_json_names(names))
     claims_depth[card] = depth
+    # Empty queue cannot be refusing new leads — drop a stale standing warning.
+    if depth == 0:
+        claims_queue_capped.discard(card)
     return depth
 
 
@@ -164,15 +168,17 @@ async def _append_one_notebook(notebooks, cfg, run, entries, card, *,
         rec = claim_record(run, entry, i)
         creates[f"{CLAIMS_DIR}/{cid}.json"] = json.dumps(rec, indent=2) + "\n"
     json_creates = [p for p in creates if p.endswith(".json")]
+    n = len(json_creates)
+    # Listing proved room (or unlimited): standing capped alert is dishonest
+    # even when every entry was a file-exists dedup and nothing is committed.
+    if not cap or depth + n < cap:
+        claims_queue_capped.discard(card)
     if not creates:
         return 0
-    n = len(json_creates)
     await notebooks.commit(
         card, creates=creates, deletes=[],
         message=f"devcake:claims:v1 run={run.run_id} n={n}")
     claims_depth[card] = depth + n
-    if cap and claims_depth[card] < cap:
-        claims_queue_capped.discard(card)
     return n
 
 
@@ -187,15 +193,19 @@ async def prune_all(notebooks: ClaimsNotebooks, cards: list[str], *,
         if not notebooks.can_write(card):
             continue
         try:
-            names = _json_names(await notebooks.list_json_names(card))
-            if not names:
+            listing = await notebooks.list_json_names(card)
+            if listing is None:
                 continue
-            await notebooks.commit(
-                card, creates={},
-                deletes=[f"{CLAIMS_DIR}/{n}" for n in names],
-                message="devcake:claims:v1 prune source=clear-all")
+            names = _json_names(listing)
+            if names:
+                await notebooks.commit(
+                    card, creates={},
+                    deletes=[f"{CLAIMS_DIR}/{n}" for n in names],
+                    message="devcake:claims:v1 prune source=clear-all")
+                pruned[card] = len(names)
+            # Empty or just-wiped: advisory depth + standing cap must match disk.
             claims_depth[card] = 0
-            pruned[card] = len(names)
+            claims_queue_capped.discard(card)
         except Exception:  # noqa: BLE001 — clear must not fail the wipe
             log.exception("claims prune failed for %s", card)
             if audit:
@@ -207,7 +217,12 @@ async def prune_board(notebooks: ClaimsNotebooks, cards: list[str], *,
                       source_instance: str, source_pmo_id: str = "",
                       audit=None) -> dict[str, int]:
     """Delete `.claims/*.json` whose source matches the wiped board.
-    Leave README. Never touch paths outside `.claims/`."""
+
+    Each non-empty filter is required (AND). Instance alone wipes every
+    mission on that board; instance + pmo_id wipes one mission. OR matching
+    would cross-delete colliding numeric pmo ids across boards (N6).
+    Leave README. Never touch paths outside `.claims/`.
+    """
     pruned: dict[str, int] = {}
     for card in cards:
         if not notebooks.can_write(card):
@@ -226,14 +241,25 @@ async def prune_board(notebooks: ClaimsNotebooks, cards: list[str], *,
     return pruned
 
 
+def _claim_source_matches(rec: dict, source_instance: str,
+                          source_pmo_id: str) -> bool:
+    """True when every non-empty prune filter matches the claim meta."""
+    if not source_instance and not source_pmo_id:
+        return False
+    if source_instance and rec.get("source_instance") != source_instance:
+        return False
+    if source_pmo_id and rec.get("source_pmo_id") != source_pmo_id:
+        return False
+    return True
+
+
 async def _prune_one(notebooks, card, source_instance, source_pmo_id) -> int:
     records = await notebooks.list_claim_meta(card)
     if records is None:
         return 0
     deletes = []
     for rec in records:
-        if ((source_instance and rec.get("source_instance") == source_instance)
-                or (source_pmo_id and rec.get("source_pmo_id") == source_pmo_id)):
+        if _claim_source_matches(rec, source_instance, source_pmo_id):
             cid = rec.get("id") or ""
             if _SAFE_ID.match(str(cid)):
                 deletes.append(f"{CLAIMS_DIR}/{cid}.json")

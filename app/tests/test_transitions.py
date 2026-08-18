@@ -862,6 +862,44 @@ def test_tracking_sweep_waits_for_open_grandchildren(tmp_path):
     assert "DEVCAKE-TRACKING" not in proj.labels
 
 
+def test_tracking_sweep_empty_children_does_not_complete(tmp_path):
+    """docs/04 §1.3: auto-complete only when ≥1 child AND all terminal.
+    Empty list must leave TRACKING on and status unchanged (not a silent Done)."""
+    proj = mission("in_progress", {"DEVCAKE-TRACKING"})
+    proj.pmo_kind = "project"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+    fake.children = []
+    run_coro(sweeps.tracking_sweep(mgr, proj))
+    assert proj.status == "in_progress"
+    assert "DEVCAKE-TRACKING" in proj.labels
+    assert fake.statuses == []
+
+
+def test_tracking_sweep_children_of_raise_surfaces_blocked_reasons(tmp_path):
+    """Port F1 / projects_supported=False: children_of raises on a project-kind
+    ref (caller bug or transient read failure). Outer sweeps() used to only
+    log.exception — thinner than merge missing-forge/PR which sets
+    blocked_reasons. Must not false-complete; must leave an admin-visible
+    reason (house pattern for parked wedges)."""
+    proj = mission("in_progress", {"DEVCAKE-TRACKING"})
+    proj.pmo_kind = "project"
+    proj.key = "PROJ-1"
+    mgr, fake, _store = make_mgr(tmp_path, proj)
+
+    async def _boom(ref):
+        raise RuntimeError(
+            "gitea_issues: projects are not supported (got kind='project')")
+    fake.children_of = _boom
+    run_coro(sweeps.sweeps(mgr, [proj]))
+    assert proj.status == "in_progress"
+    assert "DEVCAKE-TRACKING" in proj.labels
+    assert fake.statuses == []
+    reason = mgr.blocked_reasons[proj.pmo_id]
+    assert "PROJ-1" in reason
+    assert "tracking" in reason.lower()
+    assert "children" in reason.lower()
+
+
 def dep_mission(pmo_id, key, status="backlog", blocked_by=()):
     m = Mission(instance="linear", pmo_id=pmo_id, pmo_kind="issue", key=key,
                 title=key, status=status, labels={"DEVCAKE"}, repo="main",

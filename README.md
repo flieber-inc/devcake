@@ -198,7 +198,9 @@ real EXECUTE: §9.
 ## Quickstart
 
 ```bash
-git clone https://github.com/fidecastro/devcake && cd devcake
+# Clone the remote or fork you intend to run (a fixed public product URL is
+# not published yet — pre-FOSS; do not invent one):
+git clone <this-repo-url> && cd devcake
 cp .env.example .env
 # Edit .env: strong ADMIN / REDIS / DAGU / OO / GITEA passwords only.
 # Leave DOCKER_GID blank. Empty/change-me* passwords refuse boot unless
@@ -274,6 +276,8 @@ must not exceed [`docs/14-security.md`](docs/14-security.md).
 |---|---|
 | Understand the product and invariants | [`docs/00-overview.md`](docs/00-overview.md) |
 | Onboard as a new engineer (reading path) | [`docs/00-overview.md`](docs/00-overview.md) §6a |
+| Contribute (build, tests, PR expectations) | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Report a vulnerability | [`SECURITY.md`](SECURITY.md) |
 | Understand the security deal | [`docs/14-security.md`](docs/14-security.md) |
 | Know what you own as operator | [`docs/18-operator-contract.md`](docs/18-operator-contract.md) |
 | Run a first mission / operate daily | [`docs/tutorials/`](docs/tutorials/) |
@@ -281,7 +285,7 @@ must not exceed [`docs/14-security.md`](docs/14-security.md).
 | Labels, lifecycle, orchestrator | [`docs/02`](docs/02-domain-model.md) · [`03`](docs/03-mission-lifecycle.md) · [`04`](docs/04-orchestrator.md) |
 | PMO / forge / harnesses | [`05`](docs/05-pmo-adapter.md) · [`06`](docs/06-forge-adapter.md) · [`08`](docs/08-harness-templates.md) |
 | Admin API & UI contract | [`docs/11-admin-panel.md`](docs/11-admin-panel.md) |
-| History and backlog | [`docs/16-roadmap.md`](docs/16-roadmap.md) |
+| History and backlog | [`docs/16-roadmap.md`](docs/16-roadmap.md) · [`CHANGELOG.md`](CHANGELOG.md) |
 | How we talk about it | [`docs/17-positioning.md`](docs/17-positioning.md) |
 | Why this exists — the thesis | [`docs/19-thesis.md`](docs/19-thesis.md) |
 
@@ -294,4 +298,6 @@ Full map and architecture: [`docs/00`](docs/00-overview.md) §7 · [`docs/01`](d
 Self-hosted operator software. Prefer PRs with tests at public seams
 (`app/tests/`) and zero-drift docs when public contracts change. Build with
 **Bake**, target **Python 3.12**, and prove run/up paths — not only “build
-succeeded.” See [`AGENTS.md`](AGENTS.md).
+succeeded.” Full contributor guide: [`CONTRIBUTING.md`](CONTRIBUTING.md) ·
+coding agents: [`AGENTS.md`](AGENTS.md) · vulnerability reporting:
+[`SECURITY.md`](SECURITY.md).

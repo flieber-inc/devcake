@@ -37,9 +37,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # ── runtime (production) ─────────────────────────────────────────────────────
 FROM ${PYTHON_IMAGE} AS runtime
 
+# image.source is omitted until a public product remote is published
+# (pre-FOSS — do not hardcode a personal/private URL here).
 LABEL org.opencontainers.image.title="devcake-app" \
-      org.opencontainers.image.description="DevCake orchestrator API" \
-      org.opencontainers.image.source="https://github.com/fidecastro/devcake"
+      org.opencontainers.image.description="DevCake orchestrator API"
 
 # Receipt identity (PLAN_CLI_PINS). Default is an obviously invalid
 # sentinel so bare `bake app` / group ci is distinguishable from

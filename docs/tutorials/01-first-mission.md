@@ -26,7 +26,8 @@ Every step mirrors the project's integration-test shape.
 ## Step 1 — Bootstrap and start
 
 ```bash
-git clone https://github.com/fidecastro/devcake && cd devcake
+# Clone the remote or fork you intend to run (no fixed public product URL yet):
+git clone <this-repo-url> && cd devcake
 cp .env.example .env
 ```
 

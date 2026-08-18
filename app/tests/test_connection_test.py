@@ -23,7 +23,7 @@ def test_forge_failed_probe_puts_detail_on_error(tmp_path, monkeypatch):
 
     repo = RepoInstance(
         name="devcakerepo", forge="github",
-        url="https://github.com/flieber-inc/devcake")
+        url="https://github.com/example-org/devcake")
     secrets_store.write_connection_secret("repo", "devcakerepo", "token", "ghp_test")
     reason = (
         "repository access failed (HTTP 404); for a fine-grained PAT, "
@@ -36,7 +36,7 @@ def test_forge_failed_probe_puts_detail_on_error(tmp_path, monkeypatch):
         async def refresh_health(self, name):
             return {
                 "ok": False,
-                "repository": "flieber-inc/devcake",
+                "repository": "example-org/devcake",
                 "can_push": False,
                 "detail": reason,
             }

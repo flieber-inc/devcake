@@ -163,14 +163,16 @@ CRASH = (None, 10, "DEV_CRASH")
 # (capture, intended verdict). Comments record WHY a row is what it is, and in
 # particular which predicate arm each one keeps honest.
 CAPTURES = [
-    # ── claude-code 2.1.210 — the conservatism baseline ──────────────────────
+    # ── claude-code house 2.1.229 — the conservatism baseline ───────────────
+    # Rig-covered rows (healthy/refusal/resume) recaptured at 2.1.229. Pre-sidecar
+    # empty/fault streams still grade the same structural arms (test_entrypoint_fault).
     # The arm that must NEVER fire. A refusal is protocol-identical to a healthy
     # run (same subtype, same terminal_reason, only shorter text), which is why
     # empty_completion has to be structural.
     ("claude_healthy", NO_FAULT),
     ("claude_refusal", NO_FAULT),
 
-    # ── codex-cli 0.146.0 (0.147.0 bump: rig re-run, streams measured
+    # ── codex-cli house 0.147.0 (recaptured from 0.146.0; streams measured
     #    shape-identical — fixtures keep their recorded truth) ───────────────
     # Reaches empty_completion only because error items are bucketed apart from
     # tool activity: with `-m` naming a model the backend does not advertise,
@@ -250,22 +252,25 @@ CAPTURES = [
     # leg's session. Every leg exits 0 with no fault (the stub writes no
     # result.json, so all six still land exit 11 — the row-9 shape ADR-0022's
     # loop takes over). What each pair PROVES, and what RESUME_SPECS encodes:
-    #   grok 0.2.117:  `-p P -r SID` composes headless; the resumed `end` event
-    #     carries the SAME sessionId (no fork), no history replay in stdout,
-    #     usage/num_turns are PER-INVOCATION (leg 2 reports 1 turn, one call's
-    #     tokens) → usage_cumulative=False. Version drift note: 0.2.117 says
-    #     stopReason "end_turn" where the 0.2.112 captures say "EndTurn", and
-    #     adds available_commands/usage event types — nothing branches on
-    #     either (GROK_FAULT_STOP_REASONS is empty by design; unknown event
-    #     types are skipped), the docs/08 unpinned-CLI caveat in action.
+    # Only claude/codex/grok are in RESUME_SPECS; pi/opencode/qwen-code skip
+    # the probe resume row until a capture pair lands (matrix.py).
+    #   grok resume pair captured at 0.2.117 (house pin remains 0.2.112):
+    #     `-p P -r SID` composes headless; the resumed `end` event carries the
+    #     SAME sessionId (no fork), no history replay in stdout, usage/num_turns
+    #     are PER-INVOCATION (leg 2 reports 1 turn, one call's tokens) →
+    #     usage_cumulative=False. Version drift note: 0.2.117 says stopReason
+    #     "end_turn" where the 0.2.112 captures say "EndTurn", and adds
+    #     available_commands/usage event types — nothing branches on either
+    #     (GROK_FAULT_STOP_REASONS is empty by design; unknown event types are
+    #     skipped), the docs/08 unpinned-CLI caveat in action.
     ("grok_resume_nudge", NO_FAULT),
     ("grok_resume_nudge_resume", NO_FAULT),
-    #   claude 2.1.210: `-p P --resume SID` composes headless; same session_id
-    #     on the resumed result event, no replay, per-invocation usage
-    #     → usage_cumulative=False.
+    #   claude house 2.1.229: `-p P --resume SID` composes headless; same
+    #     session_id on the resumed result event, no replay, per-invocation
+    #     usage → usage_cumulative=False.
     ("claude_resume_nudge", NO_FAULT),
     ("claude_resume_nudge_resume", NO_FAULT),
-    #   codex 0.146.0: `exec resume THREAD P` composes headless; same
+    #   codex house 0.147.0: `exec resume THREAD P` composes headless; same
     #     thread_id, no replay, and usage is CUMULATIVE over the session —
     #     leg 2's turn.completed reports input 240/output 48, both calls'
     #     worth (docs/08 §5's `codex exec resume` caveat, now measured)
@@ -273,7 +278,7 @@ CAPTURES = [
     ("codex_resume_nudge", NO_FAULT),
     ("codex_resume_nudge_resume", NO_FAULT),
 
-    # ── pi 0.84.2 (`@earendil-works/pi-coding-agent`, --mode json) ──────────
+    # ── pi house 0.84.2 (`@earendil-works/pi-coding-agent`, --mode json) ────
     # Pi exits 0 even on HTTP 401/429/500: the failure is `stopReason: error`
     # + `errorMessage: "401: …"` on the assistant message, then `agent_end`.
     # Auth still latches 12 via in-band status (same precedence as nonzero).
@@ -287,7 +292,7 @@ CAPTURES = [
     ("pi_http_500", TERMINAL),
     ("pi_truncated", TERMINAL),          # errorMessage "terminated" after stub hang-up
 
-    # ── opencode 1.18.18 (`opencode run --format json --auto`) ────────────
+    # ── opencode house 1.18.18 (`opencode run --format json --auto`) ──────
     # HTTP errors exit 1 and carry APIError.data.statusCode. 401 latches 12.
     ("opencode_healthy", NO_FAULT),
     ("opencode_refusal", NO_FAULT),
@@ -299,7 +304,7 @@ CAPTURES = [
     ("opencode_http_500", TERMINAL),
     ("opencode_truncated", TERMINAL),
 
-    # ── qwen-code 0.21.12 (`qwen -p --output-format stream-json --yolo`) ──
+    # ── qwen-code house 0.21.12 (`qwen -p --output-format stream-json --yolo`)
     # Stream is Claude-shaped (system/init, assistant, result). HTTP and
     # empty completions are wrapped as assistant `[API Error: …]` with
     # subtype=success / is_error=false / exit 0 — so the predicate must

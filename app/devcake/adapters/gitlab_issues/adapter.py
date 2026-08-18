@@ -18,6 +18,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
+from .._toolkit import label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref, project_path_encoded)
@@ -370,19 +371,24 @@ class GitLabIssuesAdapter:
 
     async def swap_labels(self, ref: MissionRef, remove: set[str],
                           add: set[str]) -> None:
+        # Read-modify-write over the full label set: hold the per-mission
+        # lock so a concurrent swap's read never goes stale mid-write
+        # (the CAKE-48 clobber — see _toolkit.label_write_lock).
         self._require_issue(ref)
-        await self.ensure_labels(self._team_ref, add)
-        cur = await self._req("GET", self._proj(f"/issues/{ref.pmo_id}"))
-        current = self._label_set(cur)
-        next_names = (current - remove) | add
-        missing = [n for n in next_names if n.upper() not in self._label_names]
-        if missing:
-            raise RuntimeError(
-                f"label {missing[0]} missing — ensure_labels not run?")
-        # GitLab PUT replaces the full label set by *name*.
-        await self._req(
-            "PUT", self._proj(f"/issues/{ref.pmo_id}"),
-            json={"labels": ",".join(sorted(next_names))})
+        async with label_write_lock(ref.pmo_id):
+            await self.ensure_labels(self._team_ref, add)
+            cur = await self._req("GET", self._proj(f"/issues/{ref.pmo_id}"))
+            current = self._label_set(cur)
+            next_names = (current - remove) | add
+            missing = [n for n in next_names
+                       if n.upper() not in self._label_names]
+            if missing:
+                raise RuntimeError(
+                    f"label {missing[0]} missing — ensure_labels not run?")
+            # GitLab PUT replaces the full label set by *name*.
+            await self._req(
+                "PUT", self._proj(f"/issues/{ref.pmo_id}"),
+                json={"labels": ",".join(sorted(next_names))})
 
     async def create_mission(
         self, team_ref: str, title: str, description: str,

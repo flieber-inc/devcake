@@ -94,13 +94,14 @@ class PMOHealth(BaseModel):        # neutral connection-probe result — replace
     detail: str = ""
 
 class PMOCapabilities(BaseModel):
-    projects_supported: bool          # Linear: True
+    projects_supported: bool          # Linear: True; forge-issue: False
     project_labels_supported: bool    # Linear: True (project labels since 2025-06)
     attachment_max_bytes: int
     native_label_swap_atomic: bool    # Linear: True via issueUpdate(labelIds)
-    relations_supported: bool = False # write support latched on create_relation; False until a blocking-link POST succeeds
-    attachments_supported: bool = True  # official file-upload API
-    attachments_supported: bool = True  # official file-upload API; false skips upload + contract rows 8/13
+    relations_supported: bool = False # write support; GitLab Free latches False on 403
+    attachments_supported: bool = True  # official file-upload API; False → feed multipart (GitHub)
+    comment_max_chars: int | None = None  # GitHub Issues: 65536; None = no extra cap
+    global_ids: bool = False          # Linear UUIDs True; forge-issue numbers False
 ```
 
 `/health` and `POST /api/v1/connections/pmo/{name}/test` consume `health_probe` (the public port method) instead of reaching into adapter internals. Two deliberate behavior changes from the pre-port era: the managed-label count is the **intersection with `ALL_LABELS`** (a `DEVCAKE-CUSTOM-EXTRA` label no longer inflates it, as the old `startswith("DEVCAKE")` check did), and the test endpoint's response now carries `labels_expected` alongside `labels`.
@@ -109,10 +110,10 @@ class PMOCapabilities(BaseModel):
 
 `app/devcake/adapters/registry.py` is the single place that knows which PMO systems exist and how to construct them. The domain never imports it — `api/main.py` builds adapters here and injects them (`01-architecture.md` §3).
 
-- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`. (There is no `api_key_env_default` field — schema v4 stores secret VALUES in the GUI store.) The secret fields feed `security.redact` (`14-security.md` §7) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env names for redaction `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
-- **`make_pmo(inst) -> PMOPort`** constructs one adapter for a single `PMOInstance` (`inst`); the composition root builds **one manager/adapter per** configured entry in `config.pmos` (0..N). An unregistered `inst.system` raises.
+- **`PMO_SYSTEMS: dict[str, PMOSystemInfo]`** — registry metadata per system: `id`, `display_name`, `secret_env_vars`, `token_patterns` (regex sources), `secret_shape_prefixes`, capability residual flags (`attachments_supported`, `relations_supported`, `supports_priority`), `operator_note`, and **`experimental`** (launch vs experimental honesty — `True` for GitHub Issues and GitLab Issues; `False` for Linear and Gitea Issues). (There is no `api_key_env_default` field — schema v4 stores secret VALUES in the GUI store.) The secret fields feed `security.redact` (`14-security.md` §7) and the admin SPA's paste guard — every registered system contributes its token shapes **whether configured or not**, so switching adapters never opens a redaction gap. Linear's entry: env names for redaction `LINEAR_API_KEY`, patterns `lin_api_…`/`lin_oauth_…`, prefixes `lin_api_`/`lin_oauth_`.
+- **`make_pmo(inst) -> PMOPort`** constructs one adapter for a single `PMOInstance` (`inst`); the composition root builds **one manager/adapter per** configured entry in `config.pmos` (0..N). An unregistered `inst.system` raises. Non-Linear systems register the GUI-stored API key via `register_runtime_secret` so exact-match redaction covers pasted tokens without a shape pattern.
 - **`PMOInstance.system` is validated against `PMO_SYSTEMS`** at config-load/PUT time (pydantic field validator), so a typo'd system name is a 422, not a boot crash.
-- **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, default env-var names, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin Config page's selectors and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).
+- **`GET /api/v1/connections/registry`** exposes the registered PMO systems and forges (display names, capability residual flags, `operator_note`, `experimental`, merged `secret_shape_prefixes`, `managed_labels_expected`) — the admin PMO page's selectors, experimental suffix, and paste guard are driven from it, so adding an adapter never means editing the SPA (`11-admin-panel.md`).
 - **Hot reload:** a successful config `PUT` calls `reload_connections()` — the PMO (and forge) adapters are rebuilt from the saved config, the orchestrator is repointed, and `ensure_labels` is re-run for the (possibly new) team. Label bootstrap is otherwise startup-only; without the re-ensure, a hot-swapped `team_key` would run unlabeled until restart.
 
 The registry also carries the forge side (`forges()` / `make_forge`, `06-forge-adapter.md`); the shapes mirror each other.
@@ -310,13 +311,13 @@ Expect all rows **PASS** (1–5, 5b, 8–14 when `relations_supported`). Same sc
 
 **GHA `ci.yml` note:** the minimal dispatch compose has no Gitea, so the PMO live battery stays in **local `ci_suite.sh`** (full stack), not the PR-minimal job — same as the forge contract battery today.
 
-### 9.6 Path to GitHub / GitLab Issues
+### 9.6 GitHub / GitLab Issues — experimental in-tree
 
-Same forge-issue profile (issue-only, label stages, open→backlog, markdown comments, dependency/links). New package per vendor; do **not** grow a shared Issues Port until a second forge-issue adapter exists. Live gate: same `scripts/contract_tests_pmo.py` once the system is registered.
+GitHub Issues and GitLab Issues ship as **experimental** forge-issue adapters (same profile: issue-only, label stages, open→backlog, markdown comments, dependency/links). They are **not** launch-supported until the live `scripts/contract_tests_pmo.py` battery graduates them (docs/16). Registry `PMOSystemInfo.experimental=True` and `operator_note` keep the admin SPA honest; do not present them as equal to Linear / Gitea Issues. Shared cancel footer lives in `adapters/forge_issue.py` (not a second Issues Port).
 
 ### 9.7 GitLab Issues (`gitlab_issues`) — experimental
 
-**Experimental** (in-tree, not launch-supported) as of 2026-08-15. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
+**Experimental** (in-tree, not launch-supported) as of 2026-08-15 — registry `experimental=True`. `team_key` is `path_with_namespace` (two or more segments). `api_base` defaults to `https://gitlab.com`. Auth: `PRIVATE-TOKEN` (`glpat-…`).
 
 | Need | Measured |
 |---|---|
@@ -330,7 +331,7 @@ Same forge-issue profile (issue-only, label stages, open→backlog, markdown com
 
 ### 9.8 GitHub Issues (`github_issues`) — experimental
 
-**Experimental** (in-tree, not launch-supported) as of 2026-08-15. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
+**Experimental** (in-tree, not launch-supported) as of 2026-08-15 — registry `experimental=True`. `team_key` is `owner/repo`. `api_base` defaults to `https://api.github.com`. Auth: `Authorization: Bearer` (`ghp_` / `github_pat_`).
 
 | Need | Measured |
 |---|---|

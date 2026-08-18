@@ -334,6 +334,8 @@ class GitLabIssuesAdapter:
         return found
 
     async def children_of(self, ref: MissionRef) -> list[Mission]:
+        self._require_issue(ref)
+        # Issue-only: no project children. Decomposition uses markers + relations.
         return []
 
     async def post_feed(self, ref: MissionRef, markdown: str) -> None:
@@ -541,6 +543,9 @@ class GitLabIssuesAdapter:
             raise PMOTransient(f"gitlab_issues download network: {e}") from e
         except AssetUrlError as e:
             raise RuntimeError(f"gitlab_issues download refused: {e}") from e
+        if resp.status_code in (429, 500, 502, 503, 504):
+            raise PMOTransient(
+                f"gitlab_issues download → {resp.status_code}")
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"gitlab_issues download → {resp.status_code}: {resp.text[:200]}")

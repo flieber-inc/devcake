@@ -291,6 +291,14 @@ def test_project_ref_raises():
         run(make_pmo().get(MissionRef("1", "project")))
 
 
+def test_children_of_project_ref_raises_never_empty_list():
+    """projects_supported=False: children_of must not silently return [] on a
+    project ref (port F1 — every method raises the permanent family)."""
+    with pytest.raises(RuntimeError, match="projects are not supported"):
+        run(make_pmo().children_of(MissionRef("1", "project")))
+    assert run(make_pmo().children_of(MissionRef("1", "issue"))) == []
+
+
 def test_mixed_case_managed_label_normalizes_and_can_be_swapped():
     """GitHub folds case. A human `Devcake-Plan` must not wedge the stage."""
     r = Router()

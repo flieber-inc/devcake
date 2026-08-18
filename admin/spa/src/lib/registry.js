@@ -17,6 +17,7 @@ const FALLBACK = {
       operator_note: "",
       attachments_supported: true,
       relations_supported: true,
+      experimental: false,
     },
     {
       id: "gitea_issues",
@@ -30,6 +31,7 @@ const FALLBACK = {
       operator_note: "",
       attachments_supported: true,
       relations_supported: true,
+      experimental: false,
     },
     {
       id: "gitlab_issues",
@@ -41,9 +43,10 @@ const FALLBACK = {
       api_base_help:
         "GitLab origin from the app container. gitlab.com: https://gitlab.com. Self-hosted: https://gitlab.example.com",
       operator_note:
-        "Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token.",
+        "Experimental (not launch-supported). Blocked-by issue links need GitLab Premium (or self-hosted EE). DevCake probes the live token.",
       attachments_supported: true,
       relations_supported: false,
+      experimental: true,
     },
     {
       id: "github_issues",
@@ -55,9 +58,10 @@ const FALLBACK = {
       api_base_help:
         "GitHub API origin. github.com: leave empty or https://api.github.com. GitHub Enterprise: https://ghe.example.com/api/v3",
       operator_note:
-        "GitHub's public API cannot attach files to issues. Transcripts live in the activity repo; the ticket comment is a short pointer.",
+        "Experimental (not launch-supported). GitHub's public API cannot attach files to issues. Transcripts live in the activity repo; the ticket comment is a short pointer.",
       attachments_supported: false,
       relations_supported: true,
+      experimental: true,
     },
   ],
   forges: [

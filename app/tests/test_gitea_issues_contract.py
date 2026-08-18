@@ -365,6 +365,8 @@ def test_capabilities_issue_only():
     assert caps.projects_supported is False
     assert caps.relations_supported is True
     assert caps.native_label_swap_atomic is True
+    assert caps.attachments_supported is True
+    assert caps.global_ids is False
 
 
 def test_project_ref_get_raises():
@@ -555,8 +557,10 @@ def test_download_asset_allows_same_host_redirect():
 
 
 @pytest.mark.parametrize("op", [
+    lambda pmo: pmo.get(MissionRef("9", "project")),
     lambda pmo: pmo.get_activity(MissionRef("9", "project"), full=True),
     lambda pmo: pmo.get_activity(MissionRef("9", "project")),
+    lambda pmo: pmo.children_of(MissionRef("9", "project")),
     lambda pmo: pmo.post_feed(MissionRef("9", "project"), "hi"),
     lambda pmo: pmo.set_status(MissionRef("9", "project"), "done"),
     lambda pmo: pmo.swap_labels(MissionRef("9", "project"), set(), {"X"}),
@@ -567,7 +571,8 @@ def test_project_ref_operations_raise_never_fabricate_or_noop(op):
     """projects_supported=False: a project ref is a caller bug (2026-08-12
     audit F1). The old adapter fabricated a Mission for get_activity and
     silently no-opped every write — success reported, no labels swapped, the
-    misroute invisible forever. All seven now raise the permanent family."""
+    misroute invisible forever. Every method raises the permanent family,
+    including children_of (must not return [])."""
     router = Router()
     pmo = make_pmo(router)
     with pytest.raises(RuntimeError, match="projects are not supported"):

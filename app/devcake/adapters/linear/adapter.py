@@ -919,9 +919,18 @@ class LinearAdapter:
                                          transport=self._transport) as client:
                 resp = await client.put(uf["uploadUrl"], content=data,
                                         headers=headers)
-                resp.raise_for_status()
         except httpx.HTTPError as e:
             raise PMOTransient(f"linear upload network: {e}") from e
+        # Status map mirrors download_asset: only 429/5xx are retryable.
+        # Do not wrap raise_for_status() in HTTPError → PMOTransient —
+        # HTTPStatusError ⊆ HTTPError and permanent 4xx would be retried.
+        if resp.status_code in (429, 500, 502, 503, 504):
+            raise PMOTransient(
+                f"linear upload → {resp.status_code}")
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"linear upload → {resp.status_code}: "
+                f"{(resp.text or '')[:200]}")
         return uf["assetUrl"]
 
     async def download_asset(self, url: str) -> bytes:
@@ -955,9 +964,17 @@ class LinearAdapter:
             except AssetUrlError as e:
                 raise RuntimeError(
                     f"linear download redirect refused: {e}") from e
+            except httpx.HTTPError as e:
+                raise PMOTransient(f"linear download network: {e}") from e
             except RuntimeError:
                 raise RuntimeError("linear download: too many redirects")
-            resp.raise_for_status()
+            if resp.status_code in (429, 500, 502, 503, 504):
+                raise PMOTransient(
+                    f"linear download → {resp.status_code}")
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"linear download → {resp.status_code}: "
+                    f"{(resp.text or '')[:200]}")
             try:
                 return enforce_download_byte_cap(
                     resp.content,

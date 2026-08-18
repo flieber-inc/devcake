@@ -55,12 +55,15 @@ instance, eventually — without touching the core.
 3. **Adapter registry + hot reload.** `adapters/registry.py` is the single
    place that knows which PMO systems and forges exist (`PMO_SYSTEMS`,
    `make_pmo`, `make_forge`, `forges()`), including each adapter's secret env
-   vars, token regexes, and paste-guard prefixes. Config `system`/`forge`
-   fields are open strings validated against the registry (an unknown value
-   422s exactly like the old `Literal`s). A config PUT calls
-   `reload_connections()`: both adapters rebuild, and managed labels are
-   re-ensured for the (possibly new) team. `GET /api/v1/connections/registry`
-   feeds the admin SPA, so adding an adapter never edits the UI.
+   vars, token regexes, paste-guard prefixes, capability residual flags, and
+   launch-vs-experimental labeling (`PMOSystemInfo.experimental` — in-tree
+   GitHub/GitLab Issues are experimental; Linear + Gitea Issues are not).
+   Config `system`/`forge` fields are open strings validated against the
+   registry (an unknown value 422s exactly like the old `Literal`s). A config
+   PUT calls `reload_connections()`: both adapters rebuild, and managed
+   labels are re-ensured for the (possibly new) team.
+   `GET /api/v1/connections/registry` feeds the admin SPA, so adding an
+   adapter never edits the UI.
 
 4. **`ForgeDescriptor` owns the dev-side dialect.** Everything forge-specific
    that is not an API call — PR/MR CLI instructions, clone auth user, git

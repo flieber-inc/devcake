@@ -36,6 +36,12 @@ class PMOSystemInfo(BaseModel):
     operator_note: str = ""
     attachments_supported: bool = True
     relations_supported: bool = True
+    # Launch vs experimental honesty (docs/05 §9.7–9.8, docs/16). False =
+    # launch-supported (Linear, Gitea Issues). True = in-tree but not
+    # launch-supported (GitHub/GitLab Issues). SPA select + help copy read
+    # this; it is NOT a second code path — adapters still implement full
+    # PMOPort.
+    experimental: bool = False
 
 
 PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
@@ -89,11 +95,13 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         supports_priority=False,
         attachments_supported=False,
         relations_supported=True,
+        experimental=True,
         operator_note=(
-            "GitHub's public API cannot attach files to issues. Transcripts, "
-            "plans, and other deliverables still land in the mission's "
-            "activity repo; the ticket comment carries a short reference. "
-            "This is a GitHub limitation, not a DevCake setting."
+            "Experimental (not launch-supported). GitHub's public API cannot "
+            "attach files to issues. Transcripts, plans, and other "
+            "deliverables still land in the mission's activity repo; the "
+            "ticket comment carries a short reference. Attachment limit is "
+            "a GitHub API gap, not a DevCake setting."
         ),
     ),
     "gitlab_issues": PMOSystemInfo(
@@ -115,12 +123,14 @@ PMO_SYSTEMS: dict[str, PMOSystemInfo] = {
         supports_priority=False,
         attachments_supported=True,
         relations_supported=False,
+        experimental=True,
         operator_note=(
-            "Blocked-by issue links need GitLab Premium (or self-hosted EE). "
-            "DevCake probes the live token — Free boards will not write "
-            "decomposition traffic-control edges, and child missions will "
-            "not block each other. File attachments work. This is a GitLab "
-            "license limit, not a DevCake setting."
+            "Experimental (not launch-supported). Blocked-by issue links "
+            "need GitLab Premium (or self-hosted EE). DevCake probes the "
+            "live token — Free boards will not write decomposition "
+            "traffic-control edges, and child missions will not block each "
+            "other. File attachments work. Relations limit is a GitLab "
+            "license gap, not a DevCake setting."
         ),
     ),
 }

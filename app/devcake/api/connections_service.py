@@ -293,6 +293,7 @@ async def connections_registry():
                 "operator_note": s.operator_note,
                 "attachments_supported": s.attachments_supported,
                 "relations_supported": s.relations_supported,
+                "experimental": s.experimental,
             }
             for s in PMO_SYSTEMS.values()
         ],

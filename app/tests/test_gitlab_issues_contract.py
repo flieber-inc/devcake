@@ -359,6 +359,15 @@ def test_project_ref_get_raises():
         run(pmo.get(MissionRef("1", "project")))
 
 
+def test_children_of_project_ref_raises_never_empty_list():
+    """projects_supported=False: children_of must not silently return [] on a
+    project ref (port F1 — every method raises the permanent family)."""
+    pmo = make_pmo()
+    with pytest.raises(RuntimeError, match="projects are not supported"):
+        run(pmo.children_of(MissionRef("1", "project")))
+    assert run(pmo.children_of(MissionRef("1", "issue"))) == []
+
+
 def test_429_is_pmo_transient():
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(429, text="slow down")
@@ -378,6 +387,42 @@ def test_upload_and_download_round_trip():
     blob = run(pmo.download_asset(url))
     assert blob == b"# plan"
     assert r.notes[1] == []  # feed chokepoint posts the note, not upload
+
+
+def test_download_asset_maps_http_status_to_domain_errors():
+    """Port Liskov: download 429/5xx are retryable (PMOTransient); other ≥400
+    permanent. Mirrors upload_attachment / gitea_issues download mapping."""
+    url = ("https://gitlab.com/api/v4/projects/o%2Fr/"
+           "uploads/abc123/plan.md")
+
+    def handler_5xx(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="upstream down")
+
+    pmo = GitLabIssuesAdapter(
+        "https://gitlab.com", "tok", "o/r",
+        transport=httpx.MockTransport(handler_5xx))
+    with pytest.raises(PMOTransient, match="download"):
+        run(pmo.download_asset(url))
+
+    def handler_429(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="slow down")
+
+    pmo = GitLabIssuesAdapter(
+        "https://gitlab.com", "tok", "o/r",
+        transport=httpx.MockTransport(handler_429))
+    with pytest.raises(PMOTransient, match="download"):
+        run(pmo.download_asset(url))
+
+    def handler_4xx(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="forbidden")
+
+    pmo = GitLabIssuesAdapter(
+        "https://gitlab.com", "tok", "o/r",
+        transport=httpx.MockTransport(handler_4xx))
+    with pytest.raises(RuntimeError, match="download") as ei:
+        run(pmo.download_asset(url))
+    assert not isinstance(ei.value, PMOTransient)
+    assert not isinstance(ei.value, httpx.HTTPError)
 
 
 def test_download_asset_refuses_evil_host():

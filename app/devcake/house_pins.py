@@ -52,7 +52,10 @@ def effective_cli_version(dev_type) -> str:
     pin = (getattr(dev_type, "cli_version", "") or "").strip()
     if pin:
         return pin
-    return HOUSE_PINS.get(dev_type.harness_template, "")
+    template = dev_type.harness_template
+    if template not in HOUSE_PINS:
+        raise ValueError(f"unknown harness template: {template!r}")
+    return HOUSE_PINS[template]
 
 
 def image_ref(template: str, cli_version: str, *, tag: str | None = None) -> str:
@@ -60,9 +63,12 @@ def image_ref(template: str, cli_version: str, *, tag: str | None = None) -> str
 
     Keep-set records effective versions, so the baker cannot tell a typed
     house pin from an empty field. Both must name the same image.
+    Unknown templates refuse — never invent devcake/dev-{unknown}:….
     """
+    if template not in HOUSE_PINS:
+        raise ValueError(f"unknown harness template: {template!r}")
     tag = tag if tag is not None else os.environ.get("DEVCAKE_TAG", "latest")
     pin = (cli_version or "").strip()
-    if not pin or pin == HOUSE_PINS.get(template, ""):
+    if not pin or pin == HOUSE_PINS[template]:
         return f"devcake/dev-{template}:{tag}"
     return f"devcake/dev-{template}:{tag}-{pin}"

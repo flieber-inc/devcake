@@ -35,8 +35,10 @@ def compile_receipt(
         "cli_version": cli_version,
         "rows": rows,
         "ok": _ok(specs, rows),
+        # App staffing requires gated is True (fail-closed on absence).
+        # Host compile path is the only honest producer of that stamp.
+        "gated": True,
     }
-
 
 def receipt_ok(receipt: Mapping[str, Any]) -> bool:
     """Reader-side: required matrix rows must be present and status==pass."""

@@ -84,7 +84,7 @@ def test_health_exposes_digest_and_receipt_summary(monkeypatch):
     class Store:
         def get(self, **kw):
             if kw["template"] == "grok-build":
-                return {"ok": True, "digest": "sha256:abc"}
+                return {"ok": True, "gated": True, "digest": "sha256:abc"}
             return None
 
     dts = {

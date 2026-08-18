@@ -34,9 +34,9 @@ def require_staffed(dev_type, *, digest: str | None = None,
     """Raise HarnessNotStaffed unless a matching ok receipt exists."""
     if baker_alive is None:
         from .bake_status import baker_liveness, read_bake_status
-        status = read_bake_status()
-        if status.get("heartbeat_at"):
-            baker_alive = bool(baker_liveness(status).get("alive"))
+        # Always evaluate liveness. Missing/never-checked-in heartbeat is
+        # dead (baker_liveness already says so) — do not skip and staff.
+        baker_alive = bool(baker_liveness(read_bake_status()).get("alive"))
     if baker_alive is False:
         raise HarnessNotStaffed(
             "host baker is not running — cannot vouch for images",
@@ -56,7 +56,8 @@ def require_staffed(dev_type, *, digest: str | None = None,
     if rec is None:
         raise HarnessNotStaffed(
             f"no receipt for {template} {version}", kind="missing")
-    if rec.get("gated") is False:
+    # gated must be True — absence or null is fabricated (fail-closed).
+    if rec.get("gated") is not True:
         raise HarnessNotStaffed(
             f"{template} {version} receipt is not gated", kind="fabricated")
     if rec.get("ok") is True:

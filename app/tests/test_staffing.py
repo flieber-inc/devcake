@@ -29,7 +29,8 @@ def test_sentinel_digest_names_the_wrapper_not_a_missing_receipt():
     with pytest.raises(HarnessNotStaffed, match="built without the bake wrapper") as exc:
         require_staffed(
             _dt(), digest=SENTINEL_DIGEST,
-            store=_Store({"ok": True, "digest": SENTINEL_DIGEST}))
+            store=_Store({"ok": True, "gated": True, "digest": SENTINEL_DIGEST}),
+            baker_alive=True)
     assert "no receipt" not in str(exc.value).lower()
 
 
@@ -37,7 +38,8 @@ def test_missing_receipt_refuses():
     from devcake.staffing import HarnessNotStaffed, require_staffed
 
     with pytest.raises(HarnessNotStaffed, match="no receipt"):
-        require_staffed(_dt(), digest="sha256:abc", store=_Store(None))
+        require_staffed(
+            _dt(), digest="sha256:abc", store=_Store(None), baker_alive=True)
 
 
 def test_ok_false_names_the_failing_required_row():
@@ -45,6 +47,7 @@ def test_ok_false_names_the_failing_required_row():
 
     rec = {
         "ok": False,
+        "gated": True,
         "digest": "sha256:abc",
         "rows": [
             {"name": "healthy", "required": True, "status": "pass"},
@@ -52,7 +55,8 @@ def test_ok_false_names_the_failing_required_row():
         ],
     }
     with pytest.raises(HarnessNotStaffed, match="http_401"):
-        require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
+        require_staffed(
+            _dt(), digest="sha256:abc", store=_Store(rec), baker_alive=True)
 
 
 def test_ok_false_lists_every_required_row_that_did_not_pass():
@@ -60,6 +64,7 @@ def test_ok_false_lists_every_required_row_that_did_not_pass():
 
     rec = {
         "ok": False,
+        "gated": True,
         "digest": "sha256:abc",
         "rows": [
             {"name": "healthy", "required": True, "status": "fail"},
@@ -69,7 +74,8 @@ def test_ok_false_lists_every_required_row_that_did_not_pass():
         ],
     }
     with pytest.raises(HarnessNotStaffed) as caught:
-        require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
+        require_staffed(
+            _dt(), digest="sha256:abc", store=_Store(rec), baker_alive=True)
     msg = str(caught.value)
     assert "healthy fail" in msg
     assert "resume error" in msg
@@ -84,12 +90,14 @@ def test_required_skip_and_error_are_not_ok():
     for status in ("skipped", "error"):
         rec = {
             "ok": False,
+            "gated": True,
             "digest": "sha256:abc",
             "rows": [{"name": "empty", "required": True, "status": status}],
         }
         with pytest.raises(HarnessNotStaffed, match="empty"):
-            require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
-
+            require_staffed(
+                _dt(), digest="sha256:abc", store=_Store(rec),
+                baker_alive=True)
 
 def test_dead_baker_refuses_even_with_an_ok_receipt():
     from devcake.staffing import HarnessNotStaffed, require_staffed
@@ -97,8 +105,27 @@ def test_dead_baker_refuses_even_with_an_ok_receipt():
     with pytest.raises(HarnessNotStaffed, match="cannot vouch") as exc:
         require_staffed(
             _dt(), digest="sha256:abc",
-            store=_Store({"ok": True, "digest": "sha256:abc"}),
+            store=_Store({"ok": True, "gated": True, "digest": "sha256:abc"}),
             baker_alive=False)
+    assert exc.value.kind == "baker"
+
+
+def test_absent_baker_heartbeat_refuses_even_with_ok_receipt(monkeypatch):
+    """Missing heartbeat is dead baker — not 'skip liveness and staff'."""
+    import devcake.bake_status as bs
+    from conftest import REAL_REQUIRE_STAFFED
+    from devcake.staffing import HarnessNotStaffed
+
+    monkeypatch.setattr(
+        bs, "read_bake_status",
+        lambda root=None: {"state": "idle", "jobs": [], "detail": ""},
+    )
+
+    with pytest.raises(HarnessNotStaffed, match="cannot vouch") as exc:
+        # Unwrapped seam: baker_alive stays None so production liveness runs.
+        REAL_REQUIRE_STAFFED(
+            _dt(), digest="sha256:abc",
+            store=_Store({"ok": True, "gated": True, "digest": "sha256:abc"}))
     assert exc.value.kind == "baker"
 
 
@@ -107,8 +134,23 @@ def test_ok_true_matching_digest_is_staffed():
 
     require_staffed(
         _dt(), digest="sha256:abc",
-        store=_Store({"ok": True, "digest": "sha256:abc"}))
+        store=_Store({"ok": True, "gated": True, "digest": "sha256:abc"}),
+        baker_alive=True)
 
+
+def test_receipt_without_gated_true_is_refused():
+    """Absence of gated (or null) is fabricated — not fail-open."""
+    from devcake.staffing import HarnessNotStaffed, require_staffed
+
+    for rec in (
+        {"ok": True, "digest": "sha256:abc"},
+        {"ok": True, "digest": "sha256:abc", "gated": None},
+    ):
+        with pytest.raises(HarnessNotStaffed, match="not gated") as exc:
+            require_staffed(
+                _dt(), digest="sha256:abc", store=_Store(rec),
+                baker_alive=True)
+        assert exc.value.kind == "fabricated"
 
 def test_oauth_does_not_launch_when_not_staffed(tmp_path, monkeypatch):
     import json
@@ -126,7 +168,7 @@ def test_oauth_does_not_launch_when_not_staffed(tmp_path, monkeypatch):
     rec_dir.mkdir()
     (rec_dir / "grok-build@0.2.112.json").write_text(json.dumps({
         "digest": "sha256:abc", "template": "grok-build",
-        "cli_version": "0.2.112", "ok": False,
+        "cli_version": "0.2.112", "ok": False, "gated": True,
         "rows": [{"name": "http_401", "required": True, "status": "fail"}],
     }))
     executor = FakeExecutor()
@@ -156,7 +198,7 @@ def test_steward_does_not_launch_when_not_staffed(tmp_path, monkeypatch):
     rec_dir = tmp_path / "harness_receipts"
     rec_dir.mkdir()
     (rec_dir / "grok-build@0.2.112.json").write_text(json.dumps({
-        "digest": "sha256:test", "ok": False,
+        "digest": "sha256:test", "ok": False, "gated": True,
         "rows": [{"name": "empty", "required": True, "status": "error"}],
     }))
     from test_oauth import FakeExecutor, NullMessaging
@@ -203,7 +245,8 @@ def test_fabricated_ungated_receipt_is_refused():
 
     rec = {"ok": True, "digest": "sha256:abc", "gated": False, "rows": []}
     with pytest.raises(HarnessNotStaffed, match="not gated"):
-        require_staffed(_dt(), digest="sha256:abc", store=_Store(rec))
+        require_staffed(
+            _dt(), digest="sha256:abc", store=_Store(rec), baker_alive=True)
 
 
 def test_every_registry_template_is_gated_the_same_way():
@@ -214,8 +257,8 @@ def test_every_registry_template_is_gated_the_same_way():
     for template in HARNESSES:
         with pytest.raises(HarnessNotStaffed, match="no receipt"):
             require_staffed(
-                _dt(template), digest="sha256:abc", store=_Store(None))
-
+                _dt(template), digest="sha256:abc", store=_Store(None),
+                baker_alive=True)
 
 def test_pin_summary_has_no_host_command():
     """The host baker watches the keep-set. SPA must not assign terminal homework."""

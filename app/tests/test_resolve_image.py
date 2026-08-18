@@ -52,6 +52,21 @@ def test_resolve_image_empty_pin_is_todays_house_image():
     assert resolve_image(dt) == "devcake/dev-codex:latest"
 
 
+def test_resolve_image_refuses_unknown_template():
+    """No silent invent of devcake/dev-not-a-harness:… for unregistered ids."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from devcake.harness import resolve_image
+    from devcake.house_pins import image_ref
+
+    unknown = SimpleNamespace(harness_template="not-a-harness", cli_version="")
+    with pytest.raises(ValueError, match="unknown harness template"):
+        resolve_image(unknown)
+    with pytest.raises(ValueError, match="unknown harness template"):
+        image_ref("not-a-harness", "", tag="latest")
+
 def test_resolve_image_explicit_pin_is_tag_plus_version():
     """Two pins on one template must not share :TAG — that would collide."""
     from devcake.harness import resolve_image

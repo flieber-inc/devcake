@@ -51,6 +51,11 @@ def encrypt_blob(passphrase: str, plaintext: bytes) -> dict:
 
 def decrypt_blob(passphrase: str, envelope: dict) -> bytes:
     try:
+        # Non-mapping envelopes are corruption, not a distinct error class —
+        # keep them on the wrong-passphrase/tamper message so shape probes
+        # learn nothing extra.
+        if not isinstance(envelope, dict):
+            raise DecryptError("wrong passphrase or corrupted bundle")
         if envelope.get("v") != 1 or envelope.get("cipher") != "aesgcm" \
                 or envelope.get("kdf") != "scrypt":
             raise DecryptError("unsupported envelope")
@@ -66,5 +71,5 @@ def decrypt_blob(passphrase: str, envelope: dict) -> bytes:
         return AESGCM(key).decrypt(nonce, ct, None)
     except DecryptError:
         raise
-    except (InvalidTag, KeyError, ValueError, TypeError):
+    except (InvalidTag, KeyError, ValueError, TypeError, AttributeError):
         raise DecryptError("wrong passphrase or corrupted bundle")

@@ -101,7 +101,8 @@ The mirror is strictly chronological and complete — *all* the current activity
 Delivery happens in two stages, because Dagu trigger params are visible unmasked in its UI (verified — `13-deployment.md` §4):
 
 - **Stage 1 — container env from the Dagu DAG:** `DEVCAKE_RUN_ID`, `TRACEPARENT`, `REDIS_URL`, and the per-run scoped Redis ACL credential (`REDIS_USER`/`REDIS_PASSWORD` — the one deliberate param-borne secret, `09-messaging.md` §1a).
-- **Stage 2 — the run spec, fetched by the entrypoint** over Redis (`runspec.get` → keyed by run id, `09-messaging.md` §3): everything else below, including all secrets, scoped to exactly what this run's Dev Type needs. The entrypoint exports these as env vars (or writes credential files) **before** launching the harness — so from the harness's point of view the full table is simply its environment. Under ADR-0025 the `runspec.get` payload carries the caller's `phase`: the **provision** step receives a REDUCED spec (no credential files, no harness/model or Dev-Type secret env; the forge token only for direct-clone internal repos) — it runs no agent and needs only what cloning needs; the **harness** step receives the full table below (`09-messaging.md` §3).
+- **Stage 2 — the run spec, fetched by the entrypoint** over Redis (`runspec.get` → keyed by run id, `09-messaging.md` §3): everything else below, including all secrets, scoped to exactly what this run's Dev Type needs. The entrypoint exports these as env vars (or writes credential files) **before** launching the harness — so from the harness's point of view the full table is simply its environment. Under ADR-0025 the `runspec.get` payload carries the caller's `phase`: the **provision** step receives a REDUCED spec (no credential files, no harness/model or Dev-Type secret env; the forge token only for direct-clone internal repos) — it runs no agent and needs only what cloning needs; the **harness** step receives the full table below (this §3; channel shape in
+  `09-messaging.md` §3 `runspec.get`).
 
 | Variable | Stage | Meaning |
 |---|---|---|
@@ -281,11 +282,21 @@ unchanged and bounds the whole loop.
 
 | Package path | Role |
 |---|---|
-| `domain.fault` | ADR-0018 harness fault classification (pure) |
+| `domain.fault` | ADR-0018 harness fault classification; container-produced `(exit_code, error_class)` pairs in `PRODUCED` (pure) |
+| `harness.dialect` / `dialects` | Fail-closed `HarnessDialect` registry — argv / render / parse / fault / session id; unknown id → `ValueError` (docs/16 H1) |
+| `harness.launch` | Single `composed_launch` chokepoint (dialect argv ± operator script / override) |
+| `harness.aim` | Backend adaptor (docs/08 §8): base URL → env / extra argv / files — not fault classification |
 | `harness.continuation` | ADR-0022 continuation policy, nudges, session chains, token-report merge, terminal evidence (pure) |
 | `harness.render` / `tokens` / `argv` | Live relay, stream dumps, CLI argv (+ resume dialects, `RESUME_SPECS`) |
 | `workspace.*` | Clone, skills/MCP, forensics, activity, transcript |
 | `adapters.bus` | Redis Streams send / request-reply / artifacts |
+
+Contract consumers on the app side: `domain/failure_taxonomy.py` (exit ↔ `DEV_*`,
+backend brake), `orchestrator/markers.LEGAL_OUTCOMES` (mirrored first-line in the
+entrypoint; STEWARD is entrypoint-only), `orchestrator/finalize.py` (token report
+stamp + `continuations_used`). Image↔app parity is test-enforced
+(`test_legal_outcomes_pin`, `test_failure_taxonomy`, `test_token_report_shape`,
+`test_entrypoint_*`) — do not hand-sync comment tables.
 
 There is **no write access** to the PMO mid-run (INV-4). Writes travel as end-of-run artifacts that the app applies. Mid-run re-fetch of the activity payload uses the same `activity.get` request/reply channel the entrypoint already speaks.
 

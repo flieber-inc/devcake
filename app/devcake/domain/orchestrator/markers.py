@@ -38,7 +38,7 @@ PART_LINE = re.compile(r"^Part (\d+) of (\d+)$")
 
 # Stage label each checkpointed swap leaves on the mission (None = stage label
 # removed). Consulted by the redelivery external-transition check in
-# _transition: a live stage matching a present marker's value is our own swap
+# transitions.transition: a live stage matching a present marker's value is our own swap
 # resuming, anything else is an external change and halts the finalize.
 # DERIVED from the step registry (ADR-0034) — a new stage-swapping checkpoint
 # declares its stage_after at registration in steps.py; the old hand-copy

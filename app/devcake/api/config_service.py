@@ -109,8 +109,15 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
     # In-place skill-source rename (SPA edits name on the same card index):
     # plan the move now; apply it only after reload succeeds so a rolled-back
     # PUT does not leave tokens under the new name while config reverts.
+    # Index inequality alone is NOT a rename — SPA Remove uses filter() and
+    # shifts later cards up; treat as rename only when old left the name set
+    # and new is genuinely new (else set-difference delete handles remove).
     prev_skills = previous.get("skill_sources") or []
     new_skills = list(merged.skill_sources)
+    old_names = {
+        (old["name"] if isinstance(old, dict) else old.name)
+        for old in prev_skills}
+    new_names = {s.name for s in new_skills}
     skill_renames: list[tuple[str, str]] = []
     renamed_from: set[str] = set()
     for i, old in enumerate(prev_skills):
@@ -120,8 +127,9 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         new_name = new_skills[i].name
         if old_name == new_name:
             continue
-        skill_renames.append((old_name, new_name))
-        renamed_from.add(old_name)
+        if old_name not in new_names and new_name not in old_names:
+            skill_renames.append((old_name, new_name))
+            renamed_from.add(old_name)
     # a removed instance's stored secrets go with it — otherwise a later
     # instance reusing the name silently inherits the dead credential
     prev_keys = set(secrets_store.connection_instances(previous))

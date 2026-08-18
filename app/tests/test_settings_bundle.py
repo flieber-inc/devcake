@@ -1107,3 +1107,95 @@ def test_config_put_renames_skill_source_moves_secrets(monkeypatch, tmp_path):
         == "skill_rw_rename_0062"
     assert not (tmp_path / "secrets" / "connections" / "skill-shelf.json").exists()
     assert secrets.read_connection_secret("skill", "shelf", "token_ro") == ""
+
+
+def test_config_put_removing_non_last_skill_source_keeps_survivor_token(
+        monkeypatch, tmp_path):
+    """SPA Remove shifts later cards up (filter by index). That must delete
+    the removed card's secrets — not treat the shift as an in-place rename
+    that os.replace-overwrites the survivor's tokens."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="shelf", url="https://github.com/acme/skills"),
+        config_mod.SkillSource(
+            name="toolbox", url="https://github.com/acme/toolbox-skills"),
+    ]
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "SECRET_SHELF")
+    secrets.write_connection_secret("skill", "toolbox", "token_ro",
+                                    "SECRET_TOOLBOX")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    # Body shape after SPA removes index 0: remaining list is the prior suffix.
+    body = {
+        "skill_sources": [
+            {"name": "toolbox", "forge": "github",
+             "url": "https://github.com/acme/toolbox-skills",
+             "default_branch": "", "subdir": ""},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [s.name for s in cfg.skill_sources] == ["toolbox"]
+    assert secrets.read_connection_secret("skill", "toolbox", "token_ro") \
+        == "SECRET_TOOLBOX"
+    assert not (tmp_path / "secrets" / "connections" / "skill-shelf.json").exists()
+    assert secrets.read_connection_secret("skill", "shelf", "token_ro") == ""
+
+
+def test_config_put_removing_middle_skill_source_keeps_neighbors_tokens(
+        monkeypatch, tmp_path):
+    """Removing the middle of three skill cards must not scramble the last
+    card's secrets onto the middle name (same SPA index-shift path)."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    _sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="alpha", url="https://github.com/acme/alpha-skills"),
+        config_mod.SkillSource(
+            name="bravo", url="https://github.com/acme/bravo-skills"),
+        config_mod.SkillSource(
+            name="charlie", url="https://github.com/acme/charlie-skills"),
+    ]
+    secrets.write_connection_secret("skill", "alpha", "token_ro", "SA")
+    secrets.write_connection_secret("skill", "bravo", "token_ro", "SB")
+    secrets.write_connection_secret("skill", "charlie", "token_ro", "SC")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "skill_sources": [
+            {"name": "alpha", "forge": "github",
+             "url": "https://github.com/acme/alpha-skills",
+             "default_branch": "", "subdir": ""},
+            {"name": "charlie", "forge": "github",
+             "url": "https://github.com/acme/charlie-skills",
+             "default_branch": "", "subdir": ""},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [s.name for s in cfg.skill_sources] == ["alpha", "charlie"]
+    assert secrets.read_connection_secret("skill", "alpha", "token_ro") == "SA"
+    assert secrets.read_connection_secret("skill", "charlie", "token_ro") == "SC"
+    assert not (tmp_path / "secrets" / "connections" / "skill-bravo.json").exists()
+    assert secrets.read_connection_secret("skill", "bravo", "token_ro") == ""

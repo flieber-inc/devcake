@@ -11,14 +11,16 @@ from typing import Protocol
 
 class ClaimsNotebooks(Protocol):
     async def list_json_names(self, card: str) -> list[str] | None:
-        """`*.json` filenames under `.claims/` (no path prefix). None if
-        the notebook cannot be listed (missing card, no credentials)."""
+        """`*.json` filenames under `.claims/` (no path prefix).
+        `[]` only when checkout succeeds and `.claims/` has no JSON.
+        None if unlistable (missing card, clone/ls-remote failure)."""
         ...
 
     async def snapshot(self, card: str) -> dict | None:
         """`{json_names: [...], has_readme: bool}` in ONE checkout — the
-        append path's listing + README presence probe. None if the
-        notebook cannot be read."""
+        append path's listing + README presence probe. None if unlistable
+        (including clone failure); definite-empty only after a successful
+        checkout."""
         ...
 
     async def list_claim_meta(self, card: str) -> list[dict] | None:

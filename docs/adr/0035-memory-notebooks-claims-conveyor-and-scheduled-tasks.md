@@ -69,6 +69,9 @@ seeded by the app.
    notebook, refuse-new-never-evict. Conveyor failure never fails the
    discovering run. The writer is forge-neutral (clone+commit+push with
    the card's write token, one push-race retry) — never a Dev token.
+   List/snapshot return `None` when the notebook cannot be cloned or
+   listed (including clone failure); definite empty (`[]` / no README)
+   is only when checkout succeeds and `.claims/` has no JSON.
    The app reads/writes ONLY under `.claims/`; note bodies stay
    app-blind (wipe test: delete every note, replay the same Dev
    outputs, the mission loop is unchanged).

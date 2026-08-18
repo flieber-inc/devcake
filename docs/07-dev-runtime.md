@@ -291,7 +291,7 @@ unchanged and bounds the whole loop.
 |---|---|
 | `domain.fault` | ADR-0018 harness fault classification; container-produced `(exit_code, error_class)` pairs in `PRODUCED` (pure) |
 | `harness.dialect` / `dialects` | Fail-closed `HarnessDialect` registry — argv / render / parse / fault / session id; unknown id → `ValueError` (docs/16 H1) |
-| `harness.launch` | Single `composed_launch` chokepoint (dialect argv, or override script with `set -e`); additive setup is `run_mcp_setup`, not a bash prelude |
+| `harness.launch` | Single `composed_launch` chokepoint (dialect argv, or resume argv when `session_id` is set, or override script with `set -e`); additive setup is `run_mcp_setup`, not a bash prelude |
 | `harness.aim` | Backend adaptor (docs/08 §8): base URL → env / extra argv / files — not fault classification |
 | `harness.continuation` | ADR-0022 continuation policy, nudges, session chains, token-report merge, terminal evidence (pure) |
 | `harness.render` / `tokens` / `argv` | Live relay, stream dumps, CLI argv (+ resume dialects, `RESUME_SPECS`) |

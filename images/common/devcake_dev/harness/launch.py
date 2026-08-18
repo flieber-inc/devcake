@@ -2,9 +2,12 @@
 
 Default: aim() has already written env/files; additive operator setup runs
 via ``run_mcp_setup`` (docs/07 §5) before this function is called with an
-empty script, then the dialect argv is returned for exec.
+empty script, then the dialect argv (or resume argv when ``session_id`` is
+set) is returned for exec.
 override=True: dialect argv is not used — the operator script is the
-process (fail-closed with ``set -e``).
+process (fail-closed with ``set -e``). ``session_id`` is ignored under
+override — the entrypoint degrades resume→fresh so mode stays truthful
+(CAKE-62 honesty).
 
 Prod entrypoint and the hermetic probe call this one function.
 """
@@ -24,6 +27,7 @@ def composed_launch(
     script: str = "",
     override: bool = False,
     out_dir=None,
+    session_id: str | None = None,
 ) -> list[str]:
     body = (script or "").strip()
     if override:
@@ -42,6 +46,16 @@ def composed_launch(
         raise ValueError(
             "additive entrypoint setup must run via run_mcp_setup; "
             "pass script='' to composed_launch")
-    return get_dialect(template).argv(
+    dialect = get_dialect(template)
+    if session_id:
+        # Plan never continues — no plan_mode on resume (ADR-0022).
+        dialect_argv = dialect.resume_argv(
+            session_id, prompt, model=model,
+            extra=list(extra), out_dir=out_dir)
+        if dialect_argv is None:
+            raise ValueError(
+                f"harness {template!r} has no resume dialect")
+        return dialect_argv
+    return dialect.argv(
         prompt, plan_mode=plan_mode, model=model,
         extra=list(extra), out_dir=out_dir)

@@ -982,23 +982,26 @@ def harness_main() -> None:
                         if cont_cfg.max_continuations > 0 else "")
                      + f"\n\n---\n\n{result_text}",
                      bad_output_reason=reason)
-            if decision.action == "resume":
+            # Override scripts are opaque — DevCake cannot inject dialect
+            # resume flags. Degrade to the fresh arm (same honesty as
+            # "resume unavailable → fresh") so mode/tokens stay truthful.
+            relaunch = decision.action
+            if relaunch == "resume" and override:
+                relaunch = "fresh"
+            if relaunch == "resume":
                 mode = "resume"
                 inv_prompt = resume_nudge_prompt(
                     mission_type, legal, attempt=cont.used,
                     budget=cont_cfg.max_continuations, stray_note=note)
-                # Additive setup already ran once before the loop — do not
-                # re-embed it. Override remains the process on every relaunch.
-                if override:
-                    os.environ["DEVCAKE_PROMPT"] = inv_prompt
-                    cmd = composed_launch(
-                        harness, inv_prompt, plan_mode=False, model=model,
-                        extra=extra, script=launch_script, override=True)
-                else:
-                    cmd = harness_resume_argv(
-                        harness, last_sid(chains), inv_prompt,
-                        model=model, extra=extra)
-            if decision.action == "fresh" or cmd is None:
+                os.environ["DEVCAKE_PROMPT"] = inv_prompt
+                # Additive setup already ran once (launch_script=""); resume
+                # argv via composed_launch(session_id=…) — same as
+                # harness_resume_argv when the body is empty (CAKE-62 + 63).
+                cmd = composed_launch(
+                    harness, inv_prompt, plan_mode=False, model=model,
+                    extra=extra, script=launch_script, override=False,
+                    session_id=last_sid(chains))
+            if relaunch == "fresh" or cmd is None:
                 # `cmd is None` is defensive only: a harness in RESUME_SPECS
                 # always has a builder arm — degrade to fresh, never crash
                 mode = "fresh"

@@ -34,6 +34,17 @@ HARVEST_TYPES = ("ONBOARD", "EXECUTE", "REVIEW")
 _FIELDS = ("finding", "evidence", "scope")
 
 
+def harvest_run_index(mgr, runs=None) -> dict[tuple[str, int], Run]:
+    """ONE run-index filter for harvest / package / apply / sweep peers
+    (chokepoint). Harvest-typed runs that are ours AND carry a result —
+    missing result is treated as gone so clear-runs / incomplete records
+    cannot be routed as if they still had findings."""
+    rows = mgr.runs.store.all() if runs is None else runs
+    return {(r.mission_pmo_id, r.seq): r for r in rows
+            if r.mission_type in HARVEST_TYPES
+            and mgr._run_is_ours(r) and r.result}
+
+
 def valid_entries(result: dict) -> list[dict]:
     """Defensive normalization of the optional `discoveries` result key:
     list-of-dicts with non-empty string finding/evidence/scope (evidence is
@@ -292,11 +303,10 @@ async def discovery_sweep(mgr, m) -> None:
             mgr._audit(m.pmo_id, "discovery_label_failed", str(ex)[:200])
         mgr._discoveries_pending.discard(m.pmo_id)
         return
-    run_ix = {(r.mission_pmo_id, r.seq): r for r in mgr.runs.store.all()
-              if r.mission_type in HARVEST_TYPES and mgr._run_is_ours(r)}
+    run_ix = harvest_run_index(mgr)
     gone = [(step, n) for step, n in pending
             if (m.pmo_id, step) not in run_ix
-            or not valid_entries(run_ix[(m.pmo_id, step)].result or {})]
+            or not valid_entries(run_ix[(m.pmo_id, step)].result)]
     if gone:
         lines = [f"`devcake:discovery-routed:v1 step={s} to=-`"
                  for s, _n in sorted(gone)]

@@ -5,7 +5,8 @@ Public seams:
   composed_launch(...) — argv composition only; additive setup is NOT
     inlined here (that hole swallowed failures without set -e). Additive
     lines run via run_mcp_setup before launch; override scripts are the
-    process and must be fail-closed (set -e).
+    process and must be fail-closed (set -e). Empty-script + session_id
+    yields resume dialect argv (CAKE-62 honesty without the prelude).
 Legacy YAML key mcp_setup_commands joins into the script on read.
 """
 
@@ -110,12 +111,59 @@ def test_override_failing_line_exits_nonzero(tmp_path):
     assert not marker.exists()
 
 
-def _composed_launch():
-    import os
-    os.environ.setdefault("DEVCAKE_RUN_ID", "T-LAUNCH")
-    os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6399/0")
-    os.environ.setdefault("REDIS_USER", "t")
-    os.environ.setdefault("REDIS_PASSWORD", "t")
+# ── CAKE-62 + CAKE-63: resume through empty-script composed_launch ───────────
+
+
+def test_additive_with_session_id_still_refuses_inline_prelude():
+    """Resume must not reintroduce the no-set-e bash prelude around setup."""
+    launch = _composed_launch()
+    with pytest.raises(ValueError, match="run_mcp_setup"):
+        launch(
+            "grok-build", "NUDGE", plan_mode=False, model="stub-model",
+            extra=(), script="claude mcp add x -- y", override=False,
+            session_id="SID")
+
+
+def test_empty_script_with_session_id_equals_harness_resume_argv():
+    launch = _composed_launch()
+    resume = _harness_resume_argv()
+    prompt = "NUDGE"
+    sid = "SID"
+    got = launch(
+        "grok-build", prompt, plan_mode=False, model="stub-model",
+        extra=(), script="", override=False, session_id=sid)
+    assert got == resume(
+        "grok-build", sid, prompt, model="stub-model")
+
+
+def test_override_with_session_id_still_uses_only_operator_script():
+    """Under override the opaque script is the process; session_id is ignored."""
+    launch = _composed_launch()
+    script = "my-cli --serve"
+    got = launch(
+        "grok-build", "NUDGE", plan_mode=False, model="stub-model",
+        extra=(), script=script, override=True, session_id="SID")
+    assert got[:4] == ["bash", "--noprofile", "--norc", "-c"]
+    body = got[-1]
+    assert body.startswith("set -e\n") or "\nset -e\n" in f"\n{body}"
+    assert "my-cli --serve" in body
+    assert "grok" not in body
+    assert "-r" not in body
+    assert "SID" not in body
+
+
+def test_entrypoint_continuations_pass_empty_additive_script():
+    """Once-before-loop setup: relaunches must use launch_script (empty when
+    not override), never re-embed the operator script into composed_launch."""
+    src = (_images_common_root() / "dev_entrypoint.py").read_text()
+    assert 'launch_script = script if override else ""' in src
+    assert src.count("script=launch_script") >= 2  # initial + continuation(s)
+    # No composed_launch call may pass the raw operator script (would either
+    # double-run setup or raise on the additive refuse).
+    assert "script=script," not in src
+
+
+def _images_common_root() -> Path:
     roots = [
         Path(__file__).resolve().parents[2] / "images" / "common",
         Path("/srv/images/common"),
@@ -124,5 +172,21 @@ def _composed_launch():
     assert root is not None, "images/common missing"
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
+    return root
+
+
+def _composed_launch():
+    import os
+    os.environ.setdefault("DEVCAKE_RUN_ID", "T-LAUNCH")
+    os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6399/0")
+    os.environ.setdefault("REDIS_USER", "t")
+    os.environ.setdefault("REDIS_PASSWORD", "t")
+    _images_common_root()
     from devcake_dev.harness.launch import composed_launch
     return composed_launch
+
+
+def _harness_resume_argv():
+    _images_common_root()
+    from devcake_dev.harness.argv import harness_resume_argv
+    return harness_resume_argv

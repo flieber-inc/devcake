@@ -194,7 +194,7 @@ def build_discovery_package(mgr, family, pending: dict,
     harvest used, truncated to the marker's n — so the package transports
     exactly what the board memorialized."""
     from ...prompts import STEWARD_DESC_HEAD_CHARS, STEWARD_MISSION_CAP
-    from .discovery import valid_entries
+    from .discovery import harvest_run_index, valid_entries
     from .markers import handoff_of
 
     def head(m) -> str:
@@ -216,9 +216,7 @@ def build_discovery_package(mgr, family, pending: dict,
 
     finds: list[str] = []
     included: list[tuple[str, int]] = []
-    run_ix = {(r.mission_pmo_id, r.seq): r for r in runs
-              if r.mission_type in ("ONBOARD", "EXECUTE", "REVIEW")
-              and mgr._run_is_ours(r) and r.result}
+    run_ix = harvest_run_index(mgr, runs)
     for pmo_id, batches in sorted(pending.items()):
         src = by_id.get(pmo_id)
         if src is None:
@@ -358,7 +356,8 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     judgment layer. Idempotent against the board: a redelivered finalize
     re-checks the recipient's delivery markers and the source's receipts
     before every write."""
-    from .discovery import render_entry_lines, scan_source, valid_entries
+    from .discovery import (harvest_run_index, render_entry_lines,
+                            scan_source, valid_entries)
     from .family_graph import family_of
 
     if not mgr.instance.discovery_routing:          # D11 — delivery too
@@ -367,10 +366,7 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     missions = await mgr.pmo.list_all(mgr.instance.team_key)
     by_key = {m.key.upper(): m for m in missions if m.pmo_kind == "issue"}
     by_id = {m.pmo_id: m for m in missions if m.pmo_kind == "issue"}
-    runs = mgr.runs.store.all()
-    run_ix = {(r.mission_pmo_id, r.seq): r for r in runs
-              if r.mission_type in ("ONBOARD", "EXECUTE", "REVIEW")
-              and mgr._run_is_ours(r) and r.result}
+    run_ix = harvest_run_index(mgr)
     batches = {(b.get("pmo_id"), int(b.get("step") or 0)): b
                for b in (run.steward_batches or [])}
 
@@ -537,8 +533,16 @@ async def apply_discovery_routes(mgr, run: Run, routes: list) -> tuple[int, int]
     # (incl. a ceiling-truncated recipient, whose human-directed reason
     # rides this comment). Transient holds (unreadable / post-fail) stay
     # pending — to=- is deliberate/clear-runs only (ADR-0033 addendum).
+    # Addendum 10: a hold on ANY recipient withholds *every* receipt for
+    # that (source, step), including success siblings — otherwise
+    # pending = posted − receipted clears the step and held deliveries
+    # are never re-driven. Already-landed discovery-in markers keep
+    # re-drives idempotent.
     for (pid, step), b in batches.items():
         if (pid, step) in held:
+            if pid in receipts:
+                receipts[pid] = {(s, t) for s, t in receipts[pid]
+                                 if s != step}
             continue
         receipts.setdefault(pid, set())
         if not any(s == step for s, _t in receipts[pid]):

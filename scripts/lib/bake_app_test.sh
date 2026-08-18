@@ -22,14 +22,16 @@ export DEVCAKE_TAG="$TAG"
 
 echo "── ensure app-test → devcake/app-test:${TAG}"
 
-# No mandatory `-f docker-bake.hcl`: the default file in the repo root is that
-# HCL, and buildah's buildx rejects `-f` even when bake itself is absent.
-if docker buildx bake app-test; then
-  echo "── app-test via: docker buildx bake app-test"
+# `-f docker-bake.hcl` is mandatory: without it, bake's default-file lookup
+# also merges docker-compose.yml, whose `:?` interpolations hard-fail on a
+# fresh clone with no .env. (On podman, buildah's buildx shim fails with or
+# without `-f`, so the fallback below still triggers there either way.)
+if docker buildx bake -f docker-bake.hcl app-test; then
+  echo "── app-test via: docker buildx bake -f docker-bake.hcl app-test"
   exit 0
 fi
 
-echo "── docker buildx bake unavailable or failed; fallback: docker build --target test"
+echo "── bake failed (CLI missing or bake error); fallback: docker build --target test"
 # Match docker-bake.hcl target "app-test" (context ./app, Dockerfile target test).
 if docker build -f app/Dockerfile --target test \
   -t "devcake/app-test:${TAG}" \

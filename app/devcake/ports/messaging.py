@@ -2,6 +2,11 @@
 
 One adapter today: adapters.redis.Messaging. Slice scope uses create_run_user;
 reply/teardown methods are part of the same seam for RunManager and later slices.
+
+Adapters must never leak redis-py exception types upward — surface
+`MessagingError` on Protocol methods (create_run_user, reply, …). The
+long-running consumer loop handles reconnect internally and does not
+raise MessagingError for transient disconnects.
 """
 
 from __future__ import annotations
@@ -9,6 +14,14 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Protocol
 
 Handler = Callable[[str, str, dict[str, Any]], Awaitable[None]]
+
+
+class MessagingError(Exception):
+    """Raised by MessagingPort adapters for wire-level failures (docs/09).
+
+    Covers redis connection/timeout/response errors on request/reply and
+    ACL lifecycle methods. Adapters must never leak redis.exceptions upward.
+    """
 
 
 class MessagingPort(Protocol):

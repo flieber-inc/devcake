@@ -133,17 +133,22 @@ docs/04 §3.1). This does **not** reopen vendor pluggability decisions above.
 
 | Port / module | Role | Production adapter |
 |---|---|---|
-| `ExecutorPort` | start/stop/status Dev runs | `adapters/dagu` |
-| `StatePort` | run-record persistence | `adapters/files` |
-| `MessagingPort` | Redis Streams ACL + ingress/reply | `adapters/redis` |
-| `RunFinalizer` | mission finalize / mapper finalize / INV-3 restore | `MissionManager` |
-| `domain/run_bootstrap.py` | deep dispatch spine shared by hello, mission, mapper, OAuth | — |
+| `ExecutorPort` | start/stop/status Dev runs; `ExecutorError` / `DuplicateRun` | `adapters/dagu` |
+| `StatePort` | run-record persistence | `adapters/files` (`run_store`) |
+| `MessagingPort` | Redis Streams ACL + ingress/reply; `MessagingError` | `adapters/redis` |
+| `RunFinalizer` | mission finalize / steward finalize / INV-3 restore | `MissionManager` / `FinalizerRouter` |
+| `ReceiptStore` | harness bake receipts (staffing fail-closed) | `adapters/files/receipts` |
+| `HarnessVersionSource` | operator-asked remote CLI latest | `adapters/registry_versions` |
+| `ClaimsNotebooks` | memory notebook `.claims/` write | `adapters/claims_writer` |
+| `OidcTokenPort` | control-plane OAuth token refresh (host-side) | `adapters/xai` |
+| `domain/run_bootstrap.py` | deep dispatch spine shared by hello, mission, steward, OAuth | — |
 
 `RunManager` binds the finalizer via `set_finalizer` after composition (breaks
 the construct-time `RunManager` ↔ `MissionManager` cycle). Tests pin the
-spine and finalizer routing at `tests/test_run_bootstrap.py`. SQLite (or other)
-`StatePort` swaps remain backlog (`16-roadmap.md`) — the Protocol is the
-stable seam.
+spine and finalizer routing at `tests/test_run_bootstrap.py`. Wire adapters
+must not leak httpx/redis types upward (executor + messaging error contracts
+parallel forge F7). SQLite (or other) `StatePort` swaps remain backlog
+(`16-roadmap.md`) — the Protocol is the stable seam.
 
 ## Addendum — v0 crystallization (2026-07-13)
 

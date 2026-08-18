@@ -11,7 +11,8 @@ import json
 import httpx
 import pytest
 
-from devcake.adapters.dagu.executor import DAG_NAME, DaguExecutor, DuplicateRun
+from devcake.adapters.dagu.executor import DAG_NAME, DaguExecutor
+from devcake.ports.executor import DuplicateRun
 
 
 def run_coro(c):
@@ -128,8 +129,9 @@ def test_delete_accepts_204_and_404():
     assert run_coro(ex.delete("ok")) is True
     assert run_coro(ex.delete("gone")) is True
     assert run_coro(ex.delete("running")) is False
-    with pytest.raises(httpx.HTTPStatusError):
-        run_coro(ex.delete("boom"))
+    # Unexpected statuses also report not-deleted instead of raising, so
+    # clear_dagu can keep an honest failed-list without a try/except per id.
+    assert run_coro(ex.delete("boom")) is False
 
 
 def test_list_all_run_ids_paginates():

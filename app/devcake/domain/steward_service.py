@@ -210,8 +210,12 @@ class StewardService:
                           >= self.config.concurrency.global_max):
                         outcome = "concurrency_deferred"
                     else:
+                        # same gate honesty as relations / run_now: stale and
+                        # omit ride into launch so mounts and mirror_repos
+                        # match what `_context_gate` just decided
                         run = await mgr.dispatch_steward_discovery(
-                            dt, fam, pending)
+                            dt, fam, pending, context_stale=ctx_stale,
+                            context_omit=ctx_omit)
                         if run is None:
                             outcome = "dispatch_skipped"   # workspace/empty
                         else:

@@ -38,9 +38,10 @@ log = logging.getLogger("devcake.missions")
 # review.py's step names cannot drift anymore.
 _PAST_GATE_STEPS = steps.past_gate_steps()
 
-# Synthetic finding when the adapter's hard stop truncated the fetch: the
-# gitea_issues adapter pages ASCENDING and drops the NEWEST entries at its
-# ceiling — exactly the ones the gate exists to catch — so truncation means
+# Synthetic finding when the adapter's hard stop truncated the fetch.
+# Which end a vendor drops is adapter-specific (Linear newest-first keeps
+# newest; Gitea/GitHub use paginate_rest_newest so the ceiling also keeps
+# newest when last-page is known) — but truncated always means
 # material-UNKNOWN, and unknown trips rather than passes (ADR-0031 D2).
 _TRUNCATED = "(feed truncated — material unknown)"
 

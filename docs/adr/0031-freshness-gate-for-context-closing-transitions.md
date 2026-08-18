@@ -1,8 +1,13 @@
 # ADR-0031 — The Freshness Gate: no context-closing transition on an unread feed
 
 - **Status:** accepted (2026-08-06); **phase 1 implemented** (REVIEW finalize +
-  sweep disclosure); **phase 2 pending** (decomposition cancel gate — specified
-  in Decision 5, not yet shipped)
+  sweep disclosure + the settle/force re-checks); **phase 2 pending**
+  (decomposition cancel gate — specified in Decision 5, not yet shipped);
+  **amended in-body** (budget → `AppConfig.budgets.freshness_rereviews` via
+  ADR-0033 D7 as amended; `ELEVATED_MARKERS` first member via ADR-0033;
+  oldest-first REST ceiling survival via ADR-0034 `paginate_rest_newest` —
+  product docs must not restate the original fixed-2 / empty-registry /
+  "gitea drops newest" prose as live contract)
 - **Amends (on implementation):** `docs/03-mission-lifecycle.md` (new §
   beside §4.1's conflict routing; §8a cross-reference), `docs/04-orchestrator.md`
   (finalize_review), `docs/15-errors-and-retries.md` §2 (a second
@@ -69,11 +74,15 @@ persisted, the run's receipt for what it read. The gate check is then a
 pure function of PMO content plus that receipt: fetch the feed **full**
 (shallow entries carry no ids in either adapter) and take every entry
 after the watermark id as *new*. Truncation direction is
-**adapter-specific and cannot be assumed benign**: Linear walks
-newest-first (its hard stop eats the oldest end), but gitea_issues pages
-*ascending* and drops the **newest** entries at its ceiling — exactly
-the ones the gate exists to catch. Rule: `Activity.truncated is True` ⇒
-material-UNKNOWN ⇒ the gate **trips** (fail loud, never pass).
+**adapter-specific and cannot be assumed benign**. As shipped, Linear
+walks newest-first (its hard stop eats the oldest end). Oldest-first
+REST vendors (Gitea/GitHub issues) originally dropped the **newest**
+pages at the ceiling — exactly the ones the gate exists to catch —
+until ADR-0034's `paginate_rest_newest` kept the newest pages when the
+vendor advertises a last page (legacy forward walk without a last-page
+hint can still lose the tail). Rule, unchanged either way:
+`Activity.truncated is True` ⇒ material-UNKNOWN ⇒ the gate **trips**
+(fail loud, never pass).
 
 Degradations, stated honestly: a legacy Run without the field falls
 back to entry-timestamp > dispatch-time (clock-skew-tolerant only to
@@ -92,10 +101,11 @@ non-empty AND either:
 - carries **no** `devcake:v1` sentinel — i.e. 🧑 HUMAN provenance per
   docs/03 §8a (steering posts bypass the sentinel by design), or
 - carries the sentinel but matches a marker class in the **elevated
-  registry** — a named allowlist in `markers.py`, shipped EMPTY. Future
-  cross-mission delivery (the routed `DISCOVERY-IN` class from the
-  2026-08-06 context-flow design) joins the registry when it ships;
-  nothing is elevated implicitly.
+  registry** — a named allowlist in `markers.py`. Shipped empty at this
+  ADR; **ADR-0033** fills the seam with `` `devcake:discovery-in:v1` ``
+  as the first member (the source-side `` `devcake:discovery:v1` `` is
+  deliberately *not* elevated — a mission's own harvest must never trip
+  its own gate). Nothing is elevated implicitly.
 
 Everything else the app posts — step markers, merge notes, replies,
 deliverable notes, and the gate's own trip directive — is sentinel'd
@@ -123,12 +133,16 @@ shape):
    material, the directive, AND the prior REVIEW's transcript via the
    activity payload — that is where incrementality comes from), fresh
    watermark (closing the sub-race for the next landing).
-3. `MAX_FRESHNESS_REREVIEWS = 2`, counted from the feed marker like
-   `MAX_CONFLICT_RESOLVES` — PMO-derivable, restart-proof, no local
-   counter. A freshness re-review is **not a failure retry**: it must
-   not consume `attempt_of_step` budget nor feed ADR-0026's brakes
-   (docs/15 §2 gains the carve-out beside ADR-0022's — the run being
-   re-run did not fail; its context did).
+3. **Count** from the feed marker like `MAX_CONFLICT_RESOLVES` —
+   PMO-derivable, restart-proof, no local counter. **Bound (amended):**
+   originally `MAX_FRESHNESS_REREVIEWS = 2` beside the conflict constant;
+   **ADR-0033 Decision 7 as amended** moved counting budgets to
+   `AppConfig.budgets.freshness_rereviews` (default **5**, `0` =
+   unlimited). Conflict-resolve stays at `MAX_CONFLICT_RESOLVES = 2` and
+   must not be conflated. A freshness re-review is **not a failure
+   retry**: it must not consume `attempt_of_step` budget nor feed
+   ADR-0026's brakes (docs/15 §2 gains the carve-out beside ADR-0022's
+   — the run being re-run did not fail; its context did).
 4. **Exhaustion:** finalize proceeds on the standing verdict, plus a
    sentinel'd ⚠ feed comment naming the unevaluated entries (and the
    mission's cumulative recorded cost — re-reviews are otherwise
@@ -209,9 +223,11 @@ design; shipped separately.
   detected (edits carry no new entry id — v1 watches arrivals only);
   the human-attended `DEVCAKE-MERGE` close and operator cancels are
   exempt by doctrine, not oversight.
-- The `08` §1 caveat pattern applies: `MAX_FRESHNESS_REREVIEWS` is a
-  constant beside `MAX_CONFLICT_RESOLVES`, not operator config, until
-  someone demonstrates a need — knobs are debt too.
+- **Amended (ADR-0033 D7):** the re-review **bound** is operator config
+  (`budgets.freshness_rereviews`, default 5, `0` = unlimited). The
+  original "constant beside `MAX_CONFLICT_RESOLVES`" stance is
+  superseded for this counting budget only — conflict-resolve remains a
+  fixed `MAX_CONFLICT_RESOLVES = 2`. Marker counting stays feed-derived.
 
 ## Related
 

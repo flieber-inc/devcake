@@ -46,13 +46,15 @@ Appended at approve-finalize as a marked section: `---` +
 `` `devcake:handoff:v1` `` + the note. Description, not a feed comment,
 because (a) **zero extra PMO calls at dispatch** — `resolve_blocker_work`
 already fetches every blocker Mission whole, description included, and
-today throws the narrative away; (b) **immunity to feed truncation** — the
-gitea adapter's hard stop drops the *newest* feed entries (ADR-0031's
-correction), which is exactly where a close-time comment would sit; (c) the
-`devcake-repo:`/decomposition-footer precedent: descriptions already carry
-machine-readable markers. The trade accepted with eyes open: a description
-append notifies no one — the feed remains where humans watch — and the
-founder amends by *editing in place* rather than superseding by comment.
+today throws the narrative away; (b) **immunity to feed truncation** — a
+close-time feed comment can fall off either end of a hard-stopped history
+(ADR-0031 D2: truncated is material-UNKNOWN; which end an adapter drops is
+vendor-specific), while a description marker is not subject to the feed
+ceiling; (c) the `devcake-repo:`/decomposition-footer precedent: descriptions
+already carry machine-readable markers. The trade accepted with eyes open: a
+description append notifies no one — the feed remains where humans watch —
+and the founder amends by *editing in place* rather than superseding by
+comment.
 Parse rule: the **last** marker line wins (`markers.handoff_of`) — appends
 accumulate across re-approves, and a human-authored marker line is a
 feature (the description is operator-owned), not a forgery.

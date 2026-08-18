@@ -208,6 +208,34 @@ def _default_forge() -> str:
     return DEFAULT_FORGE
 
 
+def _validate_known_forge(v: str) -> str:
+    """Registry check shared by RepoInstance and SkillSource."""
+    from .adapters.registry import forges  # lazy: config stays import-light
+    if v not in forges():
+        raise ValueError(f"unknown forge {v!r} — registered: "
+                         f"{sorted(forges())}")
+    return v
+
+
+def _validate_forge_url_shape(v: str) -> str:
+    """Forge-neutral host + owner/repo path rule (ISSUES #10). Empty is
+    allowed for first-boot / unconfigured cards. Shared by RepoInstance and
+    SkillSource so the two connection classes cannot drift."""
+    if not v:
+        return v
+    from urllib.parse import urlsplit
+    parts = urlsplit(v if "://" in v else f"https://{v}")
+    path = (parts.path or "").strip("/").removesuffix(".git")
+    segs = [s for s in path.split("/") if s]
+    # every supported forge addresses a repo as at least
+    # <owner-or-group>/<repo> (nested groups add more segments)
+    if not parts.netloc or len(segs) < 2:
+        raise ValueError(
+            f"invalid repository URL {v!r}: need a host and an "
+            f"owner/repo project path (e.g. https://<host>/owner/repo)")
+    return v
+
+
 class RepoInstance(BaseModel):
     """One configured forge repository (instances-with-identities; secrets GUI-stored).
     An instance with an empty url is valid but unconfigured (first boot)."""
@@ -240,31 +268,12 @@ class RepoInstance(BaseModel):
     @field_validator("forge")
     @classmethod
     def _known_forge(cls, v):
-        from .adapters.registry import forges  # lazy: config stays import-light
-        if v not in forges():
-            raise ValueError(f"unknown forge {v!r} — registered: "
-                             f"{sorted(forges())}")
-        return v
+        return _validate_known_forge(v)
 
     @field_validator("url")
     @classmethod
     def _url_shape(cls, v: str) -> str:
-        """Reject malformed forge URLs that would crash adapter constructors
-        after a config PUT has already persisted (ISSUES #10). Empty is allowed
-        for first-boot until the operator configures a repo."""
-        if not v:
-            return v
-        from urllib.parse import urlsplit
-        parts = urlsplit(v if "://" in v else f"https://{v}")
-        path = (parts.path or "").strip("/").removesuffix(".git")
-        segs = [s for s in path.split("/") if s]
-        # forge-neutral rule: every supported forge addresses a repo as at
-        # least <owner-or-group>/<repo> (nested groups add more segments)
-        if not parts.netloc or len(segs) < 2:
-            raise ValueError(
-                f"invalid repository URL {v!r}: need a host and an "
-                f"owner/repo project path (e.g. https://<host>/owner/repo)")
-        return v
+        return _validate_forge_url_shape(v)
 
     @property
     def configured(self) -> bool:
@@ -330,6 +339,16 @@ class SkillSource(BaseModel):
     # optional path inside the repository holding the `<skill>/SKILL.md`
     # dirs ("" = repo root)
     subdir: str = ""
+
+    @field_validator("forge")
+    @classmethod
+    def _known_forge(cls, v):
+        return _validate_known_forge(v)
+
+    @field_validator("url")
+    @classmethod
+    def _url_shape(cls, v: str) -> str:
+        return _validate_forge_url_shape(v)
 
     @field_validator("subdir")
     @classmethod

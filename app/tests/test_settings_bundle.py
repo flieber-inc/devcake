@@ -970,3 +970,140 @@ def test_wrong_type_json_secret_reads_as_absent_not_attribute_error(
         "present": False, "updated_at": None}
     with pytest.raises(ValueError, match="refusing read-modify-write"):
         secrets.write_connection_secret("pmo", "linear", "api_key", "v")
+
+
+# ── skill-source connection secrets (CAKE-65) ────────────────────────────────
+
+def test_serialize_includes_skill_source_connection_secrets(monkeypatch, tmp_path):
+    """Skill-source tokens ride user-facing snapshots with the skill card —
+    same live-key rule as pmo/repo (tutorial 02; CONNECTION_FIELDS already
+    allowlists skill). Orphans without a card stay excluded; rollback keeps
+    them when include_orphan_secrets=True."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="shelf", url="https://github.com/acme/skills"),
+    ]
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "skill_ro_secret_value_0042")
+    secrets.write_connection_secret("skill", "ghost", "token_ro",
+                                    "skill_orphan_ghost_0043")
+    facing = sb.serialize_current(cfg, dts, include_secrets=True)
+    conns = facing["secrets"]["connections"]
+    assert conns["skill-shelf"] == {"token_ro": "skill_ro_secret_value_0042"}
+    assert "skill-ghost" not in conns
+    assert "pmo-linear" in conns and "repo-main" in conns
+    rollback = sb.serialize_current(cfg, dts, include_secrets=True,
+                                    include_orphan_secrets=True)
+    assert rollback["secrets"]["connections"]["skill-ghost"] == {
+        "token_ro": "skill_orphan_ghost_0043"}
+
+
+def test_serialize_apply_roundtrip_keeps_skill_source_secrets(monkeypatch,
+                                                              tmp_path):
+    """Operator-visible contract: a secrets-bearing snapshot of a world with
+    a skill source restores those tokens on apply (and does not wipe them as
+    'extra' unknowns)."""
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path / "src")
+    cfg, dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="shelf", url="https://github.com/acme/skills"),
+    ]
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "skill_ro_roundtrip_0050")
+    bundle = sb.serialize_current(cfg, dts, include_secrets=True)
+    assert "skill-shelf" in bundle["secrets"]["connections"]
+
+    dst = tmp_path / "dst"
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(dst))
+    monkeypatch.setattr(config_mod, "CONFIG_PATH",
+                        dst / "config" / "config.yaml")
+    cfg2, dts2 = config_mod.AppConfig(), {}
+    # seed a live skill token that must survive replace-the-world only when
+    # the bundle carries it — and must not be deleted as an unknown key
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "preexisting-should-be-overwritten")
+    result = sb.apply_bundle(bundle, config=cfg2, dev_types=dts2,
+                             reload=lambda: None)
+    assert "secrets" in result["applied"]
+    assert secrets.read_connection_secret("skill", "shelf", "token_ro") \
+        == "skill_ro_roundtrip_0050"
+    assert any(s.name == "shelf" for s in cfg2.skill_sources)
+    again = sb.serialize_current(cfg2, dts2, include_secrets=True)
+    assert again["secrets"]["connections"]["skill-shelf"] == {
+        "token_ro": "skill_ro_roundtrip_0050"}
+
+
+def test_config_put_deletes_removed_skill_source_secrets(monkeypatch, tmp_path):
+    """Removing a skill_sources card deletes skill-{name} secrets — same
+    best-effort contract as pmo/repo instance removal."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="shelf", url="https://github.com/acme/skills"),
+    ]
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "skill_ro_to_delete_0060")
+    assert (tmp_path / "secrets" / "connections" / "skill-shelf.json").exists()
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {"skill_sources": []}
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert cfg.skill_sources == []
+    assert not (tmp_path / "secrets" / "connections" / "skill-shelf.json").exists()
+    assert secrets.read_connection_secret("skill", "shelf", "token_ro") == ""
+
+
+def test_config_put_renames_skill_source_moves_secrets(monkeypatch, tmp_path):
+    """In-place rename (same card index, new name) moves the connection
+    secret file — tokens follow the new name; no orphan under the old."""
+    import asyncio
+
+    from devcake.api import config_service
+
+    sb, _, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
+    cfg, _dts = _world(config_mod, secrets, tpl)
+    cfg.skill_sources = [
+        config_mod.SkillSource(
+            name="shelf", url="https://github.com/acme/skills"),
+    ]
+    secrets.write_connection_secret("skill", "shelf", "token_ro",
+                                    "skill_ro_rename_0061")
+    secrets.write_connection_secret("skill", "shelf", "token",
+                                    "skill_rw_rename_0062")
+
+    monkeypatch.setattr(config_service, "save_config", lambda c: None)
+    monkeypatch.setattr(config_service, "validate_config_semantics",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(config_service, "dry_run_adapters", lambda *a, **k: None)
+
+    body = {
+        "skill_sources": [
+            {"name": "bookshelf", "forge": "github",
+             "url": "https://github.com/acme/skills",
+             "default_branch": "", "subdir": ""},
+        ],
+    }
+    asyncio.new_event_loop().run_until_complete(
+        config_service.apply_config_patch(
+            body, config=cfg, dev_types={}, managers={}, reload=lambda: None))
+    assert [s.name for s in cfg.skill_sources] == ["bookshelf"]
+    assert secrets.read_connection_secret("skill", "bookshelf", "token_ro") \
+        == "skill_ro_rename_0061"
+    assert secrets.read_connection_secret("skill", "bookshelf", "token") \
+        == "skill_rw_rename_0062"
+    assert not (tmp_path / "secrets" / "connections" / "skill-shelf.json").exists()
+    assert secrets.read_connection_secret("skill", "shelf", "token_ro") == ""

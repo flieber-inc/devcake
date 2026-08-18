@@ -1,6 +1,8 @@
 # ADR-0031 — The Freshness Gate: no context-closing transition on an unread feed
 
-- **Status:** accepted (2026-08-06)
+- **Status:** accepted (2026-08-06); **phase 1 implemented** (REVIEW finalize +
+  sweep disclosure); **phase 2 pending** (decomposition cancel gate — specified
+  in Decision 5, not yet shipped)
 - **Amends (on implementation):** `docs/03-mission-lifecycle.md` (new §
   beside §4.1's conflict routing; §8a cross-reference), `docs/04-orchestrator.md`
   (finalize_review), `docs/15-errors-and-retries.md` §2 (a second

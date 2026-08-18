@@ -1,6 +1,6 @@
 # ADR-0008 — Pluggable PMO and Forge Adapters
 
-**Status:** accepted (2026-07-13) · **Relates to:** ADR-0003 (PMO as source of truth), ADR-0004 (label namespace), ADR-0006/0007 (Linear-specific policies)
+**Status:** accepted (2026-07-13); **partially superseded** — D4/D5/D7 and the multi-instance "future" consequence are struck (schema v4 / ADR-0009 / live `ForgeCapabilities` + `cancel_mission`). · **Relates to:** ADR-0003 (PMO as source of truth), ADR-0004 (label namespace), ADR-0006/0007 (Linear-specific policies)
 
 > **Supersession note (runtime today — do not read D1 construction site / D4–D5 / D7 as current law):**
 > multi-instance is **0..N** PMO and repos (ADR-0009 / schema v4); `ForgeCapabilities`

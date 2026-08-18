@@ -1,12 +1,15 @@
 # ADR-0035 — Memory-compatible notebooks, the `.claims/` conveyor, and Scheduled Tasks
 
-**Status:** Accepted (2026-08-14). Decided across three Fable↔Grok debate
-rounds plus founder rulings (D1–D12, F1′–F4 — the
+**Status:** Accepted (2026-08-14); amends ADR-0020 (memory merge guard) and the
+ADR-0016 addendum (shared `context_sourcing_strict` knob). Decided across
+three Fable↔Grok debate rounds plus founder rulings (D1–D12, F1′–F4 — the
 `devcake-internal/memorytalk` repo holds the full record); built by
-PR #150 + remediation. **Not "shipped"**: docs/16 gates that claim on the
-pre-registered pilot receipts (`PLAN_MEMORY.md` §14–§15).
-`PLAN_MEMORY.md` (repo root) is the byte-frozen build contract this ADR
-distills; it retires into the pilot write-up once the receipts land.
+PR #150 + remediation. **Not "shipped"**: docs/16 still gates that claim on
+pre-registered throwaway-box A/B pilot receipts (historically tracked as
+`PLAN_MEMORY.md` §14–§15). Distilled decisions live **in this ADR**; the
+former root `PLAN_MEMORY.md` build plan is **not in the repository** (deleted
+after the decisions were accepted here) and must not be treated as a live
+openable contract.
 
 ## Context
 
@@ -114,7 +117,8 @@ seeded by the app.
 
 - Memory quality is entirely the operator's: DevCake guarantees
   delivery, gating, and provenance — never that a note is true or that
-  a Dev reads it. The pre-registered A/B (`PLAN_MEMORY.md` §15) must be
+  a Dev reads it. The pre-registered A/B pilot (historically
+  `PLAN_MEMORY.md` §15; criteria now owned by docs/16 residuals) must be
   allowed to report "nobody consulted the notebook"; claims-seen and
   claims-drained are reported even if they embarrass the feature.
 - Chosen risk, on the record: the full loop (mounts, conveyor, cron,
@@ -130,8 +134,9 @@ seeded by the app.
 
 ## References
 
-`PLAN_MEMORY.md` (build contract, §17 rulings log); ADR-0014 (operator
-repos), ADR-0016 addendum (strict knob lineage), ADR-0020 (merge
-chokepoint, amended here), ADR-0024/0025 (mirror + provision), ADR-0033
-(discoveries; D7 steward non-authorship); docs/02/03/07/09/10/11/14
-carry the seam-level detail.
+Historical build plan `PLAN_MEMORY.md` (retired / not in-tree; §17 rulings
+log lived there during design); ADR-0014 (operator repos), ADR-0016 addendum
+(strict knob lineage), ADR-0020 (merge chokepoint, amended here),
+ADR-0024/0025 (mirror + provision), ADR-0033 (discoveries; D7 steward
+non-authorship); docs/02/03/07/09/10/11/14/16 carry the seam-level detail
+and the pilot/"shipped" residual gate.

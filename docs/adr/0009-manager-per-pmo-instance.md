@@ -1,6 +1,6 @@
 # ADR-0009 — One MissionManager per PMO instance (schema v3 multi-PMO)
 
-- **Status:** accepted (2026-07-14, docs/16 M9)
+- **Status:** accepted (2026-07-14, docs/16 M9); **amended 2026-07-28** (cross-instance blocker resolution — see Amendment below)
 - **Context:** F2 makes DevCake PMO-independent: one deployment oversees N≥1 PMO instances at once, with identities that keep branches, run ids, and ACL names collision-free. The entire orchestrator package was written against a single `self.pmo` and pmo_id-keyed advisory state.
 
 ## Decision

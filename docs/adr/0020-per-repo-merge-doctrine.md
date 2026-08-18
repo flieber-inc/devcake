@@ -1,6 +1,8 @@
 # ADR-0020 — Per-repository merge doctrine
 
-- **Status:** accepted (2026-07-29)
+- **Status:** accepted (2026-07-29); **amended by ADR-0035** (memory-bound merge
+  targets additionally require global `memory_auto_merge`, default OFF — see
+  banner below)
 - **Context:** `auto_merge`, `auto_resolve_merge_conflicts`, and
   `merge_retry_window_minutes` lived as deployment-global fields on
   `AppConfig` and as a master switch at the bottom of the Repos page. Every

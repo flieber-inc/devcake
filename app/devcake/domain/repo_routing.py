@@ -82,10 +82,13 @@ def resolve_repo(mission: "Mission", instance: "PMOInstance",
             return None, (f"repo '{marker}' is a REFERENCE repo of this "
                           f"instance (read-only context) — work cannot route "
                           f"to it; fix the marker")
-        if allowed and marker not in allowed:
+        if marker not in allowed:
             # the instance's repo SET is its allowed set (item 2): a marker
             # naming a configured-but-unlisted repo gates rather than
-            # silently crossing the instance boundary
+            # silently crossing the instance boundary. Empty set (`[]` =
+            # per-mission internal only) lists nothing — every external
+            # marker is unlisted; do NOT short-circuit on falsy `allowed`
+            # (that made `[]` more permissive than a non-empty set).
             return None, (f"repo '{marker}' is not in this PMO instance's "
                           f"repo set {allowed} — add it to the instance's "
                           f"repositories or fix the marker")

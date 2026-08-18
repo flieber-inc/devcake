@@ -224,6 +224,31 @@ def test_classify_context_failures_strict_and_open():
     assert omit == {"skillrepo"}               # never synced
 
 
+def test_open_mode_uses_has_last_good_not_bare_dir(tmp_path):
+    """Callers must pass RepoCache.has_last_good (not mirror_path.is_dir):
+    a bare-init dir with empty heads is never-synced → omit under open mode."""
+    from test_repo_mirror import R1, make_cache, run_coro
+    cache, _, _ = make_cache(tmp_path, [R1])
+    # simulate failed first sync: bare dir exists, no branch content
+    p = cache.mirror_path("alpha")
+    p.mkdir(parents=True)
+    (p / "refs" / "heads").mkdir(parents=True)
+    assert p.is_dir() and not cache.has_last_good("alpha")
+    why = {"alpha": "fetch: fatal: unable to access"}
+    defer, stale, omit = classify_context_failures(
+        why, context_cards={"alpha"}, strict=False,
+        has_mirror=cache.has_last_good)
+    assert defer == {} and stale == set() and omit == {"alpha"}
+    # successful sync then fail → last-good → stale_cache path
+    assert run_coro(cache.sync_one("alpha")).ok
+    (p / "refs" / "heads" / "main").write_text("c" * 40 + "\n")
+    assert cache.has_last_good("alpha")
+    defer, stale, omit = classify_context_failures(
+        why, context_cards={"alpha"}, strict=False,
+        has_mirror=cache.has_last_good)
+    assert defer == {} and stale == {"alpha"} and omit == set()
+
+
 def test_skill_source_cards_is_gate_only_never_sourcing(tmp_path, monkeypatch):
     """Skill cards feed the mirror GATE and the payload — never the clone
     set. A gate snapshot that includes `skillrepo` (145 stamps the union on

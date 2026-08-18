@@ -94,7 +94,9 @@ def classify_context_failures(why: dict[str, str], *, context_cards: set[str],
     Work / reference / blocker failures always defer. Memory and
     skill-source cards are toggle-governed: strict ⇒ defer (provisioning
     family, no attempt); open ⇒ last-good mirror is stale_cache, never-
-    synced is omit-and-continue.
+    synced is omit-and-continue. ``has_mirror`` must mean last-good
+    content (``RepoCache.has_last_good``), not bare-dir presence —
+    ``mirror_path.is_dir`` is true after a failed first sync too.
     """
     defer: dict[str, str] = {}
     stale: set[str] = set()

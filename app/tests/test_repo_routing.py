@@ -97,6 +97,24 @@ def test_repo_set_routing_semantics():
     assert resolve_repo(_m(), INST_SET, REPOS, [_run("beta")]) == ("beta", None)
 
 
+def test_empty_repo_set_marker_gates_not_external():
+    """`repos: []` is zero-repo / per-mission internal only (docs/16 item 2).
+    A `devcake-repo:` marker naming a configured external card must GATE as
+    unlisted — never silently become a work target. The prior
+    `if allowed and marker not in allowed` short-circuit treated the empty
+    set as more permissive than a non-empty set (false-green trap for any
+    routing test that only exercised unmarked empty instances)."""
+    # empty work set + valid known marker → gate (not beta)
+    name, reason = resolve_repo(_m("`devcake-repo:beta`"), INST, REPOS, [])
+    assert name is None, "empty instance.repos must not accept external markers"
+    assert "repo set" in reason and "beta" in reason
+    # still not REASON_ZERO_REPO — live path must NOT re-route this to internal
+    assert reason is not REASON_ZERO_REPO
+    # listed marker still works when the set is non-empty
+    assert resolve_repo(_m("`devcake-repo:beta`"), INST_SET, REPOS, []) \
+        == ("beta", None)
+
+
 def test_malformed_marker_gates_instead_of_silent_default():
     """Audit A26: a `devcake-repo:`-shaped but unparseable marker (hyphens,
     >12 chars, bad leading char) previously fell through to the instance

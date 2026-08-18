@@ -441,7 +441,8 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         defer, stale_cards, omit_cards = classify_context_failures(
             why, context_cards=memory_cards | skill_cards,
             strict=mgr.config.context_sourcing_strict,
-            has_mirror=lambda n: mgr.repo_cache.mirror_path(n).is_dir())
+            has_mirror=getattr(mgr.repo_cache, "has_last_good",
+                               lambda n: False))
         if defer:
             # provisioning family (ADR-0025) — no container, no attempt.
             # Never DEV_BAD_OUTPUT; never a Dev-type breaker.

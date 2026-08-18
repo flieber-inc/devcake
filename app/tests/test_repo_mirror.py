@@ -315,6 +315,48 @@ def test_eligible_excludes_internal_and_unknown(tmp_path):
     assert not cache.eligible("never-configured")
 
 
+def test_has_last_good_requires_branch_content_not_bare_dir(tmp_path):
+    """Open-mode stale_cache (ADR-0035 / PLAN_MEMORY §3.5) means a prior
+    successful sync left branch content — not that a bare dir exists.
+    Bare `git init --bare` alone (fetch never succeeded) must be False so
+    classify_context_failures omits rather than proceeding on empty heads."""
+    cache, _, _ = make_cache(tmp_path, [R1])
+    assert not cache.has_last_good("alpha")
+    # bare dir only — the pre-fetch state after a failed first sync
+    p = cache.mirror_path("alpha")
+    p.mkdir(parents=True)
+    (p / "refs" / "heads").mkdir(parents=True)
+    (p / "HEAD").write_text("ref: refs/heads/main\n")
+    assert p.is_dir() and not cache.has_last_good("alpha")
+    # after a successful sync the ledger + heads are populated
+    assert run_coro(cache.sync_one("alpha")).ok
+    # materialize a branch ref the way a real fetch would (fake git does not)
+    (p / "refs" / "heads" / "main").write_text("a" * 40 + "\n")
+    assert cache.has_last_good("alpha")
+    # failed re-sync keeps last-good (synced_at preserved; heads remain)
+    def fail_fetch(args):
+        if "fetch" in args:
+            return GitResult(128, "", "fatal: unable to access")
+        return None
+    cache2, _, _ = make_cache(tmp_path / "m2", [R1], script=fail_fetch)
+    good = cache2.mirror_path("alpha")
+    good.mkdir(parents=True)
+    (good / "refs" / "heads").mkdir(parents=True)
+    (good / "refs" / "heads" / "main").write_text("b" * 40 + "\n")
+    # seed a prior success in the ledger without going through git
+    from datetime import datetime, timezone
+    from devcake.domain.repo_mirror import MirrorStatus
+    cache2.ledger["alpha"] = MirrorStatus(
+        ok=True, synced_at=datetime.now(timezone.utc),
+        attempted_at=datetime.now(timezone.utc))
+    cache2._synced_mono["alpha"] = cache2._monotonic()
+    assert cache2.has_last_good("alpha")
+    st = run_coro(cache2.sync_one("alpha"))
+    assert not st.ok and st.synced_at is not None
+    assert cache2.has_last_good("alpha")
+    assert NullRepoCache().has_last_good("anything") is False
+
+
 # ── hygiene ──────────────────────────────────────────────────────────────────
 
 def test_delete_mirror_renames_aside_then_removes(tmp_path):

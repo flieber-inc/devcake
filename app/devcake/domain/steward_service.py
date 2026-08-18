@@ -258,16 +258,11 @@ class StewardService:
         stale: set[str] = set()
         omit: set[str] = set()
         if not ok:
-            def _has_mirror(n):
-                mp = getattr(self.mgr.repo_cache, "mirror_path", None)
-                if not callable(mp):
-                    return False
-                p = mp(n)
-                return bool(getattr(p, "is_dir", lambda: False)())
+            has_last = getattr(self.mgr.repo_cache, "has_last_good", None)
             defer, stale, omit = classify_context_failures(
                 why, context_cards=memory_cards | skill_cards,
                 strict=self.config.context_sourcing_strict,
-                has_mirror=_has_mirror)
+                has_mirror=has_last if callable(has_last) else (lambda n: False))
             if defer:
                 return False, defer, set(), set()
         # §3.5 second half: dangling / uncredentialed internal notebooks

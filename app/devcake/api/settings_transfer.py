@@ -63,13 +63,25 @@ def bundle_filename() -> str:
 
 async def export_settings_body(body: dict, *, config, dev_types,
                                skill_service) -> PlainTextResponse:
-    sections = body.get("sections") or {}
+    raw_sections = body.get("sections")
+    if raw_sections is None:
+        sections: dict = {}
+    elif not isinstance(raw_sections, dict):
+        raise HTTPException(422, "sections must be an object")
+    else:
+        sections = raw_sections
     inc_cfg = bool(sections.get("config"))
     inc_sec = bool(sections.get("secrets"))
     inc_env = bool(sections.get("setup_env"))
     if not (inc_cfg or inc_sec or inc_env):
         raise HTTPException(422, "select at least one section to export")
-    enc = body.get("encryption") or {}
+    raw_enc = body.get("encryption")
+    if raw_enc is None:
+        enc: dict = {}
+    elif not isinstance(raw_enc, dict):
+        raise HTTPException(422, "encryption must be an object")
+    else:
+        enc = raw_enc
     passphrase = None
     if inc_sec or inc_env:
         mode = enc.get("mode")
@@ -86,6 +98,7 @@ async def export_settings_body(body: dict, *, config, dev_types,
             raise HTTPException(422, "exports containing secrets or setup "
                                      "values require an encryption choice")
     source = body.get("source") or "current"
+    profile_name: str | None = None
     if source == "current":
         skill_payloads = None
         if inc_cfg and body.get("include_skills"):
@@ -96,18 +109,24 @@ async def export_settings_body(body: dict, *, config, dev_types,
             include_config=inc_cfg, include_secrets=inc_sec,
             include_credential_files=inc_sec and bool(body.get("include_credential_files")),
             include_setup_env=inc_env, skill_payloads=skill_payloads)
-    else:
-        name = str((source or {}).get("profile") or "")
+    elif isinstance(source, dict):
+        raw_profile = source.get("profile")
+        if not isinstance(raw_profile, str) or not raw_profile:
+            raise HTTPException(
+                422,
+                "source must be \"current\" or {\"profile\": \"<name>\"}")
+        profile_name = raw_profile
         if inc_env:
             raise HTTPException(422, "profiles never hold setup values — "
                                      "export setup_env from current settings")
         try:
-            stored = profiles_store.read_profile(name)
+            stored = profiles_store.read_profile(profile_name)
         except BundleError as e:
             raise HTTPException(e.status, str(e))
         for want, key in ((inc_cfg, "config"), (inc_sec, "secrets")):
             if want and key not in stored:
-                raise HTTPException(422, f"profile {name!r} has no {key} section")
+                raise HTTPException(
+                    422, f"profile {profile_name!r} has no {key} section")
         bundle = {k: v for k, v in stored.items() if k != "name"}
         bundle["sections"] = [s for s in ("config", "secrets")
                               if (s == "config" and inc_cfg) or (s == "secrets" and inc_sec)]
@@ -115,12 +134,16 @@ async def export_settings_body(body: dict, *, config, dev_types,
             bundle.pop("config", None)
         if not inc_sec:
             bundle.pop("secrets", None)
+    else:
+        raise HTTPException(
+            422,
+            "source must be \"current\" or {\"profile\": \"<name>\"}")
     if (inc_sec or inc_env) and passphrase is None:
         bundle["plaintext_secrets"] = True
     if passphrase is not None:
         bundle = protect_bundle(bundle, passphrase)
     audit_event("settings_exported",
-                f"source={'current' if source == 'current' else source.get('profile')} "
+                f"source={'current' if source == 'current' else profile_name} "
                 f"sections={'+'.join(bundle.get('sections') or [])} "
                 f"encrypted={passphrase is not None}")
     return PlainTextResponse(

@@ -132,6 +132,30 @@ def test_export_from_profile_source(monkeypatch, tmp_path):
     assert e.value.status_code == 404
 
 
+@pytest.mark.parametrize("body,needle", [
+    ({"source": "myprofile", "sections": {"config": True}}, "source"),
+    ({"source": ["current"], "sections": {"config": True}}, "source"),
+    ({"source": "current", "sections": "config"}, "sections"),
+    ({"sections": ALL, "encryption": "passphrase"}, "encryption"),
+    ({"source": {"profile": ""}, "sections": {"config": True}}, "source"),
+    ({"source": {"name": "base"}, "sections": {"config": True}}, "source"),
+])
+def test_export_rejects_bad_body_shapes_with_422(monkeypatch, tmp_path, body, needle):
+    """Bad request shapes must be 422, never AttributeError / 500.
+
+    Contract: source is omit/\"current\" or {\"profile\": \"<name>\"};
+    sections and encryption (when present) must be objects.
+    Bare-string profile names are not accepted as shorthand.
+    """
+    from fastapi import HTTPException
+    app_main, *_ = _wire_app(monkeypatch, tmp_path)
+    with pytest.raises(HTTPException) as e:
+        run_coro(app_main.export_settings(body))
+    assert e.value.status_code == 422
+    assert needle in str(e.value.detail).lower()
+    assert "AttributeError" not in str(e.value.detail)
+
+
 # ── preview + import ─────────────────────────────────────────────────────────
 
 def test_preview_needs_passphrase_then_no_values(monkeypatch, tmp_path):

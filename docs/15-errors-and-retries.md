@@ -23,7 +23,7 @@ prose.
 | `PMO_GONE` | *taxonomy residual* — no dedicated code path today (a mid-run delete surfaces as ordinary PMO read failure / EXTERNAL_TRANSITION at finalize, not a named `PMO_GONE` branch) | external, informational |
 | `FORGE_TRANSIENT` | forge 429/5xx/network; probe-classified transient failures | retryable |
 | `FORGE_PERMANENT` | auth failure, branch protection blocks merge | config problem |
-| `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint — incl. the ADR-0025 sentinel/marker family: provision found the wrong bind dir, or the harness step found no/mismatched `provisioned` marker — the artifact carries owner/mode/listing forensics); vanished container | counted attempt |
+| `DEV_CRASH` | exit 10 (harness crash), 20 (entrypoint — incl. the ADR-0025 sentinel/marker family: provision found the wrong bind dir, or the harness step found no/mismatched `provisioned` marker — the artifact carries owner/mode/listing forensics); orphan post-mortem enrichment of those codes | counted attempt |
 | `DEV_MCP_SETUP` | exit 14: the Dev Type **entrypoint script** failed (or a legacy prelude command hit the 300 s cap); `run.error` carries the command + stderr tail | counted attempt |
 | `DEV_TIMEOUT` | app watchdog kill via Dagu stop → Run `timed_out` (not an entrypoint exit code) | counted attempt |
 | `DEV_ORPHANED` | reconciliation found the Dagu run dead while the app was away → Run `orphaned` (post-mortem enrichment may then upgrade `run.error` to a classified exit — §2 note); also stamped by the multi-instance router on a run whose PMO instance is no longer configured (state `failed`, deliberately — the condition is a genuine orphan) | counted attempt |

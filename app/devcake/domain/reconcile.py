@@ -5,6 +5,7 @@ import logging
 import re
 
 from . import failure_taxonomy
+from .run import utcnow
 
 log = logging.getLogger("devcake.reconcile")
 
@@ -14,6 +15,28 @@ log = logging.getLogger("devcake.reconcile")
 # membership (10/11/20 recovered, 12 refused) independently of this regex.
 _EXIT_RE = re.compile(r"exit status (%s)" % "|".join(
     str(c) for c in failure_taxonomy.ORPHAN_RECOVERABLE_EXIT_CODES))
+
+# Terminal Dagu run labels/statuses. One set for reconcile + watchdog so a
+# cancel* spelling cannot be a ghost on boot and a kill mid-flight (docs/04
+# §5–6). "cancel" substring covers cancelled/canceled without listing both.
+_DEAD_DAGU = frozenset({"failed", "aborted", "error", "cancelled", "canceled"})
+
+
+def dagu_run_not_alive(status: dict | None) -> bool:
+    """True when executor.status is missing (404) or the Dagu run is terminal.
+
+    Shared by reconcile (boot orphan) and the watchdog liveness branch so
+    dead-status membership cannot drift between the two kill paths.
+    """
+    if status is None:
+        return True
+    detail = (status.get("dagRunDetails") or {})
+    st = str(detail.get("status", "")).lower()
+    label = str(detail.get("statusLabel", "")).lower()
+    if st in _DEAD_DAGU or label in _DEAD_DAGU:
+        return True
+    # belt: unknown "…cancel…" labels (Dagu stop variants) still count as dead
+    return "cancel" in st or "cancel" in label
 
 
 def _restamp_store_gen(store, run) -> None:
@@ -60,15 +83,18 @@ async def reconcile_runs(manager) -> None:
             continue
         try:
             status = await executor.status(r.run_id)
-            st = str(((status or {}).get("dagRunDetails") or {}).get("status", "")).lower()
-            label = str(((status or {}).get("dagRunDetails") or {}).get("statusLabel", "")).lower()
-            if status is None or st in ("failed", "aborted", "error") \
-                    or label in ("failed", "aborted", "error", "cancelled"):
+            if dagu_run_not_alive(status):
                 try:
                     node_errors = await executor.node_errors(r.run_id) if status else []
                 except Exception:  # noqa: BLE001 — error-detail probe is optional enrichment; empty detail is the safe default, the orphan kill proceeds
                     node_errors = []
                 await manager.kill(r, "orphaned", "reconciliation: dagu run not alive")
+                # Enrich only a run that is still orphaned on disk — if kill
+                # aborted (state moved / wipe), do not scribble error_class
+                # onto a live or missing record.
+                fresh = store.get(r.run_id)
+                if fresh is None or fresh.state != "orphaned":
+                    continue
                 detail = " ".join(str(item.get("error") or "") for item in node_errors)
                 # enrich the classified exits (13 clone/forge, 14 MCP setup,
                 # 15 harness fault, 16 turn budget) when the app was down at
@@ -85,14 +111,29 @@ async def reconcile_runs(manager) -> None:
                 # trip a breaker from reconcile.
                 exit_m = _EXIT_RE.search(detail.lower())
                 if finalizer and exit_m:
-                    r.error = finalizer.dev_failure_error(
-                        r, {"exit_code": int(exit_m.group(1)),
-                            "error_detail": detail})
-                    store.save(r)
+                    fresh.error = finalizer.dev_failure_error(
+                        fresh, {"exit_code": int(exit_m.group(1)),
+                                "error_detail": detail})
+                    store.save(fresh)
             else:
                 _restamp_store_gen(store, r)
-                log.info("reconciliation: adopted in-flight run %s (dagu: %s)",
-                         r.run_id, label or st or "running")
+                # docs/04 §6: Dagu running → mark running. A crash that lost
+                # run.started left the record at dispatched; without promotion
+                # heartbeat liveness never arms (state must be running) and a
+                # healthy container only dies at wall-clock timeout.
+                if r.state == "dispatched":
+                    r.state = "running"
+                    if r.started_at is None:
+                        r.started_at = utcnow()
+                    store.save(r)
+                    log.info("reconciliation: promoted dispatched→running %s",
+                             r.run_id)
+                else:
+                    detail = (status or {}).get("dagRunDetails") or {}
+                    label = str(detail.get("statusLabel",
+                                           detail.get("status", ""))).lower()
+                    log.info("reconciliation: adopted in-flight run %s (dagu: %s)",
+                             r.run_id, label or "running")
         except Exception:
             log.exception("reconciliation failed for %s", r.run_id)
     try:

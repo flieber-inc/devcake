@@ -7,6 +7,7 @@ import os
 import time
 from datetime import timedelta
 
+from .reconcile import dagu_run_not_alive
 from .run import utcnow
 from .runs import RunManager
 
@@ -65,12 +66,17 @@ async def watchdog_loop(mgr: RunManager) -> None:
                     # finalized (or entered finalize) in that window must not
                     # be overwritten to timed_out after its PMO transition
                     # landed. Same guard the stalled-finalize branch below
-                    # has always had.
+                    # has always had. Re-derive age on the FRESH record too
+                    # (timeout_seconds / created_at are stable in practice,
+                    # but the kill reason must quote the live values).
                     fresh = mgr.store.get(run.run_id)
                     if fresh is None or fresh.state not in ("dispatched", "running"):
                         continue
+                    age_fresh = (utcnow() - fresh.created_at).total_seconds()
+                    if age_fresh <= fresh.timeout_seconds:
+                        continue
                     await mgr.kill(fresh, "timed_out",
-                                   f"exceeded {run.timeout_seconds}s")
+                                   f"exceeded {fresh.timeout_seconds}s")
                     continue
                 # reference = last heartbeat, else run start: a Dev killed before its
                 # first heartbeat must not be invisible until the wall-clock timeout
@@ -81,10 +87,7 @@ async def watchdog_loop(mgr: RunManager) -> None:
                                      and utcnow() - run.created_at > STARTUP_GRACE)
                 if stale_running or dead_before_start:
                     status = await mgr.executor.status(run.run_id)
-                    detail = ((status or {}).get("dagRunDetails") or {})
-                    label = str(detail.get("statusLabel", detail.get("status", ""))).lower()
-                    if status is None or any(t in label for t in
-                                             ("failed", "aborted", "error", "cancel")):
+                    if dagu_run_not_alive(status):
                         # TOCTOU guard: the status() await above is a yield
                         # point — finalize may have claimed the run, and a
                         # first heartbeat/artifacts entry may have landed.

@@ -495,6 +495,69 @@ def test_recon_adopts_live_runs_and_enriches_exit13(tmp_path):
     assert saved.error == "DEV_FORGE: clone failed"      # exit-13 enrichment
 
 
+def test_recon_promotes_dispatched_to_running_when_dagu_alive(tmp_path):
+    """docs/04 §6: Dagu running → adopt marks `running`. Without promotion a
+    post-crash run stuck at `dispatched` (run.started lost or never ACKed)
+    only dies at wall-clock timeout even while the container is healthy and
+    heartbeating — liveness requires state==running."""
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {"status": "running",
+                                      "statusLabel": "running"}}
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    stuck = _make_run(store, state="dispatched", run_id="DISP-1",
+                      started_at=None)
+    assert stuck.started_at is None
+    run_coro(reconcile_runs(mgr))
+    saved = store.get(stuck.run_id)
+    assert saved.state == "running"
+    assert saved.started_at is not None
+
+
+@pytest.mark.parametrize("status_payload", [
+    {"dagRunDetails": {"status": "aborted", "statusLabel": "aborted"}},
+    {"dagRunDetails": {"status": "failed", "statusLabel": "cancelled"}},
+    {"dagRunDetails": {"status": "canceled", "statusLabel": "canceled"}},
+    None,
+])
+def test_recon_orphans_all_dead_dagu_status_shapes(tmp_path, status_payload):
+    """Watchdog treats cancel* substrings as dead; reconcile must not leave a
+    cancelled/canceled/aborted Dagu run as an active ghost while the watchdog
+    would kill it. status=None (404) is the classic orphan path."""
+    from devcake.domain.reconcile import reconcile_runs
+
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+
+    class Executor(FakeExecutor):
+        async def status(self, rid):
+            return status_payload
+
+        async def node_errors(self, rid):
+            return []
+
+    async def reclaim(handler, verify_auth):
+        pass
+
+    messaging.reclaim_pending = reclaim
+    mgr = RunManager(store, messaging, Executor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run = _make_run(store, state="running", run_id="DEAD-SHAPE")
+    run_coro(reconcile_runs(mgr))
+    assert store.get(run.run_id).state == "orphaned"
+
+
 def test_recon_restamps_store_gen_for_adopted_and_finalizing(tmp_path):
     """PR #34 review follow-up: wipe_generation resets to 0 on process start,
     but run files may still carry store_gen from a prior process. Reconcile

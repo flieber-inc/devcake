@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -17,6 +18,31 @@ from .markers import FEED_INLINE_MAX, REPLY_MARKER
 
 log = logging.getLogger("devcake.missions")
 tracer = trace.get_tracer("devcake")
+
+# Entrypoint contract (images/common/dev_entrypoint.py): strict memory clone
+# failures prefix the detail with this shape before the clone stderr.
+_NOTEBOOK_CLONE_FAILED = re.compile(
+    r"^memory notebook (\S+) clone failed(?:\b|:)")
+
+
+def notebook_card_from_forge_auth_detail(
+        detail: str | None,
+        memory_mounts: list[dict] | None = None) -> str | None:
+    """Card name to latch for notebook-clone DEV_FORGE_AUTH, else None.
+
+    When ``memory_mounts`` is non-empty, the parsed card must appear there
+    (dispatch snapshot) — otherwise fall through to the work-repo latch.
+    """
+    m = _NOTEBOOK_CLONE_FAILED.match(detail or "")
+    if not m:
+        return None
+    card = m.group(1)
+    mounts = memory_mounts or []
+    if mounts:
+        names = {str(x.get("card") or "") for x in mounts}
+        if card not in names:
+            return None
+    return card
 
 
 def _pre_wipe(mgr, run: Run) -> bool:
@@ -283,10 +309,14 @@ def _forge_auth(mgr, run, row, detail, structured, exit_code):
     # row (classify's bare-sibling rule; the detail still names it), which
     # terminates.
     #
-    # latch only THIS run's repo (M10): a bad credential on repo A
-    # must never stop repo B's missions
+    # Latch the failing card only (M10 / ADR-0035): primary clone or push
+    # auth → run.repo_ref; strict memory-notebook clone auth → that notebook
+    # card. Never latch the work repo for a notebook-prefix failure — healthy
+    # work-repo probes would clear it while DEV_FORGE_AUTH stays uncounted.
+    target = (notebook_card_from_forge_auth_detail(detail, run.memory_mounts)
+              or run.repo_ref)
     mgr.forges.latch(
-        run.repo_ref, f"repository credential rejected in {run.run_id}")
+        target, f"repository credential rejected in {run.run_id}")
     return f"{row.error_class}: " + (detail or row.default_detail)
 
 

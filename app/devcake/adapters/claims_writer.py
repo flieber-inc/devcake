@@ -130,13 +130,50 @@ class ClaimsWriter:
             ["clone", "--depth", "1", "--branch", branch, url, str(dest)],
             env=env)
         if r.returncode != 0:
-            # empty remote (no default branch yet) — init a local checkout
-            shutil.rmtree(dest, ignore_errors=True)
-            dest.mkdir(parents=True)
-            for args in (["init", "-b", branch],
-                         ["remote", "add", "origin", url]):
-                await self._run(args, cwd=dest, env=env)
+            await self._empty_or_unlistable(dest, url=url, branch=branch,
+                                            env=env, clone=r)
         return dest
+
+    async def _empty_or_unlistable(self, dest: Path, *, url: str,
+                                   branch: str, env: dict,
+                                   clone) -> None:
+        """After a failed `clone --branch`, distinguish genuine empty
+        remotes (empty-init) from outages (raise → unlistable)."""
+        probe = await self.git(["ls-remote", "--heads", url], env=env)
+        shutil.rmtree(dest, ignore_errors=True)
+        if probe.returncode != 0:
+            detail = (probe.stderr or probe.stdout or clone.stderr
+                      or clone.stdout or "")[-400:]
+            raise RuntimeError(
+                f"claims notebook unlistable (clone+ls-remote failed): "
+                f"{detail}")
+        heads = {
+            line.split("\t", 1)[-1].strip()
+            for line in (probe.stdout or "").splitlines()
+            if line.strip()
+        }
+        want = f"refs/heads/{branch}"
+        if want in heads:
+            detail = (clone.stderr or clone.stdout or "")[-400:]
+            raise RuntimeError(
+                f"claims notebook clone failed though {want} exists: "
+                f"{detail}")
+        if heads:
+            # Populated remote without the configured branch: almost
+            # certainly a misconfigured default_branch — reading it as a
+            # confidently empty notebook is the exact failure this helper
+            # exists to prevent. Bootstrap is the no-heads case below.
+            have = ", ".join(sorted(h.removeprefix("refs/heads/")
+                                    for h in heads)[:5])
+            raise RuntimeError(
+                f"claims notebook unlistable: remote has no {want} "
+                f"(branches: {have}) — check the card's default_branch")
+        # Reachable remote with no heads at all (fresh bare repo) —
+        # empty-init so the first commit can push the branch.
+        dest.mkdir(parents=True)
+        for args in (["init", "-b", branch],
+                     ["remote", "add", "origin", url]):
+            await self._run(args, cwd=dest, env=env)
 
     async def _with_tree(self, card, *, write: bool):
         inst = self._inst(card)

@@ -13,7 +13,8 @@ from devcake.config import (AppConfig, CronJob, MEMORY_CURATOR_CRON_ID,
 from devcake.domain.cron_service import (CronBusy, CronService,
                                          CronUnconfigured, cron_marker)
 from devcake.domain.model import (LABEL_EXECUTE, LABEL_OPTIN, LABEL_PLAN,
-                                  Mission)
+                                  PRIORITY_RANK, Mission)
+
 
 
 def run_coro(c):
@@ -38,15 +39,24 @@ class FakePMO:
 
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):
+        if priority not in PRIORITY_RANK:
+            raise ValueError(f"illegal priority {priority!r}")
         key = f"T-{len(self.created) + 1}"
         pid = f"id-{key}"
-        self.created.append((title, description, set(label_names), key))
+        self.created.append((title, description, set(label_names), key, priority))
         self.missions.append(Mission(
             pmo_id=pid, pmo_kind="issue", key=key, title=title,
-            description=description, status="backlog",
+            description=description, status="backlog", priority=priority,
             labels=set(label_names),
             updated_at=datetime.now(timezone.utc)))
         return key, pid
+
+
+
+def test_fake_pmo_refuses_illegal_priority():
+    pmo = FakePMO()
+    with pytest.raises(ValueError, match="illegal priority 'normal'"):
+        run_coro(pmo.create_mission("T", "t", "d", "normal", set()))
 
 
 def _cfg(*pmos, crons=None, memory=None):
@@ -55,6 +65,7 @@ def _cfg(*pmos, crons=None, memory=None):
     rows = list(pmos)
     jobs = list(crons) if crons is not None else [memory_curator_seed()]
     return AppConfig(pmos=rows, repos=repos, crons=jobs)
+
 
 
 def _mgr(name, pmo, inst):
@@ -76,15 +87,16 @@ def test_generic_execute_labels_and_onboard_has_no_stage_label():
     svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)})
     got = run_coro(svc.fire("nightly", automatic=False))
     assert got[0]["key"] == "T-1"
-    title, body, labels, _ = pmo.created[0]
+    title, body, labels, _, priority = pmo.created[0]
     assert title.startswith("[cron:nightly]")
     assert LABEL_OPTIN in labels and LABEL_EXECUTE in labels
     assert cron_marker("nightly") in body
     assert "{timestamp}" not in body
+    assert priority == "medium"
     pmo.created.clear()
     pmo.missions.clear()
     run_coro(svc.fire("onboard", automatic=False))
-    _, _, labels, _ = pmo.created[0]
+    _, _, labels, _, _ = pmo.created[0]
     assert labels == {LABEL_OPTIN}
     assert "DEVCAKE-ONBOARD" not in labels
 
@@ -132,7 +144,8 @@ def test_memory_curator_skips_empty_automatic_run_now_does_not():
     assert pmo.created == []
     got = run_coro(svc.fire(MEMORY_CURATOR_CRON_ID, automatic=False))
     assert got[0]["pmo"] == "cur"
-    _, body, labels, _ = pmo.created[0]
+    _, body, labels, _, _ = pmo.created[0]
+
     assert LABEL_EXECUTE in labels
     assert cron_marker(MEMORY_CURATOR_CRON_ID) in body
 
@@ -304,10 +317,11 @@ def test_template_backticks_defanged_and_marker_appended():
     ])
     svc = CronService(cfg, {"eng": _mgr("eng", pmo, inst)})
     run_coro(svc.fire("nightly", automatic=False))
-    _, body, _, _ = pmo.created[0]
+    _, body, _, _, _ = pmo.created[0]
     assert "`devcake:cron:v1 job=other`" not in body
     assert "evil 'devcake:cron:v1 job=other' go" in body
     assert cron_marker("nightly") in body
+
 
 
 class _PortLedger:

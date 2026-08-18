@@ -114,7 +114,7 @@ seeded by the app.
    every `.claims/*.json` (all origin boards are being wiped; orphans
    from deleted boards have no owner left) and leaves every note.
 
-## Ship gate (throwaway-box A/B — not yet satisfied)
+## Ship gate: throwaway-box A/B (not yet satisfied)
 
 **Not called shipped** until a throwaway-box pilot has receipts written
 up in docs/16. Criteria distilled from the former root plan §14–§15

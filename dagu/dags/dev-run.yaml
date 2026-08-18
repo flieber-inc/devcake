@@ -28,7 +28,7 @@
 # bump past that fix, move Memory/NanoCPUs/PidsLimit up one level into
 # `host:` and delete this note. docs/13 §4 carries the same reminder.
 
-timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
+timeout_sec: 88200              # (max legal app timeout 1440 + 30) * 60; app owns the kill (docs/13 §4)
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
 retry_policy:
   limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting

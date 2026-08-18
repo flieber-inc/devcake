@@ -271,11 +271,11 @@ DAG's `name:` keys (ADR-0025), with the human-readable run id format of
 
 | Command | Builds |
 |---|---|
-| `docker buildx bake` | `app` + `admin` (control plane; **prod** app — no pytest) |
-| `docker buildx bake app-test` | `devcake/app-test` (pytest + `tests/` for CI) |
-| `docker buildx bake images` | `hello` + all six house harnesses (shared `base` stage) |
-| `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (no full harness matrix) |
-| `docker buildx bake all` | everything — **use this on first install and full upgrades** |
+| `docker buildx bake` | `app` + `admin` (control plane; **prod** app — no pytest) — group `default` |
+| `docker buildx bake app-test` | `devcake/app-test` (pytest + `tests/` for CI) — **explicit target** (also in group `ci`) |
+| `docker buildx bake images` | `hello` + **six** launch-supported harnesses (`claude-code`, `codex`, `grok-build`, `pi`, `opencode`, `qwen-code`; shared `base` stage) — group `images` |
+| `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (no full harness matrix) — group `ci` |
+| `docker buildx bake all` | control plane + hello + the six harnesses (`app`, `admin`, `hello`, `claude-code`, `codex`, `grok-build`, `pi`, `opencode`, `qwen-code`) — **first install / full upgrades**. **`app-test` is not in group `all`** — bake it explicitly or via group `ci` |
 
 **Cache:** opt-in local `.buildx-cache/` — `BAKE_LOCAL_CACHE=1 docker buildx bake …` (needs a docker-container builder or the containerd image store; the default `docker` driver cannot export cache, so plain `bake all` works everywhere without it). CI: `docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl …` for GitHub Actions `type=gha` cache.
 
@@ -331,7 +331,7 @@ Compose services that opt into the **fluentd logging driver** (`dagu`, `redis`, 
 
 ## 8. Runbook
 
-- **First run (virgin host):** `cp .env.example .env` → strong bootstrap passwords → `./up.sh --bake` (discovers `DOCKER_GID`, computes `DEVCAKE_APP_DIGEST`, bakes **control plane + hello**, `compose up -d`, starts the **host baker**). Open `http://localhost:8080` → **Configuration** (PMO + model/harness secrets, **Dev Types**) and **Repositories** (`#/repos`: forge tokens + merge posture) → connection tests. Saving Dev Types publishes `/data/harness_keep_set.json`; the host baker compiles those pins, probes them, and writes receipts. **The first mission refuses until that second bake finishes** — the editor says “baking” / “waiting,” not a host command to run. Day-to-day restarts: `./up.sh` (restarts the baker). Absent keep-set = control plane + hello only; the baker never parses Dev Type YAML. `./up.sh --bake all` still compiles the full harness matrix when you ask for it. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` so telemetry connectivity needs no host script (`12-observability.md` §1/§5). **Dashboard + alerts** remain optional ops polish: `python3 scripts/provision_oo.py` (alerts only when `OO_ALERT_WEBHOOK` is set; re-run is create-if-missing — existing DevCake dashboard panels are not updated in place). Then `14` §9 checklist before first EXECUTE.
+- **First run (virgin host):** `cp .env.example .env` → strong bootstrap passwords → `./up.sh --bake` (discovers `DOCKER_GID`, computes `DEVCAKE_APP_DIGEST`, bakes **control plane + hello**, `compose up -d`, starts the **host baker**). Open `http://localhost:8080` → **PMO** (`#/pmo`, Adapters) + **Repositories** (`#/repos`) for connections and forge tokens, and **Configuration → Dev Types** (`#/config/dev-types`) for harness/model credentials → connection tests. Saving Dev Types publishes `/data/harness_keep_set.json`; the host baker compiles those pins, probes them, and writes receipts. **The first mission refuses until that second bake finishes** — the editor says “baking” / “waiting,” not a host command to run. Day-to-day restarts: `./up.sh` (restarts the baker). Absent keep-set = control plane + hello only; the baker never parses Dev Type YAML. `./up.sh --bake all` still compiles the full harness matrix when you ask for it. Labels bootstrap on startup; **OpenObserve ingest user** is auto-created at app boot from `OO_INGEST_*` (dashboard/alerts still optional via `scripts/provision_oo.py`). Then `14` §9 checklist before first EXECUTE.
 - **Upgrading from a pre-Bake install (app ran as root):** the baked app image runs as non-root uid 1000, so `/data` files written by the old root-running app (config.yaml, run records, secrets) crash-loop boot with `PermissionError`. One-time fix before `up`:
   `docker run --rm -v devcake_devcake_data:/data alpine chown -R 1000:1000 /data`
 

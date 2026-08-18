@@ -15,7 +15,8 @@ from pathlib import Path
 import pytest
 
 from devcake.config import AppConfig, RepoInstance
-from devcake.adapters.claims_writer import make_claims_writer
+from devcake.adapters.claims_writer import ClaimsWriter, make_claims_writer
+from devcake.adapters.git import GitResult
 
 
 def run_coro(c):
@@ -24,6 +25,10 @@ def run_coro(c):
         return loop.run_until_complete(c)
     finally:
         loop.close()
+
+
+def _git_result(rc=0, stdout="", stderr=""):
+    return GitResult(rc, stdout, stderr)
 
 
 @pytest.fixture
@@ -214,3 +219,87 @@ def test_commit_retries_once_after_push_race(tmp_path, tokens):
     snap = run_coro(w.snapshot("nb"))
     assert snap == {"json_names": ["aa11bb22cc33dd44.json"],
                     "has_readme": False}
+
+
+def test_clone_failure_returns_unlistable_not_empty(tokens):
+    """Auth/network/missing-repo clone failure must surface as None
+    (unlistable), never definite-empty from a local empty-init tree."""
+    tokens[("nb", "token")] = "bad-token"
+    card = RepoInstance(name="nb", forge="github",
+                        url="https://github.com/acme/notes",
+                        default_branch="main")
+
+    async def failing_git(args, cwd=None, env=None):
+        # clone + ls-remote fail (outage). init/remote succeed so that
+        # today's buggy empty-init path would still produce a tree —
+        # without the fix, reads would return []/False instead of None.
+        if args[:1] == ["clone"]:
+            return _git_result(128, stderr="Authentication failed")
+        if args[:2] == ["ls-remote", "--heads"]:
+            return _git_result(128, stderr="Could not read from remote")
+        if args[:1] == ["init"] or args[:2] == ["remote", "add"]:
+            return _git_result(0)
+        return _git_result(1, stderr=f"unexpected git {args!r}")
+
+    w = ClaimsWriter(_cfg(card), git=failing_git)
+    assert run_coro(w.list_json_names("nb")) is None
+    assert run_coro(w.snapshot("nb")) is None
+    assert run_coro(w.has_readme("nb")) is None
+    assert run_coro(w.list_claim_meta("nb")) is None
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="no git binary")
+def test_genuine_empty_remote_empty_inits_and_first_commit_works(
+        tmp_path, tokens):
+    """Clone --branch fails on a reachable remote with no heads, but
+    ls-remote succeeds empty → definite-empty reads + first push OK."""
+    origin = tmp_path / "origin.git"
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin",
+           "HOME": str(tmp_path), "GIT_TERMINAL_PROMPT": "0",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x"}
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)],
+                   check=True, capture_output=True, env=env)
+    # No commits → no heads. Clone --branch fails; ls-remote --heads is empty.
+    url = "file://localhost" + str(origin)
+    tokens[("nb", "token")] = "unused-for-local"
+    card = RepoInstance(name="nb", forge="github", url=url,
+                        default_branch="main")
+    w = make_claims_writer(_cfg(card), internal_forge=None)
+
+    assert run_coro(w.list_json_names("nb")) == []
+    assert run_coro(w.has_readme("nb")) is False
+    assert run_coro(w.snapshot("nb")) == {"json_names": [], "has_readme": False}
+    assert run_coro(w.list_claim_meta("nb")) == []
+
+    run_coro(w.commit(
+        "nb",
+        creates={".claims/aabbccddeeff0011.json": "{}\n"},
+        deletes=[],
+        message="devcake:claims:v1 run=r1 n=1"))
+    assert run_coro(w.list_json_names("nb")) == ["aabbccddeeff0011.json"]
+
+
+def test_default_branch_exists_but_clone_fails_is_unlistable(tokens):
+    """ls-remote shows refs/heads/<default> yet clone failed → None.
+    Must not empty-init over a remote that already has the branch."""
+    tokens[("nb", "token")] = "tok"
+    card = RepoInstance(name="nb", forge="github",
+                        url="https://github.com/acme/notes",
+                        default_branch="main")
+
+    async def flaky_clone_git(args, cwd=None, env=None):
+        if args[:1] == ["clone"]:
+            return _git_result(128, stderr="early EOF / transient")
+        if args[:2] == ["ls-remote", "--heads"]:
+            return _git_result(
+                0, stdout="abc123\trefs/heads/main\ndef456\trefs/heads/dev\n")
+        if args[:1] == ["init"] or args[:2] == ["remote", "add"]:
+            return _git_result(0)
+        return _git_result(1, stderr=f"unexpected git {args!r}")
+
+    w = ClaimsWriter(_cfg(card), git=flaky_clone_git)
+    assert run_coro(w.list_json_names("nb")) is None
+    assert run_coro(w.snapshot("nb")) is None
+    assert run_coro(w.has_readme("nb")) is None
+    assert run_coro(w.list_claim_meta("nb")) is None

@@ -39,6 +39,31 @@ def test_vector_sweep_is_the_full_powerset():
     assert len(data["board"]["reasons"]) >= 8
 
 
+def test_connections_registry_payload_domain_rules():
+    """Independent domain rules for the registry projection (the single
+    source behind GET /connections/registry and the SPA FALLBACK pin) — not
+    a re-read of the same fields under a different name."""
+    from devcake.adapters.registry import connections_registry_payload
+    data = connections_registry_payload()
+    # ALL_LABELS includes DEVCAKE-DISCOVERY (sweep gate); count is 11.
+    assert data["managed_labels_expected"] == 11
+    by_id = {s["id"]: s for s in data["pmo_systems"]}
+    assert set(by_id) == {
+        "linear", "gitea_issues", "github_issues", "gitlab_issues",
+    }
+    assert by_id["linear"]["supports_priority"] is True
+    for forge_issue in ("gitea_issues", "github_issues", "gitlab_issues"):
+        assert by_id[forge_issue]["supports_priority"] is False, forge_issue
+    # Copy honesty: team_key_help must distinguish the issues board from a
+    # per-mission work repo (forge-issue systems only).
+    for forge_issue in ("gitea_issues", "github_issues", "gitlab_issues"):
+        assert "Not a per-mission work repo" in by_id[forge_issue]["team_key_help"]
+    assert by_id["github_issues"]["attachments_supported"] is False
+    assert by_id["gitlab_issues"]["relations_supported"] is False
+    assert "ghp_" in data["secret_shape_prefixes"]
+    assert data["secret_shape_prefixes"] == sorted(data["secret_shape_prefixes"])
+
+
 def test_discovery_label_is_derivation_inert():
     """ADR-0033 founder ruling 2a: DEVCAKE-DISCOVERY is a pure sweep gate —
     adding it to ANY label combination must leave derive() untouched (the

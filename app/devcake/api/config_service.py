@@ -106,12 +106,37 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
     except BundleError as e:
         raise HTTPException(e.status, str(e))
     previous = config.model_dump()
+    # In-place skill-source rename (SPA edits name on the same card index):
+    # plan the move now; apply it only after reload succeeds so a rolled-back
+    # PUT does not leave tokens under the new name while config reverts.
+    # Index inequality alone is NOT a rename — SPA Remove uses filter() and
+    # shifts later cards up; treat as rename only when old left the name set
+    # and new is genuinely new (else set-difference delete handles remove).
+    prev_skills = previous.get("skill_sources") or []
+    new_skills = list(merged.skill_sources)
+    old_names = {
+        (old["name"] if isinstance(old, dict) else old.name)
+        for old in prev_skills}
+    new_names = {s.name for s in new_skills}
+    skill_renames: list[tuple[str, str]] = []
+    renamed_from: set[str] = set()
+    for i, old in enumerate(prev_skills):
+        if i >= len(new_skills):
+            break
+        old_name = old["name"] if isinstance(old, dict) else old.name
+        new_name = new_skills[i].name
+        if old_name == new_name:
+            continue
+        if old_name not in new_names and new_name not in old_names:
+            skill_renames.append((old_name, new_name))
+            renamed_from.add(old_name)
     # a removed instance's stored secrets go with it — otherwise a later
     # instance reusing the name silently inherits the dead credential
-    removed = [("pmo", p["name"]) for p in previous["pmos"]
-               if p["name"] not in {i.name for i in merged.pmos}]
-    removed += [("repo", r["name"]) for r in previous["repos"]
-                if r["name"] not in {i.name for i in merged.repos}]
+    prev_keys = set(secrets_store.connection_instances(previous))
+    new_keys = set(secrets_store.connection_instances(merged))
+    removed = sorted(
+        (scope, name) for scope, name in (prev_keys - new_keys)
+        if not (scope == "skill" and name in renamed_from))
     for field in type(merged).model_fields:
         setattr(config, field, getattr(merged, field))
     save_config(config)
@@ -128,6 +153,13 @@ def _apply_config_patch(body: dict, *, config, dev_types, managers,
         except Exception:
             log.exception("restore reload also failed")
         raise HTTPException(500, f"config reload failed; previous config restored: {e}")
+    for old_name, new_name in skill_renames:
+        try:
+            secrets_store.rename_connection_instance(
+                "skill", old_name, new_name)
+        except Exception:  # noqa: BLE001 — best-effort: config change is APPLIED; orphan named in the log
+            log.exception("could not rename skill-source secrets %r → %r",
+                          old_name, new_name)
     for scope, name in removed:                  # only once the new config took
         try:
             secrets_store.delete_connection_instance(scope, name)

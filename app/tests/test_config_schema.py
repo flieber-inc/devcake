@@ -824,3 +824,27 @@ def test_skill_sources_round_trip_validation_and_name_disjointness():
     assert not hasattr(
         RepoInstance(name="main", url="https://github.com/o/r"),
         "skills_subdir")
+
+
+def test_skill_source_url_and_forge_match_repo_instance():
+    """CAKE-65: SkillSource rejects the same malformed URL / unknown forge
+    literals as RepoInstance — empty URL still allowed (unconfigured card)."""
+    from pydantic import ValidationError
+
+    from devcake.config import RepoInstance, SkillSource
+
+    bad_url = "https://github.com/onlyowner"
+    with pytest.raises(ValidationError, match="owner/repo"):
+        SkillSource(name="shelf", url=bad_url)
+    with pytest.raises(ValidationError, match="owner/repo"):
+        RepoInstance(name="main", url=bad_url)
+    with pytest.raises(ValidationError, match="unknown forge"):
+        SkillSource(name="shelf", forge="not-a-forge",
+                    url="https://github.com/o/skills")
+    with pytest.raises(ValidationError, match="unknown forge"):
+        RepoInstance(name="main", forge="not-a-forge",
+                     url="https://github.com/o/r")
+    # empty URL = unconfigured card (first-boot / draft)
+    assert SkillSource(name="shelf", url="").url == ""
+    assert SkillSource(name="shelf",
+                       url="https://github.com/o/skills").configured

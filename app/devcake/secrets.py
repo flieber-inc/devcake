@@ -5,7 +5,7 @@ are NEVER echoed back.
 
 Layout — deliberately two path levels so security._known_values()'s existing
 glob("*/*") scan auto-redacts every value:
-    /data/secrets/connections/{scope}-{instance}.json   scope ∈ pmo | repo
+    /data/secrets/connections/{scope}-{instance}.json   scope ∈ pmo | repo | skill
     /data/secrets/harness/{VAR}.json                    harness/model keys
 
 A connection file holds a flat {field: value} dict (e.g. {"api_key": …} for a
@@ -40,6 +40,40 @@ CONNECTION_FIELDS: dict[str, set[str]] = {
     # skills source has no PR surface and is read-only by construction
     "skill": {"token", "token_ro"},
 }
+
+
+def connection_instances(config) -> tuple[tuple[str, str], ...]:
+    """`(scope, name)` for every connection card on config — pmo, repo, skill.
+
+    ONE derivation of the live instance set: settings_bundle serialize /
+    validate / apply and config PUT cleanup must not hard-code a subset of
+    scopes. Accepts an AppConfig or a `model_dump()` dict.
+    """
+    if isinstance(config, dict):
+        pmos = config.get("pmos") or []
+        repos = config.get("repos") or []
+        skills = config.get("skill_sources") or []
+
+        def _name(x) -> str:
+            return x["name"] if isinstance(x, dict) else x.name
+    else:
+        pmos = config.pmos
+        repos = config.repos
+        skills = getattr(config, "skill_sources", None) or []
+
+        def _name(x) -> str:
+            return x.name
+
+    return tuple(
+        [("pmo", _name(p)) for p in pmos]
+        + [("repo", _name(r)) for r in repos]
+        + [("skill", _name(s)) for s in skills]
+    )
+
+
+def connection_instance_keys(config) -> set[str]:
+    """`{scope}-{name}` keys for every connection card on config."""
+    return {f"{scope}-{name}" for scope, name in connection_instances(config)}
 
 
 def _root() -> Path:
@@ -165,6 +199,34 @@ def delete_connection_instance(scope: str, instance: str) -> None:
     must still scrub late PMO/forge writes)."""
     path = _conn_path(scope, instance)
     path.unlink(missing_ok=True)
+
+
+def rename_connection_instance(scope: str, old: str, new: str) -> None:
+    """Move `connections/{scope}-{old}.json` → `{scope}-{new}.json`.
+
+    Used when a config PUT renames a card in place (same list index, new
+    name) so tokens follow the card instead of orphaning under the old
+    name. Missing source is a no-op; if the destination already exists it
+    is replaced (the renamed card owns that identity). Old redaction
+    registrations are kept until restart (safe direction); values are
+    re-registered under the new instance name.
+    """
+    if old == new:
+        return
+    src = _conn_path(scope, old)
+    dst = _conn_path(scope, new)
+    if not src.exists():
+        return
+    data = _read_strict(src)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(src, dst)
+    _fsync_dir(dst.parent)
+    from .security import invalidate_secret_scan
+    invalidate_secret_scan()
+    for field, value in data.items():
+        if isinstance(value, str) and value:
+            security.register_runtime_secret(
+                f"conn:{scope}:{new}:{field}", value)
 
 
 # ── harness/model secrets ───────────────────────────────────────────────────
@@ -321,7 +383,7 @@ def inventory() -> dict[str, list[dict]]:
 
     Groups:
       harness           — model / secret_env keys under harness/
-      connections       — pmo/repo fields under connections/
+      connections       — pmo/repo/skill fields under connections/
       credential_files  — OAuth/upload files under /data/secrets/{dev_type}/
 
     Excludes profile snapshots and internal_forge mission tokens (system-

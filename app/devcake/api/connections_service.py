@@ -66,9 +66,10 @@ def _cycle(lock: asyncio.Lock | None):
 async def put_secret(scope: str, instance: str, field: str, body: dict, *,
                      forge_runtime, reload,
                      cycle_lock: asyncio.Lock | None = None):
-    """Store a connection secret VALUE (never echoed). scope ∈ pmo|repo;
-    instance is the config instance name; field ∈ api_key|token|token_ro|
-    reviewer_token. Writing a repo/pmo secret clears any latched breaker."""
+    """Store a connection secret VALUE (never echoed). scope ∈ pmo|repo|skill;
+    instance is the config instance name; field ∈ the scope's
+    CONNECTION_FIELDS allowlist. Writing a repo/pmo secret clears any
+    latched breaker."""
     _require_secret_ref(scope, instance, field)
     value = body.get("value")
     if not isinstance(value, str) or not value:

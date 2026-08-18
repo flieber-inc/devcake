@@ -196,8 +196,7 @@ def serialize_current(config: AppConfig, dev_types: dict[str, DevType], *,
         if include_orphan_secrets:
             conns = all_conns
         else:
-            live_keys = ({f"pmo-{p.name}" for p in config.pmos}
-                         | {f"repo-{r.name}" for r in config.repos})
+            live_keys = secrets_store.connection_instance_keys(config)
             conns = {k: v for k, v in all_conns.items() if k in live_keys}
         sec: dict = {
             "connections": conns,
@@ -482,8 +481,7 @@ def _validate_secrets(sec, cfg: AppConfig | None, warnings: list[str]) -> dict:
             out_cred[str(dev)] = rows
         out["credential_files"] = out_cred
     if cfg is not None:
-        known = ({f"pmo-{p.name}" for p in cfg.pmos}
-                 | {f"repo-{r.name}" for r in cfg.repos})
+        known = secrets_store.connection_instance_keys(cfg)
         for key in conns:
             if key not in known:
                 warnings.append(f"secrets.connections[{key}]: no such instance "
@@ -1076,8 +1074,7 @@ def _plan_secret_ops(sec: dict, target_cfg: AppConfig, *,
     legitimately hold a secret whose instance card isn't saved yet, and a
     rollback must restore byte-exact, not editorialize."""
     warnings: list[str] = []
-    known = ({f"pmo-{p.name}" for p in target_cfg.pmos}
-             | {f"repo-{r.name}" for r in target_cfg.repos})
+    known = secrets_store.connection_instance_keys(target_cfg)
     wanted: dict[str, dict[str, str]] = {}
     for key, fields in sec["connections"].items():
         if key not in known and not restore_exact:

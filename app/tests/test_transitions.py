@@ -13,7 +13,9 @@ from devcake.config import AppConfig, DevType
 from devcake.ports.forge import ForgeError, PullRequest
 from devcake.domain.orchestrator import MissionManager
 from devcake.domain.orchestrator import decomposition, review, transitions
-from devcake.domain.model import Activity, ActivityEntry, Mission, MissionType
+from devcake.domain.model import (Activity, ActivityEntry, Mission, MissionType,
+                                  PRIORITY_RANK)
+
 from devcake.adapters.files.run_store import RunStore
 from devcake.domain.run import Run
 from devcake.domain import backend_health
@@ -112,6 +114,8 @@ class FakePMO:
 
     async def create_mission(self, team_ref, title, description, priority,
                              label_names, parent_ref=None):
+        if priority not in PRIORITY_RANK:
+            raise ValueError(f"illegal priority {priority!r}")
         self.created.append((title, parent_ref))
         key, pmo_id = f"T-{len(self.created) + 1}", f"id-{len(self.created)}"
         self.all_missions.append(Mission(
@@ -121,6 +125,7 @@ class FakePMO:
             parent_ref=parent_ref,
         ))
         return key, pmo_id
+
 
     async def list_all(self, team_ref):
         return list(self.all_missions)

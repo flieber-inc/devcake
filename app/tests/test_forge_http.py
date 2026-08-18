@@ -124,8 +124,17 @@ def test_gitea_health_probe_sends_token_auth_and_url():
 
 
 def test_gitea_reviewer_token_header():
+    """Gitea review event is APPROVED (not GitHub's APPROVE) — live-verified
+    M11; a mutant posting APPROVE would 422 and still look green if we only
+    checked the Authorization header."""
+    import json as _json
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("Authorization") == "token gitea-reviewer"
+        assert request.method == "POST"
+        assert str(request.url).endswith("/pulls/2/reviews")
+        body = _json.loads(request.content.decode())
+        assert body["event"] == "APPROVED"
         return httpx.Response(200, json={"id": 1})
 
     forge = GiteaForge(
@@ -133,6 +142,10 @@ def test_gitea_reviewer_token_header():
         transport=httpx.MockTransport(handler),
     )
     assert run_coro(forge.approve(2)) is True
+    assert run_coro(GiteaForge(
+        "https://git.example/o/r", "gitea-tok", None,
+        transport=httpx.MockTransport(handler),
+    ).approve(2)) is False
 
 
 def test_github_request_asserts_auth_header_on_wire():

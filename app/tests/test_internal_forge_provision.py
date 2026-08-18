@@ -650,6 +650,28 @@ def test_invalid_username_fails_loud_instead_of_being_tolerated():
     assert len(seen) == 1
 
 
+def test_mission_credentials_register_tokens_for_redaction(tmp_path, monkeypatch):
+    """ADR-0010 dual registration: mint/load in provision.py registers
+    internal:{repo}:w|r so empty token_patterns still redact (factory
+    registration alone is not the whole story)."""
+    from devcake.security import MASK, redact, unregister_runtime_secret
+
+    _seed_stored(tmp_path)
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    prov = GiteaProvisioner(url="http://gitea:3000", admin_user="a",
+                            admin_password="p")
+    keys = [f"internal:{REPO}:w", f"internal:{REPO}:r"]
+    try:
+        creds = prov.mission_credentials(REPO)
+        assert creds is not None
+        out = redact(f"leak {creds.token_write} and {creds.token_read} end")
+        assert creds.token_write not in out and creds.token_read not in out
+        assert MASK in out
+    finally:
+        for key in keys:
+            unregister_runtime_secret(key)
+
+
 def test_existing_user_is_still_tolerated():
     """The idempotent path must keep working — re-provisioning is normal."""
     def handler(request: httpx.Request) -> httpx.Response:

@@ -246,7 +246,7 @@ def test_get_pr_by_branch_encodes_hash_in_query():
     source_branch filter, so merge_sweep cannot complete after a merge."""
     from urllib.parse import quote
 
-    branch = "devcake/DEVCAKEMEM-fidecastro/devcake-memories#3"
+    branch = "devcake/DEVCAKEMEM-example-org/devcake-memories#3"
 
     seen: list[str] = []
     g = gh()

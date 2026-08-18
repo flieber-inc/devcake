@@ -13,7 +13,7 @@ const srcRoot = join(here, "../src");
 // Families not listed in DESIGN.md §1 and not part of the Runs-table stone
 // hover idiom. Numeric suffix required so prose comments ("blue running") can
 // still name the concept without tripping the guard until classes are gone.
-const OFF_PALETTE = /\b(?:blue|sky|yellow|purple|indigo|cyan|teal|violet|fuchsia|rose|orange)-[0-9]{2,3}\b/g;
+const OFF_PALETTE = /\b(?:blue|sky|yellow|purple|indigo|cyan|teal|violet|fuchsia|rose|orange|slate|gray|zinc|emerald|lime|pink)-[0-9]{2,3}\b/g;
 
 function walk(dir) {
   const out = [];

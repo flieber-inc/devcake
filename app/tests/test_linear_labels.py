@@ -1,4 +1,4 @@
-"""ISSUES #7 regression + the CAKE-48 clobber: label reads paginate past a
+"""Label pagination + the CAKE-48 clobber: label reads paginate past a
 full first page; the issue swap path uses per-label mutations (never a
 full-set rewrite, so a concurrent writer's labels survive); the project path
 still rewrites and must never do so from a truncated read."""
@@ -198,7 +198,7 @@ def test_all_project_labels_past_ceiling_fail_loud():
 
 
 def test_get_issue_paginates_labels():
-    """Read path: DEVCAKE-SKIP hiding on page 2 must be seen (ISSUES #7)."""
+    """Read path: DEVCAKE-SKIP hiding on page 2 must be seen."""
     ad = LinearAdapter("key")
     labels = [_label(i) for i in range(50)] + [{"id": "s", "name": "DEVCAKE-SKIP"}]
 

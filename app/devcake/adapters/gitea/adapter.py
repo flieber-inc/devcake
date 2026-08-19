@@ -195,8 +195,8 @@ class GiteaForge:
     async def merge(self, pr_number: int) -> None:
         """Squash-merge. Gitea's 405 is overloaded (docstring): retry only the
         transient "Please try again later" (async mergeability check); on any
-        other failure probe already-merged first (ISSUES #6 — redelivery
-        after a successful merge must not report auto-merge failure)."""
+        other failure probe already-merged first (redelivery after a
+        successful merge must not report auto-merge failure)."""
         for attempt in range(3):
             try:
                 await self._req("POST", f"/pulls/{pr_number}/merge",

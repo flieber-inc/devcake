@@ -11,10 +11,10 @@
 # Image tags must match bake output (default TAG/DEVCAKE_TAG=latest).
 name: devcake
 
-# Control-plane ports bind to loopback by default (ISSUES #17). Remote access
-# requires SSH tunnels or host firewall rules — Dagu holds docker.sock and is
-# root-equivalent if reachable. restart: unless-stopped on long-lived services
-# (ISSUES #21) so host reboots recover the stack automatically.
+# Control-plane ports bind to loopback by default. Remote access requires SSH
+# tunnels or host firewall rules — Dagu holds docker.sock and is root-equivalent
+# if reachable. restart: unless-stopped on long-lived services so host reboots
+# recover the stack automatically.
 
 # Bounded local logs for services NOT on the fluentd pipeline (2026-08-12
 # audit L1): the pipeline itself (fluentbit/otel-collector) cannot ship to
@@ -224,7 +224,7 @@ services:
     ports: [ "127.0.0.1:24224:24224" ]     # receives the fluentd logging driver (host side)
     networks: [control]
 
-  # Dev-side telemetry boundary (docs/12 §1, ISSUES #13): Devs on
+  # Dev-side telemetry boundary (docs/12 §1): Devs on
   # devcake_runtime export OTLP here with NO credentials; only this collector
   # holds the OO service account. Image is FROM scratch — no shell, so no
   # container healthcheck (the otlphttp exporter retries; ordering is soft).

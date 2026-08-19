@@ -107,7 +107,7 @@ def test_unknown_pmo_system_rejected():
 
 
 def test_operational_fields_reject_zero_and_negative():
-    """ISSUES #8/#9: zero/negative operational values must not validate."""
+    """Zero/negative operational values must not validate."""
     base = _base()
     with pytest.raises(Exception):
         AppConfig.model_validate({**base, "poll_interval_seconds": 0})
@@ -362,7 +362,7 @@ def test_cost_inputs_defaults_validation_and_round_trip():
 
 
 def test_repo_url_shape_validated():
-    """ISSUES #10: malformed forge URLs rejected at schema layer."""
+    """Malformed forge URLs rejected at schema layer."""
     base = _base()
     bad = dict(base, repos=[{**base["repos"][0], "url": "not-a-url"}])
     with pytest.raises(Exception, match="invalid"):

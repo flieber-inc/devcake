@@ -1,4 +1,4 @@
-"""Crash-recovery spine (ISSUES #1–3, #6, #26): redelivery, kill teardown,
+"""Crash-recovery spine: redelivery, kill teardown,
 watchdog timeout, and merge already-merged honesty."""
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ class FakeExecutor:
 
 
 def test_artifacts_redelivery_noop_on_all_terminal_states(tmp_path):
-    """ISSUES #1: true redelivery after finalize already ran must not re-enter.
+    """Terminal runs must not re-enter finalize.
 
     Terminal alone is not enough — premature orphan/kill leaves empty
     finalized_steps and must still accept the first delivery (CAKE-73).
@@ -267,7 +267,7 @@ def test_started_does_not_resurrect_a_killed_run(tmp_path):
 
 
 def test_kill_teardown_when_stop_raises(tmp_path):
-    """ISSUES #3: ACL + terminal state even if executor.stop raises."""
+    """ACL + terminal state even if executor.stop raises."""
     store = RunStore(tmp_path / "runs")
     messaging = FakeMessaging()
     executor = FakeExecutor(stop_raises=True)
@@ -300,7 +300,7 @@ def test_kill_teardown_when_ship_failure_raises(tmp_path):
 
 
 def test_watchdog_timeout_kills(tmp_path, monkeypatch):
-    """ISSUES #26: watchdog_loop calls kill on aged runs."""
+    """watchdog_loop calls kill on aged runs."""
     from devcake.domain import watchdog as wd
 
     store = RunStore(tmp_path / "runs")
@@ -430,7 +430,7 @@ def test_watchdog_liveness_kill_disarmed_by_fresh_heartbeat(tmp_path,
 
 
 def test_github_merge_already_merged_is_success(monkeypatch):
-    """ISSUES #6: merge() treats already-merged as success."""
+    """merge() treats already-merged as success."""
     forge = GitHubForge("https://github.com/o/r", "tok")
 
     async def fake_req(method, path, **kwargs):
@@ -446,7 +446,7 @@ def test_github_merge_already_merged_is_success(monkeypatch):
 
 
 def test_recon_orphans_dead_runs_but_leaves_finalizing_for_reclaim(tmp_path):
-    """ISSUES #2/#26: reconciliation kills dead-Dagu runs to orphaned, leaves
+    """Reconciliation kills dead-Dagu runs to orphaned, leaves
     finalizing runs alone, adopts live ones, and reclaims AFTER the orphan
     pass — exercised through the real reconcile_runs."""
     from devcake.domain.reconcile import reconcile_runs

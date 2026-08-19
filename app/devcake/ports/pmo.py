@@ -108,7 +108,7 @@ class PMOPort(Protocol):
         Adapters must round-trip those bytes such that a later ``get_activity``
         can re-find them. ADF/rich-text PMOs (e.g. Jira) need an explicit
         fidelity strategy — multi-PMO is not “just another adapter” for this
-        reason (ISSUES #35)."""
+        reason."""
         ...
     async def set_status(self, ref: MissionRef, status: NormalizedStatus) -> None: ...
     async def cancel_mission(self, ref: MissionRef) -> None:

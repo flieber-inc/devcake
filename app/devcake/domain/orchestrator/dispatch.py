@@ -771,7 +771,7 @@ def _protocol_spec_env(mgr, *, mission_id: str, mission_key: str,
         "DEVCAKE_MODEL": (dev_type.model
                           or HARNESSES[dev_type.harness_template].default_model),
         "DEVCAKE_CLI_VERSION": effective_cli_version(dev_type),
-        # Devs export through the collector, credential-free (ISSUES #13)
+        # Devs export through the collector, credential-free
         "OTEL_EXPORTER_OTLP_ENDPOINT": f"{OTEL_COLLECTOR_URL}/v1/traces",
     }
 
@@ -790,12 +790,11 @@ def runspec_secret_payload(mgr, run: Run) -> dict | None:
     if dt is None:
         return None            # dev type deleted mid-run → runspec.error
     env_creds, spec_files = _credential_spec(mgr, dt)
-    # Stage-scope forge credentials (ISSUES #15): every stage clones the
-    # repo (entrypoint always git-clones), so all stages need a
-    # clone-capable token. EXECUTE gets the write token (push/PR). Other
-    # stages prefer token_ro when set, else fall back to the write token
-    # so private repos keep working without a separate RO PAT.
-    # Reviewer PAT stays app-side only.
+    # Stage-scope forge credentials: every stage clones the repo (entrypoint
+    # always git-clones), so all stages need a clone-capable token. EXECUTE
+    # gets the write token (push/PR). Other stages prefer token_ro when set,
+    # else fall back to the write token so private repos keep working without
+    # a separate RO PAT. Reviewer PAT stays app-side only.
     repo = mgr.forges.instance(run.repo_ref)
     if repo is None:
         # the run's repo vanished from config mid-flight → runspec.error

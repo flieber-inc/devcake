@@ -142,8 +142,8 @@ class ForgeRuntime:
         elif data.get("transient"):
             log.warning("forge probe transient failure on repo %s (breaker "
                         "untouched): %s", name, data.get("detail"))
-            # span-mirrored so the FORGE_TRANSIENT >15m alert has a signal
-            # (ISSUES #23) — the log line never reaches the traces stream
+            # span-mirrored so the FORGE_TRANSIENT >15m alert has a signal —
+            # the log line never reaches the traces stream
             from ..security import redact
             with tracer.start_as_current_span("forge.probe_transient") as span:
                 span.set_attribute("devcake.repo", name)

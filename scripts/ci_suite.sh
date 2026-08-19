@@ -64,7 +64,7 @@ mixed_version_banner() {
   fi
 }
 
-echo "── digest-pin gate (ISSUES #29)"
+echo "── digest-pin gate"
 python3 scripts/check_image_pins.py
 
 echo "── rebuild app-test (prod image has no pytest; DEVCAKE_TAG=${DEVCAKE_TAG:-latest} lockstep)"

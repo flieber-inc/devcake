@@ -14,7 +14,7 @@
 # ${params.RUN_ID} interpolates inside volume sources (probe-verified 2.11.3;
 # re-verified through the docker.run form on 2.13.0).
 #
-# Resource limits (closes the old ISSUES #20 deferral): both steps use the
+# Resource limits (closes the old container-limits deferral): both steps use the
 # docker.run action form, whose `host:` block passes Docker SDK HostConfig.
 # The cgroup fields live in HostConfig's EMBEDDED Resources struct, and Dagu
 # 2.13.0 decodes `host:` without mapstructure Squash — so they only land via

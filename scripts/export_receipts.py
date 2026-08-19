@@ -48,7 +48,7 @@ import urllib.request
 PAGE = 10_000
 MAX_PAGES = 500          # 5M spans per stream; loud, never silent (below)
 
-# Digest-pinned (ISSUES #29 rider, 2026-08-12 audit OPS-M1): runs as root
+# Digest-pinned (2026-08-12 audit OPS-M1): runs as root
 # with RW on the output dir — check_image_pins.py enforces the pin.
 ALPINE_IMAGE = ("alpine:3.22@sha256:"
                 "14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce")

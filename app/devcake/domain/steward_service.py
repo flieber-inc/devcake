@@ -1,5 +1,5 @@
 """Relations Steward cadence service (ADR-0007). Split from the orchestrator
-god object for maintainability (ISSUES #36).
+god object for maintainability.
 """
 
 from __future__ import annotations

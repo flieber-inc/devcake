@@ -270,6 +270,45 @@ def test_resolve_repo_history_assembly(tmp_path):
     assert name == "beta" and reason is None      # sticky = newest repo_ref
 
 
+def test_resolve_repo_sticky_survives_mixed_naive_aware_created_at(tmp_path):
+    """Sticky history sort must not TypeError on mixed naive/aware created_at;
+    newest after aware() (naive as UTC) wins."""
+    from fakes import FakeForgeRuntime, make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+    import devcake.domain.repo_routing as rr
+
+    store = RunStore(tmp_path / "runs")
+    older = _run("alpha")
+    older.mission_pmo_id = "p1"
+    older.pmo_ref = "linear"
+    older.created_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    newer = _run("beta", seq=2)
+    newer.mission_pmo_id = "p1"
+    newer.pmo_ref = "linear"
+    newer.created_at = datetime(2026, 1, 2, 12, 0, 0)  # naive
+    store.save(older)
+    store.save(newer)
+
+    fr = FakeForgeRuntime(object())
+    fr._inst.name = "main"
+    mgr = make_mission_manager(
+        instance=INST,
+        forge_runtime=fr,
+        runs=type("Runs", (), {"store": store})(),
+    )
+    orig = rr.resolve_repo
+
+    def spy(mission, instance, names, history):
+        return orig(mission, instance, {"alpha", "beta"}, history)
+
+    rr.resolve_repo = spy
+    try:
+        name, reason = dispatch.resolve_repo(mgr, _m())
+    finally:
+        rr.resolve_repo = orig
+    assert name == "beta" and reason is None
+
+
 def test_internal_repo_naming_and_port_helper():
     """The internal-repo naming convention lives on the PORT (domain may
     derive it to detect prior internal routing across restarts) — not in the

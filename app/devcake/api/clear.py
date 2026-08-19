@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from opentelemetry import trace
 
 from ..adapters.dagu import DaguExecutor
 from ..adapters.files import RunLogStore, RunStore
@@ -22,6 +23,10 @@ from ..domain import failure_taxonomy
 from ..telemetry import OO_ORG, OO_URL
 
 log = logging.getLogger("devcake.clear")
+
+# ProxyTracer (api/poll.py precedent): resolves the real provider per span
+# start, so module scope needs no telemetry install.
+tracer = trace.get_tracer("devcake")
 
 DATA_DIR = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data"))
 STATE_DIR = DATA_DIR / "state"
@@ -384,3 +389,63 @@ async def clear_all(
                       "notebooks (notes stay; board claims pruned)",
                       "repo mirrors"],
     }
+
+
+async def run_clear_runs(
+    *,
+    store: RunStore,
+    executor: DaguExecutor,
+    messaging: Messaging,
+    runlog: RunLogStore | None,
+    internal_forge,
+    run_manager,
+    claims,
+    config,
+    poll_lock,
+    dispatch_lock,
+    missions_cache,
+    managers: dict,
+    shared_backend_degraded: dict,
+) -> dict[str, Any]:
+    """HTTP clear-runs request body (ADR-0015): locks, wipe, advisory clears.
+
+    Owns the orchestration formerly inlined in ``main.clear_runs`` so the
+    route stays a ≤4-statement forward. Wipe semantics stay in ``clear_all``;
+    lock order is load-bearing (poll_rt.lock → dispatch_lock).
+    """
+    with tracer.start_as_current_span("system.clear_runs") as span:
+        # Serialize the wipe against EVERY dispatch path (audit D5 #2/#8 +
+        # re-audit #0/#6). Two locks, acquired in a fixed order:
+        #   • poll_rt.lock stops the periodic poll cycle (and force-poll) —
+        #     the poll loop takes it at cycle start, so no cycle runs.
+        #   • bootstrap.dispatch_lock is the true chokepoint: EVERY dispatch
+        #     flavor (poll, oauth, steward "run now", hello) creates its ACL
+        #     user + container inside RunBootstrap.launch under this lock.
+        #     poll_rt.lock alone missed the three non-poll paths, so the
+        #     ACL/SIGTERM race D3 targeted was still reachable — this closes it.
+        # Order poll_rt.lock → dispatch_lock matches the poll loop's own order
+        # (run_cycle holds poll_rt.lock, then launch takes dispatch_lock), so
+        # there is no lock-ordering inversion / deadlock.
+        async with poll_lock, dispatch_lock:
+            result = await clear_all(
+                store, executor, messaging, runlog,
+                internal_forge=internal_forge,
+                run_manager=run_manager,
+                claims=claims, config=config)
+        missions_cache.clear()
+        for mgr in managers.values():
+            mgr._grace.clear()
+            mgr._grace_next.clear()
+        # ADR-0018: the backend-degraded map IS run history, so "start fresh"
+        # legitimately forgets it — and clearing it now avoids throttling with
+        # zero evidence until the next poll cycle recomputes.
+        shared_backend_degraded.clear()
+        # auth breakers stay — they reflect live credential health, not run history
+        span.set_attribute(
+            "devcake.clear.runs_deleted",
+            int((result.get("local") or {}).get("runs_deleted") or 0))
+        span.set_attribute(
+            "devcake.clear.dagu_deleted",
+            int((result.get("dagu") or {}).get("deleted") or 0))
+        span.set_attribute("devcake.clear.ok", bool(result.get("ok")))
+        return result

@@ -9,6 +9,7 @@ RunBootstrap; this module owns ingress, kill, and hello-specific fields.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
@@ -262,7 +263,9 @@ class RunManager:
             refresh_err: str | None = None
             if run.state in ("dispatched", "running"):
                 try:
-                    secret = self._runspec_secret(run)
+                    # Host-side Grok OAuth refresh (flock + sync httpx) must
+                    # not monopolize the event loop during runspec.get.
+                    secret = await asyncio.to_thread(self._runspec_secret, run)
                 except Exception as e:  # noqa: BLE001 — narrowed to CredentialRefreshError below; other types re-raise
                     # Fail closed at inject: host-side Grok OAuth refresh.
                     from .grok_oauth import CredentialRefreshError

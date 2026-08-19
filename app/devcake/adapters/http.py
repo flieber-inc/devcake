@@ -15,6 +15,7 @@ adapter set's clients (`aclose_adapters`); an adapter that is simply GC'd
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import httpx
@@ -52,19 +53,28 @@ async def forge_request(client: httpx.AsyncClient, method: str, url: str, *,
     three forge `_req`s let ConnectError/ReadTimeout escape raw while both
     PMO adapters wrapped correctly (the audit's first-tenant/second-tenant
     pattern). Network failures become ForgeError(status=None), which
-    health_probe's definitive-status check already reads as transient."""
+    health_probe's definitive-status check already reads as transient.
+    Success is HTTP 2xx only — 3xx raise ForgeError; non-JSON 2xx bodies
+    map through ForgeError rather than leaking json.JSONDecodeError."""
     from ..ports.forge import ForgeError
     try:
         resp = await client.request(method, url, headers=headers, **kwargs)
     except httpx.HTTPError as e:
         raise ForgeError(f"{method} {path_label} → network: {e}",
                          status=None) from e
-    if resp.status_code >= 400:
+    if resp.status_code < 200 or resp.status_code >= 300:
         raise ForgeError(f"{method} {path_label} → {resp.status_code}: "
                          f"{resp.text[:200]}", status=resp.status_code)
     if raw:                           # file_content wants bytes, not JSON
         return resp.content
-    return resp.json() if resp.text else None
+    if not resp.text:
+        return None
+    try:
+        return resp.json()
+    except json.JSONDecodeError as e:
+        raise ForgeError(
+            f"{method} {path_label} → {resp.status_code}: non-JSON body: "
+            f"{resp.text[:200]}", status=resp.status_code) from e
 
 
 def aclose_adapters(adapters) -> None:

@@ -3,14 +3,15 @@ docs/16 M11). Exit code is the verdict.
 
 Runs INSIDE the app container (imports devcake.*):
     docker compose exec -T app python - < scripts/contract_tests_forge.py
-Lane selection: DEVCAKE_CONTRACT_FORGE=gitea|github|gitlab (default gitea —
-the bundled instance; zero external tokens, wired into ci_suite.sh).
-Creates a scratch repo (+ scratch reviewer user on gitea) and deletes both.
 
-The gitea lane provisions its own fixtures via the admin API; the github/
-gitlab lanes exercise the same port battery against an EXISTING scratch repo
-named via DEVCAKE_CONTRACT_REPO_URL + the adapter's token envs (tester-side
-credentials — the M12 acceptance ritual supplies them; ISSUES #30).
+The **only wired live lane** is bundled Gitea (``DEVCAKE_CONTRACT_FORGE=gitea``,
+the default). Zero external tokens; wired into ci_suite.sh / GHA. Creates a
+scratch repo (+ scratch reviewer user) and deletes both.
+
+Non-gitea ``DEVCAKE_CONTRACT_FORGE`` values hard-exit by design. GitHub/GitLab
+live forge proof is the M12 acceptance ritual / ``scripts/acceptance.py``
+(tester-side tokens), not this script. Hermetic GitHub/GitLab coverage lives
+in ``app/tests/test_forge.py`` / ``test_forge_http.py``.
 """
 
 import asyncio
@@ -26,7 +27,25 @@ from devcake.adapters.registry import make_forge
 from devcake.config import RepoInstance
 
 PASS, FAIL = "PASS", "FAIL"
+# Pinned check count (ids 1–13). A vanished check must fail the battery —
+# never self-grade N/N from len(results) alone (CAKE-83).
+EXPECTED_ROWS = 13
 results: list[tuple[str, str, str]] = []
+
+
+def grade_contract_battery(results, expected_rows):
+    """Return process exit code for a live contract battery.
+
+    Fails when ``len(results) != expected_rows`` (even if every present row is
+    PASS) or when any row is FAIL. SKIP rows (PMO) count toward expected_rows
+    and do not fail the battery.
+    """
+    if len(results) != expected_rows:
+        return 1
+    for _num, _name, res in results:
+        if res == "FAIL" or res.startswith("FAIL"):
+            return 1
+    return 0
 
 
 def check(num: str, name: str, ok: bool, note: str = "") -> None:
@@ -120,9 +139,11 @@ class GiteaFixture:
             except Exception as e:
                 print(f"cleanup {path}: {e}")
         try:
-            # drop the battery's secret-store entries (repo/contract/*)
+            # drop the battery's secret-store entries (repo/contract/* and
+            # repo/bare/* written by check 6's no-reviewer approve probe)
             from devcake import secrets as _s
             _s.delete_connection_instance("repo", "contract")
+            _s.delete_connection_instance("repo", "bare")
         except Exception as e:
             print(f"cleanup secret store: {e}")
 
@@ -206,9 +227,10 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     check("10", "approval_footer renders", pr.url in footer)
 
     # 11 — pr_files lists the merged change set (deliverable packaging)
-    # merge SHA comes from ForgePort.pr_state (same path deliver uses)
+    # merge SHA comes from ForgePort.pr_state (same path deliver uses);
+    # a pr_state failure fails the battery loudly — no silent "main" default
     state_after = await forge.pr_state(n)
-    merge_sha = state_after.merge_commit_sha
+    merge_sha = state_after.merge_commit_sha or "main"
     files = await forge.pr_files(n)
     check("11", "pr_files lists changed files",
           any(f.path == "out.bin" for f in files), f"{[f.path for f in files]}")
@@ -216,7 +238,7 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     # 12 — file_content returns EXACT bytes (base64-safe binary)
     ok12, note12 = True, ""
     try:
-        raw = await forge.file_content("out.bin", merge_sha or "main")
+        raw = await forge.file_content("out.bin", merge_sha)
         ok12 = raw == b"contract battery \xf0\x9f\x8d\xb0"
         note12 = "" if ok12 else f"{raw!r}"
     except Exception as e:
@@ -242,13 +264,19 @@ def main():
         asyncio.run(run_battery(inst, fixture))
     finally:
         fixture.down()
-    width = max(len(nm) for _, nm, _ in results)
+    width = max((len(nm) for _, nm, _ in results), default=0)
     failures = 0
     for num, nm, res in results:
         print(f"  test {num:>2}  {nm:<{width}}  {res}")
         failures += res != PASS
-    print(f"\n{len(results) - failures}/{len(results)} passed")
-    raise SystemExit(1 if failures else 0)
+    code = grade_contract_battery(results, EXPECTED_ROWS)
+    if len(results) != EXPECTED_ROWS:
+        ids = [num for num, _, _ in results]
+        print(f"\nexpected {EXPECTED_ROWS} checks, got {len(results)} "
+              f"(ids={ids})")
+    else:
+        print(f"\n{len(results) - failures}/{EXPECTED_ROWS} passed")
+    raise SystemExit(code)
 
 
 main()

@@ -192,7 +192,7 @@ Empty or `change-me*` bootstrap passwords refuse app boot unless
 ```yaml
 # dev-run: one run = two dependent Dev containers (ADR-0025). Only non-secret
 # params; everything else via runspec.get. $DEVCAKE_WS_HOST is dagu-service env.
-timeout_sec: 9000               # 150 min belt-and-suspenders; the app watchdog kills at 120
+timeout_sec: 88200              # (max legal app timeout 1440 + 30) * 60; app owns the kill (docs/13 §4)
 max_clean_up_time_sec: 30       # grace between SIGTERM and SIGKILL on stop
 retry_policy:
   limit: 0                      # Dagu must NOT auto-retry: DevCake owns attempt counting

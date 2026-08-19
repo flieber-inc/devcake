@@ -126,16 +126,54 @@ def _count_label(n: int, cap: int) -> str:
 
 
 def _directive_body(run: Run, n: int, found: list, cap: int) -> str:
+    # Do NOT backtick `{seq}_REVIEW.md` — that shape is STEP_MARKER wire
+    # format and would render a phantom [attachment: …] line in ACTIVITY.md.
+    # Plain-language pointer keeps seq for the operator without the wire token.
     what = (_TRUNCATED if found and found[0] == _TRUNCATED
             else f"{len(found)} new feed entr{'y' if len(found) == 1 else 'ies'}")
     return (
         f"🔄 **Freshness re-review {_count_label(n, cap)}:** {what} "
         f"arrived after this review's context was assembled, so the approve "
-        f"verdict is withheld (report: `{run.seq}_REVIEW.md` in the feed). "
-        f"The next REVIEW evaluates ONLY whether the newer entries change "
-        f"that verdict. No reply needed — a reply posted during the "
-        f"re-review is itself new material and will trigger another one. "
+        f"verdict is withheld (the standing REVIEW report for seq {run.seq} "
+        f"is already in the feed). The next REVIEW evaluates ONLY whether "
+        f"the newer entries change that verdict. No reply needed — a reply "
+        f"posted during the re-review is itself new material and will "
+        f"trigger another one. "
         f"`devcake:freshness-rereview:{n}`")
+
+
+def _exhaustion_copy(
+        *, closes: bool, key: str, cap: int, names: str, more: str,
+        cost: float) -> tuple[str, str]:
+    """Feed disclosure + anomaly for a spent freshness re-review budget.
+
+    ``closes=True`` is the in-pipeline finalize path (standing approve
+    proceeds). ``closes=False`` is Force / merge-settle recheck — labels stay
+    on DEVCAKE-MERGE; nothing closes. Sharing one "Closing…" string across
+    both paths is the honesty bug this helper exists to prevent.
+    """
+    if closes:
+        body = (
+            f"⚠️ Closing with unevaluated activity: the freshness "
+            f"re-review budget ({cap}) is spent, so "
+            f"the standing approve verdict proceeds. Unevaluated: "
+            f"{names}{more}. Cumulative recorded mission cost: "
+            f"${cost:.2f}.")
+        anomaly = (f"{key}: closed with unevaluated feed activity "
+                   f"(re-review budget spent)")
+    else:
+        # Shared by operator Force and merge-settle — do not say "Force"
+        # (merge-settle also lands here) and do not say "Closing" (labels
+        # stay on DEVCAKE-MERGE; nothing closes).
+        body = (
+            f"⚠️ Freshness re-review declined: the freshness re-review "
+            f"budget ({cap}) is spent, so the mission remains parked on "
+            f"`DEVCAKE-MERGE` awaiting a human. Unevaluated: "
+            f"{names}{more}. Cumulative recorded mission cost: "
+            f"${cost:.2f}.")
+        anomaly = (f"{key}: freshness re-review budget spent; still parked "
+                   f"on DEVCAKE-MERGE")
+    return body, anomaly
 
 
 async def review_freshness_gate(mgr, run: Run) -> str:
@@ -172,20 +210,15 @@ async def review_freshness_gate(mgr, run: Run) -> str:
     if cap and count >= cap:
         names = "; ".join(_describe(found)[:5])
         more = f" (+{len(found) - 5} more)" if len(found) > 5 else ""
+        body, anomaly = _exhaustion_copy(
+            closes=True, key=run.mission_key, cap=cap, names=names,
+            more=more, cost=mission_cost(mgr, pmo_id))
 
         async def _disclose():
-            await mgr._feed(
-                pmo_id, "issue",
-                f"⚠️ Closing with unevaluated activity: the freshness "
-                f"re-review budget ({cap}) is spent, so "
-                f"the standing approve verdict proceeds. Unevaluated: "
-                f"{names}{more}. Cumulative recorded mission cost: "
-                f"${mission_cost(mgr, pmo_id):.2f}.")
+            await mgr._feed(pmo_id, "issue", body)
             mgr._audit(pmo_id, "freshness_exhausted",
                        f"{len(found)} unread entries at close")
-            mgr.anomalies[pmo_id] = (
-                f"{run.mission_key}: closed with unevaluated feed activity "
-                f"(re-review budget spent)")  # transient — pruned once done
+            mgr.anomalies[pmo_id] = anomaly  # transient — pruned once done
         await mgr._checkpoint(run, steps.REVIEW_FRESHNESS_EXHAUSTED, _disclose)
         return "exhausted"
 
@@ -252,18 +285,13 @@ async def recheck_and_maybe_rereview(
     if cap and count >= cap:
         names = "; ".join(_describe(found)[:5])
         more = f" (+{len(found) - 5} more)" if len(found) > 5 else ""
-        await mgr._feed(
-            pmo_id, "issue",
-            f"⚠️ Closing with unevaluated activity: the freshness "
-            f"re-review budget ({cap}) is spent, so "
-            f"the standing approve verdict proceeds. Unevaluated: "
-            f"{names}{more}. Cumulative recorded mission cost: "
-            f"${mission_cost(mgr, pmo_id):.2f}.")
+        body, anomaly = _exhaustion_copy(
+            closes=False, key=mission.key, cap=cap, names=names,
+            more=more, cost=mission_cost(mgr, pmo_id))
+        await mgr._feed(pmo_id, "issue", body)
         mgr._audit(pmo_id, "freshness_exhausted",
                    f"{reason}: {len(found)} unread entries")
-        mgr.anomalies[pmo_id] = (
-            f"{mission.key}: closed with unevaluated feed activity "
-            f"(re-review budget spent)")
+        mgr.anomalies[pmo_id] = anomaly
         return "exhausted"
 
     n = count + 1

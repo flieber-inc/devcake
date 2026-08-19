@@ -39,6 +39,7 @@ ATTRIBUTES: frozenset[str] = frozenset({
     "devcake.verdict",
     "devcake.cause",
     "devcake.reason",
+    "devcake.error.class",  # mission.give_up (CAKE-75); was missing from CAKE-86 pin
     "devcake.kill.reason",
     "devcake.merge.verdict",
     # Poll cycle counts

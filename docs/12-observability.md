@@ -88,6 +88,7 @@ devcake.cost.usd
 devcake.cost.usd_estimated
 devcake.dev_type
 devcake.discoveries.harvested
+devcake.error.class
 devcake.harness
 devcake.instance
 devcake.kill.reason

@@ -77,3 +77,52 @@ def test_fit_payload_behavior_parity():
     for f in ("result", "exit_code", "token_report"):
         assert out_h[f] == big[f]
     assert len(json.dumps(out_h).encode()) <= hello["MAX_ARTIFACT_BYTES"]
+
+
+# ADR-0029 closed TokenReport v1 key set — mirrored as a literal because
+# hello is a standalone one-file image (no runtime dep on tokens.py).
+_TOKEN_REPORT_V1_KEYS = (
+    "schema", "model", "input_tokens", "output_tokens", "cache_read_tokens",
+    "cache_write_tokens", "total_tokens", "reasoning_tokens", "num_turns",
+    "duration_ms", "cost_usd_native", "cost_usd_estimated", "source", "raw")
+
+
+def test_hello_token_report_is_token_report_v1():
+    """hello_dev.py posts TokenReport v1 (`source`), not pre-ADR-0029
+    `extraction_method`."""
+    tree = ast.parse(HELLO.read_text())
+    reports = []
+
+    class _Find(ast.NodeVisitor):
+        def visit_Dict(self, node):
+            keys = []
+            for k in node.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    keys.append(k.value)
+            if "token_report" in keys:
+                for k, v in zip(node.keys, node.values):
+                    if (isinstance(k, ast.Constant) and k.value == "token_report"
+                            and isinstance(v, ast.Dict)):
+                        reports.append(v)
+            self.generic_visit(node)
+
+    _Find().visit(tree)
+    assert reports, "hello_dev.py send_artifacts lost token_report"
+    report = reports[0]
+    got = {}
+    for k, v in zip(report.keys, report.values):
+        assert isinstance(k, ast.Constant) and isinstance(k.value, str)
+        if isinstance(v, ast.Constant):
+            got[k.value] = v.value
+        elif isinstance(v, ast.Dict) and not v.keys:
+            got[k.value] = {}
+        else:
+            got[k.value] = v
+    assert set(got) == set(_TOKEN_REPORT_V1_KEYS), (
+        f"hello token_report keys {sorted(set(got) ^ set(_TOKEN_REPORT_V1_KEYS))} "
+        "out of TokenReport v1 shape")
+    assert "extraction_method" not in got
+    assert got.get("source") == "unavailable"
+    assert got.get("schema") == 1
+    assert got.get("model") == "stub"
+    assert got.get("raw") == {}

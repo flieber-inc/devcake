@@ -100,11 +100,13 @@ class GitLabForge:
                 e.status == 403 and "rate limit" in str(e).lower())
             if e.status is None:
                 detail = "repository access failed (network)"
-            else:
+            elif definitive:
                 detail = (
                     f"repository access failed (HTTP {e.status}); grant api and "
                     "write_repository scopes"
                 )
+            else:
+                detail = f"repository access failed (HTTP {e.status})"
             return ForgeHealth(
                 ok=False, repository=self.project, transient=not definitive,
                 detail=detail,

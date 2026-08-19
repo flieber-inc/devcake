@@ -206,12 +206,9 @@ async def run_battery(inst: RepoInstance, fixture) -> None:
     check("10", "approval_footer renders", pr.url in footer)
 
     # 11 — pr_files lists the merged change set (deliverable packaging)
-    merge_sha = None
-    try:
-        raw = await forge._req("GET", f"/pulls/{n}")
-        merge_sha = raw.get("merge_commit_sha")
-    except Exception:
-        pass
+    # merge SHA comes from ForgePort.pr_state (same path deliver uses)
+    state_after = await forge.pr_state(n)
+    merge_sha = state_after.merge_commit_sha
     files = await forge.pr_files(n)
     check("11", "pr_files lists changed files",
           any(f.path == "out.bin" for f in files), f"{[f.path for f in files]}")

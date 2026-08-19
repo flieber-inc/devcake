@@ -10,6 +10,27 @@ from devcake.config import AppConfig, DevType, PMOInstance, RepoInstance
 from devcake.domain.orchestrator import MissionManager
 
 
+def stub_forge_runtime(breakers: dict | None = None) -> SimpleNamespace:
+    """Minimal ForgeRuntime stand-in for API route tests (clear_breaker /
+    clear_all_breakers parity with production — CAKE-118)."""
+    br: dict = dict(breakers or {})
+    fields: dict = {}
+
+    def clear_breaker(name: str) -> None:
+        br.pop(name, None)
+        fields.pop(name, None)
+
+    def clear_all_breakers() -> None:
+        br.clear()
+        fields.clear()
+
+    return SimpleNamespace(
+        breakers=br, breaker_fields=fields,
+        clear_breaker=clear_breaker,
+        clear_all_breakers=clear_all_breakers,
+    )
+
+
 class FakeForgeRuntime:
     """Single-forge stand-in for the M10 ForgeRuntime: every repo name
     resolves to the one forge/instance (tests predate repo multiplicity and
@@ -21,6 +42,7 @@ class FakeForgeRuntime:
             name="main", url="https://github.com/o/r")
         self.health: dict = {}
         self.breakers: dict = {}
+        self.breaker_fields: dict = {}
         self.internal: set = set()
 
     @property
@@ -37,15 +59,34 @@ class FakeForgeRuntime:
     def instance(self, name):
         return self._inst if self._forge is not None else None
 
-    def latch(self, name, reason):
+    def latch(self, name, reason, *, credential_field=None):
         self.breakers[name] = reason
+        if credential_field is not None:
+            self.breaker_fields[name] = credential_field
+
+    def clear_breaker(self, name):
+        self.breakers.pop(name, None)
+        self.breaker_fields.pop(name, None)
+
+    def clear_all_breakers(self):
+        self.breakers.clear()
+        self.breaker_fields.clear()
 
     def apply_health(self, name, data):
         self.health[name] = data
         if data.get("ok"):
+            latched_field = self.breaker_fields.get(name)
+            probe_field = data.get("credential_field")
+            if (latched_field is not None
+                    and probe_field != latched_field):
+                return
             self.breakers.pop(name, None)
+            self.breaker_fields.pop(name, None)
         elif not data.get("transient"):
             self.breakers[name] = data.get("detail", "")
+            field = data.get("credential_field")
+            if field in ("token", "token_ro"):
+                self.breaker_fields[name] = field
 
 
 class NullMessaging:

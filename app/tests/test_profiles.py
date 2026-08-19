@@ -176,14 +176,14 @@ def test_divergence_flips_on_config_edit_and_secret_rewrite(monkeypatch, tmp_pat
 def _wire_app(monkeypatch, tmp_path):
     sb, profiles, secrets, config_mod, tpl = _env(monkeypatch, tmp_path)
     from devcake.api import main as app_main
-    from fakes import make_services
+    from fakes import make_services, stub_forge_runtime
     cfg, dts = _small_world(config_mod, secrets)
     tpl.seed_devtype_prompts(dts)
     # ADR-0028: one test graph instead of six module-global patches
     monkeypatch.setattr(app_main, "services", make_services(
         config=cfg, dev_types=dts, reload_connections=lambda: None,
         store=SimpleNamespace(active=lambda: []), shared_breakers={},
-        forge_runtime=SimpleNamespace(breakers={}), managers={},
+        forge_runtime=stub_forge_runtime(), managers={},
         poll_rt=SimpleNamespace(lock=asyncio.Lock())))
     return sb, profiles, secrets, config_mod, app_main
 

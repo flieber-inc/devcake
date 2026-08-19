@@ -302,3 +302,107 @@ def test_make_forge_reference_only_uses_read_token(tmp_path, monkeypatch):
         for key in ("forge_token:docs", "forge_token_ro:docs",
                     "forge_reviewer:docs"):
             unregister_runtime_secret(key)
+
+
+# ── CAKE-118: credential-keyed breaker clear ────────────────────────────────
+# Dual-token notebook cards latch on the read-preferred clone credential
+# (token_ro). A write-preferred health probe must NOT clear that latch.
+
+
+def test_token_ro_latch_stays_when_write_token_probe_ok():
+    """Bug reproduction: notebook-clone latch + write-token-only probe success
+    must leave the breaker latched (CAKE-118)."""
+    rt = ForgeRuntime()
+    rt.forges["nb"] = object()
+    rt.latch("nb", "repository credential rejected in run-x",
+             credential_field="token_ro")
+    assert "nb" in rt.breakers
+    assert rt.breaker_fields["nb"] == "token_ro"
+
+    rt.apply_health("nb", {"ok": True, "detail": "",
+                           "credential_field": "token"})
+    assert "nb" in rt.breakers
+    assert rt.breaker_fields["nb"] == "token_ro"
+
+
+def test_token_ro_latch_clears_when_read_token_probe_ok():
+    """Self-heal: restored token_ro clears within one matching probe."""
+    rt = ForgeRuntime()
+    rt.forges["nb"] = object()
+    rt.latch("nb", "repository credential rejected in run-x",
+             credential_field="token_ro")
+    rt.apply_health("nb", {"ok": True, "detail": "",
+                           "credential_field": "token_ro"})
+    assert "nb" not in rt.breakers
+    assert "nb" not in rt.breaker_fields
+
+
+def test_work_repo_token_latch_clears_on_write_probe_ok():
+    """Control: work-repo latch keyed on token still clears on write probe."""
+    rt = ForgeRuntime()
+    rt.forges["main"] = object()
+    rt.latch("main", "repository credential rejected in run-y",
+             credential_field="token")
+    rt.apply_health("main", {"ok": True, "detail": "",
+                             "credential_field": "token"})
+    assert "main" not in rt.breakers
+    assert "main" not in rt.breaker_fields
+
+
+def test_single_token_card_latch_clear_unchanged(tmp_path, monkeypatch):
+    """Control: single-token (write-only) card latch + matching probe clears."""
+    _store_repo_secrets(tmp_path, monkeypatch, "app",
+                        token="write-token-0123456789")
+    rt = ForgeRuntime()
+    rt.rebuild(
+        [RepoInstance(name="app", url="https://github.com/o/app")],
+        lambda i: _ProbeForge(**OK_HEALTH))
+    rt.latch("app", "repository credential rejected in run-z",
+             credential_field="token")
+    data = run_coro(rt.refresh_health("app"))
+    assert data["ok"] is True
+    assert data.get("credential_field") == "token"
+    assert "app" not in rt.breakers
+    assert "app" not in rt.breaker_fields
+
+
+def test_refresh_health_reprobes_latched_token_ro_not_write(
+        tmp_path, monkeypatch):
+    """Dual-token card: latched token_ro must re-probe with the read token.
+    A write-only-green factory must leave the latch in place."""
+    _store_repo_secrets(tmp_path, monkeypatch, "nb",
+                        token="write-ok-0123456789abcd",
+                        token_ro="read-dead-0123456789ab")
+    probed: list[str] = []
+
+    def make(inst, *, credential_field=None):
+        # Default write-preferred matches make_forge; field-specific uses
+        # exactly that secret (empty when missing).
+        if credential_field == "token":
+            tok = inst.token
+        elif credential_field == "token_ro":
+            tok = inst.token_ro
+        else:
+            tok = inst.token or inst.token_ro
+        probed.append(credential_field or "default")
+
+        class _TokProbe:
+            async def health_probe(self):
+                if tok.startswith("write-ok"):
+                    return ForgeHealth(**OK_HEALTH)
+                return ForgeHealth(
+                    ok=False, repository="o/nb", can_push=False,
+                    can_read=False, transient=False,
+                    detail="repository access failed (HTTP 401)")
+
+        return _TokProbe()
+
+    rt = ForgeRuntime()
+    rt.rebuild([RepoInstance(name="nb", url="https://github.com/o/nb",
+                             forge="github")], make)
+    rt.latch("nb", "notebook clone auth", credential_field="token_ro")
+    data = run_coro(rt.refresh_health("nb"))
+    assert "token_ro" in probed
+    assert data["ok"] is False
+    assert "nb" in rt.breakers
+    assert rt.breaker_fields["nb"] == "token_ro"

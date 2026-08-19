@@ -306,10 +306,22 @@ def _forge_auth(mgr, run, row, detail, structured, exit_code):
     # auth → run.repo_ref; strict memory-notebook clone auth → that notebook
     # card. Never latch the work repo for a notebook-prefix failure — healthy
     # work-repo probes would clear it while DEV_FORGE_AUTH stays uncounted.
-    target = (notebook_card_from_forge_auth_detail(detail, run.memory_mounts)
-              or run.repo_ref)
+    #
+    # CAKE-118: key the latch by the credential field that path used.
+    # Notebook/memory clones are read-preferred (token_ro or token); work
+    # clone/push is the write path (token). Clear requires a probe of the
+    # same field — a healthy write token must not clear a dead token_ro.
+    notebook = notebook_card_from_forge_auth_detail(detail, run.memory_mounts)
+    target = notebook or run.repo_ref
+    if notebook is not None:
+        inst = mgr.forges.instance(notebook)
+        field = ("token_ro" if (inst is not None and inst.token_ro)
+                 else "token")
+    else:
+        field = "token"
     mgr.forges.latch(
-        target, f"repository credential rejected in {run.run_id}")
+        target, f"repository credential rejected in {run.run_id}",
+        credential_field=field)
     return f"{row.error_class}: " + (detail or row.default_detail)
 
 

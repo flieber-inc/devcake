@@ -40,6 +40,7 @@ class FakeForges:
         self._forge = FakeForge()
         self.internal = set(internal)
         self.breakers: dict[str, str] = {}
+        self.breaker_fields: dict[str, str] = {}
 
     def instance(self, name):
         return self.instances.get(name)
@@ -47,8 +48,10 @@ class FakeForges:
     def get(self, name):
         return self._forge if name in self.instances else None
 
-    def latch(self, name, reason):
+    def latch(self, name, reason, *, credential_field=None):
         self.breakers[name] = reason
+        if credential_field is not None:
+            self.breaker_fields[name] = credential_field
 
 
 class Repo(RepoInstance):

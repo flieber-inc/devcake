@@ -265,8 +265,15 @@ def make_gitea_adapter(url: str, token: str, reviewer_token: str | None = None):
     return GiteaForge(url, token, reviewer_token)
 
 
-def make_forge(inst) -> "ForgePort":
-    """Construct the adapter for one configured RepoInstance (config.repos[i])."""
+def make_forge(inst, *, credential_field: str | None = None) -> "ForgePort":
+    """Construct the adapter for one configured RepoInstance (config.repos[i]).
+
+    `credential_field` selects exactly one secret for auth (`token` or
+    `token_ro`) — used by ForgeRuntime when re-probing a field-keyed
+    breaker latch (CAKE-118). Default remains write-preferred
+    (`token or token_ro`); reference-only cards still fall through to
+    the read token.
+    """
     import os
     classes = _forge_classes()
     if inst.forge not in classes:
@@ -282,8 +289,15 @@ def make_forge(inst) -> "ForgePort":
                         ("reviewer", reviewer or "")):
         if value:
             register_runtime_secret(f"forge_{kind}:{inst.name}", value)
-    # reference-only repos (founder decision 2026-07-15) store no write token:
-    # build their adapter on the read token so health probes and reads work —
-    # write calls would 403, but routing never targets them with work
-    return classes[inst.forge](inst.url, inst.token or inst.token_ro, reviewer,
+    if credential_field == "token":
+        tok = inst.token
+    elif credential_field == "token_ro":
+        tok = inst.token_ro
+    else:
+        # reference-only repos (founder decision 2026-07-15) store no write
+        # token: build their adapter on the read token so health probes and
+        # reads work — write calls would 403, but routing never targets them
+        # with work
+        tok = inst.token or inst.token_ro
+    return classes[inst.forge](inst.url, tok, reviewer,
                                api_base=inst.api_base)

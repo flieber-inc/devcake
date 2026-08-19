@@ -104,7 +104,7 @@ def save_profile_body(body: dict, config, dev_types) -> dict:
 
 
 def apply_profile_body(name: str, *, config, dev_types, store, reload,
-                       shared_breakers, forge_breakers, managers=None) -> dict:
+                       shared_breakers, forge_runtime, managers=None) -> dict:
     """THE world-swap: replaces the sections the profile contains (a profile
     without secrets keeps the live ones). Blocked while runs are active;
     rollback-by-reapply on reload failure (settings_bundle)."""
@@ -117,9 +117,9 @@ def apply_profile_body(name: str, *, config, dev_types, store, reload,
         raise HTTPException(e.status, str(e))
     if "secrets" in result["applied"]:
         # fresh credentials clear latched auth state, same as the individual
-        # secret PUT endpoints do
+        # secret PUT endpoints do (CAKE-118: companion breaker_fields too)
         shared_breakers.clear()
-        forge_breakers.clear()
+        forge_runtime.clear_all_breakers()
     profiles_store.record_applied(name)
     audit_event("profile_applied",
                 f"name={name} sections={'+'.join(result['applied'])}")

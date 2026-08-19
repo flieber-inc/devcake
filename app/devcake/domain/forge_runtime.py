@@ -11,7 +11,10 @@ cleanly, dispatch refuses — a mission parked on DEVCAKE-MERGE whose repo the
 operator removed must neither crash nor silently wedge.
 
 Breakers latch per repo name ("repo:<name>"): a definitive credential
-failure on repo A never stops repo B's missions (docs/15 §4).
+failure on repo A never stops repo B's missions (docs/15 §4). A latch
+records which RepoInstance credential field failed (`token` vs
+`token_ro`); clear requires a successful probe of that same field
+(CAKE-118).
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -37,6 +40,12 @@ tracer = trace.get_tracer("devcake")
 # to stay clear of secondary rate limits.
 PROBE_CONCURRENCY = 8
 
+# Which RepoInstance credential field a breaker latch requires to heal.
+# Notebook/memory clones and mirror sync are read-preferred (token_ro);
+# work-repo clone/push and the default write-preferred make_forge probe
+# use token. Membership of `breakers` stays the schedule/steward gate.
+CredentialField = Literal["token", "token_ro"]
+
 
 class ForgeRuntime:
     def __init__(self):
@@ -44,6 +53,15 @@ class ForgeRuntime:
         self.instances: dict[str, "RepoInstance"] = {}
         self.health: dict[str, dict] = {}       # advisory; /health
         self.breakers: dict[str, str] = {}      # repo name → reason (latched)
+        # Companion to breakers: which credential field must probe ok to
+        # clear (CAKE-118). Schedule/steward still gate on `name in
+        # breakers` only. Direct breakers.pop/clear call sites must also
+        # drop the companion (clear_breaker / clear_all_breakers).
+        self.breaker_fields: dict[str, CredentialField] = {}
+        # Factory from rebuild — used to build a one-shot probe adapter
+        # authenticated with the latched credential field (domain must not
+        # import adapters/*).
+        self._make_forge = None
         # repo names created on the internal fallback forge (M11): these are
         # NOT config repos — registered dynamically per mission, and flagged
         # so the merge → zip-to-PMO delivery hook knows to fire
@@ -63,6 +81,7 @@ class ForgeRuntime:
         to a poll cycle. Internal entries leave ONLY via the admin delete
         endpoint (`unregister`), which pops forges/instances/internal plus
         health and breakers so Clear does not leave a latched ghost."""
+        self._make_forge = make_forge
         live: dict[str, "ForgePort"] = {}
         insts: dict[str, "RepoInstance"] = {}
         for inst in repos:
@@ -89,7 +108,7 @@ class ForgeRuntime:
                 del self.health[name]
         for name in list(self.breakers):
             if name not in live:
-                del self.breakers[name]
+                self._drop_breaker(name)
 
     def register_internal(self, name: str, inst, forge) -> None:
         """Register (idempotently) an auto-created internal-forge repo under
@@ -114,7 +133,20 @@ class ForgeRuntime:
         self.instances.pop(name, None)
         self.internal.discard(name)
         self.health.pop(name, None)
+        self._drop_breaker(name)
+
+    def _drop_breaker(self, name: str) -> None:
         self.breakers.pop(name, None)
+        self.breaker_fields.pop(name, None)
+
+    def clear_breaker(self, name: str) -> None:
+        """Operator/credential-write clear: drop latch + companion field."""
+        self._drop_breaker(name)
+
+    def clear_all_breakers(self) -> None:
+        """Profile/secret bulk clear — both maps."""
+        self.breakers.clear()
+        self.breaker_fields.clear()
 
     def get(self, name: str) -> "ForgePort | None":
         """None = the repo is not (or no longer) configured — the caller's
@@ -127,17 +159,28 @@ class ForgeRuntime:
     def apply_health(self, name: str, data: dict) -> None:
         """Single writer for per-repo health + breaker latching (moved from
         finalize.apply_forge_health): latch only on definitive (non-transient)
-        failures; a transient probe failure neither latches nor clears; any
-        OK probe clears the latch (docs/15 §4). No-op for unregistered names
-        (audit A29): a probe completing after a rebuild/delete removed the
-        repo must not resurrect its health entry — refresh_all walks only
-        registered repos, so it would sit stale until the next config PUT."""
+        failures; a transient probe failure neither latches nor clears; an
+        OK probe clears the latch only when it used the same credential
+        field the latch recorded (CAKE-118 / docs/15 §4). No-op for
+        unregistered names (audit A29): a probe completing after a
+        rebuild/delete removed the repo must not resurrect its health
+        entry — refresh_all walks only registered repos, so it would sit
+        stale until the next config PUT."""
         if name not in self.forges:
             log.info("health probe for unregistered repo %s dropped", name)
             return
         self.health[name] = data
         if data.get("ok"):
+            latched_field = self.breaker_fields.get(name)
+            probe_field = data.get("credential_field")
+            # A field-keyed latch clears only on a matching-field ok.
+            # Latches without a companion field (legacy / direct dict set)
+            # still clear on any ok — schedule gates stay name-in-breakers.
+            if (latched_field is not None
+                    and probe_field != latched_field):
+                return
             if self.breakers.pop(name, None) is not None:
+                self.breaker_fields.pop(name, None)
                 log.info("forge breaker CLEARED for repo %s", name)
         elif data.get("transient"):
             log.warning("forge probe transient failure on repo %s (breaker "
@@ -150,12 +193,22 @@ class ForgeRuntime:
                 span.set_attribute("devcake.reason",
                                    redact(str(data.get("detail") or ""))[:500])
         else:
-            self.latch(name, data.get("detail") or "repository is not writable")
+            field = data.get("credential_field")
+            self.latch(
+                name, data.get("detail") or "repository is not writable",
+                credential_field=field if field in ("token", "token_ro")
+                else None)
 
-    def latch(self, name: str, reason: str) -> None:
+    def latch(self, name: str, reason: str, *,
+              credential_field: CredentialField | None = None) -> None:
         """Manually latch a repo breaker (Dev-side DEV_FORGE_AUTH — the
         structured clone-credential classification, docs/15 §4). No-op for
-        unregistered names (audit A29 — see apply_health)."""
+        unregistered names (audit A29 — see apply_health).
+
+        `credential_field` records which RepoInstance secret must heal
+        before the latch clears (CAKE-118). Omit only when the failure
+        path cannot name a field; callers that know the clone/probe path
+        must pass it."""
         if name not in self.forges:
             log.warning("breaker latch for unregistered repo %s dropped", name)
             return
@@ -170,30 +223,89 @@ class ForgeRuntime:
                 span.set_attribute("devcake.reason", redact(reason)[:500])
                 span.set_status(Status(StatusCode.ERROR, redact(reason)[:200]))
         self.breakers[name] = reason
+        if credential_field is not None:
+            self.breaker_fields[name] = credential_field
+
+    def _probe_field_for(self, name: str, inst: "RepoInstance | None"
+                         ) -> CredentialField | None:
+        """Credential field this refresh should authenticate with.
+
+        Latched repos re-probe the field that failed. Unlatched probes use
+        the write-preferred make_forge default (token when present, else
+        token_ro for reference_only)."""
+        latched = self.breaker_fields.get(name)
+        if latched is not None:
+            return latched
+        return self._default_probe_field(inst)
+
+    def _default_probe_field(self, inst: "RepoInstance | None"
+                             ) -> CredentialField | None:
+        if inst is None:
+            return None
+        if inst.token:
+            return "token"
+        if inst.token_ro:
+            return "token_ro"
+        return None
+
+    def _forge_for_probe(self, name: str, inst: "RepoInstance | None",
+                         field: CredentialField | None):
+        """Return (adapter, ephemeral, field_used). Ephemeral adapters are
+        closed after the probe — same aclose discipline as rebuild.
+        `field_used` is what the returned adapter authenticates with (may
+        differ from `field` when the factory cannot build a field-specific
+        client)."""
+        registered = self.forges.get(name)
+        default_field = self._default_probe_field(inst)
+        if (field is None or inst is None or self._make_forge is None
+                or registered is None):
+            return registered, False, default_field
+        # Prefer the registered adapter when it already matches the field
+        # preference make_forge would pick (avoids extra clients on the
+        # common unlatched / write-token path).
+        if field == default_field:
+            return registered, False, field
+        try:
+            adapter = self._make_forge(inst, credential_field=field)
+        except TypeError:
+            # Test lambdas / factories that only accept inst — fall back
+            # to the registered adapter and stamp its real field so
+            # apply_health does not treat a write-token ok as a token_ro
+            # heal.
+            return registered, False, default_field
+        return adapter, adapter is not registered, field
 
     async def refresh_health(self, name: str) -> dict:
-        forge = self.forges.get(name)
         inst = self.instances.get(name)
-        if forge is None:
-            data = {"ok": False, "repository": "", "can_push": False,
-                    "transient": True, "detail": "repository not configured"}
-        else:
-            try:
-                data = (await forge.health_probe()).model_dump()
-            except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + transient detail, never raises into the poll loop
-                # a probe that could not run says nothing about the credential
-                data = {"ok": False, "repository": inst.url if inst else "",
-                        "can_push": False, "transient": True,
-                        "detail": f"forge probe failed: {str(e)[:200]}"}
-        # reference-only repos (read token, no write token — founder decision
-        # 2026-07-15): readable-but-not-writable is their EXPECTED healthy
-        # state, not a latchable failure. A read token that cannot even READ
-        # (can_read False) still latches normally.
+        wanted = self._probe_field_for(name, inst)
+        forge, ephemeral, field = self._forge_for_probe(name, inst, wanted)
+        try:
+            if forge is None:
+                data = {"ok": False, "repository": "", "can_push": False,
+                        "transient": True,
+                        "detail": "repository not configured"}
+            else:
+                try:
+                    data = (await forge.health_probe()).model_dump()
+                except Exception as e:  # noqa: BLE001 — probe contract: any failure → ok:False + transient detail, never raises into the poll loop
+                    # a probe that could not run says nothing about the credential
+                    data = {"ok": False, "repository": inst.url if inst else "",
+                            "can_push": False, "transient": True,
+                            "detail": f"forge probe failed: {str(e)[:200]}"}
+        finally:
+            if ephemeral and forge is not None:
+                from ..adapters.http import aclose_adapters
+                aclose_adapters([forge])
+        # reference-only repos (founder decision 2026-07-15): readable-but-not-writable
+        # is their EXPECTED healthy state, not a latchable failure. A read
+        # token that cannot even READ (can_read False) still latches normally.
         if (inst is not None and not data["ok"] and not data.get("transient")
                 and data.get("can_read") and inst.reference_only):
             data = {**data, "ok": True,
                     "detail": "reference-only: read access verified (no write "
                               "token stored — never a work target)"}
+        if field is not None:
+            data = {**data, "credential_field": field}
         self.apply_health(name, data)
         return data
 

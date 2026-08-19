@@ -470,7 +470,9 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
 
     class FakeForge:
         async def pr_state(self, n):
-            return PullRequest(number=n, url="http://gitea/pr/1", state="closed", merged=True)
+            return PullRequest(number=n, url="http://gitea/pr/1",
+                               state="closed", merged=True,
+                               merge_commit_sha="abc123")
         async def pr_files(self, n):
             return [PRFile(path="report/REPORT.md", status="added"),
                     PRFile(path="report/data.bin", status="added"),
@@ -478,8 +480,6 @@ def test_internal_zip_delivery(tmp_path, monkeypatch):
         async def file_content(self, path, ref):
             return {"report/REPORT.md": b"# report",
                     "report/data.bin": b"\x00\x01\x02"}[path]
-        async def _req(self, method, path):
-            return {"merge_commit_sha": "abc123"}
 
     class RT:
         internal = {"linear-t-1"}
@@ -540,13 +540,12 @@ def _mission_delivery_setup(tmp_path, feed_body):
     class FakeForge:
         async def pr_state(self, n):
             return PullRequest(number=n, url="http://gitea/pr/1",
-                               state="closed", merged=True)
+                               state="closed", merged=True,
+                               merge_commit_sha="abc123")
         async def pr_files(self, n):
             return [PRFile(path="a.txt", status="added")]
         async def file_content(self, path, ref):
             return b"data"
-        async def _req(self, method, path):
-            return {"merge_commit_sha": "abc123"}
 
     class RT:
         internal = {"linear-t-1"}
@@ -613,13 +612,12 @@ def test_external_zip_delivery_gated_by_toggle(tmp_path):
     class FakeForge:
         async def pr_state(self, n):
             return PullRequest(number=n, url="http://gh/pr/1",
-                               state="closed", merged=True)
+                               state="closed", merged=True,
+                               merge_commit_sha="deadbeef")
         async def pr_files(self, n):
             return [PRFile(path="src/a.py", status="added")]
         async def file_content(self, path, ref):
             return b"print(1)\n"
-        async def _req(self, method, path):
-            return {"merge_commit_sha": "deadbeef"}
 
     class RT:
         internal = set()          # external — not in forges.internal
@@ -678,13 +676,12 @@ def test_external_mission_zip_respects_toggle(tmp_path):
     class FakeForge:
         async def pr_state(self, n):
             return PullRequest(number=n, url="http://gh/pr/1",
-                               state="closed", merged=True)
+                               state="closed", merged=True,
+                               merge_commit_sha="abc")
         async def pr_files(self, n):
             return [PRFile(path="a.txt", status="added")]
         async def file_content(self, path, ref):
             return b"data"
-        async def _req(self, method, path):
-            return {"merge_commit_sha": "abc"}
 
     class RT:
         internal = set()
@@ -709,6 +706,147 @@ def test_external_mission_zip_respects_toggle(tmp_path):
     cfg.attach_merged_changeset_to_pmo = True
     run_coro(mgr.deliver_internal_zip_for_mission(m, pr))
     assert "T-1-deliverable.zip" in uploaded
+
+
+def test_deliver_zip_ref_from_pr_state_merge_commit_sha(tmp_path):
+    """CAKE-77: deliver pins the zip to PullRequest.merge_commit_sha from
+    pr_state — never via adapter-private forge._req."""
+    from devcake.ports.forge import PRFile, PullRequest
+    from fakes import make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+
+    uploaded = {}
+    seen_refs: list[str] = []
+    req_calls: list[tuple[str, str]] = []
+
+    class FakePMO:
+        async def upload_attachment(self, pmo_id, name, data):
+            uploaded[name] = data
+            return f"https://pmo/{name}"
+
+        def capabilities(self):
+            from devcake.ports.pmo import PMOCapabilities
+            return PMOCapabilities(attachment_max_bytes=10 * 1024 * 1024,
+                                   relations_supported=True)
+
+    class FakeForge:
+        async def pr_state(self, n):
+            return PullRequest(number=n, url="http://gitea/pr/1",
+                               state="closed", merged=True,
+                               merge_commit_sha="deadbeef")
+
+        async def pr_files(self, n):
+            return [PRFile(path="a.txt", status="added")]
+
+        async def file_content(self, path, ref):
+            seen_refs.append(ref)
+            return b"data"
+
+        async def _req(self, method, path):
+            # Reach-through detector: recording beats raising — a swallowed
+            # exception would still yield the "main" fallback and hide the leak.
+            req_calls.append((method, path))
+            return {"merge_commit_sha": "should-not-be-used"}
+
+    class RT:
+        internal = {"linear-t-1"}
+
+        def get(self, name):
+            return FakeForge()
+
+    mgr = make_mission_manager(
+        pmo=FakePMO(), forge_runtime=RT(),
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
+    feed = []
+
+    async def _feed(pmo_id, kind, md):
+        feed.append(md)
+
+    mgr._feed = _feed
+    mgr._attachment_cap = lambda: 10 * 1024 * 1024
+
+    run = _run("linear-t-1")
+    run.mission_pmo_id = "p1"
+    run.mission_key = "T-1"
+    run.finalized_steps = []
+    pr = PullRequest(number=1, url="http://gitea/pr/1",
+                     state="closed", merged=True)
+    run_coro(mgr.deliver_internal_zip(run, pr))
+
+    assert "T-1-deliverable.zip" in uploaded
+    assert seen_refs == ["deadbeef"]
+    assert req_calls == []
+
+
+def test_deliver_zip_ref_falls_back_to_main_without_req(tmp_path):
+    """CAKE-77: when neither pr_state nor the inbound PR carries
+    merge_commit_sha, the zip ref is the default branch name — still with
+    no forge._req reach-through."""
+    from devcake.ports.forge import PRFile, PullRequest
+    from fakes import make_mission_manager
+    from devcake.adapters.files.run_store import RunStore
+
+    uploaded = {}
+    seen_refs: list[str] = []
+    req_calls: list[tuple[str, str]] = []
+
+    class FakePMO:
+        async def upload_attachment(self, pmo_id, name, data):
+            uploaded[name] = data
+            return f"https://pmo/{name}"
+
+        def capabilities(self):
+            from devcake.ports.pmo import PMOCapabilities
+            return PMOCapabilities(attachment_max_bytes=10 * 1024 * 1024,
+                                   relations_supported=True)
+
+    class FakeForge:
+        async def pr_state(self, n):
+            return PullRequest(number=n, url="http://gitea/pr/1",
+                               state="closed", merged=True,
+                               merge_commit_sha=None)
+
+        async def pr_files(self, n):
+            return [PRFile(path="a.txt", status="added")]
+
+        async def file_content(self, path, ref):
+            seen_refs.append(ref)
+            return b"data"
+
+        async def _req(self, method, path):
+            req_calls.append((method, path))
+            return {"merge_commit_sha": "should-not-be-used"}
+
+    class RT:
+        internal = {"linear-t-1"}
+
+        def get(self, name):
+            return FakeForge()
+
+    mgr = make_mission_manager(
+        pmo=FakePMO(), forge_runtime=RT(),
+        runs=type("Runs", (), {"store": RunStore(tmp_path / "runs")})(),
+    )
+    feed = []
+
+    async def _feed(pmo_id, kind, md):
+        feed.append(md)
+
+    mgr._feed = _feed
+    mgr._attachment_cap = lambda: 10 * 1024 * 1024
+
+    run = _run("linear-t-1")
+    run.mission_pmo_id = "p1"
+    run.mission_key = "T-1"
+    run.finalized_steps = []
+    pr = PullRequest(number=1, url="http://gitea/pr/1",
+                     state="closed", merged=True)
+    run_coro(mgr.deliver_internal_zip(run, pr))
+
+    assert "T-1-deliverable.zip" in uploaded
+    assert seen_refs == ["main"]
+    assert req_calls == []
 
 
 def test_onboard_runspec_carries_extra_repo_read_tokens(tmp_path, monkeypatch):

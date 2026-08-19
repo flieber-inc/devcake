@@ -13,9 +13,10 @@ auto-merge off, DevCake waits for you; with it on, the app merges an approved
 pull request before marking the mission Done.
 
 It runs on **your** machine, with **your** model subscriptions or API
-credentials and **your** forge. There is no hosted SaaS and no second
-day-to-day work queue: the board drives missions, while the bundled admin UI
-handles configuration and operations.
+credentials and **your** forge (code-hosting platform — GitHub / GitLab /
+Gitea). There is no hosted SaaS and no second day-to-day work queue: the board
+drives missions, while the bundled admin UI handles configuration and
+operations.
 
 > Anyone who can write tickets on the configured team (or land content in a
 > configured repo) can influence agents that hold forge and model credentials.
@@ -57,8 +58,9 @@ its evidence status stated claim by claim, and what would change our mind — is
 
 ## Who this is for
 
-- Teams already running work on a **PMO board** (Linear and Gitea Issues
-  launch-supported; GitHub Issues and GitLab Issues are **experimental**)
+- Teams already running work on a **PMO board** (project-management system —
+  Linear and Gitea Issues launch-supported; GitHub Issues and GitLab Issues
+  are **experimental**)
 - A **single operator** who will **self-host on a dedicated machine** (Docker,
   Bake, your forge, your models) — not multi-tenant SaaS
 - People who want **receipts** (transcripts, costs, traces) more than a chat copilot
@@ -211,7 +213,7 @@ cp .env.example .env
 # Later restarts (images already baked):  ./up.sh
 # Configure Dev Types in the admin UI — the host baker compiles those pins.
 
-open http://localhost:8080   # basic auth → Config / the Adapters pages → secrets + connection tests
+# In a browser: http://localhost:8080  — basic auth → Config / Adapters → secrets + connection tests
 # Telemetry connectivity: app boot auto-provisions the OO ingest user from OO_INGEST_*.
 # Optional dashboard/alerts only: python3 scripts/provision_oo.py  (docs/12 §5)
 ```

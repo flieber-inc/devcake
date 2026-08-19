@@ -131,11 +131,13 @@ class GiteaForge:
             definitive = e.status in (401, 403, 404)
             if e.status is None:
                 detail = "repository access failed (network)"
-            else:
+            elif definitive:
                 detail = (
                     f"repository access failed (HTTP {e.status}); the "
                     f"token needs write:repository scope and repo access"
                 )
+            else:
+                detail = f"repository access failed (HTTP {e.status})"
             return ForgeHealth(
                 ok=False, repository=repository, transient=not definitive,
                 detail=detail)

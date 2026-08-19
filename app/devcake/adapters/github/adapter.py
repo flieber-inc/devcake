@@ -90,10 +90,12 @@ class GitHubForge:
                 e.status == 403 and "rate limit" in str(e).lower())
             if e.status is None:
                 detail = "repository access failed (network)"
-            else:
+            elif definitive:
                 hint = ("; for a fine-grained PAT, select this repository and grant "
                         "Contents and Pull requests read/write")
                 detail = f"repository access failed (HTTP {e.status}){hint}"
+            else:
+                detail = f"repository access failed (HTTP {e.status})"
             return ForgeHealth(ok=False, repository=repository, transient=not definitive,
                                detail=detail)
         can_push = bool((repo.get("permissions") or {}).get("push"))

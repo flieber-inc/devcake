@@ -588,6 +588,35 @@ def test_health_probe_distinguishes_transient_from_credential_failure():
     assert ok.ok and not ok.transient
 
 
+@pytest.mark.parametrize("forge_factory,status,text,hint,expect_hint", [
+    # Transient integer statuses: plain HTTP detail, no credential lecture.
+    (gh, 500, "err", "fine-grained PAT", False),
+    (gl, 500, "err", "write_repository", False),
+    (gt, 500, "err", "write:repository", False),
+    (gh, 403, "API rate limit exceeded for install", "fine-grained PAT", False),
+    (gl, 403, "API rate limit exceeded", "write_repository", False),
+    # Definitive credential/permission failures: hint remains.
+    (gh, 403, "Resource not accessible", "fine-grained PAT", True),
+    (gh, 404, "Not Found", "fine-grained PAT", True),
+    (gl, 403, "forbidden", "write_repository", True),
+    (gl, 404, "Not Found", "write_repository", True),
+    (gt, 403, "forbidden", "write:repository", True),
+    (gt, 404, "Not Found", "write:repository", True),
+])
+def test_health_probe_credential_hint_only_on_definitive(
+        forge_factory, status, text, hint, expect_hint):
+    """Credential/scope lecture is appended only when the probe is definitive
+    (CAKE-121). Transient 5xx / rate-limit 403 keep the plain HTTP copy."""
+    h = _probe_error(forge_factory(), status, text)
+    assert h.detail.startswith(f"repository access failed (HTTP {status})")
+    assert h.transient is (not expect_hint)
+    if expect_hint:
+        assert hint in h.detail
+    else:
+        assert hint not in h.detail
+        assert h.detail == f"repository access failed (HTTP {status})"
+
+
 def test_api_base_defaults_and_overrides():
     assert gh().api == "https://api.github.com"
     assert GitHubForge("https://github.com/o/r", "t",

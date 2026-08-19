@@ -18,11 +18,11 @@
 
 > **Amended by ADR-0028 (2026-08-04):** Decision 3's "main.py is composition
 > root" still governs *where routes live* and the ≤4-statement forward ratchet
-> (guard-tested residual count is authority — seven, not the C6 draft's nine).
-> **Object-graph construction** moved to `api/services.build_services()`;
-> `main.py` is wiring + route forwards only. Read ADR-0028 for the factory
-> seam; do not treat Decision 3 alone as current law on *where* dependencies
-> are built.
+> (guard-tested residual count is authority — currently only `run_steward`;
+> earlier drafts claimed nine then seven). **Object-graph construction** moved
+> to `api/services.build_services()`; `main.py` is wiring + route forwards
+> only. Read ADR-0028 for the factory seam; do not treat Decision 3 alone as
+> current law on *where* dependencies are built.
 
 ## Decision 1 — the manager is DI container + advisory state + verbs
 
@@ -66,15 +66,15 @@ Endpoint behavior lives in `api/` application-service modules (the
 as forwards with **unchanged coroutine names and signatures** — tests call
 them directly (`app_main.save_profile(...)`), so the forward layer is the
 API's stable test seam. No `APIRouter`: it would be a second routing idiom for
-zero behavior. Every `@app.<verb>` body is ≤ 4 statements, AST-guarded with an
-allowlist that may only shrink, never grow. It holds **seven** read-side
-residuals — `dispatch_hello` (CI fixture), the `run_mapper`/`oauth` trio,
-and `get_run_log`/`stream_run_log`/`clear_runs` — not the single-entry end
-state an earlier draft imagined. (The C6 close-out counted nine; `list_runs`
-and `get_run` were since forwarded — the ratchet shrank and this prose
-lagged until the 2026-08 truth sweep.) The guard test
-(`test_structure_guards.py`) is the source of truth. Poll machinery lives in `api/poll.py` as `PollRuntime`; health probes
-in `api/health.py`.
+zero behavior. Every `@app.<verb>` body is ≤ 4 statements, counted
+**recursively** through compound bodies (`with`/`async with`/`try`/`if`/
+nested `def`) and AST-guarded with an allowlist that may only shrink, never
+grow. The live allowlist holds only `run_steward`; earlier residuals
+(`dispatch_hello`, oauth/mapper trio, `get_run`/`get_run_log`/
+`stream_run_log`/`clear_runs`) are thin forwards into service modules. The
+guard test (`test_structure_guards.py`) is the source of truth — including
+app-object name aliases (`api = app` then `@api.post`). Poll machinery lives
+in `api/poll.py` as `PollRuntime`; health probes in `api/health.py`.
 
 ## Decision 4 — module-public functions are the sanctioned test seam
 

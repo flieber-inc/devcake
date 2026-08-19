@@ -2,7 +2,20 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+
+
+def inject_clone_user(url: str, user: str) -> str:
+    """Embed ``user@`` after an http(s) scheme for forge clone URLs.
+
+    Shared by the primary work-repo clone, activity clone, and sibling
+    (extra/memory) clones so scheme coverage cannot drift. Empty user
+    leaves the URL unchanged. Non-http(s) schemes are untouched.
+    """
+    if not user:
+        return url
+    return re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
 
 
 def set_origin_cmd(dest: str, clone_url: str) -> list:
@@ -43,8 +56,6 @@ def clone_memory_repos(mounts, memory_dir, runner=None, failures=None):
 def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
                     runner=None, failures=None):
     """Shared mirror/askpass/LFS clone for extra and memory siblings."""
-    import re as _re
-
     from .provision import mirror_clone_argv, mirror_clone_env
     runner = runner or subprocess.run
     notes = []
@@ -52,8 +63,7 @@ def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
         url = x.get("url") or ""
         user = x.get("clone_user") or ""
         mirror = x.get("mirror_path") or ""
-        clone_url = (_re.sub(r"^(https?://)", rf"\g<1>{user}@", url)
-                     if user else url)
+        clone_url = inject_clone_user(url, user)
         slug = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
         dest_name = (x.get("name") or slug) if dest_by == "card" else slug
         env = {**os.environ, "DEVCAKE_FORGE_TOKEN": x.get("token") or ""}

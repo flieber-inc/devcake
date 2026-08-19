@@ -158,6 +158,7 @@ from devcake_dev.workspace.clone import (  # noqa: E402
     clone_error_class,
     clone_extra_repos,
     clone_memory_repos,
+    inject_clone_user,
     mirror_clone_error_class,
     set_origin_cmd,
 )
@@ -425,7 +426,7 @@ def _provision_workspace(spec: dict, env: dict) -> pathlib.Path:
         print(note)
 
     clone_user, _gn, _ge, cli_envs = forge_dialect(env)
-    clone_url = repo_url.replace("https://", f"https://{clone_user}@")
+    clone_url = inject_clone_user(repo_url, clone_user)
     repo_name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
     repo_dir = WORKSPACE / "repo"  # canonical path; dir inside named after the repo
     # git auth for clone AND the harness's own push (docs/03 §3, askpass set

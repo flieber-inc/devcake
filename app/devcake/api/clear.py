@@ -245,6 +245,7 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
     r = messaging.redis
     reply_deleted = 0
     users_deleted = 0
+    errors: list[str] = []
     # reply streams + any other devcake:* keys except we recreate ingress group
     async for key in r.scan_iter(match="devcake:*", count=200):
         if key == INGRESS:
@@ -254,6 +255,7 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
             reply_deleted += 1
         except Exception as e:  # noqa: BLE001 — clear-runs teardown is best-effort per key; failure logged, sweep continues
             log.warning("redis delete %s: %s", key, e)
+            errors.append(f"delete {key}: {str(e)[:160]}")
     # trim ingress rather than drop it (keeps consumer group)
     try:
         await r.xtrim(INGRESS, maxlen=0, approximate=False)
@@ -267,13 +269,17 @@ async def clear_redis(messaging: Messaging) -> dict[str, Any]:
         users_deleted = await messaging.revoke_leftover_run_users()
     except Exception as e:  # noqa: BLE001 — clear-runs teardown is best-effort per subsystem; failure logged, sweep continues
         log.warning("redis ACL cleanup: %s", e)
-    # in-process chunk reassembly
-    messaging._chunks.clear()
-    return {
+        errors.append(f"acl cleanup: {str(e)[:160]}")
+    # in-process chunk reassembly via the Messaging chokepoint (no private reach-through)
+    messaging.clear_chunk_assemblies()
+    out: dict[str, Any] = {
         "keys_deleted": reply_deleted,
         "ingress_trimmed": ingress_trimmed,
         "acl_users_deleted": users_deleted,
     }
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 async def clear_activity_repos(internal_forge) -> dict[str, Any]:
@@ -328,11 +334,13 @@ async def clear_all(
     # them). Runs inside the caller's dispatch_lock wrap, so no pre-create
     # can race the wipe.
     workspaces_removed = 0
+    workspaces_error: str | None = None
     if run_manager is not None:
         try:
             workspaces_removed = run_manager.workspaces.wipe_all()
-        except Exception:  # noqa: BLE001 — best-effort like every subsystem here; the sweep reclaims stragglers
+        except Exception as e:  # noqa: BLE001 — best-effort like every subsystem here; the sweep reclaims stragglers
             log.exception("workspace wipe failed")
+            workspaces_error = str(e)[:300]
     dagu: dict[str, Any]
     oo: dict[str, Any]
     redis_info: dict[str, Any]
@@ -371,11 +379,18 @@ async def clear_all(
         local.get("runs_deleted"), dagu.get("deleted"), oo.get("deleted"),
         activity.get("deleted"),
     )
-    return {
-        "ok": not dagu.get("failed") and not oo.get("errors") and "error" not in dagu
-              and "error" not in oo and "error" not in redis_info
-              and not activity.get("errors") and "error" not in drain
-              and not drain.get("undrained"),
+    redis_failed = ("error" in redis_info
+                    or redis_info.get("ingress_trimmed") is False
+                    or bool(redis_info.get("errors")))
+    ok = (not dagu.get("failed") and not oo.get("errors")
+          and "error" not in dagu and "error" not in oo
+          and not redis_failed
+          and not activity.get("errors") and "error" not in drain
+          and not drain.get("undrained")
+          and "error" not in claims_pruned
+          and workspaces_error is None)
+    out: dict[str, Any] = {
+        "ok": ok,
         "stopped": drain,
         "local": local,
         "workspaces_removed": workspaces_removed,
@@ -389,6 +404,9 @@ async def clear_all(
                       "notebooks (notes stay; board claims pruned)",
                       "repo mirrors"],
     }
+    if workspaces_error is not None:
+        out["workspaces_error"] = workspaces_error
+    return out
 
 
 async def run_clear_runs(

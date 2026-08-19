@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security policy
+    url: https://github.com/flieber-inc/devcake/blob/main/SECURITY.md
+    about: Credential- or RCE-class defects and hard-control failures — use the private channel in SECURITY.md, not a public issue with exploit detail.
+  - name: Contributing guide
+    url: https://github.com/flieber-inc/devcake/blob/main/CONTRIBUTING.md
+    about: Build, test, and pull-request norms before opening a contribution.

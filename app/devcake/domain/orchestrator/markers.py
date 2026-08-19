@@ -297,17 +297,19 @@ AUDIT_PATH = Path(os.environ.get("DEVCAKE_DATA_DIR", "/data")) / "state" / "even
 # The old reader re-parsed the ENTIRE append-only audit log once per candidate
 # mission per poll cycle — O(missions × log size) JSON on a file only
 # clear-runs ever truncates. This incremental reader parses only the appended
-# tail: the module-level state carries (path, byte offset, per-pmo marks) and
-# resets itself when the path changes (tests monkeypatch AUDIT_PATH) or the
-# file shrank (clear-runs truncation). Safe without locks: the writer
+# tail: the module-level state carries (path, byte offset, per-(instance,pmo)
+# marks) and resets itself when the path changes (tests monkeypatch AUDIT_PATH)
+# or the file shrank (clear-runs truncation). Safe without locks: the writer
 # (feed._audit) is synchronous inside the one event loop, so a reader never
-# observes a partial line.
+# observes a partial line. Marks are keyed by (instance, pmo_id) so colliding
+# bare ids across PMO instances do not reset each other's watermarks.
 _GIVEUP_STATE: dict = {"path": None, "offset": 0, "marks": {}}
 
 
-def last_giveup_at(pmo_id: str):
-    """Timestamp of the newest `devcake_failed` audit event for pmo_id, or
-    None. Incremental over AUDIT_PATH (see block comment)."""
+def last_giveup_at(pmo_id: str, instance: str = ""):
+    """Timestamp of the newest `devcake_failed` audit event for
+    (instance, pmo_id), or None. Incremental over AUDIT_PATH (see block
+    comment). Missing `instance` on a legacy line keys as \"\"."""
     import json as _json
     from datetime import datetime as _dt, timezone as _tz
     st = _GIVEUP_STATE
@@ -329,8 +331,9 @@ def last_giveup_at(pmo_id: str):
                         ts = _dt.fromisoformat(e["ts"])
                         if ts.tzinfo is None:
                             ts = ts.replace(tzinfo=_tz.utc)
-                        st["marks"][e.get("pmo_id")] = ts
+                        key = (e.get("instance") or "", e.get("pmo_id"))
+                        st["marks"][key] = ts
                 except Exception:  # noqa: BLE001 — one bad audit line must never halt scheduling
                     continue
             st["offset"] = f.tell()
-    return st["marks"].get(pmo_id)
+    return st["marks"].get((instance or "", pmo_id))

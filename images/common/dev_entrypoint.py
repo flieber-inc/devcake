@@ -249,8 +249,23 @@ def _apply_backend_aim(spec: dict, env: dict, extra: list, stop) -> list:
     from devcake_dev.harness.aim import (
         aim, aimed_model_id, api_key_from_env, merge_grok_config_toml,
     )
+    # docs/07 §3: runspec → image-baked ENV only — never a Claude default.
     template = (env.get("DEVCAKE_HARNESS")
-                or os.environ.get("DEVCAKE_HARNESS", "claude-code"))
+                or os.environ.get("DEVCAKE_HARNESS")
+                or "").strip()
+    if not template:
+        detail = ("DEVCAKE_HARNESS missing — refusing Claude fall-through "
+                  "(runspec or image ENV must set it)")
+        print(f"backend aim refused: {detail}", file=sys.stderr)
+        send_artifacts({
+            "result": None, "exit_code": 14,
+            "error_class": "DEV_MCP_SETUP",
+            "error_detail": detail,
+            "transcript_md": f"Backend aim refused:\n\n{detail}\n",
+            "token_report": unavailable_report()})
+        if stop is not None:
+            stop.set()
+        sys.exit(14)
     model = aimed_model_id(template, env.get("DEVCAKE_MODEL", ""))
     if model != (env.get("DEVCAKE_MODEL") or "").strip():
         env["DEVCAKE_MODEL"] = model
@@ -623,7 +638,9 @@ def harness_main() -> None:
 
     # ── harness (docs/08 §§1,3) ──────────────────────────────────────────────
     # Aiming (env / HOME files / extra argv) always runs before additive setup.
-    harness = os.environ.get("DEVCAKE_HARNESS", "claude-code")
+    # docs/07 §3: runspec (already merged into os.environ) → image ENV only.
+    # Empty ⇒ get_dialect raises → _fail_20. Never fall through to Claude.
+    harness = (os.environ.get("DEVCAKE_HARNESS") or "").strip()
     plan_mode = env.get("DEVCAKE_MISSION_TYPE") == "PLAN"
     extra = shlex.split(env.get("DEVCAKE_EXTRA_ARGS", ""))
     extra = _apply_backend_aim(spec, env, extra, stop)
@@ -909,6 +926,7 @@ def harness_main() -> None:
                 fail(code, cls, fault["detail"],
                      f"plan mode: {fault['reason']}\n\n{fault['detail']}")
             if len((result_text or "").strip()) < 200:  # a real plan is never this short
+                forensics["terminal"] = terminal_ev
                 fail(11, "DEV_BAD_OUTPUT",
                      f"plan mode returned {len(result_text or '')} chars",
                      f"plan mode returned no usable plan "

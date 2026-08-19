@@ -14,7 +14,7 @@
 | [0004](0004-label-namespace-and-versioning.md) | Label namespace and versioning | Accepted. **Amended:** eleven managed labels incl. `DEVCAKE-DISCOVERY` (`02` §5 / ADR-0033) |
 | [0005](0005-no-lock-atomicity-via-pmo-state.md) | No-lock atomicity via PMO state | Accepted. The single-process premise is now test-enforced (`test_repo_structural.py`) |
 | [0006](0006-projects-always-decompose.md) | Projects always decompose | Accepted |
-| [0007](0007-mission-ordering-and-human-handoff.md) | Mission ordering + human hand-off | Accepted |
+| [0007](0007-mission-ordering-and-human-handoff.md) | Mission ordering + human hand-off | Accepted; **MAPPER→STEWARD rename** (ADR-0033 D10 staffing) — banner in-body |
 | [0008](0008-pluggable-pmo-and-forge-adapters.md) | Pluggable PMO and forge adapters | **Partially superseded** — three decisions struck in-body (schema v4, ADR-0009, multi-PMO) |
 | [0009](0009-manager-per-pmo-instance.md) | One MissionManager per PMO instance | Accepted, **amended** (cross-instance blocker resolution) |
 | [0010](0010-internal-fallback-forge.md) | Internal fallback forge (bundled Gitea) | Accepted |
@@ -22,16 +22,16 @@
 | [0012](0012-decomposition-depth-and-edge-inheritance.md) | Decomposition depth + edge inheritance | Accepted |
 | [0013](0013-settings-bundle-profiles-and-export.md) | Settings bundle, profiles, export | Accepted |
 | [0014](0014-activity-feed-fidelity-and-activity-repos.md) | Activity feed fidelity + activity repos | Accepted |
-| [0015](0015-orchestrator-module-functions-and-api-composition.md) | Orchestrator module functions + composition root | Accepted, **amended by ADR-0028** (the composition root moved behind `build_services()`; the route-forward ratchet is unchanged). Close-out inventory drifted (the guard test allows seven residual forwards, the prose said nine — the ratchet is the truth) |
-| [0016](0016-skills-and-prompt-assembly.md) | Skills and prompt assembly | Accepted; **addendum 1** (2026-08-13) external skill repos over the ADR-0024 mirror; **addendum 2** (2026-08-14) dedicated `skill_sources` connections — supersedes addendum-1 decision 1 (repo-card sources; `skills_subdir` deleted) and makes the fail-closed gate toggle-governed (`context_sourcing_strict`, shared with ADR-0035 memory) |
+| [0015](0015-orchestrator-module-functions-and-api-composition.md) | Orchestrator module functions + composition root | Accepted, **amended by ADR-0028** (the composition root moved behind `build_services()`; the route-forward ratchet is unchanged). Live route allowlist is `{run_steward}` only; nesting-aware `_count_statements` is authority (earlier drafts claimed nine then seven residuals) |
+| [0016](0016-skills-and-prompt-assembly.md) | Skills and prompt assembly | Accepted; **addendum 1** (2026-08-13) external skill repos over the ADR-0024 mirror; **addendum 2** (2026-08-14) dedicated `skill_sources` connections — supersedes addendum-1 decision 1 (repo-card sources; `skills_subdir` deleted) and makes the fail-closed gate toggle-governed (`context_sourcing_strict`, shared with ADR-0035 memory); **MAPPER→STEWARD** seed/playbook naming (ADR-0033 D10) — banner in-body |
 | [0017](0017-blocker-work-ro-mounts-and-optional-pmo-zip.md) | Blocker work "RO mounts" + optional PMO zip | Accepted, **amended** (cross-instance). Read the body, not the title: the mechanism is an RO **token** + prompt contract in ordinary writable clone dirs — falling back to the write token when no `token_ro` is configured — not a filesystem mount |
 | [0018](0018-harness-fault-classification-and-backend-brake.md) | Harness fault classification + backend brake | Accepted. The exit-11 "known gap" is now an operator toggle (ADR-0026) |
 | [0019](0019-per-pmo-assignment-overrides.md) | Per-PMO assignment overrides | Accepted |
 | [0020](0020-per-repo-merge-doctrine.md) | Per-repository merge doctrine | Accepted, **amended by ADR-0035** (a memory-bound merge target additionally requires the global `memory_auto_merge`, default OFF — banner in-body) |
-| [0021](0021-app-side-estimated-cost-and-operator-rate-card.md) | App-side estimated cost + rate card | Accepted |
+| [0021](0021-app-side-estimated-cost-and-operator-rate-card.md) | App-side estimated cost + rate card | Accepted; mapper finalize identifier superseded (`finalize_steward`) — note in-body |
 | [0022](0022-in-container-run-continuation.md) | In-container run continuation | Accepted |
 | [0023](0023-dev-toolchain-floor.md) | Dev container toolchain floor | Accepted |
-| [0024](0024-mandatory-repo-source-mirror.md) | Mandatory repo source mirror | Accepted; **§5's ambient mirror-read superseded by ADR-0025** (banner in-body) |
+| [0024](0024-mandatory-repo-source-mirror.md) | Mandatory repo source mirror | Accepted; **§5's ambient mirror-read superseded by ADR-0025** (banner in-body); **MAPPER→STEWARD** path/service rename — banner in-body |
 | [0025](0025-provisioned-workspaces.md) | Provisioned workspaces | Accepted — supersedes ADR-0024 §5's risk posture |
 | [0026](0026-attempt-reset-policy-and-bad-output-brake.md) | Attempt-reset policy + opt-in bad-output brake | Accepted (2026-08-04) |
 | [0027](0027-failure-taxonomy-as-data.md) | Failure taxonomy as data | Accepted (2026-08-04) |

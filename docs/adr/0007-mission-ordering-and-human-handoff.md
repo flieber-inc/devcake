@@ -1,6 +1,8 @@
 # ADR-0007 — Mission Ordering via Native PMO Relations + the Human Hand-off
 
-**Status:** accepted (post-v0 traffic-control increment). Confirmed with the founder 2026-07-12.
+**Status:** accepted (post-v0 traffic-control increment). Confirmed with the founder 2026-07-12. **Partially superseded** for the Relations Mapper identity (run kind / seed Dev Type / service module / staffing) by the MAPPER→STEWARD rename (PR #111) + ADR-0033 Decision 10 — banner below. The five coupled mechanisms and propose-only edge contract stand.
+
+> **Supersession note (runtime today — do not read Decision 5 / addendum #6 Mapper identifiers as current law):** the team-scoped vehicle is **STEWARD** / run kind `STEWARD` / `StewardService` (`domain/steward_service.py`) / route `run_steward` / finalize `finalize_steward`. Seed Dev Type is `steward` on `claude-code` with model **Claude Opus** (`claude-opus-5`) per **ADR-0033 Decision 10** (re-pin from `claude-haiku-4-5`). Config migration helper: `migrate_steward_names`. Historical "Mapper" / `MAPPER` / `mapper` / `MapperService` / `claude-haiku-4-5` prose below is provenance for the 2026-07-12 acceptance — leave it intact.
 
 ## Context
 
@@ -15,7 +17,7 @@ preserved — no persistent per-Mission lease and no local Mission authority):
 2. **Human hand-off = `DEVCAKE-NEEDS-HUMAN` (the tenth label) + the `human_needed` outcome.** A clean, deliberate hand-off: the run finishes, never counts toward `max_attempts`, the stage label stays, and an ONBOARD hand-off restores `backlog`. Removing the label resumes at the same step.
 3. **Intake pause (`intake_paused`).** One config bool gating only the dispatch step of the poll cycle; sweeps, finalization, and the watchdog keep running.
 4. **Comment provenance = the `` `devcake:v1` `` sentinel.** Every app-posted comment ends with the footer (single choke-point `_feed`); `ACTIVITY.md` classifies entries 🧑 HUMAN / 🤖 DevCake by content, never by author, and playbooks make human comments authoritative.
-5. **Relations Mapper.** A team-scoped `MAPPER` run kind (interval service + manual trigger, admin-configured Dev Type) that proposes missing edges across existing open Missions; the app validates (unknown/self/terminal/duplicate/cycle ⇒ dropped) and applies survivors as native relations with a signed notification comment.
+5. **Relations Mapper.** *(Runtime identity: STEWARD — see status banner.)* A team-scoped `MAPPER` run kind (interval service + manual trigger, admin-configured Dev Type) that proposes missing edges across existing open Missions; the app validates (unknown/self/terminal/duplicate/cycle ⇒ dropped) and applies survivors as native relations with a signed notification comment.
 
 ## Alternatives considered
 
@@ -42,7 +44,7 @@ Shipped as the immediate follow-up increment, after live verification (relation 
 3. **All Linear list reads paginate; `inverseRelations` reads 50 with a full-page WARNING** — silent truncation of the gate's inputs (or the mapper's validation graph) is never acceptable.
 4. **The gate is a poll artifact** (`gate_map`), computed even while paused, with **dependency-cycle detection** (`pmo.find_cycles`) naming unsatisfiable waits explicitly — an undetected routing deadlock is the one failure a traffic-routing product cannot afford.
 5. **Hand-off guardrail: evidence required, warnings only** — escalating "Hand-off #N" headers from the 2nd repeat; never auto-park (founder decision: the human always decides).
-6. **The Mapper runs on the seeded `mapper`** (claude-code, `claude-haiku-4-5`) by default, manual-only out of the box; `MapperService` serializes manual/periodic dispatch, advances its watermark only on success, and backs off after 3 consecutive dead runs (store-derived). The repo clone is kept (founder decision: preserves future code-aware ordering).
+6. **The Mapper runs on the seeded `mapper`** (claude-code, `claude-haiku-4-5`) by default, manual-only out of the box; `MapperService` serializes manual/periodic dispatch, advances its watermark only on success, and backs off after 3 consecutive dead runs (store-derived). *(Superseded identity/staffing: seed `steward` / `claude-opus-5`, `StewardService` — status banner / ADR-0033 D10.)* The repo clone is kept (founder decision: preserves future code-aware ordering).
 7. **Blocking stays pipeline-coarse** (founder decision): better bottlenecked than accumulating parallel garbage — routing quality is the product thesis (docs/04 §2).
 8. Provenance classification ignores `>`-quoted lines (a human quoting DevCake stays human); project-kind baton passes go out as project updates.
 

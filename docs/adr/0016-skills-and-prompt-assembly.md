@@ -3,7 +3,9 @@
 - **Status:** accepted (2026-07-20); **addendum 1** (2026-08-13, external skill
   repos over the ADR-0024 mirror); **addendum 2** (2026-08-14, dedicated
   `skill_sources` — supersedes addendum-1 decision 1 and makes the fail-closed
-  gate toggle-governed via `context_sourcing_strict`, shared with ADR-0035)
+  gate toggle-governed via `context_sourcing_strict`, shared with ADR-0035);
+  **MAPPER→STEWARD naming** in Decisions 1/2/5 (playbook / outcomes / seed row)
+  superseded by STEWARD / seed `steward` (ADR-0033 D10) — banner below
 - **Context:** DevCake composes every Dev run from identifying prompts, mission
   playbooks, and optional skill-store packages. Early product work shipped
   **illustrative vendored skills** (generic PM ceremony, interactive craft
@@ -15,6 +17,13 @@
   content rules so playbooks, Dev Types, and the skill store stay complementary
   rather than three competing instruction systems.
 
+> **Supersession note (runtime today — Relations Mapper naming):** the
+> Relations Mapper vehicle was renamed **STEWARD** (PR #111). Seed Dev Type
+> is `steward` (not `mapper`); playbook / run-kind identifiers are STEWARD /
+> `STEWARD` (not MAPPER). Staffing re-pin: **Claude Opus** (`claude-opus-5`)
+> per **ADR-0033 Decision 10**. Historical `mapper` / `MAPPER` spellings in
+> Decisions 1/2/5 and Rejected below are provenance — leave them intact.
+
 ## Decision 1 — three prompt layers, never collapsed
 
 Every mission (and mapper) run’s **composed prompt** is:
@@ -22,7 +31,7 @@ Every mission (and mapper) run’s **composed prompt** is:
 ```text
 spec_prompt =
     identifying prompt          # Dev Type vehicle × active workflow preset
-  + mission-type playbook       # (or MAPPER playbook)
+  + mission-type playbook       # (or MAPPER playbook)  # runtime: STEWARD playbook
   + [optional] required-skills soft-force block
 ```
 
@@ -56,13 +65,14 @@ A skill **must not**:
 
 - Encode Mission Type contracts (`ONBOARD` / `PLAN` / `EXECUTE` / `REVIEW` /
   `MAPPER` outcomes, stage labels, branch naming, “when you are in EXECUTE…”).
+  *(Runtime outcome vocabulary uses STEWARD / `stewarded`, not MAPPER — see status banner.)*
 - Invent or restate `LEGAL_OUTCOMES` / `result.json` legality.
 - Assume an interactive operator (“ask for sprint capacity”); Devs read the
   activity feed and repo under the playbook.
 
 Mission-step specialist skills (`onboard-mission`, `execute-mission`, …) are
 **rejected**. Cross-step utility is expected (e.g. company orientation on every
-vehicle; dependency reasoning on `judgment` **and** `mapper`).
+vehicle; dependency reasoning on `judgment` **and** `mapper` *(seed name now `steward`)*).
 
 Authoritative authoring contract for store content: `app/devcake/skills/README.md`.
 Domain model fields: `docs/02-domain-model.md` §6 (`skills`, `skills_required`).
@@ -114,7 +124,7 @@ skill chips), not junior/main/senior theater and not one-to-one skill packs:
 |---|---|
 | `judgment` | ONBOARD, PLAN, REVIEW |
 | `implementer` | EXECUTE |
-| `mapper` | Relations Mapper default |
+| `mapper` | Relations Mapper default *(runtime seed name: `steward` — status banner / ADR-0033 D10)* |
 
 Assignments (`AppConfig.assignments`; labeled **Mission Types** in the UI
 since the 2026-08-02 nav reorg — the config field stays `assignments`) remain

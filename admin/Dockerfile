@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+# (frontend digest-pinned — see images/Dockerfile line 1 for why + bump how)
 # Admin SPA (Vite) + nginx reverse proxy. Multi-stage: Node build → alpine nginx.
 
 # Digest-pinned (ISSUES #29). Bump: docker buildx imagetools inspect <image:tag>

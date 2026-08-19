@@ -383,7 +383,6 @@ class SkillService:
         """Import pre-flight: the uploaded files must contain a root
         SKILL.md whose frontmatter carries a valid name + description.
         Returns the skill name; raises SkillStoreError(422) otherwise."""
-        import re
         skill_md = next((f for f in files or []
                          if f.get("path") == "SKILL.md"), None)
         if skill_md is None:
@@ -413,7 +412,6 @@ class SkillService:
         with a store skill OR a built-in name — need explicit overwrite. An
         overwrite is a full REPLACE: files the new version dropped are
         deleted, never left as orphans that keep shipping to every run."""
-        import re
         if self.forge is None:
             raise SkillStoreError(503, "the skill store needs the bundled "
                                        "Gitea (GITEA_ADMIN_PASSWORD unset)")

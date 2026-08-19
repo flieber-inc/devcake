@@ -11,7 +11,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from ...security import redact, redact_value
 from .. import backend_health, costing, failure_taxonomy
 from ..model import MissionRef
-from ..run import Run, utcnow
+from ..run import Run, is_pre_wipe, utcnow
 from . import discovery, steps, transitions
 from .feed import blockquote, post_attachment_comment, stage_of
 from .markers import FEED_INLINE_MAX, REPLY_MARKER
@@ -51,16 +51,9 @@ def _pre_wipe(mgr, run: Run) -> bool:
     After any clear-runs in this process, only an exact store_gen match is
     current — prior-process stamps (store_gen > wipe_generation) used to
     slip past a strict-less-than check and resurrect wiped records.
+    Shared with RunManager via ``domain.run.is_pre_wipe``.
     """
-    store = mgr.runs.store
-    check = getattr(store, "is_current_generation", None)
-    if callable(check):
-        return not check(run)
-    wipe_gen = int(getattr(store, "wipe_generation", 0) or 0)
-    gen = int(getattr(run, "store_gen", 0) or 0)
-    if wipe_gen <= 0:
-        return False
-    return gen != wipe_gen
+    return is_pre_wipe(mgr.runs.store, run)
 
 
 async def _checkpoint(mgr, run: Run, key: str, fn) -> None:

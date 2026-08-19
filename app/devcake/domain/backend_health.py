@@ -22,7 +22,6 @@ DEGRADED_CONCURRENCY = 1    # the probe that makes the condition self-clearing
 MAX_EXCUSALS_PER_STEP = 3   # escape hatch: bounds the livelock (see below)
 
 FAULT_CLASS = failure_taxonomy.DEV_HARNESS_FAULT
-BAD_OUTPUT_CLASS = failure_taxonomy.DEV_BAD_OUTPUT
 DEFAULT_CLASSES = failure_taxonomy.BRAKE_ALWAYS_CLASSES
 
 

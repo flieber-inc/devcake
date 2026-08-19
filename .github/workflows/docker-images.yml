@@ -10,14 +10,12 @@ on:
     paths:
       - "images/**"
       - "docker-bake.hcl"
-      - "docker-bake.ci.hcl"
       - ".github/workflows/docker-images.yml"
   push:
     branches: [main]
     paths:
       - "images/**"
       - "docker-bake.hcl"
-      - "docker-bake.ci.hcl"
       - ".github/workflows/docker-images.yml"
   # Allow manual full rebuild (e.g. after CLI pin bumps).
   workflow_dispatch:
@@ -49,7 +47,6 @@ jobs:
         with:
           files: |
             ./docker-bake.hcl
-            ./docker-bake.ci.hcl
           targets: images
           load: true
           provenance: false
@@ -98,6 +95,9 @@ jobs:
           CLAUDE_PIN=$(sed -n 's/^ARG CLAUDE_CODE_VERSION=//p' images/Dockerfile)
           CODEX_PIN=$(sed -n 's/^ARG CODEX_VERSION=//p' images/Dockerfile)
           GROK_PIN=$(sed -n 's/^ARG GROK_VERSION=//p' images/Dockerfile)
+          PI_PIN=$(sed -n 's/^ARG PI_VERSION=//p' images/Dockerfile)
+          OPENCODE_PIN=$(sed -n 's/^ARG OPENCODE_VERSION=//p' images/Dockerfile)
+          QWEN_PIN=$(sed -n 's/^ARG QWEN_CODE_VERSION=//p' images/Dockerfile)
           mkdir -p /tmp/harness_receipts
           bash scripts/harness_probe/host_probe.sh grok-build "$GROK_PIN" \
             "devcake/dev-grok-build:${DEVCAKE_TAG}" /tmp/harness_receipts
@@ -105,6 +105,12 @@ jobs:
             "devcake/dev-claude-code:${DEVCAKE_TAG}" /tmp/harness_receipts
           bash scripts/harness_probe/host_probe.sh codex "$CODEX_PIN" \
             "devcake/dev-codex:${DEVCAKE_TAG}" /tmp/harness_receipts
+          bash scripts/harness_probe/host_probe.sh pi "$PI_PIN" \
+            "devcake/dev-pi:${DEVCAKE_TAG}" /tmp/harness_receipts
+          bash scripts/harness_probe/host_probe.sh opencode "$OPENCODE_PIN" \
+            "devcake/dev-opencode:${DEVCAKE_TAG}" /tmp/harness_receipts
+          bash scripts/harness_probe/host_probe.sh qwen-code "$QWEN_PIN" \
+            "devcake/dev-qwen-code:${DEVCAKE_TAG}" /tmp/harness_receipts
           python3 -c "
           import json, pathlib, sys
           ok = True
@@ -112,6 +118,9 @@ jobs:
               f'grok-build@${GROK_PIN}.json',
               f'claude-code@${CLAUDE_PIN}.json',
               f'codex@${CODEX_PIN}.json',
+              f'pi@${PI_PIN}.json',
+              f'opencode@${OPENCODE_PIN}.json',
+              f'qwen-code@${QWEN_PIN}.json',
           ):
               rec = json.loads(pathlib.Path('/tmp/harness_receipts', name).read_text())
               print(name, 'ok=' + str(rec.get('ok')))

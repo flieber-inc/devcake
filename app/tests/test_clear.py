@@ -471,6 +471,92 @@ def test_clear_all_without_run_manager_still_wipes(monkeypatch):
     assert out["stopped"]["skipped"] == "no run_manager"
 
 
+def _stub_clear_subsystems(monkeypatch, *, redis_info=None):
+    """Happy-path stubs for clear_all subsystem helpers."""
+    import devcake.api.clear as clear_mod
+
+    async def fake_dagu(executor):
+        return {"stop_errors": [], "listed": 0, "deleted": 0, "failed": []}
+
+    async def fake_oo():
+        return {"deleted": [], "errors": []}
+
+    async def fake_redis(messaging):
+        return redis_info or {"keys_deleted": 0, "ingress_trimmed": True,
+                              "acl_users_deleted": 0}
+
+    async def fake_activity(internal_forge):
+        return {"deleted": 0, "errors": []}
+
+    monkeypatch.setattr(clear_mod, "clear_local_state",
+                        lambda store, runlog=None: {"runs_deleted": 0,
+                                                    "runlogs_deleted": 0,
+                                                    "audit_cleared": 0})
+    monkeypatch.setattr(clear_mod, "clear_dagu", fake_dagu)
+    monkeypatch.setattr(clear_mod, "clear_openobserve", fake_oo)
+    monkeypatch.setattr(clear_mod, "clear_redis", fake_redis)
+    monkeypatch.setattr(clear_mod, "clear_activity_repos", fake_activity)
+
+
+def test_clear_all_ok_false_when_claims_prune_errors(monkeypatch):
+    """Recorded claims_pruned.error must flip ok — partial failures are
+    reported and ok means none of them."""
+    import devcake.api.clear as clear_mod
+    from types import SimpleNamespace
+
+    _stub_clear_subsystems(monkeypatch)
+
+    async def boom_prune(claims, cards):
+        return {"error": "notebook unreachable"}
+
+    monkeypatch.setattr("devcake.domain.claims.prune_all", boom_prune)
+    monkeypatch.setattr("devcake.config.memory_bound_names",
+                        lambda cfg: ["nb1"])
+
+    out = run_coro(clear_mod.clear_all(
+        None, None, None,
+        claims=SimpleNamespace(),
+        config=SimpleNamespace()))
+    assert "error" in out["claims_pruned"]
+    assert out["ok"] is False
+
+
+def test_clear_all_ok_false_when_ingress_not_trimmed(monkeypatch):
+    """redis.ingress_trimmed=False is a recorded sub-failure — ok must be False."""
+    import devcake.api.clear as clear_mod
+
+    _stub_clear_subsystems(
+        monkeypatch,
+        redis_info={"keys_deleted": 0, "ingress_trimmed": False,
+                    "acl_users_deleted": 0})
+    out = run_coro(clear_mod.clear_all(None, None, None))
+    assert out["redis"]["ingress_trimmed"] is False
+    assert out["ok"] is False
+
+
+def test_clear_all_ok_false_when_workspace_wipe_fails(monkeypatch):
+    """Workspace wipe exceptions must be recorded and flip ok."""
+    import devcake.api.clear as clear_mod
+
+    _stub_clear_subsystems(monkeypatch)
+
+    async def fake_drain(store, executor, run_manager, timeout_s=40.0):
+        return {"stopped": 0, "undrained": []}
+
+    monkeypatch.setattr(clear_mod, "stop_and_drain", fake_drain)
+
+    class WS:
+        def wipe_all(self):
+            raise OSError("EACCES: workspace base not writable")
+
+    class RM:
+        workspaces = WS()
+
+    out = run_coro(clear_mod.clear_all(None, None, None, run_manager=RM()))
+    assert out.get("workspaces_error")
+    assert out["ok"] is False
+
+
 def test_run_clear_runs_acquires_locks_then_clears_advisories(monkeypatch):
     """Public clear-runs entrypoint: poll→dispatch lock order, then advisory
     clears (missions cache, grace maps, backend-degraded). Wipe body is

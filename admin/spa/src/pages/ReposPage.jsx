@@ -95,12 +95,9 @@ function RepoUsageChips({ name, cfg, devTypes, depth }) {
   const ref = (cfg.pmos || []).filter((p) => (p.reference_repos || []).includes(name)).length;
   const memB = (cfg.pmos || []).filter((p) => (p.memory_repos || []).includes(name)).length;
   const memD = Object.values(devTypes || {}).filter((d) => (d.memory_repos || []).includes(name)).length;
-  const skills = Object.values(devTypes || {}).some((d) =>
-    (d.skills || []).some((s) => s.startsWith(`${name}/`)));
   const chips = [];
   if (work) chips.push(`work ×${work}`);
   if (ref) chips.push(`reference ×${ref}`);
-  if (skills) chips.push("skills-source");
   if (memB) chips.push(`memory board-bound ×${memB}`);
   if (memD) chips.push(`memory domain-bound ×${memD}`);
   if (typeof depth === "number") chips.push(`queue ${depth}`);

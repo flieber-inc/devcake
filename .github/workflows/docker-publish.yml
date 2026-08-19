@@ -51,7 +51,6 @@ jobs:
         with:
           files: |
             ./docker-bake.hcl
-            ./docker-bake.ci.hcl
           targets: all
           push: true
           provenance: true

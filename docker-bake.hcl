@@ -13,8 +13,9 @@
 # containerd image store, then:
 #   BAKE_LOCAL_CACHE=1 docker buildx bake all     # exports to .buildx-cache/
 #
-# GitHub Actions — add the CI overlay so cache hits GHA:
-#   docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
+# GitHub Actions — bake docker-bake.hcl only; bake-action `set:` applies
+# type=gha cache with a per-workflow scope (devcake-ci / devcake-images /
+# devcake-publish) and ignore-error=true on cache-to.
 
 variable "TAG" {
   default = "latest"

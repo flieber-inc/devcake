@@ -259,12 +259,15 @@ where bake is unavailable — e.g. podman/buildah hosts, see
 
 CI-shaped proof on a full Docker Engine (real Buildx — not buildah's shim)
 matches [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — bake group
-`ci`, then Redis + pytest in `app-test`, then the dispatch smoke. The bake
-line CI uses is:
+`ci`, then Redis + pytest in `app-test`, then the dispatch smoke. Locally
+that bake is:
 
 ```bash
-docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl ci
+docker buildx bake ci
 ```
+
+(GHA applies `type=gha` cache via bake-action `set:` — not a second bake
+file; see `docs/13-deployment.md` §6.)
 
 Full local suite when the stack is up (pin gate + ruff + pytest + forge/PMO
 contract batteries + dispatch-hello smoke). Not a full GHA clone (no

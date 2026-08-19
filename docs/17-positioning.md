@@ -37,13 +37,15 @@ branch, and you hold the merge button. That ownership is the deal, stated
 plainly: it is *why* the output can be trusted, not fine print to walk back
 (`14` §9; recurring duties in [`18-operator-contract.md`](18-operator-contract.md)).
 
-The second pillar is **autonomy with receipts.** Every step posts its transcript
-and token bill to the ticket; dispatches, kills, sweeps, and PMO writes are
-traced. REVIEW is always a pipeline stage; the **reviewer token** (app-only
-formal forge approval) is the security-relevant second identity when branch
-protection requires it. **Unless you turn on auto-merge**, a human merges
-before Done. Autonomy you can audit is the only autonomy worth shipping —
-receipts do not make agents injection-proof (`14` §3).
+The second pillar is **autonomy with receipts.** Issue mission steps that
+finalize with artifacts post their transcript and token bill to the ticket
+(INV-5; named exceptions for truly FAILED / STEWARD / CURATOR); dispatches,
+kills, sweeps, and PMO writes are traced. REVIEW is always a pipeline stage;
+the **reviewer token** (app-only formal forge approval) is the
+security-relevant second identity when branch protection requires it.
+**Unless you turn on auto-merge**, a human merges before Done. Autonomy you
+can audit is the only autonomy worth shipping — receipts do not make agents
+injection-proof (`14` §3).
 
 **Every sentence that claims autonomy must earn a trust clause** (§1a).
 
@@ -110,7 +112,7 @@ inner harness is the process that runs inside it.
 | Contamination control | Context hygiene: fresh containers, curated mounts, quoting quarantine, activity-mirror discipline (ADR-0014/0025) |
 | One-way pressure / valves | Read-only upstream context — credential scope plus instruction; the only kernel-RO mount is the provision-phase source mirror (ADR-0025) |
 | QA before release | REVIEW as an always-on pipeline stage, plus the operator/forge merge doctrine |
-| Batch records / genealogy | Transcripts, token reports, run records, feed posts, activity repos — the accountability trail (INV-5) |
+| Batch records / genealogy | Transcripts, token reports, run records, feed posts, activity repos — the accountability trail (INV-5, with its named exceptions) |
 
 The analogy stops where `14` stops: a clean room for *work quality* is not a
 multi-tenant sandbox, and receipts do not make agents injection-proof
@@ -174,7 +176,7 @@ multi-tenant sandbox, and receipts do not make agents injection-proof
 |---|---|
 | **Roof (motto)** | *Your board is the interface.* (board-native day-to-day Mission work — and you own the trust envelope) |
 | **Pillar 1 — Board-native Mission work** | Your task board is the day-to-day Mission interface. Labels are the controls; tickets are the conversations; your merge (or auto-merge) is the deploy button. The admin UI remains the configuration and operations surface. |
-| **Pillar 2 — Autonomy with receipts** | Every step posts transcript + token bill. Traced and audited. REVIEW is always a pipeline stage; formal forge approval uses the **reviewer token** when configured. “Done” never lies about merge. |
+| **Pillar 2 — Autonomy with receipts** | Issue mission steps post transcript + token bill (INV-5 exceptions named). Traced and audited. REVIEW is always a pipeline stage; formal forge approval uses the **reviewer token** when configured. “Done” never lies about merge. |
 | **Pillar 3 — Your box, your rules** | Self-hosted on a **dedicated** machine; you own the trust envelope — team membership, branch protection, the merge button, backups (`18`). Mix registry harnesses per role (Claude, Grok, Codex, and the rest of the launch-supported roster). Control plane does not ship your secrets to us; agents with open egress can still exfiltrate if injected — defend the supply chain (`14`). |
 | **Foundation** | Verified, not vibed: acceptance path tickets → PRs, GitHub, GitLab, and Gitea, invariant tests, redaction of app-mediated posts. Security contract in `14`. |
 

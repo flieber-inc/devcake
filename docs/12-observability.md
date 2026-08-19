@@ -147,9 +147,10 @@ Canonical queries (the shapes `scripts/provision_oo.py` installs):
 | Poison / forgery pressure | `ingress.poison` / `ingress.forged_drop` spans |
 | Poll health & queue depth | `poll.cycle` spans: duration + missions seen/candidates/dispatched |
 
-Token/cost numbers are reported **twice by design**: human-facing in the
-activity-feed report (INV-5) and machine-facing as `run.finalize` span
-attributes — OpenObserve is the cost dashboard.
+Token/cost numbers are reported **twice by design** on paths that post a
+feed report: human-facing in the activity-feed report (INV-5) and
+machine-facing as `run.finalize` span attributes — OpenObserve is the cost
+dashboard.
 
 **`devcake.cost.usd` is a claude-code-only attribute.** It keeps its name over
 the stored v1 key (`cost_usd_native`, `adr/0029`) and is set solely from a

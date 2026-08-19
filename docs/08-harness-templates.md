@@ -221,7 +221,7 @@ Credential requirements are **registry-driven** (`HARNESSES` in `app/devcake/har
 
 Uploaded credential files (when the harness registry declares them) live at `/data/secrets/{dev_type}/{secret_file}` (0600); their content is delivered to the Dev in the run spec (`runspec.get`, `09-messaging.md` §3) and the entrypoint writes it to the harness-expected path (0600). Auth failure at harness launch ⇒ exit 12 ⇒ the per-Dev-Type circuit breaker (`15-errors-and-retries.md`, `DEV_AUTH`).
 
-## 5. Token extraction (INV-5 — a report is ALWAYS posted)
+## 5. Token extraction (INV-5 — unavailable, not silence, on measuring paths)
 
 Every extractor emits **TokenReport v1** (`adr/0029`, built by
 `devcake_dev/harness/tokens.token_report_v1`): one CLOSED shape whose keys are
@@ -230,8 +230,10 @@ five token counts, `reasoning_tokens` (first-class; pre-v1 it hid in a
 regex-parsed `notes` string), `num_turns`, `duration_ms`, `cost_usd_native`,
 `cost_usd_estimated` (always `None` image-side — the app-side ADR-0021 stamp
 fills it), `source`, and `raw` (the vendor usage payload, untouched). Provenance
-is the `source` field, never key-presence folklore; silence is never acceptable
-(INV-5). The `source` values:
+is the `source` field, never key-presence folklore; on runs that **do** post a
+token report, silence is never acceptable (INV-5 — `unavailable` is explicit).
+Truly FAILED / STEWARD / CURATOR are outside the feed-post requirement
+(`00-overview.md` INV-5). The `source` values:
 
 1. **`session_json`** — the harness's own structured output, named for the shape it reads:
    - `claude-code`: the final `stream-json` `result` event's `usage` object + `total_cost_usd` (authoritative, includes per-model breakdown) → `cost_usd_native`. `usage.output_tokens_details.thinking_tokens` (**new at 2.1.229**, capture-verified) → `reasoning_tokens` — a subset of `output_tokens`, never priced on top; pre-2.1.229 streams read None, never a fabricated 0.
@@ -244,7 +246,7 @@ is the `source` field, never key-presence folklore; silence is never acceptable
 4. **`cumulative` / `mixed`** — merge provenance (ADR-0022 continuation chains): `cumulative` marks a resume chain whose harness reports cumulative counters (codex — the last report IS the chain total, summing would double-count); `mixed` marks a multi-chain merge whose inputs disagree on source.
 5. **`unavailable`** — post an explicit report when structured extraction fails, in the same full shape. Every method above reads a **documented structured field**: there is no heuristic scraping of prose output, and **no price table anywhere in the harness layer** — `cost_usd_native` is only ever a harness-reported number. The rate-card **estimate** exists, but it is app-side (`domain/costing.py`, `adr/0021`), lands in the *separate* `cost_usd_estimated` field, and is always labeled with its rate-card vintage; `images/` never computes a dollar.
 
-The token report message posted to the activity feed (format in `03-mission-lifecycle.md` §8) accompanies **every** step, and the same numbers ride the `run.finalize` span as `devcake.tokens.*` / `devcake.cost.usd` / `devcake.cost.usd_estimated` attributes (`12-observability.md`).
+The token report message posted to the activity feed (format in `03-mission-lifecycle.md` §8) accompanies every **issue mission-step** that finalizes with artifacts (INV-5), and the same numbers ride the `run.finalize` span as `devcake.tokens.*` / `devcake.cost.usd` / `devcake.cost.usd_estimated` attributes (`12-observability.md`).
 
 ## 6. Transcript capture
 

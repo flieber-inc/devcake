@@ -68,8 +68,10 @@ shape. Legacy Run records on disk keep their old dicts — read paths use
 `.get(...)` with a `None` default, so a pre-v1 record renders "—" where v1
 keys are absent (native cost on old claude runs, reasoning on old grok
 runs). Display-only, wipeable-by-doctrine state (docs/10 §5); no
-migration, no dual-shape tolerance window. INV-5 unchanged: unavailable
-reports stay explicit (`source: "unavailable"`), never silence.
+migration, no dual-shape tolerance window. INV-5 measuring-path rule
+unchanged: when a token report is posted, unavailable stays explicit
+(`source: "unavailable"`), never silence (see `00-overview.md` for INV-5's
+named feed-post exceptions).
 
 ### 4 — SQL-readiness doctrine (the sentence, made executable)
 

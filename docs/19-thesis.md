@@ -126,11 +126,12 @@ have not seen elsewhere, and it has four load-bearing members:
    model-plural, so judgment roles and volume roles can run different vendors
    on subscriptions you already own. Every harness release upgrades DevCake's
    workforce without a line of our code changing.
-3. **A trust regime that refuses to overclaim.** Receipts on every step
-   (INV-5), an adult-operator security contract (`14`), a positioning doc that
-   bans its own marketing from exceeding it (`17` §1a), and an operator
-   contract that says what you own (`18`). We believe the honesty is a
-   feature, not a disclaimer.
+3. **A trust regime that refuses to overclaim.** Receipts on issue mission
+   steps that finalize with artifacts (INV-5, with named exceptions), an
+   adult-operator security contract (`14`), a positioning doc that bans its
+   own marketing from exceeding it (`17` §1a), and an operator contract that
+   says what you own (`18`). We believe the honesty is a feature, not a
+   disclaimer.
 4. **Flow discipline as a design target.** Context hygiene is not an
    accident of the container model; it is the point. The mechanisms of §2
    exist because ordering information is the product.
@@ -155,9 +156,10 @@ delegated deep work.
 DevCake might matter to people who study these systems, for one structural
 reason: it makes context hygiene a *controllable variable* instead of an
 anecdote. The same model and harness can run the same task inside or outside
-the envelope; every step already emits transcripts, token bills, timings,
-retry counts, and review verdicts, because receipts are doctrine (INV-5) —
-the environment is instrumented by default, not by special arrangement.
+the envelope; issue mission steps that finalize with artifacts already emit
+transcripts, token bills, timings, retry counts, and review verdicts,
+because receipts are doctrine (INV-5) — the environment is instrumented by
+default, not by special arrangement.
 
 Questions it can operationalize:
 

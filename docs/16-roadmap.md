@@ -20,18 +20,20 @@
 > **⏳ live-pending** = built, live end-to-end still owed ·
 > milestone `[x]` checkboxes mark exit criteria verified at that milestone's close.
 >
-> **Where we are (2026-08-04):** layers 1–2 closed through tag **v0.2**;
+> **Where we are (2026-08-19):** layers 1–2 closed through tag **v0.2**;
 > release tags through **v0.2.5 "Hummingbird"** on `main`. The product loop
-> (poll → dispatch → harness → finalize → forge/PMO) is operational with three
-> harness templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`, `qwen-code`), multi-PMO /
-> multi-repo / internal Gitea, skills (ADR-0016), settings profiles/export
+> (poll → dispatch → harness → finalize → forge/PMO) is operational with six
+> harness templates (`claude-code`, `grok-build`, `codex`, `pi`, `opencode`,
+> `qwen-code`), multi-PMO / multi-repo / internal Gitea, skills (ADR-0016)
+> including dedicated skill sources (**built**), settings profiles/export
 > (ADR-0013), fault classification + backend brake (ADR-0018/0026), mandatory
 > source mirrors + provisioned workspaces (ADR-0024/0025), in-container
-> continuation (ADR-0022), and the 2026-08 evaluation fix campaign (spend
-> discipline, TOCTOU guards, composition-root tests, ops hardening — entries
-> below). Unit suite is on the order of **~1400+** tests (1421 counted
-> 2026-08-04; do not treat any single count as a permanent claim).
-> Ongoing append-only tracking: [Living log (after v0.2)](#living-log-after-v02).
+> continuation (ADR-0022), discovery routing (ADR-0033 — **graduated**
+> 2026-08-13), and the 2026-08 evaluation fix campaign (spend discipline,
+> TOCTOU guards, composition-root tests, ops hardening — entries below).
+> Unit suite is on the order of ~1400+ tests (do not treat any single count
+> as a permanent claim). Ongoing append-only tracking:
+> [Living log (after v0.2)](#living-log-after-v02).
 
 ## History — Layer 1: Milestone era (M0–M12)
 
@@ -543,7 +545,7 @@ until that run exists, field evidence below stays operator-self-reported.
   cache-export resilience fix (#113, `ignore-error=true` on `type=gha`
   cache-to across all three lanes); the live stack has **not** yet been
   redeployed onto them (R9 ritual + image rebake owed).
-- **Discovery routing: SHIPPED hermetically — graduation smoke owed.** Both
+- **Discovery routing: SHIPPED + GRADUATED (live smoke passed 2026-08-13).** Both
   ADR-0033 halves landed 2026-08-13. Harvest: the optional `discoveries`
   result key (ONBOARD/EXECUTE/REVIEW; PLAN relays via a marked PLAN.md
   section), `DISCOVERY_<seq>.md` always attached as the step's deliverable

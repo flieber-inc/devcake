@@ -181,6 +181,6 @@ async def route_conflict_to_execute(mgr, pmo_id: str, key: str, pr_url: str,
         mgr._audit(pmo_id, "conflict_resolve_dispatched",
                     f"attempt {n + 1} ({pr_url})")
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 — degrade with record: conflict routing failure is logged; caller keeps the mission parked for a human
         log.exception("conflict auto-resolve routing failed for %s", key)
         return False

@@ -39,8 +39,9 @@ cp .env.example .env
 Fill in **bootstrap only** (schema v4 — see `.env.example`):
 
 - Strong passwords: `ADMIN_*`, `REDIS_PASSWORD`, `DAGU_PASSWORD`, `OO_*`,
-  `GITEA_ADMIN_PASSWORD` (empty/`change-me*` refuse boot unless
-  `DEVCAKE_ALLOW_INSECURE=1`).
+  `GITEA_ADMIN_PASSWORD` (empty/`change-me*` refuse boot; `ADMIN_PASSWORD`
+  must be ≥ 12 characters; `DEVCAKE_ALLOW_INSECURE=1` waives both — local
+  sandbox only).
 - Leave `DOCKER_GID` blank — `./up.sh` discovers it from
   `/var/run/docker.sock` (or set manually with `stat -c %g /var/run/docker.sock`).
 
@@ -96,7 +97,8 @@ Six top-level sidebar items (Adapters expands to two pages — seven surfaces to
 ## Step 3 — Log Grok in (one time)
 
 On Configuration → Dev Types, **implementer** → **Connect via OAuth…** — dialog shows URL + code.
-(Or `./scripts/grok_login.sh`.) Session is DevCake's own. Device-code OAuth
+(Or `./scripts/grok_login.sh` — defaults to the seeded `implementer`; override with
+`DEVCAKE_DEV_TYPE` or a positional Dev Type name.) Session is DevCake's own. Device-code OAuth
 rides the operator's **xAI account billing / subscription quota** (same trust
 as pasting an `XAI_API_KEY`). Grok's feed cost is an **app-side rate-card
 estimate** (`08` §5 / ADR-0021) — the harness does not report billed USD.

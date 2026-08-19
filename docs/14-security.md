@@ -86,7 +86,7 @@ Compromise of Dagu auth, the admin password, or the host is total for that machi
 
 | Surface | Stance |
 |---|---|
-| Mission text + repo content in prompts | **Trusted by design** (adult-operator / OpenClaw-class). Prompt injection is not a product defect (§3). |
+| Mission text + repo content in prompts | **Trusted by design** (adult-operator: mission and repo text are accepted as written). Prompt injection is not a product defect (§3). |
 | Forge + model credentials in the Dev | Required for clone/push and harnesses. Open **egress** by design (forge, package registries, model APIs). |
 | Operator “latest CLI” / “check for a newer version” | **Asked egress** to npm (`registry.npmjs.org`) and x.ai (`/cli/stable`). Not polled; not on editor open. The app never talks to Docker. |
 | MCP setup commands / `extra_cli_args` | **Admin-equivalent code execution** inside the disposable container (`11-admin-panel.md`). |
@@ -235,7 +235,8 @@ branch protection is weak or absent**, or exfiltrating tokens.
    DAG params or YAML** — trigger params are rendered unmasked in the Dagu UI
    (verified on v2.10.5; re-verified at the pinned 2.13.0, 2026-08-13 — the
    dag-run API the UI renders returns `params` in clear, the scoped Redis
-   credential included). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`, plus
+   credential included). Dagu receives `RUN_ID`, `IMAGE`, `TRACEPARENT`,
+   `MEMORY_BYTES`, `NANO_CPUS`, `PIDS` (container limits, 2026-08-13), plus
    one deliberate exception: the per-run scoped Redis ACL credential, revoked at
    finalization. Secret material is rebuilt on authenticated `runspec.get`
    (`09-messaging.md` §§3, 5).
@@ -431,8 +432,9 @@ dismiss.
    (app-only, different account) for formal PR/MR approval under branch
    protection. REVIEW is always a pipeline stage; staffing which Dev Type runs
    it is not a security control.
-7. Strong bootstrap passwords in `.env` (empty/`change-me*` refuse boot unless
-   `DEVCAKE_ALLOW_INSECURE=1` — local sandbox only).
+7. Strong bootstrap passwords in `.env`: empty/`change-me*` refuse boot, and
+   `ADMIN_PASSWORD` must be ≥ 12 characters. `DEVCAKE_ALLOW_INSECURE=1` waives
+   both checks (local sandbox only).
 8. Read `/health`: **`security_warnings`**, **`forge_protection`**,
    **`circuit_breakers`**, and (ops, not credentials) **`dev_backend_degraded`**
    if present — do not dismiss warnings unread (`15` §4 / §4a for breaker vs
@@ -518,8 +520,8 @@ contract:
   `api_base` origin, path pin `/attachments/`, netloc pin, body size cap;
   no off-allowlist redirects with auth headers). Operator use of the Gitea UI
   / direct git (migrate, clone, push) remains out of band and unrestricted by
-  this app-side policy. Stronger bootstrap password policy than a short
-  deny-list remains open.
+  this app-side policy. Bootstrap password floor shipped: empty/`change-me*`
+  deny-list plus `ADMIN_PASSWORD` ≥ 12 (`DEVCAKE_ALLOW_INSECURE=1` waives both).
 - Optional: gVisor/Kata for Devs; egress allowlists / credential-injection
   proxy (e.g. [iron-proxy](https://github.com/ironsh/iron-proxy) class —
   deferred radar in `16-roadmap.md`; note the ADR-0023 baked browser widens

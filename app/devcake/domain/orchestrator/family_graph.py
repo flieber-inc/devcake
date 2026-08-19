@@ -33,12 +33,13 @@ class Family:
 
 
 def family_of(source: Mission, missions: list[Mission]) -> Family:
-    """BFS over the undirected union of blocked_by and decomposition-parent
-    edges, seeded at `source`. `missions` is one instance's snapshot;
-    matching is by pmo_id (the marker's parent= carries the parent's
-    pmo_id; key accepted as a defensive alias). Parent trust is
-    markers.decomposition_parent_ref (LABEL_CREATED gate — same chokepoint
-    as the family gate). blocked_by edges are PMO-native and trusted as-is."""
+    """DFS/stack walk over the undirected union of blocked_by and
+    decomposition-parent edges, seeded at `source`. `missions` is one
+    instance's snapshot; matching is by pmo_id (the marker's parent=
+    carries the parent's pmo_id; key accepted as a defensive alias).
+    Parent trust is markers.decomposition_parent_ref (LABEL_CREATED gate
+    — same chokepoint as the family gate). blocked_by edges are
+    PMO-native and trusted as-is."""
     pool = [m for m in missions if m.pmo_id]
     by_id = {m.pmo_id: m for m in pool}
     by_key = {m.key.upper(): m for m in pool if m.key}

@@ -20,7 +20,7 @@ import itertools
 import json
 
 from devcake.config import (HARNESS_VAR_PATTERN, _INSTANCE_NAME_RE,
-                            PMOInstance, RepoInstance)
+                            PMOInstance, RepoInstance, SkillSource)
 from devcake.domain.model import Mission, derive
 
 from datetime import datetime, timezone
@@ -36,14 +36,15 @@ _ADOPTION = ("opt_in", "opt_out")
 
 # SPA scaffold fields (cards.js) — the convergence contract is scaffold ==
 # refetched server row, so the defaults come from the pydantic models.
-_PMO_CARD_FIELDS = ("team_key", "api_base", "repos", "reference_repos",
-                    "memory_repos",
-                    "intake_paused", "discovery_routing", "assignments",
-                    "managed")
-_REPO_CARD_FIELDS = ("forge", "api_base", "default_branch", "auto_merge",
-                     "auto_resolve_merge_conflicts",
-                     "merge_settle_minutes",
-                     "merge_retry_window_minutes")
+# Derived from model_fields so a new server field without a scaffold update
+# turns the spa-contracts exhaustiveness pin red (identity keys are the
+# scaffold constructor args, not defaults-map entries).
+_PMO_CARD_FIELDS = tuple(
+    k for k in PMOInstance.model_fields if k not in ("name", "system"))
+_REPO_CARD_FIELDS = tuple(
+    k for k in RepoInstance.model_fields if k not in ("name", "url"))
+_SKILL_SOURCE_CARD_FIELDS = tuple(
+    k for k in SkillSource.model_fields if k not in ("name",))
 
 
 def _board_vectors() -> tuple[list[str], list[list]]:
@@ -82,6 +83,9 @@ def build() -> dict:
         "repo_card_defaults": {
             k: RepoInstance(name="x", url="https://h/o/r").model_dump()[k]
             for k in _REPO_CARD_FIELDS},
+        "skill_source_card_defaults": {
+            k: SkillSource(name="x").model_dump()[k]
+            for k in _SKILL_SOURCE_CARD_FIELDS},
         "board": {
             "statuses": list(_STATUSES),
             "adoption_modes": list(_ADOPTION),

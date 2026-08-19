@@ -370,13 +370,8 @@ DOMAIN = Path(__file__).parents[1] / "devcake" / "domain"
 # git is the single subprocess seam (ADR-0024 §"single subprocess seam");
 # adapters.http's pool cleanup rides the hot-reload path (F16 — documented
 # by this allowlist entry and the module's own comment).
-DOMAIN_ADAPTER_IMPORT_ALLOWLIST = {
-    ("repo_mirror.py", "adapters.git"),
-    ("forge_runtime.py", "adapters.http"),
-}
-
-# keyed by path relative to domain/ so a new nested file cannot inherit
-# a basename allowlist entry
+# Keyed by path relative to domain/ so a new nested file cannot inherit a
+# basename allowlist entry. Single definition — a twin set silently no-ops.
 DOMAIN_ADAPTER_IMPORT_ALLOWLIST_REL = {
     ("repo_mirror.py", "adapters.git"),
     ("forge_runtime.py", "adapters.http"),
@@ -527,6 +522,35 @@ def test_every_registry_key_is_used():
                   if not s.dynamic and const_by_key.get(s.key) not in used)
     dead += sorted(f for f in steps.FAMILY_CONSTRUCTORS if f not in used)
     assert not dead, f"registry rows with no producer in domain/: {dead}"
+
+
+def test_domain_adapter_import_allowlist_is_single_definition():
+    """A dead twin allowlist silently no-ops contributor edits of the
+    comment-adjacent set. Exactly one module-level allowlist Assign must
+    exist, and test_domain_never_imports_adapters must consult it."""
+    src_path = Path(__file__).resolve()
+    tree = ast.parse(src_path.read_text())
+    defined = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (isinstance(t, ast.Name)
+                        and t.id.startswith("DOMAIN_ADAPTER_IMPORT_ALLOWLIST")):
+                    defined.append(t.id)
+    assert defined == ["DOMAIN_ADAPTER_IMPORT_ALLOWLIST_REL"], (
+        "expected a single DOMAIN_ADAPTER_IMPORT_ALLOWLIST_REL definition, "
+        f"got {defined}")
+    # The consulted name must be that one definition (AST walk of the test).
+    consulted: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "test_domain_never_imports_adapters"):
+            continue
+        for n in ast.walk(node):
+            if (isinstance(n, ast.Name)
+                    and n.id.startswith("DOMAIN_ADAPTER_IMPORT_ALLOWLIST")):
+                consulted.add(n.id)
+    assert consulted == {"DOMAIN_ADAPTER_IMPORT_ALLOWLIST_REL"}, consulted
 
 
 def test_domain_never_imports_adapters():

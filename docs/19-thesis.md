@@ -226,6 +226,12 @@ The moment a proposed feature originates intent or holds a conversation, it
 belongs above the membrane, and the answer is no — however useful it would
 be. This section exists to be cited in that argument.
 
+> **Observed at scale (2026-08):** the strongest single piece of evidence for
+> this thesis is the receipted self-audit — 54 tickets, 257 runs, 42
+> human-merged PRs, feedback loops demonstrably changing merged diffs —
+> written up with its honest scorecard (demonstrated *and* not demonstrated)
+> in [`docs/evidence/2026-08-devcake-audits-devcake.md`](evidence/2026-08-devcake-audits-devcake.md).
+
 ## 7. What would change our mind *(the falsifiers)*
 
 - **The measurement fails.** If the controlled comparison of §2 shows the

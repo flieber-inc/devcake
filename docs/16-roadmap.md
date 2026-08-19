@@ -671,6 +671,15 @@ until that run exists, field evidence below stays operator-self-reported.
   Still open (Memory + Cron pilot ship gate, fresh-`/data` drill, M9–M12
   demos, etc.) remain open as already listed.
 
+### Field evidence (receipted)
+
+- **DevCake audits DevCake** (2026-08-17/18) — one board prompt became 54
+  self-decomposed tickets, 257 fresh-context runs, and 42 human-merged pull
+  requests, with seven independently reproduced security-relevant findings,
+  the fleet's own errors named, and every count re-derived from the audit
+  log, the board's API, and the notebook's git history. Full field report
+  with figures: [`docs/evidence/2026-08-devcake-audits-devcake.md`](evidence/2026-08-devcake-audits-devcake.md).
+
 ### Field evidence (operator-self-reported)
 
 Production use reported by the founder-operator, 2026-08. Evidence class:

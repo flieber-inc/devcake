@@ -119,12 +119,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 | `docker buildx bake ci` | `app` + `app-test` + `admin` + `hello` (PR loop without full harness matrix) |
 | `docker compose up -d` | **Run** the stack (requires images already baked) |
 
-**Build cache:** opt-in — `BAKE_LOCAL_CACHE=1` exports to `.buildx-cache/` (gitignored), but needs a docker-container builder or the containerd image store; the default `docker` driver refuses cache export, so plain `bake` commands stay cache-less and work on a stock Docker Engine. On GitHub Actions:
-
-```bash
-docker buildx bake -f docker-bake.hcl -f docker-bake.ci.hcl all
-# or use workflows — they already pass both files to docker/bake-action
-```
+**Build cache:** opt-in — `BAKE_LOCAL_CACHE=1` exports to `.buildx-cache/` (gitignored), but needs a docker-container builder or the containerd image store; the default `docker` driver refuses cache export, so plain `bake` commands stay cache-less and work on a stock Docker Engine. On GitHub Actions, workflows bake `docker-bake.hcl` only and apply `type=gha` cache via bake-action `set:` with a **per-workflow** scope (`devcake-ci` / `devcake-images` / `devcake-publish`) and `ignore-error=true` on cache-to.
 
 **GitHub Actions** (`.github/workflows/`):
 

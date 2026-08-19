@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Digest-pin gate (docs/16 M8, ISSUES #29): every external base image —
-Dockerfile ARG defaults / FROM lines / COPY --from refs and compose `image:`
-values — must be pinned `tag@sha256:<64 hex>`. Local bake images (devcake/*)
-and stage references are exempt; every devcake/* compose service must declare
-`pull_policy: never` (otherwise a typo'd tag would pull from the public —
-squattable — Docker Hub `devcake` namespace). Exit non-zero listing offenders.
+Dockerfile `# syntax=` frontends / ARG defaults / FROM lines / COPY --from
+refs and compose `image:` values — must be pinned `tag@sha256:<64 hex>`.
+Local bake images (devcake/*) and stage references are exempt; every
+devcake/* compose service must declare `pull_policy: never` (otherwise a
+typo'd tag would pull from the public — squattable — Docker Hub `devcake`
+namespace). Exit non-zero listing offenders.
 
 Files are DISCOVERED (rglob Dockerfile*, glob docker-compose*.yml, glob
 scripts/*.sh + scripts/*.py), not hardcoded — a new Dockerfile or a
@@ -58,15 +59,22 @@ def _strip_platform(tokens: list[str]) -> list[str]:
 
 
 def check_dockerfile(path: Path, offenders: list[str]) -> None:
-    """Every FROM and external COPY --from must resolve to a pinned ref:
-    stage refs and bare stage indexes are local; a ${VAR} base is resolved
-    against ANY collected ARG default (not just *_IMAGE-named ones — a
-    rename must not slip past the gate)."""
+    """Every `# syntax=` frontend, FROM, and external COPY --from must
+    resolve to a pinned ref: stage refs and bare stage indexes are local; a
+    ${VAR} base is resolved against ANY collected ARG default (not just
+    *_IMAGE-named ones — a rename must not slip past the gate)."""
     args: dict[str, str] = {}
     stages: set[str] = set()
     rel = path.relative_to(ROOT)
     for lineno, raw in enumerate(path.read_text().splitlines(), 1):
         line = raw.strip()
+        # BuildKit syntax frontend is an EXTERNAL image pull on every cold
+        # bake — floating tags are the same class of drift as unpinned FROM.
+        m = re.match(r"#\s*syntax\s*=\s*(\S+)", line, re.IGNORECASE)
+        if m:
+            if not PINNED.search(m.group(1)):
+                offenders.append(f"{rel}:{lineno}: {line}")
+            continue
         m = re.match(r"ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)", line)
         if m:
             args[m.group(1)] = m.group(2)

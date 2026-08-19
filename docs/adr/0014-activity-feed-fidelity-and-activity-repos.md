@@ -1,6 +1,11 @@
 # ADR-0014 — Activity feed fidelity and per-mission activity repos
 
-- **Status:** accepted and SHIPPED (2026-07-18; all four phases in one PR by founder decision, each slice adversarially reviewed; live-verified on the Linear sandbox same day — incl. the full-mode GraphQL field pins (`parent { id }`, issue `attachments` connection), the per-step activity-repo commits with in-container `git log`, and the Clear sweep. The Gitea-down fallback branch is unit-pinned only: on a single-Gitea deployment the pre-existing repo-health breaker gates dispatch first.)
+> **Amended by [ADR-0036](0036-upstream-activity-ancestor-offer.md) (2026-08-19):**
+> decomposition ancestors' activity mirrors land under
+> `activity/upstream/{MISSION-KEY}/` in the same payload/snapshot (CAKE-124).
+> `blocked_by` work-repo mounts stay on ADR-0017.
+
+- **Status:** accepted and SHIPPED (2026-07-18; all four phases in one PR by founder decision, each slice adversarially reviewed; live-verified on the Linear sandbox same day — incl. the full-mode GraphQL field pins (`parent { id }`, issue `attachments` connection), the per-step activity-repo commits with in-container `git log`, and the Clear sweep. The Gitea-down fallback branch is unit-pinned only: on a single-Gitea deployment the pre-existing repo-health breaker gates dispatch first.) **Amended 2026-08-19 by ADR-0036** (upstream ancestor offer).
 - **Context:** The step-conclusion feed post is inverted from its intent: the `{seq}_{TYPE}.md` attachment carries only the Dev's **last** harness message (plus outcome JSON) and the comment is a one-line pointer — while the full run transcript is never durably captured for Claude/Codex (the raw stream-json lives only in `dev_entrypoint.py` process memory and dies with the container; only Grok ships a full session via `grok export`). Separately, the activity folder a Dev receives is a Redis-borne snapshot with no history: nobody can later see what a Dev *actually* received at step N, and comment edits/deletions in the PMO silently rewrite the past. Mission repos exist only for zero-repo missions (ADR-0010), and the original "activity mirror" idea was discarded 2026-07-14 (docs/16 discarded list) — before the internal forge existed to make it cheap.
 
 ## Decision 1 — step-end feed contract: last message inline, full dump attached

@@ -29,7 +29,7 @@ from ..model import Activity, LABEL_FAILED, Mission, MissionType, derive
 from ..workspaces import WorkspaceUnavailable
 from . import markers
 from . import schedule
-from .activity_payload import push_activity_repo
+from .activity_payload import activity_payload, push_activity_repo
 from ..run import Run, aware, utcnow
 from .feed import is_devcake_comment, stage_of, unquoted
 from .markers import STEP_MARKER
@@ -495,11 +495,25 @@ async def dispatch(mgr, mission: Mission, mtype: MissionType,
         log.warning("dispatch of %s omitting unavailable context %s",
                     live.key, ", ".join(sorted(omit_cards)))
 
-    # ADR-0014 D4: refresh the mission's activity repo BEFORE the step — the
-    # repo records what this Dev actually receives. NEVER gates dispatch.
-    # The returned watermark (ADR-0031) is the run's reading receipt.
-    feed_watermark = await push_activity_repo(mgr, live, mtype, seq,
-                                              blocker_notes=blocker_notes)
+    # ADR-0014 D4 + ADR-0036: build the activity payload (own folder +
+    # upstream/{KEY}/ ancestor mirrors) BEFORE the snapshot push so a
+    # strict upstream gap can fail-closed with no attempt burned. The
+    # push itself still never gates (Gitea down → Redis fallback); only
+    # unreadable ancestor *content* under context_sourcing_strict does.
+    activity = await activity_payload(
+        mgr, live.pmo_id, live.pmo_kind, blocker_notes=blocker_notes)
+    upstream_gaps = activity.get("upstream_gaps") or []
+    if upstream_gaps and mgr.config.context_sourcing_strict:
+        mgr.blocked_reasons[live.pmo_id] = (
+            "upstream activity unavailable — dispatch deferred: "
+            + "; ".join(f"{g.get('key')}: {g.get('reason')}"
+                        for g in upstream_gaps))
+        log.warning("dispatch of %s deferred — %s", live.key,
+                    mgr.blocked_reasons[live.pmo_id])
+        return None
+    feed_watermark = await push_activity_repo(
+        mgr, live, mtype, seq, blocker_notes=blocker_notes,
+        payload=activity)
 
     blocker_note = _blocker_repos_note(mgr, blocker_entries, blocker_skips,
                                        blocker_notes)

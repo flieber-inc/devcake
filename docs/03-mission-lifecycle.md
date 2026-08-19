@@ -5,7 +5,7 @@
 
 Each Mission Type has a **playbook**: what the Dev receives, what it must do inside the workspace, the structured output it must produce, and the app-side finalization that follows. Common to all four:
 
-- **Inputs:** `/workspace/repo` (fresh clone — served from the read-only source mirror for configured repos, origin rewritten to the real forge; ADR-0024, `07-dev-runtime.md` §7b), `/workspace/activity/` (MISSION.md brief + ACTIVITY.md feed mirror + attachments, ADR-0014), the Dev Type's identifying prompt, and the playbook prompt (§7).
+- **Inputs:** `/workspace/repo` (fresh clone — served from the read-only source mirror for configured repos, origin rewritten to the real forge; ADR-0024, `07-dev-runtime.md` §7b), `/workspace/activity/` (MISSION.md brief + ACTIVITY.md feed mirror + attachments, ADR-0014; plus `upstream/{MISSION-KEY}/` mirrors of every decomposition ancestor when this mission is a child in the graph — ADR-0036 / CAKE-124), the Dev Type's identifying prompt, and the playbook prompt (§7).
 - **Output:** `/workspace/out/result.json` (§6) — the app finalizes **from this file plus the exit code, never by parsing prose**.
 - **Finalization (app-side, always):** post the step comment (the Dev's last message, `>`-blockquoted) with the `{seq}_{TYPE}.md` full-session transcript attached (ADR-0014) → post token report (§8) → compare-and-transition (`04-orchestrator.md` §4) → forge side effects if any. **Exception:** on REVIEW-approve, the merge precedes the Done transition (§4.1) — Done must never overstate the repository.
 - **Failure:** nonzero exit or invalid `result.json` ⇒ no PMO transition; the Mission's label is untouched and it reschedules (attempt counting per `15-errors-and-retries.md`).

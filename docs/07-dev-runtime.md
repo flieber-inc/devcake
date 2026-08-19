@@ -36,7 +36,16 @@ Devs are **pure functions from (workspace, prompt) to artifacts**: they never wr
   activity/
     MISSION.md           # the brief: key/title/meta/labels, FULL description, mission
                          #   attachments (ADR-0014 — every playbook points here)
-    ACTIVITY.md          # faithful mirror of the Mission's feed (format: §2)
+    ACTIVITY.md          # faithful mirror of the Mission's feed (format: §2);
+                         #   opens with upstream-offer / gap / truncation banners
+                         #   when this mission has decomposition ancestors (ADR-0036)
+    upstream/
+      {MISSION-KEY}/     # ZERO OR MORE decomposition-ancestor mirrors (ADR-0036 /
+                         #   CAKE-124): each holds that ancestor's MISSION.md,
+                         #   ACTIVITY.md, and attachments. Nearest parent first
+                         #   toward the graph root; oldest truncated first under
+                         #   the attachment byte cap. Direct blocked_by work-repo
+                         #   mounts stay on ADR-0017 — they are not mirrored here.
     {attachment files}   # every attachment from the feed — including prior steps' full
                          #   session transcripts (`N_TYPE.md`, `PLAN_N.md`). When the
                          #   PMO cannot attach files, paginated `Part i of n` comments
@@ -76,7 +85,7 @@ The workspace is prepared entirely by the container **entrypoint** (not the app)
 
 ## 2. `ACTIVITY.md` format
 
-**Intent (confirmed decision, revised by ADR-0014):** the `activity/` folder is a mini **knowledge base the harness taps into as needed** — queryable, greppable reference material. It is *never* inlined into the prompt; the playbook prompt carries only the mission title/description and points here (`03-mission-lifecycle.md` §7). The folder is three parts: **`MISSION.md`** (the brief — key/title/meta/labels, the FULL description, and mission-level attachments: description-embedded assets + the vendor's native attachment list, files downloaded / links rendered as links), **`ACTIVITY.md`** (a **faithful mirror of the feed as seen in the PMO** — every post and reply inline with its full body, `↳ reply to` nesting, `[attachment: name]` markers at their feed positions; heavy content is naturally attachment-borne because DevCake's own long posts externalize at post time), and the **sibling files** (every attachment's bytes, including prior steps' full session transcripts). If the adapter's full-history hard stop ever trips, `ACTIVITY.md` opens with a loud `⚠ FEED TRUNCATED` banner — never silent.
+**Intent (confirmed decision, revised by ADR-0014; amended by ADR-0036):** the `activity/` folder is a mini **knowledge base the harness taps into as needed** — queryable, greppable reference material. It is *never* inlined into the prompt; the playbook prompt carries only the mission title/description and points here (`03-mission-lifecycle.md` §7). The folder is four parts: **`MISSION.md`** (the brief — key/title/meta/labels, the FULL description, and mission-level attachments: description-embedded assets + the vendor's native attachment list, files downloaded / links rendered as links), **`ACTIVITY.md`** (a **faithful mirror of the feed as seen in the PMO** — every post and reply inline with its full body, `↳ reply to` nesting, `[attachment: name]` markers at their feed positions; heavy content is naturally attachment-borne because DevCake's own long posts externalize at post time), the **sibling files** (every attachment's bytes, including prior steps' full session transcripts), and — when this mission is a decomposition child — **`upstream/{MISSION-KEY}/`** mirrors of every ancestor toward the graph root (ADR-0036 / CAKE-124; nearest parent first; oldest truncated first under the attachment byte cap; `blocked_by` work-repo mounts stay on ADR-0017). If the adapter's full-history hard stop ever trips, `ACTIVITY.md` opens with a loud `⚠ FEED TRUNCATED` banner — never silent. Upstream gaps and truncation use the same honest-banner doctrine (`⚠ UPSTREAM GAP` / `⚠ UPSTREAM TRUNCATED`).
 
 ```markdown
 # {mission_key}: {title}

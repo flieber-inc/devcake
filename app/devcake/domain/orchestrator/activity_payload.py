@@ -1,11 +1,12 @@
-"""Activity-mirror payload building (ADR-0014 D3/D4).
+"""Activity-mirror payload building (ADR-0014 D3/D4; ADR-0036 upstream).
 
 Extracted from dispatch.py in the 2026-08 evaluation cleanups: this is pure
 content transformation — MISSION.md/ACTIVITY.md rendering, attachment
 materialization with the docs/07 §2 dedupe rules, zip-slip-hardened archive
-expansion, and the per-step activity-repo snapshot — with no dispatch
-coupling at all. Consumers: dispatch (pre-step snapshot push), manager
-(the RunFinalizer activity_payload seam), tests.
+expansion, the per-step activity-repo snapshot, and (CAKE-124 / ADR-0036)
+decomposition-ancestor mirrors under `upstream/{MISSION-KEY}/` — with no
+dispatch coupling at all. Consumers: dispatch (pre-step snapshot push),
+manager (the RunFinalizer activity_payload seam), tests.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from ..model import MissionRef
 from .feed import coalesced_step_files, is_devcake_comment, unquoted
-from .markers import discovery_in_keys
+from .markers import decomposition_parent_ref, discovery_in_keys
 
 log = logging.getLogger("devcake.missions")
 
@@ -153,8 +154,155 @@ def _activity_snapshot_files(payload: dict) -> list[dict]:
     return files
 
 
+def _safe_upstream_key(key: str) -> str | None:
+    """One path segment for upstream/{KEY}/ — reject empty/slippery keys."""
+    seg = (key or "").strip().replace("\\", "/").split("/")[-1]
+    return safe_activity_relpath(seg)
+
+
+async def _missions_snapshot(mgr) -> list:
+    """Board snapshot for the directed ancestor walk. Tests may inject
+    `mgr._upstream_missions`; production reads list_all once per payload."""
+    override = getattr(mgr, "_upstream_missions", None)
+    if override is not None:
+        return list(override)
+    try:
+        return await mgr.pmo.list_all(mgr.instance.team_key)
+    except Exception as e:  # noqa: BLE001 — ancestry degrades to empty; gaps disclose
+        log.warning("upstream ancestry snapshot failed: %s", e)
+        return []
+
+
+def _nested_snapshot_bytes(payload: dict) -> list[tuple[str, bytes]]:
+    """Own-mission payload → (relpath, bytes) for nesting under upstream/KEY/."""
+    out: list[tuple[str, bytes]] = []
+    if payload.get("mission_md"):
+        out.append(("MISSION.md", payload["mission_md"].encode()))
+    out.append(("ACTIVITY.md", (payload.get("activity_md") or "").encode()))
+    for a in payload.get("attachments") or []:
+        raw = a.get("filename") or "attachment.bin"
+        rel = safe_activity_relpath(raw)
+        if rel is None:
+            rel = Path(str(raw).replace("\\", "/")).name or "attachment.bin"
+            if rel in (".", ".."):
+                rel = "attachment.bin"
+        try:
+            data = base64.b64decode(a["content_b64"])
+        except Exception:  # noqa: BLE001 — skip one corrupt nested attachment
+            continue
+        out.append((rel, data))
+    return out
+
+
+async def _offer_upstream(mgr, mission, used: set[str]
+                          ) -> tuple[list[dict], list[dict], list[str], list[str]]:
+    """CAKE-124 / ADR-0036: mirror each decomposition ancestor under
+    upstream/{KEY}/. Packs nearest-parent-first into a total byte budget
+    equal to `_attachment_cap()`; oldest (root-ward) ancestors truncate
+    first. Returns (attachment_dicts, gaps, truncated_keys, banner_lines)."""
+    # Lazy import: family_graph → dispatch → activity_payload (cycle).
+    from . import family_graph
+    missions = await _missions_snapshot(mgr)
+    ancestors = family_graph.decomposition_ancestors(mission, missions)
+    # A trusted parent_ref that does not resolve in the snapshot is a gap —
+    # the Dev must not start believing the chain is empty when it is not.
+    pref = decomposition_parent_ref(mission)
+    if pref and not ancestors:
+        pool = {m.pmo_id for m in missions}
+        pool |= {m.key.upper() for m in missions if m.key}
+        if pref not in pool and pref.upper() not in pool:
+            gap = {"key": pref, "pmo_id": pref,
+                   "reason": "ancestor not in board snapshot"}
+            banner = ("⚠ UPSTREAM GAP — activity for "
+                      f"`{pref}` is unavailable: ancestor not in board "
+                      "snapshot.")
+            return [], [gap], [], [banner]
+
+    try:
+        budget = mgr._attachment_cap()
+    except Exception:  # noqa: BLE001 — cap is advisory; fixed budget fallback
+        budget = 25 * 1024 * 1024
+
+    files: list[dict] = []
+    gaps: list[dict] = []
+    truncated: list[str] = []
+    banners: list[str] = []
+    included: list[str] = []
+    used_bytes = 0
+    # Do NOT seed `used` with the bare "upstream" token: `_tree_conflict`
+    # treats an exact ancestor path as a file, so reserving "upstream"
+    # would reject every `upstream/KEY/…` child. Once the first nested
+    # file lands, a later flat attachment named `upstream` takes the
+    # docs/07 §2 `-2` suffix via `_unique_name` / `_tree_conflict`.
+
+    for i, anc in enumerate(ancestors):
+        key = anc.key or anc.pmo_id
+        seg = _safe_upstream_key(key)
+        if seg is None:
+            gaps.append({"key": key, "pmo_id": anc.pmo_id,
+                         "reason": "unsafe mission key for upstream path"})
+            continue
+        try:
+            nested = await activity_payload(
+                mgr, anc.pmo_id, anc.pmo_kind or "issue",
+                include_upstream=False)
+        except Exception as e:  # noqa: BLE001 — one ancestor failure must not abort the offer
+            reason = f"{type(e).__name__}: {str(e)[:160]}"
+            gaps.append({"key": key, "pmo_id": anc.pmo_id, "reason": reason})
+            continue
+
+        pairs = _nested_snapshot_bytes(nested)
+        size = sum(len(b) for _, b in pairs)
+        if used_bytes + size > budget:
+            # This ancestor and every older (farther) one are omitted.
+            for rest in ancestors[i:]:
+                truncated.append(rest.key or rest.pmo_id)
+            break
+
+        prefix = f"upstream/{seg}"
+        for rel, data in pairs:
+            full = f"{prefix}/{rel}"
+            if _tree_conflict(full, used):
+                continue
+            used.add(full)
+            files.append({"filename": full,
+                          "content_b64": base64.b64encode(data).decode()})
+        used_bytes += size
+        included.append(key)
+
+    if included:
+        banners.append(
+            "## Upstream mission activity (decomposition ancestors)")
+        banners.append(
+            "Ancestor activity mirrors live under `upstream/{MISSION-KEY}/` "
+            "(nearest parent first, toward the graph root). Direct "
+            "`blocked_by` work-repo mounts remain a separate contract "
+            "(ADR-0017) — they are not mirrored here.")
+        for key in included:
+            seg = _safe_upstream_key(key) or key
+            banners.append(f"- `upstream/{seg}/` — included")
+        banners.append("")
+
+    if gaps:
+        for g in gaps:
+            banners.append(
+                f"⚠ UPSTREAM GAP — activity for `{g.get('key')}` is "
+                f"unavailable: {g.get('reason', 'unreadable')}.")
+        banners.append("")
+
+    if truncated:
+        banners.append(
+            "⚠ UPSTREAM TRUNCATED — oldest ancestors omitted under the "
+            "payload byte cap (nearest parents were kept): "
+            + ", ".join(f"`{k}`" for k in truncated) + ".")
+        banners.append("")
+
+    return files, gaps, truncated, banners
+
+
 async def push_activity_repo(mgr, mission, mtype, seq: int,
-                             blocker_notes: list[dict] | None = None
+                             blocker_notes: list[dict] | None = None,
+                             payload: dict | None = None,
                              ) -> dict[str, str]:
     """ADR-0014 D4: one snapshot commit per step dispatch. Any failure is
     audited loudly and swallowed — the run proceeds on the Redis fallback;
@@ -163,12 +311,15 @@ async def push_activity_repo(mgr, mission, mtype, seq: int,
     Returns the pushed snapshot's feed watermark (ADR-0031) — {} when the
     push failed or never ran: a failed push means the Dev clones the
     PREVIOUS snapshot, so a watermark from this fetch would overclaim what
-    the run actually read."""
+    the run actually read. Callers that already built `payload` (dispatch
+    strict-gate) pass it to avoid a second fetch."""
     if mgr.internal_forge is None:
         return {}
     try:
-        payload = await activity_payload(mgr, mission.pmo_id, mission.pmo_kind,
-                                         blocker_notes=blocker_notes)
+        if payload is None:
+            payload = await activity_payload(
+                mgr, mission.pmo_id, mission.pmo_kind,
+                blocker_notes=blocker_notes)
         name = await mgr.internal_forge.ensure_activity_repo(
             mgr.instance_name, mission.key)
         await mgr.internal_forge.push_activity_snapshot(
@@ -242,7 +393,8 @@ def _doc_filename(title: str) -> str:
 
 
 async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
-                           blocker_notes: list[dict] | None = None) -> dict:
+                           blocker_notes: list[dict] | None = None,
+                           *, include_upstream: bool = True) -> dict:
     """ADR-0014 D3: MISSION.md = the brief; ACTIVITY.md = a faithful MIRROR
     of the feed — full bodies inline (never externalized), attachments by
     name in feed order, reply nesting; every attachment's bytes ride as
@@ -250,7 +402,14 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
     project-update mirror, and project Documents materialize under docs/.
     blocker_notes (ADR-0032, dispatch-only — the Redis fallback rebuild has
     no resolved blockers and omits the section) render as a MISSION.md
-    handoff block."""
+    handoff block.
+
+    ADR-0036 / CAKE-124: when `include_upstream` is true (default), each
+    decomposition ancestor's activity mirror is nested under
+    `upstream/{MISSION-KEY}/` (nearest parent first; oldest truncated first
+    under the attachment byte cap). Gaps land in `upstream_gaps` and as
+    honest banners — never silent. Nested rebuilds pass
+    `include_upstream=False` to avoid recursion."""
     act = await mgr.pmo.get_activity(MissionRef(pmo_id, kind), full=True)
     m = act.mission
     attachments = []
@@ -392,9 +551,23 @@ async def activity_payload(mgr, pmo_id: str, kind: str = "issue",
         blocker_lines.append(f"- `{n['mission_key']}` — {n['title']}")
         if n.get("handoff"):
             blocker_lines.append(f"  Handoff: {n['handoff']}")
+
+    upstream_gaps: list[dict] = []
+    upstream_truncated: list[str] = []
+    if include_upstream:
+        up_files, upstream_gaps, upstream_truncated, banners = \
+            await _offer_upstream(mgr, m, used)
+        attachments.extend(up_files)
+        if banners:
+            # Banners precede the feed mirror so a Dev scanning ACTIVITY.md
+            # sees gaps/truncation before the chronological entries.
+            lines = banners + lines
+
     return {"mission_md": _mission_md(m, mission_lines, document_lines,
                                       blocker_lines,
                                       _discovery_lines(act.entries)),
             "activity_md": "\n".join(lines), "attachments": attachments,
-            "feed_watermark": watermark}
+            "feed_watermark": watermark,
+            "upstream_gaps": upstream_gaps,
+            "upstream_truncated": upstream_truncated}
 

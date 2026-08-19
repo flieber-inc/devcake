@@ -217,6 +217,20 @@ def run_once(ep, args, index: int, root: pathlib.Path) -> dict:
     return rec
 
 
+def grade_capture(ep, *, exit_code, stderr: str, fault, api_status):
+    """Map process outcome to (exit, class) for capture sidecars.
+
+    Same wiring as live.py / the baked entrypoint: nonzero → classify on
+    stderr; exit 0 + fault → classify on the fault (api_status → DEV_AUTH);
+    clean exit 0 → 11 / "".
+    """
+    if exit_code != 0:
+        return ep.classify_nonzero_exit((stderr or "")[-1500:], fault, api_status)
+    if fault:
+        return ep.classify_nonzero_exit("", fault, api_status)
+    return 11, ""
+
+
 def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
                  out_dir: pathlib.Path, prompt: str) -> dict:
     """Execute one argv in an EXISTING workspace and measure it — the shared
@@ -268,11 +282,9 @@ def execute_argv(ep, args, argv: list, workdir: pathlib.Path,
     fault = ep.harness_fault(args.harness, stdout, exit_code, dump=dump,
                              last_message=last_message, prompt=prompt)
     api_status = ep.harness_api_error_status(args.harness, stdout)
-    observed_exit, observed_class = (
-        ep.classify_nonzero_exit(stderr[-1500:], fault, api_status)
-        if exit_code != 0 else
-        (15 if fault and fault["reason"] != ep.FAULT_TURN_BUDGET
-         else 16 if fault else 11, ""))
+    observed_exit, observed_class = grade_capture(
+        ep, exit_code=exit_code, stderr=stderr, fault=fault,
+        api_status=api_status)
 
     return {
         "argv": argv, "exit_code": exit_code,

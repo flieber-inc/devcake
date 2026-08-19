@@ -61,3 +61,31 @@ def test_capture_cli_name_and_dump_fail_closed_on_unknown_id():
         rig.cli_name("something-new")
     with pytest.raises(ValueError, match="unknown harness"):
         rig.capture_dump("something-new", "", workspace=Path("/tmp"))
+
+
+def _load_rig():
+    assert CAPTURE is not None and COMMON is not None
+    for root in (str(COMMON), str(CAPTURE)):
+        if root not in sys.path:
+            sys.path.insert(0, root)
+    import in_container as rig
+    return rig
+
+
+def test_grade_capture_exit0_auth_fault_wires_classify_nonzero_exit():
+    """Exit-0 + in-band fault + distinctive api_status must match production.
+
+    Independent expected value: classify_nonzero_exit("", fault, 401) →
+    (12, "DEV_AUTH") — pinned in test_entrypoint_fault. The capture rig must
+    wire through that chokepoint, not hand-roll (15, "").
+    """
+    rig = _load_rig()
+    ep, _path = rig.load_entrypoint()
+    fault = {
+        "reason": ep.FAULT_TERMINAL_ERROR,
+        "detail": "harness reported a terminal error: 401",
+    }
+    observed = rig.grade_capture(
+        ep, exit_code=0, stderr="", fault=fault, api_status=401)
+    assert observed == (12, "DEV_AUTH")
+    assert observed == ep.classify_nonzero_exit("", fault, 401)

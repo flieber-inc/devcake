@@ -14,32 +14,10 @@ from pathlib import Path
 
 from .entrypoint import load_baked_entrypoint
 from .matrix import RowSpec
-from .plan_mode import composed_plan_argv, run_flag_accept
+from .plan_mode import composed_plan_argv, ensure_devcake_dev_on_path, run_flag_accept
 
 
-def _ensure_devcake_dev() -> None:
-    """Image root /devcake_dev first; checkout images/common for host tests."""
-    if Path("/devcake_dev").is_dir():
-        if "/" not in sys.path:
-            sys.path.insert(0, "/")
-        return
-    planted = os.environ.get("DEVCAKE_DEV_ROOT")
-    if planted and Path(planted, "devcake_dev").is_dir():
-        if planted not in sys.path:
-            sys.path.insert(0, planted)
-        return
-    for candidate in (
-        Path("/srv/images/common"),
-        Path(__file__).resolve().parents[2] / "images" / "common",
-    ):
-        if candidate.joinpath("devcake_dev").is_dir():
-            if str(candidate) not in sys.path:
-                sys.path.insert(0, str(candidate))
-            return
-    raise RuntimeError("devcake_dev not found — cannot aim the probe stub")
-
-
-_ensure_devcake_dev()
+ensure_devcake_dev_on_path()
 from devcake_dev.harness.aim import aim, stub_lane  # noqa: E402
 
 _STUB = None

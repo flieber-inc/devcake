@@ -69,7 +69,7 @@ def require_staffed(dev_type, *, digest: str | None = None,
 
 
 def receipt_fail_reason(rec: Mapping[str, Any]) -> str:
-    """Required rows that did not pass — same rule as the baker's detail."""
+    """Required rows that did not pass — shared with the baker's detail."""
     bits: list[str] = []
     for row in rec.get("rows") or []:
         if not isinstance(row, Mapping):

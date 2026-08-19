@@ -243,20 +243,12 @@ def run_prune(
 
 
 def receipt_fail_detail(job: BakeJob, rec: Mapping) -> str:
-    """Operator copy from a not-ok receipt. Harness-agnostic: required
-    rows that did not pass, plus any row detail the probe already wrote."""
-    bits: list[str] = []
-    for row in rec.get("rows") or []:
-        if not isinstance(row, Mapping):
-            continue
-        if not row.get("required") or row.get("status") == "pass":
-            continue
-        name = str(row.get("name") or "?")
-        status = str(row.get("status") or "fail")
-        extra = str(row.get("detail") or "").strip()
-        bits.append(f"{name} {status} ({extra})" if extra else f"{name} {status}")
-    body = "; ".join(bits) if bits else "receipt not ok"
-    return f"probe {job.template}@{job.cli_version} failed: {body}"
+    """Operator copy from a not-ok receipt. Body from staffing chokepoint."""
+    from devcake.staffing import receipt_fail_reason
+    return (
+        f"probe {job.template}@{job.cli_version} failed: "
+        f"{receipt_fail_reason(rec)}"
+    )
 
 
 def image_ref(

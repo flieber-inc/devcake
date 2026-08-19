@@ -304,6 +304,26 @@ def test_receipt_fail_detail_names_required_rows_that_did_not_pass():
     assert '{"ok": false' not in text
 
 
+def test_receipt_fail_detail_suffix_matches_staffing_reason():
+    """Pinned mirror: baker detail body == staffing.receipt_fail_reason."""
+    from devcake.staffing import receipt_fail_reason
+
+    factory = _load_factory()
+    rec = {
+        "ok": False,
+        "rows": [
+            {"name": "healthy", "required": True, "status": "fail"},
+            {"name": "resume", "required": True, "status": "error",
+             "detail": "first invocation exposed no session identity"},
+        ],
+    }
+    job = factory.BakeJob("grok-build", "1.0.4")
+    detail = factory.receipt_fail_detail(job, rec)
+    prefix = f"probe {job.template}@{job.cli_version} failed: "
+    assert detail.startswith(prefix)
+    assert detail[len(prefix):] == receipt_fail_reason(rec)
+
+
 def test_run_bake_probe_failure_uses_receipt_rows_not_stdout_json(tmp_path):
     factory = _load_factory()
     receipts = tmp_path / "receipts"
@@ -913,6 +933,47 @@ def test_unhealthy_needs_three_strikes():
     assert factory.unhealthy_verdict(1) is False
     assert factory.unhealthy_verdict(2) is False
     assert factory.unhealthy_verdict(3) is True
+
+
+
+def _patch_once_compose(monkeypatch, listed):
+    """Stub host Docker/compose seams so once() is hermetic."""
+    import dev_factory.watch as watch
+
+    monkeypatch.setattr(watch, "compose_claim", lambda rel: None)
+    monkeypatch.setattr(watch, "compose_read", lambda rel: None)
+    monkeypatch.setattr(watch, "compose_ls", lambda rel: [])
+    monkeypatch.setattr(watch, "compose_rm", lambda rel: None)
+    monkeypatch.setattr(watch, "compose_write", lambda rel, text: None)
+    monkeypatch.setattr(
+        watch, "docker_name_list",
+        lambda argv: list(listed))
+    return watch
+
+
+def test_once_hello_only_images_are_virgin(tmp_path, monkeypatch):
+    """Hello is baked by every ./up.sh — it is not evidence of staffing."""
+    _load_factory()
+    watch = _patch_once_compose(
+        monkeypatch,
+        ["devcake/dev-hello:latest", "devcake/dev-hello:<none>"])
+    status = watch.once(
+        work=tmp_path, tag="latest",
+        house={"grok-build": "0.2.112"}, digest="sha256:abc")
+    assert status["state"] == "virgin"
+    assert status["detail"] == "no keep-set — control plane + hello only"
+
+
+def test_once_real_harness_image_is_ready_without_keep_set(tmp_path, monkeypatch):
+    _load_factory()
+    watch = _patch_once_compose(
+        monkeypatch,
+        ["devcake/dev-hello:latest", "devcake/dev-grok-build:0.2.112"])
+    status = watch.once(
+        work=tmp_path, tag="latest",
+        house={"grok-build": "0.2.112"}, digest="sha256:abc")
+    assert status["state"] == "ready"
+    assert status["detail"] == ""
 
 
 def test_write_status_stamps_a_heartbeat(tmp_path):

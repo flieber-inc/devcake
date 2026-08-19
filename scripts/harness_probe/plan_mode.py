@@ -20,7 +20,7 @@ _FLAG_REJECT = (
 
 def composed_plan_argv(template: str, prompt: str = "probe") -> list[str]:
     """Same harness_argv production uses, plan_mode=True."""
-    _ensure_dialects()
+    ensure_devcake_dev_on_path()
     from devcake_dev.harness.argv import harness_argv
     return list(harness_argv(template, prompt, plan_mode=True, model="stub-model"))
 
@@ -42,7 +42,7 @@ def run_flag_accept(argv: list[str], *, timeout: float = 15.0,
     return {"flag_accepted": True}
 
 
-def _ensure_dialects() -> None:
+def ensure_devcake_dev_on_path() -> None:
     # Baked image first and only if present — never prefer /srv (working tree).
     if Path("/devcake_dev").is_dir():
         if "/" not in sys.path:
@@ -62,4 +62,4 @@ def _ensure_dialects() -> None:
             if str(candidate) not in sys.path:
                 sys.path.insert(0, str(candidate))
             return
-    raise RuntimeError("devcake_dev not found — cannot compose plan-mode argv")
+    raise RuntimeError("devcake_dev not found")

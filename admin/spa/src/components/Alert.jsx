@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Info, TriangleAlert, OctagonAlert, ChevronRight, ExternalLink, X } from "lucide-react";
+import React from "react";
+import { Info, TriangleAlert, OctagonAlert, X } from "lucide-react";
 
 const STYLES = {
   info: {
@@ -20,27 +20,7 @@ const STYLES = {
   },
 };
 
-// items entries are "text — url"; render the trailing url as a link
-function Item({ entry }) {
-  const i = entry.lastIndexOf(" — ");
-  const [text, url] = i > -1 ? [entry.slice(0, i), entry.slice(i + 3)] : [entry, null];
-  return (
-    <li className="list-disc">
-      {text}
-      {url && (
-        <>
-          {" — "}
-          <a href={url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-            {url}
-          </a>
-        </>
-      )}
-    </li>
-  );
-}
-
-export default function Alert({ severity = "warning", title, body, items, collapsible, link, onDismiss }) {
-  const [open, setOpen] = useState(true);
+export default function Alert({ severity = "warning", title, body, onDismiss }) {
   const s = STYLES[severity] || STYLES.warning;
   const Icon = s.icon;
   return (
@@ -48,33 +28,11 @@ export default function Alert({ severity = "warning", title, body, items, collap
       <div className="flex items-start gap-2.5">
         <Icon size={17} strokeWidth={2} className={`mt-0.5 shrink-0 ${s.iconCls}`} aria-hidden />
         <div className="min-w-0 flex-1">
-          {collapsible ? (
-            <button className="flex w-full items-center gap-2 text-left font-medium"
-              onClick={() => setOpen(!open)}>
-              <span>{title}</span>
-              <ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
-            </button>
-          ) : (
-            <p className="font-medium">{title}</p>
-          )}
+          <p className="font-medium">{title}</p>
           {body && (
             <p className="mt-0.5 opacity-90">
               {body}
-              {link && (
-                <>
-                  {" "}
-                  <a href={link.href} className="inline-flex items-center gap-0.5 font-medium underline underline-offset-2">
-                    {link.label}
-                    {link.href.startsWith("http") && <ExternalLink size={11} aria-hidden />}
-                  </a>
-                </>
-              )}
             </p>
-          )}
-          {items && open && (
-            <ul className="mt-1.5 space-y-0.5 pl-5">
-              {items.map((e) => <Item key={e} entry={e} />)}
-            </ul>
           )}
         </div>
         {onDismiss && (

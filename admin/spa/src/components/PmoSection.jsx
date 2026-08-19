@@ -107,17 +107,6 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       action: () => { setField(path, value); setConfirm(null); },
     });
 
-  const test = async (kind) => {
-    try {
-      const result = await send("POST", `/connections/${kind}/test`);
-      setTestResult((prev) => ({ ...prev, [kind]: result }));
-    } catch (e) {
-      setTestResult((prev) => ({
-        ...prev,
-        [kind]: { ok: false, error: String(e.message || e) },
-      }));
-    }
-  };
   // per-instance tests (schema v3 / M10): keyed pmo:{name} / forge:{name}
   const testPmo = async (name) => {
     const key = `pmo:${name}`;

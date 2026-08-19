@@ -59,7 +59,7 @@ def test_can_write_every_forge_when_the_card_has_a_write_token(tokens):
         RepoInstance(name="gt", forge="gitea",
                      url="https://git.example.com/acme/notes"),
     ]
-    w = make_claims_writer(_cfg(*cards), internal_forge=None)
+    w = make_claims_writer(_cfg(*cards))
     for c in cards:
         assert w.can_write(c.name) is True, c.forge
 
@@ -71,14 +71,14 @@ def test_can_write_false_for_reference_only_missing_and_empty(tokens):
                      url="https://github.com/acme/docs"),
         RepoInstance(name="bare", forge="github",
                      url="https://github.com/acme/bare"),
-    ), internal_forge=None)
+    ))
     assert w.can_write("ro") is False
     assert w.can_write("bare") is False
     assert w.can_write("nosuch") is False
 
 
 def test_make_claims_writer_does_not_need_bundled_gitea():
-    w = make_claims_writer(AppConfig(), internal_forge=None)
+    w = make_claims_writer(AppConfig())
     assert w.can_write("x") is False
     # not the Null that raises a "not configured" blanket
     with pytest.raises(Exception) as ei:
@@ -91,8 +91,7 @@ def test_commit_refuses_paths_outside_claims(tokens):
     tokens[("nb", "token")] = "tok"
     w = make_claims_writer(_cfg(
         RepoInstance(name="nb", forge="github",
-                     url="https://github.com/acme/nb")),
-        internal_forge=None)
+                     url="https://github.com/acme/nb")))
     with pytest.raises(ValueError, match=r"\.claims"):
         run_coro(w.commit("nb", creates={"notes/secret.md": "no"},
                           deletes=[], message="x"))
@@ -130,7 +129,7 @@ def test_round_trip_create_list_prune_on_local_origin(tmp_path, tokens):
     tokens[("nb", "token")] = "unused-for-local"
     card = RepoInstance(name="nb", forge="github", url=url,
                         default_branch="main")
-    w = make_claims_writer(_cfg(card), internal_forge=None)
+    w = make_claims_writer(_cfg(card))
     assert w.can_write("nb") is True
 
     rec = {"id": "abc123456789abcd", "source_instance": "eng",
@@ -265,7 +264,7 @@ def test_genuine_empty_remote_empty_inits_and_first_commit_works(
     tokens[("nb", "token")] = "unused-for-local"
     card = RepoInstance(name="nb", forge="github", url=url,
                         default_branch="main")
-    w = make_claims_writer(_cfg(card), internal_forge=None)
+    w = make_claims_writer(_cfg(card))
 
     assert run_coro(w.list_json_names("nb")) == []
     assert run_coro(w.has_readme("nb")) is False

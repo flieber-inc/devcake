@@ -141,7 +141,6 @@ const DEV_TYPE_FIELDS = {
   identifying_prompt: { label: "Identifying prompt", format: orEmpty, multiline: true },
   dev_entrypoint: { label: "Entrypoint script", format: orEmpty, multiline: true },
   override_harness_adapter: { label: "Override harness adapter", format: onOff },
-  mcp_setup_commands: { label: "Entrypoint script (legacy)", format: lines, multiline: true },
   skills: { label: "Skills (available)", format: lines, multiline: true },
   skills_required: { label: "Skills (required)", format: lines, multiline: true },
   secret_env: { label: "Secret env vars", format: lines, multiline: true },

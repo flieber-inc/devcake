@@ -30,6 +30,27 @@ def test_contracts_file_matches_the_source_of_truth():
     )
 
 
+def test_card_default_maps_cover_every_non_identity_field():
+    """Scaffold pins must stay exhaustive vs the live pydantic models — a
+    new model field without a scaffold update must turn this red (ADR-0034).
+    Identity keys are supplied by the SPA scaffold args, not the defaults
+    map: PMO name/system, Repo name/url, SkillSource name."""
+    from devcake.config import PMOInstance, RepoInstance, SkillSource
+
+    data = build()
+    assert set(data["pmo_card_defaults"]) == (
+        set(PMOInstance.model_fields) - {"name", "system"})
+    assert set(data["repo_card_defaults"]) == (
+        set(RepoInstance.model_fields) - {"name", "url"})
+    assert set(data["skill_source_card_defaults"]) == (
+        set(SkillSource.model_fields) - {"name"})
+    # Independent expected values: construct a real SkillSource and compare
+    # defaults for the non-identity keys (do not re-read the generator tuple).
+    dumped = SkillSource(name="x").model_dump()
+    for key, value in data["skill_source_card_defaults"].items():
+        assert value == dumped[key], key
+
+
 def test_vector_sweep_is_the_full_powerset():
     """The drift guarantee rests on coverage: 4 statuses × 2 adoption modes
     × 2^8 label subsets — ANY precedence reordering in derive() must land

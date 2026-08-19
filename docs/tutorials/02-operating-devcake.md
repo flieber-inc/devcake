@@ -99,10 +99,20 @@ Honesty rules worth knowing: profiles are snapshots, not live links — later
 edits never update a profile (the row shows "settings changed since" when
 you've drifted from the last-applied one); applying an old profile restores
 its **old** secret values, and the preview warns when a live secret is newer
-than the snapshot; run history, the skill store, internal repos (memory notebooks included), and `.env`
-are never touched by a profile — but note that skill-source and other
-connection secrets ARE in the snapshot (they restore with it). Profile snapshots live on `/data` and hold
-secret values — they are part of why backups are a password export.
+than the snapshot. Two different "skill" surfaces — do not conflate them:
+
+- **Skill-source connection secrets** (`skill-*` tokens for configured skill
+  source cards) **are** in the snapshot and **restore** with Apply (same
+  path as `pmo-*` / `repo-*`; ADR-0011 / `docs/11`).
+- The **skill store** (installed skill contents on disk), run history,
+  internal repos (memory notebooks included), and `.env` are **never**
+  touched by a profile.
+
+Save-time `snapshot_warnings` still name gaps only for PMO and repo cards —
+a skill source with a URL but no stored token may get no warning even though
+tokens that *are* stored do ride the snapshot. Profile snapshots live on
+`/data` and hold secret values — they are part of why backups are a password
+export.
 
 **Moving a setup to another install:** the same section's **Export…** writes
 one bundle file — configs stay readable YAML; secrets and `.env` setup

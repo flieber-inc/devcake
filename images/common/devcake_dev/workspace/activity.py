@@ -9,8 +9,10 @@ import subprocess
 import sys
 
 def _safe_activity_relpath(path: str):
-    """Mirror of the app's safe_activity_relpath: reject zip-slip / absolute
-    / empty paths. Returns a posix-relative string or None."""
+    """Pinned mirror of app safe_activity_relpath (activity_payload.py):
+    reject zip-slip / absolute / empty paths. Returns a posix-relative
+    string or None. Guard: app/tests/test_safe_activity_relpath_pin.py
+    (ADR-0034)."""
     if not path or not isinstance(path, str):
         return None
     raw = path.replace("\\", "/").strip()

@@ -20,7 +20,7 @@ import io
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from ..config import CostInputs
 from ..domain import costing
@@ -312,6 +312,45 @@ def run_detail(run: Run, cost_inputs: CostInputs,
     body["harness_version"] = _blank(run.harness_version)
     body["mission_url"] = _mission_url_of(run, missions_cache)
     return body
+
+
+def get_run_response(run_id: str, store, cost_inputs: CostInputs,
+                     missions_cache: list[dict] | None = None) -> dict:
+    """GET /runs/{id} body — 404 when missing (ADR-0015 thin route)."""
+    if (run := store.get(run_id)) is None:
+        raise HTTPException(404)
+    return run_detail(run, cost_inputs, missions_cache=missions_cache)
+
+
+def get_run_log_response(run_id: str, store, runlog,
+                         tail: int | None = None) -> PlainTextResponse:
+    """GET /runs/{id}/log body — 404 when the run record is gone."""
+    if store.get(run_id) is None:
+        raise HTTPException(404)
+    _seq, text = runlog.read(run_id, tail)
+    return PlainTextResponse(text)
+
+
+def stream_run_log_response(
+    run_id: str,
+    store,
+    runlog,
+    *,
+    terminal_states: set[str] | frozenset[str],
+) -> StreamingResponse:
+    """GET /runs/{id}/log/stream SSE body — 404 when the run record is gone."""
+    if store.get(run_id) is None:
+        raise HTTPException(404)
+
+    def is_terminal() -> bool:
+        r = store.get(run_id)
+        return r is None or r.state in terminal_states
+
+    return StreamingResponse(
+        runlog.stream(run_id, is_terminal),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # CSV export (docs/11): the WHOLE filtered set, flat regardless of the page's

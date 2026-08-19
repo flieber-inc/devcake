@@ -141,7 +141,7 @@ function StewardPanel() {
       )}>
       <SettingRow label="Dev Type"
         desc="Which AI worker profile runs this task."
-        help="Dev Types are the worker profiles you define under Configuration → Dev Types (which model, which coding harness). Ordering judgment from ticket titles doesn't need a heavyweight — the built-in 'steward' profile uses a cheap, fast model.">
+        help="Dev Types are the worker profiles you define under Configuration → Dev Types (which model, which coding harness). The built-in 'steward' profile is an EXECUTE-grade, judgment-heavy model (Opus-class) — point this task at a different Dev Type if you want a cheaper vehicle.">
         <Select className="w-44" value={rm.dev_type || ""}
           aria-label="Relations Steward Dev Type"
           onChange={(e) => {

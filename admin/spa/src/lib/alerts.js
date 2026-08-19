@@ -121,10 +121,11 @@ export default function deriveAlerts(health) {
       dismissable: true,
       title: `${unused.count} of ${unused.configured} configured repositories are unused`,
       body:
-        `${shown}${more} — selected as work or reference repos on no PMO, ` +
-        "but still probed on every forge sweep. Remove them on Repositories " +
-        "→ ⋯ → Remove unused repositories (their stored tokens are deleted " +
-        "with them on Save).",
+        `${shown}${more} — selected as work, reference, or memory on no PMO ` +
+        "or Dev Type, but still probed on every forge sweep (skill sources " +
+        "are a separate connection type, not repo cards). Remove these " +
+        "repositories on Repositories → ⋯ → Remove unused repositories " +
+        "(their stored tokens are deleted with them on Save).",
     });
   }
 

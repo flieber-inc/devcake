@@ -4,7 +4,9 @@
 # but never destructively: the payload validates the whole archive and its
 # kind marker first, moves the current contents aside, and deletes the aside
 # only after a clean extract (2026-08-12 audit OPS-H1; on failure the
-# previous contents survive at the printed .pre-restore-* path).
+# previous tree is put back on its original paths under the volume root —
+# prior .pre-restore-* leftovers are kept, not nested or wiped).
+
 #
 # After restore: run files reflect the backup's moment — the app's boot
 # reconciliation (docs/04 §6) orphans anything whose container no longer

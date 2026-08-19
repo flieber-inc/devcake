@@ -82,6 +82,12 @@ await withPage(async (page) => {
     return (await page.locator(
       '[role="dialog"]:has-text("Clear all run history?")').count()) === 1;
   });
+  await checked("Clear dialog names .claims prune and notes stay", async () => {
+    const text = await page.locator(
+      '[role="dialog"]:has-text("Clear all run history?")').innerText();
+    return text.includes(".claims") && /notes stay/i.test(text)
+      && /operator repos/i.test(text) && /untouched/i.test(text);
+  });
   await page.click('[role="dialog"] button:has-text("Cancel")');
 
   // 6: Skills header — one primary; secondary actions in ⋯ or a lone ghost

@@ -187,6 +187,10 @@ async def paginate_rest_newest(
 # --- per-mission label-write serialization ---------------------------------
 
 _LABEL_LOCKS: dict[str, "asyncio.Lock"] = {}
+# Entrants that have entered label_write_lock (before acquire) and not yet
+# left — holders and waiters. Eviction must not use Lock.locked() alone:
+# locked() is False after release even while waiters remain (CAKE-74).
+_LABEL_LOCK_OCCUPANCY: dict[str, int] = {}
 _LABEL_LOCKS_MAX = 512
 
 
@@ -194,9 +198,10 @@ def _label_lock(pmo_id: str) -> "asyncio.Lock":
     lock = _LABEL_LOCKS.get(pmo_id)
     if lock is None:
         if len(_LABEL_LOCKS) >= _LABEL_LOCKS_MAX:
-            for key, held in list(_LABEL_LOCKS.items()):
-                if not held.locked():
+            for key in list(_LABEL_LOCKS):
+                if _LABEL_LOCK_OCCUPANCY.get(key, 0) == 0:
                     del _LABEL_LOCKS[key]
+                    _LABEL_LOCK_OCCUPANCY.pop(key, None)
         lock = _LABEL_LOCKS.setdefault(pmo_id, asyncio.Lock())
     return lock
 
@@ -217,7 +222,18 @@ async def label_write_lock(pmo_id: str):
 
     Keyed by pmo_id across adapter instances; a numeric-id collision between
     two boards only over-serializes, never under-serializes. The registry
-    drops unheld locks once it grows past _LABEL_LOCKS_MAX.
+    drops locks with no in-flight entrants once it grows past
+    _LABEL_LOCKS_MAX (not merely unheld — a released lock may still have
+    waiters; CAKE-74).
     """
-    async with _label_lock(pmo_id):
-        yield
+    lock = _label_lock(pmo_id)
+    _LABEL_LOCK_OCCUPANCY[pmo_id] = _LABEL_LOCK_OCCUPANCY.get(pmo_id, 0) + 1
+    try:
+        async with lock:
+            yield
+    finally:
+        remaining = _LABEL_LOCK_OCCUPANCY.get(pmo_id, 1) - 1
+        if remaining <= 0:
+            _LABEL_LOCK_OCCUPANCY.pop(pmo_id, None)
+        else:
+            _LABEL_LOCK_OCCUPANCY[pmo_id] = remaining

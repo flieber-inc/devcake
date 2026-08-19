@@ -51,9 +51,12 @@ async def _flag_out_of_pipeline_merge(mgr, run: Run) -> None:
             f"{run.mission_key}: PR merged outside the pipeline ({state.url})")
         log.warning("out-of-pipeline merge on %s (%s)", run.mission_key,
                     state.url)
-    except Exception:  # noqa: BLE001 — anomaly probe is best-effort; failure logged (debug), the review flow is unaffected
-        log.debug("out-of-pipeline merge check failed for %s",
-                  run.mission_key, exc_info=True)
+    except Exception as e:  # noqa: BLE001 — anomaly probe is best-effort; must not fail REVIEW, but detection blindness is itself an anomaly (CAKE-75)
+        mgr.anomalies[run.mission_pmo_id] = (
+            f"{run.mission_key}: out-of-pipeline-merge detection failed — "
+            f"forge probe error: {redact(str(e))[:200]}")
+        log.warning("out-of-pipeline merge check failed for %s",
+                    run.mission_key, exc_info=True)
 
 
 async def _append_handoff(mgr, run: Run, result: dict) -> None:

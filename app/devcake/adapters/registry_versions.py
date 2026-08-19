@@ -19,10 +19,10 @@ TIMEOUT_SECS = 8.0
 class RegistryVersionSource:
     def latest(self, template: str) -> str:
         if template == "grok-build":
-            return _http_text(GROK_STABLE).splitlines()[0].strip()
+            return _stable_feed_version(_http_text(GROK_STABLE))
         pkg = PACKAGE_IDS.get(template)
         if pkg == "x.ai/cli":
-            return _http_text(GROK_STABLE).splitlines()[0].strip()
+            return _stable_feed_version(_http_text(GROK_STABLE))
         if not pkg:
             raise ValueError(f"no remote latest source for {template}")
         body = json.loads(_http_text(f"https://registry.npmjs.org/{pkg}/latest"))
@@ -30,6 +30,14 @@ class RegistryVersionSource:
         if not ver:
             raise ValueError(f"npm returned no version for {pkg}")
         return ver
+
+
+def _stable_feed_version(body: str) -> str:
+    lines = body.splitlines()
+    ver = lines[0].strip() if lines else ""
+    if not ver:
+        raise ValueError(f"empty release feed from {GROK_STABLE}")
+    return ver
 
 
 def _http_text(url: str) -> str:

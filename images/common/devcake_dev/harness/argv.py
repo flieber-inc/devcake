@@ -20,17 +20,6 @@ def resume_specs() -> dict[str, ResumeSpec]:
 RESUME_SPECS: dict[str, ResumeSpec] = resume_specs()
 
 
-def forge_dialect(env: dict) -> tuple:
-    """(clone_user, git_name, git_email, cli_token_envs) for the clone
-    bootstrap. Values come from the app's ForgeDescriptor via spec_env
-    (docs/06, docs/07). App and images deploy in lockstep (docs/13 §8), so
-    every var is always present — a KeyError here means a mismatched build
-    and should crash the run loudly."""
-    cli_envs = [e for e in env.get("DEVCAKE_FORGE_CLI_ENVS", "").split(",") if e]
-    return (env["DEVCAKE_CLONE_USER"], env["DEVCAKE_GIT_NAME"],
-            env["DEVCAKE_GIT_EMAIL"], cli_envs)
-
-
 def cli_version(harness: str, *, timeout: float = 5.0) -> str:
     """First line of `<cli> --version` in this container. Empty on unknown
     harness, missing binary, or timeout — never raises into provision."""

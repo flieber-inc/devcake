@@ -414,7 +414,7 @@ class Steward(BaseModel):
     and discovery routing (ADR-0033). Manual-only by default
     (enabled=False → the admin "Run now" button); the periodic service is
     opt-in. dev_type must name an existing Dev Type whenever enabled — the
-    seeded steward (cheap model) is the default vehicle."""
+    seeded steward (EXECUTE-grade / Opus-class) is the default vehicle."""
     enabled: bool = False
     interval_minutes: int = Field(60, ge=1)
     dev_type: str | None = "steward"

@@ -399,7 +399,7 @@ export default function RunsPage() {
                 desc: "Kills every in-flight Dev (each counts as a failed attempt). Finalizing runs complete on their own.",
                 onClick: () => { setStopConfirmOpen(true); setClearErr(""); } },
               { label: "Clear run history", danger: true,
-                desc: "Wipes local records, Dagu history and OpenObserve data. Cannot be undone.",
+                desc: "Wipes local records, Dagu/OO history, activity repos, and notebook .claims leads. Cannot be undone.",
                 onClick: () => { setConfirmOpen(true); setClearErr(""); } },
             ]} />
           </>
@@ -617,7 +617,8 @@ export default function RunsPage() {
           "execution history, and empties OpenObserve logs and traces. " +
           "Per-mission activity repos on the internal Gitea are deleted too — " +
           "their git history includes pre-edit feed states your PMO no longer " +
-          "shows.\n\n" +
+          "shows. Memory-notebook .claims/*.json leads are also pruned " +
+          "(notebook notes stay; the notebooks themselves are not deleted).\n\n" +
           "Config, credentials, operator repos, the skill-store, work repos, " +
           "and everything in your PMO are untouched. Every mission's retry " +
           "count starts fresh.\n\n" +

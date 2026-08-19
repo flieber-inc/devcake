@@ -15,6 +15,7 @@ import { SecretField, Select } from "./Field.jsx";
 import { newSkillSourceCard } from "../lib/cards.js";
 import { getRegistry, loadRegistry } from "../lib/registry.js";
 import { useSharedDraft } from "../lib/ConfigDraftContext.jsx";
+import { useNewNames } from "../lib/instanceNames.js";
 import { fileToB64 } from "../lib/files.js";
 import { isMarkdownPath, stripYamlFrontmatter } from "../lib/markdown.js";
 
@@ -246,14 +247,21 @@ function ViewSkillDialog({ name, onClose }) {
 // Dedicated skills connections (2026-08-14 ruling): a skills repository
 // is its own connection — managed HERE, never on the Repositories page.
 function SkillSourcesCard() {
-  const { dr } = useSharedDraft();
+  const { dr, skillSourceNewNamesState } = useSharedDraft();
   const [registry, setRegistry] = useState(getRegistry());
   useEffect(() => { loadRegistry().then(setRegistry); }, []);
   const cfg = dr.draft.cfg;
   const setField = dr.setField;
   const sources = cfg.skill_sources || [];
+  // stored tokens key on the source name — lock the name once saved, with
+  // the same session-new / last-index rule as Repos and PMO cards
+  const newNames = useNewNames(dr.server?.cfg.skill_sources, sources,
+                               skillSourceNewNamesState);
   const savedNames = new Set(
     (dr.server.cfg.skill_sources || []).map((x) => x.name));
+  const nameLocked = (name, idx) =>
+    savedNames.has(name) &&
+    !(newNames.has(name) && idx === sources.map((s) => s.name).lastIndexOf(name));
   return (
     <Section id="skills-sources" title="Skill sources"
       description="Repositories that hold skills — connected here, separate from your code repositories."
@@ -273,18 +281,24 @@ function SkillSourcesCard() {
             </span>
             <Button kind="danger-ghost" icon={Trash2} size="sm"
               aria-label={`Remove skill source ${src.name}`}
-              onClick={() => setField("cfg.skill_sources",
-                sources.filter((_, i) => i !== idx))}>
+              onClick={() => {
+                newNames.untrack(src.name);
+                setField("cfg.skill_sources",
+                  sources.filter((_, i) => i !== idx));
+              }}>
               Remove
             </Button>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Name"
-              help="Short identity for this source (lowercase letters/digits, up to 12). Skills from it are selected as '<name>/<skill>' on worker profiles.">
+              help="Short identity for this source (lowercase letters/digits, up to 12). Skills from it are selected as '<name>/<skill>' on worker profiles. Locked once saved — stored tokens key on it; remove and re-add to rename.">
               <Input value={src.name}
                 aria-label={`Skill source ${idx + 1} name`}
-                onChange={(e) => setField(`cfg.skill_sources.${idx}.name`,
-                  e.target.value)} />
+                disabled={nameLocked(src.name, idx)}
+                onChange={(e) => {
+                  newNames.rename(src.name, e.target.value);
+                  setField(`cfg.skill_sources.${idx}.name`, e.target.value);
+                }} />
               {dr.errors[`cfg.skill_sources.${idx}.name`] && (
                 <span className="mt-1 block text-xs text-red-600 dark:text-red-400">
                   ✗ {dr.errors[`cfg.skill_sources.${idx}.name`]}
@@ -327,13 +341,13 @@ function SkillSourcesCard() {
             <SecretField label="Read token"
               help="Token with read access to the repository (private sources). Stored as plaintext mode 0600 on the app volume — never echoed back."
               refKey={`skill:${src.name}:token_ro`} paste
-              locked={!savedNames.has(src.name)} />
+              locked={!nameLocked(src.name, idx)} />
             <SecretField label="Token (fallback)"
               help="Used only when no read token is stored. A read-scoped token is all a skills source ever needs."
               refKey={`skill:${src.name}:token`} paste
-              locked={!savedNames.has(src.name)} />
+              locked={!nameLocked(src.name, idx)} />
           </div>
-          {!savedNames.has(src.name) && (
+          {!nameLocked(src.name, idx) && (
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Save first — tokens can be pasted once the source exists.
             </p>
@@ -341,8 +355,11 @@ function SkillSourcesCard() {
         </div>
       ))}
       <button type="button"
-        onClick={() => setField("cfg.skill_sources",
-          [...sources, newSkillSourceCard("")])}
+        onClick={() => {
+          newNames.track("");
+          setField("cfg.skill_sources",
+            [...sources, newSkillSourceCard("")]);
+        }}
         className="flex w-full items-center justify-center gap-2 rounded-card border-2 border-dashed border-neutral-300 py-2.5 text-sm font-medium text-neutral-600 transition hover:border-accent-400 hover:bg-accent-50/40 hover:text-accent-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-accent-700 dark:hover:bg-accent-950/30 dark:hover:text-accent-300">
         <Plus size={15} aria-hidden="true" />
         New skill source

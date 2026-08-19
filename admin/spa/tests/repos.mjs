@@ -21,9 +21,16 @@ await withPage(async (page) => {
   const text = await page.locator('[role="dialog"]').innerText();
   // stack-dependent: either the empty state or the removal confirm — both
   // must name their outcome (the confirm must own the token-deletion truth)
+  // and neither may claim skill-source prefixes select repo cards (CAKE-89)
   const emptyState = text.includes("No unused repositories");
   check("dialog names the outcome honestly",
     emptyState || (/unused repositor/.test(text) && text.includes("tokens")));
+  check("unused dialog does not treat skill-source as a repo selection",
+    !/skill-source on no board/i.test(text)
+    && (emptyState
+      ? /Skill sources are managed separately/i.test(text)
+        || /work, reference, or memory/i.test(text)
+      : /work, reference, or memory/i.test(text)));
 
   await page.click('[role="dialog"] button:has-text("Cancel")');
   await page.waitForTimeout(100);

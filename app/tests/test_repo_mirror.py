@@ -88,7 +88,10 @@ def make_cache(tmp_path, repos, *, internal=(), lfs=False, max_age=0,
             name = Path(args[1]).name.removesuffix(".git")
             inst = forges.instance(name)
             user = FakeForge.descriptor.clone_user
-            url = inst.url.replace("https://", f"https://{user}@")
+            # Match RepoCache._url_with_clone_user (scheme-agnostic).
+            url = inst.url
+            if user and "://" in url and "@" not in url.split("://", 1)[1].split("/", 1)[0]:
+                url = url.replace("://", f"://{user}@", 1)
             return GitResult(0, url + "\n", "")
         return GitResult(0, "", "")
 

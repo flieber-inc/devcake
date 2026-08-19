@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..adapters.git import GIT_TIMEOUT_SECONDS, run_git
+from ..adapters.git import run_git
 from ..security import redact
 
 log = logging.getLogger("devcake.mirror")
@@ -137,11 +137,28 @@ class RepoCache:
             return True
         if name in self._synced_mono:
             return True
-        heads = self.mirror_path(name) / "refs" / "heads"
+        root = self.mirror_path(name)
+        heads = root / "refs" / "heads"
         try:
-            return heads.is_dir() and any(heads.iterdir())
+            if heads.is_dir() and any(heads.iterdir()):
+                return True
         except OSError:
-            return False
+            pass
+        # After `git gc`, heads live in packed-refs and loose refs/heads/*
+        # may be empty — still last-good content (ADR-0024 offline maintenance).
+        packed = root / "packed-refs"
+        try:
+            if packed.is_file():
+                for line in packed.read_text(errors="replace").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("^"):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].startswith("refs/heads/"):
+                        return True
+        except OSError:
+            pass
+        return False
 
     def needed_for(self, *, work_repo: str, mission_type: str, instance,
                    blocker_entries: list[dict],
@@ -223,8 +240,7 @@ class RepoCache:
                 return st
         clone_user = (forge.descriptor.clone_user if forge is not None
                       else self.clone_user_of(inst.forge))
-        expected_url = inst.url.replace("https://", f"https://{clone_user}@") \
-            if clone_user else inst.url
+        expected_url = self._url_with_clone_user(inst.url, clone_user)
         p = self.mirror_path(name)
         env = self._git_env(inst)
 
@@ -309,15 +325,28 @@ class RepoCache:
         url = inst.url.strip()
         clone_user = (getattr(forge.descriptor, "clone_user", "") or ""
                       if forge is not None else self.clone_user_of(inst.forge))
-        if clone_user and "://" in url \
-                and "@" not in url.split("://", 1)[1].split("/", 1)[0]:
-            url = url.replace("://", f"://{clone_user}@", 1)
+        url = self._url_with_clone_user(url, clone_user)
         ref = (f"refs/heads/{inst.default_branch}"
                if inst.default_branch else "HEAD")
         r = await self.git(["ls-remote", url, ref], env=self._git_env(inst))
         if r.returncode != 0 or not (r.stdout or "").strip():
             return None
         return r.stdout.split()[0]
+
+    @staticmethod
+    def _url_with_clone_user(url: str, clone_user: str) -> str:
+        """Insert ``clone_user@`` after the scheme when userinfo is absent.
+
+        Scheme-agnostic (http and https) — https-only ``str.replace`` left
+        private http-hosted cards userless while ``remote_head`` already
+        inserted for any scheme.
+        """
+        if not clone_user or "://" not in url:
+            return url
+        after = url.split("://", 1)[1]
+        if "@" in after.split("/", 1)[0]:
+            return url
+        return url.replace("://", f"://{clone_user}@", 1)
 
     def _git_env(self, inst) -> dict[str, str]:
         token = inst.token_ro or inst.token   # read-preferred, same rule as

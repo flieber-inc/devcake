@@ -94,7 +94,7 @@ def _refuse_insecure_passwords() -> None:
         raise RuntimeError(
             "ADMIN_PASSWORD must be at least 12 characters — it is "
             "host-root-equivalent (settings export carries the Dagu "
-            "credential, and Dagu holds docker.sock — docs/14 §3). Set a "
+            "credential, and Dagu holds docker.sock — docs/14 §0 / §4). Set a "
             "longer value in .env, or DEVCAKE_ALLOW_INSECURE=1 for local "
             "sandbox only.")
     # the password check above can't catch a blank USER half of the OO

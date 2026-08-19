@@ -99,12 +99,30 @@ export default function PmoSection({ newNamesState, health = {}, healthError = f
       action: () => { setField(path, value); setConfirm(null); },
     });
 
-  const test = async (kind) =>
-    setTestResult({ ...testResult, [kind]: await send("POST", `/connections/${kind}/test`) });
+  const test = async (kind) => {
+    try {
+      const result = await send("POST", `/connections/${kind}/test`);
+      setTestResult((prev) => ({ ...prev, [kind]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [kind]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
   // per-instance tests (schema v3 / M10): keyed pmo:{name} / forge:{name}
-  const testPmo = async (name) =>
-    setTestResult({ ...testResult,
-                    [`pmo:${name}`]: await send("POST", `/connections/pmo/${name}/test`) });
+  const testPmo = async (name) => {
+    const key = `pmo:${name}`;
+    try {
+      const result = await send("POST", `/connections/pmo/${name}/test`);
+      setTestResult((prev) => ({ ...prev, [key]: result }));
+    } catch (e) {
+      setTestResult((prev) => ({
+        ...prev,
+        [key]: { ok: false, error: String(e.message || e) },
+      }));
+    }
+  };
 
   // Narrow endpoint — never rewrites the pmos list (lost-update / secret-delete race).
   // State comes from App /health; only saved instances can toggle live.

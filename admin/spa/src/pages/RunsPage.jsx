@@ -351,6 +351,7 @@ export default function RunsPage() {
   };
 
   const [stopErr, setStopErr] = useState("");
+  const [exportErr, setExportErr] = useState("");
   const doStopAll = async () => {
     setStopping(true);
     setStopErr("");
@@ -378,6 +379,11 @@ export default function RunsPage() {
       setStopping(false);
     }
   };
+  const doExportCsv = () => {
+    setExportErr("");
+    download(`/runs.csv?${filterQuery().slice(1)}`, null, "GET")
+      .catch((e) => setExportErr(String(e.message || e)));
+  };
 
   return (
     <div className="space-y-4">
@@ -391,13 +397,13 @@ export default function RunsPage() {
             <MoreMenu label="More run actions" items={[
               { label: "Export to CSV…",
                 desc: "Downloads the filtered set as a spreadsheet — every matching run, not just this page.",
-                onClick: () => { download(`/runs.csv?${filterQuery().slice(1)}`, null, "GET").catch((e) => setStopErr(String(e.message || e))); } },
+                onClick: doExportCsv },
               { label: "Cost inputs…",
                 desc: "Per-model rates behind estimated costs. Changes apply immediately.",
                 onClick: () => setCostOpen(true) },
               { label: "Stop all runs", danger: true,
                 desc: "Kills every in-flight Dev (each counts as a failed attempt). Finalizing runs complete on their own.",
-                onClick: () => { setStopConfirmOpen(true); setClearErr(""); } },
+                onClick: () => { setStopConfirmOpen(true); setClearErr(""); setExportErr(""); } },
               { label: "Clear run history", danger: true,
                 desc: "Wipes local records, Dagu history and OpenObserve data. Cannot be undone.",
                 onClick: () => { setConfirmOpen(true); setClearErr(""); } },
@@ -412,6 +418,11 @@ export default function RunsPage() {
       {clearErr && (
         <p className="rounded-card border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           Partial clear: {clearErr}
+        </p>
+      )}
+      {exportErr && (
+        <p className="rounded-card border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          Export failed: {exportErr}
         </p>
       )}
       {stopErr && (

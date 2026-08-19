@@ -16,7 +16,7 @@ sections, SettingRow, MoreMenu, InstantZone), `src/pages/OverviewPage.jsx`
 ## 1. Identity — "bakery-warm, terminal-precise"
 
 The product is an oven that bakes software missions. The UI is warm (stone
-surfaces, espresso ink, crust-orange accent) but operates with terminal
+surfaces, espresso ink, frosting-violet accent) but operates with terminal
 precision (mono ids, tabular numerals, dense honest tables).
 
 ### Color — tokens only, never raw hex in components
@@ -27,10 +27,10 @@ color family in a component.**
 
 | Register | Classes | Meaning |
 |---|---|---|
-| **Accent** | `accent-*` (brand `#b4550a` at 600) | The ONLY brand accent. Primary buttons, active nav, links, the current StageGlyph layer, InstantZone tint. Don't dilute it with a second accent color. |
+| **Accent** | `accent-*` (brand `#6042cc` at 600; 400/500/600 are the brand mark's frosting-gradient stops) | The ONLY brand accent. Primary buttons, active nav, links, the current StageGlyph layer, InstantZone tint. Don't dilute it with a second accent color. |
 | **Neutrals** | `neutral-*` (warm, stone-tinted; 900 = espresso `#2a2018`) | All text/borders/surfaces. The warmth is token-side — keep using `neutral-*` classes. |
 | **Surfaces** | `bg-surface` / `bg-surface-raised` (+ `-dark`) | Page ground / cards. Cards via the `Card` component, not hand-rolled divs. |
-| **Warning** | `amber-*` (retuned yellower, 600 = `#a1720d`) | Warnings/partial states. Deliberately pushed away from the brand orange — never use `accent-*` for a warning or `amber-*` as decoration. |
+| **Warning** | `amber-*` (true amber, 600 = `#a1720d`) | Warnings/partial states — a register of its own: never use `accent-*` for a warning or `amber-*` as decoration. |
 | **Danger** | `red-*` (stock) | Destructive actions and errors only. |
 | **Success** | `green-*` (stock) | Confirmations only. |
 
@@ -41,8 +41,9 @@ color family in a component.**
   (The wordmark is no longer set in type: the brand mark and wordmark are SVG
   artwork — canonical files in `docs/img/brand/`, bundled copies in
   `src/assets/` — rendered per theme: black-violet on light, cream-violet on
-  dark. The artwork's own palette is the one sanctioned exception to the
-  single-accent rule; UI accents stay `accent-*`.)
+  dark. The UI's `accent-*` ramp is anchored on the artwork's violet gradient;
+  the artwork's cream cake layers remain artwork-only — don't promote them
+  into UI classes. UI accents stay `accent-*`.)
 - Mono (`font-mono`) for machine identifiers: run ids, mission keys, env var
   names, InstantZone eyebrow labels.
 - Numerals that line up in columns get `tabular-nums`.
@@ -237,7 +238,7 @@ semantically distinct:
   config fields must join this flow and get labels in `configLabels.js`.
   **Never change draft semantics** — no per-section save buttons, no autosave.
 - **Instant**: anything that hits the server the moment it's used gets wrapped
-  in `InstantZone` (crust-tinted region with the ⚡ "applies immediately"
+  in `InstantZone` (accent-tinted region with the ⚡ "applies immediately"
   eyebrow) or carries `ImmediateBadge`. No third regime.
 
 ---

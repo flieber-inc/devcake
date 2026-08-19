@@ -552,18 +552,8 @@ export default function OverviewPage({
               icon={GitMerge} title="Gitea (internal forge)"
               desc="The bundled forge — internal repos, PRs and history" />
           )}
-          <Card className="flex items-start gap-3 p-4">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-50 text-accent-700 dark:bg-accent-950/70 dark:text-accent-300">
-              <BookOpen size={16} aria-hidden />
-            </span>
-            <span className="min-w-0">
-              <span className="text-sm font-semibold">Spec &amp; source</span>
-              <span className="mt-0.5 block text-xs text-neutral-500 dark:text-neutral-400">
-                Design docs live in the repository under <code className="text-[11px]">docs/</code>
-                {" "}(no fixed public product URL published yet)
-              </span>
-            </span>
-          </Card>
+          <QuickLink href="https://github.com/flieber-inc/devcake" icon={BookOpen}
+            title="Spec &amp; source" desc="The public repository — design docs under docs/, ADRs, releases" />
         </div>
       </div>
 

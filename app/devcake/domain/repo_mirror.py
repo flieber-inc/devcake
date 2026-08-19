@@ -268,7 +268,14 @@ class RepoCache:
                               if name in self.ledger else None)
             self.ledger[name] = st
             if auth:
-                self.forges.latch(name, f"mirror sync: {clean[:200]}")
+                # Mirror sync is read-preferred (token_ro or token) — same
+                # rule as memory mounts. Key the latch so a write-token
+                # probe cannot clear a dead read credential (CAKE-118).
+                field = ("token_ro" if getattr(inst, "token_ro", None)
+                         else "token")
+                self.forges.latch(
+                    name, f"mirror sync: {clean[:200]}",
+                    credential_field=field)
             log.warning("mirror sync failed for %s: %s", name, clean[:200])
             return st
 

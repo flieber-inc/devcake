@@ -75,14 +75,14 @@ def _main(monkeypatch, tmp_path):
 
     from devcake.api import main as app_main
     from devcake.config import AppConfig
-    from fakes import make_services
+    from fakes import make_services, stub_forge_runtime
 
     # ADR-0028: install a test graph — routes resolve svc() at call time.
     # Unwired slots explode with their name; these are the ones the
     # secrets/connections routes actually reach.
     monkeypatch.setattr(app_main, "services", make_services(
         config=AppConfig(), dev_types={}, shared_breakers={},
-        forge_runtime=SimpleNamespace(breakers={}),
+        forge_runtime=stub_forge_runtime(),
         reload_connections=lambda: None,
         # the secret routes serialize their write+reload against the poll
         # cycle (L-1) — wire the lock they now take
@@ -419,13 +419,11 @@ def test_secrets_clear_repo_pops_forge_breaker_and_reloads(monkeypatch, tmp_path
     s = _store(monkeypatch, tmp_path)
     s.write_connection_secret("repo", "main", "token", "repo-tok-sentinel")
 
-    class _FR:
-        def __init__(self):
-            self.breakers = {"main": "FORGE_AUTH"}
+    from fakes import stub_forge_runtime
 
     reloads = []
     resets = []
-    fr = _FR()
+    fr = stub_forge_runtime({"main": "FORGE_AUTH"})
     app_main.services.forge_runtime = fr
     # clear_secrets binds reload/forge_runtime at the route — call the service
     # with fakes so we can assert the side effects without full composition.

@@ -77,7 +77,7 @@ async def put_secret(scope: str, instance: str, field: str, body: dict, *,
     async with _cycle(cycle_lock):
         secrets_store.write_connection_secret(scope, instance, field, value)
         if scope == "repo":
-            forge_runtime.breakers.pop(instance, None)
+            forge_runtime.clear_breaker(instance)
             reset_health_caches()
         # adapters capture credentials by VALUE at construction — a rotated
         # secret takes effect only through a rebuild, same as a config PUT
@@ -92,7 +92,7 @@ async def delete_secret(scope: str, instance: str, field: str, *,
     async with _cycle(cycle_lock):
         secrets_store.delete_connection_field(scope, instance, field)
         if scope == "repo":
-            forge_runtime.breakers.pop(instance, None)
+            forge_runtime.clear_breaker(instance)
             reset_health_caches()
         reload()
     return {"present": False}
@@ -242,7 +242,7 @@ async def clear_secrets(body: dict, *, forge_runtime, reload, config,
             deleted_c.append({"scope": scope, "instance": instance,
                               "field": field})
             if scope == "repo":
-                forge_runtime.breakers.pop(instance, None)
+                forge_runtime.clear_breaker(instance)
                 repo_touched = True
 
         deleted_f: list[dict] = []

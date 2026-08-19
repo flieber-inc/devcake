@@ -64,6 +64,7 @@ class Forges:
         self.instances = {r.name: r for r in repos}
         self.internal = set()
         self.breakers = {}
+        self.breaker_fields = {}
 
     def instance(self, name):
         return self.instances.get(name)
@@ -71,8 +72,10 @@ class Forges:
     def get(self, name):
         return self._F() if name in self.instances else None
 
-    def latch(self, name, reason):
+    def latch(self, name, reason, *, credential_field=None):
         self.breakers[name] = reason
+        if credential_field is not None:
+            self.breaker_fields[name] = credential_field
 
 
 @pytest.fixture

@@ -525,7 +525,7 @@ async def apply_profile(name: str):
         return profiles_service.apply_profile_body(
             name, config=s.config, dev_types=s.dev_types, store=s.store,
             reload=s.reload_connections, shared_breakers=s.shared_breakers,
-            forge_breakers=s.forge_runtime.breakers, managers=s.managers)
+            forge_runtime=s.forge_runtime, managers=s.managers)
 
 
 @app.post("/api/v1/profiles/{name}/rename")

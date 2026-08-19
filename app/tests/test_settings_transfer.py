@@ -37,14 +37,14 @@ def _wire_app(monkeypatch, tmp_path: Path):
                                     "ghp_transfer_secret_value_01")
     secrets.write_harness_secret("ANTHROPIC_API_KEY", "sk-ant-transfer-02")
     from devcake.domain.skills import SkillService
-    from fakes import make_services
+    from fakes import make_services, stub_forge_runtime
     # ADR-0028: one test graph instead of five module-global patches.
     # SkillService(None) serves the bundled skills forge-less, exactly as
     # the old module global did in a GITEA-less test env.
     monkeypatch.setattr(app_main, "services", make_services(
         config=cfg, dev_types=dts, reload_connections=lambda: None,
         store=SimpleNamespace(active=lambda: []), shared_breakers={},
-        managers={}, forge_runtime=SimpleNamespace(breakers={}),
+        managers={}, forge_runtime=stub_forge_runtime(),
         skill_service=SkillService(None),
         poll_rt=SimpleNamespace(lock=asyncio.Lock())))
     return app_main, config_mod, secrets

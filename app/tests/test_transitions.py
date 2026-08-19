@@ -589,6 +589,8 @@ def test_forge_auth_artifact_trips_repo_breaker(tmp_path):
     assert error.startswith("DEV_FORGE_AUTH:")
     # M10: the latch is per-repo on the runtime, never the dev-type dict
     assert "main" in mgr.forges.breakers and not mgr.breakers
+    # CAKE-118: work-repo path keys the latch on the write credential
+    assert mgr.forges.breaker_fields["main"] == "token"
 
 
 def test_notebook_clone_forge_auth_latches_notebook_card_not_work_repo(tmp_path):
@@ -612,6 +614,47 @@ def test_notebook_clone_forge_auth_latches_notebook_card_not_work_repo(tmp_path)
     assert "nb" in mgr.forges.breakers
     assert "main" not in mgr.forges.breakers
     assert not mgr.breakers
+
+
+def test_notebook_clone_forge_auth_keys_latch_on_token_ro(
+        tmp_path, monkeypatch):
+    """CAKE-118: dual-token notebook card latch records token_ro so a
+    write-preferred health probe cannot clear it."""
+    from fakes import make_mission_manager
+    from devcake.config import RepoInstance
+    from devcake.domain.forge_runtime import ForgeRuntime
+
+    monkeypatch.setenv("DEVCAKE_DATA_DIR", str(tmp_path))
+    from devcake import secrets as s
+    s.write_connection_secret("repo", "nb", "token", "write-ok-0123456789ab")
+    s.write_connection_secret("repo", "nb", "token_ro", "read-dead-0123456789")
+    s.write_connection_secret("repo", "main", "token", "main-write-0123456789")
+
+    rt = ForgeRuntime()
+    rt.rebuild(
+        [RepoInstance(name="main", url="https://github.com/o/main"),
+         RepoInstance(name="nb", url="https://github.com/o/nb")],
+        lambda i: object())
+    m = mission("in_progress", {"DEVCAKE"})
+    fake = FakePMO(m)
+    mgr = make_mission_manager(
+        tmp_path, pmo=fake, forge_runtime=rt, config=AppConfig(),
+        dev_types={"senior-dev": DevType(name="senior-dev",
+                                         harness_template="claude-code")},
+        messaging=NullMessaging(), noop_audit=True)
+    run = _run("ONBOARD", None)
+    run.repo_ref = "main"
+    run.memory_mounts = [{"card": "nb", "binding": "board", "path": "memory/nb"}]
+    error = mgr.dev_failure_error(run, {
+        "exit_code": 13,
+        "error_class": "DEV_FORGE_AUTH",
+        "error_detail": (
+            "memory notebook nb clone failed: "
+            "remote returned 403: Authentication failed"),
+    })
+    assert error.startswith("DEV_FORGE_AUTH:")
+    assert "nb" in rt.breakers and "main" not in rt.breakers
+    assert rt.breaker_fields["nb"] == "token_ro"
 
 
 def test_stderr_403_without_error_class_does_not_trip_breaker(tmp_path):

@@ -482,22 +482,22 @@ class RunManager:
         try:
             try:
                 await self.executor.stop(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: stop may raise on transport errors; ACL + terminal state must still run
                 log.exception("executor.stop failed for %s — continuing teardown",
                               run.run_id)
             try:
                 await self._ship_failure(run, new_state, reason)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: failure record may fail to ship; ACL + terminal state must still run
                 log.exception("ship_failure failed for %s — continuing teardown",
                               run.run_id)
         finally:
             try:
                 await self.messaging.delete_run_user(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: ACL delete is mandatory-attempt; continue past transport errors
                 log.exception("delete_run_user failed for %s", run.run_id)
             try:
                 await self.messaging.delete_reply_stream(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: reply-stream delete continues past transport errors
                 log.exception("delete_reply_stream failed for %s", run.run_id)
             # Two guards on one FRESH read, no await before save (atomic under
             # asyncio's cooperative scheduling):
@@ -551,7 +551,7 @@ class RunManager:
             # block is the fail-safe teardown, so belt-and-suspenders.
             try:
                 self.workspaces.cleanup(run.run_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: workspace cleanup is belt-and-suspenders; the sweep reclaims leftovers
                 log.exception("workspace cleanup failed for %s", run.run_id)
         # state_moved: the kill lost the race — the run's mover (finalize, or
         # another killer) now owns the mission transition, and restoring the
@@ -562,7 +562,7 @@ class RunManager:
         if self.finalizer and run.mission_pmo_id and not state_moved:
             try:
                 await self.finalizer.restore_after_failure(run)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort teardown: INV-3 restore must not undo a completed kill if PMO write fails
                 log.exception("restore_after_failure failed for %s", run.run_id)
         if self.oauth_mgr and run.run_id in self.oauth_mgr.sessions:
             self.oauth_mgr.sessions[run.run_id].update(

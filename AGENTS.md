@@ -101,7 +101,7 @@ Design and refactors must respect SOLID. Prefer **deep modules** (small interfac
 - Typing domain code against concrete `DaguExecutor` / `Messaging` / `RunStore` instead of ports
 - Duplicating the ACL → digest → save → start spine outside `RunBootstrap`
 - Giant untested functions in `orchestrator.py` without a public-seam test
-- `except Exception: pass` that swallows real failures without logging — lint-enforced: ruff `BLE001`; every blanket catch is narrowed or carries `# noqa: BLE001 — <justification>` naming its contract (docs/15 §7)
+- `except Exception: pass` that swallows real failures without logging — lint-enforced: ruff `BLE001`; every production blanket catch is narrowed, carries `# noqa: BLE001 — <justification>` naming its contract, or is a logged handler under a sanctioned docs/15 §7 contract (ruff accepts the logged arm without noqa; prefer an explicit noqa at long-lived seams)
 - Mutating production modules only “to make the test pass” by weakening invariants
 - New endpoint bodies in `api/main.py` or new attributes bound onto `MissionManager` after its class body — main.py is wiring + ≤4-statement route forwards (composition happens in `api/services.build_services()`, ADR-0028), orchestrator behavior lives in module functions taking `mgr` (ADR-0015; enforced by `tests/test_structure_guards.py`)
 - New checkpoint-step key literals — every `finalized_steps`/`_checkpoint` key registers in `domain/orchestrator/steps.py` (ADR-0034; the AST guard in `test_structure_guards` rejects bare literals). Same file forbids a domain module importing `adapters/*` outside the two allowlisted seams.

@@ -8,7 +8,7 @@ from typing import Literal, NamedTuple, Optional
 
 from pydantic import BaseModel, Field
 
-# ── The ten managed labels (docs/02 §5 — defined once) ──────────────────────
+# ── The eleven managed labels (docs/02 §5 — defined once) ───────────────────
 
 LABEL_OPTIN = "DEVCAKE"
 LABEL_PLAN = "DEVCAKE-PLAN"

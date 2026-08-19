@@ -20,7 +20,7 @@ from ...domain.model import (ALL_LABELS, Activity, ActivityEntry, AttachmentRef,
                              Mission, MissionRef, NormalizedStatus,
                              canonicalize_labels)
 from ...ports.pmo import PMOCapabilities, PMOHealth, PMOTransient
-from .._toolkit import label_write_lock
+from .._toolkit import gitea_internal_tracker_enable_deps, label_write_lock
 from ..forge_issue import CANCEL_FOOTER, apply_cancel_footer, strip_cancel_footer
 from .mapping import (mission_key, normalize_priority,
                       normalize_status, parse_team_ref)
@@ -30,6 +30,16 @@ log = logging.getLogger("devcake.gitea_issues")
 # Managed-label colors (cosmetic; names are the contract)
 _LABEL_COLOR = "6e40c9"
 
+
+class GiteaIssuesHTTPError(RuntimeError):
+    """Permanent Gitea Issues HTTP failure carrying the status code."""
+
+    def __init__(self, method: str, path: str, status: int, body: str):
+        super().__init__(
+            f"gitea_issues {method} {path} → {status}: {body[:300]}")
+        self.status_code = status
+
+
 # get_activity ceilings (mirror Linear: fail-loud, newest-first survival)
 MAX_COMMENT_PAGES = 10
 MAX_COMMENT_PAGES_FULL = 100
@@ -38,6 +48,8 @@ ISSUES_PAGE = 50
 MAX_ISSUE_PAGES = 40  # 2000 issues fail-loud
 LABELS_PAGE = 50
 MAX_LABEL_PAGES = 10  # 500 labels fail-loud — see _fetch_all_labels
+DEPS_PAGE = 50
+MAX_DEP_PAGES = 10  # 500 blockers fail-loud ceiling (Linear relations twin)
 
 # Attachment host patterns for markdown link recovery
 _NAMED_ASSET_RE = re.compile(
@@ -215,9 +227,8 @@ class GiteaIssuesAdapter:
                 f"gitea_issues {method} {path} → {resp.status_code}: "
                 f"{resp.text[:200]}")
         if resp.status_code >= 400:
-            raise RuntimeError(
-                f"gitea_issues {method} {path} → {resp.status_code}: "
-                f"{resp.text[:300]}")
+            raise GiteaIssuesHTTPError(
+                method, path, resp.status_code, resp.text or "")
         if as_response:
             return resp
         if not expect_json or not resp.content:
@@ -271,13 +282,25 @@ class GiteaIssuesAdapter:
         )
 
     async def _blocked_by_ids(self, index: int) -> list[str]:
-        """Issue numbers (as pmo_id strings) that block this issue."""
+        """Issue numbers (as pmo_id strings) that block this issue.
+
+        Paged with a warn ceiling (Linear inverseRelations / forge list twin).
+        Only HTTP 404 (deps endpoint absent / disabled) yields []; other
+        permanent failures raise — never match on the path substring
+        ``depend`` (always present) or bare ``404`` in the issue index.
+        """
+        from .._toolkit import paginate_rest
         try:
-            deps = await self._req(
-                "GET", self._repo_path(f"/issues/{index}/dependencies"))
-        except RuntimeError as e:
-            # dependencies disabled → empty (ensure_labels enables them)
-            if "404" in str(e) or "depend" in str(e).lower():
+            deps, _ = await paginate_rest(
+                lambda page: self._req(
+                    "GET",
+                    self._repo_path(f"/issues/{index}/dependencies"),
+                    params={"page": page, "limit": DEPS_PAGE}),
+                page_size=DEPS_PAGE, max_pages=MAX_DEP_PAGES,
+                what=f"gitea_issues issue {index} dependencies",
+                on_ceiling="warn")
+        except GiteaIssuesHTTPError as e:
+            if e.status_code == 404:
                 return []
             raise
         if not isinstance(deps, list):
@@ -630,15 +653,21 @@ class GiteaIssuesAdapter:
                 self._label_ids[n] = int(lb["id"])
 
     async def _enable_issue_dependencies(self) -> None:
-        """Dependencies are off by default on new repos (spike 1.24.7)."""
+        """Dependencies are off by default on new repos (spike 1.24.7).
+
+        Gitea replaces the whole ``internal_tracker`` (plain bools) on PATCH —
+        omitted keys become false. GET the current tracker, then PATCH with
+        deps enabled and time-tracker flags preserved
+        (``gitea_internal_tracker_enable_deps``).
+        """
         try:
+            repo = await self._req("GET", self._repo_path(""))
+            cur = (repo or {}).get("internal_tracker") if isinstance(
+                repo, dict) else None
             await self._req(
                 "PATCH", self._repo_path(""),
-                json={"internal_tracker": {
-                    "enable_time_tracker": False,
-                    "allow_only_contributors_to_track_time": False,
-                    "enable_issue_dependencies": True,
-                }})
+                json={"internal_tracker":
+                      gitea_internal_tracker_enable_deps(cur)})
         except Exception as e:  # noqa: BLE001 — best-effort enable; create_relation may still work
             log.warning("gitea_issues enable dependencies: %s", e)
 

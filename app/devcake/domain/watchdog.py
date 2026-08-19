@@ -42,6 +42,16 @@ async def watchdog_loop(mgr: RunManager) -> None:
                 log.exception("workspace sweep failed")
         try:
             stalled_finalizing = []
+            # Fail-closed: if unresolved_run_ids is unreachable, skip
+            # timeout/liveness kills this cycle so we never race a first
+            # artifacts delivery onto a terminal state (CAKE-73). None ⇒ unknown.
+            try:
+                unresolved: set[str] | None = await mgr.messaging.unresolved_run_ids()
+            except Exception:  # noqa: BLE001 — messaging probe fail-closed: prefer skip-kill over terminalling a first delivery we cannot rule out
+                log.exception(
+                    "watchdog: unresolved_run_ids failed — skipping "
+                    "timeout/liveness kills this cycle (fail-closed)")
+                unresolved = None
             for run in mgr.store.active():
                 # finalizing = app-side PMO/forge work after the Dev has exited.
                 # Never wall-clock-kill it while its artifacts entry can still
@@ -75,9 +85,39 @@ async def watchdog_loop(mgr: RunManager) -> None:
                     age_fresh = (utcnow() - fresh.created_at).total_seconds()
                     if age_fresh <= fresh.timeout_seconds:
                         continue
+                    if unresolved is None:
+                        continue  # cannot prove ingress empty — skip this cycle
+                    # CAKE-73: unresolved_run_ids covers ANY ingress kind
+                    # (heartbeat/log/chunk/artifacts). Promote-on-timeout only
+                    # when Dagu is already dead — same predicate as the
+                    # liveness branch — so a still-alive Dev keeps its
+                    # timed_out kill. Handle-side empty finalized_steps
+                    # reopen covers a first delivery that races after kill.
+                    if fresh.run_id in unresolved:
+                        status = await mgr.executor.status(fresh.run_id)
+                        if dagu_run_not_alive(status):
+                            # TOCTOU: status() await is a yield point.
+                            again = mgr.store.get(fresh.run_id)
+                            if again is None or again.state not in (
+                                    "dispatched", "running"):
+                                continue
+                            again.state = "finalizing"
+                            mgr.store.save(again)
+                            log.info(
+                                "watchdog: promoting %s to finalizing "
+                                "(timeout, dagu dead, ingress still has "
+                                "entries)",
+                                again.run_id)
+                            continue
+                        # unresolved but Dagu alive (heartbeat lag) → kill
+                        fresh = mgr.store.get(fresh.run_id)
+                        if fresh is None or fresh.state not in (
+                                "dispatched", "running"):
+                            continue
                     await mgr.kill(fresh, "timed_out",
                                    f"exceeded {fresh.timeout_seconds}s")
                     continue
+
                 # reference = last heartbeat, else run start: a Dev killed before its
                 # first heartbeat must not be invisible until the wall-clock timeout
                 beat_ref = run.last_heartbeat or run.started_at
@@ -105,15 +145,26 @@ async def watchdog_loop(mgr: RunManager) -> None:
                                       > STARTUP_GRACE)
                         if not (still_stale or still_dead):
                             continue
+                        if unresolved is None:
+                            continue  # cannot prove ingress empty — skip
+                        if fresh.run_id in unresolved:
+                            fresh.state = "finalizing"
+                            mgr.store.save(fresh)
+                            log.info(
+                                "watchdog: promoting %s to finalizing (dagu "
+                                "dead but artifacts still on ingress)",
+                                fresh.run_id)
+                            continue
                         await mgr.kill(fresh, "failed",
                                        "dagu run dead (%s)" %
                                        ("no heartbeat" if still_stale else "never started"))
-            if stalled_finalizing and \
-                    time.monotonic() - last_stall_check >= STALL_CHECK_INTERVAL:
+            if (stalled_finalizing
+                    and unresolved is not None
+                    and time.monotonic() - last_stall_check
+                    >= STALL_CHECK_INTERVAL):
                 last_stall_check = time.monotonic()
-                # fail-closed on the check itself: if redis is unreachable we
-                # cannot prove the entry is gone, so leave the runs alone
-                unresolved = await mgr.messaging.unresolved_run_ids()
+                # reuse the cycle's unresolved snapshot (already fail-closed);
+                # unresolved is None ⇒ cannot prove the entry is gone → leave
                 for run in stalled_finalizing:
                     if run.run_id in unresolved:
                         continue

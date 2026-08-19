@@ -22,8 +22,8 @@ assignees: []
 
 Point at existing docs rather than inventing architecture here:
 
-- Product / domain: [`docs/`](../../docs/) (start with `docs/00-overview.md`, `docs/01-architecture.md`, `docs/02-domain-model.md`)
-- Agent coding rules: [`AGENTS.md`](../../AGENTS.md)
-- Contribution norms: [`CONTRIBUTING.md`](../../CONTRIBUTING.md)
+- Product / domain: [`docs/`](https://github.com/flieber-inc/devcake/blob/main/docs) (start with `docs/00-overview.md`, `docs/01-architecture.md`, `docs/02-domain-model.md`)
+- Agent coding rules: [`AGENTS.md`](https://github.com/flieber-inc/devcake/blob/main/AGENTS.md)
+- Contribution norms: [`CONTRIBUTING.md`](https://github.com/flieber-inc/devcake/blob/main/CONTRIBUTING.md)
 
-Security claims must not exceed [`docs/14-security.md`](../../docs/14-security.md).
+Security claims must not exceed [`docs/14-security.md`](https://github.com/flieber-inc/devcake/blob/main/docs/14-security.md).

@@ -64,8 +64,8 @@ class PullRequest(BaseModel):
     state: Literal["open", "closed"]
     merged: bool = False
     # the merge commit once merged (deliverable zip ref); None before the
-    # merge or when the vendor omits it — callers fall back to a direct
-    # PR read, then to the default branch (deliver._merge_sha)
+    # merge or when the vendor omits it — callers fall back to the default
+    # branch name "main" (DTO fields only; no adapter-private probe)
     merge_commit_sha: Optional[str] = None
 
 

@@ -149,7 +149,7 @@ After `max_attempts` (default 3) counted failures of the **same step** (mission 
 1. Add the `DEVCAKE-FAILED` label (one of the managed labels in `ALL_LABELS`, `02-domain-model.md` §5 / `domain/model.py`).
 2. Post a comment: last error class + message, attempt count, and the OpenObserve trace link for the final attempt.
 3. Stop scheduling the Mission (derivation row 8).
-4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event count toward the next give-up (advisory local state — `10-persistence.md` §5).
+4. **Recovery is human:** remove the label → the Mission derives normally again; the attempt counter restarts — implemented as a watermark: only failures newer than the mission's last `devcake_failed` audit event **for that PMO instance + `pmo_id`** count toward the next give-up (advisory local state — `10-persistence.md` §5 / §6; bare ids collide across instances).
 
 The counter is **seq-independent** (failed runs post transcripts and advance `seq`, so per-seq counting could retry forever) and resets at the newest of its anchors. Two are policy-independent: the give-up watermark above, and **any finished run for the mission** (a later step completing implies the failing step was resolved, possibly by hand). What comments do is the operator's `attempt_reset` policy (ADR-0026, Limits):
 

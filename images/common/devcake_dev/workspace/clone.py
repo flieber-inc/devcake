@@ -89,7 +89,11 @@ def _clone_siblings(entries, *, dest_parent, dest_by, label, rel_prefix,
 def clone_error_class(stderr: str) -> str:
     """DEV_FORGE_AUTH only on git's credential wording — a bare "403"/"401"
     can be a rate limit or an incidental URL fragment, and DEV_FORGE_AUTH
-    latches the app's global forge breaker."""
+    latches the app's global forge breaker.
+
+    auth_markers are the Dev half of the app repo_mirror._AUTH_MARKERS pin
+    (app omits "repository not found" — sync-path asymmetry). Guard:
+    app/tests/test_mirror_auth_markers_pin.py (ADR-0034)."""
     lowered = stderr.lower()
     auth_markers = ("returned error: 403", "returned error: 401",
                     "authentication failed", "repository not found",

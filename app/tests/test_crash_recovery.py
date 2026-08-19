@@ -882,9 +882,9 @@ def _one_watchdog_cycle(mgr, monkeypatch):
 
 def test_watchdog_promotes_running_to_finalizing_when_artifacts_pending(
         tmp_path, monkeypatch):
-    """CAKE-73 kill-race: wall-clock timeout must not terminal a run whose
-    run.artifacts entry is already on the ingress stream — promote to
-    finalizing so the first delivery is not dropped by the terminal guard."""
+    """CAKE-73: timeout + unresolved + Dagu already dead → promote, do not
+    kill. FakeExecutor.status returns None (dead). Heartbeat-only unresolved
+    while Dagu is still alive must still kill — see the next test."""
     store = RunStore(tmp_path / "runs")
     messaging = FakeMessaging()
     mgr = RunManager(store, messaging, FakeExecutor())
@@ -898,6 +898,35 @@ def test_watchdog_promotes_running_to_finalizing_when_artifacts_pending(
     _one_watchdog_cycle(mgr, monkeypatch)
     assert store.get(run.run_id).state == "finalizing"
     assert messaging.deleted_users == []
+
+
+def test_watchdog_timeout_kills_when_unresolved_but_dagu_alive(
+        tmp_path, monkeypatch):
+    """CAKE-73 review: unresolved_run_ids includes heartbeats/logs, not only
+    artifacts. A still-alive timed-out Dev must still be killed (timed_out /
+    DEV_TIMEOUT). Promote-on-timeout only when Dagu is already dead — mirror
+    the liveness branch. Handle-side empty finalized_steps reopen covers a
+    first delivery that races after the kill."""
+    store = RunStore(tmp_path / "runs")
+    messaging = FakeMessaging()
+
+    class AliveExecutor(FakeExecutor):
+        async def status(self, rid):
+            return {"dagRunDetails": {
+                "status": "running", "statusLabel": "running"}}
+
+    mgr = RunManager(store, messaging, AliveExecutor())
+    mgr._ship_failure = AsyncMock()  # type: ignore[method-assign]
+    run = _make_run(
+        store, state="running",
+        created_at=utcnow() - timedelta(hours=5),
+        timeout_seconds=60,
+    )
+    messaging.unresolved = {run.run_id}  # heartbeat/log traffic, not proof of artifacts
+    _one_watchdog_cycle(mgr, monkeypatch)
+    saved = store.get(run.run_id)
+    assert saved.state == "timed_out"
+    assert messaging.deleted_users == [run.run_id]
 
 
 def test_watchdog_never_timeouts_resumable_finalizing(tmp_path, monkeypatch):
